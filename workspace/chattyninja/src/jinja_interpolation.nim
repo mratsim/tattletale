@@ -572,7 +572,7 @@ func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
   let v = rangeVal(a, b, step)
   # One element count check at construction bounds every consumer, the count
   # answering through the same arithmetic each consumer reads:
-  # - a range past `RangeElemCap` raises located at the range expression here
+  # - a range past `TTT_CNJ_RangeElemCap` raises located at the range expression here
   # - no loop, materialization, serializer or comparison ever sees one
   discard rangeLen(v.r, lo, hi)
   v
@@ -707,12 +707,12 @@ func binPrec(op: Op): int =
   of opNone: 0
 
 template enterDepth(cx: var Cx) =
-  ## Counts one recursion level of the expression walker toward `ExprDepthCap`, a breach
+  ## Counts one recursion level of the expression walker toward `TTT_CNJ_ExprDepthCap`, a breach
   ## raising located, dry walks included. `expr` counts at its entry, and so does
   ## every recursion leg that bypasses `expr`, the paired exit a `dec cx.depth`.
   inc cx.depth
-  if cx.depth > ExprDepthCap:
-    raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
+  if cx.depth > TTT_CNJ_ExprDepthCap:
+    raise jinjaErr("expression nests deeper than TTT_CNJ_ExprDepthCap = " & $TTT_CNJ_ExprDepthCap,
         cx.tok.lo)
 
 func skipExpr(c: JinjaRenderContext, cx: var Cx, minPrec: int) =
@@ -998,7 +998,7 @@ func unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   ## - `not` binds looser than the comparisons, its operand parsing at comparison
   ##   binding power through `expr`, whose entry counts the operand walk toward
-  ##   `ExprDepthCap` however deep the chain, so `not a == 5` tests `a == 5`
+  ##   `TTT_CNJ_ExprDepthCap` however deep the chain, so `not a == 5` tests `a == 5`
   ## - unary `-` and `+` bind tighter than any comparison, their chain recursing here
   ##   without re-entering `expr`, so each recursion counts one level itself,
   ##   `enterDepth` at the leg's entry and a `dec` once the operand is evaluated
@@ -1249,7 +1249,7 @@ func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
   ##   `raise_exception` or `strftime_now` from acting while unelected
   ##
   ## Depth contract:
-  ## - every entry counts one level toward `ExprDepthCap`, dry walks included, so skipped
+  ## - every entry counts one level toward `TTT_CNJ_ExprDepthCap`, dry walks included, so skipped
   ##   operands and the ternary scan are bounded like evaluated ones
   ## - one exit decrements, the ternary legs included, so an entry is never left counted
   ## A stray `if` ends the expression, and `evalRange` reports the tail text.
@@ -1308,7 +1308,7 @@ func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
 
 func evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
   ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]` in its own cursor.
-  ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
+  ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `TTT_CNJ_ExprDepthCap`
   var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth)
   advance(c.tmpl, cx)
   result = expr(c, cx, 1)

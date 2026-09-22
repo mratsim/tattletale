@@ -23,7 +23,7 @@ const
     ## call passes is 2. A call past the cap is a template error, reported at the call.
 
 const
-  RangeElemCap* {.intdefine.} = 1_000_000
+  TTT_CNJ_RangeElemCap* {.intdefine.} = 1_000_000
     ## Element bound of one lazy `range`:
     ## - the count answers wherever a consumer counts or drains, and eagerly
     ##   at construction (`range` global), the one site holding a location
@@ -31,7 +31,7 @@ const
     ##   hundred elements, 1_000_000 clearing legitimate use with margin
     ## - every consumer stays bounded to a count or a materialization no larger
     ##   than the cap, a breach raising a located `JinjaError`
-  ValueDepthCap* {.intdefine.} = 1000
+  TTT_CNJ_ValueDepthCap* {.intdefine.} = 1000
     ## Recursion bound over the value graph fed host-provided data:
     ## - deepest corpus context nesting is single digits, 1000 clearing it
     ##   with margin and staying far below the C stack depth
@@ -346,7 +346,7 @@ func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
   ## a step against the span's direction answers 0.
   ##
-  ## A count past `RangeElemCap` raises a `JinjaError` located at the range
+  ## A count past `TTT_CNJ_RangeElemCap` raises a `JinjaError` located at the range
   ## expression `lo ..< hi`. A caller with no template location in scope passes
   ## `NoOffset` and the raise carries none.
   ##
@@ -354,7 +354,7 @@ func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
   ## is exact, so the span arithmetic never wraps however extreme the bounds:
   ##
   ##   rangeLen(rangeVal(0, 9223372036854775807, 1)) computes the walk distance exactly
-  ##   and the raise fires past `RangeElemCap`, before any consumer sees the count
+  ##   and the raise fires past `TTT_CNJ_RangeElemCap`, before any consumer sees the count
   if r.step == 0:
     return 0
   let fwd = r.step > 0
@@ -366,8 +366,8 @@ func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
       cast[uint64](r.start) - cast[uint64](r.stop)
   let s = if fwd: cast[uint64](r.step) else: 0'u64 - cast[uint64](r.step)
   let n = (d - 1) div s + 1
-  if n > cast[uint64](RangeElemCap):
-    let what = "range of " & $n & " elements exceeds RangeElemCap = " & $RangeElemCap
+  if n > cast[uint64](TTT_CNJ_RangeElemCap):
+    let what = "range of " & $n & " elements exceeds TTT_CNJ_RangeElemCap = " & $TTT_CNJ_RangeElemCap
     if lo == NoOffset:
       raise jinjaErr(what)
     raise jinjaErr(what, lo, hi - lo)
@@ -530,12 +530,12 @@ func sameBytes(x, y: openArray[char]): bool =
 
 func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
   ## `eqVal` recursion core, `depth` the container levels entered so far, counting
-  ## toward `ValueDepthCap`, the graph nesting past it raising a located
+  ## toward `TTT_CNJ_ValueDepthCap`, the graph nesting past it raising a located
   ## `JinjaError` at `offset`:
   ## - data deeper than the cap
   ## - a value-graph cycle, whose comparison otherwise runs off the C stack
-  if depth > ValueDepthCap:
-    raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+  if depth > TTT_CNJ_ValueDepthCap:
+    raise jinjaErr("value nesting deeper than TTT_CNJ_ValueDepthCap = " & $TTT_CNJ_ValueDepthCap &
         " cannot be compared", offset)
   if a.kind == vkUndefined or b.kind == vkUndefined:
     return a.kind == vkUndefined and b.kind == vkUndefined
@@ -595,7 +595,7 @@ func eqVal*(a, b: JinjaVal, offset = NoOffset): bool =
   ## - numbers compare across tiers, containers element-wise, undefined
   ##   equaling only undefined
   ## - a shared container payload equals itself
-  ## - a value graph nesting past `ValueDepthCap` raises at `offset`,
+  ## - a value graph nesting past `TTT_CNJ_ValueDepthCap` raises at `offset`,
   ##   never running off the C stack
   eqValAt(a, b, 0, offset)
 
@@ -624,11 +624,11 @@ func substringOf(needle, haystack: openArray[char]): bool =
   false
 
 func containsValAt(haystack, needle: JinjaVal, depth: int, offset: int): bool =
-  ## `containsVal` recursion core, `depth` counting toward `ValueDepthCap` exactly
+  ## `containsVal` recursion core, `depth` counting toward `TTT_CNJ_ValueDepthCap` exactly
   ## as `eqValAt` does, the breach raising a `JinjaError` located at `offset`.
   ## Each container level of the haystack is entered through the element `==`.
-  if depth > ValueDepthCap:
-    raise jinjaErr("value nesting deeper than ValueDepthCap = " & $ValueDepthCap &
+  if depth > TTT_CNJ_ValueDepthCap:
+    raise jinjaErr("value nesting deeper than TTT_CNJ_ValueDepthCap = " & $TTT_CNJ_ValueDepthCap &
         " cannot be scanned", offset)
   let haystack = if haystack.kind == vkCut: materializeVal(haystack) else: haystack
   let needle = if needle.kind == vkCut: materializeVal(needle) else: needle
@@ -650,7 +650,7 @@ func containsVal*(haystack, needle: JinjaVal, offset = NoOffset): bool =
   ## Returns Jinja `in`:
   ## - membership for sequences, keys for mappings, substring for strings
   ## - arithmetic membership for a lazy range
-  ## - a value graph nesting past `ValueDepthCap` raises at `offset`,
+  ## - a value graph nesting past `TTT_CNJ_ValueDepthCap` raises at `offset`,
   ##   never running off the C stack
   containsValAt(haystack, needle, 0, offset)
 

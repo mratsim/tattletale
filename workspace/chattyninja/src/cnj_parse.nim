@@ -28,7 +28,7 @@
 # - each construct body walk consumes at least one tag per pass, so arena growth stays bounded by the tag count
 #
 # - a find that misses reports `stop` or raises, never rescans
-# - construct nesting is capped at `ParseNestingCap`, the dispatch recursion bounded, a breach raising located at the tag
+# - construct nesting is capped at `TTT_CNJ_ParseNestingCap`, the dispatch recursion bounded, a breach raising located at the tag
 # - the trailing-newline back-trim walk in `settle` decrements its arena index toward `tagMark`
 #
 # | Rule                 | Effect                                                                                            |
@@ -494,15 +494,15 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
 
 template capNesting(p: var Parser, t: Tag) =
-  ## Counts one recursion level of the parse dispatch toward `ParseNestingCap`, a breach
+  ## Counts one recursion level of the parse dispatch toward `TTT_CNJ_ParseNestingCap`, a breach
   ## raising located at the tag. A raise aborts the whole parse, the parser value abandoned.
   ##
   ## Counted sites:
   ## - body walks, at `parseNested`
   ## - the `{% elif %}` chain, which recurses `parseIf` outside any body walk
   inc p.nesting
-  if p.nesting > ParseNestingCap:
-    raise jinjaErr("template nests deeper than ParseNestingCap = " & $ParseNestingCap &
+  if p.nesting > TTT_CNJ_ParseNestingCap:
+    raise jinjaErr("template nests deeper than TTT_CNJ_ParseNestingCap = " & $TTT_CNJ_ParseNestingCap &
         " at byte " & $t.tLo, t.tLo, t.tHi - t.tLo)
 
 template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =

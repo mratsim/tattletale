@@ -33,17 +33,17 @@ func ctx(pairs: varargs[(string, JinjaVal)]): JinjaVal =
     dictSet(d, k, v)
   dictVal(d)
 
-# Compiled with `-d:StepBudget=32` (a dedicated runCmd in config.nims), one pull
+# Compiled with `-d:TTT_CNJ_StepBudget=32` (a dedicated runCmd in config.nims), one pull
 # call past 32 dispatches raises located. This variant runs alone and quits.
 # Compilations without the define run a 1M budget, the full expression tier.
-when StepBudget == 32:
+when TTT_CNJ_StepBudget == 32:
   var raised = ""
   try:
     discard renderStmt("{% for x in range(64) %}{{ x }}{% endfor %}")
     doAssert false, "a 64-iteration loop stayed under the 32-step budget"
   except JinjaError as e:
     raised = e.what
-  doAssert "StepBudget = 32" in raised, raised
+  doAssert "TTT_CNJ_StepBudget = 32" in raised, raised
 
   # A macro body forced for capture walks its own dispatch loop, so it carries
   # the same budget as `pull`, and a 64-iteration for inside a forced body
@@ -55,7 +55,7 @@ when StepBudget == 32:
     doAssert false, "a forced 64-iteration body stayed under the 32-step budget"
   except JinjaError as e:
     raised = e.what
-  doAssert "StepBudget = 32" in raised, raised
+  doAssert "TTT_CNJ_StepBudget = 32" in raised, raised
   doAssert "macro force" in raised, raised
   echo "t_expr: the 32-step budget raise observed on pull and macro force"
   quit(0)
@@ -336,7 +336,7 @@ doAssert renderStmt(
     "{% set r = m(2) %}{{ r }}") == "[2][1]!!",
     "a recursive same-macro emit call inside a forced capture keeps the outer body running"
 
-# Macro call nesting is capped at MacroDepthCap, a self-calling macro chaining one
+# Macro call nesting is capped at TTT_CNJ_MacroDepthCap, a self-calling macro chaining one
 # depth level per call.
 # 16 nested calls render.
 # 17 nested calls raise on both entry paths:
@@ -348,18 +348,18 @@ block macroDepthCap:
       "16 nested emit calls render within the cap"
   try:
     discard renderStmt(emitChain & "{{ m(16) }}")
-    doAssert false, "a 17-call emit chain stayed under MacroDepthCap"
+    doAssert false, "a 17-call emit chain stayed under TTT_CNJ_MacroDepthCap"
   except JinjaError as e:
-    doAssert "macro nesting reached MacroDepthCap = 16 on `m`" in e.what, e.what
+    doAssert "macro nesting reached TTT_CNJ_MacroDepthCap = 16 on `m`" in e.what, e.what
 
   let forceChain = "{% macro m(n) %}{% if n > 0 %}{% set r = m(n - 1) %}{% endif %}!{% endmacro %}"
   doAssert renderStmt(forceChain & "{% set r = m(15) %}{{ r }}") == "!",
       "16 nested forced calls render within the cap, the set binding one capture deep"
   try:
     discard renderStmt(forceChain & "{% set r = m(16) %}{{ r }}")
-    doAssert false, "a 17-call forced chain stayed under MacroDepthCap"
+    doAssert false, "a 17-call forced chain stayed under TTT_CNJ_MacroDepthCap"
   except JinjaError as e:
-    doAssert "macro nesting reached MacroDepthCap = 16 on `m`" in e.what, e.what
+    doAssert "macro nesting reached TTT_CNJ_MacroDepthCap = 16 on `m`" in e.what, e.what
 
 # Macro-argument binding raises where upstream raises:
 #   a positional past the parameter list, a positional after a keyword,
@@ -731,20 +731,20 @@ doAssert renderStmt(
     "the empty-body drain ran the clause on every item, item 0's included"
 
 # Depth caps:
-#   every recursion leg counts toward ExprDepthCap, dry walks and unary chains included.
+#   every recursion leg counts toward TTT_CNJ_ExprDepthCap, dry walks and unary chains included.
 #   Deep nesting raises located before the C stack runs out.
 
 # Paren boundary sits exactly at the cap.
 # Every emit entry counts one level, each paren group one more:
-# `ExprDepthCap - 1` groups reach the cap's last level and render,
-# `ExprDepthCap` groups reach one past it and raise located.
-doAssert render("(".repeat(ExprDepthCap - 1) & "1" & ")".repeat(ExprDepthCap - 1)) == "1",
+# `TTT_CNJ_ExprDepthCap - 1` groups reach the cap's last level and render,
+# `TTT_CNJ_ExprDepthCap` groups reach one past it and raise located.
+doAssert render("(".repeat(TTT_CNJ_ExprDepthCap - 1) & "1" & ")".repeat(TTT_CNJ_ExprDepthCap - 1)) == "1",
     "paren nesting reaching the cap renders"
 try:
-  discard render("(".repeat(ExprDepthCap) & "1" & ")".repeat(ExprDepthCap))
+  discard render("(".repeat(TTT_CNJ_ExprDepthCap) & "1" & ")".repeat(TTT_CNJ_ExprDepthCap))
   doAssert false, "paren nesting one past the cap rendered instead of raising"
 except JinjaError as e:
-  doAssert "ExprDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ExprDepthCap" in e.what, e.what
 
 doAssert render("not not not not not not not not not not 1") == "True",
     "a unary chain within the cap renders"
@@ -752,12 +752,12 @@ try:
   discard render("not ".repeat(40000) & "1")
   doAssert false, "a unary chain past the cap rendered instead of raising"
 except JinjaError as e:
-  doAssert "ExprDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ExprDepthCap" in e.what, e.what
 try:
   discard render("0 and " & "(".repeat(25000) & "1" & ")".repeat(25000))
   doAssert false, "a dry walk over a skipped operand ran uncapped"
 except JinjaError as e:
-  doAssert "ExprDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ExprDepthCap" in e.what, e.what
 
 # Ternaries leave no depth behind, only the real nesting depth spending budget:
 #   chained and sequenced ternaries render well within the cap.
@@ -776,7 +776,7 @@ doAssert render(sequenced) == "8".repeat(25),
     "25 ternaries sequenced on one cursor render within the cap"
 
 # Lazy range, one element bound at construction, so no consumer loops, materializes,
-# drains or scans past RangeElemCap, and the span arithmetic never wraps:
+# drains or scans past TTT_CNJ_RangeElemCap, and the span arithmetic never wraps:
 #   range(0, int64 high) answers its count as a located raise, not an OverflowDefect.
 
 doAssert render("range(0, 1000000) | length") == "1000000",
@@ -785,27 +785,27 @@ try:
   discard render("range(0, 1000001) | length")
   doAssert false, "a range past the cap answered instead of raising"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard render("range(0, 9223372036854775807) | length")
   doAssert false, "an overflow-scale range raised a defect instead of the cap"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard renderStmt("{% for x in range(0, 4611686018427387904) %}{{ x }}{% endfor %}")
   doAssert false, "an unbounded range entered a for loop"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard render("range(0, 2000001) | list | length")
   doAssert false, "a range past the cap materialized"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard render("range(0, 2000001) | tojson")
   doAssert false, "a range past the cap drained to the serializer"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 
 # Range membership and equality answer arithmetically, no scan:
 #   direction-aware bounds plus an exact stride split for ints, the element whose
@@ -823,17 +823,17 @@ try:
   discard render("5 in range(0, 4611686018427387904)")
   doAssert false, "an overflow-scale membership did not raise"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard render("range(0, 4611686018427387904) == range(0, 4611686018427387903)")
   doAssert false, "an overflow-scale equality did not raise"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 try:
   discard render("range(-9223372036854775807, 0) | length")
   doAssert false, "a negative-extreme span did not raise"
 except JinjaError as e:
-  doAssert "RangeElemCap" in e.what, e.what
+  doAssert "TTT_CNJ_RangeElemCap" in e.what, e.what
 doAssert render("0 in range(0, 0)") == "False", "an empty range contains nothing"
 doAssert render("range(0, 6, 2) == range(0, 5, 2)") == "True",
     "equal progressions compare equal past their differing bounds"
@@ -849,7 +849,7 @@ doAssert renderStmt("{% for x in range(1, 4) %}{{ x }}{% endfor %}") == "123"
 
 # Hostile value depth raises located, from both container walkers:
 #   equality and membership count one level per container entered toward
-#   ValueDepthCap, so neither runs off the C stack.
+#   TTT_CNJ_ValueDepthCap, so neither runs off the C stack.
 
 proc nestedVal(depth: int): JinjaVal =
   var v = intVal(1)
@@ -867,12 +867,12 @@ try:
   discard render("a == b", ctxPair(1200))
   doAssert false, "deep data compared instead of raising"
 except JinjaError as e:
-  doAssert "ValueDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ValueDepthCap" in e.what, e.what
 try:
   discard render("b in a", ctxPair(1200))
   doAssert false, "deep data scanned instead of raising"
 except JinjaError as e:
-  doAssert "ValueDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ValueDepthCap" in e.what, e.what
 doAssert render("a == b", ctxPair(50)) == "True",
     "data nesting well within the cap compares"
 
@@ -887,12 +887,12 @@ try:
   discard renderStmt("{% set ns = namespace() %}{% set ns.a = ns %}{{ ns }}")
   doAssert false, "a cyclic namespace rendered unbounded"
 except JinjaError as e:
-  doAssert "ValueDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ValueDepthCap" in e.what, e.what
 try:
   discard renderStmt("{% set ns = namespace() %}{% set ns.a = ns %}{{ ns | tojson }}")
   doAssert false, "a cyclic namespace serialized unbounded"
 except JinjaError as e:
-  doAssert "ValueDepthCap" in e.what, e.what
+  doAssert "TTT_CNJ_ValueDepthCap" in e.what, e.what
 block:
   var v = intVal(1)
   for _ in 1 .. 500:

@@ -116,28 +116,28 @@ except JinjaError as e:
   doAssert "`{% break %}` is outside any `{% for %}`" in e.what, e.what
   doAssert e.offset == 3 and e.span == 5, "the raise locates the keyword: " &
       $e.offset & "+" & $e.span
-# Construct nesting is capped at ParseNestingCap, a template nested past it raising located
+# Construct nesting is capped at TTT_CNJ_ParseNestingCap, a template nested past it raising located
 # at the offending tag, never exhausting the dispatch stack. Nesting at the cap parses.
 block nestingValve:
   block:
-    discard parseTemplate(repeat("{% if x %}", ParseNestingCap) & "y" &
-        repeat("{% endif %}", ParseNestingCap))
+    discard parseTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap) & "y" &
+        repeat("{% endif %}", TTT_CNJ_ParseNestingCap))
   var reported = ""
   var at = -1
   try:
-    discard parseTemplate(repeat("{% if x %}", ParseNestingCap + 1) & "y" &
-        repeat("{% endif %}", ParseNestingCap + 1))
+    discard parseTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap + 1) & "y" &
+        repeat("{% endif %}", TTT_CNJ_ParseNestingCap + 1))
     doAssert false, "nesting past the cap parsed instead of raising"
   except JinjaError as e:
     reported = e.what
     at = e.offset
-  doAssert "ParseNestingCap" in reported, reported
-  let tagStart = "{% if x %}".len * ParseNestingCap
+  doAssert "TTT_CNJ_ParseNestingCap" in reported, reported
+  let tagStart = "{% if x %}".len * TTT_CNJ_ParseNestingCap
   doAssert at >= tagStart and at < tagStart + "{% if x %}".len,
       "the cap raise located inside the offending tag: offset " & $at
 
 # An `{% elif %}` chain recurses `parseIf` outside any body walk, so the chain depth counts
-# toward ParseNestingCap too. A modest chain parses, a chain past the cap raising located.
+# toward TTT_CNJ_ParseNestingCap too. A modest chain parses, a chain past the cap raising located.
 block elifChainNesting:
   discard parseTemplate("{% if z %}a" & repeat("{% elif z %}a", 10) & "{% endif %}")
   var reported = ""
@@ -146,7 +146,7 @@ block elifChainNesting:
     doAssert false, "an elif chain past the cap parsed instead of raising"
   except JinjaError as e:
     reported = e.what
-  doAssert "ParseNestingCap" in reported, reported
+  doAssert "TTT_CNJ_ParseNestingCap" in reported, reported
 
 # Truncation is a located raise, never a spin. Every body walk consumes at least one tag,
 # an unterminated construct reaching the end sentinel, its close check reporting it.

@@ -109,27 +109,27 @@ const
   # Static cross-macro chain depth in the corpus is 3, two templates recur cyclically, and the shipped
   # `gemma4/tools_tool_response.json` drives the tools subtree to 6, with real depth set by the input.
   # 16 bounds the stack on bad input, a breach raising.
-  MacroDepthCap* {.intdefine.} = 16
+  TTT_CNJ_MacroDepthCap* {.intdefine.} = 16
 
   # Expression-walker recursion bound:
   # deepest paren nesting measured over the corpus templates is 3 (`gemma4`, `lfm25`),
   # 24 clears it with margin, far below the C stack overflow depth.
-  ExprDepthCap* {.intdefine.} = 24
+  TTT_CNJ_ExprDepthCap* {.intdefine.} = 24
 
   # Parse-time nesting bound of the parser's dispatch recursion, one level per body-carrying
   # construct. Corpus nesting tops out at 5 (`glm53flash`'s macro-in-for chain), so 64 clears it
   # with margin and bounds the walk on adversarial input, a breach raising located at the tag.
-  ParseNestingCap* {.intdefine.} = 64
+  TTT_CNJ_ParseNestingCap* {.intdefine.} = 64
 
   # Output pieces reach the consumer in slices of at most this many bytes, which is what lets `cur`
   # compose with chunking.
-  ChunkSize* {.intdefine.} = 4096
+  TTT_CNJ_ChunkSize* {.intdefine.} = 4096
 
   # Step-dispatch bound of one `pull` call. One call dispatches at most this many steps,
   # a breach raising located at the node the walk reached. The corpus suite completes
   # with 240 and fails with 230, so no corpus pull dispatches past 240, and a 200x200
   # nested loop test lands in the low thousands. 1_000_000 keeps ample headroom.
-  StepBudget* {.intdefine.} = 1_000_000
+  TTT_CNJ_StepBudget* {.intdefine.} = 1_000_000
 
   Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}
   WsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}

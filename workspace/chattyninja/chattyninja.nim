@@ -32,8 +32,8 @@ export cnj_types.JinjaRenderContext, cnj_types.RenderState, cnj_types.CompiledTe
     cnj_types.targetAt, cnj_types.paramCount, cnj_types.paramNameAt,
     cnj_types.paramDefLoAt, cnj_types.paramDefHiAt,
     cnj_types.SlotHi, cnj_types.SlotSucc, cnj_types.SlotChild, cnj_types.SlotAlt,
-    cnj_types.MacroDepthCap, cnj_types.ExprDepthCap, cnj_types.ParseNestingCap,
-    cnj_types.ChunkSize, cnj_types.StepBudget
+    cnj_types.TTT_CNJ_MacroDepthCap, cnj_types.TTT_CNJ_ExprDepthCap, cnj_types.TTT_CNJ_ParseNestingCap,
+    cnj_types.TTT_CNJ_ChunkSize, cnj_types.TTT_CNJ_StepBudget
 
 # Values and their construction, the dict reads, the error and the JSON form.
 export jinja_data_model.JinjaVal, jinja_data_model.ValueKind, jinja_data_model.SeqVal,
@@ -41,7 +41,7 @@ export jinja_data_model.JinjaVal, jinja_data_model.ValueKind, jinja_data_model.S
     jinja_data_model.MacroVal, jinja_data_model.PendingCallVal, jinja_data_model.Args,
     jinja_data_model.Arg, jinja_data_model.ArgKeyword, jinja_data_model.JinjaError,
     jinja_data_model.JinjaCause, jinja_data_model.JsonOpts, jinja_data_model.NoOffset, jinja_data_model.NoLink,
-    jinja_data_model.ArgsCap, jinja_data_model.RangeElemCap, jinja_data_model.ValueDepthCap,
+    jinja_data_model.ArgsCap, jinja_data_model.TTT_CNJ_RangeElemCap, jinja_data_model.TTT_CNJ_ValueDepthCap,
     jinja_data_model.undefinedVal, jinja_data_model.noneVal, jinja_data_model.boolVal,
     jinja_data_model.intVal, jinja_data_model.floatVal, jinja_data_model.strVal,
     jinja_data_model.seqVal, jinja_data_model.dictVal, jinja_data_model.nsVal,

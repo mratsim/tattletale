@@ -582,8 +582,8 @@ func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNod
   ## - the body's output pieces drain through the caller's window until the row closes on the definition node
   ## - an empty body emits nothing, its row closing at once, the tail continuing at the return node
   ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
-  if c.state.macroDepth >= MacroDepthCap:
-    raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
+  if c.state.macroDepth >= TTT_CNJ_MacroDepthCap:
+    raise jinjaErr("macro nesting reached TTT_CNJ_MacroDepthCap = " & $TTT_CNJ_MacroDepthCap & " on `" &
         c.symbols.names[call.mc.name] & "`", lo, hi - lo)
   inc c.state.macroDepth
   let scopeBase = c.state.scopes.len
@@ -616,8 +616,8 @@ func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal =
   ##   and a breach raises
   doAssert c.state.pend.kind == pkNone,
       "a macro body was forced while the driver still held a pending piece"
-  if c.state.macroDepth >= MacroDepthCap:
-    raise jinjaErr("macro nesting reached MacroDepthCap = " & $MacroDepthCap & " on `" &
+  if c.state.macroDepth >= TTT_CNJ_MacroDepthCap:
+    raise jinjaErr("macro nesting reached TTT_CNJ_MacroDepthCap = " & $TTT_CNJ_MacroDepthCap & " on `" &
         c.symbols.names[mc.name] & "` (forced call)")
   # Nested-session shape, reproducing the field-copy semantics the corpus verifies:
   # - the same artifact refs and the same stateless force handle
@@ -639,7 +639,7 @@ func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal =
   # entered through, so node == mc.node alone cannot mean the body is done.
   #   - the outer row closed and dropped a row below the entry count
   #   - the flow reached mc.node with no row beyond the entry set open
-  # MacroDepthCap bounds nesting, not iterations, so the force walk keeps
+  # TTT_CNJ_MacroDepthCap bounds nesting, not iterations, so the force walk keeps
   # its own step counter with the budget `pull` enforces, a breach raising
   # located at the node the walk reached.
   let baseRows = c2.state.rows.len
@@ -647,8 +647,8 @@ func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal =
   var steps = 0
   while node != NoLink:
     inc steps
-    if steps > StepBudget:
-      raise jinjaErr("one macro force stepped past StepBudget = " & $StepBudget &
+    if steps > TTT_CNJ_StepBudget:
+      raise jinjaErr("one macro force stepped past TTT_CNJ_StepBudget = " & $TTT_CNJ_StepBudget &
           ", the body walk is not terminating", c2.tmpl.nodes[node].lo.int,
           c2.tmpl.nodes[node].hi.int - c2.tmpl.nodes[node].lo.int)
     Steps[c2.tmpl.nodes[node].kind](c2, node)
@@ -691,7 +691,7 @@ func pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ##
   ## Termination and budget:
   ## - 0 means the render is complete, nothing pending and `c.state.curNode == NoLink`
-  ## - one call dispatches at most `StepBudget` steps, a breach raising located at the reached node
+  ## - one call dispatches at most `TTT_CNJ_StepBudget` steps, a breach raising located at the reached node
   ##
   ## A raise discards the bytes already written into `buf` in the failing call, the caller
   ## never receiving them and the render state having advanced past their render, so a repull
@@ -749,18 +749,18 @@ func pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
       return
     let n = st.curNode
     inc steps
-    if steps > StepBudget:
-      raise jinjaErr("one pull call stepped past StepBudget = " & $StepBudget &
+    if steps > TTT_CNJ_StepBudget:
+      raise jinjaErr("one pull call stepped past TTT_CNJ_StepBudget = " & $TTT_CNJ_StepBudget &
           ", the render walk is not terminating", tmpl.nodes[n].lo.int,
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
 iterator items*(c: JinjaRenderContext): openArray[char] =
-  ## Pulls the render in chunks of at most `ChunkSize` bytes, one `pull` call per chunk.
+  ## Pulls the render in chunks of at most `TTT_CNJ_ChunkSize` bytes, one `pull` call per chunk.
   ## - a chunk borrows the iterator's local window, so a consumer must finish with it before
   ##   advancing the loop
   ## - `cur` counts bytes handed out, so a stop mid-render resumes consistently
-  var buf: array[ChunkSize, char]
+  var buf: array[TTT_CNJ_ChunkSize, char]
   while true:
     let n = pull(c, buf)
     if n == 0:
@@ -770,7 +770,7 @@ iterator items*(c: JinjaRenderContext): openArray[char] =
 func pullAll*(c: JinjaRenderContext): string =
   ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
   ## that counts bytes first can redeliver from a fresh session without a counting pass.
-  var buf: array[ChunkSize, char]
+  var buf: array[TTT_CNJ_ChunkSize, char]
   while true:
     let n = pull(c, buf)
     if n == 0:
