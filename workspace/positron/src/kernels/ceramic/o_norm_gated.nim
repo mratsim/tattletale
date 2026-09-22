@@ -17,7 +17,7 @@
 ## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32, must be > 0 (the recorded layer's 1e-6) |
 ## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side      |
 ## | rstd           | rsqrt(mean(x²) + eps) over the row                                                                         |
-## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                           |
+## | tail rows      | rows >= M store zero-skipped, the load reads padded rows, backing storage covers ceil(M / TileR)·TileR     |
 ## | Dv             | static (128), equal to the tile width, one row_sum spans the tile                                          |
 ## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                       |
 ## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between              |
@@ -66,7 +66,11 @@ proc loadTileRowsGated[R, C: static int; A: static MmaAtom; T](
     origin: tuple,
     rowLimit: int32) {.device.} =
   ## Row-bounded loadTile over a 2D view.
-  ## Plane rows at or above `rowLimit` load zero-filled, never read.
+  ## - the underlying tile load reads the full (R, C) plane unconditionally
+  ## - rows at or above `rowLimit` are zeroed in registers afterwards
+  ## - a straddling tile does read its tail rows past the logical row count,
+  ##   the view's backing storage must cover the padded tile rows,
+  ##   ceil(M / TileR)·TileR
   tile.loadTile(gl, origin)
   let r0 = int32(origin[2]) * int32(R)
   if r0 + int32(R) > rowLimit:
