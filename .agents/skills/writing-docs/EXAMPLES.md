@@ -36,6 +36,8 @@ term of art), harness, smoke.
 | `wave` (campaign-phase sense: "re-record wave", "device-matrix wave") | "pass" ("re-record pass"), "work" ("device-matrix work") |
 | `donor` (fixture-source sense: "fixture donor", "the same donor") | "recorded family", "recorded source" |
 | `law` / `laws` (set-of-rules sense: "harness law", "fixture law") | "rule", "rule set", "contract" ("harness law" → "harness contract") |
+| `lineage` | "from X", "descends from X", "the X-era form of the technique" ("ATM lineage" → "from ATM networks") |
+| `substrate` | "base", "foundation", or name the component ("continuation substrate" → "continuation base") |
 
 ## Line-end hazards from the reflow scanner
 

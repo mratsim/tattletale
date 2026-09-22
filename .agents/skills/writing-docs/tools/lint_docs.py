@@ -252,6 +252,22 @@ HOW_NARRATION = [
 # The predicate reads the lowercased line with backtick spans stripped.
 # The hint text carries no banned word.
 # Finding messages quote the runtime match instead.
+def _research_corpus(path):
+    """Research corpus files keep long entry lists.
+
+    - Args:
+      the path under check
+    - Returns:
+      True for reference-index files where the bullet cap is waived,
+      the one operator-ruled exception: a research index is an entry
+      list, its length is the content
+    - Contract:
+      the cap stays active everywhere else
+    """
+    return ("research" in path.parts
+            or path.name.startswith("research-"))
+
+
 def _probe_exempt(line):
     """Exemptions for the record-field vocabulary.
 
@@ -305,6 +321,8 @@ BANNED = [
      "name the ladder tier, 00 codec, 01 per-op, 02 chain, 03 forward, 04 decode"),
     (r"\bsubstrates?\b", None,
      "use base, foundation, or name the component"),
+    (r"\blineages?\b", None,
+     "use from X, descends from X, or name the origin"),
     (r"\bRED\b|\bGREEN\b", None,
      "state the invariant in present tense"),
     (r"\boracles?\b", None, "use reference implementation"),
@@ -1105,7 +1123,7 @@ def check_bullets(path, block, findings):
                 j = k
                 continue
             break
-        if len(spans) > BULLET_LIST_MAX_ITEMS:
+        if len(spans) > BULLET_LIST_MAX_ITEMS and not _research_corpus(path):
             findings.append(Finding(
                 path, block[i][0], "bullet-list-length",
                 "bullet list holds %d items, cap is %d (split the list, "
