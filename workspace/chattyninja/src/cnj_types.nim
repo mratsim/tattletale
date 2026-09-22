@@ -4,9 +4,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
-# symbol arena, the per-instantiation render state, and the injected render ports
-# the expression tier reads the render through. See cnj_engine.nim for the dispatch table,
-# the render context bundle, the port forwarders, and the `items` pull interface.
+# symbol arena, the per-instantiation render state, the name-resolution reads
+# and the macro-force handle. The dispatch table, the render context bundle
+# and the `items` pull interface live in cnj_engine.nim.
 #
 # Dataflow of one render, the record types here shared across the module boundary
 #
@@ -17,17 +17,18 @@
 #     │  cnj_engine dispatches pull() steps over the arena
 #     ▼
 #   RenderState (rows + scopes + pending Piece)
-#     │  evalSpan drives jinja_interpolation, expressions reading the render through Ports
+#     │  evalSpan drives jinja_interpolation, expressions reading the render state
+#     │  directly and reaching the statement tier only through the MacroForcer handle
 #     ▼
 #   Piece (pkSpan, pkStr, pkCut or pkLazy), drained into the caller's window
 #
-# Lifecycle and ownership of the render state and its ports
+# Lifecycle and ownership of the render state and its forcer handle
 #
 #   RenderState, one per render, owned by the caller's Context
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
-#     └─ ports    PortEnv built on the stack per dispatch, typed here, dead at dispatch end
+#     └─ force    the engine's macro forcer, bound per dispatch, borrowed by expressions
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
@@ -320,37 +321,16 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  PortEnv* = object
-    ## Adapter state one dispatch's ports read:
-    ## - the artifact, the shared symbol arena, the render state the port procs serve
-    ## - built on the stack per dispatch, never stored in the render state, so a copied
-    ##   `Context` never carries a dangling adapter
-    ## - lives here with `Ports` so the port procs read it typed, no pointer cast
-    tmpl*: CompiledTemplate
-    sym*: ptr CompiledSymbols
-    st*: ptr RenderState
-
-  LookupPort = proc (env: ptr PortEnv, name: openArray[char]): JinjaVal {.nimcall, noSideEffect.}
-    ## Resolves one name of the enclosing render to its binding, undefined when absent.
-    ## `env` carries the adapter state the port procs read, owned by the pull consumer.
-
-  ClockPort = proc (env: ptr PortEnv): float64 {.nimcall, noSideEffect.}
-    ## Returns the render's injected epoch, `strftime_now`'s only time source.
-
-  MacroForcer = proc (env: ptr PortEnv, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
-    ## Runs one macro body to completion and returns the captured text as a string value.
-    ## The pull consumer injects the forcer, so the expression tier never reaches the statement
-    ## tier and no import cycle forms.
-
-  Ports* = object
-    ## Render services the expression tier reads, injected per dispatch. The adapter behind
-    ## `env` lives with the pull consumer and is rebuilt there, so a value a step carries
-    ## never outlives the call that built it.
-    lookup*: LookupPort
-    clock*: ClockPort
-    force*: MacroForcer
-    env*: ptr PortEnv
-      ## adapter state the port procs read, typed here so no caller casts
+  MacroForcer* = proc (tmpl: CompiledTemplate, sym: ptr CompiledSymbols,
+      st: var RenderState, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+    ## Runs one macro body to completion on the render state given, returning the captured
+    ## text as a string value.
+    ## Contract:
+    ## - bound by the statement tier's engine at its dispatch sites, the expression tier
+    ##   receiving it as a plain stateless handle
+    ## - every state a call serves arrives as a typed borrow on the call itself, so no
+    ##   adapter value and no erased pointer exists
+    ## - this handle is the one edge the tier split keeps, no import cycle crossing it
 
   Context* = object
     ## Object the caller holds, bundling the shared artifact, a borrowed symbol-arena pointer,
@@ -362,11 +342,6 @@ type
       ## class as the `jinja` borrow of the template text
     state*: RenderState
 
-func buildPorts*(lookup: LookupPort, clock: ClockPort, force: MacroForcer, env: ptr PortEnv): Ports =
-  ## Returns the one `Ports` value of a dispatch, the single constructor of the injected
-  ## render services, every dispatch building its own adapter and its own ports.
-  Ports(lookup: lookup, clock: clock, force: force, env: env)
-
 func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
   ## One linear scan over the interned arena, allocation-free and parse-time only,
@@ -375,6 +350,29 @@ func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
     if n == name:
       return int32 i
   NoLink
+
+func scopeHas*(st: var RenderState, id: int32, val: var JinjaVal): bool =
+  ## Scope scan innermost first, returning true with `val` set when `id` is bound.
+  ## A binding to an undefined value is still a binding, so the root lookup never sees it.
+  for si in countdown(st.scopes.len - 1, 0):
+    for b in st.scopes[si]:
+      if b.name == id:
+        val = b.val
+        return true
+  false
+
+func lookupName*(sym: CompiledSymbols, st: var RenderState, name: openArray[char]): JinjaVal =
+  ## Returns the binding of `name` in one render, resolving the scopes innermost first,
+  ## then the render context root dict, then undefined.
+  ## Absence is a value, never an error, `is defined` testing for exactly that shape.
+  let id = sym.findName(name)
+  var got: JinjaVal
+  if id != NoLink and st.scopeHas(id, got):
+    return got
+  if st.root.kind == vkDict:
+    return st.root.d.dictGet(name)
+  undefinedVal()
+
 
 func internName*(t: var CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, inserting the one arena copy when absent.

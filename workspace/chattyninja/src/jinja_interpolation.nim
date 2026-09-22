@@ -5,9 +5,10 @@
 
 # Fused expression walker of the chattyninja engine.
 # One `lo..hi` span of template text is parsed and evaluated in a single pass, no expression
-# becomes a node. The walker reads the render only through the injected `Ports` and never
-# touches the render state, which stays at the step tier. Lookup, clock and macro forcer
-# arrive as ports. A dry pass advances tokens without evaluating, one mechanism three
+# becomes a node. The walker reads the render state directly, scopes and root through
+# the pure `lookupName` in cnj_types, the clock through the state's own field, reaching
+# the statement tier only through the engine's `MacroForcer` handle. A dry pass advances
+# tokens without evaluating, one mechanism three
 # places use:
 #
 # - `and` and `or` skip the operand they do not evaluate
@@ -35,17 +36,18 @@ type
   Cx = object
     ## Walker cursor:
     ##   the half-open span it owns, a one-token lookahead, the dry flag, the recursion depth,
-    ##   the render ports handed to nested calls.
+    ##   the engine's macro-forcer handle handed to nested calls.
     pos, stop: int
     tok: ExTok
     dry: bool
     depth: int
-    ports: Ports
+    force: MacroForcer
 
-  GlobalProc = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal {.nimcall, noSideEffect.}
+  GlobalProc = proc (tmpl: CompiledTemplate, lo, hi: int, args: Args,
+      st: var RenderState): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global. `namespace` and `dict` store a keyword name as a dict key.
     ## - `lo` and `hi` bound the global's name token, the location the raise sites report
-    ## - globals read the template text and the injected ports, never the render state
+    ## - globals read the template text and the render state's clock, and write nothing
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -291,16 +293,16 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## marking a positional argument, which has no name to read.
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-func forceCall(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceCall(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Renders one pending macro call to its output value, the primitive `forceOperand`
-  ## routes every value-position forcing through, the forcer itself carried by the ports.
+  ## routes every value-position forcing through, the handle itself carried by the context.
   ## Raises at `cx.tok.lo` when no macro forcer was supplied.
-  if cx.ports.force.isNil:
+  if cx.force.isNil:
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied",
         cx.tok.lo)
-  cx.ports.force(cx.ports.env, v.pc.mc, v.pc.args)
+  cx.force(tmpl, sym, st, v.pc.mc, v.pc.args)
 
-func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func forceOperand(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` with a pending macro call rendered to its output value, the value-position
   ## forcing contract held in one proc.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
@@ -313,7 +315,7 @@ func forceOperand(ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
   if cx.dry:
     return v
   if v.kind == vkCall:
-    forceCall(ports, cx, v)
+    forceCall(tmpl, sym, st, cx, v)
   else:
     v
 
@@ -541,15 +543,15 @@ func argDict(tmpl: CompiledTemplate, args: Args): DictVal =
     dv.dictSet(argKey(tmpl, a), a.val)
   dv
 
-func namespaceGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
+func namespaceGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
   nsVal(argDict(tmpl, args))
 
-func dictGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
+func dictGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
   dictVal(argDict(tmpl, args))
 
-func rangeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
+func rangeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
   ## `range(a, b, step)`:
   ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
   ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
@@ -613,11 +615,11 @@ func threeDigits(n: int): string =
   while result.len < 3:
     result = '0' & result
 
-func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
-  ## Renders the format against the epoch read through the clock port, never the wall clock,
+func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
+  ## Renders the format against the render state's injected epoch, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
-  let secs = ports.clock(ports.env).int64
+  let secs = st.clock.int64
   let tod = floorMod(secs.int, 86400)
   let (yr, mo, dy) = civilFromDays(floorDiv(secs.int, 86400))
   var acc = ""
@@ -642,7 +644,7 @@ func strftimeGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Port
     inc i, 2
   strVal(acc)
 
-func raiseExceptionGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, ports: Ports): JinjaVal =
+func raiseExceptionGlobal(tmpl: CompiledTemplate, lo, hi: int, args: Args, st: var RenderState): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
   ##   the message verbatim, the raise call's name-token span as `offset` and `span`, cause `ceRaiseCall`.
   raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), lo, hi - lo, cause = ceRaiseCall)
@@ -656,8 +658,8 @@ const
 
 # Walker:
 
-func evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal
-func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal
+func evalRange(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int, depth = 0): JinjaVal
+func expr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal
 
 
 const OpSpelling: array[Op, string] = [
@@ -715,14 +717,14 @@ template enterDepth(cx: var Cx) =
     raise jinjaErr("expression nests deeper than ExprDepthCap = " & $ExprDepthCap,
         cx.tok.lo)
 
-func skipExpr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int) =
+func skipExpr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
-  discard expr(tmpl, ports, cx, minPrec)
+  discard expr(tmpl, sym, st, cx, minPrec)
   cx.dry = wasDry
 
-func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
+func argList(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
   ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
   ## carrier in call order, no per-call sequence.
@@ -741,7 +743,7 @@ func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
         advance(tmpl, cx)
       else:
         cx = save
-    let v = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
+    let v = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
     result.addArg(Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v))
     if isPunct(cx, ","):
       advance(tmpl, cx)
@@ -753,7 +755,7 @@ func argList(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): Args =
     raise jinjaErr("argument list is not closed", cx.tok.lo)
   advance(tmpl, cx)
 
-func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): JinjaVal =
+func postfix(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   ## An integer constant after a dot is a subscript, `m.content.0` spelling
   ## `m.content[0]` the way upstream Jinja does.
@@ -764,7 +766,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
     # re-forced here the same way, its pending form never surviving past the next operator.
     if v.kind == vkCall and (isPunct(cx, ".") or isPunct(cx, "[") or isPunct(cx, "|") or
         isWord(tmpl, cx, "is")):
-      v = forceOperand(ports, cx, v)
+      v = forceOperand(tmpl, sym, st, cx, v)
     if isPunct(cx, "."):
       advance(tmpl, cx)
       if cx.tok.kind == exInt:
@@ -779,7 +781,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
       advance(tmpl, cx)
       if isPunct(cx, "("):
-        let a = argList(tmpl, ports, cx)
+        let a = argList(tmpl, sym, st, cx)
         if cx.dry:
           v = undefinedVal()
           continue
@@ -805,18 +807,18 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       var lo, hi, step = undefinedVal()
       var hasLo, hasHi, hasStep, isSlice = false
       if not isPunct(cx, ":"):
-        lo = expr(tmpl, ports, cx, 1)
+        lo = expr(tmpl, sym, st, cx, 1)
         hasLo = true
       if isPunct(cx, ":"):
         isSlice = true
         advance(tmpl, cx)
         if not (isPunct(cx, ":") or isPunct(cx, "]")):
-          hi = expr(tmpl, ports, cx, 1)
+          hi = expr(tmpl, sym, st, cx, 1)
           hasHi = true
         if isPunct(cx, ":"):
           advance(tmpl, cx)
           if not isPunct(cx, "]"):
-            step = expr(tmpl, ports, cx, 1)
+            step = expr(tmpl, sym, st, cx, 1)
             hasStep = true
       if not isPunct(cx, "]"):
         raise jinjaErr("subscript is not closed", cx.tok.lo)
@@ -825,7 +827,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
         subslice(v, lo, hi, step, hasLo, hasHi, hasStep, isSlice)
     elif isPunct(cx, "("):
       let callLo = cx.tok.lo
-      let a = argList(tmpl, ports, cx)
+      let a = argList(tmpl, sym, st, cx)
       v =
         if cx.dry:
           undefinedVal()
@@ -841,7 +843,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       advance(tmpl, cx)
       var a: Args
       if isPunct(cx, "("):
-        a = argList(tmpl, ports, cx)
+        a = argList(tmpl, sym, st, cx)
       if cx.dry:
         v = undefinedVal()
         continue
@@ -865,7 +867,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       advance(tmpl, cx)
       var a: Args
       if isPunct(cx, "("):
-        a = argList(tmpl, ports, cx)
+        a = argList(tmpl, sym, st, cx)
       if cx.dry:
         v = undefinedVal()
         continue
@@ -881,7 +883,7 @@ func postfix(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, v: JinjaVal): Jin
       break
   v
 
-func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
+func primary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
   ## then the postfix chain.
   var v: JinjaVal
@@ -912,20 +914,20 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
     elif name == "none" or name == "None":
       v = noneVal()
     else:
-      var bound = if cx.dry: undefinedVal() else: cx.ports.lookup(cx.ports.env, name)
+      var bound = if cx.dry: undefinedVal() else: lookupName(sym[], st, name)
       let gi = findIn(GlobalNames, name)
       if bound.kind == vkUndefined and gi >= 0 and isPunct(cx, "("):
         # A global is reached only when the name is unbound, Jinja's own precedence:
         #   context shadows globals, and a skipped branch never gets here. A dry walk still
         #   consumes the argument list, so the skipped text is never left behind as trailing text.
-        let a = argList(tmpl, ports, cx)
+        let a = argList(tmpl, sym, st, cx)
         if cx.dry:
           v = undefinedVal()
         else:
           let gp = GlobalProcs[GlobalName gi]
           if gp.isNil:
             gapWhat("global", tmpl.wordSpan(lo, hi))
-          v = gp(tmpl, lo, hi, a, ports)
+          v = gp(tmpl, lo, hi, a, st)
       else:
         v = bound
   of exPunct:
@@ -935,7 +937,7 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       var parts = newSeq[JinjaVal]()
       var isTuple = false
       while not isPunct(cx, ")"):
-        parts.add expr(tmpl, ports, cx, 1)
+        parts.add expr(tmpl, sym, st, cx, 1)
         if isPunct(cx, ","):
           isTuple = true
           advance(tmpl, cx)
@@ -951,7 +953,7 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       advance(tmpl, cx)
       var parts = newSeq[JinjaVal]()
       while not isPunct(cx, "]"):
-        parts.add forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
+        parts.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
         if isPunct(cx, ","):
           advance(tmpl, cx)
           if isPunct(cx, "]"):
@@ -966,11 +968,11 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       advance(tmpl, cx)
       var dv = DictVal()
       while not isPunct(cx, "}"):
-        let k = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
+        let k = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
         if not isPunct(cx, ":"):
           raise jinjaErr("dict literal entry needs a `:`", cx.tok.lo)
         advance(tmpl, cx)
-        let val = forceOperand(ports, cx, expr(tmpl, ports, cx, 1))
+        let val = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 1))
         if not cx.dry:
           dv.dictSet(pyStr(k), val)
         if isPunct(cx, ","):
@@ -986,9 +988,9 @@ func primary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
     else:
       let spelled = $cx.tok.p0 & (if cx.tok.p1 != '\0': $cx.tok.p1 else: "")
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
-  postfix(tmpl, ports, cx, v)
+  postfix(tmpl, sym, st, cx, v)
 
-func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
+func unary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   ## - `not` binds looser than the comparisons, its operand parsing at comparison
   ##   binding power through `expr`, whose entry counts the operand walk toward
@@ -999,7 +1001,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
   if isWord(tmpl, cx, "not"):
     advance(tmpl, cx)
     let operandLo = cx.tok.lo
-    let v = forceOperand(ports, cx, expr(tmpl, ports, cx, 5))
+    let v = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 5))
     return boolVal(if cx.dry: false else: not isTruthy(v, operandLo))
   if isPunct(cx, "-") or isPunct(cx, "+"):
     let neg = isPunct(cx, "-")
@@ -1011,7 +1013,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
       return intVal(int64.low)
     let operandLo = cx.tok.lo
     enterDepth(cx)
-    let v = forceOperand(ports, cx, unary(tmpl, ports, cx))
+    let v = forceOperand(tmpl, sym, st, cx, unary(tmpl, sym, st, cx))
     dec cx.depth
     if cx.dry:
       return undefinedVal()
@@ -1024,7 +1026,7 @@ func unary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx): JinjaVal =
     else: raise jinjaErr("arithmetic needs a number, this is a " & $v.kind,
         operandLo, cx.tok.lo - operandLo)
   else:
-    primary(tmpl, ports, cx)
+    primary(tmpl, sym, st, cx)
 
 func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
   ## Combines two numbers, or two strings and two sequences under `+`.
@@ -1092,25 +1094,25 @@ func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
+func binOp(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
   ## before the truth test, a boolean position reading the output's bytes.
   case op
   of opAnd:
-    let l = forceOperand(ports, cx, lhs)
+    let l = forceOperand(tmpl, sym, st, cx, lhs)
     if not cx.dry and not isTruthy(l, opLo):
-      skipExpr(tmpl, ports, cx, 4)
+      skipExpr(tmpl, sym, st, cx, 4)
       return l
-    expr(tmpl, ports, cx, 4)
+    expr(tmpl, sym, st, cx, 4)
   of opOr:
-    let l = forceOperand(ports, cx, lhs)
+    let l = forceOperand(tmpl, sym, st, cx, lhs)
     if not cx.dry and isTruthy(l, opLo):
-      skipExpr(tmpl, ports, cx, 3)
+      skipExpr(tmpl, sym, st, cx, 3)
       return l
-    expr(tmpl, ports, cx, 3)
+    expr(tmpl, sym, st, cx, 3)
   of opIn, opNotIn:
-    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, 6))
+    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, 6))
     if cx.dry:
       undefinedVal()
     else:
@@ -1125,10 +1127,10 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     # First rhs parses here, the outer precedence loop leaving the first `~` consumed
     # when it enters this leg, the chain then continuing past it.
     var leaves = @[lhs]
-    leaves.add forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(opConcat) + 1))
+    leaves.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(opConcat) + 1))
     while isPunct(cx, "~"):
       advance(tmpl, cx)
-      leaves.add forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(opConcat) + 1))
+      leaves.add forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(opConcat) + 1))
     if cx.dry:
       undefinedVal()
     else:
@@ -1153,10 +1155,10 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
           inc pidx
       strVal(move acc)
   of opAdd, opSub, opMod:
-    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
+    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
   of opMul, opDiv, opFloorDiv, opPow:
-    skipExpr(tmpl, ports, cx, binPrec(op) + 1)
+    skipExpr(tmpl, sym, st, cx, binPrec(op) + 1)
     # A dry walk is only mapping the skipped-branch spans, no value is read,
     # so the unimplemented operators surface only on a live evaluation.
     if cx.dry:
@@ -1164,7 +1166,7 @@ func binOp(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, lhs: JinjaVal, op: 
     else:
       gapWhat("operator", OpSpelling[op])
   else:
-    let rhs = forceOperand(ports, cx, expr(tmpl, ports, cx, binPrec(op) + 1))
+    let rhs = forceOperand(tmpl, sym, st, cx, expr(tmpl, sym, st, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)
 
 func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
@@ -1201,7 +1203,7 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     inc i
   false
 
-func scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int): Ternary =
+func scanTernary(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
@@ -1209,20 +1211,20 @@ func scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int):
   advance(tmpl, cx)
   let dry = cx.dry
   cx.dry = true
-  discard expr(tmpl, ports, cx, 2) # the then-branch text, unevaluated
+  discard expr(tmpl, sym, st, cx, 2) # the then-branch text, unevaluated
   result.aHi = cx.tok.lo
   if not isWord(tmpl, cx, "if"):
     cx = head
     return
   advance(tmpl, cx)
   result.cLo = cx.tok.lo
-  discard expr(tmpl, ports, cx, 2) # the condition, unevaluated
+  discard expr(tmpl, sym, st, cx, 2) # the condition, unevaluated
   result.cHi = cx.tok.lo
   if isWord(tmpl, cx, "else"):
     result.hasElse = true
     advance(tmpl, cx)
     result.bLo = cx.tok.lo
-    discard expr(tmpl, ports, cx, 1) # the else-branch text, unevaluated
+    discard expr(tmpl, sym, st, cx, 1) # the else-branch text, unevaluated
     result.bHi = cx.tok.lo
   else:
     result.bLo = result.cHi
@@ -1234,7 +1236,7 @@ func scanTernary(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, headLo: int):
   result.isTernary = true
   cx.dry = dry
 
-func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): JinjaVal =
+func expr(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
   ##   a prefix, then infix while the operator binds at least `minPrec`.
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1252,22 +1254,22 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
   var ranTernary = false
   let headLo = cx.tok.lo
   if minPrec <= 1 and cx.tok.kind != exEof and ifWordAhead(tmpl, headLo, cx.stop):
-    let shape = scanTernary(tmpl, ports, cx, headLo)
+    let shape = scanTernary(tmpl, sym, st, cx, headLo)
     if shape.isTernary:
       ranTernary = true
       if cx.dry:
         v = undefinedVal()
       else:
-        let cond = evalRange(tmpl, cx.ports, shape.cLo, shape.cHi, cx.depth)
-        let tested = forceOperand(cx.ports, cx, cond)
+        let cond = evalRange(tmpl, sym, st, cx.force, shape.cLo, shape.cHi, cx.depth)
+        let tested = forceOperand(tmpl, sym, st, cx, cond)
         if isTruthy(tested):
-          v = evalRange(tmpl, cx.ports, headLo, shape.aHi, cx.depth)
+          v = evalRange(tmpl, sym, st, cx.force, headLo, shape.aHi, cx.depth)
         elif shape.hasElse:
-          v = evalRange(tmpl, cx.ports, shape.bLo, shape.bHi, cx.depth)
+          v = evalRange(tmpl, sym, st, cx.force, shape.bLo, shape.bHi, cx.depth)
         else:
           v = undefinedVal()
   if not ranTernary:
-    v = unary(tmpl, ports, cx)
+    v = unary(tmpl, sym, st, cx)
     while true:
       var op = opNone
       if cx.tok.kind == exName:
@@ -1293,27 +1295,28 @@ func expr(tmpl: CompiledTemplate, ports: Ports, cx: var Cx, minPrec: int): Jinja
       if prec == 0 or prec < minPrec:
         break
       if v.kind == vkCall:
-        v = forceOperand(ports, cx, v)
+        v = forceOperand(tmpl, sym, st, cx, v)
       let opLo = cx.tok.lo # the operator token, still current here
       advance(tmpl, cx)
-      v = binOp(tmpl, ports, cx, v, op, opLo)
+      v = binOp(tmpl, sym, st, cx, v, op, opLo)
   dec cx.depth
   v
 
-func evalRange(tmpl: CompiledTemplate, ports: Ports, lo, hi: int, depth = 0): JinjaVal =
+func evalRange(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState,
+    force: MacroForcer, lo, hi: int, depth = 0): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `ExprDepthCap`
-  ## - `ports` carries the lookup, clock and macro-forcer services, so a nested call can still run
-  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, ports: ports)
+  ## - `sym` carries the render's name resolution, `st` its scopes, root and clock
+  ## - `force` is the engine's macro forcer, so a nested call can still run
+  var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth, force: force)
   advance(tmpl, cx)
-  result = expr(tmpl, ports, cx, 1)
+  result = expr(tmpl, sym, st, cx, 1)
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-func evalSpan*(tmpl: CompiledTemplate, ports: Ports, lo, hi: int32): JinjaVal =
+func evalSpan*(tmpl: CompiledTemplate, sym: ptr CompiledSymbols, st: var RenderState, force: MacroForcer, lo, hi: int32): JinjaVal =
   ## Evaluates the expression held in `tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
-  ## - `ports` carries the render services, a nil forcer in them making a consumed macro
-  ##   call a reported gap
+  ## - a nil forcer making a consumed macro call a reported gap
   ## - a macro call that is a whole expression returns pending, for the emit step to stream
-  evalRange(tmpl, ports, lo.int, hi.int, 0)
+  evalRange(tmpl, sym, st, force, lo.int, hi.int, 0)
