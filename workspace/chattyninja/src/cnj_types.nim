@@ -16,22 +16,24 @@
 #   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name arena)
 #     │  cnj_engine dispatches pull() steps over the arena
 #     ▼
-#   RenderState (rows + scopes + pending Piece)
-#     │  evalSpan drives jinja_interpolation, expressions reading the render state
-#     │  directly and reaching the statement tier only through the MacroForcer handle
+#   Context = the object every render call holds (tmpl + symbols + state + force)
+#     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one `var Context` borrow
+#     ▼
+#   RenderState (rows + scopes + pending Piece), the context's per-instantiation third field
+#     │  evalSpan drives jinja_interpolation on the same context borrow, expressions reading
+#     │  the render state directly and reaching the statement tier only through `c.force`
 #     ▼
 #   Piece (pkSpan, pkStr, pkCut or pkLazy), drained into the caller's window
 #
-# Lifecycle and ownership of the render state and its forcer handle
+# Lifecycle and ownership inside the context
 #
 #   RenderState, one per render, owned by the caller's Context
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
 #
-#   macro-force handle, a parameter threaded one call deep, no field anywhere holding it
-#     bound by the engine at its dispatch sites, expressions receiving it as a stateless value
-#     the render state it serves arriving as the caller's own `var RenderState` borrow
+#   force, the engine's macro-force handle, bound once at `startRender` into the context, stateless,
+#     so every `Context` copy carries the same callable
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs

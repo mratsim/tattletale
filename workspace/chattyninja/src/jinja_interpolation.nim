@@ -5,9 +5,9 @@
 
 # Fused expression walker of the chattyninja engine.
 # One `lo..hi` span of template text is parsed and evaluated in a single pass, no expression
-# becomes a node. The walker reads the render state directly, scopes and root through
-# the pure `lookupName` in cnj_types, the clock through the state's own field, reaching
-# the statement tier only through the engine's `MacroForcer` handle. A dry pass advances
+# becomes a node. The walker takes the caller's `var Context` borrow, scopes and root resolve
+# through the pure `lookupName` in cnj_types, the clock is the context's own field,
+# the statement tier reached only through `c.force`. A dry pass advances
 # tokens without evaluating, one mechanism three
 # places use:
 #
