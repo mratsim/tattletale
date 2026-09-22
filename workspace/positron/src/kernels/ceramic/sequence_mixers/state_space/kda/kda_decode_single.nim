@@ -15,8 +15,8 @@
 ## - g is a (B·Hk, Dk) matrix, one log-decay per KEY channel, decayed elementwise BEFORE the kv read
 ## - the kv read contracts the decayed state kᵀ·Diag(exp(g))·S, a post-contraction decay kᵀ·S·exp(g) is the GDN op
 ##
-## | ------------ | ----------------------------------------------------------------------------------------------- |
 ## | contract     | value                                                                                           |
+## | ------------ | ----------------------------------------------------------------------------------------------- |
 ## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync      |
 ## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                     |
 ## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                  |
@@ -26,23 +26,36 @@
 ## | decay        | exp2(g·log2e) per channel, log2e = 1.4426950408889634'f32 (Metal has no exp device builtin)     |
 ## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32               |
 ##
+## | contract            | value                                                                                                                                                      |
+## | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                         |
+## | g precondition      | finite and ≤ 0 per key channel (−exp(A_log)·softplus(·) ≤ 0 by construction), the kernel applies no clamp, a violating g explodes the persistent f32 state |
+## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                                   |
+##
 ## - the recorded contract keeps q/k/g/beta f32, this spelling's family axis covers v and y only
 ## - the bf16 core is the recorded Kimi spelling, the fp16 core follows the family dtype verdict
 ##
-## Design provenance:
-##   ported from the WIP spelling state_space/kda/kda_decode_single.nim
-##   in the 20260912-positron-taxonomy worktree, kernel design mined, test shapes not carried over
+## - design provenance, WIP spelling in the 20260912-positron-taxonomy worktree,
+##   kernel design mined, test shapes not carried over
 ##
-## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
+## - Entries are consumer-side, a `metal` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
 ## - The engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ## - The decode mega kernel composes the tile cores `kdaDecodeStepTileF16At` and `kdaDecodeStepTileBf16At` inline instead
 ##
-## Binding note:
-## - hosts binding through the Metal engine's no-copy path get in-place state updates
-##   and visible y writes from one run (page-aligned pointer, page-multiple byte length)
-## - `state` is the engine's output buffer, `y` is written by the kernel
+## Binding and state ABI:
+## - hosts binding through the Metal engine's no-copy path get in-place state
+##   updates and visible y writes from one run
+## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
+##
 ## - any other binding copies and the y writes are lost
+## - `state` is the engine's output buffer, `y` is written by the kernel
+##
+## - the state's ABI is (B·Hv, Dv, Dk) f32, dense row-major, head-major over
+##   (sequence, value head), one unrounded fp32 tile per (bh, Dv-row-block)
+## - the f32 state buffer persists across steps and launches with no in-kernel reset,
+##   the host owns the layout and the lifetime
+## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 import workspace/crucible
 import workspace/ceramic
 
@@ -69,9 +82,13 @@ proc kdaDecodeStepTileF16At*(
   ##
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds
-  ## - the per-channel decay applies BEFORE the kv read, the recurrence's step order:
+  ## - the per-channel decay applies BEFORE the kv read, the recurrence's step order
   ##   decayed[dkc] = exp2(g[dkc]·log2e)·S[dkc], the kv read contracts the decayed state
   ## - the state stores in place, f32, no rounding
+  ##
+  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
+  ## - precondition, qScale finite and > 0, launch_contract.assertHeadMapping
+  ##   and launch_contract.assertQScale assert both at the launch site
   ##
   ##   kv_mem[row] = Σ_dkc decayed[row][dkc]·k[dkc]
   ##   delta[row] = β·(v[row] − kv_mem[row])

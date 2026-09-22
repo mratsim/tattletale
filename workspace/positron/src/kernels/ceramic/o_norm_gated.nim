@@ -12,16 +12,16 @@
 ##   out = bf16(bf16(w · bf16(x · rstd)) · silu(g))    silu(g) = g / (1 + exp2(−g·log2e))
 ##   chain:  x → x·rstd → bf16 → ·w → bf16 → ·silu(g) → bf16
 ##
-## | contract       | value                                                                                                 |
-## | -------------- | ----------------------------------------------------------------------------------------------------- |
-## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32 (the recorded layer's 1e-6)         |
-## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side |
-## | rstd           | rsqrt(mean(x²) + eps) over the row                                                                    |
-## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                      |
-## | Dv             | static (128), equal to the tile width, one row_sum spans the tile                                     |
-## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                  |
-## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between         |
-## | silu form      | f32 over the widened gated operand, the same 1-ulp-class exponential form as silu_and_mul             |
+## | contract       | value                                                                                                      |
+## | -------------- | ---------------------------------------------------------------------------------------------------------- |
+## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32, must be > 0 (the recorded layer's 1e-6) |
+## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side      |
+## | rstd           | rsqrt(mean(x²) + eps) over the row                                                                         |
+## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                           |
+## | Dv             | static (128), equal to the tile width, one row_sum spans the tile                                          |
+## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                       |
+## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between              |
+## | silu form      | f32 over the widened gated operand, the same 1-ulp-class exponential form as silu_and_mul                  |
 ##
 ## Fusion contract (the inline-tile property):
 ## - {.device.} tile procs `rowRstd`, `rmsWeightElem`, `siluMulElem`, `rmsNormGatedElem`
@@ -40,7 +40,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Local device helpers ────────────────────────────────────────────
-
 proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
     tile: var RtLeft[T, R, C, A], r0, rowLimit: int32) {.device.} =
   ## Zeroes the tile's rows from the `rowLimit` boundary up. Argument `r0` is the tile's
@@ -117,6 +116,8 @@ proc rowRstd[R, C: static int; A: static MmaAtom](
   ## - Per-lane rstd = rsqrt(mean over the tile row of y² + eps).
   ## - Each lane's fragments share one tile row, the atom's lane→element mapping,
   ##   and C is the norm width, so the row reduction is one row_sum inside the tile.
+  ## - eps must be > 0, an all-zero row makes the mean 0 and rsqrt(0) = +Inf,
+  ##   which the store writes silently, the launch site asserts it (launch_contract.assertEpsPositive)
   var y32: rt_l(float32, R, C)
   y32.widenBf16(y)
   var sq: rt_l(float32, R, C)

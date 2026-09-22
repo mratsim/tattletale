@@ -31,6 +31,13 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state     |
 ## | decay / q̃   | exp2(cumg·log2e) per channel in-device, log2e = 1.4426950408889634'f32, q̃ = per-element division by the runtime f32 qScale    |
 ##
+## | contract            | value                                                                                                                                                                         |
+## | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | lanes               | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                            |
+## | cumg precondition   | finite and monotone non-increasing in each key (host prefix of g, terms ≤ 0), monotonicity keeps the pairdecay argument ≤ 0, a rising cumg overflows the persistent f32 state |
+## | qScale precondition | finite and > 0, the device divides q per element by it (launch_contract.assertQScale at the launch site)                                                                      |
+## | index bound         | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                        |
+##
 ## | provenance | source                                                                                                                                                        |
 ## | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | schedule   | the naive WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/naive/naive_kda.nim, the same per-channel cumg, pairdecay, solve and carry formulas |
@@ -67,11 +74,19 @@
 ##   one call-site line per static binding set
 ## - the engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ##
-## Binding note:
-## - hosts binding through the Metal engine's no-copy path get in-place state updates
-##   and visible y writes from one run (page-aligned pointer, page-multiple byte length)
-## - `state` is the engine's output buffer, `y` is written by the kernel
+## Binding and state ABI:
+## - hosts binding through the Metal engine's no-copy path get in-place state
+##   updates and visible y writes from one run
+## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
+##
 ## - any other binding copies and the y writes are lost
+## - `state` is the engine's output buffer, `y` is written by the kernel
+##
+## - the state's ABI is (B·Hv, Dv, Dk) f32, dense row-major, head-major over
+##   (sequence, value head), one unrounded fp32 tile per (bh, Dv-row-block)
+## - the f32 state buffer persists across steps and launches with no in-kernel reset,
+##   the host owns the layout and the lifetime
+## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
 import workspace/crucible
 import workspace/ceramic
@@ -113,6 +128,10 @@ proc kdaPrefillChunkScanBf16At*(
   ##   per-channel cumulative log decay
   ##
   ## - the u solve is sequential in t, the sums over s walk s ascending
+  ##
+  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
+  ## - precondition, qScale finite and > 0, launch_contract.assertHeadMapping
+  ##   and launch_contract.assertQScale assert both at the launch site
   ##
   ##   per token:   dT ─→ G_t, H_t reads ─→ u_t solve ─→ y_t store
   ##   chunk end   S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s

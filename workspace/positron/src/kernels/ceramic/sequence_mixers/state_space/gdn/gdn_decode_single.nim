@@ -7,36 +7,45 @@
 
 # ──────────────────────────────  GDN decode_single (one gated-delta-rule step per threadgroup)  ───────────────────────────────
 
-## One decode step (T = 1) of the gated delta-rule recurrence
-## (arXiv:2412.06464) on the ceramic Tile API:
+## One decode step (T = 1) of the gated delta-rule recurrence (arXiv:2412.06464):
 ##
 ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
 ##
-## | contract     | value                                                                                                                              |
-## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                         |
-## | q, k         | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                            |
-## | v, beta      | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                    |
-## | y            | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                 |
-## | family dtype | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                    |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                       |
-## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                 |
-## | decay / q̃   | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
+## | contract       | value                                                                                                                                                     |
+## | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                                |
+## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                                   |
+## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                                           |
+## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                                        |
+## | family dtype   | fp16 primary (`gdnDecodeStepTileF16`), bf16 the range-robust fallback (`gdnDecodeStepTileBf16`)                                                           |
+## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                              |
+## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                        |
+## | decay / q̃     | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin)                        |
+## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                        |
+## | g precondition | finite and ≤ 0: g = −exp(A_log)·softplus(·) ≤ 0 by construction, the kernel applies no clamp, a g > 0 or a non-finite g explodes the persistent f32 state |
 ##
-## Design provenance:
-##   ported from the WIP spelling state_space/gdn/gdn_decode_single.nim
-##   in the 20260912-positron-taxonomy worktree, kernel design mined, test shapes not carried over
+## - design provenance, WIP spelling in the 20260912-positron-taxonomy worktree,
+##   kernel design mined, test shapes not carried over
 ##
 ## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
 ## - The engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ## - The decode mega kernel composes the tile core `gdnDecodeStepTileBf16At` and `gdnDecodeStepTileF16At` inline instead
 ##
-## Binding note:
-## - hosts binding through the Metal engine's no-copy path get in-place state updates
-##   and visible y writes from one run (page-aligned pointer, page-multiple byte length)
-## - `state` is the engine's output buffer, `y` is written by the kernel
+## Binding and state ABI:
+## - hosts binding through the Metal engine's no-copy path get in-place state
+##   updates and visible y writes from one run
+## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
+##
 ## - any other binding copies and the y writes are lost
+## - `state` is the engine's output buffer, `y` is written by the kernel
+##
+## - the state's ABI is (B·Hv, Dv, Dk) f32, dense row-major, head-major over
+##   (sequence, value head), one unrounded fp32 tile per (bh, Dv-row-block)
+## - the f32 state buffer persists across steps and launches with no in-kernel reset,
+##   the host owns the layout and the lifetime
+## - rebinding the state to a 16-bit dtype or a strided view silently
+##   corrupts the recurrence
 
 import workspace/crucible
 import workspace/ceramic
@@ -46,32 +55,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Module-local device helpers ─────────────────────────────────────
-
-proc gdnWidenBf16*[A, B: static MmaAtom; R, C: static int](
-    dst: var RtLeft[float32, R, C, A],
-    src: RtLeft[bfloat16, R, C, B]) {.device.} =
-  ## Exact bf16 → f32 widening, walking each tile's own atom lane→element mapping.
-  ## Atoms in one 8×8×8 geometry class share the lane→element geometry, the fragment
-  ## indices agree elementwise.
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
-
-proc gdnWidenF16*[A, B: static MmaAtom; R, C: static int](
-    dst: var RtLeft[float32, R, C, A],
-    src: RtLeft[float16, R, C, B]) {.device.} =
-  ## Exact fp16 → f32 widening, same lane→element walk as `gdnWidenBf16`.
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
@@ -93,6 +76,9 @@ proc gdnDecodeStepTileBf16At*(
   ##
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds
+  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
+  ##   (launch_contract.assertHeadMapping at the launch site)
+  ##
   ## - the decay applies before the kv read (the recurrence's step order)
   ## - the state stores in place, f32, no rounding
   ##

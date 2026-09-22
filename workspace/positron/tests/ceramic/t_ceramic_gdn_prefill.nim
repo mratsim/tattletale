@@ -112,6 +112,7 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_gdn
 import ceramic_pagebuf
+import ../../src/kernels/ceramic/launch_contract
 
 # ─── Device entries, one per (family dtype, chunk length) binding ─────
 
@@ -452,6 +453,13 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
   var gPA = gB.pa()
   var betaPA = betaB.pa()
 
+  # Launch-site contracts, see the kernel modules' binding and state ABI docs
+  assertHeadMapping(Hv, Hk, hkRatio)
+  assertLanes32(32)
+  assertNocopyBinding(statePA)
+  assertNocopyBinding(yPA)
+  assertPrefillExtent32(qkRows, T, Dk)
+  assertPrefillExtent32(bhMax, T, Dv)
   var worstState = 0.0'f64
   var worstStateUse = 0.0'f64
   var worstCont = 0.0'f64

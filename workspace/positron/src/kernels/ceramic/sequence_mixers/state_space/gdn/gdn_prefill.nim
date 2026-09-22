@@ -28,6 +28,12 @@
 ## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state         |
 ## | decay / q̃   | exp2(g·log2e), log2e = 1.4426950408889634'f32, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
+## | contract       | value                                                                                                                                                                                     |
+## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | lanes          | 32 per threadgroup, the lane→element walk is a 32-lane contract (launch_contract.assertLanes32 at the launch site)                                                                        |
+## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus(·) ≤ 0 by construction), the in-block cumg prefix inherits the sign, the kernel applies no clamp and a violating g explodes the persistent f32 state |
+## | index bound    | the head/sequence linear bases are int32, rows·T·dim < 2^31 (launch_contract.assertPrefillExtent32 at the launch site)                                                                    |
+##
 ## | provenance | source                                                                                                                                                    |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | schedule   | the naive WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/naive/naive_gdn.nim, the same cumg, pairdecay, solve and carry formulas at fp32 |
@@ -35,6 +41,8 @@
 
 ##
 ## Implementation shape:
+##   per chunk:  t 0 → t 1 → … → t ChunkC-1   u solve, then the carry update
+##   chunks:     0 → 1 → … → N-1              each carry feeds the next chunk
 ## - each lane computes its own state row's scalars (the solve, y, the u contributions),
 ##   so the u vectors live in a per-lane local array, no inter-threadgroup data movement needed
 ## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s) pair,
@@ -43,15 +51,23 @@
 ##   the register budget (per-lane state and u arrays are the only residents, no (ChunkC, Dk) working tile)
 ##
 ## Entries are consumer-side:
-## - a `metal:` block wraps the grid-driven proc with concrete static (Dk, Dv, ChunkC),
+## - a `metal` block wraps the grid-driven proc with concrete static (Dk, Dv, ChunkC),
 ##   one call-site line per static binding set
 ## - the engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ##
-## Binding note:
-## - hosts binding through the Metal engine's no-copy path get in-place state updates
-##   and visible y writes from one run (page-aligned pointer, page-multiple byte length)
-## - `state` is the engine's output buffer, `y` is written by the kernel
+## Binding and state ABI:
+## - hosts binding through the Metal engine's no-copy path get in-place state
+##   updates and visible y writes from one run
+## - the path needs a page-aligned pointer and a page-multiple byte length, launch_contract.assertNocopyBinding asserts it
+##
 ## - any other binding copies and the y writes are lost
+## - `state` is the engine's output buffer, `y` is written by the kernel
+##
+## - the state's ABI is (B·Hv, Dv, Dk) f32, dense row-major, head-major over
+##   (sequence, value head), one unrounded fp32 tile per (bh, Dv-row-block)
+## - the f32 state buffer persists across steps and launches with no in-kernel reset,
+##   the host owns the layout and the lifetime
+## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
 import workspace/crucible
 import workspace/ceramic
@@ -77,10 +93,15 @@ proc gdnPrefillChunkScanBf16At*(
   ## One (bh, TileR-row) state tile of the chunked GDN prefill scan, the whole
   ## token sequence walked over the register state at the caller's coordinates:
   ##
+  ##   t 0 → t 1 → … → t ChunkC-1   u solve per t, sums over s ascending
+  ##
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds before the final in-place store
   ## - the state entering a chunk is S_carry, untouched until the chunk-end carry update
   ## - the u solve is sequential in t, the sums over s walk s ascending
+  ##
+  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
+  ##   (launch_contract.assertHeadMapping at the launch site)
   ##
   ## `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block.
   ## The grid-driven wrapper passes the threadgroup coordinates.
