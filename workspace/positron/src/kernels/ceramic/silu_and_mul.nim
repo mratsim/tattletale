@@ -20,7 +20,7 @@
 ##
 ## Per-element semantics:
 ##   - silu computed in fp32 from the fp16 gate (exact promotion) as
-##     `g / (1 + exp2(−g·log2e))` with log2e = 1.4426950408889634'f32
+##     `g / (1 + exp2(−g·log2e))` with log2e = math_consts.Log2e
 ##     and the backend's native exp2 (1-ulp class, not a bit-exact
 ##     Taylor form)
 ##   - the silu result rounds to fp16, then the optional `actLimit`
@@ -52,6 +52,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import math_consts
 import ./tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
@@ -79,7 +80,7 @@ proc siluAndMulElem*[R, C: static int; A: static MmaAtom](
       for v in 0 ..< vpt:
         let g32 = gate.frags[n][m].frag[v].to(float32)
         let u32 = up.frags[n][m].frag[v].to(float32)
-        var s = g32 / (1.0'f32 + exp2(-g32 * 1.4426950408889634'f32))
+        var s = g32 / (1.0'f32 + exp2(-g32 * Log2e))
         var u = u32
         if actLimit != 0.0'f32:
           s = min(s, actLimit)

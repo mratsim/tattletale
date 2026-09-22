@@ -54,6 +54,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import math_consts
 import ./tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
@@ -93,7 +94,7 @@ proc siluMul16[A: static MmaAtom](
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         let g = gHalf.frags[n][m].frag[v]
-        let s = g / (1.0'f32 + exp2(-g * 1.4426950408889634'f32))
+        let s = g / (1.0'f32 + exp2(-g * Log2e))
         dst.frags[n][m].frag[v] = (s * uHalf.frags[n][m].frag[v]).to(float16)
 
 proc accScale[A: static MmaAtom](
@@ -149,9 +150,9 @@ proc gatherScores[AL, AS: static MmaAtom](
     let g1 = simdShuffle(logits.frags[0][m].frag[1], uint32(srcLane))
     if m == r:
       scores.frags[0][0].frag[0] =
-        1.0'f32 / (1.0'f32 + exp2(-g0 * 1.4426950408889634'f32))
+        1.0'f32 / (1.0'f32 + exp2(-g0 * Log2e))
       scores.frags[0][0].frag[1] =
-        1.0'f32 / (1.0'f32 + exp2(-g1 * 1.4426950408889634'f32))
+        1.0'f32 / (1.0'f32 + exp2(-g1 * Log2e))
 
 proc topk4[A: static MmaAtom](
     scores: RtLeft[float32, 8, 8, A],
