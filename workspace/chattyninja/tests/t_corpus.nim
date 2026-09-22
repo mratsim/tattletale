@@ -441,19 +441,27 @@ proc renderChunked[N: static int](m: CompiledTemplate, sym: CompiledSymbols, ctx
 # Totality contract:
 # every NodeKind has a non-nil step, checked over every kind. A nil entry
 # would send a render through a null pointer.
-for k in NodeKind:
-  doAssert not Steps[k].isNil, "steps has no entry for " & $k
+
+proc testStepsTotality() =
+  for k in NodeKind:
+    doAssert not Steps[k].isNil, "steps has no entry for " & $k
+
 
 # Equality must reject a one-byte change:
 # a comparison that cannot fail leaves the corpus walk vacuous.
-block equalityRejectsChange:
+
+proc testEqualityRejectsChange() =
+
   doAssert sameBytes("abc", "abc")
   doAssert not sameBytes("abc", "abd"), "sameBytes accepted a changed byte"
   doAssert not sameBytes("abc", "abcd"), "sameBytes accepted a length change"
   doAssert not sameBytes("", "a"), "sameBytes accepted empty against non-empty"
 
+
 # Every recorded corpus row through the three delivery paths.
-block corpusDelivery:
+
+proc testCorpusDelivery() =
+
   const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47flash", "glm53flash",
       "gptoss20b", "kimi", "lagunaxs21", "lfm25", "ling30", "mimo25", "mistral7bv01",
       "moonlight", "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38flashnext"]
@@ -587,11 +595,14 @@ block corpusDelivery:
   doAssert gapRows == 13, "expected 13 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
+
 # Window-capacity contract of the delivery `Cursor`:
 #   an append the window cannot hold raises the located `ceWindow` error naming
 #   capacity and shortfall, writing nothing
 # the measuring cursor counts without touching storage, no raise past any size
-block windowContract:
+
+proc testWindowContract() =
+
   var small: array[4, char]
   var sb = over(small)
   try:
@@ -614,9 +625,12 @@ block windowContract:
   measure.add "hello"
   doAssert measure.len == 5
 
+
 # Boundary shapes of the delivery window on one corpus row.
 # Oversized, exact-size, 1-byte and stop-then-resume windows all deliver the recorded bytes.
-block boundaryShapes:
+
+proc testBoundaryShapes() =
+
   let src = templateSource("deepseekv2lite")
   let (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
@@ -671,8 +685,11 @@ block boundaryShapes:
   doAssert tail == want[head.len ..< want.len], "the resumed bytes overlapped or diverged"
   doAssert head & tail == want, "stop-then-resume is not the whole render"
 
+
 # A zero-capacity buffer reports 0 without stepping the render.
-block zeroCapacityBuffer:
+
+proc testZeroCapacityBuffer() =
+
   let src = templateSource("deepseekv2lite")
   let (m, tables) = parseTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
@@ -691,9 +708,12 @@ block zeroCapacityBuffer:
     acc.add bytesOf(window, n)
   doAssert acc == row.rendered, "the render after a zero-capacity pull differs from the recorded bytes"
 
+
 # Partial consumption stops mid-piece, and resumption from the same driver
 # completes the render without losing or re-handing a byte.
-block partialConsumptionResumes:
+
+proc testPartialConsumptionResumes() =
+
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
     let (m, tables) = parseTemplate(src)
@@ -720,6 +740,7 @@ block partialConsumptionResumes:
     doAssert head & tail == r.rendered,
         suite & ": the resumed bytes overlapped or diverged from the recording"
 
+
 func listCtx(): JinjaVal =
   ## One context holding `m`, a mixed container whose serialization exceeds a tiny window.
   var inner = DictVal()
@@ -730,12 +751,16 @@ func listCtx(): JinjaVal =
   dictSet(cd, "m", dictVal(inner))
   dictVal(cd)
 
+
 const listRepr = "{'alpha': 'one', 'beta': 'two', 'gamma': ['x', 'y', 'z']}"
   ## Python `repr()` of the `m` value above, the independent byte truth for the drains.
 
+
 # A container emit drains as a lazy piece across pull calls byte-exact, a window far below
 # the serialization forcing the drain mid-value.
-block lazyWindowDrain:
+
+proc testLazyWindowDrain() =
+
   let ctx = listCtx()
   let src = "{{ m }}"
   let (m, tables) = parseTemplate(src)
@@ -755,9 +780,12 @@ block lazyWindowDrain:
   doAssert lazyPieces >= 3, "the lazy piece drained in fewer than three pulls, " &
       "the mid-piece drain is unobserved"
 
+
 # A `~` concat emit accumulates its leaves into one string pending piece.
 # An 8-byte window still forces the drain across several pulls mid-value.
-block concatWindowDrain:
+
+proc testConcatWindowDrain() =
+
   let ctx = listCtx()
   let src = "{{ m ~ '::' ~ m }}"
   let (m, tables) = parseTemplate(src)
@@ -778,9 +806,12 @@ block concatWindowDrain:
   doAssert lazyPulls > 2, "the concat drained in fewer than three pulls, the " &
       "mid-value drain is unobserved"
 
+
 # Resumption across a value boundary:
 # an emit value longer than the buffer drains across pull calls through the pending piece.
-block valueBoundary:
+
+proc testValueBoundary() =
+
   let longA = repeat("alpha-", 50)
   let longB = repeat("beta-", 40)
   let src = "{% for m in messages %}{{ m.content }}{% endfor %}"
@@ -802,8 +833,11 @@ block valueBoundary:
   let whole = renderAllPull(m, tables, ctx, 0.0)
   doAssert whole == want, "pullAll differs across the value boundary"
 
+
 # Span pieces copy out of `CompiledTemplate.jinja` and drain across calls byte-exact.
-block spanDrain:
+
+proc testSpanDrain() =
+
   let verbatim = repeat("literal text ", 15)
   let src = verbatim & "{{ m }}"
   var ctxd = DictVal()
@@ -828,10 +862,13 @@ block spanDrain:
   doAssert acc == want, "the span-drain render differs from the string render"
   doAssert spanPulls > 0, "no pull drained a pending span piece"
 
+
 # A raise inside a for-filter propagates per the pull contract. The loop cursor stays
 # committed past the failed item and a repull resumes after it. One-byte window first,
 # where every byte delivered before the failing call is already with the caller.
-block filterRaiseRepull:
+
+proc testFilterRaiseRepull() =
+
   var msgs = newSeq[JinjaVal]()
   msgs.add strVal("aa")
   msgs.add intVal(7)
@@ -904,10 +941,13 @@ block filterRaiseRepull:
   doAssert wideRest == "[ab]post",
       "the wide-window repull did not resume after the discarded bytes"
 
+
 # A streamed macro call resolves names against the caller's scopes only before the call
 # and against its own scopes only inside the body:
 # the macro scope is popped on close.
-block macroScopePop:
+
+proc testMacroScopePop() =
+
   let leakCaller = "{% macro mm(q) %}[{{ q }}]{% endmacro %}" &
       "{% set q = 'caller' %}{{ mm('inner') }}:{{ q }}"
   doAssert renderToString(leakCaller, listCtx()) == "[inner]:caller",
@@ -917,13 +957,16 @@ block macroScopePop:
   doAssert renderToString(leakBody, listCtx()) == "body:",
       "a macro body binding leaked into the caller's name resolution"
 
+
 # Every close shape pops exactly the row's own scope range, the shapes being
 # for exhaust, empty-body for, for break, macro body end, macro boundary stop
 # and generation span.
 # A binding set in an enclosing row's scope survives every inner close.
 # A close popping one scope past the row's mark loses an outer binding, showing
 # the undefined fallback in its place in the render.
-block nestedRowClosesKeepOuterScope:
+
+proc testNestedRowClosesKeepOuterScope() =
+
   let src = "{% macro mm() %}{% set q = 'Q' %}{{ q }}{% endmacro %}" &
       "{% for i in items %}{% set x = 'X' ~ i %}" &
       "{% for j in inner %}{% endfor %}{{ x }}" &
@@ -938,11 +981,14 @@ block nestedRowClosesKeepOuterScope:
   doAssert renderToString(src, dictVal(ctx)) == want,
       "a row close popped past the row's own scope mark and lost an outer binding"
 
+
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,
 # plus the UTF-16 surrogate pair for a code point beyond the Basic Multilingual Plane. The corpus records `ensure_ascii`-off output,
 # so this suite checks the engine's escape set directly:
 # uppercase hex digits and the surrogate pair.
-block ensureAsciiEscapes:
+
+proc testEnsureAsciiEscapes() =
+
   let raw = strVal("a\tb\rc\bd\x0Ce\x01f\"g\\h<i>j&k'lém😀n")
   doAssert toJson(raw, JsonOpts(ensureAscii: true)) ==
       "\"a\\tb\\rc\\bd\\fe\\u0001f\\\"g\\\\h\\u003ci\\u003ej\\u0026k\\u0027l\\u00E9m\\uD83D\\uDE00n\"",
@@ -951,251 +997,282 @@ block ensureAsciiEscapes:
       "\"a\\tb\\rc\\bd\\fe\\u0001f\\\"g\\\\h\\u003ci\\u003ej\\u0026k\\u0027lém😀n\"",
       "the raw-utf8 rendering differs from the expected escapes"
 
+
 # Allocation counting. Compiled only under `-d:nimAllocStats`. A failing doAssert
 # there hangs the run with no output.
-when defined(nimAllocStats):
-  privateAccess(AllocStats)
 
-  template allocsOf(body: untyped): int =
-    ## Counts `alloc` calls made by `body`, with allocator state warmed by the caller.
+privateAccess(AllocStats)
+
+template allocsOf(body: untyped): int =
+  ## Counts `alloc` calls made by `body`, with allocator state warmed by the caller.
+  let before = getAllocStats()
+  body
+  (getAllocStats() - before).allocCount
+
+
+proc testAllocDrainWindow() =
+
+  let src = templateSource("deepseekv2lite")
+  let (m, tables) = parseTemplate(src)
+  let row = loadRow("deepseekv2lite", "assistant_history")
+
+  # Warm-up renders, uncounted:
+  # first-touch allocator state settles here.
+  for _ in 0 ..< 3:
+    discard renderPull(m, tables, row.context, row.clock, 1)
+    discard renderAllPull(m, tables, row.context, row.clock)
+    discard renderToString(src, row.context, row.clock)
+
+  # A pull that enters on a pending piece with bytes left only drains it, no step runs,
+  # so it must allocate nothing.
+  var d = startRender(m, tables, row.context, row.clock)
+  var one: array[1, char]
+  var acc = ""
+  var drainCalls = 0
+  while true:
+    let pending = d.state.pend.kind != pkNone and pieceRemaining(d.state.pend) > 0
     let before = getAllocStats()
-    body
-    (getAllocStats() - before).allocCount
+    let n = pull(d, one)
+    let used = (getAllocStats() - before).allocCount
+    if n == 0:
+      break
+    acc.add one[0]
+    if pending:
+      inc drainCalls
+      doAssert used == 0, "a pull that only drained pending bytes allocated " & $used
+  doAssert acc == row.rendered, "the counted render disagrees with the recorded bytes"
+  doAssert drainCalls > 0, "no pending-piece drain was counted"
+  echo "t_corpus alloc: ", drainCalls, " pending-piece drain calls, all 0 allocs"
 
-  block allocDrainWindow:
-    let src = templateSource("deepseekv2lite")
-    let (m, tables) = parseTemplate(src)
-    let row = loadRow("deepseekv2lite", "assistant_history")
+  # Whole-render comparison:
+  # the pull path against the string path, whose count also covers parsing the template
+  # and therefore bounds the pull total from above.
+  var dTotal = startRender(m, tables, row.context, row.clock)
+  let pullAllocs = allocsOf:
+    discard pullAll(dTotal)
+  let strAllocs = allocsOf:
+    discard renderToString(src, row.context, row.clock)
+  doAssert pullAllocs <= strAllocs, "the pull render allocated " & $pullAllocs &
+      " against the string render's " & $strAllocs
+  echo "t_corpus alloc: full pull render ", pullAllocs, " allocs, string render ", strAllocs,
+      " allocs"
 
-    # Warm-up renders, uncounted:
-    # first-touch allocator state settles here.
-    for _ in 0 ..< 3:
-      discard renderPull(m, tables, row.context, row.clock, 1)
-      discard renderAllPull(m, tables, row.context, row.clock)
-      discard renderToString(src, row.context, row.clock)
 
-    # A pull that enters on a pending piece with bytes left only drains it, no step runs,
-    # so it must allocate nothing.
-    var d = startRender(m, tables, row.context, row.clock)
-    var one: array[1, char]
-    var acc = ""
-    var drainCalls = 0
-    while true:
-      let pending = d.state.pend.kind != pkNone and pieceRemaining(d.state.pend) > 0
-      let before = getAllocStats()
-      let n = pull(d, one)
-      let used = (getAllocStats() - before).allocCount
-      if n == 0:
-        break
-      acc.add one[0]
-      if pending:
-        inc drainCalls
-        doAssert used == 0, "a pull that only drained pending bytes allocated " & $used
-    doAssert acc == row.rendered, "the counted render disagrees with the recorded bytes"
-    doAssert drainCalls > 0, "no pending-piece drain was counted"
-    echo "t_corpus alloc: ", drainCalls, " pending-piece drain calls, all 0 allocs"
+# Micro attribution over a 10-message for-loop context:
+# a warm-up render per template stays uncounted, then `getAllocStats()` deltas measure
+# the counted renders. DictGet lookup floors are measured in the same run.
+# Every assert below is an upper bound taken at this binary's measured value:
+# allocation inflation fails the bound, a lower count passing it.
+# - an emit-role render costs nothing beyond the loop machinery, its lookups included
+# - an emit-content render costs at most one lookup copy per emit, the accepted residual
+# - a punctuator evaluation and the pending-piece move of an emit string cost 0
 
-    # Whole-render comparison:
-    # the pull path against the string path, whose count also covers parsing the template
-    # and therefore bounds the pull total from above.
-    var dTotal = startRender(m, tables, row.context, row.clock)
-    let pullAllocs = allocsOf:
-      discard pullAll(dTotal)
-    let strAllocs = allocsOf:
-      discard renderToString(src, row.context, row.clock)
-    doAssert pullAllocs <= strAllocs, "the pull render allocated " & $pullAllocs &
-        " against the string render's " & $strAllocs
-    echo "t_corpus alloc: full pull render ", pullAllocs, " allocs, string render ", strAllocs,
-        " allocs"
+proc testAllocMicro() =
 
-  # Micro attribution over a 10-message for-loop context:
-  # a warm-up render per template stays uncounted, then `getAllocStats()` deltas measure
-  # the counted renders. DictGet lookup floors are measured in the same run.
-  # Every assert below is an upper bound taken at this binary's measured value:
-  # allocation inflation fails the bound, a lower count passing it.
-  # - an emit-role render costs nothing beyond the loop machinery, its lookups included
-  # - an emit-content render costs at most one lookup copy per emit, the accepted residual
-  # - a punctuator evaluation and the pending-piece move of an emit string cost 0
-  block allocMicro:
-    const msgCount = 10
-    let iters = 50
+  const msgCount = 10
+  let iters = 50
 
-    func msgVal(role, content: string): JinjaVal =
-      ## Builds one chat message carrying the two keys the templates read.
-      var d = DictVal()
-      dictSet(d, "role", strVal(role))
-      dictSet(d, "content", strVal(content))
-      dictVal(d)
+  func msgVal(role, content: string): JinjaVal =
+    ## Builds one chat message carrying the two keys the templates read.
+    var d = DictVal()
+    dictSet(d, "role", strVal(role))
+    dictSet(d, "content", strVal(content))
+    dictVal(d)
 
-    var msgs = newSeq[JinjaVal]()
-    for i in 0 ..< msgCount:
-      msgs.add msgVal(if i mod 2 == 0: "user" else: "assistant",
-          "Message " & $i & ": please continue the conversation and stay on topic.")
-    var cd = DictVal()
-    dictSet(cd, "messages", seqVal(msgs))
-    let ctx = dictVal(cd)
+  var msgs = newSeq[JinjaVal]()
+  for i in 0 ..< msgCount:
+    msgs.add msgVal(if i mod 2 == 0: "user" else: "assistant",
+        "Message " & $i & ": please continue the conversation and stay on topic.")
+  var cd = DictVal()
+  dictSet(cd, "messages", seqVal(msgs))
+  let ctx = dictVal(cd)
 
-    # Lookup floors over one message, each warmed by one uncounted call:
-    # `role` strings are literal-backed so a lookup copies nothing, `content` strings are
-    # runtime-built so a lookup copies once.
-    let msg1 = ctx.d.dictGet("messages").xs.items[1]
+  # Lookup floors over one message, each warmed by one uncounted call:
+  # `role` strings are literal-backed so a lookup copies nothing, `content` strings are
+  # runtime-built so a lookup copies once.
+  let msg1 = ctx.d.dictGet("messages").xs.items[1]
+  discard msg1.d.dictGet("role")
+  discard msg1.d.dictGet("content")
+  let dgRole = allocsOf:
     discard msg1.d.dictGet("role")
+  let dgContent = allocsOf:
     discard msg1.d.dictGet("content")
-    let dgRole = allocsOf:
-      discard msg1.d.dictGet("role")
-    let dgContent = allocsOf:
-      discard msg1.d.dictGet("content")
 
-    template countRenders(src: string, n: int): int =
-      ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
-      let (m, tables) = parseTemplate(src)
-      let want = renderToString(src, ctx, 0.0)
-      doAssert renderAllPull(m, tables, ctx, 0.0) == want,
-          "the micro pull render differs from the string render for " & src
-      allocsOf:
-        for _ in 0 ..< n:
-          discard renderAllPull(m, tables, ctx, 0.0)
+  template countRenders(src: string, n: int): int =
+    ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
+    let (m, tables) = parseTemplate(src)
+    let want = renderToString(src, ctx, 0.0)
+    doAssert renderAllPull(m, tables, ctx, 0.0) == want,
+        "the micro pull render differs from the string render for " & src
+    allocsOf:
+      for _ in 0 ..< n:
+        discard renderAllPull(m, tables, ctx, 0.0)
 
-    let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
-    let roleRenders = countRenders("{% for m in messages %}{{ m.role }}{% endfor %}", iters)
-    let contentRenders = countRenders("{% for m in messages %}{{ m.content }}{% endfor %}", iters)
-    let bothSrc = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
-    let bothRenders = countRenders(bothSrc, iters)
+  let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
+  let roleRenders = countRenders("{% for m in messages %}{{ m.role }}{% endfor %}", iters)
+  let contentRenders = countRenders("{% for m in messages %}{{ m.content }}{% endfor %}", iters)
+  let bothSrc = "{% for m in messages %}{{ m.role }}: {{ m.content }}\n{% endfor %}"
+  let bothRenders = countRenders(bothSrc, iters)
 
-    doAssert roleRenders <= loopOnly + iters * msgCount * dgRole,
-        "the emit-role render cost " & $(roleRenders - loopOnly) &
-        " allocs beyond the loop baseline"
-    doAssert contentRenders <= loopOnly + iters * msgCount * dgContent,
-        "the emit-content render cost " & $(contentRenders - loopOnly) &
-        " allocs beyond the loop baseline"
-    doAssert bothRenders <= loopOnly + iters * msgCount * (dgRole + dgContent),
-        "the two-emit render cost " & $(bothRenders - loopOnly) &
-        " allocs beyond the loop baseline"
-    doAssert (roleRenders - loopOnly) div iters <= msgCount and
-        (contentRenders - loopOnly) div iters <= msgCount,
-        "an emit cost more than the accepted one-lookup residual"
-    echo "t_corpus alloc: emit-role ", roleRenders, ", emit-content ", contentRenders,
-        ", emit both ", bothRenders, ", loop baseline ", loopOnly,
-        " allocs over ", iters, " renders each"
+  doAssert roleRenders <= loopOnly + iters * msgCount * dgRole,
+      "the emit-role render cost " & $(roleRenders - loopOnly) &
+      " allocs beyond the loop baseline"
+  doAssert contentRenders <= loopOnly + iters * msgCount * dgContent,
+      "the emit-content render cost " & $(contentRenders - loopOnly) &
+      " allocs beyond the loop baseline"
+  doAssert bothRenders <= loopOnly + iters * msgCount * (dgRole + dgContent),
+      "the two-emit render cost " & $(bothRenders - loopOnly) &
+      " allocs beyond the loop baseline"
+  doAssert (roleRenders - loopOnly) div iters <= msgCount and
+      (contentRenders - loopOnly) div iters <= msgCount,
+      "an emit cost more than the accepted one-lookup residual"
+  echo "t_corpus alloc: emit-role ", roleRenders, ", emit-content ", contentRenders,
+      ", emit both ", bothRenders, ", loop baseline ", loopOnly,
+      " allocs over ", iters, " renders each"
 
-  block allocSerializer:
-    let iters = 50
 
-    func toolsVal(): JinjaVal =
-      ## One function-tool definition, the bench tool schema shape.
-      var cityProp = DictVal()
-      dictSet(cityProp, "type", strVal("string"))
-      var props = DictVal()
-      dictSet(props, "city", dictVal(cityProp))
-      var params = DictVal()
-      dictSet(params, "type", strVal("object"))
-      dictSet(params, "properties", dictVal(props))
-      var fn = DictVal()
-      dictSet(fn, "name", strVal("get_weather"))
-      dictSet(fn, "description", strVal("Current weather for one city"))
-      dictSet(fn, "parameters", dictVal(params))
-      var tool = DictVal()
-      dictSet(tool, "type", strVal("function"))
-      dictSet(tool, "function", dictVal(fn))
-      seqVal(@[dictVal(tool)])
+proc testAllocSerializer() =
 
-    # Direct tojson of the tool schema. The writer drains into a growable buffer with no
-    # presize pass, so a call costs one allocation for the buffer plus one for the stack
-    # behind the schema's two nested containers.
-    let tools = toolsVal()
-    # warm-up call, excluded from the counted region
-    discard toJson(tools)
-    let tjAllocs = allocsOf:
-      for _ in 0 ..< iters:
-        discard toJson(tools)
-    doAssert tjAllocs <= 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
-        " allocations per call against the measured two"
+  let iters = 50
 
-    # Same schema through the pull render, driver setup uncounted:
-    # the counted region holds only the pull loop, and the render costs
-    # the filter's argument list plus the serializer's container stack.
-    const tJson = "{{ tools|tojson }}"
-    var cd = DictVal()
-    dictSet(cd, "tools", tools)
-    let ctx = dictVal(cd)
-    let (m, tables) = parseTemplate(tJson)
-    let want = renderToString(tJson, ctx, 0.0)
+  func toolsVal(): JinjaVal =
+    ## One function-tool definition, the bench tool schema shape.
+    var cityProp = DictVal()
+    dictSet(cityProp, "type", strVal("string"))
+    var props = DictVal()
+    dictSet(props, "city", dictVal(cityProp))
+    var params = DictVal()
+    dictSet(params, "type", strVal("object"))
+    dictSet(params, "properties", dictVal(props))
+    var fn = DictVal()
+    dictSet(fn, "name", strVal("get_weather"))
+    dictSet(fn, "description", strVal("Current weather for one city"))
+    dictSet(fn, "parameters", dictVal(params))
+    var tool = DictVal()
+    dictSet(tool, "type", strVal("function"))
+    dictSet(tool, "function", dictVal(fn))
+    seqVal(@[dictVal(tool)])
 
-    var dWarm = startRender(m, tables, ctx, 0.0)
-    var bufWarm = newSeq[char](256)
-    var warm = ""
-    while true:
-      let n = pull(dWarm, bufWarm)
-      if n == 0:
-        break
-      warm.add bytesOf(bufWarm, n)
-    doAssert warm == want, "the pull render differs from the string render"
-
-    var buf = newSeq[char](256)
-    var renderAllocs = 0
+  # Direct tojson of the tool schema. The writer drains into a growable buffer with no
+  # presize pass, so a call costs one allocation for the buffer plus one for the stack
+  # behind the schema's two nested containers.
+  let tools = toolsVal()
+  # warm-up call, excluded from the counted region
+  discard toJson(tools)
+  let tjAllocs = allocsOf:
     for _ in 0 ..< iters:
-      var di = startRender(m, tables, ctx, 0.0)
+      discard toJson(tools)
+  doAssert tjAllocs <= 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
+      " allocations per call against the measured two"
+
+  # Same schema through the pull render, driver setup uncounted:
+  # the counted region holds only the pull loop, and the render costs
+  # the filter's argument list plus the serializer's container stack.
+  const tJson = "{{ tools|tojson }}"
+  var cd = DictVal()
+  dictSet(cd, "tools", tools)
+  let ctx = dictVal(cd)
+  let (m, tables) = parseTemplate(tJson)
+  let want = renderToString(tJson, ctx, 0.0)
+
+  var dWarm = startRender(m, tables, ctx, 0.0)
+  var bufWarm = newSeq[char](256)
+  var warm = ""
+  while true:
+    let n = pull(dWarm, bufWarm)
+    if n == 0:
+      break
+    warm.add bytesOf(bufWarm, n)
+  doAssert warm == want, "the pull render differs from the string render"
+
+  var buf = newSeq[char](256)
+  var renderAllocs = 0
+  for _ in 0 ..< iters:
+    var di = startRender(m, tables, ctx, 0.0)
+    let renderCost = allocsOf:
+      while true:
+        let n = pull(di, buf)
+        if n == 0:
+          break
+    renderAllocs += renderCost
+  doAssert renderAllocs <= 3 * iters, "the tojson pull render cost " &
+      $(renderAllocs div iters) & " allocations per render against the measured three"
+
+  # A container emit costs one allocation per emit for the lookup copy plus one per
+  # render for the serializer's container stack, over the loop machinery.
+  var msgs = newSeq[JinjaVal]()
+  for i in 0 ..< 10:
+    var md = DictVal()
+    dictSet(md, "n", strVal($i))
+    msgs.add dictVal(md)
+  var mcd = DictVal()
+  dictSet(mcd, "messages", seqVal(msgs))
+  let loopCtx = dictVal(mcd)
+
+  template countRenders(src: string, n: int): int =
+    ## Warms one pull render uncounted, then totals `n` renders through
+    ## `getAllocStats()` deltas with one driver per render, as above.
+    var (mm, ts) = parseTemplate(src)
+    let wantLocal = renderToString(src, loopCtx, 0.0)
+    var dWarm2 = startRender(mm, ts, loopCtx, 0.0)
+    var bufWarm2 = newSeq[char](256)
+    var accWarm = ""
+    while true:
+      let got = pull(dWarm2, bufWarm2)
+      if got == 0:
+        break
+      accWarm.add bytesOf(bufWarm2, got)
+    doAssert accWarm == wantLocal, "the micro render differs for " & src
+    var total = 0
+    for _ in 0 ..< n:
+      var di = startRender(mm, ts, loopCtx, 0.0)
+      var bi = newSeq[char](256)
       let renderCost = allocsOf:
         while true:
-          let n = pull(di, buf)
-          if n == 0:
+          let got = pull(di, bi)
+          if got == 0:
             break
-      renderAllocs += renderCost
-    doAssert renderAllocs <= 3 * iters, "the tojson pull render cost " &
-        $(renderAllocs div iters) & " allocations per render against the measured three"
+      total += renderCost
+    total
 
-    # A container emit costs one allocation per emit for the lookup copy plus one per
-    # render for the serializer's container stack, over the loop machinery.
-    var msgs = newSeq[JinjaVal]()
-    for i in 0 ..< 10:
-      var md = DictVal()
-      dictSet(md, "n", strVal($i))
-      msgs.add dictVal(md)
-    var mcd = DictVal()
-    dictSet(mcd, "messages", seqVal(msgs))
-    let loopCtx = dictVal(mcd)
+  let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
+  let strEmits = countRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
+  let dictEmits = countRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
+  # Runtime-built message values keep the engine's one-lookup-copy residual per emit.
+  doAssert strEmits <= loopOnly + iters * 10, "the string emit cost " &
+      $(strEmits - loopOnly) & " allocations beyond the loop baseline"
+  # A container emit through the lazy piece costs one allocation per emit over the string
+  # emit and one per render for the serializer's container stack.
+  doAssert dictEmits <= strEmits + iters * 11, "the container emit cost " &
+      $(dictEmits - strEmits) & " allocations beyond the string emit"
 
-    template countRenders(src: string, n: int): int =
-      ## Warms one pull render uncounted, then totals `n` renders through
-      ## `getAllocStats()` deltas with one driver per render, as above.
-      var (mm, ts) = parseTemplate(src)
-      let wantLocal = renderToString(src, loopCtx, 0.0)
-      var dWarm2 = startRender(mm, ts, loopCtx, 0.0)
-      var bufWarm2 = newSeq[char](256)
-      var accWarm = ""
-      while true:
-        let got = pull(dWarm2, bufWarm2)
-        if got == 0:
-          break
-        accWarm.add bytesOf(bufWarm2, got)
-      doAssert accWarm == wantLocal, "the micro render differs for " & src
-      var total = 0
-      for _ in 0 ..< n:
-        var di = startRender(mm, ts, loopCtx, 0.0)
-        var bi = newSeq[char](256)
-        let renderCost = allocsOf:
-          while true:
-            let got = pull(di, bi)
-            if got == 0:
-              break
-        total += renderCost
-      total
+  echo "t_corpus alloc: tojson direct ", tjAllocs div iters, "/call, tojson render ",
+      renderAllocs div iters, "/render, string emit ", (strEmits - loopOnly) div iters,
+      ", container emit ", (dictEmits - loopOnly) div iters,
+      " allocs beyond the loop baseline over ", iters, " renders"
 
-    let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
-    let strEmits = countRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
-    let dictEmits = countRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
-    # Runtime-built message values keep the engine's one-lookup-copy residual per emit.
-    doAssert strEmits <= loopOnly + iters * 10, "the string emit cost " &
-        $(strEmits - loopOnly) & " allocations beyond the loop baseline"
-    # A container emit through the lazy piece costs one allocation per emit over the string
-    # emit and one per render for the serializer's container stack.
-    doAssert dictEmits <= strEmits + iters * 11, "the container emit cost " &
-        $(dictEmits - strEmits) & " allocations beyond the string emit"
 
-    echo "t_corpus alloc: tojson direct ", tjAllocs div iters, "/call, tojson render ",
-        renderAllocs div iters, "/render, string emit ", (strEmits - loopOnly) div iters,
-        ", container emit ", (dictEmits - loopOnly) div iters,
-        " allocs beyond the loop baseline over ", iters, " renders"
+proc main() =
+  testStepsTotality()
+  testEqualityRejectsChange()
+  testCorpusDelivery()
+  testWindowContract()
+  testBoundaryShapes()
+  testZeroCapacityBuffer()
+  testPartialConsumptionResumes()
+  testLazyWindowDrain()
+  testConcatWindowDrain()
+  testValueBoundary()
+  testSpanDrain()
+  testFilterRaiseRepull()
+  testMacroScopePop()
+  testNestedRowClosesKeepOuterScope()
+  testEnsureAsciiEscapes()
+  when defined(nimAllocStats):
+    testAllocDrainWindow()
+    testAllocMicro()
+    testAllocSerializer()
+  echo "t_corpus: 77 ok rows byte-exact through pull, compose and render, 13 gap rows loud, " &
+      "16 err rows raise the recorded error"
 
-echo "t_corpus: 77 ok rows byte-exact through pull, compose and render, 13 gap rows loud, " &
-    "16 err rows raise the recorded error"
+main()
