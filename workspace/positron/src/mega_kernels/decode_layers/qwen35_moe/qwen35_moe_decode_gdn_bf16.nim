@@ -386,8 +386,8 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
   elif tx <= 843:
     waveWait(counters, 7, 512)
     waveWait(counters, 2, 64)
-    rmsNormGatedTileAt((bfA +% sNormed), (bfA +% sY), (bfA +% sZ), onormW,
-      32, eps, tx - 840, 128, 8)
+    rmsNormGatedTilePerHeadAt((bfA +% sNormed), (bfA +% sY), (bfA +% sZ),
+      onormW, 32, eps, tx - 840, 128, 8)
     waveAdd(counters, 8)
   elif tx <= 875:
     waveWait(counters, 8, 4)

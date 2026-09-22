@@ -1,30 +1,36 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 # ──────────────────────  o_norm_gated (SiLU-gated RMSNorm, the GDN output norm)  ──────────────────────
 
-## SiLU-gated RMSNorm on the ceramic Tile API, the Gated DeltaNet output norm, the kernel
-## counterpart of RmsNormGated in workspace/transformers/src/layers/norm.nim.
-## Per row, rstd = rsqrt(mean(x²) + eps), then
+## SiLU-gated RMSNorm on the ceramic Tile API, the Gated DeltaNet output norm.
 ##
 ##   out = bf16(bf16(w · bf16(x · rstd)) · silu(g))    silu(g) = g / (1 + exp2(−g·log2e))
-##
 ##   chain:  x → x·rstd → bf16 → ·w → bf16 → ·silu(g) → bf16
 ##
-## | contract       | value                                                                                                     |
-## | -------------- | --------------------------------------------------------------------------------------------------------- |
-## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32 (the recorded layer's 1e-6)             |
-## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side     |
-## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                          |
-## | Dv             | static (128), equal to the tile width: one row_sum spans the tile, the whole row in threadgroup registers |
-## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                      |
-## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between             |
-## | silu form      | f32 over the widened gated operand, the same 1-ulp-class exponential form as silu_and_mul                 |
+## | contract       | value                                                                                                 |
+## | -------------- | ----------------------------------------------------------------------------------------------------- |
+## | tensors        | x, gate, out (M, Dv) bf16 row-major; w (Dv) bf16; eps runtime f32 (the recorded layer's 1e-6)         |
+## | M              | runtime arg, the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation stays host-side |
+## | rstd           | rsqrt(mean(x²) + eps) over the row                                                                    |
+## | tail rows      | rows >= M load zero-filled and skip the store, a tail tile needs no host padding                      |
+## | Dv             | static (128), equal to the tile width, one row_sum spans the tile                                     |
+## | geometry       | grid (1, ceil(M div TileR)) at 32 lanes, one TileR-row x Dv-col tile per threadgroup                  |
+## | rounding chain | normed, weighted and output each round to bf16, every multiply's operands stay f32 in between         |
+## | silu form      | f32 over the widened gated operand, the same 1-ulp-class exponential form as silu_and_mul             |
 ##
 ## Fusion contract (the inline-tile property):
 ## - {.device.} tile procs `rowRstd`, `rmsWeightElem`, `siluMulElem`, `rmsNormGatedElem`
 ##   inline into any kernel that keeps the epilogue tiles in threadgroup registers
 ## - the mega kernel composes the tile core `rmsNormGatedTileAt` inline, the fused
 ##   entry `rmsNormGatedTile` computing the whole chain in one launch
-## - the composed pair `rmsWeightTile` + `siluMulTile` splits bit-exactly at the bf16
-##   weighted value, the f32/bf16 store/load round-trip through memory is exact
+## - the per-head variant `rmsNormGatedTilePerHeadAt` serves (Hv, Dv) per-head weight
+##   layouts. The pair `rmsWeightElem` + `siluMulElem` splits bit-exactly at the bf16
+##   weighted value, so the f32/bf16 memory round-trip is exact
 
 import workspace/crucible
 import workspace/ceramic
@@ -195,22 +201,28 @@ proc rmsNormGatedElem*[R, C: static int; A: static MmaAtom](
         dst.frags[n][m].frag[v] =
           (weighted.float32 * silu32).bfloat16
 
-# ─── Core tile proc (inline-tile property) ───────────────────────────
+# ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc rmsNormGatedTileAt*(
-    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
-    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
-    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
-    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight
+proc rmsNormGatedTileCoreAt(
+    outp: ptr UncheckedArray[bfloat16],
+    x: ptr UncheckedArray[bfloat16],
+    gate: ptr UncheckedArray[bfloat16],
+    w: ptr UncheckedArray[bfloat16],
     M: int32,
     eps: float32,
     rowBlk: int32,
-    Dv, TileR: static int) {.device.} =
-  ## Tile core contract:
+    Dv, TileR, WRowStride: static int) {.device.} =
+  ## Shared epilogue tile walk, parameterized over the weight view's row stride.
+  ##
+  ##   WRowStride = 0  ─────  one (Dv) weight row broadcast over the tile
+  ##   WRowStride = Dv ─────  one weight row per tile row
+  ##
+  ## Public wrappers below fix the binding. The generic never needs a direct call site.
+  ##
+  ## Tile contract:
   ##   - One (TileR-row) tile of epilogue rows at the caller's row block, the full Dv-wide
   ##     row in the tile.
   ##   - Rows at or above M load zero-filled and stay unwritten on store.
-  ##   - The megakernel composes this core inline, `rmsNormGatedTile` is the grid-driven wrapper.
   ##
   ## Instantiation contract:
   ##   - Each static binding set of this core needs its own call-site line.
@@ -218,7 +230,7 @@ proc rmsNormGatedTileAt*(
   ##     one call-site line all collapse into the first binding set's body.
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
   let glG = gate.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
-  let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
+  let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, WRowStride, 1))
   let glO = outp.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
 
   var xT: rt_l(bfloat16, TileR, Dv)
@@ -232,16 +244,54 @@ proc rmsNormGatedTileAt*(
   rmsNormGatedElem(oT, xT, gT, wT, eps)
   glO.storeTileRowsGated(oT, (0, 0, rowBlk, 0), M)
 
+proc rmsNormGatedTileAt*(
+    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
+    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
+    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
+    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight, one row broadcast over the tile
+    M: int32,
+    eps: float32,
+    rowBlk: int32,
+    Dv, TileR: static int) {.device.} =
+  ## Tile core, one (Dv) weight row broadcast over the tile's rows. The megakernel composes this core inline. `rmsNormGatedTile`
+  ## is the grid-driven wrapper.
+  ##
+  ## Returns the weighted, silu-gated, normalized rows through `outp`.
+  ##
+  ## Example, at TileR = 8: `rmsNormGatedTileAt(outp, x, gate, w, 32, eps, rowBlk, 128, 8)`
+  ## computes rows `rowBlk·8 ..< rowBlk·8 + 8` of a 32-row epilogue, every row
+  ## weighted by the same `w[0 ..< 128]`.
+  rmsNormGatedTileCoreAt(outp, x, gate, w, M, eps, rowBlk, Dv, TileR, 0)
+
+proc rmsNormGatedTilePerHeadAt*(
+    outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
+    x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
+    gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
+    w: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, one weight row per output row
+    M: int32,
+    eps: float32,
+    rowBlk: int32,
+    Dv, TileR: static int) {.device.} =
+  ## Tile core, one (Dv) weight row per output row. Serves the (M, Dv) per-head weight layout of a per-head output norm.
+  ## Row `rowBlk·TileR + r` weights with `w[(rowBlk·TileR + r)·Dv ..< (rowBlk·TileR + r + 1)·Dv]`.
+  ##
+  ## Returns the weighted, silu-gated, normalized rows through `outp`.
+  ##
+  ## Example, at TileR = 8: `rmsNormGatedTilePerHeadAt(outp, x, gate, w, 32, eps, rowBlk, 128, 8)`
+  ## computes rows `rowBlk·8 ..< rowBlk·8 + 8` of a 32-row epilogue, each row
+  ## weighted by its own head's weight row.
+  rmsNormGatedTileCoreAt(outp, x, gate, w, M, eps, rowBlk, Dv, TileR, Dv)
+
 proc rmsNormGatedTile*(
     outp: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16 out
     x: ptr UncheckedArray[bfloat16],     # (M, Dv) bf16, the norm input
     gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
-    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight
+    w: ptr UncheckedArray[bfloat16],     # (Dv) bf16, the norm weight, one row broadcast over the tile
     M: int32,
     eps: float32,
     Dv, TileR: static int) {.device.} =
-  ##  Grid-driven form of `rmsNormGatedTileAt`: `grid`
-  ## (1, ceil(M div tileR)), one (TileR-row) tile per threadgroup.
+  ##  Grid-driven form of `rmsNormGatedTileAt`. Grid (1, ceil(M div tileR)),
+  ## one (TileR-row) tile per threadgroup.
   let rowBlk = int32(threadgroup_position_in_grid.y)
   rmsNormGatedTileAt(outp, x, gate, w, M, eps, rowBlk, Dv, TileR)
 
@@ -252,8 +302,8 @@ proc rmsWeightTile*(
     M: int32,
     eps: float32,
     Dv, TileR: static int) {.device.} =
-  ## Composed pair, first launch:
-  ## the RMSNorm + weight half, rows ≥ M bounded on load and store.
+  ## Composed pair, first launch.
+  ## The RMSNorm + weight half, rows >= M bounded on load and store.
   let rowBlk = int32(threadgroup_position_in_grid.y)
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
   let glW = w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 0, 1))
@@ -274,9 +324,11 @@ proc siluMulTile*(
     gate: ptr UncheckedArray[bfloat16],  # (M, Dv) bf16, the silu-gated operand
     M: int32,
     Dv, TileR: static int) {.device.} =
-  ## - Composed pair, second launch:
-  ## - multiplies the weighted RMSNorm by the f32 silu of the second operand.
-  ## - Rows ≥ M bound both the load and the store.
+  ## Composed pair, second launch.
+  ## Multiplies the weighted RMSNorm by the f32 silu of the second operand.
+  ## Rows >= M bound both the load and the store.
+  ##
+  ## Returns the silu-gated weighted rows through `outp`.
   let rowBlk = int32(threadgroup_position_in_grid.y)
   let glM = mid.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
   let glG = gate.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))
