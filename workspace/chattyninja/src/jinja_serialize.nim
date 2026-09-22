@@ -19,6 +19,8 @@ const
     ## Capacity of the literal queue, bounding every queued literal. The longest `tojson`
     ## escape is the astral surrogate pair (12 bytes), the longest atom rendering a float repr
     ## (26 bytes), the macro form `<macro ` plus one int64 plus `>` (30 bytes with quotes).
+    ## - paired with `CaptureDrainCap` in cnj_engine, the capture's drain buffer
+    ## - both bound one serializer chunk per drain step
 
   SerStartCap = 256
     ## First `serString` drain buffer, doubled by `setLen` until the rendering completes.

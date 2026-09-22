@@ -486,6 +486,8 @@ const
   CaptureDrainCap = 256
     ## Stack buffer `capturePend` hands to `pullSer` per drain call, sized to hold a whole
     ## scalar rendering in the common case so the capture copies in one grow.
+    ## - paired with `SerChunkCap` in jinja_serialize, the serializer's queue cap
+    ## - both bound one serializer chunk per drain step
 
   Steps*: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
@@ -799,10 +801,7 @@ func pullAll*(c: var Context): string =
     let n = pull(c, buf)
     if n == 0:
       break
-    let at = result.len
-    result.setLen(at + n)
-    if n > 0:
-      copyMem(addr result[at], unsafeAddr buf[0], n)
+    addView(result, buf.toOpenArray(0, n - 1))
 
 func generationSpans*(c: Context): seq[tuple[start, stop: int]] =
   ## Returns the render's recorded generation spans.

@@ -440,55 +440,53 @@ func afterKeyword(p: Parser, t: Tag, kwLen: int): int =
     inc i
   i
 
+func scanDepth0(src: openArray[char], at, stop: int, stops: set[char], word: string): int =
+  ## Returns the offset of the first position at bracket depth zero, outside quoted literals,
+  ## holding a character of `stops` or the bare word `word`, or `stop` when neither appears.
+  ##
+  ## - word boundaries are checked against `at` and `stop`, the scan span's ends
+  ## - quoted literals are skipped and bracketed subexpressions counted, so a match inside
+  ##   a string or a call's argument list never fires
+  ## - an empty `word` disables the word test
+  var i = at
+  var depth = 0
+  var q: char = '\0'
+  while i < stop:
+    if q != '\0':
+      if src[i] == '\\':
+        inc i
+      elif src[i] == q:
+        q = '\0'
+    elif src[i] in {'\'', '"'}:
+      q = src[i]
+    elif depth == 0 and (src[i] in stops or
+        (word.len > 0 and at(src, word, i) and
+          (i == at or src[i - 1] notin WsNameChars) and
+          (i + word.len >= stop or src[i + word.len] notin WsNameChars))):
+      return i
+    elif src[i] in {'(', '['}:
+      inc depth
+    elif src[i] in {')', ']'}:
+      dec depth
+    inc i
+  stop
+
 func skipBalanced(src: openArray[char], at, stop: int, stops: set[char], expected: string): int =
   ## Returns the offset of any character of `stops` at bracket depth zero, skipping quoted
   ## literals and raising when the construct ends first.
   ## `expected` names the stop characters in the error message.
-  var i = at
-  var depth = 0
-  var q: char = '\0'
-  while i < stop:
-    if q != '\0':
-      if src[i] == '\\':
-        inc i
-      elif src[i] == q:
-        q = '\0'
-    elif src[i] in {'\'', '"'}:
-      q = src[i]
-    elif depth == 0 and src[i] in stops:
-      return i
-    elif src[i] in {'(', '['}:
-      inc depth
-    elif src[i] in {')', ']'}:
-      dec depth
-    inc i
-  raise jinjaErr("expected `" & expected & "` before byte " & $stop, stop)
+  let i = scanDepth0(src, at, stop, stops, "")
+  if i == stop:
+    raise jinjaErr("expected `" & expected & "` before byte " & $stop, stop)
+  i
 
 func findKeyword(src: openArray[char], at, stop: int, word: string): int =
-  ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` when the span holds no such
-  ## word. Quoted literals and bracketed subexpressions are skipped, so an `if` inside a string or a call's
-  ## argument list is not mistaken for the for-`if` clause.
-  var i = at
-  var depth = 0
-  var q: char = '\0'
-  while i < stop:
-    if q != '\0':
-      if src[i] == '\\':
-        inc i
-      elif src[i] == q:
-        q = '\0'
-    elif src[i] in {'\'', '"'}:
-      q = src[i]
-    elif src[i] in {'(', '['}:
-      inc depth
-    elif src[i] in {')', ']'}:
-      dec depth
-    elif depth == 0 and at(src, word, i) and
-        (i == at or src[i - 1] notin WsNameChars) and
-        (i + word.len >= stop or src[i + word.len] notin WsNameChars):
-      return i
-    inc i
-  stop
+  ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` on a span
+  ## holding no such word.
+  ##
+  ## - quoted literals and bracketed subexpressions are skipped, so an `if` inside a string
+  ##   or a call's argument list is not mistaken for the for-`if` clause
+  scanDepth0(src, at, stop, {}, word)
 
 proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
