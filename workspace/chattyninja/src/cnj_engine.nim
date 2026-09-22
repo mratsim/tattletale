@@ -396,7 +396,6 @@ func closeMacroRow(st: var RenderState, at: int, next: int32) =
   ## close and a break's boundary stop take.
   ## - every row above the boundary drops with the close, the depth count falling with it
   ## - control continues at `next`, the row's return node, queued pieces draining to the caller
-  ## - control continues at `next`, the row's return node, queued pieces draining to the caller
   closeRow(st, at, next)
   dec st.macroDepth
 

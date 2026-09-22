@@ -945,8 +945,8 @@ block macroScopePop:
 # for exhaust, empty-body for, for break, macro body end, macro boundary stop
 # and generation span.
 # A binding set in an enclosing row's scope survives every inner close.
-# A close popping one scope past the row's mark loses the outer binding.
-# The render then shows the undefined fallback in its place.
+# A close popping one scope past the row's mark loses an outer binding, showing
+# the undefined fallback in its place in the render.
 block nestedRowClosesKeepOuterScope:
   let src = "{% macro mm() %}{% set q = 'Q' %}{{ q }}{% endmacro %}" &
       "{% for i in items %}{% set x = 'X' ~ i %}" &
