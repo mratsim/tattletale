@@ -424,9 +424,10 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     when not HaveNorm:
       # Mixer entry's launch-end counter self-reset, the projection stage's
       # last threadgroup (tx 875) behind the stage's wait (see `waveReset`).
-      if tx == 875:
-        waveWait(counters, 9, 32)
-        waveReset(counters, 13)
+      when not defined(WaveResetSabotage):
+        if tx == 875:
+          waveWait(counters, 9, 32)
+          waveReset(counters, 13)
   elif tx == 876:
     when HaveNorm:
       # Stage 11:
@@ -452,6 +453,10 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     waveAdd(counters, 12)
     # Launch-end counter self-reset, the merge's last threadgroup (tx 949)
     # behind the final stage's waveWait (see `waveReset`'s contract).
-    if tx == 949:
-      waveWait(counters, 12, 64)
-      waveReset(counters, 13)
+    # WaveResetSabotage restores the pre-self-reset spelling, the re-zero
+    # compiled out, the next launch's waveWaits pass instantly on the stale
+    # counts of the launch before (see `t_ceramic_mega_gdn_gate`'s sabotage build).
+    when not defined(WaveResetSabotage):
+      if tx == 949:
+        waveWait(counters, 12, 64)
+        waveReset(counters, 13)

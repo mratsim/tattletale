@@ -40,7 +40,8 @@ proc runMegaBounded*[C: static int](
     launch: proc(): bool {.gcsafe.};
     counters: ptr UncheckedArray[uint32];
     stageNames: array[C, string];
-    deadlineMs: float = MegaWaitDeadlineSecMs.float) =
+    deadlineMs: float = MegaWaitDeadlineSecMs.float;
+    onExpiry: proc(msg: string) {.gcsafe.} = nil) =
   ## One megakernel launch under a wall-clock deadline.
   ##
   ## Contract:
@@ -50,8 +51,14 @@ proc runMegaBounded*[C: static int](
   ##   launches serialized exactly as an unwrapped `engine.run` sequence
   ## - `counters` is the launch's host-visible counters page and `stageNames` gives the labels
   ##
-  ## On expiry the wrapper reads the counters page as the wedged grid left it,
-  ## exits nonzero and names the stuck stage per the given labels.
+  ## Expiry:
+  ##
+  ## - the counters page is read as the wedged grid left it, the stuck
+  ##   stage named per the given labels
+  ## - the default expiry is terminal, stderr message then exit nonzero
+  ## - `onExpiry` records the expiry and returns, the wedged worker thread
+  ##   is then never joined, it holds the engine until the process exits
+  ##   and no further launch on that engine is possible
   var ctx = LaunchCtx(launch: launch)
   var th: Thread[LaunchCtx]
   createThread(th, launchWorker, ctx)
@@ -63,6 +70,9 @@ proc runMegaBounded*[C: static int](
         &"{deadlineMs / 1000.0:.1f}s, stage counters at expiry: "
       for i in 0 ..< C:
         msg.add &"{stageNames[i]}={counters[i]} "
-      stderr.writeLine msg
-      quit(1)
+      if onExpiry.isNil:
+        stderr.writeLine msg
+        quit(1)
+      onExpiry(msg)
+      return
   joinThread(th)
