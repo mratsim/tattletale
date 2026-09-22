@@ -950,7 +950,7 @@ block nestedRowClosesKeepOuterScope:
       "a row close popped past the row's own scope mark and lost an outer binding"
 
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,
-# plus the astral-codepoint surrogate pair. The corpus records `ensure_ascii`-off output,
+# plus the UTF-16 surrogate pair for a code point beyond the Basic Multilingual Plane. The corpus records `ensure_ascii`-off output,
 # so this suite checks the engine's escape set directly: uppercase hex digits and the surrogate pair.
 # ---------------------------------------------------------------------------
 block ensureAsciiEscapes:
