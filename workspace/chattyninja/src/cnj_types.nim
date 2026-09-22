@@ -35,6 +35,10 @@
 #   force, the engine's macro-force handle, bound once at `startRender` into the context, stateless,
 #     so every `Context` copy carries the same callable
 
+# Public API:
+#   Context, RenderState, the compiled artifact, the slot accessors,
+#   the name-resolution reads and the depth and window caps.
+
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
 
@@ -158,8 +162,8 @@ const
   SlotLoopName = 4
   SlotSetTarget = 4
     ## `nkSetBlock` interned target name id, the capture body binding it on close.
-  SlotFilterLo* = 5
-  SlotFilterHi* = 6
+  SlotFilterLo = 5
+  SlotFilterHi = 6
   SlotNsTarget = 3
   SlotNsField = 4
   SlotMacroName = 0
@@ -209,7 +213,7 @@ template field*(nd: Node): int32 =
   ## Interned member name id of `nkSetNamespace`.
   nd.slots[SlotNsField]
 
-template setTarget*(nd: Node): int32 =
+template setTarget(nd: Node): int32 =
   ## Interned target name id of `nkSetBlock`, the name the capture body binds on close.
   nd.slots[SlotSetTarget]
 
@@ -349,7 +353,7 @@ type
     ##   no parameter threading and no import cycle crossing the tier split
     ## - the body runs on the callee's own copy, the caller's context borrow untouched
 
-func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
+func findName(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
   ## One linear scan over the interned arena, allocation-free and parse-time only,
   ## the corpus topping out at 33 names.
