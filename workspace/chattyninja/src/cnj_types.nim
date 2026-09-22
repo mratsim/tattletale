@@ -11,16 +11,6 @@
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
 
-const
-  FixedNameSlots = 128
-    ## Embedded slot-table capacity, allocated with the `CompiledSymbols` value itself
-    ## so name resolution costs no parse allocation. The load fraction allows 89
-    ## interned names, past them the table freezes into the arena-scan fallback.
-  NameLoadNum = 7
-  NameLoadDen = 10
-    ## Slot-table load fraction (7/10), the fill level past which the table freezes,
-    ## keeping slot-scan chains short.
-
 type
   NodeKind* {.pure.} = enum
     ## Corpus-derived construct vocabulary, one entry per engine step.
@@ -68,16 +58,9 @@ type
     ## over its artifact. Node int32 name slots index into it, so `CompiledTemplate` is
     ## only meaningful together with the matching `CompiledSymbols`.
     ##
-    ## Name resolution runs over the embedded open-addressing `slots` table:
-    ## - the byte hash of the queried name picks the slot start
-    ## - the slot scan compares the caller's bytes in place against the interned arena
-    ## - a lookup and a carried-name intern allocate nothing and answer in expected O(1)
-    ## Slots hold `arena index + 1`, `0` the empty slot, so the value default needs no
-    ## init pass. An arena past the table's load freezes it and `findName` falls back
-    ## to the arena scan, chat templates staying far below (the corpus tops out at 33 names).
+    ## Name resolution is one linear scan over `names`, parse-time only, the corpus
+    ## topping out at 33 interned names, render lookups carrying interned ids.
     names*: seq[string]
-    slots: array[FixedNameSlots, int32]
-      ## slot table over `names`, every slot holding one `arena index + 1` or `0`
 
 const
   ## Caps measured against the corpus, each a compile-time define.
@@ -348,28 +331,10 @@ type
       ## class as the `jinja` borrow of the template text
     state*: RenderState
 
-func nameHash(name: openArray[char]): int =
-  ## FNV-1a over the caller's bytes, the slot start of the name table.
-  var h = 2166136261'u32
-  for c in name:
-    h = (h xor uint32(c.ord)) * 16777619'u32
-  int h
-
 func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
-  ## While the whole arena sits inside the slot table's load:
-  ## - one hash picks the slot start
-  ## - the slot scan compares the caller's bytes in place, expected O(1), allocation-free
-  ## A frozen table (arena past the load) answers by the arena scan after the slot scan.
-  if t.names.len * NameLoadDen <= FixedNameSlots * NameLoadNum:
-    var i = nameHash(name) and (FixedNameSlots - 1)
-    while true:
-      let slot = t.slots[i]
-      if slot == 0:
-        return NoLink
-      if t.names[slot - 1] == name:
-        return slot - 1
-      i = (i + 1) and (FixedNameSlots - 1)
+  ## One linear scan over the interned arena, allocation-free and parse-time only,
+  ## the corpus topping out at 33 names.
   for i, n in t.names:
     if n == name:
       return int32 i
@@ -378,15 +343,9 @@ func findName*(t: CompiledSymbols, name: openArray[char]): int32 =
 func internName*(t: var CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, inserting the one arena copy when absent.
   ## - a carried name allocates nothing
-  ## - a new name copies exactly once into `CompiledSymbols.names`, claiming one slot
-  ##   while the load fraction holds, the table frozen past it
+  ## - a new name copies exactly once into `CompiledSymbols.names`
   result = t.findName(name)
   if result != NoLink:
     return
   result = int32 t.names.len
   t.names.add spanString(name)
-  if t.names.len * NameLoadDen <= FixedNameSlots * NameLoadNum:
-    var i = nameHash(name) and (FixedNameSlots - 1)
-    while t.slots[i] != 0:
-      i = (i + 1) and (FixedNameSlots - 1)
-    t.slots[i] = result + 1
