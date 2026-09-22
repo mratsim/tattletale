@@ -337,17 +337,92 @@ func startswithMethod(v: JinjaVal, args: Args): JinjaVal = edgeWith(v, args, "st
 func endswithMethod(v: JinjaVal, args: Args): JinjaVal = edgeWith(v, args, "endswith", true)
 
 const
-  FilterProcs*: array[FilterName, FilterProc] = [
-    tojsonFilter, lengthFilter, trimFilter, defaultFilter, joinFilter, lowerFilter, upperFilter,
-    capitalizeFilter, listFilter, safeFilter, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
+  ## Builtin dispatch tables binding each enum name to its proc.
+  ## - one line per name, the pairing reads directly and insertion
+  ##   needs no position recounting
+  ## - unlisted names stay nil, the unknown-name raise at the registry
+  ##   lookup serving as the gap contract
+  ## - keys of a keyed array literal survive only when the literal names
+  ##   every index and the first pair shares the bracket line, a partial
+  ##   list silently reverts to position coupling (Nim 2.2.10)
+  FilterProcs*: array[FilterName, FilterProc] = [fTojson: tojsonFilter,
+    fLength: lengthFilter,
+    fTrim: trimFilter,
+    fDefault: defaultFilter,
+    fJoin: joinFilter,
+    fLower: lowerFilter,
+    fUpper: upperFilter,
+    fCapitalize: capitalizeFilter,
+    fList: listFilter,
+    fSafe: safeFilter,
+    fDictsort: nil,
+    fMap: nil,
+    fSelect: nil,
+    fReject: nil,
+    fReplace: nil,
+    fIndent: nil,
+    fTruncate: nil,
+    fReverse: nil,
+    fWordcount: nil,
+    fSum: nil,
+    fMin: nil,
+    fMax: nil,
+    fAbs: nil,
+    fRound: nil,
+    fBatch: nil,
+    fSlice: nil,
+    fUnique: nil,
+    fGroupby: nil,
+    fAttr: nil,
+    fCenter: nil,
+    fEscape: nil,
+    fTitle: nil
   ]
-  TestProcs*: array[TestName, TestProc] = [
-    stringTest, definedTest, undefinedTest, mappingTest, sequenceTest, iterableTest, noneTest,
-    booleanTest, trueTest, falseTest, numberTest, integerTest, floatTest, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil
+
+  TestProcs*: array[TestName, TestProc] = [tString: stringTest,
+    tDefined: definedTest,
+    tUndefined: undefinedTest,
+    tMapping: mappingTest,
+    tSequence: sequenceTest,
+    tIterable: iterableTest,
+    tNone: noneTest,
+    tBoolean: booleanTest,
+    tTrue: trueTest,
+    tFalse: falseTest,
+    tNumber: numberTest,
+    tInteger: integerTest,
+    tFloat: floatTest,
+    tFilter: nil,
+    tTest: nil,
+    tSameas: nil,
+    tIn: nil,
+    tEqualTo: nil,
+    tDivisibleby: nil,
+    tEscaped: nil,
+    tEven: nil,
+    tOdd: nil,
+    tLower: nil,
+    tUpper: nil,
+    tCallable: nil
   ]
-  MethodProcs*: array[MethodName, MethodProc] = [
-    getMethod, itemsMethod, keysMethod, valuesMethod, splitMethod, stripMethod, lstripMethod,
-    rstripMethod, startswithMethod, endswithMethod, nil, nil, nil, nil, nil, nil, nil, nil, nil
+
+  MethodProcs*: array[MethodName, MethodProc] = [mGet: getMethod,
+    mItems: itemsMethod,
+    mKeys: keysMethod,
+    mValues: valuesMethod,
+    mSplit: splitMethod,
+    mStrip: stripMethod,
+    mLstrip: lstripMethod,
+    mRstrip: rstripMethod,
+    mStartswith: startswithMethod,
+    mEndswith: endswithMethod,
+    mLower: nil,
+    mUpper: nil,
+    mTitle: nil,
+    mReplace: nil,
+    mFind: nil,
+    mCount: nil,
+    mFormat: nil,
+    mPop: nil,
+    mUpdate: nil
   ]
