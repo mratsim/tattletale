@@ -27,15 +27,15 @@ import workspace/data_structures/src/small_seqs
 import workspace/zstd/zstd_highlevel
 
 # Corpus row reader.
-# ---------------------------------------------------------------------------
-# JSON is parsed here rather than through `std/json`, because template output observes
-# dict insertion order (`items`, `tojson`, `{% for %}` over a mapping) while `std/json`
-# stores object members in a hash table. This parser keeps `DictVal.keys` in document order,
-# the order the recording captured.
+# Document-order contract:
+# template output observes dict insertion order (`items`, `tojson`,
+# `{% for %}` over a mapping). This parser keeps `DictVal.keys` in document order,
+# the order the recording captured. `std/json` stores object members inside a hash
+# hash table and cannot serve that order.
 #
-# The ground truth is self-contained.
-# Every ok row embeds `rendered`. Every `err_*` row embeds `expected_error
-# {exception, message, offset, span}`, the raise call's name-token span into the suite template.
+# Ground truth is self-contained. Every ok row embeds `rendered` and every
+# `err_*` row embeds `expected_error {exception, message, offset, span}`,
+# the raise call's name-token span into the suite template.
 
 type
   Row* = object
@@ -68,8 +68,7 @@ const CorpusRoot* = currentSourcePath().parentDir / "corpus"
 const RowSuffix = ".json.zst"
   ## the recorded row suffix, the corpus tree carrying one zstd-compressed row per row id
 
-# JSON reader
-# ---------------------------------------------------------------------------
+# JSON reader over one document
 
 type J = object
   ## Cursor over one JSON document.
@@ -245,8 +244,7 @@ proc jsonDoc*(src: string): JinjaVal =
   if j.i != src.len:
     fail j, "JSON has trailing text"
 
-# Row reading
-# ---------------------------------------------------------------------------
+# Row reading from a parsed document
 
 func field(v: JinjaVal, name: string): JinjaVal =
   if v.kind != vkDict: undefinedVal() else: v.d.dictGet(name)
@@ -440,14 +438,14 @@ proc renderChunked[N: static int](m: CompiledTemplate, sym: CompiledSymbols, ctx
       result.text.add ch
   result.spans = pc.c.state.spans
 
-# A nil step would be a hole in the table:
-#   a render would jump through a null pointer rather than
-# report the gap, so totality is checked over every kind, not merely counted.
+# Totality contract:
+# every NodeKind has a non-nil step, checked over every kind. A nil entry
+# would send a render through a null pointer.
 for k in NodeKind:
   doAssert not Steps[k].isNil, "steps has no entry for " & $k
 
-# The equality must reject a one-byte change, since a comparison that cannot fail makes
-# the corpus walk vacuous.
+# Equality must reject a one-byte change:
+# a comparison that cannot fail leaves the corpus walk vacuous.
 block equalityRejectsChange:
   doAssert sameBytes("abc", "abc")
   doAssert not sameBytes("abc", "abd"), "sameBytes accepted a changed byte"
@@ -455,7 +453,6 @@ block equalityRejectsChange:
   doAssert not sameBytes("", "a"), "sameBytes accepted empty against non-empty"
 
 # Every recorded corpus row through the three delivery paths.
-# ---------------------------------------------------------------------------
 block corpusDelivery:
   const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47flash", "glm53flash",
       "gptoss20b", "kimi", "lagunaxs21", "lfm25", "ling30", "mimo25", "mistral7bv01",
@@ -619,7 +616,6 @@ block windowContract:
 
 # Boundary shapes of the delivery window on one corpus row.
 # Oversized, exact-size, 1-byte and stop-then-resume windows all deliver the recorded bytes.
-# ---------------------------------------------------------------------------
 block boundaryShapes:
   let src = templateSource("deepseekv2lite")
   let (m, tables) = parseTemplate(src)
@@ -676,7 +672,6 @@ block boundaryShapes:
   doAssert head & tail == want, "stop-then-resume is not the whole render"
 
 # A zero-capacity buffer reports 0 without stepping the render.
-# ---------------------------------------------------------------------------
 block zeroCapacityBuffer:
   let src = templateSource("deepseekv2lite")
   let (m, tables) = parseTemplate(src)
@@ -698,7 +693,6 @@ block zeroCapacityBuffer:
 
 # Partial consumption stops mid-piece, and resumption from the same driver
 # completes the render without losing or re-handing a byte.
-# ---------------------------------------------------------------------------
 block partialConsumptionResumes:
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
@@ -741,7 +735,6 @@ const listRepr = "{'alpha': 'one', 'beta': 'two', 'gamma': ['x', 'y', 'z']}"
 
 # A container emit drains as a lazy piece across pull calls byte-exact, a window far below
 # the serialization forcing the drain mid-value.
-# ---------------------------------------------------------------------------
 block lazyWindowDrain:
   let ctx = listCtx()
   let src = "{{ m }}"
@@ -764,7 +757,6 @@ block lazyWindowDrain:
 
 # A `~` concat emit accumulates its leaves into one string pending piece.
 # An 8-byte window still forces the drain across several pulls mid-value.
-# ---------------------------------------------------------------------------
 block concatWindowDrain:
   let ctx = listCtx()
   let src = "{{ m ~ '::' ~ m }}"
@@ -788,7 +780,6 @@ block concatWindowDrain:
 
 # Resumption across a value boundary:
 # an emit value longer than the buffer drains across pull calls through the pending piece.
-# ---------------------------------------------------------------------------
 block valueBoundary:
   let longA = repeat("alpha-", 50)
   let longB = repeat("beta-", 40)
@@ -812,7 +803,6 @@ block valueBoundary:
   doAssert whole == want, "pullAll differs across the value boundary"
 
 # Span pieces copy out of `CompiledTemplate.jinja` and drain across calls byte-exact.
-# ---------------------------------------------------------------------------
 block spanDrain:
   let verbatim = repeat("literal text ", 15)
   let src = verbatim & "{{ m }}"
@@ -841,7 +831,6 @@ block spanDrain:
 # A raise inside a for-filter propagates per the pull contract. The loop cursor stays
 # committed past the failed item and a repull resumes after it. One-byte window first,
 # where every byte delivered before the failing call is already with the caller.
-# ---------------------------------------------------------------------------
 block filterRaiseRepull:
   var msgs = newSeq[JinjaVal]()
   msgs.add strVal("aa")
@@ -854,7 +843,7 @@ block filterRaiseRepull:
   let src = "pre{% for x in xs if x[0] == 'a' %}[{{ x }}]{% endfor %}post"
   let (m, tables) = parseTemplate(src)
   let want = "pre[aa][ab]post"
-  # The one-shot render propagates the same raise, the filtered strings never reaching it.
+  # One-shot render propagates the same raise, the filtered strings never reaching it.
   try:
     discard renderToString(src, ctx, 0.0)
     doAssert false, "the one-shot render did not propagate the failing filter"
@@ -880,7 +869,7 @@ block filterRaiseRepull:
       "the error did not name the failed operation: " & message
   doAssert acc == "pre[aa]", "the caller-held bytes at the raise are not exactly the prefix"
 
-  # The repull skips nothing. The integer item stays consumed and the render completes.
+  # Repull skips nothing. The integer item stays consumed and the render completes.
   var rest = newSeq[char](64)
   while true:
     let n = pull(d, rest)
@@ -916,8 +905,8 @@ block filterRaiseRepull:
       "the wide-window repull did not resume after the discarded bytes"
 
 # A streamed macro call resolves names against the caller's scopes only before the call
-# and against its own scopes only inside the body: the macro scope is popped on close.
-# ---------------------------------------------------------------------------
+# and against its own scopes only inside the body:
+# the macro scope is popped on close.
 block macroScopePop:
   let leakCaller = "{% macro mm(q) %}[{{ q }}]{% endmacro %}" &
       "{% set q = 'caller' %}{{ mm('inner') }}:{{ q }}"
@@ -951,8 +940,8 @@ block nestedRowClosesKeepOuterScope:
 
 # `tojson` with `ensure_ascii` exercises every escape shape, control characters included,
 # plus the UTF-16 surrogate pair for a code point beyond the Basic Multilingual Plane. The corpus records `ensure_ascii`-off output,
-# so this suite checks the engine's escape set directly: uppercase hex digits and the surrogate pair.
-# ---------------------------------------------------------------------------
+# so this suite checks the engine's escape set directly:
+# uppercase hex digits and the surrogate pair.
 block ensureAsciiEscapes:
   let raw = strVal("a\tb\rc\bd\x0Ce\x01f\"g\\h<i>j&k'lém😀n")
   doAssert toJson(raw, JsonOpts(ensureAscii: true)) ==
@@ -962,9 +951,8 @@ block ensureAsciiEscapes:
       "\"a\\tb\\rc\\bd\\fe\\u0001f\\\"g\\\\h\\u003ci\\u003ej\\u0026k\\u0027lém😀n\"",
       "the raw-utf8 rendering differs from the expected escapes"
 
-# Allocation counting. Compiled only under `-d:nimAllocStats`, and a failing doAssert
-# there hangs the run with no output instead of failing it.
-# ---------------------------------------------------------------------------
+# Allocation counting. Compiled only under `-d:nimAllocStats`. A failing doAssert
+# there hangs the run with no output.
 when defined(nimAllocStats):
   privateAccess(AllocStats)
 
@@ -1123,9 +1111,9 @@ when defined(nimAllocStats):
     doAssert tjAllocs <= 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
         " allocations per call against the measured two"
 
-    # The same schema through the pull render, driver setup uncounted. The counted region
-    # holds only the pull loop, and the render costs the filter's argument list plus
-    # the serializer's container stack.
+    # Same schema through the pull render, driver setup uncounted:
+    # the counted region holds only the pull loop, and the render costs
+    # the filter's argument list plus the serializer's container stack.
     const tJson = "{{ tools|tojson }}"
     var cd = DictVal()
     dictSet(cd, "tools", tools)
@@ -1196,7 +1184,7 @@ when defined(nimAllocStats):
     let loopOnly = countRenders("{% for m in messages %}x{% endfor %}", iters)
     let strEmits = countRenders("{% for m in messages %}{{ m.n }}{% endfor %}", iters)
     let dictEmits = countRenders("{% for m in messages %}{{ m }}{% endfor %}", iters)
-    # The runtime-built message values keep the engine's one-lookup-copy residual per emit.
+    # Runtime-built message values keep the engine's one-lookup-copy residual per emit.
     doAssert strEmits <= loopOnly + iters * 10, "the string emit cost " &
         $(strEmits - loopOnly) & " allocations beyond the loop baseline"
     # A container emit through the lazy piece costs one allocation per emit over the string

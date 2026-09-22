@@ -68,7 +68,6 @@ let people = ctx(
 let withPeople = ctx(("people", people))
 
 # Literals, name lookup, attribute and subscript
-# ---------------------------------------------------------------------------
 
 doAssert render("42") == "42"
 doAssert render("'text'") == "text"
@@ -89,7 +88,6 @@ doAssert render("'h\u00e9llo'[-1]") == "o", "a negative string subscript counts 
 doAssert render("'h\u00e9llo'[1]") == "\u00e9", "a multibyte string subscript returns its codepoint"
 
 # Arithmetic and concatenation
-# ---------------------------------------------------------------------------
 
 doAssert render("1 + 2") == "3", "`+` on integers"
 doAssert render("'a' + 'b'") == "ab", "`+` on strings"
@@ -143,8 +141,7 @@ try:
 except JinjaError as e:
   doAssert "integer overflow in unary" in e.what, e.what
 
-# Comparison, membership
-# ---------------------------------------------------------------------------
+# Comparison and membership operators
 
 doAssert render("1 == 1") == "True"
 doAssert render("'a' == 'a'") == "True"
@@ -213,8 +210,9 @@ block concatEagerContract:
   doAssert render("1 == 1 ~ 'x'") == "False",
       "a comparison over a concat compares the accumulated string"
 
-# A lone `=` spells no infix in Jinja, so the expression must end before it and the unclosed
-# tail is reported instead of comparing. Keyword arguments are matched in argument lists, not here.
+# A lone `=` spells no infix in Jinja:
+# the expression must end before it, and the unclosed tail reports the error.
+# Keyword arguments are matched in argument lists only.
 block loneEqualsIsAnError:
   var reported = ""
   try:
@@ -224,7 +222,6 @@ block loneEqualsIsAnError:
   doAssert "trailing text" in reported, reported
 
 # `and` / `or` skip the operand they do not evaluate
-# ---------------------------------------------------------------------------
 
 doAssert render("false and raise_exception('left was skipped')") == "False",
     "`and` with a false left operand must not evaluate the right"
@@ -244,8 +241,8 @@ doAssert renderStmt("{% set a = 0 %}{% if not a == 5 and true %}Y{% else %}N{% e
 doAssert renderStmt("{% set a = 5 %}{% if -a == -5 %}Y{% else %}N{% endif %}") == "Y",
     "unary `-` keeps its tighter binding under a comparison"
 
-# Ternary: one condition evaluation, exactly one branch
-# ---------------------------------------------------------------------------
+# Ternary:
+# one condition evaluation, exactly one branch taken
 
 doAssert render("'yes' if true else raise_exception('else branch ran')") == "yes",
     "a ternary must not run the branch it did not take"
@@ -270,12 +267,10 @@ doAssert render("{'a': missing} == {'b': 1}") == "False",
 doAssert render("{'a': missing} == {'a': missing}") == "True",
     "two mappings each storing an undefined value compare equal"
 
-# `is defined` set-guard
-# ---------------------------------------------------------------------------
+# `is defined` set-guard against an undefined name
 
-# The arena's entry must be the outermost construct, not a node inside a branch
-# body. Entering the arena at index 0 has to reach the `if`, so the false branch
-# is what comes out.
+# Arena entry is the outermost construct, a node before any branch body:
+# entering at index 0 reaches the `if`, and the false branch is what comes out.
 doAssert renderStmt("{% if false %}X{% else %}O{% endif %}") == "O",
     "an `if` whose condition is false must take the else body"
 doAssert renderStmt("{% if 1 == 2 %}X{% else %}O{% endif %}") == "O"
@@ -520,8 +515,8 @@ doAssert renderWithSpans(
     "{% endfor %}").spans == @[(start: 0, stop: 1), (start: 1, stop: 2)],
     "a break abandoning a generation body closes its span at the position reached"
 
-# Registries: filters and tests dispatch by name
-# ---------------------------------------------------------------------------
+# Registries:
+# filters and tests dispatch by name
 
 doAssert render("[1, 2] | length") == "2"
 doAssert render("'  pad  ' | trim | length") == "3"
@@ -553,8 +548,8 @@ doAssert render("people.tags is sequence", withPeople) == "True"
 doAssert render("people is sequence", withPeople) == "False"
 doAssert render("'x' is not string") == "False"
 
-# Calls: methods and globals
-# ---------------------------------------------------------------------------
+# Calls:
+# methods and globals
 
 doAssert render("people.keys()", withPeople) == "['name', 'age', 'tags', 'active']"
 doAssert render("people.items()", withPeople)[0 ..< 15] == "[['name', 'ada'"
@@ -589,8 +584,8 @@ doAssert renderStmt("{% for c in '  ab  '.strip() %}[{{ c }}]{% endfor %}") == "
 doAssert render("['  a  '.strip()]") == "['a']", "a container repr streams a cut's span"
 doAssert render("'  x  '.strip() | tojson") == "\"x\""
 doAssert render("[3, 1, 2] | list") == "[3, 1, 2]"
-# `map` is a declared filter name with no corpus site, so reaching it must report the gap
-# rather than answer wrongly or silently.
+# `map` is a declared filter name with no corpus site:
+# reaching it reports the gap, never a wrong or silent answer.
 block gapIsLoud:
   var reported = ""
   try:
@@ -600,8 +595,7 @@ block gapIsLoud:
   doAssert "not implemented" in reported and "map" in reported, reported
 doAssert render("range(3)") == "[0, 1, 2]"
 
-# Slices: bounds, and the step of `messages[::-1]`
-# ---------------------------------------------------------------------------
+# Slices, covering the bounds and the step of `messages[::-1]`
 
 # Expected values are Python's own `list.__getitem__`/`str.__getitem__` results for the literal
 # expression on the left, not values the engine computed.
@@ -641,14 +635,12 @@ doAssert render("'abcdef'[:0:-9223372036854775807]") == "f",
     "a backward step past the walk span visits the start only"
 
 # Dict literals inside an expression
-# ---------------------------------------------------------------------------
 
 doAssert render("{'role': 'user'}['role']") == "user"
 doAssert render("{'role': 'user'}") == "{'role': 'user'}"
 doAssert render("[{'role': 'user'}] | length") == "1"
 
 # Multibyte string edge cases beyond the recorded template forms
-# ---------------------------------------------------------------------------
 
 doAssert render("'h\u00e9llo'[1:3]") == "\u00e9l", "a step-1 string slice copies its byte window"
 doAssert render("'h\u00e9llo'[::-1]") == "oll\u00e9h", "a reversed string slice walks codepoints"
