@@ -67,7 +67,10 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 const
   # Make generic over the model config and dtype:
-  # - the dims, section lists and stage tables derive from them
+  # - the dims, section lists and stage tables derive from the model
+  #   config (decode_layers/gdn_moe_layer_graph is that derivation)
+  # - tests/test_gdn_moe_layer_graph.nim checks the derivation against
+  #   the baked tables below (a change here must update that check)
   # - the tile atoms need a backend context at host typecheck time
   Hidden* = 2048
     ## Layer width:
