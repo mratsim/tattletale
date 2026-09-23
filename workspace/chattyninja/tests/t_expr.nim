@@ -451,14 +451,11 @@ proc testIntegerConstantSubscript() =
     doAssert "out of range" in e.what, e.what
 
 # A break unwinds to the nearest for-row and continues at its successor, the loop's after-node.
-# A continue shares the node kind and re-enters the loop instead, one item skipped.
-proc testBreakAndContinue() =
+proc testBreak() =
   doAssert renderStmt("{% for x in [1, 2, 3] %}{{ x }}{% break %}{% endfor %}tail") == "1tail",
       "a break ends the loop after the body ran, control resuming at the for's successor"
   doAssert renderStmt("{% for x in [1, 2, 3] %}{% if x == 2 %}{% break %}{% endif %}{{ x }}{% endfor %}") == "1",
       "a break inside an if body unwinds the if, which carries no row, and ends the loop"
-  doAssert renderStmt("{% for x in [1, 2, 3] %}{% if x == 2 %}{% continue %}{% endif %}{{ x }}{% endfor %}") == "13",
-      "a continue leaves the for-row in place and re-enters it, skipping one item"
   doAssert renderStmt(
       "{% macro m() %}a{% break %}b{% endmacro %}" &
       "{% for x in [1, 2] %}{{ m() }}{% endfor %}") == "aa",
@@ -467,39 +464,6 @@ proc testBreakAndContinue() =
       "{% macro m() %}{% for x in [1, 2] %}{% break %}{% endfor %}{% endmacro %}" &
       "{% if m() %}A{% else %}B{% endif %}") == "B",
       "a break inside a for inside a forced macro body unwinds that for"
-
-# A continue or break crossing a `{% generation %}` row must not disturb the scope stack:
-# the generation row records the enclosing scope's mark without pushing one, so the unwind
-# pops nothing for it and every binding below survives.
-proc testControlThroughGeneration() =
-  doAssert renderStmt(
-      "{% set x = 'keep' %}{% for x in [1, 2] %}{% continue %}{% endfor %}{{ x }}") == "keep",
-      "control case, a plain continue keeps the outer binding"
-  doAssert renderStmt(
-      "{% set x = 'keep' %}{% for x in [1, 2] %}{% generation %}{% continue %}{% endgeneration %}" &
-      "{% endfor %}{{ x }}") == "keep",
-      "a continue crossing a generation row pops no scope, the outer binding intact"
-
-# A continue has no meaning at a macro-call boundary. A break stops there, a continue has
-# no loop to re-enter through the boundary, so it raises located like a no-for break.
-proc testContinueAtMacroBoundary() =
-  var reported = ""
-  var at = -1
-  try:
-    discard renderStmt("{% macro m() %}{% continue %}{% endmacro %}{{ m() }}")
-    doAssert false, "a continue inside a macro body closed the body instead of raising"
-  except JinjaError as e:
-    reported = e.what
-    at = e.offset
-  doAssert "continue" in reported and "outside every" in reported, reported
-  doAssert at >= 15 and at < 26, "the boundary raise located inside the continue tag: " & $at
-  try:
-    discard renderStmt(
-        "{% macro m() %}{% continue %}{% endmacro %}" &
-        "{% for x in [1, 2] %}{{ m() }}{% endfor %}")
-    doAssert false, "a continue inside a macro body crossed the boundary into the caller's loop"
-  except JinjaError as e:
-    doAssert "outside every" in e.what, e.what
 
 # A `{% generation %}` block renders its body byte-for-byte unchanged and records the span
 # of the output it produced, byte coordinates into the render, read after the drain.
@@ -539,16 +503,9 @@ proc testConditionalGenerationEntry() =
   doAssert renderWithSpans("{% if false %}{% generation %}A{% endgeneration %}{% endif %}x").text == "x",
       "the untaken branch emits nothing either"
 
-# A break or continue abandoning a generation body still ran its bytes, the walk closing
+# A break abandoning a generation body still ran its bytes, the walk closing
 # the body's span at the position reached, the span never silently dropped.
 proc testGenerationSpanAbandoned() =
-  doAssert renderWithSpans(
-      "{% for x in [1, 2] %}{% generation %}{{ x }}{% continue %}{% endgeneration %}{% endfor %}"
-      ).text == "12", "a continue after the body's emit leaves the bytes on"
-  doAssert renderWithSpans(
-      "{% for x in [1, 2] %}{% generation %}{{ x }}{% continue %}{% endgeneration %}{% endfor %}"
-      ).spans == @[(start: 0, stop: 1), (start: 1, stop: 2)],
-      "a continue abandoning a generation body closes its span at the position reached"
   doAssert renderWithSpans(
       "{% for x in [1, 2] %}{% generation %}A{% if x == 2 %}{% break %}{% endif %}{% endgeneration %}" &
       "{% endfor %}").text == "AA"
@@ -713,10 +670,10 @@ proc testLiteralSpellings() =
       "a container repr escapes quotes and control characters"
 
 proc testStrftimeNowEpoch() =
-  doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}") == "1970-01-01 00:00:00 001",
-      "the epoch renders through the hand-rolled civil conversion, the day zero-padded"
-  doAssert renderStmt("{{ strftime_now('%j') }}", undefinedVal(), 345600.0) == "005",
-      "a single-digit day of year zero-pads to three digits"
+  doAssert renderStmt("{{ strftime_now('%Y-%m-%d') }}") == "1970-01-01",
+      "the epoch renders through the hand-rolled civil conversion"
+  doAssert renderStmt("{{ strftime_now('%Y-%m-%d') }}", undefinedVal(), 951782400.0) == "2000-02-29",
+      "a leap-day epoch renders the civil date"
 
 # A skipped branch never evaluates its operators, so an unimplemented operator
 # inside one raises nothing, both the ternary and short-circuit variants silent.
@@ -732,14 +689,6 @@ proc testSkippedBranchStaysSilent() =
     doAssert false, "an unimplemented operator evaluated"
   except JinjaError as e:
     doAssert "not implemented" in e.what, e.what
-
-proc testStrftimeNowLeapYears() =
-  doAssert renderStmt("{{ strftime_now('%j') }}", undefinedVal(), 28512000.0) == "331",
-      "a three-digit day of year pads nothing"
-  doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 951782400.0) ==
-      "2000-02-29 00:00:00 060", "a leap-day epoch renders the day of year"
-  doAssert renderStmt("{{ strftime_now('%Y-%m-%d %H:%M:%S %j') }}", undefinedVal(), 4107542400.0) ==
-      "2100-03-01 00:00:00 060", "a non-leap century renders the day of year"
 
 # Zero-node templates and empty for bodies
 proc testZeroNodeTemplates() =
@@ -1001,9 +950,7 @@ proc main() =
   testMacroArgBinding()
   testCalleeArgOrder()
   testIntegerConstantSubscript()
-  testBreakAndContinue()
-  testControlThroughGeneration()
-  testContinueAtMacroBoundary()
+  testBreak()
   testGenerationSpanShape()
   testConditionalGenerationEntry()
   testGenerationSpanAbandoned()
@@ -1021,7 +968,6 @@ proc main() =
   testLiteralSpellings()
   testStrftimeNowEpoch()
   testSkippedBranchStaysSilent()
-  testStrftimeNowLeapYears()
   testZeroNodeTemplates()
   testEmptyForBodyClosesAtSetUp()
   testEmptyForBodyFilterClause()

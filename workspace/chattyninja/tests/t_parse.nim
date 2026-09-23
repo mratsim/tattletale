@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Whitespace rules, comment and raw parsing of chattyninja, asserted at the rendered bytes,
+## Whitespace rules and comment parsing of chattyninja, asserted at the rendered bytes,
 ## plus the located raises of the parse error contract.
 ##
 ## Byte-exact template output stays locked in `t_corpus` through the corpus ledger, one
@@ -61,39 +61,6 @@ proc testWhitespaceControls() =
       "a comment is erased, not preserved"
   doAssert renderToString("keep  me  ", JinjaVal(kind: vkUndefined)) == "keep  me  ",
       "spacing survives byte for byte, only a trailing newline is dropped"
-
-# A `{% raw %}` body renders verbatim, the closing tag's bytes never joining the body,
-# a bare `endraw %}` inside it unable to close the block. Each row carries an independently
-# written expected output string.
-proc testRawBodyShapes() =
-  const rawShapes = [
-    ("{% raw %}X{% endraw %}", "X"),
-    ("{% raw %}B{%  endraw %}C", "BC"),
-    ("{% raw %}{% endraw %}", ""),
-    ("pre{% raw %}X{% endraw %}post", "preXpost"),
-    ("{% raw %}A endraw %} B{% endraw %}", "A endraw %} B"),
-    ("{% raw %}X{% endraw -%}  Y", "XY"),
-    ("{% raw %}X{%- endraw -%}Y", "XY"),
-    ("{% raw %}  X  {%- endraw %}", "  X"),
-    ("{% raw %}don't{% endraw %}", "don't"),
-    ("A{% raw %}X{% endraw %}B{% raw %}C{% endraw %}D", "AXBCD"),
-    # `-%}` on the open tag strips the body's leading whitespace run, `{% endraw -%}`
-    # the trailing one, the glued `endraw-%}` spelling the closer upstream accepts
-    ("A{% raw -%}  X  {% endraw %}B", "AX  B"),
-    ("X{% raw -%}\n  Y  {% endraw %}Z", "XY  Z"),
-    ("A{% raw %} X {% endraw-%}B", "A X B"),
-    ("A{% raw %}X{% endraw-%}\n  Y", "AXY"),
-    # trim_blocks drops the one newline a plain `{% raw %}` opening carries into
-    # the body, the dashed opening stripping the whole leading run already
-    ("{% raw %}\nX{% endraw %}", "X"),
-    ("{% raw %}\n\nX{% endraw %}", "\nX"),
-    ("{% raw %}\n  X{% endraw %}", "  X"),
-    ("A{% raw %}\nX{% endraw %}B", "AXB"),
-  ]
-  for (rSrc, want) in rawShapes:
-    let got = renderToString(rSrc, JinjaVal(kind: vkUndefined))
-    doAssert got == want, "raw body: " & rSrc.escape & " rendered " & got.escape &
-        ", want " & want.escape
 
 # A comment body is a verbatim byte run, its close scan quote-blind, an odd quote count
 # in the body neither raising nor deferring the scan into the template text after it.
@@ -160,7 +127,7 @@ proc testTruncationRaisesLocated() =
   # at an unrelated byte fails the test.
   for truncation in [("{% set x %}body", 0, 11), ("{% generation %}body", 0, 16),
       ("{% for x in xs %}{{ x }}", 0, 17), ("{% if x %}body", 0, 10),
-      ("{{ x", 0, 4), ("{% x", 0, 4), ("{# c", 0, 4), ("{% raw %}body", 0, 9),
+      ("{{ x", 0, 4), ("{% x", 0, 4), ("{# c", 0, 4),
       ("{% macro f(a, b = 1 %}body{% endmacro %}", 0, 22),
       ("{% macro f(, %}body{% endmacro %}", 0, 15),
       ("{% macro f %}body{% endmacro %}", 0, 13), ("{% endfor %}", 0, 12),
@@ -207,14 +174,13 @@ proc testSetWithoutTargetNameRaises() =
     doAssert "endset" in e.what, e.what
 
 # Whitespace-rule sweep at the rendered bytes, one row per rule and branch
-# (`{% %}` block tag, `{{ }}` variable tag, comment, raw body, text run).
+# (`{% %}` block tag, `{{ }}` variable tag, comment, text run).
 #
 # | Rule            | Effect                                           |
 # | --------------- | ------------------------------------------------ |
 # | `trim_blocks`   | one newline after a block or comment tag's close |
 # | `lstrip_blocks` | the blanks of a block or comment tag's line      |
 # | `-` markers     | every whitespace run before or after their tag   |
-# | plain raw open  | one body newline consumed                        |
 #
 # Byte-locked shapes, a consolidation of the rule sites moving one byte failing here,
 # before the corpus ledger has to report it.
@@ -230,11 +196,6 @@ proc testWhitespaceRuleSweep() =
     ("A\n   {# c #}\nB", "A\nB", "a plain comment carries lstrip and trim"),
     ("A  {#- c -#}  B", "AB", "a dashed comment strips the runs"),
     ("{#- c -#}\nB", "B", "a dashed comment at the start"),
-    ("A{% raw %}\nX{% endraw %}B", "AXB", "a plain raw opening consumes one newline"),
-    ("{% raw %}\nX{% endraw %}", "X", "the raw newline consume with no run before"),
-    ("A\n   {% raw %}\nX{% endraw %}\nB", "A\nXB", "raw under lstrip and trim"),
-    ("A{% raw -%}\n  X  {% endraw %}B", "AX  B", "a dashed raw opening strips the body's leading run"),
-    ("A{% raw %}\nX{% endraw -%}\nB", "AXB", "a dashed raw close strips the run after it"),
     ("A\n", "A", "the final newline dropped"),
     ("A\nB\n", "A\nB", "only the final newline dropped"),
     ("A {#-#}\n\nB", "AB", "a whole-dash comment interior loses both markers at once"),
@@ -251,7 +212,6 @@ proc main() =
 
   testNkIfBodyWalk(tmpl)
   testWhitespaceControls()
-  testRawBodyShapes()
   testCommentCloseQuoteBlind()
   testIfSuffixedIterable()
   testTopLevelBreakRaisesLocated()

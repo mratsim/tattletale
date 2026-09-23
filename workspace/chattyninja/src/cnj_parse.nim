@@ -38,7 +38,7 @@
 # | `{{- ` `{%- ` `{#- ` | every whitespace run before the tag is stripped                                                   |
 # | `- }}` `-%}` `-#}`   | every whitespace run after the tag is stripped                                                    |
 #
-# - template text is literal, with no backslash escaping of delimiters. `{% raw %}` holds its body verbatim
+# - template text is literal, with no backslash escaping of delimiters
 # - an expression stays template text:
 #   no expression becomes a node, and each `{{ x }}` leaves an `nkEmit` carrying the `x` span
 #
@@ -165,7 +165,7 @@ func findTagClose(src: openArray[char], at, stop: int, close: string): int =
 
 func findRun(src: openArray[char], at, stop: int, needle: string): int =
   ## Returns the offset of `needle` at or after `at`, a plain byte scan with neither quote
-  ## tracking nor bracket counting, reserved for verbatim comment and `{% raw %}` bodies.
+  ## tracking nor bracket counting, reserved for verbatim comment bodies.
   var i = at
   while i + needle.len <= stop:
     if at(src, needle, i):
@@ -185,7 +185,7 @@ func nextOpen(src: openArray[char], at, stop: int): int =
 func splitTags(p: var Parser): Tag =
   ## Produces the next tag of the split, one call per tag, a whitespace-resolved text run
   ## or one `{%`/`{{` tag row, a tag row delivered one call ahead of its text run, `tkEnd`
-  ## at the template's end, an unterminated comment, tag or raw body raising.
+  ## at the template's end, an unterminated comment or tag raising.
   if p.pending.kind != tkEnd:
     result = p.pending
     p.pending = Tag()
@@ -204,7 +204,6 @@ func splitTags(p: var Parser): Tag =
     var tHi = 0
     var afterTag: int # offset just past the tag's closing delimiter, set in every tag branch
     var stripAfter: bool
-    var isRaw = false
     if openAt < stop:
       if p.src.at("{#", openAt):
         let c = p.src.findRun(openAt + 2, stop, "#}")
@@ -235,81 +234,6 @@ func splitTags(p: var Parser): Tag =
       afterTag = c + 2
       let (innerLo, innerHi, stripBefore, tagStripAfter) = p.src.tagBounds(bodyStart, c)
       stripAfter = tagStripAfter
-      if not isVar:
-        var k = innerLo
-        while k < innerHi and p.src[k] in cnj_types.Whitespace:
-          inc k
-        isRaw = p.src.at("raw", k) and (k + 3 >= innerHi or p.src[k + 3] notin WsNameChars)
-      if isRaw:
-        let openDash = stripAfter
-        # `{% raw %}` holds its body verbatim:
-        #   one text run up to the next `{% endraw %}` tag, closed by a quote-blind
-        #   scan anchored on a tag-shaped `{%`, so a quote or a bare `endraw %}`
-        #   inside the body neither defers the scan nor ends the run early
-        # - the run's end is the matched tag's `{`, so no byte of the closing tag
-        #   joins the body
-        var endOpen = -1   # the closing tag's `{`
-        var endDash = false # the closing tag carries `{%-`
-        var endAfterTag = 0 # offset just past the closing tag's `%}`
-        var endStripAfter = false # the closing tag carries `- %}`
-        var i = c + 2
-        while i < stop:
-          if p.src.at("{%", i):
-            var j = i + 2
-            var dash = false
-            if j < stop and p.src[j] == '-':
-              dash = true
-              inc j
-            while j < stop and p.src[j] in cnj_types.Whitespace:
-              inc j
-            if p.src.at("endraw", j) and (j + 6 >= stop or p.src[j + 6] notin WsNameChars):
-              var k = j + 6
-              var dashAfter = false
-              while k < stop and p.src[k] in cnj_types.Whitespace:
-                inc k
-              if k < stop and p.src[k] == '-':
-                dashAfter = true
-                inc k
-                while k < stop and p.src[k] in cnj_types.Whitespace:
-                  inc k
-              if k + 2 <= stop and p.src.at("%}", k):
-                endOpen = i
-                endDash = dash
-                endAfterTag = k + 2
-                endStripAfter = dashAfter
-                break
-            # the `{%` was body text, the scan resumes past it
-            inc i, 2
-            continue
-          inc i
-        if endOpen < 0:
-          raise jinjaErr("unclosed `{% raw %}` opened at byte " & $openAt, openAt)
-        var rawLo = c + 2
-        var rawHi = endOpen
-        # `{%- endraw %}` strips the body's trailing whitespace run, the same
-        # whitespace policy every other tag boundary follows
-        if endDash:
-          while rawHi > rawLo and p.src[rawHi - 1] in cnj_types.Whitespace:
-            dec rawHi
-        # `-%}` on the open tag strips the body's leading whitespace run
-        if openDash:
-          while rawLo < rawHi and p.src[rawLo] in cnj_types.Whitespace:
-            inc rawLo
-        if rawLo < rawHi and p.src[rawLo] in {' ', '\t'} and p.src.atLineStart(rawLo):
-          while rawLo < rawHi and p.src[rawLo] in {' ', '\t'}:
-            inc rawLo
-        # trim_blocks drops the one newline a plain `{% raw %}` opening carries into
-        # the body, the dashed opening's leading-whitespace strip covering it already
-        if rawLo < rawHi and p.src[rawLo] == '\n':
-          inc rawLo
-        p.passTagClose(endAfterTag, endStripAfter, true)
-        # One text run before the raw tag is real output under the open tag's
-        # whitespace rules, delivered first, the body queueing in `pending` after it.
-        hi = p.src.runBeforeTag(lo, hi, openAt, stripBefore, true)
-        if lo < hi:
-          p.pending = Tag(kind: tkText, lo: int32 rawLo, hi: int32 rawHi, tLo: 0, tHi: 0)
-          return Tag(kind: tkText, lo: int32 lo, hi: int32 hi, tLo: 0, tHi: 0)
-        return Tag(kind: tkText, lo: int32 rawLo, hi: int32 rawHi, tLo: 0, tHi: 0)
       kind = if isVar: tkVariable else: tkBlock
       tLo = innerLo
       tHi = innerHi
@@ -720,7 +644,7 @@ proc parseConstruct(p: var Parser): Head =
     parseSet(p)
   elif p.src.keywordIs(t, "macro"):
     parseMacro(p)
-  elif p.src.keywordIs(t, "break") or p.src.keywordIs(t, "continue"):
+  elif p.src.keywordIs(t, "break"):
     let kw = p.src.keywordSpan(t)
     if p.macroDepth == 0 and p.loopDepth == 0:
       # A macro body defers the enclosure check to its call site, so only a break

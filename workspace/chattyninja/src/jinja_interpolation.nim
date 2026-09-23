@@ -547,13 +547,6 @@ func civilFromDays(z: int): tuple[y, m, d: int] =
   let mon = mp + (if mp < 10: 3 else: -9)
   (yoe + era * 400 + ord(mon <= 2), mon, doy - (153 * mp + 2) div 5 + 1)
 
-const MonthStart = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
-
-func dayOfYear(y, m, d: int): int =
-  ## Returns the 1-based day of year, Gregorian leap rule with century handling.
-  MonthStart[m - 1] + d + ord(m > 2 and y mod 4 == 0 and
-      (y mod 100 != 0 or y mod 400 == 0))
-
 func yearField(y: int): string =
   ## Returns the `%Y` field, four digits zero-padded, non-positive years counting up
   ## from one and years past four digits carrying a leading `+`.
@@ -566,18 +559,11 @@ func twoDigits(n: int): string =
   ## Returns `n` zero-padded to two digits.
   if n < 10: "0" & $n else: $n
 
-func threeDigits(n: int): string =
-  ## Returns `n` zero-padded to three digits.
-  result = $n
-  while result.len < 3:
-    result = '0' & result
-
 func strftimeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## Renders the format against the render state's injected epoch, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
   let secs = c.state.clock.int64
-  let tod = floorMod(secs.int, 86400)
   let (yr, mo, dy) = civilFromDays(floorDiv(secs.int, 86400))
   var acc = ""
   var i = 0
@@ -592,11 +578,6 @@ func strftimeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVa
     of 'Y': acc.add yearField(yr)
     of 'm': acc.add twoDigits(mo)
     of 'd': acc.add twoDigits(dy)
-    of 'H': acc.add twoDigits(tod div 3600)
-    of 'M': acc.add twoDigits((tod mod 3600) div 60)
-    of 'S': acc.add twoDigits(tod mod 60)
-    of 'j': acc.add threeDigits(dayOfYear(yr, mo, dy))
-    of '%': acc.add '%'
     else: gapWhat("`strftime_now` directive", "%" & fmt[i + 1])
     inc i, 2
   strVal(acc)

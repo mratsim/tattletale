@@ -303,7 +303,7 @@ func gap(kindName, corpusSite: string, lo, hi: int): void {.noreturn.} =
       cause = ceUnimplemented)
 
 func outsideEveryFor(tmpl: CompiledTemplate, lo, hi: int32): void {.noreturn.} =
-  ## Raises the no-enclosing-`{% for %}` report for a break or continue,
+  ## Raises the no-enclosing-`{% for %}` report for a break,
   ## `lo` and `hi` bounding the keyword.
   raise jinjaErr("`{% " & spanString(tmpl.jinja.toOpenArray(int(lo), int(hi) - 1)) &
       " %}` ran outside every `{% for %}`", int(lo), int(hi - lo))
@@ -315,28 +315,17 @@ func closeMacroRow(st: var RenderState, at: int, next: int32) =
   dec st.macroDepth
 
 func stepBreak(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## Unwinds to the nearest for-row. A break stops at the next macro-call boundary, a continue
-  ## leaves the for-row and its scope in place, generation rows above abandon their partial spans.
+  ## Unwinds to the nearest for-row. A break stops at the next macro-call boundary,
+  ## generation rows above abandon their partial spans.
   template nd: Node = c.tmpl.nodes[n]
-  # Continue discriminates from break over the keyword span, trailing whitespace trimmed.
-  var kwHi = int(nd.hi)
-  while kwHi > int(nd.lo) and c.tmpl.jinja[kwHi - 1] in Whitespace:
-    dec kwHi
-  let cont = c.tmpl.jinja.toOpenArray(int(nd.lo), kwHi - 1) == "continue"
   var k = c.state.rows.len - 1
   while k >= 0:
     let r = c.state.rows[k]
     if r.kind == frMacro:
-      if cont:
-        outsideEveryFor(c.tmpl, nd.lo, nd.hi)
       closeMacroRow(c.state, k, c.state.rows[k].retNode)
       return
     if r.kind == frFor:
-      if cont:
-        c.state.rows.setLen(k + 1)
-        c.state.curNode = r.node
-      else:
-        closeRow(c.state, k, c.tmpl.nodes[r.node].succ)
+      closeRow(c.state, k, c.tmpl.nodes[r.node].succ)
       return
     if r.kind == frGeneration:
       # An abandoned generation body still ran its bytes, the span closing at the position reached.
