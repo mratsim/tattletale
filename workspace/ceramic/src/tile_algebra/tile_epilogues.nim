@@ -190,9 +190,11 @@ type EpiAXPBYStrided*[T] = object
   alpha*, beta*: T
   C*: StridedOperand[T]
 
-func initEpiAXPBY*[T](alpha, beta: T, C: ptr UncheckedArray[T],
-                      rsc, csc: int32): EpiAXPBYStrided[T] =
-  ## The runtime-strided form: C with explicit row/col strides (BLIS).
+func initEpiAXPBYStrided*[T](alpha, beta: T, C: ptr UncheckedArray[T], rsc, csc: int32): EpiAXPBYStrided[T] =
+  ## Returns the runtime-strided form's epilogue:
+  ## - C with explicit row/col strides (BLIS)
+  ## - the name distinguishes it from the layout-typed `initEpiAXPBY`,
+  ##   the two constructors return different epilogue types
   EpiAXPBYStrided[T](alpha: alpha, beta: beta,
                      C: StridedOperand[T](data: C, rsc: rsc, csc: csc, base: 0))
 
@@ -200,16 +202,35 @@ func apply*[T; R, C: static int; A: static MmaAtom](
     op: EpiAXPBYStrided[T],
     tmp: var RtLeft[T, R, C, A],
     AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = α·AB + β·C, per owned slot. C is read at (row, col) with the
-  ## runtime strides (rsc, csc); β = 0 skips the read.
+  ## D = α·AB + β·C, per owned slot, the same fast-path ladder as the
+  ## layout-typed apply above:
+  ##
+  ## - β = 0 skips the C read, α = 1 also skips the multiply
+  ## - α = 1 skips the multiply
+  ## - C is read at (row, col) with the runtime strides (rsc, csc)
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
   const vpt = A.valuesPerThread(opC).toIntVal()
   if op.beta == T(0):
+    if op.alpha == T(1):
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = AB.frags[n][m].frag[v]
+    else:
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+  elif op.alpha == T(1):
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:
+        let cOff = op.C.base + int32(n * A.getM()) * op.C.rsc +
+                                int32(m * A.getN()) * op.C.csc
         for v in 0 ..< vpt:
-          tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+          tmp.frags[n][m].frag[v] =
+            AB.frags[n][m].frag[v] +
+            op.beta * op.C.data[int(cOff) + int(v) * int(op.C.csc)]
   else:
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:

@@ -216,6 +216,6 @@ proc gemm*[TIn, TOut](D: ptr UncheckedArray[TOut],
   if beta != 0.0'f32:
     c_rtl.loadTileBounded(gd_c, (0, 0, OUTPUT_Y, OUTPUT_X), M, N)
 
-  var o = initEpiAXPBY(alpha, beta, C, rsc, csc).shard(C, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
+  var o = initEpiAXPBYStrided(alpha, beta, C, rsc, csc).shard(C, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
   o.apply(d_rtl, d_rtl, c_rtl)
   gd_d.storeTileMasked( d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)

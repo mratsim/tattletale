@@ -29,81 +29,10 @@ import workspace/crucible
 import workspace/ceramic
 import ./moe_router
 import ./tile_widen
+import ./tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
-
-# ─── Module-local bf16 row-bounded tile load/store ────────────────────
-# tile_io_rows ships fp16 variants only. The bf16 guards live
-# module-local (the ffn_silu and grouped_query_attention_paged precedent).
-
-# tiles-allow loadTileRowsBounded is the row-bounded tile io machinery, it needs
-# one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
-proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[El, R, C, A],
-    gl: GlView[El],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for element-dtype tiles. Tile plane rows origin[2]·R + r at or above
-  ## `rowLimit` are zero-filled, not read.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let row = laneRowOf(A)
-  let col = laneColOf(A)
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  let src = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
-          tile.frags[n][m].frag[v] = src[row + n * M, col + m * N + v]
-        else:
-          tile.frags[n][m].frag[v] = roundToRne[El](0.0'f32)
-
-# tiles-allow storeTileRowsBounded is the row-bounded tile io machinery, it needs
-# one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
-proc storeTileRowsBounded[El; R, C: static int; A: static MmaAtom](
-    gl: GlView[El],
-    tile: RtLeft[El, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for element-dtype tiles. Tile plane rows origin[2]·R + r at or above
-  ## `rowLimit` are not written.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let row = laneRowOf(A)
-  let col = laneColOf(A)
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  var dst = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
-
-proc loadRowsBounded[El; R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[El, R, C, A],
-    gl: GlView[El],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for the element-dtype storage element.
-  loadTileRowsBounded(tile, gl, origin, rowLimit)
-
-proc storeRowsBounded[El; R, C: static int; A: static MmaAtom](
-    gl: GlView[El],
-    tile: RtLeft[El, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for the element-dtype storage element.
-  storeTileRowsBounded(gl, tile, origin, rowLimit)
 
 # ─── Local device extensions: the activation and partial arithmetic ──
 
@@ -237,13 +166,13 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       gHalf.zero()
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
-        a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
+        a.loadTileRows(glX, (t, 0, 0, kk), 1)
         bT.loadTile(glGu, (ids[y], 0, nt, kk))
         gHalf.mma_AB(a, bT)
         bT.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
         uHalf.mma_AB(a, bT)
       hT.siluMulElemEager(gHalf, uHalf)
-      glH.storeRowsBounded(hT, (t * K + y, 0, 0, nt), 1)
+      glH.storeTileRows(hT, (t * K + y, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -255,7 +184,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     for nt in 0'i32 ..< H div 32:
       d.zero()
       for kk in 0'i32 ..< I div 16:
-        a.loadRowsBounded(glH, (t * K + y, 0, 0, kk), 1)
+        a.loadTileRows(glH, (t * K + y, 0, 0, kk), 1)
         bT.loadTile(glDown, (ids[y], 0, nt, kk))
         d.mma_AB(a, bT)
       var rowIdx = [int32(t * (K + 1) + y), -1'i32, -1'i32, -1'i32]
@@ -273,13 +202,13 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       gHalf.zero()
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
-        a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
+        a.loadTileRows(glX, (t, 0, 0, kk), 1)
         bT.loadTile(glSg, (0, 0, nt, kk))
         gHalf.mma_AB(a, bT)
         bT.loadTile(glSu, (0, 0, nt, kk))
         uHalf.mma_AB(a, bT)
       hT.siluMulElemEager(gHalf, uHalf)
-      glHs.storeRowsBounded(hT, (t, 0, 0, nt), 1)
+      glHs.storeTileRows(hT, (t, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -291,7 +220,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     for nt in 0'i32 ..< H div 32:
       d.zero()
       for kk in 0'i32 ..< I div 16:
-        a.loadRowsBounded(glHs, (t, 0, 0, kk), 1)
+        a.loadTileRows(glHs, (t, 0, 0, kk), 1)
         bT.loadTile(glSd, (0, 0, nt, kk))
         d.mma_AB(a, bT)
       var rowIdx = [int32(t * (K + 1) + K), -1'i32, -1'i32, -1'i32]

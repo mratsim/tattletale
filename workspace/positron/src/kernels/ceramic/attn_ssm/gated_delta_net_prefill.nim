@@ -71,6 +71,7 @@ import workspace/crucible
 import workspace/ceramic
 
 from ../tile_widen import widen
+import ./key_head
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -115,7 +116,7 @@ proc gdnPrefillChunkScanAt*[El](
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane cumulogdecay/u local arrays are sized by ChunkC"
 
-  let hk = ((bh mod Hv) div hkRatio) + ((bh div Hv) * Hk)
+  let hk = keyHeadOf(bh mod Hv, Hv, Hk) + (bh div Hv) * Hk
   let headLin = bh * Dv * Dk
   let seqLin = bh * T * Dv
   let kHeadLin = hk * T * Dk

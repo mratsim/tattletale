@@ -86,6 +86,19 @@
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
 from ../math_consts import Log2e
+import ./key_head
+
+template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
+  ## Loads the k / cumulogdecay register-tile pair of one past token:
+  ## - both tiles come from their 2D views at the token's flat row base
+  ##
+  ## Expected input:
+  ##   - k32, cumulogdecayS register tiles of the same (rows, Dk) shape,
+  ##     the pairdecay's two per-token operands
+  ##   - glK, glCumulogdecay the key and log-decay views at the token's
+  ##     flat row index `base`
+  k32.loadTile(glK, (base, 0, 0, 0))
+  cumulogdecayS.loadTile(glCumulogdecay, (base, 0, 0, 0))
 import workspace/crucible
 import workspace/ceramic
 
@@ -137,7 +150,7 @@ proc kdaPrefillChunkScanAt*[El](
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane u local array is sized by ChunkC"
-  let hk = ((bh mod Hv) div hkRatio) + ((bh div Hv) * Hk)
+  let hk = keyHeadOf(bh mod Hv, Hv, Hk) + (bh div Hv) * Hk
   let headLin = bh * Dv * Dk
   let seqLin = bh * T * Dv
   let kHeadLin = hk * T * Dk
@@ -189,9 +202,9 @@ proc kdaPrefillChunkScanAt*[El](
       var uacc = 0'f32
       for sIdx in 0 ..< t:
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var cumulogdecayS: rt_l(float32, TileR, Dk)
-        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        pairDecayInto(ks32, cumulogdecayS, glK, glCumulogdecay,
+          kHeadLin + (c0 + int32(sIdx)) * Dk)
         # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
         # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
         #
@@ -224,9 +237,9 @@ proc kdaPrefillChunkScanAt*[El](
       var yVal = hVec.rowScalar()
       for sIdx in 0 .. t:
         var ks32: rt_l(float32, TileR, Dk)
-        ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var cumulogdecayS: rt_l(float32, TileR, Dk)
-        cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+        pairDecayInto(ks32, cumulogdecayS, glK, glCumulogdecay,
+          kHeadLin + (c0 + int32(sIdx)) * Dk)
         var pdT: rt_l(float32, TileR, Dk)
         # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
         # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
@@ -252,9 +265,9 @@ proc kdaPrefillChunkScanAt*[El](
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
       var ks32: rt_l(float32, TileR, Dk)
-      ks32.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var cumulogdecayS: rt_l(float32, TileR, Dk)
-      cumulogdecayS.loadTile(glCumulogdecay, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
+      pairDecayInto(ks32, cumulogdecayS, glK, glCumulogdecay,
+        kHeadLin + (c0 + int32(sIdx)) * Dk)
       # pairdecay(end, s)[dk] = exp2((cumulogdecay_end[dk] − cumulogdecay_s[dk])·log2e) per key channel,
       # the difference form (the token pairdecay note carries the overflow bound)
       var pdEnd: rt_l(float32, TileR, Dk)

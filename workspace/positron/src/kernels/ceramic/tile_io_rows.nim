@@ -131,6 +131,47 @@ proc storeTileRows*[El; R, C: static int; A: static MmaAtom](
         for v in 0 ..< vpt:
           dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
 
+proc zeroRows[T; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[T, R, C, A],
+    r0, rowLimit: int32) {.device.} =
+  ## Zeroes the tile's rows with plane row at or above `rowLimit`:
+  ## - RtLeft frag ordering, row-tile n outer, col-tile m inner
+  ## - `r0` is the tile's first plane row
+  const M = A.getM()
+  const rowTiles = R div M
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  let row = laneRowOf(A)
+  for n in 0 ..< rowTiles:
+    if r0 + int32(n * M + row) >= rowLimit:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          when T is bfloat16:
+            tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
+          else:
+            tile.frags[n][m].frag[v] = 0'f32.to(T)
+
+proc loadTileRowsPreread*[T; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[T, R, C, A],
+    gl: GlView[T],
+    origin: tuple,
+    rowLimit: int32) {.device.} =
+  ## Row-bounded loadTile, pre-read semantics:
+  ## - the full (R, C) plane is read from `gl`
+  ## - the tile-plane rows origin[2]·R + r at or above `rowLimit` are
+  ##   zeroed in registers afterwards
+  ##
+  ## Precondition:
+  ## - the view's backing storage covers the padded tile rows,
+  ##   ceil(logical rows / R)·R, the straddling tile reads its tail rows
+  ##   before discarding them
+  ## - callers with an exactly-sized buffer need
+  ##   the guarded `loadTileRows` above instead
+  tile.loadTile(gl, origin)
+  let r0 = int32(origin[2]) * int32(R)
+  if r0 + int32(R) > rowLimit:
+    zeroRows(tile, r0, rowLimit)
+
 # ═════════════════════════════════════════════════════════════════════
 #  RtRight variants (swapped views, guard on origin[3])
 #  ═════════════════════════════════════════════════════════════════════

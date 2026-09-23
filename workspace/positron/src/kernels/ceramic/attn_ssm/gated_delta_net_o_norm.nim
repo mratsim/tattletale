@@ -37,83 +37,10 @@ import ../math_consts
 import workspace/crucible
 import workspace/ceramic
 import ../tile_widen
+import ../tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
-
-# ─── Local device helpers ────────────────────────────────────────────
-# tiles-allow zeroTailRows is the row-bounded tile io machinery, it needs a bounded-IO
-# tile-io primitive (row-guarded load/store over register tiles)
-proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
-    tile: var RtLeft[T, R, C, A], r0, rowLimit: int32) {.device.} =
-  ## Zeroes the tile's rows from the `rowLimit` boundary up. Argument `r0` is the tile's
-  ## first plane row.
-  const M = A.getM()
-  const rowTiles = R div M
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  let row = laneRowOf(A)
-  for n in 0 ..< rowTiles:
-    if r0 + int32(n * M + row) >= rowLimit:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          when T is bfloat16:
-            tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
-          else:
-            tile.frags[n][m].frag[v] = 0'f32.to(T)
-
-proc loadTileRowsGated[R, C: static int; A: static MmaAtom; T](
-    tile: var RtLeft[T, R, C, A],
-    gl: GlView[T],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile over a 2D view.
-  ## - the underlying tile load reads the full (R, C) plane unconditionally
-  ## - rows at or above `rowLimit` are zeroed in registers afterwards
-  ## - a straddling tile does read its tail rows past the logical row count,
-  ##   the view's backing storage must cover the padded tile rows,
-  ##   ceil(M / TileR)·TileR
-  tile.loadTile(gl, origin)
-  let r0 = int32(origin[2]) * int32(R)
-  if r0 + int32(R) > rowLimit:
-    zeroTailRows(tile, r0, rowLimit)
-
-# tiles-allow storeTailRows is the row-bounded tile io machinery, it needs a bounded-IO
-# tile-io primitive (row-guarded load/store over register tiles)
-proc storeTailRows[R, C: static int; A: static MmaAtom; T](
-    gl: GlView[T],
-    tile: RtLeft[T, R, C, A],
-    origin: tuple,
-    r0, rowLimit: int32) {.device.} =
-  ## Row-wise store of the in-range rows of a straddling tile.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let row = laneRowOf(A)
-  let col = laneColOf(A)
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  var dst = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    if r0 + int32(n * M + row) < rowLimit:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
-
-proc storeTileRowsGated[R, C: static int; A: static MmaAtom; T](
-    gl: GlView[T],
-    tile: RtLeft[T, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile over a 2D view.
-  ## Rows at or above `rowLimit` are not written. The in-limit tile stores
-  ## through the facility and a straddling tile stores row-wise.
-  let r0 = int32(origin[2]) * int32(R)
-  if r0 + int32(R) <= rowLimit:
-    gl.storeTile(tile, origin)
-  else:
-    storeTailRows(gl, tile, origin, r0, rowLimit)
 
 # ─── Inline tile procs (the fusion contract) ─────────────────────────
 
@@ -221,13 +148,13 @@ proc rmsNormGatedTileCoreAt[El](
   var xT: rt_l(El, TileR, Dv)
   var gT: rt_l(El, TileR, Dv)
   var wT: rt_l(El, TileR, Dv)
-  xT.loadTileRowsGated(glX, (0, 0, rowBlk, 0), M)
-  gT.loadTileRowsGated(glG, (0, 0, rowBlk, 0), M)
-  wT.loadTileRowsGated(glW, (0, 0, rowBlk, 0), M)
+  xT.loadTileRowsPreread(glX, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsPreread(glG, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsPreread(glW, (0, 0, rowBlk, 0), M)
 
   var oT: rt_l(El, TileR, Dv)
   rmsNormGatedElem(oT, xT, gT, wT, eps)
-  glO.storeTileRowsGated(oT, (0, 0, rowBlk, 0), M)
+  glO.storeTileRows(oT, (0, 0, rowBlk, 0), M)
 
 proc rmsNormGatedTileAt*[El](
     outp: ptr UncheckedArray[El],  # (M, Dv) family-dtype out
@@ -296,12 +223,12 @@ proc rmsWeightTile*[El](
 
   var xT: rt_l(El, TileR, Dv)
   var wT: rt_l(El, TileR, Dv)
-  xT.loadTileRowsGated(glX, (0, 0, rowBlk, 0), M)
-  wT.loadTileRowsGated(glW, (0, 0, rowBlk, 0), M)
+  xT.loadTileRowsPreread(glX, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsPreread(glW, (0, 0, rowBlk, 0), M)
 
   var mT: rt_l(El, TileR, Dv)
   rmsWeightElem(mT, xT, wT, eps)
-  glM.storeTileRowsGated(mT, (0, 0, rowBlk, 0), M)
+  glM.storeTileRows(mT, (0, 0, rowBlk, 0), M)
 
 proc siluMulTile*[El](
     outp: ptr UncheckedArray[El],  # (M, Dv) family-dtype out
@@ -321,9 +248,9 @@ proc siluMulTile*[El](
 
   var mT: rt_l(El, TileR, Dv)
   var gT: rt_l(El, TileR, Dv)
-  mT.loadTileRowsGated(glM, (0, 0, rowBlk, 0), M)
-  gT.loadTileRowsGated(glG, (0, 0, rowBlk, 0), M)
+  mT.loadTileRowsPreread(glM, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsPreread(glG, (0, 0, rowBlk, 0), M)
 
   var oT: rt_l(El, TileR, Dv)
   siluMulElem(oT, mT, gT)
-  glO.storeTileRowsGated(oT, (0, 0, rowBlk, 0), M)
+  glO.storeTileRows(oT, (0, 0, rowBlk, 0), M)

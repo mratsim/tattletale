@@ -52,6 +52,7 @@
 ##   the host owns the layout and the lifetime
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 from ../math_consts import Log2e
+import ./key_head
 import workspace/crucible
 import workspace/ceramic
 
@@ -103,7 +104,7 @@ proc kdaDecodeStepTileAt*[T](
     doAssert TileR == 8, "the y store covers one atom row block per column block"
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
-  let hk = ((bh mod Hv) div hkRatio) + ((bh div Hv) * Hk)
+  let hk = keyHeadOf(bh mod Hv, Hv, Hk) + (bh div Hv) * Hk
   let headLin = bh * Dv * Dk
   let yLin = bh * Dv
   let kLin = hk * Dk
