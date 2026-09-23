@@ -61,11 +61,16 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # The real GLM-4.7-Flash dims, baked as module constants.
-# The kernel is non-generic: its tile types cannot take the rt_l/rv
-# default atoms, which call getTileConfig and assert a metal:/cuda:
-# block context. A non-generic proc body is typechecked on the host
-# import.
-# The explicit universal-atom enum members below are exactly what the defaults resolve to on the Metal and CUDA backends.
+#
+# - the kernel is non-generic, so tile types spell the atoms explicitly
+# - default atoms (rt_l/rv without an atom argument) need a backend tag
+#   for getTileConfig, which crucibleSetBackend makes resolvable
+# - on Metal those defaults resolve to the Apple simdgroup atoms,
+#   whose codegen (simdgroup_multiply_accumulate)
+#   differs from the universal arithmetic atoms spelled below
+#
+# Spelled members stay so generated kernels remain byte-identical.
+
 
 const
   HiddenDim = 2048          # the model hidden size

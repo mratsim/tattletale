@@ -30,6 +30,40 @@ func getTileConfig(T: typedesc): int =
     elif T is bfloat16: 102
     else: 103
 
+# Evaluated before any `metal:` const below sets the backend tag:
+# without a DSL block or a crucibleSetBackend call, a default-atom
+# resolution must keep failing at compile time.
+const defaultAtomFailsWithoutBackend = not compiles(getTileConfig(float16))
+
+# Host-code fallback:
+# a module-scope setter makes ccGetBackend-derived defaults resolvable
+# outside any DSL block.
+# The `metal:` blocks below still override the tag per block.
+crucibleSetBackend(ctMetal)
+
+template hostTile(T; A: untyped = getTileConfig(T)): typedesc =
+  array[A, T]
+
+const hostDefaultAtom = 305  # getTileConfig's metal branch for float32
+static: doAssert hostTile(float32) is array[hostDefaultAtom, float32],
+  "module-scope crucibleSetBackend must resolve the default atom on the host"
+
+# The setter also covers the real consumer pattern of the kernel suites:
+# a default atom resolved inside a generic proc body instantiated on the host.
+proc hostUse[T](x: T) =
+  var tile: hostTile(T)
+  doAssert tile.len == hostDefaultAtom
+static: hostUse(0.0'f32)
+
+# The DSL block records its own target even after the module-scope setter.
+const setterBlockCode = metal:
+  proc setterProbe(output: ptr UncheckedArray[int]) {.global.} =
+    when ccGetBackend() == ctMetal: output[0] = 7
+    else: output[0] = 8
+
+# The tag persists after the block, host defaults keep resolving below.
+const hostStillResolvableAfterBlock = compiles(getTileConfig(float16))
+
 const dispatchCode = metal:
   proc backendProbe(output: ptr UncheckedArray[int]) {.global.} =
     when ccGetBackend() == ctOpenCL: output[0] = 1
@@ -113,6 +147,26 @@ proc runTest() =
       doAssert "tile[303]" in tileDefaultCode
       doAssert "len(tile)" in tileDefaultCode
       doAssert "output[0] = 303;" notin tileDefaultCode
+
+    test "default atom fails without a DSL block or a module-scope setter":
+      check defaultAtomFailsWithoutBackend
+
+    test "host defaults keep resolving after a DSL block":
+      check hostStillResolvableAfterBlock
+
+    test "module-scope crucibleSetBackend resolves the default atom on the host":
+      # expected the metal branch constant 305
+      static: doAssert hostTile(float32) is array[hostDefaultAtom, float32]
+      check true
+
+    test "a metal: block still records its own target after the module-scope setter":
+      doAssert "output[0] = 7;" in setterBlockCode
+      doAssert "output[0] = 8;" notin setterBlockCode
+      var engine = bkMetal.init()
+      engine.ingest(setterBlockCode)
+      var res: array[1, int32]
+      engine.run("setterProbe", res, ())
+      check res[0] == 7'i32
 
 when isMainModule:
   runTest()
