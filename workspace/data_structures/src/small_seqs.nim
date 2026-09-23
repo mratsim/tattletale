@@ -5,14 +5,37 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## SmallSeq, a sequence whose first `N` elements live inside the object,
-## the rest in one heap block.
+## SmallSeq, a sequence whose first `N` elements live inside the object.
 ##
-## - `cap` is 0 or at least `N`, `overflow` is nil exactly while `cap <= N`,
-##   element `i` sits at `arr[i]` below `N` and `overflow[i - N]` past it
-## - `[]` and `[]=` raise `IndexDefect` under `boundChecks`
-## - Layout on arm64 with Nim 2.2.10, `SmallSeq[5, int32]` measures 40 bytes:
-##   `len`/`cap` int32, `arr` at 8, `overflow` at 32, 32 bytes at `N = 3`
+## - Generic parameters follow `array[N, T]`, capacity first, reading `SmallSeq[5, int32]`.
+## - `N` is the inline capacity, not a maximum. Elements past `N` live in one
+##   heap block of their own, and the first `N` appends allocate no heap block.
+##
+## | indices     | condition | element lives at  |
+## | ----------- | --------- | ----------------- |
+## | `0 ..< N`   | `i < N`   | `arr[i]`          |
+## | `N ..< len` | `i >= N`  | `overflow[i - N]` |
+##
+## `[]` and `[]=` raise `IndexDefect` under `boundChecks`, on by default.
+## `-d:danger` or `--checks:off` removes the checks, and an out-of-range index
+## may then return garbage or crash.
+##
+## Layout of `SmallSeq[5, int32]` on arm64 with Nim 2.2.10, sizes 40 and 32
+## at `N = 5` and `N = 3`, one cache line for `int32`.
+##
+## | field      | type                    | offset | bytes |
+## | ---------- | ----------------------- | ------ | ----- |
+## | `len`      | `int32`                 | 0      | 4     |
+## | `cap`      | `int32`                 | 4      | 4     |
+## | `arr`      | `array[N, T]`           | 8      | 20    |
+## | `overflow` | `ptr UncheckedArray[T]` | 32     | 8     |
+##
+## - `overflow` is a raw pointer, never a `seq`, which would keep its own length
+##   beside the pointer and duplicate `len` for 8 bytes per value.
+## - `len` and `cap` are `int32`. With `int` lengths the same object measures 48
+##   bytes at `N = 5` and 40 at `N = 3`, the wider pair pushing `arr` forward.
+## - An 8-byte-aligned element pads the pair and pushes `arr` forward, giving
+##   sizes 64 at `N = 3` and 96 at `N = 5`.
 
 import std/typetraits
 
@@ -21,8 +44,10 @@ type
     ## Inline-buffer sequence over `T`, the first `N` elements inside the object.
     ##
     ## The zero value is a valid empty sequence, `init` differs only by setting `cap` to `N`.
-    ## `T` may be trivial (the hooks working with `copyMem`) or hook-carrying
-    ## (`string`, `ref`, a `SmallSeq` itself), the hooks working element-wise.
+    ##
+    ## Invariant:
+    ##   `cap` is 0 or at least `N`, `overflow` is nil exactly while `cap <= N`,
+    ##   element `i` sits at `arr[i]` below `N` and `overflow[i - N]` past it.
     len: int32
     cap: int32
     arr: array[N, T]
