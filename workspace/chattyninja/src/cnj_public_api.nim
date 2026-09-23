@@ -22,13 +22,10 @@ import ./cnj_engine {.all.}
 import ./jinja_data_model {.all.}
 import ./chat_context
 
-# Types, knobs and error exports the public signatures name.
+# Types, error and chat-context exports the public signatures name.
 export cnj_types.CompiledTemplate, cnj_types.CompiledSymbols,
     cnj_types.JinjaRenderContext,
-    cnj_types.TTT_CNJ_MacroDepthCap, cnj_types.TTT_CNJ_ExprDepthCap,
-    cnj_types.TTT_CNJ_ParseNestingCap, cnj_types.TTT_CNJ_StepBudget,
     jinja_data_model.JinjaCause, jinja_data_model.JinjaError,
-    jinja_data_model.TTT_CNJ_RangeElemCap, jinja_data_model.TTT_CNJ_ValueDepthCap,
     chat_context
 
 # Render tier, parse once and render over the shared artifact.

@@ -332,6 +332,11 @@ BANNED = [
      "use the recorded frame, the committed frame, or the existing recording"),
     (r"\benvelopes?\b", None,
      "state the bound directly (the band name or the inequality)"),
+    (r"\bstay[s]? internal\b|\bstays? (?:private|unexported)\b"
+     r"|\bnot (?:a )?caller[- ]facing\b|\bno reason to\b|\bby design\b"
+     r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
+     None, "lawyer and justification prose is banned, state the contract "
+           "(what the surface exports, not why the choice is defensible)"),
 ]
 
 LICENSE_SHAPE = re.compile(
