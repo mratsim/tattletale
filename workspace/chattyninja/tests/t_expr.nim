@@ -104,6 +104,89 @@ proc testArithmeticAndConcat() =
   doAssert render("'a' ~ 1 ~ none") == "a1None", "`~` stringifies both sides"
   doAssert render("people.age + 1", withPeople) == "37"
 
+# Live evaluation of `* / // % **`, Python's number rules on the int64 tier:
+# `/` always widens to a float, `//` and `%` follow the floor rule, `**` is
+# right-associative, a value past int64 raising a located `JinjaError` where
+# Python answers with unbounded integers.
+proc testArithmeticEval() =
+  doAssert render("6 * 7") == "42", "`*` on integers"
+  doAssert render("-6 * 7") == "-42"
+  doAssert render("1.5 * 2") == "3.0", "`*` on a float widens the integer"
+  doAssert render("2 + 3 * 4") == "14", "`*` binds tighter than `+`"
+  doAssert render("7 / 2") == "3.5", "`/` always widens to a float"
+  doAssert render("4 / 2") == "2.0", "`/` on exact division still renders a float"
+  doAssert render("-7 / 2") == "-3.5"
+  doAssert render("7 // 2") == "3", "`//` floors"
+  doAssert render("-7 // 2") == "-4", "`//` floors toward negative infinity"
+  doAssert render("7 // -2") == "-4", "`//` follows the sign of the divisor"
+  doAssert render("7.5 // 2") == "3.0", "`//` on a float stays a float"
+  doAssert render("-7.5 // 2") == "-4.0"
+  doAssert render("7 % 2") == "1"
+  doAssert render("-7 % 2") == "1", "`%` follows Python's floor rule, not truncation"
+  doAssert render("7 % -2") == "-1"
+  doAssert render("7.5 % 2") == "1.5"
+  doAssert render("-7.5 % 2") == "0.5"
+  doAssert render("2 ** 10") == "1024"
+  doAssert render("2 ** 0") == "1", "any base to the zeroth power is one"
+  doAssert render("0 ** 0") == "1", "Python's zeroth-power ruling"
+  doAssert render("2 ** 3 ** 2") == "512", "`**` is right-associative"
+  doAssert render("2 ** -1") == "0.5", "a negative exponent widens to a float"
+  doAssert render("1 ** -5") == "1.0"
+  doAssert render("(-1) ** -5") == "-1.0", "a negative odd base keeps its sign"
+  doAssert render("2.0 ** 0.5") == "1.4142135623730951"
+  doAssert render("(-2.0) ** 3.0") == "-8.0"
+  var reported = ""
+  try:
+    discard render("9223372036854775807 * 2")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "integer overflow in `*`" in reported, reported
+  try:
+    discard render("2 ** 63")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "integer overflow in `**`" in reported, reported
+  try:
+    discard render("-9223372036854775808 // -1")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "integer overflow in `//`" in reported, reported
+  try:
+    discard render("1 / 0")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`/` needs a non-zero divisor" in reported, reported
+  try:
+    discard render("1 // 0")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`//` needs a non-zero divisor" in reported, reported
+  try:
+    discard render("1 % 0")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`%` needs a non-zero divisor" in reported, reported
+  try:
+    discard render("0 ** -1")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`**` needs a non-zero base for a negative exponent" in reported, reported
+  try:
+    discard render("0.0 ** -1")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`**` needs a non-zero base for a negative exponent" in reported, reported
+  try:
+    discard render("(-2.0) ** 0.5")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "a negative number cannot be raised to a fractional power" in reported, reported
+  try:
+    discard render("'a' * 3")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "`*` needs numbers" in reported, reported
+
 # Integer arithmetic checks its result, a value past int64 raising a located `JinjaError`,
 # never an uncatchable `OverflowDefect`.
 # Python answers with unbounded integers, a value kind without a slot in this tier.
@@ -714,20 +797,15 @@ proc testStrftimeNowEpoch() =
   doAssert renderStmt("{{ strftime_now('%Y-%m-%d') }}", undefinedVal(), 951782400.0) == "2000-02-29",
       "a leap-day epoch renders the civil date"
 
-# A skipped branch never evaluates its operators, so an unimplemented operator
-# inside one raises nothing, both the ternary and short-circuit variants silent.
+# A skipped branch never evaluates its operators, so an evaluation that would raise
+# inside one stays silent, both the ternary and short-circuit variants.
 proc testSkippedBranchStaysSilent() =
-  doAssert renderStmt("{{ 1 if true else 2 * 3 }}") == "1",
-      "an unimplemented operator in the skipped ternary branch stays silent"
-  doAssert renderStmt("{{ false and (2 * 3) }}") == "False",
-      "an unimplemented operator behind a falsy `and` stays silent"
-  doAssert renderStmt("{{ true or (2 * 3) }}") == "True",
-      "an unimplemented operator behind a truthy `or` stays silent"
-  try:
-    discard render("2 * 3")
-    doAssert false, "an unimplemented operator evaluated"
-  except JinjaError as e:
-    doAssert "not implemented" in e.what, e.what
+  doAssert renderStmt("{{ 1 if true else 1 / 0 }}") == "1",
+      "a zero divisor in the skipped ternary branch raises nothing"
+  doAssert renderStmt("{{ false and (1 / 0) }}") == "False",
+      "a zero divisor behind a falsy `and` raises nothing"
+  doAssert renderStmt("{{ true or (1 / 0) }}") == "True",
+      "a zero divisor behind a truthy `or` raises nothing"
 
 # Zero-node templates and empty for bodies
 proc testZeroNodeTemplates() =
@@ -968,6 +1046,7 @@ proc main() =
 
   testLiteralsAndLookups()
   testArithmeticAndConcat()
+  testArithmeticEval()
   testIntegerOverflowRaisesLocated()
   testInt64LowLiteralSpelling()
   testComparisonAndMembership()

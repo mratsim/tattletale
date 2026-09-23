@@ -962,9 +962,30 @@ proc unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
   else:
     primary(c, cx)
 
+func mulChecked(a, b: int64, opLo: int, spelling: string): int64 =
+  ## Multiplies two int64 values, the product's range checked before it can wrap,
+  ## overflow raising a located `JinjaError` naming `spelling`.
+  ##
+  ## The overflow test is Hacker's Delight section 2-13's, the `b == -1` case read
+  ## off first, `int64.low div -1` a defect in its own right.
+  if a == 0 or b == 0:
+    return 0
+  if b == -1:
+    if a == int64.low:
+      raise jinjaErr("integer overflow in `" & spelling & "`", opLo)
+    return -a
+  let over = if a > 0:
+        (b > 0 and a > int64.high div b) or (b < 0 and b < int64.low div a)
+      else:
+        (b > 0 and b > int64.low div a) or (b < 0 and a < int64.high div b)
+  if over:
+    raise jinjaErr("integer overflow in `" & spelling & "`", opLo)
+  a * b
+
 func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
-  ## Combines two numbers, or two strings and two sequences under `+`, `%` following
-  ## Python's floor rule, integer overflow raising a located `JinjaError`.
+  ## Combines two numbers under `+ - * / // % **`, or two strings and two sequences under `+`.
+  ## `/` always widens to a float, `//` and `%` follow Python's floor rule,
+  ## integer overflow raising a located `JinjaError`.
   case op
   of opAdd:
     if a.kind == vkInt and b.kind == vkInt:
@@ -1009,6 +1030,71 @@ func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
       floatVal(math.floorMod(x, y))
     else:
       raise jinjaErr("`%` needs numbers")
+  of opMul:
+    if a.kind == vkInt and b.kind == vkInt:
+      intVal(mulChecked(a.i, b.i, opLo, "*"))
+    elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
+      floatVal((if a.kind == vkInt: float64 a.i else: a.f) *
+          (if b.kind == vkInt: float64 b.i else: b.f))
+    else:
+      raise jinjaErr("`*` needs numbers")
+  of opDiv:
+    if a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
+      let y = if b.kind == vkInt: float64 b.i else: b.f
+      if y == 0:
+        raise jinjaErr("`/` needs a non-zero divisor")
+      floatVal((if a.kind == vkInt: float64 a.i else: a.f) / y)
+    else:
+      raise jinjaErr("`/` needs numbers")
+  of opFloorDiv:
+    if a.kind == vkInt and b.kind == vkInt:
+      if b.i == 0:
+        raise jinjaErr("`//` needs a non-zero divisor")
+      if a.i == int64.low and b.i == -1:
+        raise jinjaErr("integer overflow in `//`", opLo)
+      var q = a.i div b.i
+      if a.i mod b.i != 0 and ((a.i < 0) != (b.i < 0)):
+        dec q
+      intVal(q)
+    elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
+      let x = if a.kind == vkInt: float64 a.i else: a.f
+      let y = if b.kind == vkInt: float64 b.i else: b.f
+      if y == 0:
+        raise jinjaErr("`//` needs a non-zero divisor")
+      floatVal(math.floor(x / y))
+    else:
+      raise jinjaErr("`//` needs numbers")
+  of opPow:
+    if a.kind == vkInt and b.kind == vkInt:
+      if b.i < 0:
+        if a.i == 0:
+          raise jinjaErr("`**` needs a non-zero base for a negative exponent")
+        floatVal(pow(float64 a.i, float64 b.i))
+      else:
+        # Exponentiation by squaring, every product range-checked like `*`, a value
+        # past int64 raising a located `JinjaError`.
+        var r: int64 = 1
+        var ba = a.i
+        var e = b.i
+        while e != 0:
+          if (e and 1) != 0:
+            r = mulChecked(r, ba, opLo, "**")
+          e = e shr 1
+          if e != 0:
+            ba = mulChecked(ba, ba, opLo, "**")
+        intVal(r)
+    elif a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
+      let x = if a.kind == vkInt: float64 a.i else: a.f
+      let y = if b.kind == vkInt: float64 b.i else: b.f
+      if x == 0 and y < 0:
+        raise jinjaErr("`**` needs a non-zero base for a negative exponent")
+      if x < 0 and y != math.floor(y):
+        # Python widens a negative base raised to a fractional power into a complex value,
+        # a value kind without a slot in this tier, the raise the contract here.
+        raise jinjaErr("a negative number cannot be raised to a fractional power")
+      floatVal(pow(x, y))
+    else:
+      raise jinjaErr("`**` needs numbers")
   else:
     raise jinjaErr("unknown arithmetic `" & OpSpelling[op] & "`")
 
@@ -1085,17 +1171,13 @@ proc binOp(c: JinjaRenderContext, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int):
           outp.add parts[pidx]
           inc pidx
       strVal(move acc)
-  of opAdd, opSub, opMod:
-    let rhs = forceOperand(c, cx, expr(c, cx, binPrec(op) + 1))
+  of opAdd, opSub, opMod, opMul, opDiv, opFloorDiv, opPow:
+    # `**` binds right, its right operand re-entering the walker at its own binding power,
+    # so `2 ** 3 ** 2` groups as `2 ** (3 ** 2)`.
+    # Every other infix binds left, its right operand parsed past its binding power.
+    let rhs = forceOperand(c, cx,
+        expr(c, cx, if op == opPow: binPrec(op) else: binPrec(op) + 1))
     if cx.dry: undefinedVal() else: arith(op, lhs, rhs, opLo)
-  of opMul, opDiv, opFloorDiv, opPow:
-    skipExpr(c, cx, binPrec(op) + 1)
-    # A dry walk is only mapping the skipped-branch spans, no value is read,
-    # so the unimplemented operators surface only on a live evaluation.
-    if cx.dry:
-      undefinedVal()
-    else:
-      gapWhat("operator", OpSpelling[op])
   else:
     let rhs = forceOperand(c, cx, expr(c, cx, binPrec(op) + 1))
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)

@@ -604,6 +604,8 @@ proc testCorpusDelivery() =
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
       "two renders of the same artifact through fresh drivers differed"
 
+  # Arithmetic restore (`* / // % **` live) leaves the ledger where it stood.
+  # No corpus template spells any of them except gemma3's `% 2`, already live.
   doAssert okExact == 94, "expected 94 rendered ok rows across 23 suites, checked " & $okExact
   doAssert gapRows == 9, "expected 9 gap rows across 23 suites, skipped " & $gapRows
   doAssert errRaised == 21, "expected 21 err rows, checked " & $errRaised
