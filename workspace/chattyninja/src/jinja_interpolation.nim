@@ -830,7 +830,7 @@ proc postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
         if cx.dry:
           undefinedVal()
         elif v.kind == vkMacro:
-          callVal(PendingCallVal(mc: v.mc, args: a))
+          callVal(DeferredMacroCall(mc: v.mc, args: a))
         else:
           raise jinjaErr("only a macro is callable, this is a " & $v.kind, callLo)
     elif isPunct(cx, "|"):

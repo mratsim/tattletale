@@ -38,7 +38,7 @@ export cnj_types.JinjaRenderContext, cnj_types.RenderState, cnj_types.CompiledTe
 # Values and their construction, the dict reads, the error and the JSON form.
 export jinja_data_model.JinjaVal, jinja_data_model.ValueKind, jinja_data_model.SeqVal,
     jinja_data_model.DictVal, jinja_data_model.RangeVal, jinja_data_model.LoopState,
-    jinja_data_model.MacroVal, jinja_data_model.PendingCallVal, jinja_data_model.Args,
+    jinja_data_model.MacroVal, jinja_data_model.DeferredMacroCall, jinja_data_model.Args,
     jinja_data_model.Arg, jinja_data_model.ArgKeyword, jinja_data_model.JinjaError,
     jinja_data_model.JinjaCause, jinja_data_model.JsonOpts, jinja_data_model.NoOffset, jinja_data_model.NoLink,
     jinja_data_model.ArgsCap, jinja_data_model.TTT_CNJ_RangeElemCap, jinja_data_model.TTT_CNJ_ValueDepthCap,

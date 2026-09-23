@@ -32,7 +32,7 @@ type
 
 proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal
 
-proc startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32)
+proc startMacro(c: JinjaRenderContext, lo, hi: int, call: DeferredMacroCall, retNode: int32)
 
 proc forceCondCall(c: JinjaRenderContext, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch
@@ -576,7 +576,7 @@ func capturePend(c: JinjaRenderContext, outp: var string) =
       copyMem(addr outp[at], addr buf[0], n)
     c.state.pend = Piece(kind: pkNone)
 
-proc startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32) =
+proc startMacro(c: JinjaRenderContext, lo, hi: int, call: DeferredMacroCall, retNode: int32) =
   ## Opens a macro row and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the row closes on the definition node

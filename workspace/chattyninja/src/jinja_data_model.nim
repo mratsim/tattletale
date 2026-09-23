@@ -130,12 +130,9 @@ type
   Args* = SmallSeq[ArgsCap, Arg]
     ## One call's arguments in call order, filled by moves, read by borrows, `ArgsCap` inline.
 
-  PendingCallVal* = ref object
-    ## ref for value size, not for sharing.
-    ##
-    ## A macro call whose body has not run. Holds the bound macro plus its evaluated arguments.
-    ## The emit step streams the body into the drain window. An expression consumer renders
-    ## the body to completion and reads the text.
+  DeferredMacroCall* = ref object
+    ## A macro call whose body has not run, holding the bound macro and its evaluated arguments.
+    ## Rendering the value runs the body.
     mc*: MacroVal
       ## the bound macro
     args*: Args
@@ -159,8 +156,7 @@ type
     of vkDict, vkNs: d*: DictVal
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
-    of vkCall: pc*: PendingCallVal
-      ## a macro call whose body has not run
+    of vkCall: pc*: DeferredMacroCall
     of vkRange: r*: RangeVal
     of vkCut:
       raw*: string
@@ -308,7 +304,7 @@ func dictVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkDict, d: d)
 func nsVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
 func loopVal*(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
 func macroVal*(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
-func callVal*(pc: PendingCallVal): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
+func callVal*(pc: DeferredMacroCall): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
 func rangeVal*(start, stop, step: int64): JinjaVal =
   ## Returns the lazy range value over `start`, `stop` and `step`.
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
