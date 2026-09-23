@@ -70,13 +70,14 @@ type
     fields*: seq[tuple[k: string, v: BlockValue]]
 
   ContentKind* = enum
-    ckText, ckBlocks
-      ## string or block-list form of one message's content
+    ckNone, ckText, ckBlocks
+      ## absent, string or block-list form of one message's content
 
   Content* = object
-    ## One message's content, the string form or the block-list form the multimodal
-    ## and chunked rows pass
+    ## One message's content, the absent form, the string form or the block-list form
+    ## the multimodal and chunked rows pass
     case kind*: ContentKind
+    of ckNone: nil
     of ckText: text*: string
     of ckBlocks: blocks*: seq[ContentBlock]
 
@@ -197,6 +198,11 @@ func blockContent*(blocks: sink seq[ContentBlock]): Content =
   ## Returns the block-list form of a message's content.
   Content(kind: ckBlocks, blocks: blocks)
 
+func noneContent*(): Content =
+  ## Returns the absent form of a message's content, the templates'
+  ## `is none` test observing it.
+  Content(kind: ckNone)
+
 # Conversion tier, once per render entry.
 
 func paramValue(p: ParamValue): JinjaVal =
@@ -239,6 +245,7 @@ func blockValue(p: BlockValue): JinjaVal =
 func contentValue(c: Content): JinjaVal =
   ## One message's content into the value model, blocks recursed.
   case c.kind
+  of ckNone: noneVal()
   of ckText: strVal(c.text)
   of ckBlocks:
     var xs: seq[JinjaVal]

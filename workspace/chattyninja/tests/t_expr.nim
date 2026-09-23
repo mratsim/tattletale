@@ -684,6 +684,10 @@ proc testItemsFilter() =
       "[['name', 'ada'], ['age', 36], ['tags', ['x', 'y']], ['active', True]]"
   doAssert renderStmt("{% for k, v in people | items %}{{ k }}={{ v }};{% endfor %}",
       withPeople) == "name=ada;age=36;tags=['x', 'y'];active=True;"
+  # Jinja 3.1 `do_items` semantics, Undefined yields nothing, the raise
+  # reserved for the other non-mapping kinds.
+  doAssert render("people.missing | items") == "[]"
+
   var reported = ""
   try:
     discard render("[1, 2] | items")

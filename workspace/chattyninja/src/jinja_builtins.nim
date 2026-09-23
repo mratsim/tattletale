@@ -247,7 +247,11 @@ func itemsMethod(v: JinjaVal, args: var Args): JinjaVal =
 
 func itemsFilter(v: JinjaVal, args: var Args): JinjaVal =
   ## `[key, value]` pairs in insertion order, the filter form the mapping methods mirror.
-  ## A non-mapping raises, jinja2's own items filter rejecting a sequence too.
+  ## Undefined yields no pairs, jinja2 3.1's `do_items` rule.
+  ## Any other non-mapping kind raises, jinja2's own items filter
+  ## rejecting a sequence.
+  if v.kind == vkUndefined:
+    return seqVal(newSeq[JinjaVal]())
   if v.kind != vkDict:
     raise jinjaErr("`items` needs a mapping")
   var acc = newSeq[JinjaVal](v.d.keys.len)

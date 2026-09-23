@@ -87,7 +87,8 @@ func readContent(n: JsonNode): Content =
     for c in n.items:
       bs.add readBlock(c)
     blockContent(bs)
-  of JInt, JFloat, JBool, JNull, JObject:
+  of JNull: noneContent()
+  of JInt, JFloat, JBool, JObject:
     # Caller-data type errors are not expressible on the typed surface, templates
     # raising on the raw value's type. The mapping records the value as text,
     # the row's message parity proving the raise order.
@@ -282,6 +283,17 @@ block:
   let (tmpl, sym) = parseJinjaTemplate(src)
   doAssert renderToString(tmpl, sym, ctx) == "True|4096",
       "the artifact overload differs from the one-shot render"
+
+# Synthetic none-content row, the null-content message the corpus never records,
+# the `is none` test over the string and absent forms
+block:
+  let src = "{% for m in messages %}{{ m.content is none }}{% endfor %}"
+  let ctx = ChatContext(
+      messages: @[
+        Message(role: "user", content: textContent("hi")),
+        Message(role: "assistant", content: noneContent())])
+  doAssert renderToString(src, ctx) == "FalseTrue",
+      "the absent content form did not read as `none`"
 
 # Typed tools path through the `tojson` filter, one int64 schema leaf rendered
 
