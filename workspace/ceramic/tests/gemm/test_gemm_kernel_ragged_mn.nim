@@ -60,11 +60,11 @@ const atomN = atom.getN()
 
 static:
   doAssert atomM == 16 and atomN == 8,
-    "the SM80 16x8x8 TF32 atom is the receipt's basis (" & $atomM & "x" & $atomN & ")"
+    "the padded-atom derivation is built on the SM80 16x8x8 TF32 atom (" & $atomM & "x" & $atomN & ")"
 
 # Worked examples locked independently of the formula, the padded extent
 # is the next atom multiple at or above the problem extent and stays put
-# for aligned extents. Each case is a compile-time receipt, exactly as
+# for aligned extents. Each case proves the derivation at compile time, exactly as
 # gemm_kernel's static block derives it, padded extents → thread
 # layout → tile, the CTA grid ceil(problem/tile).
 template paddedCase(probM, probN, expectM, expectN: static int) =
@@ -93,7 +93,7 @@ static:
   paddedCase(33, 25, 48, 32)
 
 proc runDerivationTests =
-  test "padded-to-atom-multiple derivation receipts (static, host)":
+  test "padded-to-atom-multiple derivation (static, host)":
     discard
 
 # ═════════════════════════════════════════════════════════════════════════
