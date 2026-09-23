@@ -174,7 +174,7 @@ proc chattyninjaCmd(filename, extraDefines: string): string =
   ## engine compiles under and the src/tests import paths.
   testerCmd("workspace/chattyninja/tests/" & filename,
     extraFlags = "--experimental:views --path:workspace/chattyninja/src --path:workspace/chattyninja/tests" & extraDefines,
-    compiler = "nim cpp")
+    compiler = "nim c")
 
 task test_chattyninja, "Test workspace/chattyninja template engine suites":
   withDir(ProjectRoot):
