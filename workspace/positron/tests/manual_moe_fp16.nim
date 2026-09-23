@@ -29,7 +29,8 @@ proc genMoE(T: int): MoEG =
    scaledRand(64 * 3072, 2048, 0.125'f32), scaledRand(64 * 2048, 1536, 0.125'f32),
    scaledRand(3072, 2048, 0.125'f32), scaledRand(2048, 1536, 0.125'f32))
 
-proc moeKernel(g: MoEG, T: int): F.Tensor =
+proc moeKernelBits(g: MoEG, T: int): seq[uint16] =
+  ## Raw fp16 output bits of the baked entry, the delta-zero baseline.
   var engine = bkMetal.init()
   engine.ingest(moeMsl)
   var outO = newSeq[uint16](T * 2048)
@@ -38,7 +39,10 @@ proc moeKernel(g: MoEG, T: int): F.Tensor =
   engine.run << (grid: (T, 1, 1), blk: (32, 1)) >> ("moeRun", outO,
     (fp32sToFp16(g.xf), fp32sToFp16(g.rwf), fp32sToFp16(g.guf), fp32sToFp16(g.dnf),
      fp32sToFp16(g.sguf), fp32sToFp16(g.sdwf), hScr, hsScr, int32(T)))
-  toTensor(fp16sToF32(outO)).reshape(T, 2048)
+  result = outO
+
+proc moeKernel(g: MoEG, T: int): F.Tensor =
+  toTensor(fp16sToF32(moeKernelBits(g, T))).reshape(T, 2048)
 
 proc moeReference(g: MoEG, T: int): F.Tensor =
   let x32 = w32(g.xf, T, 2048)
@@ -78,5 +82,156 @@ proc checkMoe(): bool =
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
   result = true
 
+
+# ─── The runtime-dims generic entry ──────────────────────────────────
+
+## Runtime arguments fill the generic entry's model config.
+##
+## - the Qwen3.6-35B-A3B row instantiates the shared sigmoid skeleton,
+##   Qwen shape H 2048, E 256, I 512, top-K 8, silu, with 1 shared
+##   expert and scale 1.0
+## - the model's own routing is the softmax form with no
+##   routed_scaling_factor in its config, a structural fork from the GLM
+##   sigmoid skeleton, reported here not improvised
+
+const moeMslGeneric = metal:
+  proc moeRunGeneric(out_r, x, router_w, gate_up_w, down_w,
+      shared_gate_up_w, shared_down_w, h_scratch,
+      hs_scratch: ptr UncheckedArray[float16],
+      num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
+      n_shared_experts: int32, routed_scaling: float32,
+      activation: int32) {.global.} =
+    moe_fwd_generic(out_r, x, router_w, gate_up_w, down_w, shared_gate_up_w,
+      shared_down_w, h_scratch, hs_scratch, num_tokens, hidden,
+      n_routed_experts, moe_intermediate, top_k, n_shared_experts,
+      routed_scaling, activation)
+
+type MoeRow = object
+  name: string
+  tokens, hidden, nExperts, inter, topK, nShared: int
+  scale: float32
+  act: int32
+  seed: uint64
+
+const
+  glm47Row = MoeRow(name: "glm47-flash", tokens: 8, hidden: 2048, nExperts: 64,
+    inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32, act: ActSilu,
+    seed: 0x5EED)
+  qwen36Row = MoeRow(name: "qwen36-35b-a3b", tokens: 2, hidden: 2048,
+    nExperts: 256, inter: 512, topK: 8, nShared: 1, scale: 1.0'f32,
+    act: ActSilu, seed: 0x5EED)
+  raggedRow = MoeRow(name: "ragged-gelu", tokens: 2, hidden: 2064,
+    nExperts: 70, inter: 200, topK: 4, nShared: 2, scale: 1.0'f32,
+    act: ActGeluTanh, seed: 0x5EED)
+
+proc genMoERow(r: MoeRow): MoEG =
+  let gu = 2 * r.inter
+  Torch.manual_seed(r.seed)
+  (scaledRand(r.tokens, r.hidden, 0.3'f32),
+   scaledRand(r.nExperts, r.hidden, 0.125'f32),
+   scaledRand(r.nExperts * gu, r.hidden, 0.125'f32),
+   scaledRand(r.nExperts * r.hidden, r.inter, 0.125'f32),
+   scaledRand(r.nShared * gu, r.hidden, 0.125'f32),
+   scaledRand(r.nShared * r.hidden, r.inter, 0.125'f32))
+
+proc moeKernelGenericBits(g: MoEG, r: MoeRow): seq[uint16] =
+  var engine = bkMetal.init()
+  engine.ingest(moeMslGeneric)
+  let gu = 2 * r.inter
+  var outO = newSeq[uint16](r.tokens * r.hidden)
+  var hScr = newSeq[uint16](r.tokens * r.topK * r.inter)
+  var hsScr = newSeq[uint16](r.tokens * r.nShared * r.inter)
+  engine.run << (grid: (r.tokens, 1, 1), blk: (32, 1)) >> ("moeRunGeneric",
+    outO,
+    (fp32sToFp16(g.xf), fp32sToFp16(g.rwf), fp32sToFp16(g.guf),
+     fp32sToFp16(g.dnf), fp32sToFp16(g.sguf), fp32sToFp16(g.sdwf),
+     hScr, hsScr, int32(r.tokens), int32(r.hidden), int32(r.nExperts),
+     int32(r.inter), int32(r.topK), int32(r.nShared), r.scale, r.act))
+  result = outO
+
+proc subseq(s: seq[float32], a, b: int): seq[float32] =
+  result = newSeq[float32](b - a)
+  for i in 0 ..< b - a:
+    result[i] = s[a + i]
+
+proc actMul(gate, up: F.Tensor, act: int32): F.Tensor =
+  ## Activation variant the row selects, silu or the tanh-approximate
+  ## gelu (the fused op the reference runtimes call).
+  if act == ActGeluTanh:
+    F.gelu(gate, "tanh") * up
+  else:
+    F.silu(gate) * up
+
+proc moeReferenceRow(g: MoEG, r: MoeRow): F.Tensor =
+  ## Torch chain of the generic contract at the row's dims.
+  ## Sigmoid routing skeleton, activation variant, shared experts.
+  let H = r.hidden
+  let E = r.nExperts
+  let I = r.inter
+  let gu = 2 * I
+  let x32 = w32(g.xf, r.tokens, H)
+  let logits = F.linear(x32, w32(g.rwf, E, H))
+  let s = (1.0'f32 + (-logits).exp()).reciprocal()
+  let (_, idx) = F.sort(s, axis = 1, descending = true)
+  let topK = idx.narrow(1, 0, r.topK)
+  var w = s.gather(1, topK)
+  w = w / (w.sum(1, keepdim = true) + 1e-20'f32)
+  w = w * r.scale
+  let xg = x32.unsqueeze(1).expand(r.tokens, r.topK, H, implicit = false)
+    .reshape(r.tokens * r.topK, H)
+  let gu4 = toTensor(fp16sToF32(fp32sToFp16(g.guf))).reshape(E, gu, H).index_select(0, topK.reshape(-1))
+  let guX = F.bmm(xg.unsqueeze(1), gu4.transpose(1, 2)).squeeze(1).chunk(2, dim = 1)
+  let h16 = actMul(guX[0], guX[1], r.act).to(kFloat16).to(kFloat32)
+  let dn4 = toTensor(fp16sToF32(fp32sToFp16(g.dnf))).reshape(E, H, I)
+    .index_select(0, topK.reshape(-1))
+  let oe = F.bmm(h16.unsqueeze(1), dn4.transpose(1, 2)).squeeze(1)
+    .reshape(r.tokens, r.topK, H)
+  let routed = (oe * w.unsqueeze(2)).sum(1)
+  var shared = F.zeros(r.tokens, H)
+  for s in 0 ..< r.nShared:
+    let sgu = F.linear(x32, w32(subseq(g.sguf, s * gu * H, (s + 1) * gu * H), gu, H)).chunk(2, dim = 1)
+    let hs = actMul(sgu[0], sgu[1], r.act).to(kFloat16).to(kFloat32)
+    shared = shared + F.linear(hs, w32(subseq(g.sdwf, s * H * I, (s + 1) * H * I),
+        H, I))
+  (routed + shared).to(kFloat16).to(kFloat32)
+
+proc checkGenericDeltaZero(): bool =
+  ## Bit-for-bit equality of the generic entry against the baked entry
+  ## at the GLM-4.7-Flash shape, over three seeds at T=8 and T=4.
+  for seed in [0x5EED'u64, 7'u64, 13'u64]:
+    for tokens in [8, 4]:
+      let r = MoeRow(name: "glm47-flash", tokens: tokens, hidden: 2048,
+        nExperts: 64, inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32,
+        act: ActSilu, seed: seed)
+      let g = genMoERow(r)
+      let baked = moeKernelBits(g, tokens)
+      let generic = moeKernelGenericBits(g, r)
+      var mismatches = 0
+      for i in 0 ..< baked.len:
+        if baked[i] != generic[i]:
+          mismatches += 1
+      echo &"  seed={seed:x} T={tokens}: bit mismatches = {mismatches}"
+      if mismatches != 0:
+        return false
+  result = true
+
+proc checkGenericRows(): bool =
+  ## Kernel vs torch chain of the same contract, at the Qwen3.6-35B-A3B
+  ## shape and the ragged gelu shape.
+  ##
+  ## The 1e-2 bound covers the routed chain, the exponential forms'
+  ## 1-ulp spread and the fp32 accumulation orders.
+  for r in [qwen36Row, raggedRow]:
+    let g = genMoERow(r)
+    let actual = toTensor(fp16sToF32(moeKernelGenericBits(g, r)))
+      .reshape(r.tokens, r.hidden)
+    let expected = moeReferenceRow(g, r)
+    echo &"  {r.name}: worst |Δ| = {worstAbsDiff(actual, expected)}"
+    assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
+  result = true
+
 when isMainModule:
   runCppTest("moe_fwd vs the torch reference", checkMoe)
+  runCppTest("moe_fwd_generic GLM delta-zero vs the baked entry",
+    checkGenericDeltaZero)
+  runCppTest("moe_fwd_generic rows vs the torch reference", checkGenericRows)
