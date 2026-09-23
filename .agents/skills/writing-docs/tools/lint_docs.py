@@ -42,6 +42,7 @@ Rule table (rule | trigger | severity):
 | missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
 | sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
+| decl-wrap            | a declaration or initializer wrapped across lines while the joined form fits a 140-char line       | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -446,6 +447,8 @@ RULES = {
                              "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
     "sig-wrap": Rule("sig-wrap", True,
                      "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
+    "decl-wrap": Rule("decl-wrap", True,
+                      "a const/let/var declaration or initializer wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
@@ -1475,6 +1478,44 @@ def nim_sig_wrap_checks(path, text, findings):
                 % (SIG_WRAP_MAX, len(joined))))
 
 
+DECL_HEAD_RE = re.compile(r"^\s*(?:const|let|var)\s")
+DECL_WRAP_MAX = 140
+
+
+def nim_decl_wrap_checks(path, text, findings):
+    """Flags a const/let/var declaration or initializer wrapped across lines
+    while the joined single-line form fits a 140-char line. Only the
+    comma-join shape counts, a declaration head whose value continues on
+    comma-terminated lines; a `=` head stays out (a Nim block statement
+    indented under the `=` cannot join, the layout is the grammar), a joined
+    form over the cap stays legal, and comment lines inside the wrap break
+    the walk (the doc linter governs comments, not this rule)."""
+    lines = text.splitlines()
+    for i, raw in enumerate(lines):
+        if not DECL_HEAD_RE.match(raw) or raw.lstrip().startswith("#"):
+            continue
+        if not raw.rstrip().endswith(","):
+            continue
+        parts = [raw.strip()]
+        j = i + 1
+        while j < len(lines) and j <= i + 8:
+            seg = lines[j].strip()
+            if not seg or seg.startswith("#"):
+                break
+            parts.append(seg)
+            if not seg.endswith(","):
+                break
+            j += 1
+        if len(parts) < 2 or parts[-1].endswith(","):
+            continue
+        joined = " ".join(p for seg in parts for p in seg.split())
+        if len(joined) <= DECL_WRAP_MAX:
+            findings.append(Finding(
+                path, i + 1, "decl-wrap",
+                "wraps within %d: the joined form fits one line (%d chars), "
+                "state it on one line" % (DECL_WRAP_MAX, len(joined))))
+
+
 # The file where a try block is the sanctioned exception boundary: the libtorch
 # FFI translation seam. Tests folders are exempt wholesale (test harnesses,
 # fuzz loops, C++ capture).
@@ -1788,6 +1829,7 @@ def scan(path, text, findings):
                     break
             nim_structure_checks(path, text, header_nos, findings)
             nim_sig_wrap_checks(path, text, findings)
+            nim_decl_wrap_checks(path, text, findings)
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)

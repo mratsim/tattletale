@@ -150,8 +150,7 @@ proc dequantGGUF_IQ4_XS*[A: static MmaAtom](
   ## at the store.
   const M = A.getM()
   const vpt = A.getVpt()
-  const kvaluesIQ4NL = [int32(-127), -104, -83, -65, -49, -35, -22, -10,
-                         1, 13, 25, 38, 53, 69, 89, 113]
+  const kvaluesIQ4NL = [int32(-127), -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113]
   let lane = int(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M

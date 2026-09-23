@@ -195,8 +195,7 @@ proc main =
     for p in 4 ..< 6:
       for h in 0 ..< 8:
         perm[p * 8 + h] = a.data[p * 8 + h]
-    let permuted = naiveGroupedMm(gmmBf16,
-      NaiveMat[uint16](rows: 6, cols: 8, data: perm), w, offs)
+    let permuted = naiveGroupedMm(gmmBf16, NaiveMat[uint16](rows: 6, cols: 8, data: perm), w, offs)
     # group 0 rows were reversed, each output row must equal the base
     # output of the row whose content it now carries
     for local in 0 ..< 4:

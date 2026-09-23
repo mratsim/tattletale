@@ -511,8 +511,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
       let vSeq = sliceCube(vw, b * Hv, Hv)
       let bSeq = sliceMat(bw, b * Hv, Hv)
       let gSeq = sliceMat(gw, b * Hv, Hv)
-      let chunked = gdnPrefillChunked(s0Seq, qSeq, kSeq, vSeq, bSeq, gSeq,
-        Hv, Hk, hkRatio, chunkLen)
+      let chunked = gdnPrefillChunked(s0Seq, qSeq, kSeq, vSeq, bSeq, gSeq, Hv, Hk, hkRatio, chunkLen)
       var sWalk = copyOf(s0Seq)
       var yWalk = NaiveCube[float64](planes: Hv, rows: T, cols: Dv)
       yWalk.data = newSeq[float64](Hv * T * Dv)
@@ -525,8 +524,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
         yN[(b * Hv) * T * Dv + i] = chunked.y.data[i]
         yPerGlobal[(b * Hv) * T * Dv + i] = yWalk.data[i]
 
-    let bars = gdnChunkTraceBars(s0w, qw, kw, vw, bw, gw,
-      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam)
+    let bars = gdnChunkTraceBars(s0w, qw, kw, vw, bw, gw, Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam)
 
     launch(si)
     sentinels(si)
@@ -590,15 +588,13 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
   var case0: tuple[st: seq[float32], y: seq[uint16]]
   const cases = 4
   for caseId in 0 ..< cases:
-    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride,
-      gHiOverride, betaZero)
+    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride, gHiOverride, betaZero)
     judge(si, record = true)
     if caseId == 0: case0 = snap()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
-    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride,
-      gHiOverride, betaZero)
+    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride, gHiOverride, betaZero)
     judge(si, record = false)
     let again = snap()
     for i in 0 ..< stateElems:

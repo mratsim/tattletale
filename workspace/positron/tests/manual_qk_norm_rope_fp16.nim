@@ -69,8 +69,7 @@ proc checkQkNormRope(): bool =
   ## Three flat-contract cases (real rows padded to the 8-row tile grid)
   ## vs the torch reference. The 5e-3 bound is ~5 fp16 ulps at the ~1
   ## output magnitude, above the rms_norm sum-order and the non-fma rotation noise.
-  let cases = [(real: 8, rows: 8, eps: 1e-6'f32), (real: 17, rows: 24, eps: 1e-2'f32),
-               (real: 100, rows: 104, eps: 1e-6'f32)]
+  let cases = [(real: 8, rows: 8, eps: 1e-6'f32), (real: 17, rows: 24, eps: 1e-2'f32), (real: 100, rows: 104, eps: 1e-6'f32)]
   for d in cases:
     var x = newSeq[uint16](d.rows * 128)
     for r in 0 ..< d.real:

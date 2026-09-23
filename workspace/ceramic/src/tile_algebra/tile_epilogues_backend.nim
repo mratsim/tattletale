@@ -134,8 +134,7 @@ macro shard*(epi: typed, buf: untyped, origin: untyped, tile: typed): untyped =
       let strideRow = intOf(stNode[0])
       let strideCol = intOf(stNode[1])
       let newSh = newCall(newTree(nnkBracketExpr, bindSym"shardShape", R, C, A))
-      let newSt = newCall(newTree(nnkBracketExpr, bindSym"shardStrides", R, C, A),
-                          newLit(strideRow), newLit(strideCol))
+      let newSt = newCall(newTree(nnkBracketExpr, bindSym"shardStrides", R, C, A), newLit(strideRow), newLit(strideCol))
       shardedType = rebuildType(shardedType, shNode, stNode, newSh, newSt)
     # StridedOperand fields keep their type (runtime strides)
 
@@ -148,8 +147,7 @@ macro shard*(epi: typed, buf: untyped, origin: untyped, tile: typed): untyped =
       let stNode = f[1][3]
       let strideRow = intOf(stNode[0])
       let strideCol = intOf(stNode[1])
-      let view = newCall(newTree(nnkBracketExpr, bindSym"shardView", T, R, C, A),
-                         buf, newLit(strideRow), newLit(strideCol), origin)
+      let view = newCall(newTree(nnkBracketExpr, bindSym"shardView", T, R, C, A), buf, newLit(strideRow), newLit(strideCol), origin)
       obj.add newTree(nnkExprColonExpr, f[0], view)
     else:
       let cField = fieldName(f[0])

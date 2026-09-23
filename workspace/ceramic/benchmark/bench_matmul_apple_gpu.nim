@@ -294,8 +294,7 @@ proc runBench() =   # engines are RAII, so keep them function-local
       let r = bench(run, ops)
       let pctStr =
         if cores > 0:
-          let peaks = [fp16Peak(cores, 1.4), fp16Peak(cores, 1.5),
-                       fp16Peak(cores, 1.6), fp16Peak(cores, 1.7)]
+          let peaks = [fp16Peak(cores, 1.4), fp16Peak(cores, 1.5), fp16Peak(cores, 1.6), fp16Peak(cores, 1.7)]
           &"{int(r.gflops / peaks[0] * 100):>3d}% {int(r.gflops / peaks[1] * 100):>3d}% " &
            &"{int(r.gflops / peaks[2] * 100):>3d}% {int(r.gflops / peaks[3] * 100):>3d}%"
         else:

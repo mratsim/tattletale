@@ -27,8 +27,7 @@ proc emitTrnStore8x8(ctx: var AssemblerSME) =
     ctx.trn1(v(16 + cell), "2d", v(a + 2), v(a + 6))
     ctx.trn2(v(a + 6), "2d", v(a + 2), v(a + 6))
   # Each pair (lo, hi) holds one output column's rows 0-3 and 4-7.
-  const storePairs = [(0, 8), (16, 18), (4, 12), (6, 14),
-                      (1, 9), (17, 19), (5, 13), (7, 15)]
+  const storePairs = [(0, 8), (16, 18), (4, 12), (6, 14), (1, 9), (17, 19), (5, 13), (7, 15)]
   for i, (lo, hi) in storePairs:
     ctx.stp(v(lo), v(hi), x(20), 128 * i)
   ctx.add(x(20), x(20), 1024)

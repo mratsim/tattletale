@@ -119,16 +119,14 @@ proc moeDecodeBody*(x: seq[uint16];
     # gate/up walk, one-expert cube over the fused (2I, H) weight rows
     let guData = gateUpW[(id * 2 * Inter) * H ..< ((id + 1) * 2 * Inter) * H]
     let guCube = NaiveCube[uint16](planes: 1, rows: 2 * Inter, cols: H, data: guData)
-    let gu = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: H, data: x),
-      guCube, @[1'i32])
+    let gu = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: H, data: x), guCube, @[1'i32])
     var hBits = newSeq[uint16](Inter)
     for i in 0 ..< Inter:
       hBits[i] = naiveSiluMulEl(gu.data[i], gu.data[Inter + i])
     # down walk, one-expert cube (H, I) over the expert's (H, I) weight rows
     let dnData = downW[id * H * Inter ..< (id + 1) * H * Inter]
     let dnCube = NaiveCube[uint16](planes: 1, rows: H, cols: Inter, data: dnData)
-    let dn = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: Inter, data: hBits),
-      dnCube, @[1'i32])
+    let dn = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: Inter, data: hBits), dnCube, @[1'i32])
     for e in 0 ..< H:
       result.partial[slot * H + e] = w[slot] * dn.data[e]
   # shared expert walk, the scalar then the separate projections
@@ -234,6 +232,5 @@ proc naiveQwen35GdnLayer*(state: var NaiveCube[float32], ring: var seq[uint16];
   result.normed2 = n2.normed
 
   # Stages 12 + 13, the MoE decode then the merge
-  let moe = moeDecodeBody(result.normed2, routerW, gateUpW, downW,
-    sharedGW, sharedUW, sharedDW, sharedGVW)
+  let moe = moeDecodeBody(result.normed2, routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW)
   result.moeOut = moe.moeOut

@@ -71,8 +71,7 @@ genEpilogue(epilogue_relu):
 template pack_layout(zd: Layout; transposed: static bool): auto =
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
-  let restCompact = make_layout(zd.shape[1],
-    when transposed: LayoutRight else: LayoutLeft)
+  let restCompact = make_layout(zd.shape[1], when transposed: LayoutRight else: LayoutLeft)
   let restScaled = mapLeavesWith(restCompact):
     (it_sh, it_st * tile_size)
   nested_product(tileCompact, restScaled)
@@ -257,10 +256,8 @@ proc gemm_strided*[T: SomeNumber](
         if last_m or last_k:
           let mr_eff = min(mr, current_mc)
           packA.fillWith_cpu(0.T)
-          let srcA_edge = make_view(panelA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
-          var dstA_edge = make_view(packA,
-            make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
+          let srcA_edge = make_view(panelA, make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), srcA_zd.stride))
+          var dstA_edge = make_view(packA, make_layout(((mr_eff, 1), (num_ir_eff, current_kc)), dstA_zd.stride))
           copySameShape_cpu(dstA_edge, srcA_edge)
         else:
           let src4A = make_view(panelA, srcA_zd)

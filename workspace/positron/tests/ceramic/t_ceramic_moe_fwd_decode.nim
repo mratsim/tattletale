@@ -201,10 +201,8 @@ proc naiveWalk(x, routerW, gateUpW, downW, sgW, suW, sdW, gvW: seq[uint16];
       result.partial[slot * H + e] = w[slot] * dn.data[e]
   # the shared expert, the scalar gate weight only when the walk uses it
   result.gvP = if useGate: naiveSharedGate(x, gvW, H) else: 1.0'f32
-  let sg = naiveGroupedMmSums(gmmBf16, xMat,
-    NaiveCube[uint16](planes: 1, rows: I, cols: H, data: sgW), @[1'i32])
-  let su = naiveGroupedMmSums(gmmBf16, xMat,
-    NaiveCube[uint16](planes: 1, rows: I, cols: H, data: suW), @[1'i32])
+  let sg = naiveGroupedMmSums(gmmBf16, xMat, NaiveCube[uint16](planes: 1, rows: I, cols: H, data: sgW), @[1'i32])
+  let su = naiveGroupedMmSums(gmmBf16, xMat, NaiveCube[uint16](planes: 1, rows: I, cols: H, data: suW), @[1'i32])
   var hsBits = newSeq[uint16](I)
   for i in 0 ..< I:
     hsBits[i] = naiveSiluMulEl(sg.data[i], su.data[i])
@@ -443,8 +441,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
   var worst = 0.0'f64
   for t in 0 ..< tokens:
     let xTok = xSeq[t * H ..< (t + 1) * H]
-    let nw = naiveWalk(xTok, routerWSeq, gateUpWSeq, downWSeq,
-      sharedGWSeq, sharedUWSeq, sharedDWSeq, sharedGVSeq, scale, useGate)
+    let nw = naiveWalk(xTok, routerWSeq, gateUpWSeq, downWSeq, sharedGWSeq, sharedUWSeq, sharedDWSeq, sharedGVSeq, scale, useGate)
     let xw = widen(xTok)
     # the walk exposes no ids or weight buffers, the expert selection
     # and the routing weight are judged through the partial rows they

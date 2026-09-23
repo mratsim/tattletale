@@ -88,8 +88,7 @@ template pack_layout*(zd: Layout, transposed: static bool): auto =
   ## compact, then the remaining dimension scaled by the tile size.
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
-  let restCompact = make_layout(zd.shape[1],
-    when transposed: LayoutRight else: LayoutLeft)
+  let restCompact = make_layout(zd.shape[1], when transposed: LayoutRight else: LayoutLeft)
   let restScaled = mapLeavesWith(restCompact):
     (it_sh, it_st * tile_size)
   nested_product(tileCompact, restScaled)

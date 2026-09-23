@@ -316,8 +316,7 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
 
   # the informational comparison, no band, the comparison tier owns it
   block comparison:
-    var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
-      cols: HeadKDim)
+    var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
     stateN.data = big.state
     var ringN = big.ring
     let t0 = epochTime()

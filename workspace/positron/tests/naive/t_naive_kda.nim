@@ -259,8 +259,7 @@ proc kdaPairCase(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv, chunkLen: int;
   var sPer = s0w.copyOf()
   var yPer = zerosCube[float64](B * Hv, T, Dv)
   kdaPrefillPerToken(sPer, yPer, qw, kw, gw, vw, betaw, Hv, Hk, hkRatio)
-  let chunked = kdaPrefillChunked(s0w, qw, kw, gw, vw, betaw,
-    Hv, Hk, hkRatio, chunkLen)
+  let chunked = kdaPrefillChunked(s0w, qw, kw, gw, vw, betaw, Hv, Hk, hkRatio, chunkLen)
 
   let maxAbs = max(maxAbsF64(yPer.data), maxAbsF64(sPer.data))
   let worstY = worstDiffF64(yPer.data, chunked.y.data)
@@ -365,10 +364,8 @@ proc chunkedUniformCrossCheck(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv, chunkLen
   let betaw = beta32.widenF64()
   let s0w = s032.widenF64()
 
-  let kdaOut = kdaPrefillChunked(s0w, qw, kw, gKda.widenF64(), vw, betaw,
-    Hv, Hk, hkRatio, chunkLen)
-  let gdnOut = gdnPrefillChunked(s0w, qw, kw, vw, betaw, gGdn.widenF64(),
-    Hv, Hk, hkRatio, chunkLen)
+  let kdaOut = kdaPrefillChunked(s0w, qw, kw, gKda.widenF64(), vw, betaw, Hv, Hk, hkRatio, chunkLen)
+  let gdnOut = gdnPrefillChunked(s0w, qw, kw, vw, betaw, gGdn.widenF64(), Hv, Hk, hkRatio, chunkLen)
 
   let maxAbs = max(maxAbsF64(kdaOut.y.data), maxAbsF64(kdaOut.state.data))
   let worstY = worstDiffF64(kdaOut.y.data, gdnOut.y.data)

@@ -134,10 +134,8 @@ proc pinConvSiluStep() =
   ## ConvDim = 2, kernel = 3, hand-computed taps and silu:
   ## channel 0 acc = 1·1 + 0.5·0 + 2·1 = 3, channel 1 acc = 0·2 + 1·1 + 1·1 = 2,
   ## each silu'd in fp32 then rounded bf16, the ring shifted down one slot.
-  let convW = @[f32ToBf16(1.0'f32), f32ToBf16(0.5'f32), f32ToBf16(2.0'f32),
-                f32ToBf16(0.0'f32), f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
-  var ring = @[f32ToBf16(1.0'f32), f32ToBf16(0.0'f32),
-               f32ToBf16(2.0'f32), f32ToBf16(1.0'f32)]
+  let convW = @[f32ToBf16(1.0'f32), f32ToBf16(0.5'f32), f32ToBf16(2.0'f32), f32ToBf16(0.0'f32), f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
+  var ring = @[f32ToBf16(1.0'f32), f32ToBf16(0.0'f32), f32ToBf16(2.0'f32), f32ToBf16(1.0'f32)]
   let xCol = @[f32ToBf16(1.0'f32), f32ToBf16(1.0'f32)]
   let got = naiveCausalConvSiluStep(convW, ring, xCol, 2, 3)
   let want0 = f32ToBf16(3.0'f32 / (1.0'f32 + exp(-3.0'f32)))
