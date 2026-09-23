@@ -4,3 +4,4 @@ reviews:
     - "!**/*.safetensors"
     - "!**/fixtures/**"
     - "!**/tokenizers/**"
+    - "!**/tests/corpus/**"

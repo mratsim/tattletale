@@ -169,6 +169,28 @@ task test_safetensors, "Test workspace/safetensors":
     for cmd in getTestCommands("workspace/safetensors/tests", compiler = "nim cpp"):
       runCmd(cmd)
 
+proc chattyninjaCmd(filename, extraDefines: string): string =
+  ## Build-and-run command of one chattyninja suite, with the views flag the
+  ## engine compiles under and the src/tests import paths.
+  testerCmd("workspace/chattyninja/tests/" & filename,
+    extraFlags = "--experimental:views --path:workspace/chattyninja/src --path:workspace/chattyninja/tests" & extraDefines,
+    compiler = "nim c")
+
+task test_chattyninja, "Test workspace/chattyninja template engine suites":
+  withDir(ProjectRoot):
+    # The allocation arm compiles t_corpus.nim alone under -d:nimAllocStats, the counted
+    # render window owned by the test itself (its own 7-byte buffer, no engine define).
+    runCmd(chattyninjaCmd("t_corpus.nim", ""))
+    runCmd(chattyninjaCmd("t_parse.nim", ""))
+    runCmd(chattyninjaCmd("t_expr.nim", ""))
+    runCmd(chattyninjaCmd("t_corpus.nim", " -d:nimAllocStats"))
+    # The TTT_CNJ_StepBudget arm: the suite's own `-d:TTT_CNJ_StepBudget=32` block asserts the
+    # step-counter backstop's raise and quits before the full tier runs.
+    runCmd(chattyninjaCmd("t_expr.nim", " -d:TTT_CNJ_StepBudget=32"))
+    # The typed-surface referee: every corpus row re-rendered over a real `ChatContext`
+    # through the package surface alone, byte-exact against the same ledger.
+    runCmd(chattyninjaCmd("t_chat_api.nim", ""))
+
 # Granular transformer suite tasks
 # ===================================================
 # Per-suite and per-family tasks so an agent picks exactly the suites

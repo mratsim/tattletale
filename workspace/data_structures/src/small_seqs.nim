@@ -48,10 +48,6 @@ type
     ## Invariant:
     ##   `cap` is 0 or at least `N`, `overflow` is nil exactly while `cap <= N`,
     ##   element `i` sits at `arr[i]` below `N` and `overflow[i - N]` past it.
-    ##
-    ## A trivial `T` is required. `supportsCopyMem` is false for managed memory and for a type
-    ## defining `=destroy` or `=copy`, so `SmallSeq` cannot hold `SmallSeq`, `string`, `seq`
-    ## or `ref`, while Nim containers stay free to hold values of such a type.
     len: int32
     cap: int32
     arr: array[N, T]
@@ -60,41 +56,127 @@ type
 const SmallSeqMaxCapacity = high(int32)
   # Buffer growth stops below the `int32` range, `cap` and `len` are that wide.
 
+proc allocTailBlock[N: static int, T](cap: int): ptr UncheckedArray[T] =
+  ## Fresh tail block of `cap` element slots, zeroed for non-trivial `T` (zero is Nim's moved-from representation).
+  when supportsCopyMem(T):
+    result = cast[ptr UncheckedArray[T]](alloc((cap - N) * sizeof(T)))
+  else:
+    result = cast[ptr UncheckedArray[T]](alloc0((cap - N) * sizeof(T)))
 
-proc `=destroy`*[N, T](s: var SmallSeq[N, T]) {.raises: [].} =
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  if s.overflow != nil:
-    dealloc(s.overflow)
+proc reallocTailBlock[T](p: ptr UncheckedArray[T], oldElems, newElems: int): ptr UncheckedArray[T] =
+  ## Resizes the tail block `p` between element counts, a `nil` block
+  ## becoming a fresh zeroed allocation.
+  result = cast[ptr UncheckedArray[T]](
+    realloc0(p, oldElems * sizeof(T), newElems * sizeof(T)))
 
-proc `=sink`*[N, T](dst: var SmallSeq[N, T], src: SmallSeq[N, T]) {.raises: [].} =
-  ## Takes over the source tail pointer, no deep copy.
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  if dst.overflow != nil:
-    dealloc(dst.overflow)
-  dst.len = src.len
-  dst.cap = src.cap
-  copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
-  dst.overflow = src.overflow
+proc `=destroy`*[N, T](s: var SmallSeq[N, T]) =
+  when supportsCopyMem(T):
+    if s.overflow != nil:
+      dealloc(s.overflow)
+  else:
+    for i in 0 ..< int(s.len):
+      `=destroy`(s[i])
+    if s.overflow != nil:
+      dealloc(s.overflow)
+
+proc `=sink`*[N, T](dst: var SmallSeq[N, T], src: SmallSeq[N, T]) =
+  ## Takes over the source elements, no deep copy.
+  ## The source's length, capacity and tail pointer are read into locals
+  ## before the first `dst` write, the move lowering being free to zero
+  ## the source at any point
+  let srcLen = src.len
+  let srcCap = src.cap
+  let srcOverflow = src.overflow
+  when supportsCopyMem(T):
+    if dst.overflow != nil:
+      dealloc(dst.overflow)
+    dst.len = srcLen
+    dst.cap = srcCap
+    copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
+    dst.overflow = srcOverflow
+  else:
+    # A slot the source does not refill reads back as `default(T)`, a slot
+    # it refills is overwritten by the move assignment itself.
+    for i in 0 ..< N:
+      if i < srcLen:
+        dst.arr[i] = move unsafeAddr(src.arr[i])[]
+      elif i < int(dst.len):
+        dst.arr[i] = default(T)
+    if dst.overflow != nil:
+      for i in N ..< int(dst.len):
+        dst.overflow[i - N] = default(T)
+      dealloc(dst.overflow)
+    dst.len = srcLen
+    dst.cap = srcCap
+    dst.overflow = nil
+    if srcOverflow != nil:
+      dst.overflow = allocTailBlock[N, T](int(srcCap))
+      for i in N ..< srcLen:
+        dst.overflow[i - N] = move unsafeAddr(srcOverflow[i - N])[]
 
 proc `=copy`*[N, T](dst: var SmallSeq[N, T], src {.noalias.}: SmallSeq[N, T]) =
-  ## Deep-copies into a fresh tail.
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  `=destroy`(dst)
-  dst.len = src.len
-  dst.cap = src.cap
-  copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
-  dst.overflow = nil
-  if src.overflow != nil:
-    # The block covers all cap - N slots, the copy covers the live len - N.
-    dst.overflow = cast[ptr UncheckedArray[T]](alloc((int(src.cap) - N) * sizeof(T)))
-    if src.len > N:
-      copyMem(dst.overflow, src.overflow, (int(src.len) - N) * sizeof(T))
+  ## Deep-copies `src`, reusing `dst`'s tail block when its capacity covers `src.cap`.
+  if addr(dst) == unsafeAddr(src):
+    # Self-assignment would destroy the old elements and then read them
+    # back from the destroyed slots, so the guard keeps a self-copy a no-op.
+    return
+  when supportsCopyMem(T):
+    copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
+    if dst.overflow != nil and int(dst.cap) >= int(src.cap):
+      if src.len > N:
+        copyMem(dst.overflow, src.overflow, (int(src.len) - N) * sizeof(T))
+      dst.len = src.len
+    else:
+      if src.overflow != nil:
+        if dst.overflow == nil:
+          dst.overflow = allocTailBlock[N, T](int(src.cap))
+        else:
+          dst.overflow = reallocTailBlock(dst.overflow, int(dst.cap) - N,
+              int(src.cap) - N)
+        if src.len > N:
+          copyMem(dst.overflow, src.overflow, (int(src.len) - N) * sizeof(T))
+      elif dst.overflow != nil:
+        dealloc(dst.overflow)
+        dst.overflow = nil
+      dst.len = src.len
+      dst.cap = src.cap
+  else:
+    for i in 0 ..< N:
+      if i < int(src.len):
+        dst.arr[i] = src.arr[i]
+      elif i < int(dst.len):
+        dst.arr[i] = default(T)
+    if src.overflow != nil:
+      if dst.overflow != nil and int(dst.cap) >= int(src.cap):
+        # A refilled slot's assignment destroys its prior content, a slot
+        # the source does not refill falls back to `default(T)`.
+        for i in N ..< int(dst.len):
+          if i >= int(src.len):
+            dst.overflow[i - N] = default(T)
+        for i in N ..< int(src.len):
+          dst.overflow[i - N] = src.overflow[i - N]
+        dst.len = src.len
+      else:
+        if dst.overflow != nil:
+          for i in N ..< int(dst.len):
+            dst.overflow[i - N] = default(T)
+          dealloc(dst.overflow)
+        dst.overflow = allocTailBlock[N, T](int(src.cap))
+        for i in N ..< int(src.len):
+          dst.overflow[i - N] = src.overflow[i - N]
+        dst.len = src.len
+        dst.cap = src.cap
+    else:
+      if dst.overflow != nil:
+        for i in N ..< int(dst.len):
+          dst.overflow[i - N] = default(T)
+        dealloc(dst.overflow)
+      dst.overflow = nil
+      dst.len = src.len
+      dst.cap = src.cap
 
 func init*[N: static int; T](_: type SmallSeq[N, T]): SmallSeq[N, T] =
-  ## Empty sequence, inline buffer only, no allocation.
+  ## Empty sequence, no allocation.
   SmallSeq[N, T](len: 0, cap: int32(N), overflow: nil)
 
 func len*[N, T](s: SmallSeq[N, T]): int32 {.inline.} =
@@ -132,12 +214,19 @@ proc grow[N, T](s: var SmallSeq[N, T], newCap: int) =
   # newCap counts total slots, only the tail is ever realloced.
   if newCap > SmallSeqMaxCapacity:
     raise newException(ArithmeticDefect, "SmallSeq capacity would overflow int32")
-  s.overflow = cast[ptr UncheckedArray[T]](
-    realloc0(s.overflow, (int(s.cap) - N) * sizeof(T), (newCap - N) * sizeof(T)))
+  when supportsCopyMem(T):
+    s.overflow = reallocTailBlock(s.overflow, int(s.cap) - N, newCap - N)
+  else:
+    let p = allocTailBlock[N, T](newCap)
+    if s.overflow != nil:
+      for i in N ..< int(s.len):
+        p[i - N] = move s.overflow[i - N]
+      dealloc(s.overflow)
+    s.overflow = p
   s.cap = int32(newCap)
 
 proc add*[N, T](s: var SmallSeq[N, T], value: sink T) =
-  ## Appends `value`, doubling the capacity when the sequence is full.
+  ## Appends `value`, doubling the capacity when full.
   if s.len < N:
     s.arr[s.len] = value
   else:
@@ -170,6 +259,7 @@ iterator mpairs*[N, T](s: var SmallSeq[N, T]): (int, var T) =
     yield (i, s[i])
 
 func `==`*[N, T](s: SmallSeq[N, T], other: openArray[T]): bool =
+  ## Element-wise comparison against `other`.
   if int(s.len) != other.len:
     return false
   for i in 0 ..< other.len:
@@ -178,5 +268,8 @@ func `==`*[N, T](s: SmallSeq[N, T], other: openArray[T]): bool =
   return true
 
 func clear*[N, T](s: var SmallSeq[N, T]) =
-  ## Resets `len` to 0 and keeps the heap block for reuse.
+  ## Resets `len` to 0, destroying the elements, and keeps the heap block.
+  when not supportsCopyMem(T):
+    for i in 0 ..< int(s.len):
+      reset(s[i])
   s.len = 0
