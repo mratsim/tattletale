@@ -322,11 +322,10 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   let preRing = readInto(ring.hostPtr, ConvDim * RingWidth)
 
   # Reference continuation launch:
-  #   the entry contract held explicitly, the counters host-zeroed, the full-buffer reads below are
-  #   the reference continuation's bits.
+  #   one bounded launch over the restored pre-image, the counters host-zeroed,
+  #   the full-buffer reads below are the reference continuation's bits.
   restorePreimage(preBf, preF32, preState, preRing)
   zeroCounters()
-  discard launch()
   runMegaBounded(launch, counters.hostPtr, StageNames)
   let refBf = readInto(bfA.hostPtr, BfArenaLen)
   let refF32 = readInto(f32A.hostPtr, F32ArenaLen)
@@ -335,12 +334,11 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   countersZeroWhere("the reference continuation launch")
 
   # Self-reset case:
-  #   the relaunch over untouched counters, the kernel's launch-end reset
-  #   alone maintains the entry contract here, the output must be
-  #   bit-identical to the reference continuation.
+  #   one bounded relaunch over the restored pre-image, the kernel's
+  #   launch-end reset alone maintains the entry contract here, the output
+  #   must be bit-identical to the reference continuation.
   restorePreimage(preBf, preF32, preState, preRing)
   countersZeroWhere("before the self-reset relaunch")
-  discard launch()
   runMegaBounded(launch, counters.hostPtr, StageNames)
   let selfResetBf = readInto(bfA.hostPtr, BfArenaLen)
   let selfResetF32 = readInto(f32A.hostPtr, F32ArenaLen)

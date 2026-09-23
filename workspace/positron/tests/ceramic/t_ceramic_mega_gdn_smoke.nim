@@ -246,18 +246,24 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
     result = true
+  # Pre-image, both arenas, state and ring before the first launch,
+  # the relaunch restores them.
+  # Launch reads touch xPrev, rPrev and the kernel weights only.
+  # Outputs live in the arenas.
+  let bfPre = readInto(bfA.hostPtr, BfArenaLen)
+  let f32Pre = readInto(f32A.hostPtr, F32ArenaLen)
+  let statePre = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let ringPre = readInto(ring.hostPtr, ConvDim * RingWidth)
+
   # The bounded wait on every launch, a wedged waveWait spin reports
   # the stuck stage's counters and exits, never an unbounded host spin.
   runMegaBounded(launch, counters.hostPtr, StageNames)
 
-  # state and ring snapshots are the launch's pre-image,
-  # the relaunch restores them
-  # the arena snapshots are taken after the launch, they hold
-  # the outputs the relaunch must reproduce bit for bit
-  let stateSnap = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let ringSnap = readInto(ring.hostPtr, ConvDim * RingWidth)
-
-  discard launch()
+  # Launch outputs, the relaunch must reproduce them bit for bit
+  let bfSnap = readInto(bfA.hostPtr, BfArenaLen)
+  let f32Snap = readInto(f32A.hostPtr, F32ArenaLen)
+  let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
 
   proc waveSyncCheck() =
     ## Post-launch, the kernel's launch-end reset has re-zeroed the counters.
@@ -309,11 +315,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   waveSyncCheck()
   outputRanges()
   sentinels()
-  let bfSnap = readInto(bfA.hostPtr, BfArenaLen)
-  let f32Snap = readInto(f32A.hostPtr, F32ArenaLen)
-  let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
-
   # the informational comparison, no band, the comparison tier owns it
   block comparison:
     var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
@@ -334,12 +335,13 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     echo &"[mega smoke] informational max abs diff vs naive " &
       &"moeOut {dMoe:.4f} h1 {dH1:.4f} blockOut {dBlock:.4f} y {dY:.4f}"
 
-  # the relaunch, restored arenas, state and ring, zeroed counters
-  for i in 0 ..< BfArenaLen: bfA.hostPtr[i] = bfSnap[i]
-  for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Snap[i]
-  for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = stateSnap[i]
-  for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringSnap[i]
-  discard launch()
+  # Relaunch over the restored pre-image, one bounded launch.
+  # Launch-end reset keeps the counters at the zero state.
+  for i in 0 ..< BfArenaLen: bfA.hostPtr[i] = bfPre[i]
+  for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Pre[i]
+  for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = statePre[i]
+  for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringPre[i]
+  runMegaBounded(launch, counters.hostPtr, StageNames)
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
     doAssert bfA.hostPtr[i] == bfSnap[i], &"bf arena differs at {i}"
