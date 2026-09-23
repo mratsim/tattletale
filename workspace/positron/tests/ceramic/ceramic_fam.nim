@@ -41,11 +41,13 @@ proc famName*(fam: Family): string =
   if fam == famBf16: "bf16" else: "fp16"
 
 proc famUlp*(fam: Family, v: float64): float64 =
-  ## Width of one family-dtype ulp at a nonzero normal |v|.
+  ## Width of one family-dtype ulp at a nonzero |v|, subnormal values
+  ## clamp to the family's min-normal spacing.
   if v == 0.0: return 0.0
   let (mant, exp10) = frexp(abs(v))
   doAssert mant >= 0.5 and mant < 1.0
-  let floorExp = exp10 - 1           # floor(log2|v|), the binary exponent of |v|
+  let minNormalExp = if fam == famBf16: -126 else: -14
+  let floorExp = max(exp10 - 1, minNormalExp)  # floor(log2|v|), clamped at the min normal exponent
   let mantBits = if fam == famBf16: 7 else: 10
   result = pow(2.0, float64(floorExp - mantBits))
 

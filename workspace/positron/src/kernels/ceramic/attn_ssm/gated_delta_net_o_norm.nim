@@ -124,6 +124,9 @@ proc rowRstd[El; R, C: static int; A: static MmaAtom](
   ##   and C is the norm width, so the row reduction is one row_sum inside the tile.
   ## - eps must be > 0, an all-zero row makes the mean 0 and rsqrt(0) = +Inf,
   ##   the +Inf the store writes silently
+  static:
+    doAssert R == A.getM(),
+      "rowRstd: one scalar rstd per lane requires TileR == atom M"
   var y32: rt_l(float32, R, C)
   y32.widen(y)
   var sq: rt_l(float32, R, C)

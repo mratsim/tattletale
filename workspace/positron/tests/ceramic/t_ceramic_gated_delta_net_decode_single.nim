@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
-## Run command, from the repo root:
-## - nim test_positron_naive
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/cer tests/ceramic/t_ceramic_gated_delta_net_decode_single.nim
+## Run commands, from the repo root (the aggregate runner is nim test_positron_naive):
+## - nim c -r -d:release --warnings:off \
+##   --outdir:build/tests --nimcache:nimcache/cer workspace/positron/tests/ceramic/t_ceramic_gated_delta_net_decode_single.nim
 ##
 ## Ceramic GDN decode step suite:
 ## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` compared per element against the naive `gdnDecodeStep`
@@ -209,7 +209,7 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
     for i in 0 ..< bhMax:
       doAssert gB.hostPtr[i] == si.gVals[i], "kernel-read buffer modified"
 
-  # The step walk computes bars from the naive-side trajectory, then the naive walk, the kernel launch and the per-element judgment.
+  # Bars come from the naive-side trajectory, then the naive walk, the kernel launch and the per-element judgment.
   # `judge` false marks the determinism relaunch, bit-compared against the first pass instead.
   proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap], judge: bool) =
     setState(state0)

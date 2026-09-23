@@ -24,8 +24,8 @@ import std/math
 import naive_tensors
 from naive_grouped_mm import GmmFamily, gmmBf16, gmmF16, gmmWiden, gmmRoundEl
 
-# Host libm `log1pf`, std/math spells no log1p (the softplus tail form).
-proc log1pf(x: cfloat): cfloat {.importc: "log1pf", header: "<math.h>".}
+# Host libm log1p under its C float32 spelling, std/math spells no log1p.
+proc log1p(x: float32): float32 {.importc: "log1pf", header: "<math.h>", noSideEffect.}
 
 const Log2E* = 1.4426950408889634'f32
 
@@ -35,7 +35,7 @@ func bf16Round*(x: float32): uint16 =
 
 func softplus*(x: float32): float32 =
   ## Softplus in the ATen `softplus(x, 1, 20)` shape, linear past the threshold, `log(1 + exp(x))` under it.
-  if x > 20.0'f32: x else: log1pf(exp(x))
+  if x > 20.0'f32: x else: log1p(exp(x))
 
 func sigmoid*(x: float32): float32 =
   ## Returns `1 / (1 + exp(-x))` in fp32.

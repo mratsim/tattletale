@@ -60,12 +60,16 @@ proc freePageBuf*[T](buf: PageBuf[T]) =
   ## Frees the page-aligned storage.
   freeShared(buf.data)
 
+proc bitsOf*[T: uint16|float32](v: T): uint32 =
+  ## Returns the element's bit pattern, the bit-identity form the buffer checks compare (signed zeros and NaNs stay exact).
+  when T is float32: cast[uint32](v) else: v.uint32
+
 proc assertTailZero*[T: uint16|float32](buf: PageBuf[T], usedElems: int) =
   ## Elements past `usedElems` must still hold the zero initialization, kernel writes stay inside the logical extent.
   for i in usedElems ..< buf.elems:
-    doAssert buf.hostPtr[i] == 0, "buffer written past its extent at element " & $i
+    doAssert bitsOf(buf.hostPtr[i]) == 0'u32, "buffer written past its extent at element " & $i
 
 proc assertReadUnchanged*[T: uint16|float32](buf: PageBuf[T], want: seq[T]) =
-  ## A kernel-read buffer must stay bit-identical, the host memory is the device memory under the no-copy binding.
+  ## Kernel-read buffers stay bit-identical, the host memory is the device memory under the no-copy binding.
   for i in 0 ..< want.len:
-    doAssert buf.hostPtr[i] == want[i], "kernel-read buffer modified at element " & $i
+    doAssert bitsOf(buf.hostPtr[i]) == bitsOf(want[i]), "kernel-read buffer modified at element " & $i

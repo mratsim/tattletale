@@ -5,9 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
-## Run command, from the repo root:
-## - nim test_positron_naive
-## - nim c -r -d:release --warnings:off --outdir:build/tests tests/ceramic/t_ceramic_gated_delta_net_prefill.nim
+## Run commands, from the repo root (the aggregate runner is nim test_positron_naive):
+## - nim c -r -d:release --warnings:off --outdir:build/tests workspace/positron/tests/ceramic/t_ceramic_gated_delta_net_prefill.nim
 ##
 ## Ceramic GDN prefill suite, chunked scan against the naive tier:
 ##

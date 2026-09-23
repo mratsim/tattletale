@@ -266,6 +266,7 @@ proc topKSlots(logits: seq[float64]): tuple[ids: seq[int], runner: int] =
         best = e
     used[best] = true
     result.ids[s] = best
+  result.runner = -1
   for e in 0 ..< NumExperts:
     if not used[e] and (result.runner < 0 or logits[e] > logits[result.runner]):
       result.runner = e

@@ -310,7 +310,7 @@ proc moeFwdConfigGuard*(
   ## Accepted config:
   ##   - num_tokens, hidden, moe_intermediate at least 1
   ##   - n_shared_experts at least 0
-  ##   - n_routed_experts inside [1, ScoreChunk·ScoreChunks], top_k inside [1, MaxTopK]
+  ##   - n_routed_experts inside [1, ScoreChunk·ScoreChunks], top_k inside [1, MaxTopK] and at most n_routed_experts
   ##
   ## `moeFwdConfigGuard(8, 2048, 64, 1536, 4, 1)` returns, the accepted 64-expert/4-slot row.
   ## `moeFwdConfigGuard(8, 2048, 1024, 1536, 4, 1)` raises AssertionDefect naming
@@ -323,6 +323,8 @@ proc moeFwdConfigGuard*(
     "n_routed_experts outside [1, " & $(ScoreChunk * ScoreChunks) & "]"
   doAssert top_k >= 1 and top_k <= MaxTopK,
     "top_k outside [1, " & $MaxTopK & "]"
+  doAssert top_k <= n_routed_experts,
+    "moeFwdConfigGuard: the K slots need K distinct experts, top_k exceeds n_routed_experts"
 
 proc moe_fwd*(
     out_r: ptr UncheckedArray[float16],              # (num_tokens, hidden) fp16 output
@@ -364,7 +366,7 @@ proc moe_fwd*(
   ## activation is ActSilu or ActGeluTanh.
   ##
   ## A config beyond the compiled-in fixed maxima, n_routed_experts >
-  ## ScoreChunk·ScoreChunks (512) or top_k > MaxTopK, or a non-positive dim, stops before launch.
+  ## ScoreChunk·ScoreChunks (512), top_k > MaxTopK or top_k > n_routed_experts, or a non-positive dim, stops before launch.
   ##
   ## The entry drops the launch, `moeFwdConfigGuard`
   ## reports naming the offending dimension, the caller
@@ -396,7 +398,7 @@ proc moe_fwd*(
   if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
       n_shared_experts < 0 or
       n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or
-      top_k < 1 or top_k > MaxTopK:
+      top_k < 1 or top_k > MaxTopK or top_k > n_routed_experts:
     return
 
   let t = int32(threadgroup_position_in_grid.x)

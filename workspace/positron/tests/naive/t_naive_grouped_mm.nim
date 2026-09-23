@@ -70,14 +70,15 @@ proc gmmRefF64(fam: GmmFamily; a: NaiveMat[uint16]; w: NaiveCube[uint16];
             gmmWiden(fam, w.data[(e * w.rows + i) * w.cols + h]).float64
         result.data[r * w.rows + i] = acc
 
-proc rowMaxProduct(a: NaiveMat[uint16]; w: NaiveCube[uint16]; e, r: int): float64 =
+proc rowMaxProduct(fam: GmmFamily; a: NaiveMat[uint16]; w: NaiveCube[uint16];
+    e, r: int): float64 =
   ## Returns the row's largest |a_h·w_h| over the widened exact products, the M
   ## of the band model, derived from the inputs before any output is seen.
   result = 0.0'f64
   for i in 0 ..< w.rows:
     for h in 0 ..< a.cols:
-      let m = abs(gmmWiden(gmmBf16, a.data[r * a.cols + h]).float64 *
-        gmmWiden(gmmBf16, w.data[(e * w.rows + i) * w.cols + h]).float64)
+      let m = abs(gmmWiden(fam, a.data[r * a.cols + h]).float64 *
+        gmmWiden(fam, w.data[(e * w.rows + i) * w.cols + h]).float64)
       result = max(result, m)
 
 const
@@ -97,7 +98,7 @@ proc runBandCase(fam: GmmFamily; rng: var NaiveRng; a: NaiveMat[uint16];
     let lo = (if e == 0: 0 else: offs[e - 1].int)
     let hi = offs[e].int
     for r in lo ..< hi:
-      let m = rowMaxProduct(a, w, e, r)
+      let m = rowMaxProduct(fam, a, w, e, r)
       for i in 0 ..< w.rows:
         let y = gmmWiden(fam, got.data[r * w.rows + i]).float64
         let yExact = ref64.data[r * w.rows + i]
@@ -259,7 +260,7 @@ proc main =
       let lo = (if e == 0: 0 else: offs[e - 1].int)
       let hi = offs[e].int
       for r in lo ..< hi:
-        let m = rowMaxProduct(a, w, e, r)
+        let m = rowMaxProduct(gmmBf16, a, w, e, r)
         for i in 0 ..< w.rows:
           let s = s32.data[r * w.rows + i].float64
           let sExact = s64.data[r * w.rows + i]
