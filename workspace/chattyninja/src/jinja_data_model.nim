@@ -270,11 +270,11 @@ func addRune(sb: var Cursor, r: Rune) =
     sb.add char(0x80 or (c and 0x3F))
 
 func undefinedVal(): JinjaVal =
-  ## Returns the absent-binding value, rendering empty, failing truthiness, equaling only itself.
+  ## Returns the absent-binding value.
   JinjaVal(kind: vkUndefined)
 
 func noneVal(): JinjaVal =
-  ## Returns Python's `None`, rendering `None`, failing truthiness, distinct from undefined.
+  ## Returns Python's `None`.
   JinjaVal(kind: vkNone)
 
 func boolVal(b: bool): JinjaVal = JinjaVal(kind: vkBool, b: b)
@@ -293,11 +293,7 @@ func rangeVal(start, stop, step: int64): JinjaVal =
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
 
 func cutVal(s: sink string, lo, hi: int32): JinjaVal =
-  ## Returns the stripped cut of `s`, rendering as the bytes of `s[lo ..< hi]`:
-  ## - `s` moves in, so the cut shares the source's buffer
-  ## - the cut materializes its string only where a consumer stores or re-computes it
-  ##
-  ##   cutVal(text, 4'i32, 9'i32)
+  ## Returns the stripped cut of `s`.
   ##
   ## renders the 5 bytes `text[4 ..< 9]`, the strip span the caller's to compute.
   JinjaVal(kind: vkCut, raw: s, lo: lo, hi: hi)
@@ -477,15 +473,7 @@ func dictSet(d: DictVal, key: string, val: JinjaVal) =
   d.vals.add val
 
 func dictVal(pairs: openArray[tuple[k: string, v: JinjaVal]]): JinjaVal =
-  ## Returns the dict value built from the key/value pairs, the whole mapping up front,
-  ## no dictSet afterwards:
-  ## - the pairs keep their order, so a read scans in construction order
-  ## - a repeated key keeps the last pair's value, matching dictSet and the Python dict literal
-  ##
-  ##   dictVal(@[("role", strVal("system")), ("content", strVal("hi"))])
-  ##
-  ## Each pair's key and value may name any expressions, so a caller builds a full
-  ## context inline without ever naming `DictVal`.
+  ## Builds the dict value from the key/value pairs, the whole mapping up front.
   var d = DictVal()
   for (k, v) in pairs:
     dictSet(d, k, v)

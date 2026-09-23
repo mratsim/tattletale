@@ -3,8 +3,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Chattyninja entry point.
-## Re-exports the package public API at `workspace/chattyninja/chattyninja.nim`.
+## Chattyninja package root, re-exporting the package public API of the facade module `src/cnj_public_api.nim`.
 
-import workspace/chattyninja/chattyninja as pkg
-export pkg
+import workspace/chattyninja/src/cnj_public_api
+export cnj_public_api

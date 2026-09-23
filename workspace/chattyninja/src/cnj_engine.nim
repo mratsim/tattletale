@@ -585,14 +585,7 @@ proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal =
 # Render driver:
 
 func startJinjaRender(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): JinjaRenderContext =
-  ## Returns a render context over the shared artifact, ready to render `root`, the render
-  ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
-  ##
-  ## Contract:
-  ## - `clock` is the epoch `strftime_now` reads, never artifact state, so one artifact
-  ##   renders reproducibly under different clocks
-  ## - `sym` is the parse-built interned-name table by ref, every render over the artifact
-  ##   holding the same heap object, no borrow contract
+  ## Builds the render context over the shared artifact, ready to render `root`.
   # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
   # completing on the first pullInto, so the program counter starts past the node list.
   JinjaRenderContext(tmpl: tmpl, symbols: sym, force: forceMacro,
@@ -601,30 +594,7 @@ func startJinjaRender(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaV
           scopes: @[(default(Scope))], root: root, clock: clock))
 
 proc pullInto(c: JinjaRenderContext, buf: var openArray[char]): int =
-  ## Returns the render's next bytes, written into `buf[0 ..< result]`.
-  ##
-  ## Ownership sits with the caller, whose buffer capacity is the delivery window.
-  ## Resumption state is `c.state`, so consumers over one artifact each hold a context
-  ## from `startJinjaRender` and own their delivery position.
-  ##
-  ## Delivery contract:
-  ## - `c.state.pend.pos` and `c.state.cur` advance before the call returns, so a consumer
-  ##   that stops mid-drain and resumes never re-receives a byte
-  ## - a piece longer than the window drains across calls, a lazy piece resuming
-  ##   through the serializer in `c.state.lazy`
-  ##
-  ## Termination and budget:
-  ## - 0 means the render is complete, nothing pending and `c.state.curNode == NoLink`
-  ## - one call dispatches at most `TTT_CNJ_StepBudget` steps, a breach raising located at the reached node
-  ##
-  ## A raise discards the bytes already written into `buf` in the failing call, the caller
-  ## never receiving them and the render state having advanced past their render, so a repull
-  ## resumes after them:
-  ## - a consumer that must hold every byte across a raise keeps the window at one byte,
-  ##   which makes each delivered byte a returned byte
-  ## - span pieces copy out of `CompiledTemplate.jinja`, string pieces and cut pieces copy
-  ##   out of render-state storage, lazy pieces out of the serializer state in `c.state.lazy`
-  ## - a zero-capacity buffer returns 0 without stepping the render
+  ## Writes the render's next bytes into `buf`, returning the count. 0 ends the render.
   template tmpl: CompiledTemplate = c.tmpl
   template st: RenderState = c.state
   if buf.len == 0:
@@ -680,12 +650,7 @@ proc pullInto(c: JinjaRenderContext, buf: var openArray[char]): int =
     Steps[c.tmpl.nodes[n].kind](c, n)
 
 proc renderToString(src: string, root: JinjaVal, clock = 0.0): string =
-  ## Returns the whole render of `src` over the value `root`, compiling and rendering in one call.
-  ##
-  ## - compiling happens at the scope that owns `src`, the artifact borrowing the template
-  ##   text and never outliving it
-  ## - the one-shot entry owns its drain, the render pulled through a stack window
-  ##   that is drained until it reports 0
+  ## Compiles and renders in one call.
   let (tmpl, sym) = parseJinjaTemplate(src)
   var c = startJinjaRender(tmpl, sym, root, clock)
   var buf: array[4096, char]

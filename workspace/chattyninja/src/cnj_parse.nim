@@ -716,12 +716,8 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
   Head(head: head, tails: open)
 
 proc parseJinjaTemplate(src: string): (CompiledTemplate, CompiledSymbols) =
-  ## Compiles template text to the shared artifact plus its `CompiledSymbols`, interned
-  ## names built in parse order and read-only at render.
-  ##
-  ## - the interned-name table is a heap object the parse allocates once, returned by ref,
-  ##   every render over the artifact sharing it
-  ## - the template borrows `src`, so it must not outlive the caller's text
+  ## Compiles template text to the flat node arena, the interned-name table built
+  ## in parse order.
   var p = Parser(src: src, symbols: CompiledSymbols(), nodes: newSeq[Node]())
   p.start()
   let body = parseBody(p, [])
