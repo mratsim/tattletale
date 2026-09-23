@@ -592,6 +592,30 @@ proc testCutValueConsumers() =
   doAssert render("'  x  '.strip() | tojson") == "\"x\""
   doAssert render("[3, 1, 2] | list") == "[3, 1, 2]"
 
+# A mapping under the `items` filter renders as its insertion-order
+# `[key, value]` pair list, which a for-loop unpacks like `.items()` does.
+# A non-mapping raises, Python's own items filter rejecting a sequence too.
+proc testItemsFilter() =
+  let withPeople = ctx(("people", peopleCtx()))
+  doAssert render("people | items", withPeople) ==
+      "[['name', 'ada'], ['age', 36], ['tags', ['x', 'y']], ['active', True]]"
+  doAssert renderStmt("{% for k, v in people | items %}{{ k }}={{ v }};{% endfor %}",
+      withPeople) == "name=ada;age=36;tags=['x', 'y'];active=True;"
+  var reported = ""
+  try:
+    discard render("[1, 2] | items")
+  except JinjaError as e:
+    reported = e.what
+  doAssert "items" in reported, reported
+
+# Strings pass through the `string` filter unchanged, everything else taking
+# the Python `str()` form the emit path renders, undefined rendering nothing.
+proc testStringFilter() =
+  doAssert render("42 | string") == "42"
+  doAssert render("'x' | string") == "x"
+  doAssert render("nope | string") == "", "an undefined name renders empty through the filter"
+  doAssert render("{'a': 1} | string") == "{'a': 1}"
+
 # A for-loop's filter clause rejecting an item on RE-ENTRY, item 0 rejected walking
 # the setup path and later items walking `advanceFor`, must advance past
 # rejected item. Later kept items render, Python's for-filter semantics.
@@ -975,6 +999,8 @@ proc main() =
   testStringMethods()
   testCutValueConsumers()
   testMapGapIsLoud()
+  testItemsFilter()
+  testStringFilter()
   testForFilterReentryKeepsLaterItems()
   testSliceBoundsAndStep()
   testZeroStepSliceRaises()

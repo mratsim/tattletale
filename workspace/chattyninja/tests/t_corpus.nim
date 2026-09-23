@@ -496,15 +496,11 @@ proc testCorpusDelivery() =
     ("gemma4/default", "nkSetBlock"),
     ("gemma4/enable_thinking_true", "nkSetBlock"),
     ("gemma4/tools_tool_response", "dictsort"),
-    ("mimo25/tools_tool_response", "items"),
     ("northminicode10/default", "nkSetBlock"),
     ("northminicode10/documents_grounding", "nkSetBlock"),
     ("northminicode10/reasoning_off", "nkSetBlock"),
     ("northminicode10/tool_break", "nkSetBlock"),
     ("northminicode10/tools_tool_response", "nkSetBlock"),
-    ("qwen35/tools_tool_response", "items"),
-    ("qwen36/tools_tool_response", "items"),
-    ("qwen38flashnext/tools_tool_response", "items"),
   ]
   var okExact = 0
   var gapRows = 0
@@ -607,8 +603,8 @@ proc testCorpusDelivery() =
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
       "two renders of the same artifact through fresh drivers differed"
 
-  doAssert okExact == 77, "expected 77 rendered ok rows across 18 suites, checked " & $okExact
-  doAssert gapRows == 13, "expected 13 gap rows across 18 suites, skipped " & $gapRows
+  doAssert okExact == 81, "expected 81 rendered ok rows across 18 suites, checked " & $okExact
+  doAssert gapRows == 9, "expected 9 gap rows across 18 suites, skipped " & $gapRows
   doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
 
 
@@ -1293,7 +1289,7 @@ proc main() =
     testAllocDrainWindow()
     testAllocMicro()
     testAllocSerializer()
-  echo "t_corpus: 77 ok rows byte-exact through pull, compose and render, 13 gap rows loud, " &
+  echo "t_corpus: 81 ok rows byte-exact through pull, compose and render, 9 gap rows loud, " &
       "16 err rows raise the recorded error"
 
 main()

@@ -21,7 +21,7 @@ type
   TestProc = proc (v: JinjaVal, args: var Args): bool {.nimcall, noSideEffect.}
   MethodProc = proc (v: JinjaVal, args: var Args): JinjaVal {.nimcall, noSideEffect.}
   FilterName* = enum
-    fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fDictsort,
+    fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fItems, fString, fDictsort,
     fMap
   TestName* = enum
     tString, tDefined, tUndefined, tMapping, tSequence, tIterable, tNone, tBoolean, tTrue, tFalse,
@@ -74,7 +74,7 @@ func getArg(args: var Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaV
 const
   FilterNames*: array[FilterName, string] = [
     "tojson", "length", "trim", "default", "join", "lower", "upper", "capitalize", "list", "safe",
-    "dictsort", "map"
+    "items", "string", "dictsort", "map"
   ]
   TestNames*: array[TestName, string] = [
     "string", "defined", "undefined", "mapping", "sequence", "iterable", "none", "boolean", "true",
@@ -181,6 +181,12 @@ func safeFilter(v: JinjaVal, args: var Args): JinjaVal =
   ## Autoescape is off in the upstream environment, so marking output safe changes no bytes.
   v
 
+func stringFilter(v: JinjaVal, args: var Args): JinjaVal =
+  ## Returns the value as template output text, the emit path's `pyStr` form
+  ## carried into a value. Strings pass through unchanged, everything else takes
+  ## its Python `str()` form, undefined rendering empty.
+  strVal(pyStr(v))
+
 func joinMethod(v: JinjaVal, args: var Args): JinjaVal =
   ## `x | join(sep)` and `x.join(sep)` concatenate a sequence's values, a mapping's keys.
   let sep = pyStr(getArg(args, 0, akNone, strVal("")))
@@ -238,6 +244,16 @@ func itemsMethod(v: JinjaVal, args: var Args): JinjaVal =
     seqVal(acc)
   else:
     raise jinjaErr("`items` needs a mapping or a sequence")
+
+func itemsFilter(v: JinjaVal, args: var Args): JinjaVal =
+  ## `[key, value]` pairs in insertion order, the filter form the mapping methods mirror.
+  ## A non-mapping raises, jinja2's own items filter rejecting a sequence too.
+  if v.kind != vkDict:
+    raise jinjaErr("`items` needs a mapping")
+  var acc = newSeq[JinjaVal](v.d.keys.len)
+  for i, k in v.d.keys:
+    acc[i] = seqVal(@[strVal(k), v.d.vals[i]])
+  seqVal(acc)
 
 func splitMethod(v: JinjaVal, args: var Args): JinjaVal =
   ## `s.split(sep)` over non-overlapping occurrences, an empty separator splitting per codepoint,
@@ -317,6 +333,8 @@ const
     fCapitalize: capitalizeFilter,
     fList: listFilter,
     fSafe: safeFilter,
+    fItems: itemsFilter,
+    fString: stringFilter,
     fDictsort: nil,
     fMap: nil
   ]
