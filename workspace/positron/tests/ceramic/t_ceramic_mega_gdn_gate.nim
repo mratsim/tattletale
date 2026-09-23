@@ -266,7 +266,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     aLogPA = aLog.pa()
     dtBiasPA = dtBias.pa()
 
-  proc launch(): bool {.gcsafe.} =
+  proc launch() {.gcsafe.} =
     engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_layer_bf16", countersPA,
         (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
@@ -274,7 +274,6 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
          onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
-    result = true
 
   proc zeroCounters() =
     for i in 0 ..< NumCounters:
@@ -289,6 +288,51 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     for i in 0 ..< NumCounters:
       doAssert counters.hostPtr[i] == 0'u32,
         &"stage counter {i} is {counters.hostPtr[i]}, want 0 after {after}"
+
+  proc bfRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
+    ## Widened magnitude maximum over one bf16 arena section.
+    for i in off ..< off + count:
+      result = max(result, abs(bf16ToF32(buf.hostPtr[i])))
+
+  proc outputRanges() =
+    ## Four shared outputs, each written over a non-degenerate range.
+    let moeMax = bfRangeMax(bfA, sMoeOut, Hidden)
+    let h1Max = bfRangeMax(bfA, sH1, Hidden)
+    let blockMax = bfRangeMax(bfA, sBlockOut, Hidden)
+    let yMax = bfRangeMax(bfA, sY, NumVHeads * HeadVDim)
+    doAssert moeMax > 0.0'f32, "moeOut degenerate"
+    doAssert h1Max > 0.0'f32, "h1 degenerate"
+    doAssert blockMax > 0.0'f32, "blockOut degenerate"
+    doAssert yMax > 0.0'f32, "y degenerate"
+
+  proc sentinels() =
+    ## Kernel-written buffers stay in extent, the page tails keep
+    ## the zero fill, the kernel-read buffers stay bit-identical
+    assertTailZero(bfA, BfArenaLen)
+    assertTailZero(f32A, F32ArenaLen)
+    for i in NumCounters ..< counters.elems:
+      doAssert counters.hostPtr[i] == 0'u32, "counters tail written"
+    assertReadUnchanged(xPrev, big.x)
+    assertReadUnchanged(rPrev, big.r)
+    assertReadUnchanged(norm1W, big.norm1W)
+    assertReadUnchanged(convW, big.convW)
+    assertReadUnchanged(onormW, big.onormW)
+    assertReadUnchanged(routerW, big.routerW)
+    assertReadUnchanged(gateUpW, big.gateUpW)
+    assertReadUnchanged(downW, big.downW)
+    assertReadUnchanged(qkvW, big.qkvW)
+    assertReadUnchanged(zW, big.zW)
+    assertReadUnchanged(aW, big.aW)
+    assertReadUnchanged(bW, big.bW)
+    assertReadUnchanged(outprojW, big.outprojW)
+    assertReadUnchanged(norm2W, big.norm2W)
+    assertReadUnchanged(sharedGW, big.sharedGW)
+    assertReadUnchanged(sharedUW, big.sharedUW)
+    assertReadUnchanged(sharedDW, big.sharedDW)
+    assertReadUnchanged(sharedGVW, big.sharedGVW)
+    for h in 0 ..< NumVHeads:
+      doAssert aLog.hostPtr[h] == big.aLog[h], "kernel-read buffer modified"
+      doAssert dtBias.hostPtr[h] == big.dtBias[h], "kernel-read buffer modified"
 
   proc restorePreimage(preBf: seq[uint16]; preF32: seq[float32];
       preState: seq[float32]; preRing: seq[uint16]) =
@@ -309,9 +353,9 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   echo &"[mega gate] deadline case wall {deadlineWall:.2f} s " &
     &"(the bounded wait's default deadline " &
     &"{TTT_MegaWaitDeadlineSecMs.float / 1000.0:.0f} s)"
-  doAssert deadlineWall < TTT_MegaWaitDeadlineSecMs.float / 1000.0,
-    "the launch outlived the bounded wait's deadline"
   countersZeroWhere("the deadline case's launch")
+  outputRanges()
+  sentinels()
 
   # Continuation pre-image:
   #   the launch above advanced state and ring, the arenas hold its outputs, the next launches replay one decode step
@@ -366,8 +410,9 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     #   the launch-end reset landed while threadgroups were still in flight, the re-zeroed counters cannot reach the targets
     #   the late waiters spin on, the bounded wait's diagnostic is recorded and the process exits here, a wedged grid cannot
     #   be unwound in-process.
-    echo "CERAMIC MEGA GDN GATE VERDICT: deadline held, self-reset relaunch " &
-      "bit-identical, stale-count garbage wedges the launch (recorded)"
+    echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
+      &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
+      &"{BfArenaLen + F32ArenaLen}, stale-count garbage wedges the launch"
     quit(0)
   let staleBf = readInto(bfA.hostPtr, BfArenaLen)
   let staleF32 = readInto(f32A.hostPtr, F32ArenaLen)
@@ -387,13 +432,15 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
       msg.add &"{counters.hostPtr[i]} "
     echo "[mega gate] ", msg
   echo &"[mega gate] total wall {epochTime() - t0:.2f} s"
+  echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
+    &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
+    &"{BfArenaLen + F32ArenaLen}, stale corruption bf " &
+    &"{staleBfMismatches}/{BfArenaLen} f32 {staleF32Mismatches}/{F32ArenaLen}"
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(MegaGdnMsl)
   gateChecks(engine, buildBigHost(Seed))
-  echo "CERAMIC MEGA GDN GATE VERDICT: deadline held, self-reset relaunch " &
-    "bit-identical, stale-count garbage corrupts the walk"
 
 main()

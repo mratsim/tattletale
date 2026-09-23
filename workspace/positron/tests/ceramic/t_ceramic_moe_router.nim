@@ -289,6 +289,9 @@ proc naiveWeightFor(fam: Family, logits: seq[float32]; t, E, K: int;
   let p = exp2fHost((logits[t * E + target.int] - lm) * Log2e).float64
   elRound(fam, (p / sumSel * Scale).float32).uint16
 
+var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
+var suiteWorstUse = 0.0'f64
+
 proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
     seed: uint64; scale: float32; label: string) =
   ## One (family dtype, shape, Scale) combination over `cases` independent seeded runs
@@ -490,6 +493,11 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
   echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exactW}/{total}, " &
     &"tie-region swaps {totalSwaps}, reassociation use {reassocWorst:.3f}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, max(worstUse, reassocWorst))
+  suiteExact += exactW
+  suiteTotal += total
 
 proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
     seed: uint64; label: string) =
@@ -590,6 +598,11 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
 
   echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{cases * T}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, worstUse)
+  suiteExact += exact
+  suiteTotal += cases * T
 
 proc runMergeCombo(engine: HwEngine; fam: Family; T, H, K, cases: int;
     seed: uint64; kernelName: string) =
@@ -632,6 +645,10 @@ proc runMergeCombo(engine: HwEngine; fam: Family; T, H, K, cases: int;
       if outB.hostPtr[i] == want[i]:
         inc exact
   echo &"[merge {famName(fam)}] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteExact += exact
+  suiteTotal += nOut * cases
 
 proc runPoisonedRouter(engine: HwEngine) =
   ## All-poisoned score pass, the router weight holding NaN bits, every logit
@@ -806,6 +823,7 @@ proc checkReassociation(fam: Family; T, H, E: int; seed: uint64) =
         &"(token {t}, expert {e}): {diff:.3e} > {bar:.3e}"
       worstUse = max(worstUse, diff / bar)
       inc checks
+  suiteWorstUse = max(suiteWorstUse, worstUse)
   echo &"[reassociation {famName(fam)} H{H} seed 0x{seed:x}] worst bar " &
     &"usage {worstUse:.3f} over {checks} logits, chunk walk vs sequential sum"
 
@@ -831,9 +849,7 @@ proc main =
   checkReassociation(famBf16, 8, 2048, 256, 0xC04D0525'u64)
   checkReassociation(famF16, 8, 2048, 256, 0xC04D0526'u64)
   checkReassociation(famBf16, 4, 256, 64, 0xC04D0530'u64)
-  echo "CERAMIC MOE_ROUTER VERDICT: ids judged under the reassociation tie " &
-    &"region, reassociation check clean, weights inside the stated bands, " &
-    &"merge bit-exact, the poisoned pass lands every slot on the " &
-    &"unmatched branch with finite outputs"
+  echo &"CERAMIC MOE_ROUTER VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"
 
 main()

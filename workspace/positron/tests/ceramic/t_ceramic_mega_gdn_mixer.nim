@@ -480,13 +480,12 @@ proc launchMixer(engine: HwEngine; m: var MegaBuffers) =
   var gvPA = m.sharedGVW.pa()
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
-  proc dispatch(): bool {.gcsafe.} =
+  proc dispatch() {.gcsafe.} =
     engine.run << (grid: (int(StageEnds[9]), 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_mixer_bf16", cPA,
         (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
          bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
          sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
-    result = true
   runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
 
 proc assertCounters(m: var MegaBuffers) =
@@ -901,12 +900,20 @@ proc runMixer(engine: HwEngine) =
     let norm1 = naiveRmsNormRes(x, r, w.norm1W, H, Eps).normed
     runMixerWalk(engine, w, carry0, norm1, caseId, usage)
   printUsage(usage, "mixer")
+  var worstAll = 0.0'f64
+  var exact = 0
+  var total = 0
+  for f in 0 ..< NumFields:
+    worstAll = max(worstAll, usage.worst[f])
+    exact += usage.exact[f]
+    total += usage.total[f]
+  echo &"CERAMIC MEGA GDN MIXER VERDICT: cases={NumCases} launches={NumCases} " &
+    &"worst bar usage {worstAll:.3f}, bit-exact {exact}/{total}"
 
 proc main =
   var engine = mixerInit()
   let t0 = epochTime()
   runMixer(engine)
   echo &"[mixer] wall clock {epochTime() - t0:.2f} s"
-  echo "CERAMIC MEGA GDN MIXER VERDICT: preload, sentinels, bands, counters, determinism"
 
 main()

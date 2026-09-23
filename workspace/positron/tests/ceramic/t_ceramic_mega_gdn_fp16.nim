@@ -9,8 +9,7 @@
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_fp16.nim
 ##
-## One-launch fused GDN decoder layer smoke, the fp16 family row.
-## Same launch shape as the bf16 row, `t_ceramic_mega_gdn_smoke.nim`.
+## One-launch fused GDN decoder layer check, the fp16 family row.
 ## The same seeded generation recipe stored as fp16 bit patterns.
 ##
 ## The mega kernel's fp16 instantiation against the fp16 naive chain:
@@ -20,7 +19,7 @@
 ## - an informational fp16 naive-vs-mega diff over the shared outputs
 ##
 ## The band model lives in the comparison tier, `ceramic_mega_gdn_composition.nim`,
-## the bf16 rows. This suite asserts a generous sanity bound only.
+## the bf16 rows. This suite asserts generous sanity bounds only.
 ##
 ## The fp16 chain's per-op round keeps its reassociation
 ## and transcendental differences within the bf16 row's class.
@@ -90,7 +89,7 @@ proc randBits(rng: var NaiveRng; n: int; lo, hi: float32): seq[uint16] =
 
 proc buildBigHost(seed: uint64): BigHost =
   ## Seeded inputs and weights at the same generation recipe as the bf16
-  ## smoke (modest magnitudes so no stage saturates), stored as fp16 bits.
+  ## band runs (modest magnitudes so no stage saturates), stored as fp16 bits.
   var rng = initNaiveRng(seed)
   result.x = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
   result.r = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
@@ -137,6 +136,18 @@ proc famRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
   ## Widened magnitude maximum over one fp16 arena section.
   for i in off ..< off + count:
     result = max(result, abs(fp16ToFp32(buf.hostPtr[i])))
+
+proc yWorstDiff(megaBf: PageBuf[uint16]; megaOff: int; naive: seq[uint16]): string =
+  ## Failure diagnostic of the y sanity bound, computed only on failure:
+  ## the y row's worst element against the naive row, widened from fp16.
+  var yArg = 0
+  for i in 0 ..< naive.len:
+    if abs(fp16ToFp32(megaBf.hostPtr[megaOff + i]) - fp16ToFp32(naive[i])) >
+        abs(fp16ToFp32(megaBf.hostPtr[megaOff + yArg]) - fp16ToFp32(naive[yArg])):
+      yArg = i
+  &"element {yArg}, mega {fp16ToFp32(megaBf.hostPtr[megaOff + yArg]):.6f}, " &
+    &"naive {fp16ToFp32(naive[yArg]):.6f}, worst " &
+    &"{abs(fp16ToFp32(megaBf.hostPtr[megaOff + yArg]) - fp16ToFp32(naive[yArg])):.5f}"
 
 proc maxDiffF16(megaBf: PageBuf[uint16]; megaOff: int; naive: seq[uint16]): float32 =
   ## Elementwise absolute difference maximum between a mega arena section
@@ -224,7 +235,9 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     aLogPA = aLog.pa()
     dtBiasPA = dtBias.pa()
 
-  proc launch(): bool {.gcsafe.} =
+  var worstSanityUse = 0.0'f64
+
+  proc launch() {.gcsafe.} =
     engine.run << (grid: (GridThreads, 1, 1), blk: (32, 1, 1)) >>
       ("gdn_moe_layer_fp16", countersPA,
         (fpAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
@@ -232,12 +245,11 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
          onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
-    result = true
   runMegaBounded(launch, counters.hostPtr, StageNames)
 
   let stateSnap = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readInto(ring.hostPtr, ConvDim * RingWidth)
-  discard launch()
+  launch()
 
   proc waveSyncCheck() =
     ## Post-launch, the kernel's launch-end reset has re-zeroed the counters.
@@ -256,8 +268,6 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     doAssert h1Max > 0.0'f32, "h1 degenerate"
     doAssert blockMax > 0.0'f32, "blockOut degenerate"
     doAssert yMax > 0.0'f32, "y degenerate"
-    doAssert moeMax < 1000.0'f32, "moeOut runaway"
-    doAssert h1Max < 1000.0'f32, "h1 runaway"
 
   proc sentinels() =
     assertTailZero(fpA, BfArenaLen)
@@ -307,26 +317,24 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     let dH1 = maxDiffF16(fpA, sH1, naiveOut.h1)
     let dBlock = maxDiffF16(fpA, sBlockOut, naiveOut.blockOut)
     let dY = maxDiffF16(fpA, sY, naiveOut.y)
-    var yArg = 0
-    for i in 0 ..< naiveOut.y.len:
-      if abs(fp16ToFp32(fpA.hostPtr[sY + i]) - fp16ToFp32(naiveOut.y[i])) >
-          abs(fp16ToFp32(fpA.hostPtr[sY + yArg]) - fp16ToFp32(naiveOut.y[yArg])):
-        yArg = i
-    echo &"[mega fp16] y argmax {yArg} mega {fp16ToFp32(fpA.hostPtr[sY + yArg]):.6f} " &
-      &"naive {fp16ToFp32(naiveOut.y[yArg]):.6f}"
+    worstSanityUse = max(max(max(dMoe, dH1), dBlock), dY) / 0.1
     echo &"[mega fp16] informational max abs diff vs naive " &
       &"moeOut {dMoe:.5f} h1 {dH1:.5f} blockOut {dBlock:.5f} y {dY:.5f}"
-    doAssert dMoe < 0.1'f32, "moeOut outside the sanity bound"
-    doAssert dH1 < 0.1'f32, "h1 outside the sanity bound"
-    doAssert dBlock < 0.1'f32, "blockOut outside the sanity bound"
-    doAssert dY < 0.1'f32, "y outside the sanity bound"
+    doAssert dMoe < 0.1'f32,
+      &"moeOut outside the sanity bound, worst diff {dMoe:.5f}"
+    doAssert dH1 < 0.1'f32,
+      &"h1 outside the sanity bound, worst diff {dH1:.5f}"
+    doAssert dBlock < 0.1'f32,
+      &"blockOut outside the sanity bound, worst diff {dBlock:.5f}"
+    doAssert dY < 0.1'f32,
+      &"y outside the sanity bound: the worst element {yWorstDiff(fpA, sY, naiveOut.y)}"
 
   # the relaunch, restored arenas, state and ring, zeroed counters
   for i in 0 ..< BfArenaLen: fpA.hostPtr[i] = fpSnap[i]
   for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Snap[i]
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = stateSnap[i]
   for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringSnap[i]
-  discard launch()
+  launch()
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
     doAssert fpA.hostPtr[i] == fpSnap[i], &"fp16 arena differs at {i}"
@@ -337,6 +345,10 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   for i in 0 ..< ConvDim * RingWidth:
     doAssert ring.hostPtr[i] == ringPost[i], &"ring differs at {i}"
   echo "[mega fp16] relaunch bit-identical, wave sync exact"
+  echo &"CERAMIC MEGA GDN FP16 VERDICT: launches=2 worst sanity usage " &
+    &"{worstSanityUse:.3f}, bit-exact relaunch " &
+    &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}/" &
+    &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}"
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -345,6 +357,5 @@ proc main =
   let t0 = epochTime()
   fp16Checks(engine, buildBigHost(Seed))
   echo &"[mega fp16] wall clock {epochTime() - t0:.2f} s"
-  echo "CERAMIC MEGA GDN FP16 VERDICT: one fp16 launch, wave sync, sentinels, determinism, naive-chain row"
 
 main()

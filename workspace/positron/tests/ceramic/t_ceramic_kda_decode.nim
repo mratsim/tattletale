@@ -179,6 +179,9 @@ type StepSnap = object
   state: seq[float32]
   y: seq[uint16]
 
+var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
+var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
+
 proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
   ## One (family dtype, shape, edge) combination over `cases` independent seeded runs
   ## of `steps` decode steps each, judged per element against the naive reference
@@ -445,6 +448,13 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
     &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, max(worstStateUse, worstYUse))
+  suiteWorstState = max(suiteWorstState, worstState)
+  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
+  suiteYExact += yExact
+  suiteYTotal += yTotal
 
 type CrossInputs = object
   qBits: seq[uint16]
@@ -635,6 +645,12 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
   echo &"[{label} {famName(fam)} Dk={dk}] cross-check cases={cases} " &
     &"launches={launches} | state bit-exact all | y worst {worstYUlp:.2f} " &
     &"{famName(fam)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, worstYUse)
+  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
+  suiteYExact += yExact
+  suiteYTotal += yTotal
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -711,6 +727,8 @@ proc main =
   secEdgeBetaZero()
   secCrossF16()
   secCrossBf16()
-  echo "CERAMIC KDA DECODE VERDICT: all combinations inside the stated per-element bars, cross-check state bit-exact"
+  echo &"CERAMIC KDA DECODE VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"state worst |ΔS| {suiteWorstState:.3e}, y worst {suiteWorstYUlp:.2f} ulp, " &
+    &"worst bar usage {suiteWorstUse:.3f}, y bit-exact {suiteYExact}/{suiteYTotal}"
 
 main()

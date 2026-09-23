@@ -85,6 +85,9 @@ const
   U32 = 5.9604644775390625e-8'f64      # 2^-24, the fp32 unit roundoff
   FloorSub = 2.9802322387695312e-8'f64 # 2^-25, half the fp16 subnormal ulp
 
+var suiteCases, suiteExact, suiteTotal = 0
+var suiteWorstUse = 0.0'f64
+
 proc runBandCase(fam: GmmFamily; rng: var NaiveRng; a: NaiveMat[uint16];
     w: NaiveCube[uint16]; offs: seq[int32]; label: string) =
   ## One randomized (family, group layout) case, every output element
@@ -112,6 +115,10 @@ proc runBandCase(fam: GmmFamily; rng: var NaiveRng; a: NaiveMat[uint16];
           inc exact
   echo &"[{label} {gmmName(fam)}] worst bar usage {worstUse:.3f}, " &
     &"bit-exact vs El(ref64) {exact}/{a.rows * w.rows}"
+  inc suiteCases
+  suiteWorstUse = max(suiteWorstUse, worstUse)
+  suiteExact += exact
+  suiteTotal += a.rows * w.rows
 
 proc fillRandom(fam: GmmFamily; rng: var NaiveRng; a: var NaiveMat[uint16];
     w: var NaiveCube[uint16]) =
@@ -271,7 +278,9 @@ proc main =
             &"fp32 sum outside its bar at (r {r}, i {i}): {diff:.3e} > {bar:.3e}"
           worstUse = max(worstUse, diff / bar)
     echo &"[fp32 check] worst bar usage {worstUse:.3f}"
+    suiteWorstUse = max(suiteWorstUse, worstUse)
 
-  echo "NAIVE GROUPED_MM VERDICT: offsets contract, boundary cases, band and check all inside the stated models"
+  echo &"NAIVE GROUPED_MM VERDICT: band cases={suiteCases} worst bar usage " &
+    &"{suiteWorstUse:.3f}, bit-exact vs El(ref64) {suiteExact}/{suiteTotal}"
 
 main()

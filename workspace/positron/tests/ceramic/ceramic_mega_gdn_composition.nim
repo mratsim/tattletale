@@ -538,13 +538,12 @@ proc launchMega(engine: HwEngine; m: var MegaBuffers) =
   var gvPA = m.sharedGVW.pa()
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
-  proc dispatch(): bool {.gcsafe.} =
+  proc dispatch() {.gcsafe.} =
     engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
       ("qwen35_gdn_layer_bf16", cPA,
         (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
          bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
          sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
-    result = true
   runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
   for i in 0 ..< NumCounters:
     doAssert m.counters.hostPtr[i] == 0'u32,

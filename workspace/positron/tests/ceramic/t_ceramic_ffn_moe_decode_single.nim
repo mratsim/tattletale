@@ -374,6 +374,9 @@ proc buildWeights(seed: uint64): Weights =
   fillFormula(result.sharedDW, H * I)
   fillFormula(result.sharedGV, H)
 
+var suiteWorst = 0.0'f64
+var suiteLaunches = 0
+
 proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     entry: string; scale: float32; useGate: bool; poisonGateVec: bool) =
   ## One seeded case at grid (tokens, K+1, 1), the naive walk centering
@@ -419,6 +422,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
       (entry, partialPA,
         (xPA, routerWPA, gateUpWPA, downWPA, sharedGWPA, sharedUWPA,
          sharedDWPA, sharedGVPA, hPA, hsPA))
+    inc suiteLaunches
     result = true
 
   proc readAll(): tuple[h: seq[uint16], hs: seq[uint16], partial: seq[float32]] =
@@ -477,6 +481,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
         &"the poisoned gate weight vector leaked into the shared partial at {e}"
   echo &"[moe fwd decode {entry}] every partial row inside its bar, " &
     &"worst bar usage {worst:.3f}"
+  suiteWorst = max(suiteWorst, worst)
 
   # the write extent, no sentinel left in the contract rows and the spare
   # block past the extent untouched:
@@ -515,7 +520,8 @@ proc main =
     1.0'f32, false, true)
   runCase(engine, w, 0xC04D0613'u64, 1, "cer_moe_fwd_scale2",
     2.0'f32, true, false)
-  echo "CERAMIC MOE_FWD_DECODE VERDICT: prod, no-gate and scale-2 walks " &
-    "inside their bars, extent sentinel clean, relaunch bit-identical"
+  echo &"CERAMIC MOE_FWD_DECODE VERDICT: cases=3 launches={suiteLaunches} " &
+    &"worst bar usage {suiteWorst:.3f}, extent sentinels 2 walks clean, " &
+    &"relaunch bit-identical"
 
 main()

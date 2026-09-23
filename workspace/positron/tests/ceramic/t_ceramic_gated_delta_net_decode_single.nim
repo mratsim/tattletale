@@ -131,6 +131,9 @@ type StepSnap = object
   state: seq[float32]
   y: seq[uint16]
 
+var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
+var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
+
 proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (family dtype, shape) combination over `cases` independent seeded
   ## runs of `steps` decode steps each, judged per element against the naive
@@ -393,6 +396,13 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
     &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, max(worstStateUse, worstYUse))
+  suiteWorstState = max(suiteWorstState, worstState)
+  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
+  suiteYExact += yExact
+  suiteYTotal += yTotal
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -455,6 +465,8 @@ proc main =
   secBf16Gqa()
   secChainF16Gqa()
   secChainBf16Baseline()
-  echo "CERAMIC GDN DECODE VERDICT: all combinations inside the stated per-element bars"
+  echo &"CERAMIC GDN DECODE VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"state worst |ΔS| {suiteWorstState:.3e}, y worst {suiteWorstYUlp:.2f} ulp, " &
+    &"worst bar usage {suiteWorstUse:.3f}, y bit-exact {suiteYExact}/{suiteYTotal}"
 
 main()

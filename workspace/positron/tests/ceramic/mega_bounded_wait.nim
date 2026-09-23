@@ -26,7 +26,7 @@ const TTT_MegaWaitDeadlineSecMs* {.intdefine.} = 20_000
   ## Default deadline in milliseconds, one config point.
 
 type LaunchCtx = ref object
-  launch: proc(): bool {.gcsafe.}
+  launch: proc() {.gcsafe.}
 
 proc launchWorker(ctx: LaunchCtx) {.thread.} =
   ## Runs the caller's one-dispatch closure to completion, never returning early.
@@ -34,10 +34,10 @@ proc launchWorker(ctx: LaunchCtx) {.thread.} =
   ## Precondition:
   ## the wrapper's deadline owns the reporting once a grid wedges, this thread
   ## never unwinds it.
-  discard ctx.launch()
+  ctx.launch()
 
 proc runMegaBounded*[C: static int](
-    launch: proc(): bool {.gcsafe.};
+    launch: proc() {.gcsafe.};
     counters: ptr UncheckedArray[uint32];
     stageNames: array[C, string];
     deadlineMs: float = TTT_MegaWaitDeadlineSecMs.float;

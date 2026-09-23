@@ -120,6 +120,9 @@ proc naiveLinearF64(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] 
           famWiden(fam, w[n * K + k]).float64
       result[m * N + n] = acc
 
+var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
+var suiteWorstUse = 0.0'f64
+
 proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
     seed: uint64; label: string; kernelName: string) =
   ## One (family dtype, shape) combination over `cases` independent seeded runs,
@@ -231,6 +234,11 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
 
   echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, worstUse)
+  suiteExact += exact
+  suiteTotal += total
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -252,6 +260,7 @@ proc main =
     "cer_dense_linear_bf16_gemm")
   runCombo(engine, famF16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
     "cer_dense_linear_f16_gemm")
-  echo "CERAMIC DENSE_LINEAR VERDICT: all cases inside the stated per-element bars"
+  echo &"CERAMIC DENSE_LINEAR VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"
 
 main()

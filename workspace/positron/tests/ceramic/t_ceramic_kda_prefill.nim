@@ -489,6 +489,9 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkL
   result = PrefillInputs(qVals: qVals, kVals: kVals, gVals: gVals,
     cumulogdecayVals: cumulogdecayVals, vBits: vBits, betaVals: betaVals, state0: state0)
 
+var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
+var suiteWorstUse, suiteWorstState, suiteWorstCont, suiteWorstYUlp = 0.0'f64
+
 proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string, overflowG = false) =
   ## One (family dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
@@ -728,6 +731,14 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen, Dk:
     &"state worst |ΔS| {worstState:.3e}, worst bar usage {worstStateUse:.3f} | " &
     &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, max(max(worstStateUse, worstYUse), worstCont))
+  suiteWorstState = max(suiteWorstState, worstState)
+  suiteWorstCont = max(suiteWorstCont, worstCont)
+  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
+  suiteYExact += yExact
+  suiteYTotal += yTotal
 
 # ─── Main, the shape × dtype matrix ──────────────────────────────────
 
@@ -823,6 +834,9 @@ proc main =
 
   secF16Overflow()
   secBf16Overflow()
-  echo "CERAMIC KDA PREFILL VERDICT: all combinations inside the stated per-element bars"
+  echo &"CERAMIC KDA PREFILL VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"state worst |ΔS| {suiteWorstState:.3e}, continuity worst usage {suiteWorstCont:.3f}, " &
+    &"y worst {suiteWorstYUlp:.2f} ulp, worst bar usage {suiteWorstUse:.3f}, " &
+    &"y bit-exact {suiteYExact}/{suiteYTotal}"
 
 main()

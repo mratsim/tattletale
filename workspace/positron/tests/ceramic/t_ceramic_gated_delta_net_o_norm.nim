@@ -136,6 +136,9 @@ proc relRstdOf(xBits: seq[uint16]; eps: float32; m: int): float64 =
   let denom = sumSq / Dv.float64 + eps.float64
   result = (Dv.float64 * U32 * sumSqAbs) / denom + RelRsqrt
 
+var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
+var suiteWorstUse = 0.0'f64
+
 proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
   ## One shape over `cases` independent seeded runs, judged per element against
   ## the closed-form reference under the band, case 0 relaunched bit-identical
@@ -248,6 +251,11 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
 
   echo &"[{label} M={M}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, worstUse)
+  suiteExact += exact
+  suiteTotal += total
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -257,6 +265,7 @@ proc main =
   runCombo(engine, 13, 32, 0xC04D0502'u64, "tail rows")
   runCombo(engine, 29, 16, 0xC04D0503'u64, "multi block tail")
   runCombo(engine, 1, 16, 0xC04D0504'u64, "single row")
-  echo "CERAMIC O_NORM_GATED VERDICT: all cases inside the stated per-element bars"
+  echo &"CERAMIC O_NORM_GATED VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"
 
 main()
