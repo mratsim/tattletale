@@ -24,12 +24,6 @@ template test(label: string; body: untyped) =
     body
   echo "  [OK] ", label
 
-func sameU32(a: array[13, uint32]; b: array[13, uint32]): bool =
-  for i in 0 ..< 13:
-    if a[i] != b[i]:
-      return false
-  true
-
 func qwen36Cfg(): GdnMoeCfg =
   ## Qwen3.6-35B-A3B geometry, the megakernel's geometry consts transcribed
   ## into a runtime config record.

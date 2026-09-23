@@ -120,7 +120,6 @@ type StageRow* = object
 
 type LayerGraph* = object
   ## Layer graph derived at one config.
-  cfg*: GdnMoeCfg
   bfWidths*: array[BfSectionKind, int32]
     ## Bf16 section shapes in elements.
   bfOffsets*: array[BfSectionKind, int32]
@@ -241,7 +240,6 @@ proc deriveGdnLayerGraph*(cfg: GdnMoeCfg): LayerGraph =
     doAssert cfg.convDim() mod 64 == 0,
       "GdnMoeCfg: the qkv width must be a multiple of 64, the qkv GEMV's tile"
 
-  result.cfg = cfg
   for s in BfSectionKind:
     result.bfWidths[s] = bfSectionWidthOf(cfg, s)
   for s in F32SectionKind:
