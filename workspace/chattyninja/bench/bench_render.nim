@@ -178,14 +178,13 @@ const
 func anchorContext(req: ChatRenderRequest): JinjaVal =
   ## Render context of one recorded row, the standard keys in recording order,
   ## then the row's kwargs.
-  var d = DictVal()
-  dictSet(d, "messages", req.messages)
-  dictSet(d, "tools", req.tools)
-  dictSet(d, "documents", req.documents)
-  dictSet(d, "add_generation_prompt", boolVal(req.addGenerationPrompt))
-  for k, key in req.kwargs.keys:
-    dictSet(d, key, req.kwargs.vals[k])
-  dictVal(d)
+  var ps: seq[tuple[k: string, v: JinjaVal]] =
+    @[("messages", req.messages), ("tools", req.tools),
+      ("documents", req.documents),
+      ("add_generation_prompt", boolVal(req.addGenerationPrompt))]
+  for pair in req.kwargs:
+    ps.add pair
+  dictVal(ps)
 
 type
   AnchorRow = object

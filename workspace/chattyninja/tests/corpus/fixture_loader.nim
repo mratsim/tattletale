@@ -37,8 +37,9 @@ type
     documents*: JinjaVal
       ## the none value when the recording passed no documents
     addGenerationPrompt*: bool
-    kwargs*: DictVal
-      ## template kwargs in recording order, the renderer appending them after the standard keys
+    kwargs*: seq[tuple[k: string, v: JinjaVal]]
+      ## the template kwargs as key/value pairs in recording order, the renderer appending
+      ## them after the standard keys
     clockEpoch*: float64
       ## the epoch `strftime_now` reads, 0 when the row carries none
 
@@ -61,10 +62,10 @@ func jsonToValue(n: JsonNode): JinjaVal =
   ## the tiers the two-tier value model distinguishes.
   case n.kind
   of JObject:
-    var d = DictVal()
+    var fields: seq[tuple[k: string, v: JinjaVal]]
     for key, child in n.fields:
-      dictSet(d, key, jsonToValue(child))
-    dictVal(d)
+      fields.add (key, jsonToValue(child))
+    dictVal(fields)
   of JArray:
     var items = newSeq[JinjaVal](n.len)
     var i = 0
@@ -120,15 +121,15 @@ proc loadRow*(suite: string, row: string): FixtureRow =
       dir / (row & RowSuffix)), string))
   result.suite = suite
   result.row = row
-  var kwargs = DictVal()
+  var kwargsPairs: seq[tuple[k: string, v: JinjaVal]]
   for key, child in pairs(payload["kwargs"]):
-    dictSet(kwargs, key, jsonToValue(child))
+    kwargsPairs.add (key, jsonToValue(child))
   result.request = ChatRenderRequest(
     messages: jsonToValue(payload["messages"]),
     tools: asList(payload.getOrDefault("tools")),
     documents: asList(payload.getOrDefault("documents")),
     addGenerationPrompt: payload["add_generation_prompt"].getBool(),
-    kwargs: kwargs,
+    kwargs: kwargsPairs,
     clockEpoch:
       if payload.hasKey("epoch"): float64(payload["epoch"].getFloat())
       else: 0.0)

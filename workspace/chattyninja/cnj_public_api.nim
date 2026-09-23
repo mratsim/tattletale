@@ -8,9 +8,8 @@
 ##
 ## - the render tier, `parseJinjaTemplate`, `startJinjaRender`, `pullInto`,
 ##   `renderToString`, over the compiled artifact and the caller's `JinjaRenderContext`
-## - the data tier, `JinjaVal` with `ValueKind`, the value constructors, `eqVal`,
-##   `dictSet`/`dictGet` over `DictVal`, the `tojson` form `toJson` with `JsonOpts`,
-##   `JinjaError` with its cause
+## - the data tier, the value constructors and `JinjaError`, the whole-mapping
+##   dict form `dictVal` over key/value pairs, the `tojson` form `toJson`
 ## - the depth, nesting, step and element caps
 ##
 ## Source modules sit under `import x {.all.}`. The surface above is exported by name,
@@ -32,16 +31,16 @@ export cnj_types.JinjaRenderContext, cnj_types.CompiledTemplate, cnj_types.Compi
     cnj_types.TTT_CNJ_MacroDepthCap, cnj_types.TTT_CNJ_ExprDepthCap,
     cnj_types.TTT_CNJ_ParseNestingCap, cnj_types.TTT_CNJ_StepBudget
 
-# Values and their construction, equality, the dict reads, the error and the JSON form.
-export jinja_data_model.JinjaVal, jinja_data_model.ValueKind,
-    jinja_data_model.DictVal,
-    jinja_data_model.JinjaError, jinja_data_model.JinjaCause, jinja_data_model.JsonOpts,
+# Values, their construction and the error. ValueKind, DictVal, dictGet/dictSet, eqVal,
+# JsonOpts and the error cause stay engine-internal. Callers build whole values inline
+# through the constructors, never mutating a mapping after construction.
+export jinja_data_model.JinjaVal,
+    jinja_data_model.JinjaError,
     jinja_data_model.TTT_CNJ_RangeElemCap,
     jinja_data_model.TTT_CNJ_ValueDepthCap,
     jinja_data_model.undefinedVal, jinja_data_model.noneVal, jinja_data_model.boolVal,
     jinja_data_model.intVal, jinja_data_model.floatVal, jinja_data_model.strVal,
     jinja_data_model.seqVal, jinja_data_model.dictVal, jinja_data_model.nsVal,
-    jinja_data_model.rangeVal, jinja_data_model.cutVal, jinja_data_model.eqVal,
-    jinja_data_model.dictSet, jinja_data_model.dictGet
+    jinja_data_model.rangeVal, jinja_data_model.cutVal
 
 export jinja_serialize.toJson

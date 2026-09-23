@@ -476,6 +476,21 @@ func dictSet(d: DictVal, key: string, val: JinjaVal) =
   d.keys.add key
   d.vals.add val
 
+func dictVal(pairs: openArray[tuple[k: string, v: JinjaVal]]): JinjaVal =
+  ## Returns the dict value built from the key/value pairs, the whole mapping up front,
+  ## no dictSet afterwards:
+  ## - the pairs keep their order, so a read scans in construction order
+  ## - a repeated key keeps the last pair's value, matching dictSet and the Python dict literal
+  ##
+  ##   dictVal(@[("role", strVal("system")), ("content", strVal("hi"))])
+  ##
+  ## Each pair's key and value may name any expressions, so a caller builds a full
+  ## context inline without ever naming `DictVal`.
+  var d = DictVal()
+  for (k, v) in pairs:
+    dictSet(d, k, v)
+  JinjaVal(kind: vkDict, d: d)
+
 func dictFind(d: DictVal, key: openArray[char]): int =
   ## Returns the index of `key`, -1 when absent. Presence-aware lookups build
   ## on the scan, `dictGet` layers undefined-for-absence over the same walk.
