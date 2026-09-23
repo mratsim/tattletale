@@ -326,3 +326,30 @@ proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
   laneMax = max(laneMax, simdShuffleDown(laneMax, 1'u32))
   laneMax = simdShuffle(laneMax, 0'u32)
   result = (laneMax + 15'u32) div 16'u32
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The whole-simdgroup reduce
+# ═════════════════════════════════════════════════════════════════════════
+
+template warpReduce*[V](x: V, combine: untyped): V =
+  ## Whole-32-lane simdgroup reduction of `x`, the reduced value on every lane.
+  ##
+  ## Contract:
+  ## - 5 combine steps over `simdShuffleDown` deltas (16, 8, 4, 2, 1)
+  ## - one broadcast `simdShuffle` from lane 0
+  ## - the combine's operand order fixes the result's bit pattern
+  ##
+  ## Example, a tile-wide score max over the router's softmax:
+  ##
+  ##   lm = warpReduce(lm, max)  # the lane-0-reduced max on every lane
+  ##
+  ## and a cross-lane sum of the exponentials:
+  ##
+  ##   ls = warpReduce(ls, `+`)  # the lane-0-reduced sum on every lane
+  var acc {.inject.} = x
+  acc = combine(acc, simdShuffleDown(acc, 16'u32))
+  acc = combine(acc, simdShuffleDown(acc, 8'u32))
+  acc = combine(acc, simdShuffleDown(acc, 4'u32))
+  acc = combine(acc, simdShuffleDown(acc, 2'u32))
+  acc = combine(acc, simdShuffleDown(acc, 1'u32))
+  simdShuffle(acc, 0'u32)

@@ -88,7 +88,6 @@
 from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
-from ../tile_widen import roundToRne
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra

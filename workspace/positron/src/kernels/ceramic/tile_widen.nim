@@ -18,6 +18,7 @@
 ##
 ## The tile API's mma epilogues keep the accumulator f32, an element-dtype
 ## operand tile re-enters the f32 arithmetic only through this widen.
+## The scalar RNE narrowing, `roundToRne`, lives in tile_algebra's tile_ops_unary.
 
 import workspace/crucible
 import workspace/ceramic
@@ -54,16 +55,3 @@ proc widen*[A, B: static MmaAtom; T; R, C: static int](
       for v in 0 ..< vpt:
         dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
 
-# ─── RNE narrowing ──────────────────────────────────────────────────
-
-proc roundToRne*[T](x: float32): T {.device.} =
-  ## One round-to-nearest-even of an f32 value into the dtype `T`,
-  ## the scalar counterpart of the mma epilogue's single-round contract.
-  ##
-  ## - `T` is unconstrained
-  ## - the body keeps one variant per element dtype, a further dtype
-  ##   adds its own variant
-  when T is bfloat16:
-    x.bfloat16
-  else:
-    x.to(float16)

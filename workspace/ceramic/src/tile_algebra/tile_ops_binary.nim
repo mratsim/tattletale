@@ -197,3 +197,41 @@ func div_row*[TIn; TOut; R, C, rowTiles, vpt: static int; A: static MmaAtom](
       for vptI in 0 ..< vpt0:
         dst.frags[m][n].frag[vptI] =
           src.frags[m][n].frag[vptI].to(TOut) / rowVals.data[n * vpt + vptI].to(TOut)
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The scaled carry and the fused multiply-add
+# ═════════════════════════════════════════════════════════════════════════
+
+func addScaled*[T, S; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[T, R, C, A],
+    src: RtLeft[T, R, C, A],
+    s: S) =
+  ## dst[i] = dst[i] + src[i] · s per element, the scaled carry the recurrence
+  ## updates and the outer-product accumulation write through.
+  ##
+  ## Contract:
+  ## - computed in the tile element type T
+  ## - dst and src may be the same tile, the in-place carry form
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for vptI in 0 ..< vpt:
+        dst.frags[n][m].frag[vptI] =
+          dst.frags[n][m].frag[vptI] + src.frags[n][m].frag[vptI] * s
+
+func fma*[R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[float32, R, C, A],
+    a, b, c: RtLeft[float32, R, C, A]) =
+  ## dst[i] = fma(a[i], b[i], c[i]) per element, the scalar `fma` builtin
+  ## over the whole tile, one fused multiply-add rounding.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for vptI in 0 ..< vpt:
+        dst.frags[n][m].frag[vptI] =
+          fma(a.frags[n][m].frag[vptI], b.frags[n][m].frag[vptI],
+              c.frags[n][m].frag[vptI])

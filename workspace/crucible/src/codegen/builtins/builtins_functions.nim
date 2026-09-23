@@ -28,6 +28,11 @@ proc exp2*(x: float32): float32 {.builtin.} = discard
 proc rsqrt*(x: float32): float32 {.builtin.} = discard
   ## Returns `1/sqrt(x)`: the DSL forwards the backend's native `rsqrt`.
 
+proc fma*(x, y, z: float32): float32 {.builtin.} =
+  ## Returns `x·y + z` with one fused rounding, the DSL forwards the backend's
+  ## native `fma`, MSL, OpenCL and CUDA all carry it natively.
+  discard
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Built-in Nim functions and operators that collide with or must be
 #  mapped to GPU backend equivalents (compile-time tables, codegen-only)
