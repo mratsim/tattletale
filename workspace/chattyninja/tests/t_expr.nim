@@ -592,6 +592,21 @@ proc testCutValueConsumers() =
   doAssert render("'  x  '.strip() | tojson") == "\"x\""
   doAssert render("[3, 1, 2] | list") == "[3, 1, 2]"
 
+# A for-loop's filter clause rejecting an item on RE-ENTRY, item 0 rejected walking
+# the setup path and later items walking `advanceFor`, must advance past
+# rejected item. Later kept items render, Python's for-filter semantics.
+proc testForFilterReentryKeepsLaterItems() =
+  doAssert renderStmt(
+      "{%- for k in ['a', 'b', 'c'] if k != 'b' %}[{{ k }}]{%- endfor %}") == "[a][c]",
+      "a rejected item 1 must not end the loop; item 2 still renders"
+  doAssert renderStmt(
+      "{%- for k in ['a', 'b', 'c', 'd'] if k == 'a' or k == 'd' %}[{{ k }}]{%- endfor %}") ==
+      "[a][d]",
+      "two rejected items in a row must both be advanced past"
+  doAssert renderStmt(
+      "{%- for k in ['a', 'b'] if k != 'b' %}[{{ k }}]{%- endfor %}") == "[a]",
+      "a rejected last item must close the loop cleanly"
+
 # `map` is a declared filter name with no corpus site:
 # reaching it reports the gap, never a wrong or silent answer.
 proc testMapGapIsLoud() =
@@ -960,6 +975,7 @@ proc main() =
   testStringMethods()
   testCutValueConsumers()
   testMapGapIsLoud()
+  testForFilterReentryKeepsLaterItems()
   testSliceBoundsAndStep()
   testZeroStepSliceRaises()
   testExtremeSliceStep()

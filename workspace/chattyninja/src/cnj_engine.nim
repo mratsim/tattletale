@@ -210,18 +210,26 @@ proc filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
     evaluated = forceCondCall(c, evaluated, lo, hi)
   isTruthy(evaluated, lo)
 
-proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
+type ForStepOutcome = enum
+  ## Outcome of one per-item loop step.
+  ##
+  ## - `fsKeep`, the clause kept the item
+  ## - `fsReject`, the clause rejected it
+  ## - `fsExhausted`, no item left
+  fsKeep, fsReject, fsExhausted
+
+proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): ForStepOutcome =
   ## Per-item loop step moving the shared cursor one item, binding the loop targets, running
   ## the filter clause, the keep decision returned. Exhaustion reads off the cursor.
   template nd: Node = c.tmpl.nodes[n]
   inc lp.idx
   let idx = lp.idx
   if idx >= lp.loopLen:
-    return false
-  result = nd.filterLo == NoLink
+    return fsExhausted
+  result = fsKeep
   bindTargets(c, n, lp.loopItem(idx))
-  if nd.filterLo != NoLink:
-    result = filterKeep(c, nd.filterLo, nd.filterHi)
+  if nd.filterLo != NoLink and not filterKeep(c, nd.filterLo, nd.filterHi):
+    result = fsReject
 
 func closeRow(st: var RenderState, at: int, next: int32) =
   ## Leaves the row's construct, truncating scopes to the row's `scopeAt` mark,
@@ -235,10 +243,15 @@ proc advanceFor(c: JinjaRenderContext, n: int32) =
   template nd: Node = c.tmpl.nodes[n]
   while true:
     let fi = c.state.rows.len - 1
-    if forStep(c, n, c.state.rows[fi].loop):
+    case forStep(c, n, c.state.rows[fi].loop)
+    of fsKeep:
       break
-    closeRow(c.state, fi, nd.succ)
-    return
+    of fsReject:
+      # A rejected item advances the walk, only exhaustion closing the row.
+      continue
+    of fsExhausted:
+      closeRow(c.state, fi, nd.succ)
+      return
   c.state.curNode = nd.child
 
 proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
@@ -270,18 +283,22 @@ proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
       # Loop control reads the shared cursor, which every step commits, so a rejected
       # item does not end the walk.
       discard filterKeep(c, nd.filterLo, nd.filterHi)
-      while lp.idx < lp.loopLen:
-        discard forStep(c, n, lp)
+      while true:
+        case forStep(c, n, lp)
+        of fsExhausted: break
+        else: discard
     closeRow(c.state, c.state.rows.len - 1, nd.succ)
     return
   # Item 0's clause runs before body entry. A rejected item 0 takes the advance walk,
   # the body entering on the first kept item or the row closing past the loop's end.
   if nd.filterLo != NoLink and not filterKeep(c, nd.filterLo, nd.filterHi):
     while true:
-      if forStep(c, n, lp):
-        break
-      closeRow(c.state, c.state.rows.len - 1, nd.succ)
-      return
+      case forStep(c, n, lp)
+      of fsKeep: break
+      of fsReject: continue
+      of fsExhausted:
+        closeRow(c.state, c.state.rows.len - 1, nd.succ)
+        return
   c.state.curNode = nd.child
 
 proc stepSet(c: JinjaRenderContext, n: int32) {.nimcall.} =
