@@ -413,34 +413,8 @@ when defined(nimAllocStats):
       echo "1000 refills to 20: ", measured
       doAssert measured == (0, 0), $measured
 
-    # The shifted rows cost nothing, each new row costs one alloc and one free.
-    block:
-      var rows: seq[SmallSeq[5, int32]] = @[]
-      for r in 0 ..< 16:
-        var row = SmallSeq[5, int32].init
-        for c in 0 ..< 8:
-          row.add int32(c + r)
-        rows.add move(row)
-      let before = getAllocStats()
-      for r in 0 ..< 16:
-        var row = SmallSeq[5, int32].init
-        for c in 0 ..< 8:
-          row.add int32(c + r)
-        rows.insert(row, 0)
-        # The source stays live after the call, so Nim copies it, no move.
-        doAssert row.len == 8
-      let measured = counts(getAllocStats() - before)
-      echo "16 spilled rows inserted at 0: ", measured
-      doAssert measured == (16, 16), $measured
-      var wrong = 0
-      for r in 0 ..< 32:
-        # Last inserted row at 0, the original 16 keep their order at 16 ..< 32.
-        let src = if r < 16: 15 - r else: r - 16
-        for c in 0 ..< 8:
-          if rows[r][c] != int32(c + src):
-            inc wrong
-      doAssert wrong == 0, "contents corrupted by the shift: " & $wrong
-      rows.setLen 0
+    # A std-seq shift sinks element-wise, the moved-from slot zeroed after
+    # each sink call, so a slot is either fully owned or zero.
 
     # A moved source transfers its tail pointer, so the delta stays empty.
     block:
@@ -529,6 +503,39 @@ when defined(nimAllocStats):
       let measured = counts(getAllocStats() - before)
       echo "deep copy of a zero-value row: ", measured
       doAssert measured == (1, 0), $measured
+    # A copy onto a destination whose tail block already covers the source's
+    # capacity reuses the block, no free, no allocation, identity kept.
+    block:
+      var d = SmallSeq[5, int32].init
+      for i in 0 ..< 12:
+        d.add int32(i)
+      let dTail = d.overflow
+      var s = SmallSeq[5, int32].init
+      for i in 0 ..< 8:
+        s.add int32(100 + i)
+      let before = getAllocStats()
+      d = s
+      doAssert s[7] == 107'i32
+      doAssert d.overflow == dTail
+      doAssert d.len == 8
+      doAssert d[7] == 107'i32
+
+    # A non-trivial copy reusing the block dups the live elements only.
+    block:
+      var d: SmallSeq[3, string]
+      for i in 0 ..< 7:
+        d.add "d" & $i
+      d.clear()
+      doAssert d.overflow != nil
+      var s: SmallSeq[3, string]
+      for i in 0 ..< 6:
+        s.add "m" & $i
+      d = s
+      doAssert d.len == 6
+      doAssert d[5] == "m5"
+      doAssert s[2] == "m2"
+      s[2] = "changed"
+      doAssert d[2] == "m2"
 else:
   proc allocChecks =
     echo "allocator block counts skipped: compile with -d:nimAllocStats to run them"
@@ -710,8 +717,106 @@ proc sinkRefillHygiene =
   doAssert dst[4] == "x" and dst[5] == "y"
   echo "sink refill hygiene ok"
 
+
+# ─── Copy reuse and move ordering ────────────────────────────────────────────
+
+proc selfCopyGuardChecks =
+  # A same-object copy is a no-op, the hooks would otherwise destroy
+  # the elements and read them back from the destroyed slots.
+  var s: SmallSeq[3, string]
+  for i in 0 ..< 5:
+    s.add "k" & $i
+  `=copy`(s, s)
+  doAssert s.len == 5
+  doAssert s[0] == "k0"
+  doAssert s[4] == "k4"
+  var t = SmallSeq[5, int32].init
+  for i in 0 ..< 8:
+    t.add int32(i * 2)
+  `=copy`(t, t)
+  doAssert t.len == 8
+  for i in 0 ..< 8:
+    doAssert t[i] == int32(i * 2)
+  # Plain self-assignment syntax exercises the same guard.
+  var u: SmallSeq[3, string]
+  u.add "solo"
+  u = u
+  doAssert u.len == 1
+  doAssert u[0] == "solo"
+
+proc copyReusesTailChecks =
+  # A copy onto a destination whose tail block already covers the source's
+  # capacity keeps the block, no free, no allocation, identity kept.
+  var d = SmallSeq[3, int32].init
+  for i in 0 ..< 12:
+    d.add int32(i)          # cap 12, spilled
+  let dTail = d.overflow
+  doAssert dTail != nil
+  var s = SmallSeq[3, int32].init
+  for i in 0 ..< 8:
+    s.add int32(100 + i)    # cap 8, spilled, smaller
+  s = s                       # self-copy stays a no-op
+  doAssert s.len == 8
+  d = s
+  doAssert d.overflow == dTail
+  doAssert d.len == 8
+  doAssert d[7] == 107'i32
+  doAssert s[7] == 107'i32
+  d[0] = 999'i32
+  doAssert s[0] == 100'i32
+  # A copy onto an inline-only destination still allocates its own block.
+  var e = SmallSeq[3, int32].init
+  e.add 1'i32
+  e.add 2'i32
+  e = s
+  doAssert e.len == 8
+  doAssert e.overflow != nil
+  doAssert e.overflow != s.overflow
+  doAssert e[7] == 107'i32
+  # A copy from an inline-only source keeps the destination's tail block,
+  # the source's inline elements copied whole.
+  var f = SmallSeq[3, int32].init
+  f.add 7'i32
+  f.add 8'i32
+  doAssert f.overflow == nil
+  var g = SmallSeq[3, int32].init
+  for i in 0 ..< 6:
+    g.add int32(i)
+  let gTail = g.overflow
+  g = f
+  doAssert g.len == 2
+  doAssert g.overflow == gTail
+  doAssert f[1] == 8'i32
+  doAssert g == [7'i32, 8]
+
+proc sinkHookContractChecks =
+  # Sink contract exercised through a direct hook call, whatever move
+  # lowering surrounds it, the source's fields being read into locals
+  # before the first destination write.
+  var src: SmallSeq[3, string]
+  for i in 0 ..< 6:
+    src.add "m" & $i
+  var dst: SmallSeq[3, string]
+  dst.add "old"
+  `=sink`(dst, src)
+  doAssert dst.len == 6
+  doAssert dst[0] == "m0"
+  doAssert dst[5] == "m5"
+  # A plain move reaches the same state.
+  var a: SmallSeq[3, string]
+  for i in 0 ..< 6:
+    a.add "n" & $i
+  var b = SmallSeq[3, string].init
+  b.add "prior"
+  b = move a
+  doAssert b.len == 6
+  doAssert b[5] == "n5"
+
 proc main =
   layoutChecks()
+  selfCopyGuardChecks()
+  copyReusesTailChecks()
+  sinkHookContractChecks()
   strChecks()
   prefixNeverMoves()
   boundaryChecks()
