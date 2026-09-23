@@ -752,3 +752,6 @@ for zstdSource in ZstdSources:
 task hooks_setup, "Activate the pre-commit linter hooks for this clone (core.hooksPath = .githooks)":
   exec "git config core.hooksPath .githooks"
   echo "hooks active: git config core.hooksPath .githooks"
+
+task lint_tiles_report, "Tile linter (lint_tiles.py) over the kernel roots, report mode: the inventory prints, the exit code stays out of the task (the pre-commit scoping enforces added lines only)":
+  exec "(python3 .agents/skills/writing-docs/tools/lint_tiles.py --stats workspace/positron/src/kernels workspace/positron/src/mega_kernels workspace/ceramic/src; :)"

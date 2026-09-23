@@ -108,6 +108,7 @@ proc butterflyCore(rv: var array[32, float32]; lane: uint32) {.device.} =
     rv[p] = a + b
     rv[p + 16] = a - b
 
+# tiles-allow hadamard128 needs a subgroup-butterfly primitive (butterflyCore over one lane's register slots)
 proc hadamard128*[A: static MmaAtom](
     tiles: var array[8, RtLeft[float16, 32, 16, A]]) {.device.} =
   ## In-place FWHT-128 over the 8 16-column k-block tiles of one 128-column block
@@ -127,6 +128,7 @@ proc hadamard128*[A: static MmaAtom](
       tiles[s shr 2].frags[n][(s shr 1) and 1].frag[s and 1] =
         (rv[s] * InvSqrt128).to(float16)
 
+# tiles-allow hadamard128 needs a subgroup-butterfly primitive (butterflyCore over one lane's register slots)
 proc hadamard128*[A: static MmaAtom](
     tiles: var array[4, RtLeft[float16, 32, 32, A]]) {.device.} =
   ## In-place FWHT-128 over the 4 32-column tiles (the fused linear kernel's output pass),

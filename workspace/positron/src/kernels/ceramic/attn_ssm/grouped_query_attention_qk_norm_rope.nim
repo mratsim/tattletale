@@ -90,6 +90,7 @@ proc splitHalfFloat32[A16, AF32: static MmaAtom](
         x1.frags[n][m].frag[v] = x16.frags[n][m].frag[v].to(float32)
         x2.frags[n][m].frag[v] = x16.frags[n][m + colTiles].frag[v].to(float32)
 
+# tiles-allow fmaMapFloat32 needs a fused multiply-add tile op (fma over register tiles)
 proc fmaMapFloat32[A: static MmaAtom](
     dst: var RtLeft[float32, 8, 64, A],
     a, b, c: RtLeft[float32, 8, 64, A]) {.device.} =

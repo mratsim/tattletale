@@ -99,6 +99,7 @@ proc normRound16[A: static MmaAtom](
         dst.frags[n][m].frag[v] =
           (x * gamma.frags[n][m].frag[v].to(float32)).to(float16)
 
+# tiles-allow ropeTile32 needs an interleaved rope primitive over register-tile pairs
 proc ropeTile32[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 32, A],
     cosT, sinT: ptr UncheckedArray[float32],

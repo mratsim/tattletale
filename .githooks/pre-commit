@@ -7,6 +7,10 @@ Routing (directory-specific through this script):
   the doc-comment linter (lint_docs.py), the lint_docs rules scoped to
   the lines the staged diff adds via --base, pre-existing prose stays
   outside the gate
+- any staged .nim file under the kernel roots (positron kernels and
+  mega_kernels, ceramic src): the tile linter (lint_tiles.py), the tile
+  rules scoped to the lines the staged diff adds via --base the same
+  way, pre-existing sites stay outside the report
 - tests/testgen/gen_*.py: the generator linter (L2)
 - tests/fixtures/**: the fixture linter (L3)
 - tests/**/*.nim: the fixture-consumer linter (L4)
@@ -25,6 +29,12 @@ import sys
 TESTS = os.path.join("workspace", "transformers", "tests")
 LINT_DIR = os.path.join(TESTS, "linters")
 DOC_LINT = os.path.join(".agents", "skills", "writing-docs", "tools", "lint_docs.py")
+TILE_LINT = os.path.join(".agents", "skills", "writing-docs", "tools", "lint_tiles.py")
+KERNEL_PREFIXES = (
+    os.path.join("workspace", "positron", "src", "kernels") + os.sep,
+    os.path.join("workspace", "positron", "src", "mega_kernels") + os.sep,
+    os.path.join("workspace", "ceramic", "src") + os.sep,
+)
 
 ROUTES = (
     (os.path.join(TESTS, "testgen"), "gen_", "lint_gen_scripts.py"),
@@ -62,6 +72,8 @@ def route(path):
         if rel.startswith(d + os.sep):
             if not prefix or os.path.basename(rel).startswith(prefix):
                 picked.append(os.path.join(LINT_DIR, script))
+    if rel.endswith(".nim") and rel.startswith(KERNEL_PREFIXES):
+        picked.append(TILE_LINT)
     if (rel.startswith(TESTS + os.sep) and rel.endswith(".nim")
             and os.sep + "fixtures" + os.sep not in rel
             and os.sep + "linters" + os.sep not in rel
@@ -82,7 +94,7 @@ def main():
     base = os.environ.get("DOC_LINT_BASE", "HEAD")
     for script, paths in sorted(grouped.items()):
         cmd = [sys.executable, script]
-        if script == DOC_LINT:
+        if script in (DOC_LINT, TILE_LINT):
             cmd += ["--base", base]
         cmd += paths
         out = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
