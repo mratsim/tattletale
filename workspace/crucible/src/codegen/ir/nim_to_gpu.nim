@@ -367,7 +367,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
     ctx.currentScope = prevScopeBlk
   of nnkBlockExpr:
-    ## XXX: For CUDA just a block?
     let blockLabel = if node[0].kind in {nnkSym, nnkIdent}: node[0].strVal
                      elif node[0].kind == nnkEmpty: ""
                      else: error "Unexpected node in block label field: " & $node.treerepr
@@ -394,7 +393,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     if exprs.len == 1:
       result = ctx.toGpuAst(reg, exprs[0])
     else:
-      ## XXX: For CUDA just a block?
       result = GpuAst(kind: gpuBlock, isExpr: true,
                       )
       let prevScopeStmtListExpr = ctx.currentScope
@@ -1106,6 +1104,5 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkWhenStmt:
     error "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:
-    echo "Unhandled node kind in toGpuAst: ", node.kind
     error "Unhandled node kind in toGpuAst: " & $node.treerepr
     result = GpuAst(kind: gpuBlock)

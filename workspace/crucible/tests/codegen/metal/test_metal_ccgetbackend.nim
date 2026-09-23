@@ -182,7 +182,6 @@ proc runTest() =
     test "module-scope crucibleSetBackend resolves the default atom on the host":
       # expected the metal branch constant 305
       static: doAssert hostTile(float32) is array[hostDefaultAtom, float32]
-      check true
 
     test "a metal: block still records its own target after the module-scope setter":
       doAssert "output[0] = 7;" in setterBlockCode

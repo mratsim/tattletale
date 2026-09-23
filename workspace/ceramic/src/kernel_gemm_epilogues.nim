@@ -146,7 +146,6 @@ func apply*[T, Sh, StAB, StC, StR](
     #   every element's C is in range, read unguarded
     if op.alpha == T(1):
       for i in 0 ..< S:
-        # A single FMA per element
         tmp(i) = AB(i) + op.beta * op.C_gmem(i)
     else:
       for i in 0 ..< S:
