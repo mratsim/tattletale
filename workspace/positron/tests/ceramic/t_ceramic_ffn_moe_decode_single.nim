@@ -44,12 +44,12 @@
 ## | h (silu·mul) | (RelSilu + 4·u32)·max(abs h) + 2·UBf·(abs h sum) + 1.1·abs(u)·gBar + abs(silu(g))·uBar + floor |
 ## | down sums    | 2·I·u32·Σ_i abs(h_i·w_i) + h-bar flow + 2·u32·abs(sum) + floor                                 |
 ## | weight       | abs(w)·(2·logitBar + 2·UBf) + floor, the softmax's relative logit-error class                  |
-## | partial row  | w·downBar + abs(down)·weightBar + 2·u32·abs(partial) + floor + the two centers' own deviation  |
+## | partial row  | w·downBar + abs(down)·weightBar + 2·u32·abs(partial) + floor                                   |
 ##
 ## | guard    | record                                                                                                                          |
 ## | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
 ## | pre-fix  | the row guard dropped, every atom row's row-0 lane racing on the destination, the lost writes zeroing partial-row contributions |
-## | judgment | the prod case's two-sided per-element judgment exits its bar on such a lost write                                               |
+## | judgment | the prod case's two-sided per-element judgment exits its bar on a lost write, a wrong id or a wrong weight                      |
 ## | standing | the single-writer spelling, the prod case its regression guard, the defect-run proof living in git history                      |
 
 import std/[strformat, math]
@@ -238,8 +238,8 @@ proc judgeSlotPartials(token, slot: int; id: int;
   ## the naive walk, the h-link band flowed through the down projection.
   ##
   ## - center, the naive partial row's element w[slot]·down_e
-  ## - bar, w·downBar + abs(down)·weightBar + 2·u32·abs(pM) + floor
-  ##   plus the two centers' own deviation
+  ## - bar, w·downBar + abs(down)·weightBar + 2·u32·abs(pM) + floor,
+  ##   the kernel output's own rounding grid
   let hMrow = widen(hM[(token * K + slot) * I ..< (token * K + slot + 1) * I])
   let hProw = widen(nw.hP[slot])
   let guBase = id * 2 * I * H
@@ -275,8 +275,7 @@ proc judgeSlotPartials(token, slot: int; id: int;
     let wBand = abs(dnP[e]) * wPrime * (2.0 * logitBar + 2.0 * UBf)
     let pM = partialM[(token * (K + 1) + slot) * H + e].float64
     let pN = nw.partial[slot * H + e].float64
-    let bar = wPrime * downLocal + wBand + 2.0 * U32 * abs(pM) +
-      FloorSub + abs(pM - pN)
+    let bar = wPrime * downLocal + wBand + 2.0 * U32 * abs(pM) + FloorSub
     doAssert abs(pM - pN) <= bar,
       &"partial row outside the bar at (token {token}, slot {slot}, col {e}): " &
       &"{abs(pM - pN):.3e} > {bar:.3e}"
@@ -316,7 +315,7 @@ proc judgeSharedPartial(token: int;
     let pM = partialM[(token * (K + 1) + K) * H + e].float64
     let pN = nw.partial[K * H + e].float64
     let bar = gate * downLocal + abs(nw.sdP[e].float64) * gateBar +
-      2.0 * U32 * abs(pM) + FloorSub + abs(pM - pN)
+      2.0 * U32 * abs(pM) + FloorSub
     doAssert abs(pM - pN) <= bar,
       &"shared partial outside the bar at (token {token}, col {e}): " &
       &"{abs(pM - pN):.3e} > {bar:.3e}"
