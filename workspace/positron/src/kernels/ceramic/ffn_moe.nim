@@ -62,8 +62,7 @@
 ##     no expert-batched B tiles, no x
 ##     reuse across the per-slot projections (x re-read from global per N-tile)
 ##   - the router weight is fp16 (the reference router is fp32)
-##   - the top-K is a fixed-pass register selection, no score
-##     sorting output
+##   - the top-K is a fixed-pass register selection, no score sorting output
 
 import workspace/crucible
 import workspace/ceramic
@@ -75,8 +74,10 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # Tile atoms are spelled explicitly, no defaults:
 # - the explicit atom locks the tile's codegen across call sites
-# - the universal arithmetic atoms below, not the Apple simdgroup
-#   defaults `crucibleSetBackend` resolves for implicit atoms
+# - the rt_l/rv default atoms call getTileConfig, which asserts
+#   the live DSL block context the host import does not provide
+# - a non-generic proc body is typechecked on the host import where
+#   no block context exists, so the defaults cannot resolve
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -158,7 +159,7 @@ proc actMul16[A: static MmaAtom](
   ## The gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
   ## stable at both saturation ends, fp32 end to end like the silu variant.
   ##
-  ## The frag walk follows the loadTile lane→element mapping, so the operands agree elementwise.
+  ## The frag walk uses the loadTile lane→element mapping, so the operands agree elementwise.
   ## Tile-internal, the walk bounds stay static.
   const rowTiles = 32 div A.getM()
   const colTiles = 32 div A.getN()
@@ -392,9 +393,10 @@ proc moe_fwd*(
   ## Grid (num_tokens, 1, 1) at 32 lanes, one token per threadgroup,
   ## register budget near 2 live 32×32 fp32 accumulators
   ## (the gHalf/uHalf pair) plus transients.
-  # The register tiles are compiled-in maxima, a config beyond one would
-  # write past them. The entry drops the launch, the host companion
-  # `moeFwdConfigGuard` reports and the caller runs it before each launch.
+  # - the register tiles are compiled-in maxima, a config beyond one
+  #   would write past them
+  # - the entry drops the launch, the host companion `moeFwdConfigGuard`
+  #   reports and the caller runs it before each launch
   if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
       n_shared_experts < 0 or
       n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or

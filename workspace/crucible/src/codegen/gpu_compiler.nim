@@ -46,7 +46,7 @@ macro toGpuAst*(body: typed): GpuAst =
   # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
   newLit(gpuAst)
 
-macro codegenCuda(prevTarget: static CompileTarget, body: typed): string =
+macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -66,18 +66,16 @@ macro codegenCuda(prevTarget: static CompileTarget, body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   result = newLit(ctx.codegenCuda(gpuAst))
-  crucibleCompileTarget = prevTarget
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  let prevTarget = crucibleCompileTarget
   crucibleCompileTarget = ctCuda
-  result = newCall(bindSym"codegenCuda", newLit(prevTarget), body)
+  result = newCall(bindSym"codegenCuda", body)
 
-macro codegenOpenCL(prevTarget: static CompileTarget, body: typed): string =
+macro codegenOpenCL(body: typed): string =
   ## Compiles an `opencl:` block body into OpenCL C code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -99,18 +97,16 @@ macro codegenOpenCL(prevTarget: static CompileTarget, body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   result = newLit(ctx.codegenOpenCL(gpuAst))
-  crucibleCompileTarget = prevTarget
 
 macro opencl*(body: untyped): string =
   ## Converts the body of this macro into OpenCL C code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  let prevTarget = crucibleCompileTarget
   crucibleCompileTarget = ctOpenCL
-  result = newCall(bindSym"codegenOpenCL", newLit(prevTarget), body)
+  result = newCall(bindSym"codegenOpenCL", body)
 
-macro codegenVulkan(prevTarget: static CompileTarget, body: typed): string =
+macro codegenVulkan(body: typed): string =
   ## Compiles a `vulkan:` block body into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -125,18 +121,16 @@ macro codegenVulkan(prevTarget: static CompileTarget, body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   result = newLit(ctx.codegenVulkan(gpuAst))
-  crucibleCompileTarget = prevTarget
 
 macro vulkan*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  let prevTarget = crucibleCompileTarget
   crucibleCompileTarget = ctVulkan
-  result = newCall(bindSym"codegenVulkan", newLit(prevTarget), body)
+  result = newCall(bindSym"codegenVulkan", body)
 
-macro codegenWebGpu(prevTarget: static CompileTarget, body: typed): string =
+macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -152,18 +146,16 @@ macro codegenWebGpu(prevTarget: static CompileTarget, body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   result = newLit(ctx.codegenWebGpu(gpuAst))
-  crucibleCompileTarget = prevTarget
 
 macro webgpu*(body: untyped): string =
   ## Converts the body of this macro into WebGPU WGSL code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  let prevTarget = crucibleCompileTarget
   crucibleCompileTarget = ctWebGPU
-  result = newCall(bindSym"codegenWebGpu", newLit(prevTarget), body)
+  result = newCall(bindSym"codegenWebGpu", body)
 
-macro codegenMetal(prevTarget: static CompileTarget, body: typed): string =
+macro codegenMetal(body: typed): string =
   ## Compiles a `metal:` block body into Metal Shading Language (MSL) code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -179,16 +171,14 @@ macro codegenMetal(prevTarget: static CompileTarget, body: typed): string =
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   result = newLit(ctx.codegenMetal(gpuAst))
-  crucibleCompileTarget = prevTarget
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  let prevTarget = crucibleCompileTarget
   crucibleCompileTarget = ctMetal
-  result = newCall(bindSym"codegenMetal", newLit(prevTarget), body)
+  result = newCall(bindSym"codegenMetal", body)
 
 proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
               backend: BackendKind = bkCuda): string =

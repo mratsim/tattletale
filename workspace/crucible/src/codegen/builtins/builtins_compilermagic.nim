@@ -15,40 +15,16 @@ type CompileTarget* = enum
   ctWebGPU 
 
 var crucibleCompileTarget* {.compileTime.}: CompileTarget = ctNone
-  ## Active DSL target, the tag a `cuda:`/`metal:`/`opencl:`/`vulkan:`/
-  ## `webgpu:` wrapper records for its body's compile-time resolution
-  ## and its codegen macro restores to the pre-block value after.
-var crucibleHostBackend* {.compileTime.}: CompileTarget = ctNone
-  ## Host default, set only by `crucibleSetBackend`, survives DSL blocks.
-
-macro crucibleSetBackend*(target: static CompileTarget) =
-  ## Sets the host default backend for the rest of the module, re-callable.
-  ##
-  ## Usage:
-  ## `crucibleSetBackend(ctMetal)` at module scope,
-  ## before the first ccGetBackend()-derived default resolves.
-  ##
-  ## Postcondition:
-  ## - ccGetBackend() returns `target` in host code outside any DSL block,
-  ##   whatever blocks ran before or run after
-  crucibleHostBackend = target
+  # ctNone until a DSL wrapper records its target.
+  # ccGetBackend rejects calls outside any DSL block.
 
 proc ccGetBackend*(): CompileTarget {.compileTime.} =
-  ## Returns the backend of the enclosing DSL block.
-  ## Outside any block, the host default.
+  ## Returns the backend the enclosing DSL block compiles for.
   ## Usage: `when ccGetBackend() == ctMetal: ...` selects the Metal branch.
-  ##
-  ## Valid call sites:
-  ## - inside a `cuda:` / `metal:` / `opencl:` / `vulkan:` / `webgpu:` block
-  ## - in templates and generic procs instantiated from one
-  ## - in host code after an explicit crucibleSetBackend call at module scope
-  ##
-  ## Elsewhere the call fails at compile time.
+  ## Call it only inside a `cuda:` / `metal:` / `opencl:` / `vulkan:` / `webgpu:` block,
+  ## or in templates and generic procs instantiated from one.
+  ## Outside a DSL block the call fails with a compile-time error.
   ## A call in a runtime statement is rejected by Nim.
-  let backend =
-    if crucibleCompileTarget != ctNone: crucibleCompileTarget
-    else: crucibleHostBackend
-  doAssert backend != ctNone,
-    "ccGetBackend: not inside a cuda:/metal:/opencl:/vulkan:/webgpu: block " &
-    "and no crucibleSetBackend call at module scope"
-  backend
+  doAssert crucibleCompileTarget != ctNone,
+    "ccGetBackend: not inside a cuda:/metal:/opencl:/vulkan:/webgpu: block"
+  crucibleCompileTarget
