@@ -279,8 +279,8 @@ proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) 
   ##
   ## | aspect    | contract                                                                                            |
   ## | --------- | --------------------------------------------------------------------------------------------------- |
-  ## | variance  | taken over the rounded row sums of squares, one bf16 round each                                     |
-  ## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one bf16 round at the store                                      |
+  ## | variance  | taken over the rounded row sums of squares, one store round each                                    |
+  ## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one store round per element width                                |
   ## | lane walk | per lane the serial element walk of the RowLaneSpan block, the partial row-sum of squares in f32    |
   ## | reduction | a 5-step lane butterfly with the rstd broadcast, per-lane serial f32 sums plus a lane butterfly     |
   ## | barrier   | every lane re-reads only its own stored elements, no threadgroup barrier                            |
@@ -501,7 +501,7 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
     when HaveNorm:
       # Stage 11:
       #   the residual fold plus the bias-one post-LN norm,
-      # one bf16 round each, the fold's sum becoming
+      # one store round each, the fold's sum becoming
       # the new residual of the deferred-add contract.
       waveWait(counters, 9, 32)
       normRow((bfA +% sStream), (bfA +% sBlockOut), norm2W,

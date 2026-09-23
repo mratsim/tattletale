@@ -142,15 +142,6 @@ proc bfRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
   for i in off ..< off + count:
     result = max(result, abs(bf16ToF32(buf.hostPtr[i])))
 
-proc maxDiffFam(megaBf: PageBuf[uint16]; megaOff: int;
-    naive: seq[uint16]): float32 =
-  ## Elementwise absolute difference maximum, bf16 widened.
-  doAssert megaBf.elems >= megaOff + naive.len
-  for i in 0 ..< naive.len:
-    let a = bf16ToF32(megaBf.hostPtr[megaOff + i])
-    let b = bf16ToF32(naive[i])
-    result = max(result, abs(a - b))
-
 proc maxDiff(megaBf: PageBuf[uint16]; megaOff: int;
     naive: seq[uint16]): float32 =
   ## Elementwise absolute difference maximum between a mega arena section
@@ -338,7 +329,7 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     let dMoe = maxDiff(bfA, sMoeOut, naiveOut.moeOut)
     let dH1 = maxDiff(bfA, sH1, naiveOut.h1)
     let dBlock = maxDiff(bfA, sBlockOut, naiveOut.blockOut)
-    let dY = maxDiffFam(bfA, sY, naiveOut.y)
+    let dY = maxDiff(bfA, sY, naiveOut.y)
     echo &"[mega smoke] informational max abs diff vs naive " &
       &"moeOut {dMoe:.4f} h1 {dH1:.4f} blockOut {dBlock:.4f} y {dY:.4f}"
 

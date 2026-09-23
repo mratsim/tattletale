@@ -39,17 +39,17 @@ import mega_bounded_wait
 
 const GridThreads: int = block:
   ## One launch's threadgroup count, the 13 stage blocks summed.
-  var t: int = 0
+  var threadCount: int = 0
   for c in WaveCounts:
-    t += c.int
-  t
+    threadCount += c.int
+  threadCount
 
 # ─── Device entry, one launch of the mega's fp16 instantiation ────────
 
 const MegaGdnFp16Msl = metal:
   proc gdn_moe_layer_fp16(
       counters: ptr UncheckedArray[uint32],
-      bfA: ptr UncheckedArray[float16],
+      fpA: ptr UncheckedArray[float16],
       f32A: ptr UncheckedArray[float32],
       xPrev, rPrev: ptr UncheckedArray[float16],
       state: ptr UncheckedArray[float32],
@@ -60,7 +60,7 @@ const MegaGdnFp16Msl = metal:
       aLog: ptr UncheckedArray[float32],
       dtBias: ptr UncheckedArray[float16],
       eps: float32) {.global.} =
-    gdnMoeLayerWalk[float16, true](counters, bfA, f32A, xPrev, rPrev, state,
+    gdnMoeLayerWalk[float16, true](counters, fpA, f32A, xPrev, rPrev, state,
       ring, norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
       routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW,
       aLog, dtBias, eps)
@@ -119,7 +119,7 @@ proc buildBigHost(seed: uint64): BigHost =
     result.state[i] = rng.nextF32(-0.5'f32, 0.5'f32)
   result.ring = randBits(rng, ConvDim * RingWidth, -1.0'f32, 1.0'f32)
 
-proc fillBf(buf: var PageBuf[uint16], src: seq[uint16]) =
+proc fillEl(buf: var PageBuf[uint16], src: seq[uint16]) =
   ## Copies family-dtype bit patterns into a page buffer.
   doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
     "no-copy binding needs a page-multiple byte length"
@@ -152,7 +152,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   ## and naive-comparison checks around it.
   var
     counters = allocPageBuf[uint32](NumCounters)
-    bfA = allocPageBuf[uint16](BfArenaLen)
+    fpA = allocPageBuf[uint16](BfArenaLen)
     f32A = allocPageBuf[float32](F32ArenaLen)
     xPrev = allocPageBuf[uint16](Hidden)
     rPrev = allocPageBuf[uint16](Hidden)
@@ -177,7 +177,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     aLog = allocPageBuf[float32](NumVHeads)
     dtBias = allocPageBuf[uint16](NumVHeads)
   defer:
-    freePageBuf(counters); freePageBuf(bfA); freePageBuf(f32A)
+    freePageBuf(counters); freePageBuf(fpA); freePageBuf(f32A)
     freePageBuf(xPrev); freePageBuf(rPrev); freePageBuf(state); freePageBuf(ring)
     freePageBuf(norm1W); freePageBuf(qkvW); freePageBuf(zW); freePageBuf(aW)
     freePageBuf(bW); freePageBuf(convW); freePageBuf(onormW); freePageBuf(outprojW)
@@ -185,21 +185,21 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     freePageBuf(sharedGW); freePageBuf(sharedUW); freePageBuf(sharedDW)
     freePageBuf(sharedGVW); freePageBuf(aLog); freePageBuf(dtBias)
 
-  fillBf(xPrev, big.x); fillBf(rPrev, big.r)
-  fillBf(norm1W, big.norm1W); fillBf(qkvW, big.qkvW); fillBf(zW, big.zW)
-  fillBf(aW, big.aW); fillBf(bW, big.bW); fillBf(convW, big.convW)
-  fillBf(onormW, big.onormW); fillBf(outprojW, big.outprojW)
-  fillBf(norm2W, big.norm2W); fillBf(routerW, big.routerW)
-  fillBf(gateUpW, big.gateUpW); fillBf(downW, big.downW)
-  fillBf(sharedGW, big.sharedGW); fillBf(sharedUW, big.sharedUW)
-  fillBf(sharedDW, big.sharedDW); fillBf(sharedGVW, big.sharedGVW)
-  fillBf(dtBias, big.dtBias)
+  fillEl(xPrev, big.x); fillEl(rPrev, big.r)
+  fillEl(norm1W, big.norm1W); fillEl(qkvW, big.qkvW); fillEl(zW, big.zW)
+  fillEl(aW, big.aW); fillEl(bW, big.bW); fillEl(convW, big.convW)
+  fillEl(onormW, big.onormW); fillEl(outprojW, big.outprojW)
+  fillEl(norm2W, big.norm2W); fillEl(routerW, big.routerW)
+  fillEl(gateUpW, big.gateUpW); fillEl(downW, big.downW)
+  fillEl(sharedGW, big.sharedGW); fillEl(sharedUW, big.sharedUW)
+  fillEl(sharedDW, big.sharedDW); fillEl(sharedGVW, big.sharedGVW)
+  fillEl(dtBias, big.dtBias)
   fillF32(aLog, big.aLog); fillF32(state, big.state)
-  fillBf(ring, big.ring)
+  fillEl(ring, big.ring)
 
   var
     countersPA = counters.pa()
-    bfAPA = bfA.pa()
+    fpAPA = fpA.pa()
     f32APA = f32A.pa()
     xPrevPA = xPrev.pa()
     rPrevPA = rPrev.pa()
@@ -227,7 +227,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   proc launch(): bool {.gcsafe.} =
     engine.run << (grid: (GridThreads, 1, 1), blk: (32, 1, 1)) >>
       ("gdn_moe_layer_fp16", countersPA,
-        (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
+        (fpAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
          norm1WPA, qkvWPA, zWPA, aWPA, bWPA, convWPA,
          onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
@@ -246,10 +246,10 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
         &"stage counter {i} {counters.hostPtr[i]} want 0 (the launch-end reset)"
 
   proc outputRanges() =
-    let moeMax = famRangeMax(bfA, sMoeOut, Hidden)
-    let h1Max = famRangeMax(bfA, sH1, Hidden)
-    let blockMax = famRangeMax(bfA, sBlockOut, Hidden)
-    let yMax = famRangeMax(bfA, sY, NumVHeads * HeadVDim)
+    let moeMax = famRangeMax(fpA, sMoeOut, Hidden)
+    let h1Max = famRangeMax(fpA, sH1, Hidden)
+    let blockMax = famRangeMax(fpA, sBlockOut, Hidden)
+    let yMax = famRangeMax(fpA, sY, NumVHeads * HeadVDim)
     echo &"[mega fp16] output maxima moeOut {moeMax:.4f} h1 {h1Max:.4f} " &
       &"blockOut {blockMax:.4f} y {yMax:.4f}"
     doAssert moeMax > 0.0'f32, "moeOut degenerate"
@@ -260,7 +260,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     doAssert h1Max < 1000.0'f32, "h1 runaway"
 
   proc sentinels() =
-    assertTailZero(bfA, BfArenaLen)
+    assertTailZero(fpA, BfArenaLen)
     assertTailZero(f32A, F32ArenaLen)
     assertReadUnchanged(xPrev, big.x)
     assertReadUnchanged(rPrev, big.r)
@@ -287,7 +287,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   waveSyncCheck()
   outputRanges()
   sentinels()
-  let bfSnap = readInto(bfA.hostPtr, BfArenaLen)
+  let bfSnap = readInto(fpA.hostPtr, BfArenaLen)
   let f32Snap = readInto(f32A.hostPtr, F32ArenaLen)
   let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
@@ -303,16 +303,16 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
       big.sharedGW, big.sharedUW, big.sharedDW, big.sharedGVW, big.aLog,
       big.dtBias, Eps, gmmF16)
     echo &"[mega fp16] naive walk {epochTime() - t0:.2f} s"
-    let dMoe = maxDiffF16(bfA, sMoeOut, naiveOut.moeOut)
-    let dH1 = maxDiffF16(bfA, sH1, naiveOut.h1)
-    let dBlock = maxDiffF16(bfA, sBlockOut, naiveOut.blockOut)
-    let dY = maxDiffF16(bfA, sY, naiveOut.y)
+    let dMoe = maxDiffF16(fpA, sMoeOut, naiveOut.moeOut)
+    let dH1 = maxDiffF16(fpA, sH1, naiveOut.h1)
+    let dBlock = maxDiffF16(fpA, sBlockOut, naiveOut.blockOut)
+    let dY = maxDiffF16(fpA, sY, naiveOut.y)
     var yArg = 0
     for i in 0 ..< naiveOut.y.len:
-      if abs(fp16ToFp32(bfA.hostPtr[sY + i]) - fp16ToFp32(naiveOut.y[i])) >
-          abs(fp16ToFp32(bfA.hostPtr[sY + yArg]) - fp16ToFp32(naiveOut.y[yArg])):
+      if abs(fp16ToFp32(fpA.hostPtr[sY + i]) - fp16ToFp32(naiveOut.y[i])) >
+          abs(fp16ToFp32(fpA.hostPtr[sY + yArg]) - fp16ToFp32(naiveOut.y[yArg])):
         yArg = i
-    echo &"[mega fp16] y argmax {yArg} mega {fp16ToFp32(bfA.hostPtr[sY + yArg]):.6f} " &
+    echo &"[mega fp16] y argmax {yArg} mega {fp16ToFp32(fpA.hostPtr[sY + yArg]):.6f} " &
       &"naive {fp16ToFp32(naiveOut.y[yArg]):.6f}"
     echo &"[mega fp16] informational max abs diff vs naive " &
       &"moeOut {dMoe:.5f} h1 {dH1:.5f} blockOut {dBlock:.5f} y {dY:.5f}"
@@ -322,14 +322,14 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     doAssert dY < 0.1'f32, "y outside the sanity bound"
 
   # the relaunch, restored arenas, state and ring, zeroed counters
-  for i in 0 ..< BfArenaLen: bfA.hostPtr[i] = bfSnap[i]
+  for i in 0 ..< BfArenaLen: fpA.hostPtr[i] = bfSnap[i]
   for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Snap[i]
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = stateSnap[i]
   for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringSnap[i]
   discard launch()
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
-    doAssert bfA.hostPtr[i] == bfSnap[i], &"bf arena differs at {i}"
+    doAssert fpA.hostPtr[i] == bfSnap[i], &"bf arena differs at {i}"
   for i in 0 ..< F32ArenaLen:
     doAssert f32A.hostPtr[i] == f32Snap[i], &"f32 arena differs at {i}"
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
