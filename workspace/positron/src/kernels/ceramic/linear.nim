@@ -7,9 +7,12 @@
 
 # ──────────────────────  linear (the F.linear projection, GEMV and GEMM)  ──────────────────────
 
-## Dense linear projection on the ceramic Tile API, the MSL block instantiates one entry
-## per projection shape, shapes static, the contract checks and the K-walk bound resolve
-## at compile time.
+## Dense linear projection on the ceramic Tile API.
+##
+## Regime:
+## - one device entry per element dtype
+## - the projection shape (N, K, M) travels as runtime int32 arguments
+## - one body per (El, TileC) instantiation serves every projection shape
 ##
 ## | contract     | value                                                                                                                                                |
 ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -23,9 +26,10 @@
 ##
 ##   per threadgroup:  X rows (32) × W cols (TileC) → 16-wide mma chunks → fp32 acc → RNE → El store
 ##
-## Shape contract, a violated shape under-covers the grid or mis-tiles the K walk:
+## Shape contract, the launcher computes the grid from these, a violated shape
+## under-covers the grid or mis-tiles the K walk:
 ## - K a multiple of the 16-wide mma K step
-## - N a multiple of TileC (64)
+## - N a multiple of TileC (64, the tile config's default tile width)
 ## - M unconstrained, rows past M load zero-filled and are never stored, a tail
 ##   M-tile needs no host padding
 ##
@@ -50,31 +54,39 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── The kernel ───────────────────────────────────────────────────────
 
-proc dense_linear_tile_fwd*[El; N, K, TileC: static int](
-    Out: ptr UncheckedArray[El],  # (M, N) out, the projection rows
-    X: ptr UncheckedArray[El],    # (M, K) input rows
-    W: ptr UncheckedArray[El],    # (N, K) row-major weights, the F.linear layout
-    M: int32,
-    tx, ty: int32) {.device.} =
-  ## | tile        | one (32, TileC) output tile at the caller's coordinates, grid (N div TileC, ceil(M/32))          |
-  ## | ----------- | ------------------------------------------------------------------------------------------------ |
-  ## | tx, ty      | the weight column block and the 32-row input block                                               |
-  ## | K walk      | 16-wide mma chunks, fp32 accumulation over the El operands                                       |
-  ## | output      | the fp32 accumulator rounds once (RNE) to El at the store                                        |
-  ## | tail rows   | rows past M are zero-filled on load and skipped on store, partial-M batches need no host padding |
-  ## | decode GEMV | the same body at M = 1                                                                           |
+proc dense_linear_tile_core*[El; TileC: static int](
+    Out: ptr UncheckedArray[El], X: ptr UncheckedArray[El],
+    W: ptr UncheckedArray[El], N, K, M: int32, tx, ty: int32) {.device.} =
+  ## Out[m][n] = sum_k X[m][k] * W[n][k] over the row-major (N, K) weights,
+  ## the torch F.linear contract, one (32, TileC) output tile per threadgroup.
   ##
-  ## Instantiation contract:
-  ## - every static binding set of this core needs a distinct call-site line
-  ## - the engine's monomorphization key erases generic static bindings, calls
-  ##   that share a call-site line collapse into the first binding set's body
+  ## Expected input:
+  ##   - Out of shape (M, N), X of shape (M, K), W of shape (N, K) row-major,
+  ##     the F.linear weight layout the checkpoints store, all El element size
+  ##   - N, K, M runtime int32, the projection shape
+  ##   - tx the weight column block, ty the 32-row input block, grid
+  ##     (N div TileC, ceil(M/32)) at 32 lanes
+  ##
+  ## per threadgroup, X rows (32) × W cols (TileC) → 16-wide mma chunks → fp32 acc → RNE → El store
+  ##
+  ## Output:
+  ##   - Out rows [ty*32, ty*32 + rem), rem = min(M - ty*32, 32), each element
+  ##     one RNE round of the fp32 mma accumulator to El
+  ##   - rows past M zero-fill on load and never store, a tail M-tile needs
+  ##     no host padding, the decode GEMV is the same body at M = 1
+  ##
+  ## Caller contract, the launcher computes the grid from these, a violated
+  ## shape under-covers the grid or mis-tiles the K walk:
+  ##   - K a multiple of the 16-wide mma K step
+  ##   - N a multiple of TileC
+  ##
+  ## Instantiation regime:
+  ##   - El infers from the pointer arguments
+  ##   - the projection shape is runtime, one body per (El, TileC)
+  ##     instantiation serves every projection shape
   static:
     doAssert TileC mod 8 == 0,
-      "dense_linear_tile_fwd: TileC must be an atom-column multiple"
-    doAssert K mod 16 == 0,
-      "dense_linear_tile_fwd: K must be a multiple of the 16-wide K step"
-    doAssert N mod TileC == 0,
-      "dense_linear_tile_fwd: N must be a multiple of TileC"
+      "dense_linear_tile_core: TileC must be an atom-column multiple"
   let r0 = ty * 32
   let rem = min(M - r0, 32'i32)
   let gdX = X.gd(shape = (-1, -1, -1, -1), stride = (K, 0, K, 1))
@@ -91,3 +103,26 @@ proc dense_linear_tile_fwd*[El; N, K, TileC: static int](
     acc.mma_AB(a, b)
   roundEl[El](outT, acc)
   gdOut.storeTileRows(outT, (r0, 0, 0, tx), rem)
+
+proc dense_linear_tile_fwd*[El](
+    Out: ptr UncheckedArray[El], X: ptr UncheckedArray[El],
+    W: ptr UncheckedArray[El], N, K, M: int32, tx, ty: int32) {.device.} =
+  ## F.linear at the default tile width.
+  ##
+  ## Contract:
+  ##   - TileC = 64, the 8 atom columns of the tile config's atoms
+  ##   - El infers from the pointer arguments
+  ##   - the projection shape (N, K, M) is runtime
+  dense_linear_tile_core[El, 64](Out, X, W, N, K, M, tx, ty)
+
+proc dense_linear_tile32_fwd*[El](
+    Out: ptr UncheckedArray[El], X: ptr UncheckedArray[El],
+    W: ptr UncheckedArray[El], N, K, M: int32, tx, ty: int32) {.device.} =
+  ## F.linear at the narrow tile width.
+  ##
+  ## Contract:
+  ##   - TileC = 32, the stage-4 a/b decay and beta GEMV binding of the mega composition,
+  ##     its projection rows N = 32 sit below the default width
+  ##   - El infers from the pointer arguments
+  ##   - the projection shape (N, K, M) is runtime
+  dense_linear_tile_core[El, 32](Out, X, W, N, K, M, tx, ty)

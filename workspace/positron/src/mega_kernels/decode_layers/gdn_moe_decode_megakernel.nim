@@ -427,22 +427,22 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
     waveAdd(counters, 0)
   elif tx < int32(EndStageQkv):
     waveWait(counters, 0, 1)
-    dense_linear_tile_fwd[T, 8192, 2048, 64](
-      (bfA +% sQkvCol), (bfA +% sNorm1), qkvW, 1, tx - 1, 0)
+    dense_linear_tile_fwd(
+      (bfA +% sQkvCol), (bfA +% sNorm1), qkvW, 8192, 2048, 1, tx - 1, 0)
     waveAdd(counters, 1)
   elif tx < int32(EndStageZ):
     waveWait(counters, 0, 1)
-    dense_linear_tile_fwd[T, 4096, 2048, 64](
-      (bfA +% sZ), (bfA +% sNorm1), zW, 1, tx - int32(EndStageQkv), 0)
+    dense_linear_tile_fwd(
+      (bfA +% sZ), (bfA +% sNorm1), zW, 4096, 2048, 1, tx - int32(EndStageQkv), 0)
     waveAdd(counters, 2)
   elif tx < int32(EndStageAbProj):
     waveWait(counters, 0, 1)
     if tx == int32(EndStageZ):
-      dense_linear_tile_fwd[T, 32, 2048, 32](
-        (bfA +% sA), (bfA +% sNorm1), aW, 1, 0, 0)
+      dense_linear_tile32_fwd(
+        (bfA +% sA), (bfA +% sNorm1), aW, 32, 2048, 1, 0, 0)
     else:
-      dense_linear_tile_fwd[T, 32, 2048, 32](
-        (bfA +% sB), (bfA +% sNorm1), bW, 1, 0, 0)
+      dense_linear_tile32_fwd(
+        (bfA +% sB), (bfA +% sNorm1), bW, 32, 2048, 1, 0, 0)
     waveAdd(counters, 3)
   elif tx < int32(EndStageConv):
     waveWait(counters, 1, 128)
@@ -495,8 +495,9 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
     waveAdd(counters, 8)
   elif tx < int32(EndStageOutProj):
     waveWait(counters, 8, 4)
-    dense_linear_tile_fwd[T, 2048, 4096, 64](
-      (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 1, tx - int32(EndStageONorm), 0)
+    dense_linear_tile_fwd(
+      (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 2048, 4096, 1,
+      tx - int32(EndStageONorm), 0)
     waveAdd(counters, 9)
     when not HaveNorm:
       # Mixer entry's launch-end counter self-reset, the projection stage's
