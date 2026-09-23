@@ -14,10 +14,10 @@
 ## | contract       | value                                                                                                                                                  |
 ## | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 ## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                             |
-## | q, k           | (B·Hk, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                                |
-## | v, beta        | (B·Hv, Dv) and (B·Hv,) family dtype, g is (B·Hv,) f32 log-decay                                                                                        |
-## | y              | (B·Hv, Dv) family dtype, one round-to-nearest-even                                                                                                     |
-## | family dtype   | compile-time element type of one body, fp16 primary, bf16 the range-robust fallback (`gdnDecodeStepTile`'s `T` generic, inferred from the pointers)    |
+## | q, k           | (B·Hk, Dk) element dtype, already l2-normalized (l2norm stays host-side)                                                                               |
+## | v, beta        | (B·Hv, Dv) and (B·Hv,) element dtype, g is (B·Hv,) f32 log-decay                                                                                       |
+## | y              | (B·Hv, Dv) element dtype, one round-to-nearest-even                                                                                                    |
+## | element dtype  | compile-time element type of one body (`gdnDecodeStepTile`'s `T` generic, inferred from the pointers)                                                  |
 ## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                           |
 ## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                     |
 ## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
@@ -54,21 +54,21 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc gdnDecodeStepTileAt*[Fam: bfloat16|float16](
+proc gdnDecodeStepTileAt*[T](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],             # (B·Hv, Dv) family dtype core output
-    k: ptr UncheckedArray[Fam],             # (B·Hk, Dk) family dtype, post-l2norm
-    q: ptr UncheckedArray[Fam],             # (B·Hk, Dk) family dtype, post-l2norm
-    v: ptr UncheckedArray[Fam],             # (B·Hv, Dv) family dtype
+    y: ptr UncheckedArray[T],             # (B·Hv, Dv) element dtype core output
+    k: ptr UncheckedArray[T],             # (B·Hk, Dk) element dtype, post-l2norm
+    q: ptr UncheckedArray[T],             # (B·Hk, Dk) element dtype, post-l2norm
+    v: ptr UncheckedArray[T],             # (B·Hv, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hv,) f32 log decay
-    beta: ptr UncheckedArray[Fam],          # (B·Hv,) family dtype, one per value head
+    beta: ptr UncheckedArray[T],          # (B·Hv,) element dtype, one per value head
     Hv, Hk, hkRatio: int32,
     dvBlock, bh: int32,
     Dk, Dv, TileR: static int) {.device.} =
   ## One (bh, TileR-row) state tile of the gated delta-rule decode step at the caller's coordinates
   ##
-  ## - the family dtype is a compile-time generic, fp16 primary and bf16 the range-robust fallback
-  ## - the family-dtype loads and the one family-dtype y rounding are the only
+  ## - the element dtype is an unconstrained compile-time generic
+  ## - the element-dtype loads and the one element-dtype y rounding are the only
   ##   dtype-dependent steps, the tile walk is dtype-mechanical
   ##
   ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
@@ -82,13 +82,13 @@ proc gdnDecodeStepTileAt*[Fam: bfloat16|float16](
   ##
   ##   kv_mem[row] = Σ_dk decayed[row][dk]·k[dk]
   ##   delta[row] = β·(v[row] − kv_mem[row])
-  ##   y[row] = Σ_dk S'[row][dk]·(q[dk]·Dk^-0.5), one family-dtype round
+  ##   y[row] = Σ_dk S'[row][dk]·(q[dk]·Dk^-0.5), one element-dtype round
   ##
   ## Y write goes to the lanes whose fragment column is 0, one lane per state row.
   ##
   ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
-  ## - generic only over the family dtype and the static shape, every (Dk, Dv, TileR)
+  ## - generic only over the element dtype and the static shape, every (Dk, Dv, TileR)
   ##   binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
   static:
@@ -106,9 +106,9 @@ proc gdnDecodeStepTileAt*[Fam: bfloat16|float16](
   let glV = v.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 1, 0))
 
   var s: rt_l(float32, TileR, Dk)
-  var kT: rt_l(Fam, TileR, Dk)
-  var qT: rt_l(Fam, TileR, Dk)
-  var vT: rt_l(Fam, TileR, 8)
+  var kT: rt_l(T, TileR, Dk)
+  var qT: rt_l(T, TileR, Dk)
+  var vT: rt_l(T, TileR, 8)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
   kT.loadTile(glK, (kLin, 0, 0, 0))
   qT.loadTile(glQ, (kLin, 0, 0, 0))
@@ -157,20 +157,17 @@ proc gdnDecodeStepTileAt*[Fam: bfloat16|float16](
   let rowIn = cell mod 8
   let colIn = cell div 8
   if colIn == 0:
-    when Fam is bfloat16:
-      y[yLin + dvBlock * 8 + int32(rowIn)] = oVal.bfloat16
-    else:
-      y[yLin + dvBlock * 8 + int32(rowIn)] = oVal.float16
+      y[yLin + dvBlock * 8 + int32(rowIn)] = roundToRne[T](oVal)
   glState.storeTile(s, (headLin, 0, dvBlock, 0))
 
-proc gdnDecodeStepTile*[Fam: bfloat16|float16](
+proc gdnDecodeStepTile*[T](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],             # (B·Hv, Dv) family dtype core output
-    k: ptr UncheckedArray[Fam],             # (B·Hk, Dk) family dtype, post-l2norm
-    q: ptr UncheckedArray[Fam],             # (B·Hk, Dk) family dtype, post-l2norm
-    v: ptr UncheckedArray[Fam],             # (B·Hv, Dv) family dtype
+    y: ptr UncheckedArray[T],             # (B·Hv, Dv) element dtype core output
+    k: ptr UncheckedArray[T],             # (B·Hk, Dk) element dtype, post-l2norm
+    q: ptr UncheckedArray[T],             # (B·Hk, Dk) element dtype, post-l2norm
+    v: ptr UncheckedArray[T],             # (B·Hv, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hv,) f32 log decay
-    beta: ptr UncheckedArray[Fam],          # (B·Hv,) family dtype, one per value head
+    beta: ptr UncheckedArray[T],          # (B·Hv,) element dtype, one per value head
     Hv, Hk, hkRatio: int32,
     Dk, Dv, TileR: static int) {.device.} =
   ## Grid-driven form of `gdnDecodeStepTileAt`, the caller's `metal:` entry wraps this proc.

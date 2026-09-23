@@ -20,16 +20,16 @@
 ## | H_t       | Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
 ## | carry     | S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
 ##
-## | contract     | value                                                                                                                                        |
-## | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                     |
-## | q, k, g, β   | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to family (the recorded per-channel family contract)               |
-## | cumulogdecay | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                              |
-## | v, y         | (B·Hv, T, Dv) family dtype each, y gets one round-to-nearest-even per element                                                                |
-## | family dtype | one compile-time element type, fp16 primary, bf16 the range-robust fallback (`kdaPrefillChunkScan`'s `Fam` generic)                          |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                 |
-## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                   |
-## | decay / q̃   | exp2(cumulogdecay·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
+## | contract      | value                                                                                                                                        |
+## | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                     |
+## | q, k, g, β    | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to the element dtype (the recorded per-channel contract)           |
+## | cumulogdecay  | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                              |
+## | v, y          | (B·Hv, T, Dv) element dtype each, y gets one round-to-nearest-even per element                                                               |
+## | element dtype | one compile-time element type (`kdaPrefillChunkScan`'s `El` generic)                                                                         |
+## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                 |
+## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                   |
+## | decay / q̃    | exp2(cumulogdecay·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
 ##
 ## | contract                  | value                                                                                                                             |
 ## | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -88,19 +88,20 @@
 from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
+from ../tile_widen import roundToRne
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
+proc kdaPrefillChunkScanAt*[El](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    y: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
-    v: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    v: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
     Hv, Hk, hkRatio, T: int32,
@@ -108,7 +109,7 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
   ## One (bh, TileR-row) state tile of the chunked KDA prefill scan, the whole
   ## token sequence walked over the register state at the caller's coordinates
-  ## (the family dtype a compile-time generic over bf16/fp16)
+  ## (the element dtype an unconstrained compile-time generic)
   ##
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds before the final in-place store
@@ -119,7 +120,7 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
   ##
   ## - the u solve is sequential in t, the sums over s walk s ascending
   ##
-  ## - the family-dtype y round per element is the only dtype-dependent step,
+  ## - the element-dtype y round per element is the only dtype-dependent step,
   ##   the tile walk is dtype-mechanical
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
@@ -129,7 +130,7 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
   ##
   ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
-  ## - generic only over the family dtype and the static shape, every (Dk, Dv, ChunkC)
+  ## - generic only over the element dtype and the static shape, every (Dk, Dv, ChunkC)
   ##   binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
   static:
@@ -207,7 +208,7 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
         # - the argument stays ≤ 0 (cumulogdecay decreases along t), no intermediate
         #   exceeds 1, exp2 cannot overflow
         # - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once
-        #   |cumulogdecay_s| ≳ 88.7, the resulting Inf × dT → 0 product NaNs the carry
+## | cumulogdecay_s |
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
         for n in 0 ..< rowTiles:
@@ -259,10 +260,7 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
         yVal += qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
-        when Fam is bfloat16:
-          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.bfloat16
-        else:
-          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.float16
+          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = roundToRne[El](yVal)
 
     # Carry out of the chunk, per key channel:
     # S = dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) ⊗ u_s
@@ -297,13 +295,13 @@ proc kdaPrefillChunkScanAt*[Fam: bfloat16|float16](
   glState.storeTile(s, (headLin, 0, dvBlock, 0))
 
 
-proc kdaPrefillChunkScan*[Fam: bfloat16|float16](
+proc kdaPrefillChunkScan*[El](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    y: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     k: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, T, Dk) f32, post-l2norm
     cumulogdecay: ptr UncheckedArray[float32],    # (B·Hk, T, Dk) f32 per-channel cumulative log decay
-    v: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    v: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     beta: ptr UncheckedArray[float32],    # (B·Hv, T) f32 beta
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
     Hv, Hk, hkRatio, T: int32,

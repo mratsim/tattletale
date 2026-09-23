@@ -17,16 +17,16 @@
 ## | y_t             | exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s               |
 ## | carry           | S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s                       |
 ##
-## | contract     | value                                                                                                                                       |
-## | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                    |
-## | q, k         | (B·Hk, T, Dk) family dtype, already l2-normalized (l2norm stays host-side)                                                                  |
-## | v, beta      | (B·Hv, T, Dv) and (B·Hv, T) family dtype, g is (B·Hv, T) f32 log-decay                                                                      |
-## | y            | (B·Hv, T, Dv) family dtype, one round-to-nearest-even per element                                                                           |
-## | family dtype | one compile-time element type, fp16 primary, bf16 the range-robust fallback (`gdnPrefillChunkScan`'s `Fam` generic)                         |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                |
-## | chunk axis   | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
-## | decay / q̃   | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
+## | contract      | value                                                                                                                                       |
+## | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                    |
+## | q, k          | (B·Hk, T, Dk) element dtype, already l2-normalized (l2norm stays host-side)                                                                 |
+## | v, beta       | (B·Hv, T, Dv) and (B·Hv, T) element dtype, g is (B·Hv, T) f32 log-decay                                                                     |
+## | y             | (B·Hv, T, Dv) element dtype, one round-to-nearest-even per element                                                                          |
+## | element dtype | one compile-time element type (`gdnPrefillChunkScan`'s `El` generic)                                                                        |
+## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                |
+## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
+## | decay / q̃    | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ##
 ## | contract       | value                                                                                                                                                                   |
 ## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,27 +70,27 @@ from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
-from ../tile_widen import widen
+from ../tile_widen import widen, roundToRne
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
+proc gdnPrefillChunkScanAt*[El](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
-    k: ptr UncheckedArray[Fam],           # (B·Hk, T, Dk) family dtype, post-l2norm
-    q: ptr UncheckedArray[Fam],           # (B·Hk, T, Dk) family dtype, post-l2norm
-    v: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    y: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
+    k: ptr UncheckedArray[El],           # (B·Hk, T, Dk) element dtype, post-l2norm
+    q: ptr UncheckedArray[El],           # (B·Hk, T, Dk) element dtype, post-l2norm
+    v: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hv, T) f32 log decay
-    beta: ptr UncheckedArray[Fam],        # (B·Hv, T) family dtype
+    beta: ptr UncheckedArray[El],        # (B·Hv, T) element dtype
     Hv, Hk, hkRatio, T: int32,
     dvBlock, bh: int32,
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
   ## One (bh, TileR-row) state tile of the chunked GDN prefill scan, the whole
   ## token sequence walked over the register state at the caller's coordinates
-  ## (the family dtype a compile-time generic over bf16/fp16):
+  ## (the element dtype an unconstrained compile-time generic):
   ##
   ##   t 0 → t 1 → … → t ChunkC-1   u solve per t, sums over s ascending
   ##
@@ -99,14 +99,14 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
   ## - the state entering a chunk is S_carry, untouched until the chunk-end carry update
   ## - the u solve is sequential in t, the sums over s walk s ascending
   ##
-  ## - the family-dtype loads and the one family-dtype y round per element are
+  ## - the element-dtype loads and the one element-dtype y round per element are
   ##   the only dtype-dependent steps, the tile walk is dtype-mechanical
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
   ##
   ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
-  ## - generic only over the family dtype and the static shape, every (Dk, Dv, ChunkC)
+  ## - generic only over the element dtype and the static shape, every (Dk, Dv, ChunkC)
   ##   binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
   static:
@@ -151,7 +151,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
     for t in 0 ..< cLen:
       let gt = c0 + int32(t)
       let kLinT = kHeadLin + gt * Dk
-      var kT: rt_l(Fam, TileR, Dk)
+      var kT: rt_l(El, TileR, Dk)
       kT.loadTile(glK, (kLinT, 0, 0, 0))
       var k32: rt_l(float32, TileR, Dk)
       k32.widen(kT)
@@ -170,7 +170,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
       # u_t = β_t·(v_t − G_t) − β_t·Σ_{s<t} pairdecay(t, s)·(k_t·k_s)·u_s, solved in token order
       var uacc = 0'f32
       for sIdx in 0 ..< t:
-        var ksT: rt_l(Fam, TileR, Dk)
+        var ksT: rt_l(El, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
         ks32.widen(ksT)
@@ -184,7 +184,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
       uLoc[t] = ut
 
       # y_t = exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
-      var qT: rt_l(Fam, TileR, Dk)
+      var qT: rt_l(El, TileR, Dk)
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
       q32.widen(qT)
@@ -199,7 +199,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
       qVec.row_sum(qProd)
       var yVal = decayT * qVec.data[0]
       for sIdx in 0 .. t:
-        var ksT: rt_l(Fam, TileR, Dk)
+        var ksT: rt_l(El, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
         var ks32: rt_l(float32, TileR, Dk)
         ks32.widen(ksT)
@@ -211,10 +211,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
         yVal += pdts * qkVec.data[0] * uLoc[sIdx]
 
       if colIn == 0:
-        when Fam is bfloat16:
-          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.bfloat16
-        else:
-          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = yVal.float16
+          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = roundToRne[El](yVal)
 
     # Carry out of the chunk:
     # S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
@@ -222,7 +219,7 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
     s.mul(s, decayEnd)
     for sIdx in 0 ..< cLen:
       let ws = exp2((cumulogdecay[cLen - 1] - cumulogdecay[sIdx]) * Log2e) * uLoc[sIdx]
-      var ksT: rt_l(Fam, TileR, Dk)
+      var ksT: rt_l(El, TileR, Dk)
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
       ks32.widen(ksT)
@@ -235,14 +232,14 @@ proc gdnPrefillChunkScanAt*[Fam: bfloat16|float16](
   glState.storeTile(s, (headLin, 0, dvBlock, 0))
 
 
-proc gdnPrefillChunkScan*[Fam: bfloat16|float16](
+proc gdnPrefillChunkScan*[El](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
-    k: ptr UncheckedArray[Fam],           # (B·Hk, T, Dk) family dtype, post-l2norm
-    q: ptr UncheckedArray[Fam],           # (B·Hk, T, Dk) family dtype, post-l2norm
-    v: ptr UncheckedArray[Fam],           # (B·Hv, T, Dv) family dtype
+    y: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
+    k: ptr UncheckedArray[El],           # (B·Hk, T, Dk) element dtype, post-l2norm
+    q: ptr UncheckedArray[El],           # (B·Hk, T, Dk) element dtype, post-l2norm
+    v: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hv, T) f32 log decay
-    beta: ptr UncheckedArray[Fam],        # (B·Hv, T) family dtype
+    beta: ptr UncheckedArray[El],        # (B·Hv, T) element dtype
     Hv, Hk, hkRatio, T: int32,
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
   ## Grid-driven form of `gdnPrefillChunkScanAt`, the caller's `metal:` entry wraps this proc.

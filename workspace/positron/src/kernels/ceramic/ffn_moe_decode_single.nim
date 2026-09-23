@@ -16,13 +16,13 @@
 ## Slot groups plus the merge launch (in `moe_router`) compose
 ## the full MoE decode pass, the megakernel composes this core inline.
 ##
-  ## | contract   | value                                                                                              |
-  ## | ---------- | -------------------------------------------------------------------------------------------------- |
-  ## | router     | the `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
-  ## | storage    | the family dtype (bf16 or fp16), the decode composition's storage element                          |
-  ## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down    |
-  ## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
-  ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
+## | contract   | value                                                                                              |
+## | ---------- | -------------------------------------------------------------------------------------------------- |
+## | router     | the `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
+## | storage    | the element dtype, the decode composition's storage element                                        |
+## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down    |
+## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
+## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
 
 import math_consts
 import workspace/crucible
@@ -42,7 +42,7 @@ proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
     gl: GlView[El],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for family-dtype tiles. Tile plane rows origin[2]·R + r at or above
+  ## Row-bounded loadTile for element-dtype tiles. Tile plane rows origin[2]·R + r at or above
   ## `rowLimit` are zero-filled, not read.
   const M = A.getM()
   const N = A.getN()
@@ -68,7 +68,7 @@ proc storeTileRowsBounded[El; R, C: static int; A: static MmaAtom](
     tile: RtLeft[El, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for family-dtype tiles. Tile plane rows origin[2]·R + r at or above
+  ## Row-bounded storeTile for element-dtype tiles. Tile plane rows origin[2]·R + r at or above
   ## `rowLimit` are not written.
   const M = A.getM()
   const N = A.getN()
@@ -92,7 +92,7 @@ proc loadRowsBounded[El; R, C: static int; A: static MmaAtom](
     gl: GlView[El],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for the family-dtype storage element.
+  ## Row-bounded loadTile for the element-dtype storage element.
   loadTileRowsBounded(tile, gl, origin, rowLimit)
 
 proc storeRowsBounded[El; R, C: static int; A: static MmaAtom](
@@ -100,7 +100,7 @@ proc storeRowsBounded[El; R, C: static int; A: static MmaAtom](
     tile: RtLeft[El, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for the family-dtype storage element.
+  ## Row-bounded storeTile for the element-dtype storage element.
   storeTileRowsBounded(gl, tile, origin, rowLimit)
 
 # ─── Local device extensions: the activation and partial arithmetic ──
@@ -114,10 +114,10 @@ proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
   ##
   ## Eager name separates the two `siluMulElem` contracts.
   ##
-  ## | proc                               | silu operand at the multiply |
-  ## | ---------------------------------- | ---------------------------- |
-  ## | `siluMulElemEager` (this module)   | the bf16-rounded silu        |
-  ## | `attn_ssm/gated_delta_net_o_norm.nim`'s `siluMulElem` | the unrounded f32 silu       |
+## | proc                                                  | silu operand at the multiply |
+## | ----------------------------------------------------- | ---------------------------- |
+## | `siluMulElemEager` (this module)                      | the bf16-rounded silu        |
+## | `attn_ssm/gated_delta_net_o_norm.nim`'s `siluMulElem` | the unrounded f32 silu       |
   ##
   ## Rounding, per storage element:
   ## - the silu result rounds to bf16 (RNE)
@@ -149,11 +149,11 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   ## - the store guard requires `row == 0`, exactly one lane per stored element
   ## - the GDN y store keeps the same single-writer spelling
   ##
-  ## | element (c, v) of tile row n                       | written when                    |
-  ## | -------------------------------------------------- | ------------------------------- |
-  ## | dst[rowIdx[n]·rowStride + colTile·C + m·N + c + v] | `row == 0` and `rowIdx[n] >= 0` |
-  ## | stored value                                       | rowS[n]·tile value              |
-  ## | rows with rowIdx[n] < 0                            | not written                     |
+## | element (c, v) of tile row n                       | written when                    |
+## | -------------------------------------------------- | ------------------------------- |
+## | dst[rowIdx[n]·rowStride + colTile·C + m·N + c + v] | `row == 0` and `rowIdx[n] >= 0` |
+## | stored value                                       | rowS[n]·tile value              |
+## | rows with rowIdx[n] < 0                            | not written                     |
   static:
     doAssert RT == R div A.getM()
   const M = A.getM()
@@ -188,23 +188,23 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
   ## One (token, slot) pair's decode walk, `t` the token, `y` the slot group, routed y < K, the shared group y = K.
   ## `moe_fwd_decode` is the grid-driven wrapper, the megakernel composes this core inline.
   ##
-  ## | stage        | behavior                                                                                                                                                   |
-  ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  ## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
-  ## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
-  ## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
+## | stage        | behavior                                                                                                                                                   |
+## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
+## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
+## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
   ##
   ## Instantiation contract:
   ## - each static binding set of this core needs its own call-site line
   ##
   ## shape preconditions, each one a static assert below:
   ##
-  ## | precondition  | a violated shape's failure                                             |
-  ## | ------------- | ---------------------------------------------------------------------- |
-  ## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
-  ## | H mod 32 == 0 | the down walk's 32-wide column tiles silently truncate H               |
-  ## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
-  ## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
+## | precondition  | a violated shape's failure                                             |
+## | ------------- | ---------------------------------------------------------------------- |
+## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
+## | H mod 32 == 0 | the down walk's 32-wide column tiles silently truncate H               |
+## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
+## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
   static:
     doAssert H mod 16 == 0,
       "moe_fwd_decode_at: H must be a multiple of the 16-wide K step"
@@ -226,10 +226,10 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
 
   var gHalf: rt_l(float32, 32, 32, getTileConfig(float32, El))
   var uHalf: rt_l(float32, 32, 32, getTileConfig(float32, El))
-  var hFam: rt_l(El, 32, 32)
+  var hT: rt_l(El, 32, 32)
   var d: rt_l(float32, 32, 32, getTileConfig(float32, El))
   var a: rt_l(El, 32, 16)
-  var bFam: rt_r(El, 16, 32)
+  var bT: rt_r(El, 16, 32)
 
   if y < K:
     var ids: array[K, int32]
@@ -241,12 +241,12 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
         a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
-        bFam.loadTile(glGu, (ids[y], 0, nt, kk))
-        gHalf.mma_AB(a, bFam)
-        bFam.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
-        uHalf.mma_AB(a, bFam)
-      hFam.siluMulElemEager(gHalf, uHalf)
-      glH.storeRowsBounded(hFam, (t * K + y, 0, 0, nt), 1)
+        bT.loadTile(glGu, (ids[y], 0, nt, kk))
+        gHalf.mma_AB(a, bT)
+        bT.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
+        uHalf.mma_AB(a, bT)
+      hT.siluMulElemEager(gHalf, uHalf)
+      glH.storeRowsBounded(hT, (t * K + y, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -259,8 +259,8 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       d.zero()
       for kk in 0'i32 ..< I div 16:
         a.loadRowsBounded(glH, (t * K + y, 0, 0, kk), 1)
-        bFam.loadTile(glDown, (ids[y], 0, nt, kk))
-        d.mma_AB(a, bFam)
+        bT.loadTile(glDown, (ids[y], 0, nt, kk))
+        d.mma_AB(a, bT)
       var rowIdx = [int32(t * (K + 1) + y), -1'i32, -1'i32, -1'i32]
       var rowS = [w[y], 0.0'f32, 0.0'f32, 0.0'f32]
       storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)
@@ -277,12 +277,12 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
         a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
-        bFam.loadTile(glSg, (0, 0, nt, kk))
-        gHalf.mma_AB(a, bFam)
-        bFam.loadTile(glSu, (0, 0, nt, kk))
-        uHalf.mma_AB(a, bFam)
-      hFam.siluMulElemEager(gHalf, uHalf)
-      glHs.storeRowsBounded(hFam, (t, 0, 0, nt), 1)
+        bT.loadTile(glSg, (0, 0, nt, kk))
+        gHalf.mma_AB(a, bT)
+        bT.loadTile(glSu, (0, 0, nt, kk))
+        uHalf.mma_AB(a, bT)
+      hT.siluMulElemEager(gHalf, uHalf)
+      glHs.storeRowsBounded(hT, (t, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -295,8 +295,8 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       d.zero()
       for kk in 0'i32 ..< I div 16:
         a.loadRowsBounded(glHs, (t, 0, 0, kk), 1)
-        bFam.loadTile(glSd, (0, 0, nt, kk))
-        d.mma_AB(a, bFam)
+        bT.loadTile(glSd, (0, 0, nt, kk))
+        d.mma_AB(a, bT)
       var rowIdx = [int32(t * (K + 1) + K), -1'i32, -1'i32, -1'i32]
       var rowS = [gateVal, 0.0'f32, 0.0'f32, 0.0'f32]
       storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)

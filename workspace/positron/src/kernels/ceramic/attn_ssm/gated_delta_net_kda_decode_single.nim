@@ -15,24 +15,24 @@
 ## - g is a (B·Hk, Dk) matrix, one log-decay per KEY channel, decayed elementwise BEFORE the kv read
 ## - the kv read contracts the decayed state kᵀ·Diag(exp(g))·S, a post-contraction decay kᵀ·S·exp(g) is the GDN op
 ##
-## | contract     | value                                                                                                             |
-## | ------------ | ----------------------------------------------------------------------------------------------------------------- |
-## | state math   | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                        |
-## | q, k, g, β   | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to family                                       |
-## | v, y         | (B·Hv, Dv) family dtype each, y gets one round-to-nearest-even                                                    |
-## | family dtype | one compile-time element type, fp16 primary, bf16 the range-robust fallback (`kdaDecodeStepTile`'s `Fam` generic) |
-## | head mapping | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                      |
-## | batch        | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs                           |
-## | decay        | exp2(g·log2e) per channel, log2e is the shared `math_consts.Log2e` (Metal has no exp device builtin)              |
-## | q̃           | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                                 |
+## | contract      | value                                                                                                |
+## | ------------- | ---------------------------------------------------------------------------------------------------- |
+## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync           |
+## | q, k, g, β    | (B·Hk, Dk) f32 q/k/g post-l2norm, (B·Hv,) f32 beta, never rounded to the element dtype               |
+## | v, y          | (B·Hv, Dv) element dtype each, y gets one round-to-nearest-even                                      |
+## | element dtype | one compile-time element type (`kdaDecodeStepTile`'s `T` generic)                                    |
+## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk         |
+## | batch         | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs              |
+## | decay         | exp2(g·log2e) per channel, log2e is the shared `math_consts.Log2e` (Metal has no exp device builtin) |
+## | q̃            | divides q per element by the runtime f32 `qScale`, the host's f64 √Dk cast to f32                    |
 ##
 ## | contract       | value                                                                                                                            |
 ## | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 ## | g precondition | finite and ≤ 0 per key channel (−exp(A_log)·softplus ≤ 0 by construction), no kernel clamp, a violating g explodes the f32 state |
 
 ##
-## - the recorded contract keeps q/k/g/beta f32, this spelling's family axis covers v and y only
-## - the bf16 spelling is the recorded Kimi spelling, fp16 follows the family dtype verdict
+## - the recorded contract keeps q/k/g/beta f32, this spelling's element-dtype axis covers v and y only
+## - the bf16 spelling is the recorded Kimi spelling, fp16 follows the element dtype verdict
 ##
 ## - Entries are consumer-side, a `metal` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
@@ -54,18 +54,19 @@
 from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
+from ../tile_widen import roundToRne
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc kdaDecodeStepTileAt*[Fam: bfloat16|float16](
+proc kdaDecodeStepTileAt*[T](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, Dv) family dtype core output
+    y: ptr UncheckedArray[T],           # (B·Hv, Dv) element dtype core output
     k: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32, post-l2norm
-    v: ptr UncheckedArray[Fam],           # (B·Hv, Dv) family dtype
+    v: ptr UncheckedArray[T],           # (B·Hv, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32 log decay
     beta: ptr UncheckedArray[float32],    # (B·Hv,) f32 beta, one per value head
     qScale: float32,                      # √Dk, the host's f64 sqrt cast to f32
@@ -73,7 +74,7 @@ proc kdaDecodeStepTileAt*[Fam: bfloat16|float16](
     dvBlock, bh: int32,
     Dk, Dv, TileR: static int) {.device.} =
   ## One (bh, TileR-row) state tile of the KDA decode step at the caller's coordinates
-  ## (the family dtype a compile-time generic over bf16/fp16):
+  ## (the element dtype an unconstrained compile-time generic):
   ##
   ##   S ← S·Diag(exp(g)) + k ⊗ (β·(v − (S·Diag(exp(g)))·k))    y ← S'·(q/√Dk)
   ##
@@ -83,20 +84,20 @@ proc kdaDecodeStepTileAt*[Fam: bfloat16|float16](
   ##   decayed[dkc] = exp2(g[dkc]·log2e)·S[dkc], the kv read contracts the decayed state
   ## - the state stores in place, f32, no rounding
   ##
-  ## - the family-dtype v load and the one family-dtype y rounding are the only
+  ## - the element-dtype v load and the one element-dtype y rounding are the only
   ##   dtype-dependent steps, the tile walk is dtype-mechanical
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
   ##
   ##   kv_mem[row] = Σ_dkc decayed[row][dkc]·k[dkc]
   ##   delta[row] = β·(v[row] − kv_mem[row])
-  ##   y[row] = Σ_dkc S'[row][dkc]·(q[dkc]/qScale), one family-dtype round
+  ##   y[row] = Σ_dkc S'[row][dkc]·(q[dkc]/qScale), one element-dtype round
   ##
   ## Y write goes to the lanes whose fragment column is 0, one lane per state row.
   ##
   ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
-  ## - generic only over the family dtype and the static shape, every (Dk, Dv, TileR)
+  ## - generic only over the element dtype and the static shape, every (Dk, Dv, TileR)
   ##   binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
   static:
@@ -118,7 +119,7 @@ proc kdaDecodeStepTileAt*[Fam: bfloat16|float16](
   var k32: rt_l(float32, TileR, Dk)
   var q32: rt_l(float32, TileR, Dk)
   var gT: rt_l(float32, TileR, Dk)
-  var vT: rt_l(Fam, TileR, 8)
+  var vT: rt_l(T, TileR, 8)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
   k32.loadTile(glK, (kLin, 0, 0, 0))
   q32.loadTile(glQ, (kLin, 0, 0, 0))
@@ -168,19 +169,16 @@ proc kdaDecodeStepTileAt*[Fam: bfloat16|float16](
   let rowIn = cell mod 8
   let colIn = cell div 8
   if colIn == 0:
-    when Fam is bfloat16:
-      y[yLin + dvBlock * 8 + int32(rowIn)] = oVal.bfloat16
-    else:
-      y[yLin + dvBlock * 8 + int32(rowIn)] = oVal.float16
+      y[yLin + dvBlock * 8 + int32(rowIn)] = roundToRne[T](oVal)
   glState.storeTile(s, (headLin, 0, dvBlock, 0))
 
 
-proc kdaDecodeStepTile*[Fam: bfloat16|float16](
+proc kdaDecodeStepTile*[T](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
-    y: ptr UncheckedArray[Fam],           # (B·Hv, Dv) family dtype core output
+    y: ptr UncheckedArray[T],           # (B·Hv, Dv) element dtype core output
     k: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32, post-l2norm
     q: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32, post-l2norm
-    v: ptr UncheckedArray[Fam],           # (B·Hv, Dv) family dtype
+    v: ptr UncheckedArray[T],           # (B·Hv, Dv) element dtype
     g: ptr UncheckedArray[float32],       # (B·Hk, Dk) f32 log decay
     beta: ptr UncheckedArray[float32],    # (B·Hv,) f32 beta, one per value head
     qScale: float32,                      # √Dk, the host's f64 sqrt cast to f32

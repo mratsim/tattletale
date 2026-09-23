@@ -308,8 +308,8 @@ proc convRingChannels[T](convW, ring, xCol, outCol: ptr UncheckedArray[T], chanB
   ## One threadgroup's ConvDim div 64 channels of the decode conv step
   ## in the recorded two-round spelling:
   ## - the f32 tap dot over the ring's (RingWidth) history taps
-  ##   then the step column, one family-dtype round
-  ## - the silu in f32 over the widened value, one family-dtype round
+  ##   then the step column, one element-dtype round
+  ## - the silu in f32 over the widened value, one element-dtype round
   ## - the ring rolls in the same walk, the step's pre-conv column
   ##   landing in the newest slot, the history shifting down,
   ##   each channel independent of its neighbors
@@ -345,8 +345,8 @@ proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   ##
   ## | step                | rounding                                                    |
   ## | ------------------- | ----------------------------------------------------------- |
-  ## | elementwise squares | round to the family dtype                                   |
-  ## | row sum             | f32 serial accumulation, the sum rounds to the family dtype |
+  ## | elementwise squares | round to the element dtype                                   |
+  ## | row sum             | f32 serial accumulation, the sum rounds to the element dtype |
   ## | sum + eps, rsqrt    | the sum rounds, the rsqrt computes in f32 and rounds        |
   ## | normalization       | the multiply rounds per element                             |
   ##
@@ -356,9 +356,9 @@ proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   for c in 0'i32 ..< cols:
     let xi = x[c].float32
     acc += roundToRne[T](xi * xi).float32
-  let sumFam = roundToRne[T](acc).float32
+  let sumT = roundToRne[T](acc).float32
   let inv =
-    roundToRne[T](f32InvSqrt(roundToRne[T](sumFam + 1.0e-6'f32).float32)).float32
+    roundToRne[T](f32InvSqrt(roundToRne[T](sumT + 1.0e-6'f32).float32)).float32
   var i = int32(thread_index_in_threadgroup)
   while i < cols:
     outp[i] = roundToRne[T](x[i].float32 * inv)
@@ -372,7 +372,7 @@ proc gateValues[T](aRow, bRow, dtBias: ptr UncheckedArray[T],
   ## in the recorded spellings:
   ## - g stays f32 end to end with no round,
   ##   g = -exp(A_log)·softplus(a + dt_bias)
-  ## - beta = sigmoid(b) with one family-dtype round
+  ## - beta = sigmoid(b) with one element-dtype round
   let h = int32(thread_index_in_threadgroup)
   let x = aRow[h].float32 + dtBias[h].float32
   g[h] = -exp2(aLog[h] * Log2e) * softplusDev(x)
