@@ -63,8 +63,10 @@ proc loadTileRows*[El; R, C: static int; A: static MmaAtom](
         else:
           when El is bfloat16:
             tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
-          else:
+          elif El is float16:
             tile.frags[n][m].frag[v] = 0'u16.asFp16()
+          else:
+            tile.frags[n][m].frag[v] = El(0)
 
 proc storeRows[TIn; R, C: static int; A: static MmaAtom](
     gl: GlView[float16],
