@@ -154,6 +154,29 @@ proc checkGenericRows(): bool =
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
   result = true
 
+proc checkRaggedTail(): bool =
+  ## Ragged gelu shape, 70 experts, a router whose every real logit is negative.
+  ## The chunk tail's zero-filled rows must lose the top-4.
+  ##
+  ## - experts 70..127 are chunk 1's tail
+  ## - their router rows load zero-filled, sigmoid(0) = 0.5
+  ## - unmasked, that 0.5 beats every real score, the top-4 picks expert
+  ##   ids at or beyond 70 and reads past the 70-row expert weights
+  ##
+  ## The kernel and the torch chain read the same bits, a top-4 tail
+  ## expert shows up as an O(1) order deviation.
+  var g = genMoERow(raggedRow)
+  for i in 0 ..< g.xf.len:
+    g.xf[i] = abs(g.xf[i])
+  for i in 0 ..< g.rwf.len:
+    g.rwf[i] = -abs(g.rwf[i])
+  let actual = toTensor(fp16sToF32(moeKernelBits(g, raggedRow)))
+    .reshape(raggedRow.tokens, raggedRow.hidden)
+  let expected = moeReferenceRow(g, raggedRow)
+  echo &"  {raggedRow.name} tail: worst |Δ| = {worstAbsDiff(actual, expected)}"
+  assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
+  result = true
+
 proc checkConfigGuard(): bool =
   ## Runtime-entry compiled-in maxima guard.
   ##
@@ -198,3 +221,4 @@ when isMainModule:
   runCppTest("moe_fwd vs the torch reference", checkMoe)
   runCppTest("the compiled-in maxima guard", checkConfigGuard)
   runCppTest("moe_fwd rows vs the torch reference", checkGenericRows)
+  runCppTest("the ragged tail router, masked tail experts", checkRaggedTail)

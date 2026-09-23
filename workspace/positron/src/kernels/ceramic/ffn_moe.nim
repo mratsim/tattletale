@@ -202,16 +202,18 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
   let r = cell mod 8          # the destination row = expert div 8
   let c0 = cell div 8         # the lane's col pair base
   let e0 = int32(8 * r + c0)  # the lane's experts inside the chunk
+  # The tail mask's global expert index, the same cell spelling
+  # topkRouted's table uses
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< ScoreChunk div 8:
     let g0 = simdShuffle(chunk.frags[0][m].frag[0], uint32(srcLane))
     let g1 = simdShuffle(chunk.frags[0][m].frag[1], uint32(srcLane))
     if m == r:
       scores.frags[0][chunkIndex].frag[0] =
-        if e0 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g0 * Log2e))
+        if ScoreChunk * chunkIndex + e0 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g0 * Log2e))
         else: -3.402823466e38'f32
       scores.frags[0][chunkIndex].frag[1] =
-        if e0 + 1 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g1 * Log2e))
+        if ScoreChunk * chunkIndex + e0 + 1 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g1 * Log2e))
         else: -3.402823466e38'f32
 
 proc topkRouted[A: static MmaAtom](
