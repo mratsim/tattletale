@@ -351,6 +351,8 @@ proc moe_fwd*(
 ## Compiled-in fixed maxima, a config beyond one stops and reports:
 ##   - 64 experts per score chunk, at most 8 chunks, n_routed_experts <= 512
 ##   - at most MaxTopK routing slots
+##   the guard's two halves, the device entry drops the launch, the host
+##   companion `moeFwdGenericConfigGuard` raises naming the offending dim
 ##
 ## GLM-4.7-Flash's baked `moe_fwd` constants above are one config point of this function.
 ## With those values the two entries produce the same output,
@@ -455,7 +457,9 @@ proc topkRouted[A: static MmaAtom](
   ##
   ## An unmatched pass, a NaN/Inf-poisoned score comparing false against
   ## everything so no score equals the max, routes the slot to expert
-  ## eCount − 1 with zero weight, the ids stay in [0, eCount).
+  ## eCount − 1 with zero weight. For eCount ≥ 1 that id stays inside
+  ## [0, eCount), for eCount = 0 the slot id is −1, the no-expert
+  ## config the entry's dims guard rejects before launch.
   ##
   ## The downstream expert-row reads stay in bounds.
   var sel: RtLeft[float32, 8, ScoreChunk * ScoreChunks, A]
@@ -477,6 +481,13 @@ proc topkRouted[A: static MmaAtom](
     lm = max(lm, simdShuffleDown(lm, 2'u32))
     lm = max(lm, simdShuffleDown(lm, 1'u32))
     lm = simdShuffle(lm, 0'u32)
+    # A candidate index above every real expert index. The min reduction
+    # over indices leaves the sentinel standing only when no score matched
+    # the max, so the `cand >= ScoreChunk * ScoreChunks` test below fires.
+    # The baked top-K's sentinel was the sigmoid-bound 1.0 read as an index.
+    # This sentinel is index-space too, it needs only to exceed
+    # ScoreChunk·ScoreChunks (512) and 1 shl 30 clears that with margin
+    # for any score values.
     var localCand = int32(1 shl 30)
     for m in 0 ..< ScoreChunks:
       let e0 = int32(ScoreChunk * m + 8 * r + c0)
@@ -512,6 +523,32 @@ proc topkRouted[A: static MmaAtom](
         if e0 + 1 == cand:
           sel.frags[0][m].frag[1] = -3.402823466e38'f32
 
+proc moeFwdGenericConfigGuard*(
+    num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
+    n_shared_experts: int32) =
+  ## Host-side half of `moe_fwd_generic`'s compiled-in maxima guard.
+  ##
+  ## Raises with the offending dimension named. The device entry itself
+  ## only drops the launch, the GPU has no message channel, so a caller
+  ## runs this companion before `engine.run`.
+  ##
+  ## Accepted config:
+  ##   - num_tokens, hidden, moe_intermediate at least 1
+  ##   - n_shared_experts at least 0
+  ##   - n_routed_experts inside [1, ScoreChunk·ScoreChunks], top_k inside [1, MaxTopK]
+  ##
+  ## `moeFwdGenericConfigGuard(8, 2048, 64, 1536, 4, 1)` returns, the accepted GLM row.
+  ## `moeFwdGenericConfigGuard(8, 2048, 1024, 1536, 4, 1)` raises AssertionDefect naming n_routed_experts,
+  ## the expert max times the chunk width.
+  doAssert num_tokens >= 1, "num_tokens must be at least 1"
+  doAssert hidden >= 1, "hidden must be at least 1"
+  doAssert moe_intermediate >= 1, "moe_intermediate must be at least 1"
+  doAssert n_shared_experts >= 0, "n_shared_experts must be at least 0"
+  doAssert n_routed_experts >= 1 and n_routed_experts <= ScoreChunk * ScoreChunks,
+    "n_routed_experts outside [1, " & $(ScoreChunk * ScoreChunks) & "]"
+  doAssert top_k >= 1 and top_k <= MaxTopK,
+    "top_k outside [1, " & $MaxTopK & "]"
+
 proc moe_fwd_generic*(
     out_r: ptr UncheckedArray[float16],              # (num_tokens, hidden) fp16 output
     x: ptr UncheckedArray[float16],                  # (num_tokens, hidden) fp16 activations
@@ -533,32 +570,38 @@ proc moe_fwd_generic*(
   ##   logits → sigmoid → top-K (lowest-index tiebreak)
   ##          → w = s/(sum(w)+1e-20)·routed_scaling
   ##
-  ## Expected input, per model config row:
+  ## Expected input, per model config row, tensors fp16:
   ##
-  ## | tensor fp16      | shape                                                                                |
-  ## | ------------------ |
-  ## | x                | (num_tokens, hidden), one token per threadgroup                                      |
-  ## | router_w         | (n_routed_experts, hidden)                                                           |
-  ## | gate_up_w        | (n_routed_experts, 2·moe_intermediate, hidden) fused g/up, g half 0:moe_intermediate |
-  ## | down_w           | (n_routed_experts, hidden, moe_intermediate)                                         |
-  ## | shared_gate_up_w | (n_shared_experts, 2·moe_intermediate, hidden) fused g/up                            |
-  ## | shared_down_w    | (n_shared_experts, hidden, moe_intermediate)                                         |
-  ## | h_scratch        | (num_tokens, top_k, moe_intermediate) working buffer                                 |
-  ## | hs_scratch       | (num_tokens, n_shared_experts, moe_intermediate) working buffer                      |
+  ## - x, shape (num_tokens, hidden), one token per threadgroup
+  ## - router_w, shape (n_routed_experts, hidden)
+  ## - gate_up_w, shape (n_routed_experts, 2·moe_intermediate, hidden),
+  ##   fused g/up, the g half at 0:moe_intermediate
+  ##
+  ## - down_w, shape (n_routed_experts, hidden, moe_intermediate)
+  ## - shared_gate_up_w, shape (n_shared_experts, 2·moe_intermediate, hidden), fused g/up
+  ## - shared_down_w, shape (n_shared_experts, hidden, moe_intermediate)
+  ##
+  ## - h_scratch, shape (num_tokens, top_k, moe_intermediate), working buffer
+  ## - hs_scratch, shape (num_tokens, n_shared_experts, moe_intermediate), working buffer
   ##
   ## The scalars num_tokens, hidden, n_routed_experts, moe_intermediate,
   ## top_k, n_shared_experts are int32, routed_scaling is float32,
   ## activation is ActSilu or ActGeluTanh.
   ##
   ## A config beyond the compiled-in fixed maxima, n_routed_experts >
-  ## ScoreChunk·ScoreChunks (512) or top_k > MaxTopK, stops before launch.
+  ## ScoreChunk·ScoreChunks (512) or top_k > MaxTopK, or a non-positive dim, stops before launch.
+  ##
+  ## The entry drops the launch, `moeFwdGenericConfigGuard`
+  ## reports naming the offending dimension, the caller
+  ## runs the companion before each `engine.run` launch.
   ##
   ## Output:
   ##
-  ## | output    | value                                                                                                              |
-  ## | --------- | ------------------------------------------------------------------------------------------------------------------ |
-  ## | h_scratch | h_scratch[t, slot] = fp16(act(g)·u), hs_scratch[t, s] for shared expert s                                          |
-  ## | out_r     | out_r[t] = fp16(Σ_slot w[slot]·(down_w[ids[slot]] @ h_scratch[t, slot]) + Σ_s shared_down_w[s] @ hs_scratch[t, s]) |
+  ## - h_scratch and hs_scratch hold fp16(act(g)·u) per routed slot,
+  ##   the shared activations at hs_scratch[t, s]
+  ## - out_r, per token t the fp16 of the weighted sum
+  ##   Σ_slot w[slot]·(down_w[ids[slot]] @ h_scratch[t, slot]) +
+  ##   Σ_s shared_down_w[s] @ hs_scratch[t, s]
   ##
   ## Ragged-native over the runtime dims:
   ##   - the K walks run ceil(dim / tileK) steps, each load bounded
@@ -572,6 +615,15 @@ proc moe_fwd_generic*(
   ## Grid (num_tokens, 1, 1) at 32 lanes, one token per threadgroup,
   ## the baked `moe_fwd`'s geometry. Register budget near 2 live 32×32
   ## fp32 accumulators (the gHalf/uHalf pair) plus transients.
+  # The register tiles are compiled-in maxima, a config beyond one would
+  # write past them. The entry drops the launch, the host companion
+  # `moeFwdGenericConfigGuard` reports and the caller runs it before each launch.
+  if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
+      n_shared_experts < 0 or
+      n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or
+      top_k < 1 or top_k > MaxTopK:
+    return
+
   let t = int32(threadgroup_position_in_grid.x)
 
   let gateUpOut = 2 * moe_intermediate

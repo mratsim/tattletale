@@ -230,8 +230,49 @@ proc checkGenericRows(): bool =
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
   result = true
 
+proc checkConfigGuard(): bool =
+  ## Generic-entry compiled-in maxima guard.
+  ##
+  ## The host companion raises with the offending dimension named.
+  ## The device entry drops the launch for an over-max config.
+  ## The output bits stay at the prefill value.
+  for bad in [("n_routed_experts", 8'i32, 2048'i32, 1024'i32, 1536'i32, 4'i32, 1'i32),
+              ("top_k", 8, 2048, 64, 1536, 12, 1),
+              ("num_tokens", 0, 2048, 64, 1536, 4, 1)]:
+    let (dimName, nt, h, e, i, k, ns) = bad
+    try:
+      moeFwdGenericConfigGuard(nt, h, e, i, k, ns)
+      echo "  the guard accepted the over-max ", dimName, " config"
+      return false
+    except AssertionDefect as ex:
+      echo "  ", dimName, " rejected: ", ex.msg
+  moeFwdGenericConfigGuard(8, 2048, 64, 1536, 4, 1)
+  moeFwdGenericConfigGuard(2, 2048, 256, 512, 8, 1)
+  echo "  accepted the GLM and Qwen rows"
+  # the device half drops the launch, the output stays the prefill
+  var engine = bkMetal.init()
+  engine.ingest(moeMslGeneric)
+  var outO = newSeq[uint16](8 * 2048)
+  for i in 0 ..< outO.len:
+    outO[i] = 0x7BFF'u16
+  engine.run << (grid: (8, 1, 1), blk: (32, 1)) >> ("moeRunGeneric", outO,
+    (newSeq[uint16](8 * 2048), newSeq[uint16](1024 * 2048),
+     newSeq[uint16](1024 * 3072), newSeq[uint16](1024 * 2048),
+     newSeq[uint16](3072), newSeq[uint16](2048),
+     newSeq[uint16](8 * 4 * 1536), newSeq[uint16](8 * 1536),
+     8'i32, 2048'i32, 1024'i32, 1536'i32, 4'i32, 1'i32, 1.8'f32, ActSilu))
+  var untouched = true
+  for i in 0 ..< outO.len:
+    if outO[i] != 0x7BFF'u16:
+      untouched = false
+  echo "  over-max n_routed_experts=1024 launch dropped: ", untouched
+  if not untouched:
+    return false
+  result = true
+
 when isMainModule:
   runCppTest("moe_fwd vs the torch reference", checkMoe)
+  runCppTest("the generic entry's compiled-in maxima guard", checkConfigGuard)
   runCppTest("moe_fwd_generic GLM delta-zero vs the baked entry",
     checkGenericDeltaZero)
   runCppTest("moe_fwd_generic rows vs the torch reference", checkGenericRows)
