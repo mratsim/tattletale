@@ -3,15 +3,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Builtin library of the expression language over the value model, the corpus's
-## Jinja filters, tests and methods as pure `(JinjaVal, args) -> JinjaVal` functions.
-## - name registries (`FilterNames`, `TestNames`, `MethodNames`) with the proc tables
-##   they index, dispatched by name in jinja_interpolation
-## Call arguments travel in the fixed-capacity inline carrier (`Arg`, `Args`) from jinja_data_model.
-## - a nil table entry raises `gapWhat`, a declared name the corpus does not use
-##   reported as an unimplemented demand
-## - globals stay in jinja_interpolation, their signatures reading the template text
-##   and the injected clock through the context, which this module cannot see
+## Builtin library of the expression language.
+##
+## - the corpus's Jinja filters, tests and methods as pure `(JinjaVal, args) -> JinjaVal` functions
+## - name registries with the proc tables they index, dispatched by name in jinja_interpolation
+## - a nil table entry raising `gapWhat`, the declared-gap contract
+##
+## Globals stay in jinja_interpolation.
 
 import std/unicode
 import cnj_types {.all.}
@@ -63,8 +61,7 @@ func argKeyword*(name: openArray[char]): ArgKeyword =
 
 func getArg*(args: var Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
   ## Returns the argument bound under `kw`, else the `pos`-th positional in call order,
-  ## else `default`. Positionals bind by their own count, so a keyword sitting earlier
-  ## in the carrier never shifts the positional sequence.
+  ## else `default`. Positionals bind by their own count.
   if kw != akNone:
     for a in args.argItems:
       if a.kw == kw:
@@ -95,9 +92,8 @@ const
   ]
 
 func tojsonFilter(v: JinjaVal, args: var Args): JinjaVal =
-  ## Renders JSON. `ensure_ascii` and `separators` are the only kwargs
-  ## the corpus passes. `ensure_ascii` defaults to false, non-ASCII emitted
-  ## as raw UTF-8.
+  ## Renders JSON, `ensure_ascii` and `separators` the kwargs the corpus passes,
+  ## non-ASCII emitted as raw UTF-8 by default.
   var opts = JsonOpts()
   for a in args.argItems:
     case a.kw
@@ -193,11 +189,7 @@ func safeFilter(v: JinjaVal, args: var Args): JinjaVal =
   v
 
 func joinMethod(v: JinjaVal, args: var Args): JinjaVal =
-  ## `x | join(sep)` and `x.join(sep)`:
-  ##   concatenates a sequence's values, a mapping's keys.
-  ##
-  ## A mapping's join walks its keys, matching upstream, where the values are
-  ## unreadable bytes and the keys the visible members.
+  ## `x | join(sep)` and `x.join(sep)` concatenate a sequence's values, a mapping's keys.
   let sep = pyStr(getArg(args, 0, akNone, strVal("")))
   var acc = ""
   case v.kind
@@ -272,9 +264,8 @@ func valuesMethod(v: JinjaVal, args: var Args): JinjaVal =
   seqVal(v.d.vals)
 
 func splitMethod(v: JinjaVal, args: var Args): JinjaVal =
-  ## `s.split(sep)` over non-overlapping separator occurrences, an empty separator
-  ## splitting per codepoint, a missing separator splitting on whitespace runs
-  ## and dropping the empties.
+  ## `s.split(sep)` over non-overlapping occurrences, an empty separator splitting per codepoint,
+  ## a missing separator splitting on whitespace runs and dropping the empties.
   let v = if v.kind == vkCut: materializeVal(v) else: v
   if v.kind != vkStr:
     raise jinjaErr("`split` needs a string")
@@ -337,14 +328,9 @@ func startswithMethod(v: JinjaVal, args: var Args): JinjaVal = edgeWith(v, args,
 func endswithMethod(v: JinjaVal, args: var Args): JinjaVal = edgeWith(v, args, "endswith", true)
 
 const
-  ## Builtin dispatch tables binding each enum name to its proc.
-  ## - one line per name, the pairing reads directly and insertion
-  ##   needs no position recounting
-  ## - unlisted names stay nil, the unknown-name raise at the registry
-  ##   lookup serving as the gap contract
-  ## - keys of a keyed array literal survive only when the literal names
-  ##   every index and the first pair shares the bracket line, a partial
-  ##   list silently reverts to position coupling (Nim 2.2.10)
+  ## Builtin dispatch tables, one line per name, unlisted names nil, the unknown-name
+  ## raise at the registry lookup serving as the gap contract. A keyed array literal pairs
+  ## keys only when it names every index and the first pair shares the bracket line (Nim 2.2.10).
   FilterProcs*: array[FilterName, FilterProc] = [fTojson: tojsonFilter,
     fLength: lengthFilter,
     fTrim: trimFilter,

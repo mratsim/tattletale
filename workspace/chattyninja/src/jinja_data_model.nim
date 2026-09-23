@@ -6,7 +6,7 @@
 ## Data model of chat-template inputs and outputs, the Python-object subset Jinja templates observe.
 ## JSON shapes arrive as values, renderings leave as Python text or `tojson` JSON bytes.
 ## - values carry truthiness, equality, ordering and the stringification a template reads
-## - one call's arguments travel in a fixed-capacity inline carrier (`Arg`, `Args`),
+## - one call's arguments travel in an inline array of three arguments (`Arg`, `Args`),
 ##   never a per-call sequence
 ## - renderings stream through a byte cursor over a caller-owned window, every failure
 ##   raising `JinjaError` with message, cause and template byte location
@@ -22,34 +22,23 @@ export small_seqs
 
 const
   ArgsCap = 3
-    ## Argument capacity of one call's `Args` carrier, past it `SmallSeq` spills to the heap.
+    ## Argument capacity of one call's `Args`, past it `SmallSeq` spills to the heap.
 
 const
   TTT_CNJ_RangeElemCap* {.intdefine.} = 1_000_000
-    ## Element bound of one lazy `range`:
-    ## - the count answers wherever a consumer counts or drains, and eagerly
-    ##   at construction (`range` global), the one site holding a location
-    ## - chat-template ranges are small, the corpus topping out at a few
-    ##   hundred elements, 1_000_000 clearing legitimate use with margin
-    ## - every consumer stays bounded to a count or a materialization no larger
-    ##   than the cap, a breach raising a located `JinjaError`
+    ## Element bound of one lazy `range`, checked eagerly at construction and at every
+    ## count or drain, a breach raising a located `JinjaError`.
   TTT_CNJ_ValueDepthCap* {.intdefine.} = 1000
-    ## Recursion bound over the value graph fed host-provided data:
-    ## - deepest corpus context nesting is single digits, 1000 clearing it
-    ##   with margin and staying far below the C stack depth
-    ##
-    ## Raise contract, the walkers being `eqVal`, `containsVal` and the serializer's
-    ## container stack entries:
-    ## - every value-graph walker counts levels toward the cap and raises a `JinjaError` on breach
-    ## - `eqVal` and `containsVal` raise located at the caller's template position,
-    ##   the serializer raising `NoOffset`, it carrying no template location
+    ## Recursion bound over the value graph fed host-provided data, corpus nesting
+    ## in the single digits. Every walker raises a `JinjaError` on breach, located
+    ## where a template position is in scope.
     ## - cyclic graphs raise the same way, their nesting unbounded
 
 const
   NoOffset* = -1
     ## `JinjaError.offset` marker for a raise site with no template location in scope
   NoLink = -1'i32
-    ## Marks an absent link or absent span in every node payload slot.
+    ## Marks an absent link or span in a node payload slot.
   EmptyWindow: array[0, char] = []
     ## empty span backing the measuring cursor
 
@@ -72,9 +61,7 @@ type
       ## kind of failure, `ceRaiseCall` a `raise_exception` call, `ceUnimplemented` a declared gap, `ceWindow` a window-capacity overflow
 
   Cursor = object
-    ## Appends bytes into a borrowed window. An append that does not fit raises `JinjaError`
-    ## with cause `ceWindow`, naming capacity and shortfall, never growing the window.
-    ## Measuring mode counts bytes without writing, the presize pass of a two-pass render.
+    ## Appends bytes into a borrowed window, overflow raising `ceWindow`, measuring mode only counting.
     buf*: openArray[char]
       ## borrowed window, `buf.len` the writable capacity in bytes
     len*: int
@@ -102,12 +89,8 @@ type
     start*, stop*, step*: int64
 
   LoopState* = ref object
-    ## Cursor over the iterable a `for` walks, one cursor shared by the for-row
-    ## and the `loop` value bound in the loop scope:
-    ## - `xs` borrows the sequence payload of a `vkSeq` iterable, or holds a materialized
-    ##   one for mappings and strings, whose elements are derived per index
-    ## - `r` holds a lazy range, nil unless the iterable is one, elements computing
-    ##   per index and never materializing
+    ## Cursor over the iterable a `for` walks, `xs` borrowing the payload or holding
+    ## the materialized copy, `r` the lazy range, `idx` the cursor position.
     xs*: SeqVal
     r*: RangeVal
       ## lazy range bounds, meaningful only when `isRange`
@@ -116,8 +99,7 @@ type
     idx*: int
 
   ArgKeyword* = enum
-    ## A keyword name a builtin reads out of an argument list, `akNone` the field's default:
-    ## a positional argument or a keyword no builtin reads.
+    ## A keyword name a builtin reads out of an argument list, `akNone` otherwise.
     akNone, akChars, akDefault, akEnsureAscii, akSeparators
 
   Arg = object
@@ -140,7 +122,7 @@ type
       ## evaluated arguments in call order
 
   MacroVal* = object
-    ## Bound macro over three immutable `nkMacroDef` arena indexes (name, body, node), nothing shared.
+    ## Bound macro over three immutable `nkMacroDef` node indexes (name, body, node), nothing shared.
     name*: int32
     body*: int32
     node*: int32
@@ -444,7 +426,7 @@ func loopItem*(lp: LoopState, i: int): JinjaVal =
   if lp.isRange: lp.r.rangeAt(i) else: lp.xs.items[i]
 
 iterator argItems*(a: var Args): var Arg =
-  ## Iterates the carrier's arguments in call order, each yielded by borrow.
+  ## Iterates `Args` in call order, each yielded by borrow.
   for i in 0 ..< a.len:
     yield a[i]
 

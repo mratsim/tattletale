@@ -4,7 +4,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Chat-template parser.
-# Template text in, the shared node arena plus interned-name arena out.
+# Template text in, the shared node list plus interned-name table out.
 #
 # Lifecycle:
 #
@@ -12,7 +12,7 @@
 #   a pull stream yields one tag per advance, the whitespace policy resolved at the run
 #   boundaries so no node carries a whitespace flag
 # - emit:
-#   a recursive descent over the tag stream appends nodes in source order, so arena order
+#   a recursive descent over the tag stream appends nodes in source order, so node order
 #   equals source order and `succ` stays a link field, never a program counter
 # - backpatch:
 #   each construct returns its unresolved-successor nodes and the enclosing construct
@@ -25,11 +25,11 @@
 #
 # - scan-to-bound loops (whitespace runs, name spans, marker finds) advance a byte cursor against a fixed source-span end
 # - the split's main loop returns one tag per pass, a tagless pass still moving the scan cursor past the tag it consumed
-# - each construct body walk consumes at least one tag per pass, so arena growth stays bounded by the tag count
+# - each construct body walk consumes at least one tag per pass, so node-list growth stays bounded by the tag count
 #
 # - a find that misses reports `stop` or raises, never rescans
 # - construct nesting is capped at `TTT_CNJ_ParseNestingCap`, the dispatch recursion bounded, a breach raising located at the tag
-# - the trailing-newline back-trim walk in `settle` decrements its arena index toward `tagMark`
+# - the trailing-newline back-trim walk in `settle` decrements its node index toward `tagMark`
 #
 # | Rule                 | Effect                                                                                            |
 # | -------------------- | ------------------------------------------------------------------------------------------------- |
@@ -73,9 +73,8 @@ type
     tLo, tHi: int # inside of the delimiters, with any `-` marker stripped
 
   Parser = object
-    ## Parse state:
-    ##   the current tag with a one-tag lookahead, the scan cursor into `src`,
-    ##   the arena under construction and the symbol arena.
+    ## Parse state of one tag plus a one-tag lookahead, the scan cursor into `src`, the node
+    ## list under construction and the interned-name table.
     src: openArray[char]
     cur, nxt: Tag # `nxt` is the lookahead, `tkEnd` there marking the end of the stream
     pending: Tag # a tag row scanned together with the text run before it, delivered next
@@ -83,7 +82,7 @@ type
     pendBr: bool # trim_blocks drops one newline at the next run's start
     done: bool # the scan reached the end of the template
     dropCur: bool # settle emptied `cur`, parseBody emits no node for it
-    tagMark: int # arena length at the last tag pull, the back-trim walk stops here
+    tagMark: int # node-list length at the last tag pull, the back-trim walk stops here
     nesting: int # body-carrying constructs under construction, `parseNested` caps the recursion on it
     loopDepth: int # enclosing `{% for %}` bodies under construction, 0 at top level
     macroDepth: int # enclosing `{% macro %}` bodies under construction, 0 at top level
@@ -113,11 +112,8 @@ func atLineStart(src: openArray[char], at: int): bool =
   i < 0 or src[i] == '\n'
 
 func tagBounds(src: openArray[char], innerLo, innerHi: int): (int, int, bool, bool) =
-  ## Splits a tag's inside against its `-` markers, returning the marker-free span
-  ## plus the two strip flags:
-  ## - `stripBefore` reads a `{%-`-shaped open, `stripAfter` a `-%}`-shaped close
-  ## - both flags read the unadjusted span, a degenerate whole-dash interior
-  ##   (`{#-#}`) losing both markers at once
+  ## Splits a tag's inside against its `-` markers, returning the marker-free span plus
+  ## the two strip flags, both flags read off the unadjusted span.
   var lo = innerLo
   var hi = innerHi
   let stripBefore = lo < hi and src[lo] == '-'
@@ -129,11 +125,8 @@ func tagBounds(src: openArray[char], innerLo, innerHi: int): (int, int, bool, bo
   (lo, hi, stripBefore, stripAfter)
 
 func runBeforeTag(src: openArray[char], lo, hi, openAt: int, stripBefore, blockTag: bool): int =
-  ## Resolves the whitespace of the text run before a tag, returning the run's new end.
-  ##
-  ## - a `{%-`-shaped open strips every whitespace byte of the run's tail
-  ## - otherwise only blanks precede the tag on its line, `lstrip_blocks` stripping
-  ##   those blanks of a block or comment tag
+  ## Resolves the whitespace of the text run before a tag, a `{%-`-shaped open stripping
+  ## the run's whole tail, `lstrip_blocks` the line's blanks of a block or comment tag.
   result = hi
   if stripBefore:
     while result > lo and src[result - 1] in cnj_types.Whitespace:
@@ -143,9 +136,8 @@ func runBeforeTag(src: openArray[char], lo, hi, openAt: int, stripBefore, blockT
       dec result
 
 func passTagClose(p: var Parser, afterTag: int, stripAfter, blockTag: bool) =
-  ## Steps the cursor past a tag's close and records the trim_blocks flag for the next run:
-  ## a `-%}`-shaped close skips the whitespace run after it, and one newline of the next
-  ## run is dropped when the tag is a block or comment tag.
+  ## Steps past a tag's close and records `trim_blocks` for the next run, a `-%}`-shaped
+  ## close skipping the whitespace run after it, one newline dropped for a block or comment tag.
   var j = afterTag
   if stripAfter:
     while j < p.src.len and p.src[j] in cnj_types.Whitespace:
@@ -172,11 +164,8 @@ func findTagClose(src: openArray[char], at, stop: int, close: string): int =
   -1
 
 func findRun(src: openArray[char], at, stop: int, needle: string): int =
-  ## Returns the offset of `needle` at or after `at`, a plain byte scan with no
-  ## quote or bracket tracking.
-  ## - comment and `{% raw %}` bodies are verbatim runs, a `'` or `"` inside them
-  ##   must not defer the scan
-  ## - `findTagClose` is the quote-tracking form, reserved for expression spans
+  ## Returns the offset of `needle` at or after `at`, a plain byte scan with neither quote
+  ## tracking nor bracket counting, reserved for verbatim comment and `{% raw %}` bodies.
   var i = at
   while i + needle.len <= stop:
     if at(src, needle, i):
@@ -194,15 +183,9 @@ func nextOpen(src: openArray[char], at, stop: int): int =
   stop
 
 func splitTags(p: var Parser): Tag =
-  ## Produces the next tag of the split, one call per tag:
-  ## a whitespace-resolved text run or one `{%`/`{{` tag row, scanned from the parser's cursor.
-  ##
-  ## | Property    | Contract                                                           |
-  ## | ----------- | ------------------------------------------------------------------ |
-  ## | pending     | a tag row scanned with the text run before it, delivered next call |
-  ## | end         | the `tkEnd` sentinel at the template's end                         |
-  ## | termination | a tagless pass still moves the scan cursor, an unclosed raise      |
-  ## | unclosed    | `JinjaError` on an unterminated comment, tag or raw body           |
+  ## Produces the next tag of the split, one call per tag, a whitespace-resolved text run
+  ## or one `{%`/`{{` tag row, a tag row delivered one call ahead of its text run, `tkEnd`
+  ## at the template's end, an unterminated comment, tag or raw body raising.
   if p.pending.kind != tkEnd:
     result = p.pending
     p.pending = Tag()
@@ -343,13 +326,9 @@ func splitTags(p: var Parser): Tag =
     return Tag(kind: kind, lo: 0, hi: 0, tLo: int32 tLo, tHi: int32 tHi)
 
 func settle(p: var Parser) =
-  ## Trailing-newline rule for the tag that just became `cur`:
-  ## - the final text run of a template drops its trailing newlines, matching the upstream
-  ##   `rstrip("\n")` before compile, and `dropCur` marks it so parseBody emits no node
-  ## - a run that empties passes the trim to the verbatim nodes before it, each emptied
-  ##   run passing it on, until one keeps bytes, a non-text node ends the walk,
-  ##   or the walk reaches `tagMark`, the arena length at the last tag pull
-  ## - emptied nodes stay in the arena, they render nothing
+  ## Trailing-newline rule for the tag that just became `cur`, the final run dropping
+  ## its trailing newlines, an emptied run passing the trim to the runs before it until one
+  ## keeps bytes, emptied nodes staying in the node list rendering nothing.
   p.dropCur = false
   if p.nxt.kind != tkEnd or p.cur.kind != tkText:
     return
@@ -370,9 +349,7 @@ func settle(p: var Parser) =
     dec k
 
 func advance(p: var Parser) =
-  ## Pull step of the stream:
-  ## `cur` steps to the lookahead, the scan produces the next tag.
-  ## The trailing-newline rule applies once the end of the template is the lookahead.
+  ## Pull step of the stream, `cur` stepping to the lookahead, the scan producing the next tag.
   p.cur = p.nxt
   if p.cur.kind != tkText:
     p.tagMark = p.nodes.len
@@ -388,7 +365,7 @@ func start(p: var Parser) =
 # Emit:
 
 func addNode(p: var Parser, n: sink Node): int32 =
-  ## Appends one node and returns its arena index.
+  ## Appends one node and returns its node index.
   result = int32 p.nodes.len
   p.nodes.add n
 
@@ -404,9 +381,7 @@ func keywordStart(src: openArray[char], t: Tag): int =
   i
 
 func keywordSpan(src: openArray[char], t: Tag): openArray[char] =
-  ## View of a `{% %}` tag's leading identifier over `src`, so neither a dispatch
-  ## nor a terminator test materializes the keyword.
-  ## The view's first byte offset is `keywordStart`, the same leading-whitespace skip.
+  ## View of a `{% %}` tag's leading identifier over `src`, so neither a dispatch nor a terminator test materializes the keyword.
   var i = t.tLo
   while i < t.tHi and src[i] in cnj_types.Whitespace:
     inc i
@@ -444,13 +419,8 @@ func afterKeyword(p: Parser, t: Tag, kwLen: int): int =
   i
 
 func scanDepth0(src: openArray[char], at, stop: int, stops: set[char], word: string): int =
-  ## Returns the offset of the first position at bracket depth zero, outside quoted literals,
-  ## holding a character of `stops` or the bare word `word`, or `stop` when neither appears.
-  ##
-  ## - word boundaries are checked against `at` and `stop`, the scan span's ends
-  ## - quoted literals are skipped and bracketed subexpressions counted, so a match inside
-  ##   a string or a call's argument list never fires
-  ## - an empty `word` disables the word test
+  ## Returns the first position at bracket depth zero, outside quoted literals, holding
+  ## a character of `stops` or the bare word `word`, or `stop` when neither appears.
   var i = at
   var depth = 0
   var q: char = '\0'
@@ -475,32 +445,24 @@ func scanDepth0(src: openArray[char], at, stop: int, stops: set[char], word: str
   stop
 
 func skipBalanced(src: openArray[char], at, stop: int, stops: set[char], expected: string): int =
-  ## Returns the offset of any character of `stops` at bracket depth zero, skipping quoted
-  ## literals and raising when the construct ends first.
-  ## `expected` names the stop characters in the error message.
+  ## Returns the offset of any character of `stops` at bracket depth zero, quoted
+  ## literals skipped, raising when the construct ends first.
   let i = scanDepth0(src, at, stop, stops, "")
   if i == stop:
     raise jinjaErr("expected `" & expected & "` before byte " & $stop, stop)
   i
 
 func findKeyword(src: openArray[char], at, stop: int, word: string): int =
-  ## Returns the offset of the bare word `word` at bracket depth zero, or `stop` on a span
-  ## holding no such word.
-  ##
-  ## - quoted literals and bracketed subexpressions are skipped, so an `if` inside a string
-  ##   or a call's argument list is not mistaken for the for-`if` clause
+  ## Returns the offset of the bare word `word` at bracket depth zero with quoted literals
+  ## and bracketed subexpressions skipped, or `stop` when none appears.
   scanDepth0(src, at, stop, {}, word)
 
 proc parseBody(p: var Parser, stopKws: openArray[string]): Head
 proc parseConstruct(p: var Parser): Head
 
 template capNesting(p: var Parser, t: Tag) =
-  ## Counts one recursion level of the parse dispatch toward `TTT_CNJ_ParseNestingCap`, a breach
-  ## raising located at the tag. A raise aborts the whole parse, the parser value abandoned.
-  ##
-  ## Counted sites:
-  ## - body walks, at `parseNested`
-  ## - the `{% elif %}` chain, which recurses `parseIf` outside any body walk
+  ## Counts one recursion level of the parse dispatch toward `TTT_CNJ_ParseNestingCap`,
+  ## a breach raising located at the tag and aborting the whole parse.
   inc p.nesting
   if p.nesting > TTT_CNJ_ParseNestingCap:
     raise jinjaErr("template nests deeper than TTT_CNJ_ParseNestingCap = " & $TTT_CNJ_ParseNestingCap &
@@ -515,12 +477,7 @@ template parseNested(p: var Parser, stopKws: openArray[string], t: Tag): Head =
   body
 
 proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
-  ## Parses `(a, b = expr, ...)` starting at the open paren and appending one payload triple per
-  ## parameter to the `nkMacroDef` node at `nodeIdx`, the interned name then the default span,
-  ## `NoLink` when absent, defaults staying template text, each evaluated per call after binding.
-  ## - each pass consumes a parameter name, a nameless position raising, so the walk is bounded
-  ##   by the tag's span
-  ## - evaluation happens after the parameters bind
+  ## Parses `(a, b = expr, ...)`, one payload triple per parameter to the `nkMacroDef` node, defaults staying template text.
   var i = at + 1 # past the open paren
   while true:
     while i < t.tHi and p.src[i] in cnj_types.Whitespace:
@@ -563,9 +520,8 @@ proc parseMacroParams(p: var Parser, t: Tag, at: int, nodeIdx: int32) =
     raise jinjaErr("macro parameter list is not closed at byte " & $i, i)
 
 proc parseMacro(p: var Parser): Head =
-  ## `{% macro name(a, b = 1) %} body {% endmacro %}`. The definition binds a value and never
-  ## runs the body here. A macro's output is a string, so only a call can run it, to completion.
-  ## The body's terminators land back on this node, how a call detects its end.
+  ## `{% macro name(a, b = 1) %} body {% endmacro %}`, the definition binding a value,
+  ## never running the body here, the body's terminators landing back on this node.
   let t = p.cur
   var i = p.afterKeyword(t, 5) # past the `macro` keyword
   let nameStart = i
@@ -600,7 +556,7 @@ proc parseIf(p: var Parser): Head =
   let condHi = t.tHi.int32
   p.advance()
   # Reserved before its body is walked:
-  #   arena order stays source order, the arena entry stays index 0
+  #   node order stays source order, the entry stays index 0
   #   a construct cannot sit below the nodes it dispatches into
   let idx = addNode(p, mkNode(nkIf, condLo, condHi, NoLink, NoLink, NoLink))
   let body = parseNested(p, ["elif", "else", "endif"], t)
@@ -633,9 +589,8 @@ proc parseIf(p: var Parser): Head =
   Head(head: idx, tails: tails)
 
 proc parseFor(p: var Parser): Head =
-  ## `{% for a, b in expr if cond %} body {% endfor %}`. The header stays one span,
-  ## the target names and the filter clause split out as bindings. The target walk consumes
-  ## one name per pass, a nameless position raising, so it is bounded by the tag's span.
+  ## `{% for a, b in expr if cond %} body {% endfor %}`, the header one span, the target
+  ## names and the filter clause split out as bindings.
   let t = p.cur
   var i = p.afterKeyword(t, 3) # past the `for` keyword
   var targets = newSeq[int32]()
@@ -800,15 +755,9 @@ proc parseConstruct(p: var Parser): Head =
     raise jinjaErr("unknown `{% " & spanString(kw) & " %}` tag", p.src.keywordStart(t), kw.len)
 
 proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
-  ## Emits nodes until a `{% %}` tag whose keyword is in `stopKws`, leaving `cur` on that tag.
-  ##
-  ## `open` holds every node whose successor is still unresolved. Each new entry point closes them,
-  ## so a construct's exit links to its following sibling and only the body's last exits stay open
-  ## for the enclosing construct to backpatch.
-  ##
-  ## Every pass consumes at least one tag. Text runs, emits and construct dispatches all
-  ## advance the stream or raise, so the walk is bounded by the tag count and truncation
-  ## ends it at the end sentinel or a close check's raise.
+  ## Emits nodes until a `{% %}` tag whose keyword is in `stopKws`, each new entry point
+  ## closing the unresolved-successor nodes so only each body's last exit stays open,
+  ## every pass consuming at least one tag.
   var head = NoLink
   var open = newSeq[int32]()
   while p.cur.kind != tkEnd:
@@ -846,8 +795,8 @@ proc parseTemplate*(src: string): (CompiledTemplate, CompiledSymbols) =
   ## Compiles template text to the shared artifact plus its `CompiledSymbols`, interned
   ## names built in parse order and read-only at render.
   ##
-  ## - the arena is a heap object the parse allocates once, returned by ref
-  ## - every render over the artifact shares the same arena through that ref
+  ## - the interned-name table is a heap object the parse allocates once, returned by ref,
+  ##   every render over the artifact sharing it
   ## - the template borrows `src`, so it must not outlive the caller's text
   var p = Parser(src: src, symbols: CompiledSymbols(), nodes: newSeq[Node]())
   p.start()

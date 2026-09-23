@@ -7,7 +7,7 @@
 ## Explicit re-export list, the package surface. A module's own `*` surface outside these
 ## names is Nim's cross-module plumbing, not API, and nothing under `src/` re-exports.
 ##
-## - the render tier, `parseTemplate`, `startRender`, `pullInto`, `items`, `pullAll`
+## - the render tier, `parseTemplate`, `startRender`, `pullInto`, `pullAll`
 ##   and `renderToString`, over the compiled artifact and the caller's `JinjaRenderContext`
 ## - the data tier, `JinjaVal` with `ValueKind`, the value constructors, `eqVal`,
 ##   `dictSet`/`dictGet`, the `tojson` form (`toJson`, `JsonOpts`), `JinjaError` with its cause
@@ -20,7 +20,7 @@ import ./src/cnj_engine
 import ./src/cnj_types, ./src/jinja_data_model, ./src/jinja_serialize, ./src/cnj_parse
 
 # Render driver and parser.
-export cnj_engine.startRender, cnj_engine.pullInto, cnj_engine.items,
+export cnj_engine.startRender, cnj_engine.pullInto,
     cnj_engine.pullAll, cnj_engine.renderToString, cnj_parse.parseTemplate
 
 # Compiled artifact, render session and the knobs.

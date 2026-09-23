@@ -4,20 +4,20 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
-# symbol arena, the per-instantiation render state, the name-resolution reads
-# and the macro-force handle. The dispatch table, the render context bundle
-# and the `pullInto`/`items` delivery interface live in cnj_engine.nim.
+# interned-name table, the per-instantiation render state, the name-resolution reads
+# and the macro-force callable. The dispatch table, the render context bundle
+# and the `pullInto`/`pullAll` delivery interface live in cnj_engine.nim.
 #
 # Dataflow of one render, the record types here shared across the module boundary
 #
 #   template bytes (borrowed, never copied at parse)
-#     │  cnj_parse splits tags, scans keywords, appends arena nodes, interns names once
+#     │  cnj_parse splits tags, scans keywords, appends nodes, interns names once
 #     ▼
-#   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name arena)
-#     │  cnj_engine dispatches pullInto() steps over the arena
+#   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name table)
+#     │  cnj_engine dispatches pullInto() steps over the node list
 #     ▼
-#   JinjaRenderContext = the heap session every render call holds (tmpl + symbols + state + force)
-#     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one ref borrow of the session
+#   JinjaRenderContext = the heap render context every render call holds (tmpl + symbols + state + force)
+#     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one ref borrow of the context
 #     ▼
 #   RenderState (rows + scopes + pending Piece), the context's per-instantiation third field
 #     │  evalSpan drives jinja_interpolation on the same context borrow, expressions reading
@@ -27,18 +27,18 @@
 #
 # Lifecycle and ownership inside the context
 #
-#   RenderState, one per render, owned by the caller's session object
+#   RenderState, one per render, owned by the caller's context object
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pullInto or capturePend, reset to pkNone
 #
-#   force, the engine's macro-force handle, bound once at `startRender` into the session, stateless,
-#     every session carrying the same callable
+#   force, the engine's macro-force callable, bound once at `startRender` into the context, stateless,
+#     every context carrying the same callable
 #
-#   A session is a ref by construction, one heap object per render, and cannot be copied.
-#   A second render over one artifact opens a second session through `startRender`.
+#   A context is a ref by construction, one heap object per render, and cannot be copied.
+#   A second render over one artifact opens a second context through `startRender`.
 #
-#   A forced macro body runs on an explicitly constructed second session, over the same
+#   A forced macro body runs on an explicitly constructed second context, over the same
 #   artifact refs and a snapshot of the caller's render state.
 #   The `forceMacro` contract in cnj_engine states the snapshot's exact shape.
 
@@ -53,36 +53,18 @@ import workspace/data_structures/src/small_seqs
 
 type
   NodeKind* {.pure.} = enum
-    ## Corpus-derived construct vocabulary, one entry per engine step.
-    ##
-    ## | Kind             | Payload                                                                     | |
-    ## | ---------------- | ----------------------------------------------------------------------------- |
-    ## | `nkVerbatim`     | final text run, whitespace already resolved                                 | |
-    ## | `nkEmit`         | `{{ }}` span, evaluates the `lo..hi` span, stringifies, pending piece       | |
-    ## | `nkIf`           | condition span, then-body, else-or-elif chain, bodies terminated past endif | |
-    ## | `nkFor`          | iterable span, body, loop name, filter span, interned target ids            | |
-    ## | `nkBreak`        | unwinds to the nearest for-row, stopping at a macro-call boundary          |  |
-    ## | `nkSet`          | single-target binding of an expression                                      | |
-    ## | `nkSetNamespace` | `ns.field = expr`, ns and field as interned name ids                        | |
-    ## | `nkSetBlock`     | capture body into a sink, bind on close                                     | |
-    ## | `nkGeneration`   | marks the root-output span of the model's turn                              | |
-    ## | `nkMacroDef`     | binds a macro value, never executes                                         | |
+    ## Corpus-derived construct vocabulary, one entry per engine step, the slot payload
+    ## per kind in the accessor table below.
     nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNamespace, nkSetBlock, nkGeneration,
     nkMacroDef
 
   Node = object
-    ## POD node in one append-only arena, `kind` naming the construct, a node's executable
-    ## meaning a pure function of `kind` through `steps`, so the artifact stays data.
-    ## Every payload reference is one int32 slot, `NoLink` (-1) marking an absent link or span:
-    ## - a span into `CompiledTemplate.jinja`, an arena index, or an interned name id
-    ## - slots `0`-`3` uniform across kinds, `4` and past kind-specific, see the accessors below
+    ## POD node in one append-only node list, every payload reference one int32 slot,
+    ## `NoLink` marking an absent link or span, the slot layout per kind in the table below.
     kind*: NodeKind
     slots*: SmallSeq[5, int32]
-      ## Payload slots, capacity 5 the measured corpus knee, reproducible from the checked-in
-      ## `tests/corpus/<suite>/<suite>.jinja` templates:
-      ## - corpus nodes hold at most 5 slots, except a variable `nkFor` or `nkMacroDef` payload,
-      ##   which spills to one heap block at parse time
-      ## - no node holds exactly 6 slots, corpus templates that fail parse raise declared gaps
+      ## Payload slots, capacity 5 the measured corpus knee, a variable `nkFor` or `nkMacroDef`
+      ## payload spilling to one heap block at parse time.
 
   CompiledTemplate* = ref object
     ## Read-only compiled template, shared across renders with two fields and no mutable state,
@@ -95,38 +77,28 @@ type
     nodes*: seq[Node]
 
   CompiledSymbols* = ref object
-    ## Parse-built interned-name arena, read-only at render and shared by every render
-    ## over its artifact. Node int32 name slots index into it, so `CompiledTemplate` is
-    ## only meaningful together with the matching `CompiledSymbols`.
-    ##
-    ## Name resolution is one linear scan over `names`, parse-time only, the corpus
-    ## topping out at 33 interned names, render lookups carrying interned ids.
+    ## Parse-built interned-name table, read-only at render and shared by every render
+    ## over its artifact, node name slots indexing into it. Name resolution is one
+    ## linear scan over `names`, parse-time only.
     names*: seq[string]
 
 const
   ## Caps measured against the corpus, each a compile-time define.
 
-  # Macro recursion is the engine's only render-time recursion. A macro body's output is
-  # a string value, so a call runs to completion synchronously into a capture sink.
-  # Static cross-macro chain depth in the corpus is 3, two templates recur cyclically, and the shipped
-  # `gemma4/tools_tool_response.json` drives the tools subtree to 6, with real depth set by the input.
-  # 16 bounds the stack on bad input, a breach raising.
+  # Macro recursion is the engine's only render-time recursion, a call running synchronously
+  # to completion into a capture sink. 16 bounds the stack on bad input.
   TTT_CNJ_MacroDepthCap* {.intdefine.} = 16
 
-  # Expression-walker recursion bound:
-  # deepest paren nesting measured over the corpus templates is 3 (`gemma4`, `lfm25`),
-  # 24 clears it with margin, far below the C stack overflow depth.
+  # Expression-walker recursion bound, deepest corpus paren nesting 3, 24 clears it
+  # with margin, far below the C stack overflow depth.
   TTT_CNJ_ExprDepthCap* {.intdefine.} = 24
 
-  # Parse-time nesting bound of the parser's dispatch recursion, one level per body-carrying
-  # construct. Corpus nesting tops out at 5 (`glm53flash`'s macro-in-for chain), so 64 clears it
-  # with margin and bounds the walk on adversarial input, a breach raising located at the tag.
+  # Parse-time nesting bound of the parser's dispatch recursion, one level per
+  # body-carrying construct. 64 clears the corpus with margin, a breach raising at the tag.
   TTT_CNJ_ParseNestingCap* {.intdefine.} = 64
 
-  # Step-dispatch bound of one `pullInto` call. One call dispatches at most this many steps,
-  # a breach raising located at the node the walk reached. The corpus suite completes
-  # with 240 and fails with 230, so no corpus render dispatches past 240, and a 200x200
-  # nested loop test lands in the low thousands. 1_000_000 keeps ample headroom.
+  # Step-dispatch bound of one `pullInto` call, corpus renders staying below 240, a breach
+  # raising located at the node the walk reached.
   TTT_CNJ_StepBudget* {.intdefine.} = 1_000_000
 
   Whitespace = {' ', '\t', '\n', '\r', '\v', '\f'}
@@ -158,8 +130,7 @@ const
 # Overload resolution only sees a `Node` receiver in this module.
 
 const
-  ## One slot position per construct role, plus the two variable-tail bases. Parse and render
-  ## index through the same constants, so a slot-layout move is one shared edit.
+  ## One slot position per construct role, plus the two variable-tail bases.
   SlotLo = 0
   SlotHi = 1
   SlotSucc = 2
@@ -174,8 +145,7 @@ const
   ForTargetsBase = 7
     ## First `nkFor` target name id slot, directly after the fixed prefix.
   MacroParamsBase = 4
-    ## First `nkMacroDef` parameter slot, each parameter one name id then its default span,
-    ## three slots in all.
+    ## First `nkMacroDef` parameter slot, three slots per parameter.
 
 template lo(nd: Node): int32 =
   ## Payload span start into `CompiledTemplate.jinja`, or the `nkMacroDef` macro name id.
@@ -186,15 +156,15 @@ template hi(nd: Node): int32 =
   nd.slots[SlotHi]
 
 template succ(nd: Node): int32 =
-  ## Next node in program order by arena index, `NoLink` once the artifact is exhausted.
+  ## Next node in program order by node index, `NoLink` once the artifact is exhausted.
   nd.slots[SlotSucc]
 
 template child(nd: Node): int32 =
-  ## First node of the body by arena index, or the `nkSet` target name id.
+  ## First node of the body by node index, or the `nkSet` target name id.
   nd.slots[SlotChild]
 
 template alt(nd: Node): int32 =
-  ## Next `nkIf` level in the else/elif chain by arena index, `NoLink` when the chain ends.
+  ## Next `nkIf` level in the else/elif chain by node index, `NoLink` when the chain ends.
   nd.slots[SlotAlt]
 
 template loopName(nd: Node): int32 =
@@ -242,8 +212,7 @@ template paramDefLoAt(nd: Node, k: int): int32 =
   nd.slots[MacroParamsBase + 3 * k + 1]
 
 template paramDefHiAt(nd: Node, k: int): int32 =
-  ## `nkMacroDef` parameter `k` default span end, exclusive, meaningful only while
-  ## `paramDefLoAt` is not `NoLink`.
+  ## `nkMacroDef` parameter `k` default span end, exclusive, meaningful only while `paramDefLoAt` is not `NoLink`.
   nd.slots[MacroParamsBase + 3 * k + 2]
 
 
@@ -252,12 +221,10 @@ type
     frFor, frGeneration, frMacro
 
   Row = object
-    ## Render-state row, the only place re-entry is discriminated. `node` is the row's
-    ## identity and matches the node being entered, nothing about resumption living in the node.
+    ## Render-state row, the only place re-entry is discriminated, `node` the entered node.
     node*: int32
     scopeAt*: int
-      ## Scope state at row entry. A row close truncates scopes to this mark.
-      ## Bindings the row pushed or mutated live above it
+      ## Scope state at row entry, a row close truncating scopes to this mark.
     case kind*: RowKind
     of frFor:
       loop*: LoopState
@@ -274,8 +241,7 @@ type
         ## node control returns to once the body ends
 
   Binding = object
-    ## One scope entry:
-    ##   an interned name bound to a value.
+    ## One scope entry, an interned name bound to a value.
     name*: int32
     val*: JinjaVal
 
@@ -285,12 +251,8 @@ type
     pkNone, pkSpan, pkStr, pkCut, pkLazy
 
   Piece = object
-    ## Pending output piece:
-    ## - span pieces deliver straight out of `CompiledTemplate.jinja`
-    ## - string and cut pieces are owned by the render state, the string materialized,
-    ##   the cut rendering its sub-span bytes
-    ## - lazy pieces are a derived value the serializer in `RenderState.lazy` renders
-    ##   straight into the delivery window
+    ## Pending output piece, span pieces delivering straight out of `CompiledTemplate.jinja`,
+    ## string and cut pieces owned by the render state, lazy pieces the serializer's.
     pos*: int
     case kind*: PieceKind
     of pkNone: nil
@@ -308,9 +270,8 @@ type
         ## rendered by the serializer in `RenderState.lazy`, no payload here
 
   RenderState = object
-    ## All per-instantiation render control state, owned by the pullInto consumer, nothing
-    ## reachable from `CompiledTemplate`, so two instantiations over one artifact cannot
-    ## interfere. Lives only at the step tier, the expression evaluator never seeing it.
+    ## All per-instantiation render control state, nothing reachable from `CompiledTemplate`,
+    ## so two instantiations over one artifact cannot interfere.
     curNode*: int32
       ## node program counter, `NoLink` once the artifact is exhausted
     cur*: int
@@ -331,35 +292,28 @@ type
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
   JinjaRenderContext* = ref object
-    ## One heap session per render, opened by `startRender` and owned by the caller.
-    ## - the shared artifact, its shared symbol-arena ref, one per-instantiation
-    ##   render state and the engine-bound macro-force handle
-    ## - a session is a ref and is never copied, borrows are ref borrows, and there
+    ## One heap render context per render, opened by `startRender` and owned by the caller,
+    ## holding the shared artifact, the shared interned-name table ref, one per-instantiation
+    ## render state and the engine's macro-force callable.
+    ## - a context is a ref and is never copied, borrows are ref borrows, and there
     ##   are no threads in the engine, so a field write through one borrow is
-    ##   visible to every other borrow of the same session
-    ## - a consumer that stops mid-render resumes through the same session object.
-    ##   A second render over the artifact opens a second session through `startRender`
+    ##   visible to every other borrow of the same context
+    ## - a consumer that stops mid-render resumes through the same context object.
+    ##   A second render over the artifact opens a second context through `startRender`
     tmpl*: CompiledTemplate
     symbols*: CompiledSymbols
-      ## the parse-built arena, shared by ref with the parse caller, no lifetime contract
+      ## the parse-built interned-name table, shared by ref with the parse caller, no lifetime contract
     state*: RenderState
     force*: MacroForcer
-      ## the engine's macro-force handle, bound once at `startRender`, stateless,
-      ## every session carrying the same callable
+      ## the engine's macro-force callable, bound once at `startRender`, stateless
 
   MacroForcer = proc (c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal {.nimcall.}
-    ## Runs one macro body to completion on a second session built over the caller's
-    ## artifact refs, the captured text returned as a string value.
-    ## Contract:
-    ## - the engine binds it once at `startRender` into `JinjaRenderContext.force`, both tiers
-    ##   reaching it through the session they already hold, no parameter threading
-    ##   and no import cycle crossing the tier split
-    ## - the body runs on the callee's own session, the caller's session untouched
+    ## Runs one macro body to completion on a second render context built over the caller's
+    ## artifact refs, the captured text returned as a string value,
+    ## the caller's render context untouched.
 
 func findName(t: CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, or `NoLink` when the template never names it.
-  ## One linear scan over the interned arena, allocation-free and parse-time only,
-  ## the corpus topping out at 33 names.
   for i, n in t.names:
     if n == name:
       return int32 i
@@ -367,7 +321,6 @@ func findName(t: CompiledSymbols, name: openArray[char]): int32 =
 
 func scopeHas(st: var RenderState, id: int32, val: var JinjaVal): bool =
   ## Scope scan innermost first, returning true with `val` set when `id` is bound.
-  ## A binding to an undefined value is still a binding, so the root lookup never sees it.
   for si in countdown(st.scopes.len - 1, 0):
     for b in st.scopes[si]:
       if b.name == id:
@@ -376,9 +329,8 @@ func scopeHas(st: var RenderState, id: int32, val: var JinjaVal): bool =
   false
 
 func lookupName(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
-  ## Returns the binding of `name` in one render, resolving the scopes innermost first,
-  ## then the render context root dict, then undefined.
-  ## Absence is a value, never an error, `is defined` testing for exactly that shape.
+  ## Returns the binding of `name` in one render, scopes innermost first, then the root dict, then undefined.
+  ## Absence is a value, never an error.
   let id = c.symbols.findName(name)
   var got: JinjaVal
   if id != NoLink and c.state.scopeHas(id, got):
@@ -389,9 +341,7 @@ func lookupName(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
 
 
 proc internName(t: var CompiledSymbols, name: openArray[char]): int32 =
-  ## Returns the interned id of `name`, inserting the one arena copy when absent.
-  ## - a carried name allocates nothing
-  ## - a new name copies exactly once into `CompiledSymbols.names`
+  ## Returns the interned id of `name`, inserting the one copy into `CompiledSymbols.names` when absent.
   result = t.findName(name)
   if result != NoLink:
     return

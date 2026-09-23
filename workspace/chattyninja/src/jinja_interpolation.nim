@@ -37,18 +37,16 @@ type
     p0, p1: char # punctuator bytes, `p1 == '\0'` for a one-byte punctuator
 
   Cx = object
-    ## Walker cursor:
-    ##   the half-open span it owns, a one-token lookahead, the dry flag and the recursion depth.
-    ##   The macro-force handle lives on the context, not here.
+    ## Walker cursor over the half-open span it owns, a one-token lookahead, the dry flag
+    ## and the recursion depth. The macro-force callable lives on the render context.
     pos, stop: int
     tok: ExTok
     dry: bool
     depth: int
 
   GlobalProc = proc (c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal {.nimcall, noSideEffect.}
-    ## A call to a template global. `namespace` and `dict` store a keyword name as a dict key.
-    ## - `lo` and `hi` bound the global's name token, the location the raise sites report
-    ## - globals read the template text and the context's clock, and write nothing
+    ## A call to a template global, `lo` and `hi` bounding the name token, globals reading
+    ## the template text and the context's clock, and writing nothing.
 
   GlobalName = enum
     gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
@@ -121,14 +119,11 @@ func decodeEscapes(s: openArray[char], lo, hi: int): string =
 
 const
   IntLowLit = "9223372036854775808"
-    ## Only digit spelling past int64 naming a representable value, the value int64.low
-    ## under a unary minus. The lexer emits a marker token for it, any other past-range
-    ## magnitude still raising in `parseIntToken`.
+    ## Digit spelling past int64 naming a representable value, `int64.low` under a unary minus, a marker token emitted.
 
 func checkArgOrder(a: var Args, lo, hi: int) =
-  ## Raises located at the filter, method or test call when a positional argument follows
-  ## a keyword one, the order `bindMacroArgs` already rejects for macros, a positional
-  ## past a keyword otherwise binding under no parameter and silently dropping.
+  ## Raises located at a filter, method or test call when a positional argument follows
+  ## a keyword argument, a positional past a keyword otherwise silently dropping.
   var keywordSeen = false
   for x in a.argItems:
     if x.nameLo == NoLink:
@@ -138,12 +133,8 @@ func checkArgOrder(a: var Args, lo, hi: int) =
       keywordSeen = true
 
 func parseIntToken(s: openArray[char], at: int): int64 =
-  ## Returns the integer the token bytes spell, an int64-range magnitude breach
-  ## raising a located `JinjaError` at the literal.
-  ## - Python renders such a literal as an unbounded integer, a value kind this tier
-  ##   has no slot for, so the raise is the contract here
-  ## - `parseutils.parseBiggestInt` itself raises on that magnitude, so the digits
-  ##   accumulate in checked arithmetic instead, never crossing int64
+  ## Returns the integer the token bytes spell, a past-int64 magnitude raising a located
+  ## `JinjaError`, the digits accumulating in checked arithmetic.
   var n = 0'i64
   for c in s:
     let d = c.ord - '0'.ord
@@ -203,10 +194,8 @@ func lexString(s: openArray[char], i: var int, hi: int): ExTok =
   ExTok(kind: exStr, lo: start, hi: i, s: decodeEscapes(s, body, endBody))
 
 func punctAt(s: openArray[char], i, hi: int): tuple[c0, c1: char, len: int] =
-  ## Returns the punctuator matching at `i` as its two bytes and its byte length,
-  ## `c1 == '\0'` marking a one-byte punctuator.
-  ## - `//`, `**`, `<=`, `>=`, `==` and `!=` are lexed whole, each reported
-  ##   as one construct
+  ## Returns the punctuator matching at `i` as its two bytes and its length, the two-byte
+  ## forms lexed whole as one construct each.
   if i + 1 < hi:
     case s[i]
     of '=':
@@ -278,11 +267,8 @@ func isWord(tmpl: CompiledTemplate, cx: Cx, w: string): bool =
 
 template wordSpan(tmpl: CompiledTemplate, lo, hi: int): openArray[char] =
   ## Returns the template text in `lo ..< hi` as a view, so neither an identifier nor
-  ## a registry lookup allocates. `lo ..< hi` is the half-open span the token carries.
-  ##
-  ## The template wording is required for the compiler's view analysis under
-  ## `--experimental:views`, which rejects a helper returning a view over a field
-  ## of the `ref` type.
+  ## a registry lookup allocates. The wording satisfies the view analysis, which rejects
+  ## a view over a field of the `ref` type.
   tmpl.jinja.toOpenArray(lo, hi - 1)
 
 template wordSpan(tmpl: CompiledTemplate, cx: Cx): openArray[char] =
@@ -296,23 +282,16 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
 
 proc forceCall(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Renders one pending macro call to its output value, the primitive `forceOperand`
-  ## routes every value-position forcing through, the handle carried by `c.force`.
-  ## Raises at `cx.tok.lo` when no macro forcer was supplied.
+  ## routes every value-position forcing through, the callable carried by `c.force`.
   if c.force.isNil:
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied",
         cx.tok.lo)
   c.force(c, v.pc.mc, v.pc.args)
 
 proc forceOperand(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Returns `v` with a pending macro call rendered to its output value, the value-position
-  ## forcing contract held in one proc.
-  ## - reached from every truth test, `and`/`or` left operand, ternary condition,
-  ##   call argument, postfix operator operand and binary-operator boundary
-  ## - a consumed call with no macro forcer supplied raises at `cx.tok.lo`, a dry walk
-  ##   returning `v` unevaluated, the skipped branch never running a body
-  ## - the emit step alone captures, a whole-expression macro call streaming its body there,
-  ##   a forced call's output drained from the engine's transient capture buffer into the returned string,
-  ##   the copy then discarded
+  ## Returns `v` with a pending macro call rendered to its output value, reached from every
+  ## truth test, call argument and operator boundary. A consumed call with no forcer supplied
+  ## raises at `cx.tok.lo`, a dry walk returning `v` unevaluated.
   if cx.dry:
     return v
   if v.kind == vkCall:
@@ -321,9 +300,8 @@ proc forceOperand(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
     v
 
 func argKey(tmpl: CompiledTemplate, a: Arg): string =
-  ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound argument
-  ## giving the keyword text, a positional one its stringified value. A `DictVal` key is a string,
-  ## so this is where a keyword name becomes one.
+  ## Returns the dict key one argument supplies to `namespace` or `dict`, a keyword-bound
+  ## argument giving the keyword text, a positional one its stringified value.
   if a.nameLo == NoLink:
     pyStr(a.val)
   else:
@@ -353,12 +331,8 @@ func runeOffsets(s: string, a, b: int): tuple[lo, hi: int] =
   result.hi = j
 
 func runeSub(s: string, i: int): Rune =
-  ## Returns the codepoint at Python index `i`, a negative `i` counting from the end.
-  ## One stride walk answers the read:
-  ## - `i >= 0` walks forward from the scan start
-  ## - `i < 0` walks backward over continuation bytes from the end
-  ## Never a full-string length scan. An ASCII codepoint answers by one byte read,
-  ## a multibyte one decodes in place.
+  ## Returns the codepoint at Python index `i`, one stride walk answering the read,
+  ## never a full-string length scan.
   var j: int
   if i >= 0:
     j = 0
@@ -382,15 +356,9 @@ func runeSub(s: string, i: int): Rune =
   if s[j].ord < 0x80: Rune(s[j].ord) else: runeAt(s, j)
 
 func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
-  ## Writes the stride-`by` codepoint slice into `sb`, visiting `a, a + by, ...`
-  ## while the stride keeps the walk inside the clamped bounds.
-  ## One byte walk answers the whole slice per pass:
-  ## - `by > 0` advances by lead-byte strides
-  ## - `by < 0` steps backward over continuation bytes
-  ## Every visited codepoint reads in place at its own offset, never a per-index rescan.
-  ## A stride beyond the walk span visits the start element only, so the stride clamps
-  ## to one step past the span and the index arithmetic stays inside int64 however
-  ## extreme the step value is.
+  ## Writes the stride-`by` codepoint slice into `sb`, every visited codepoint reading
+  ## in place at its own offset, the stride clamped inside the walk span however extreme
+  ## the step value is.
   if by > 0:
     if a >= b:
       return
@@ -457,15 +425,8 @@ func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
 
 func sliceIndices(n: int, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep: bool):
     tuple[start, stop, by: int] =
-  ## Returns Python's `slice.indices(n)` for one slice:
-  ##   the walk bounds and the stride, direction-dependent defaults and clamps applied.
-  ## - defaults follow the stride's direction, not the range's ends, which is what
-  ##   makes `x[::-1]` visit every element and `x[:2:-1]` stop at the head
-  ## - forward (`by > 0`):
-  ##   bounds clamp into `[0, n]`, defaults `0` and `n`
-  ## - backward (`by < 0`):
-  ##   bounds clamp into `[-1, n - 1]`, defaults `n - 1` and `-1`
-  ## A backward stop of `-1` means "one past the head", so the walk includes index 0.
+  ## Returns Python's `slice.indices(n)` for one slice, the defaults and clamps following
+  ## the stride's direction so `x[::-1]` visits every element and `x[:2:-1]` stops at the head.
   var by = 1
   if hasStep:
     if step.kind != vkInt:
@@ -553,9 +514,7 @@ func dictGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   dictVal(argDict(c.tmpl, args))
 
 func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
-  ## `range(a, b, step)`:
-  ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
-  ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
+  ## `range(a, b, step)`, the lazy bounds value, elements computing per index, never materializing.
   var a = 0'i64
   var b = 0'i64
   var step = 1'i64
@@ -670,9 +629,8 @@ const OpSpelling: array[Op, string] = [
   ## Operator spellings for error text, indexed by `Op`. Error reporting is the only reader.
 
 func punctOp(c0, c1: char): Op =
-  ## Returns the infix operator the punctuator `(c0, c1)` spells, `opNone` when it is none. A lone `=` is no infix in Jinja, so it yields
-  ## `opNone` and the expression ends before it:
-  ##   keyword arguments are detected in `argList` by `isPunct`, which never consults this map.
+  ## Returns the infix operator the punctuator `(c0, c1)` spells, `opNone` when it is none,
+  ## a lone `=` ending the expression before the keyword-argument detection in `argList`.
   if c1 == '\0':
     case c0
     of '<': opLt
@@ -696,9 +654,8 @@ func punctOp(c0, c1: char): Op =
     else: opNone
 
 func binPrec(op: Op): int =
-  ## Returns the left binding power of an infix operator, 0 when `op` is not infix. Jinja orders operators ternary-lowest, then `or`,
-  ## `and`, comparison and tests, `~`, `+ -`, `* / // %`, `**`. A ternary never enters this table, `scanTernary` claiming it before
-  ## precedence climbing runs.
+  ## Returns the left binding power of an infix operator, 0 when `op` is not infix, a ternary
+  ## never entering this table, `scanTernary` claiming it first.
   case op
   of opOr: 2
   of opAnd: 3
@@ -710,9 +667,8 @@ func binPrec(op: Op): int =
   of opNone: 0
 
 template enterDepth(cx: var Cx) =
-  ## Counts one recursion level of the expression walker toward `TTT_CNJ_ExprDepthCap`, a breach
-  ## raising located, dry walks included. `expr` counts at its entry, and so does
-  ## every recursion leg that bypasses `expr`, the paired exit a `dec cx.depth`.
+  ## Counts one recursion level of the expression walker toward `TTT_CNJ_ExprDepthCap`,
+  ## dry walks included, the paired exit a `dec cx.depth`.
   inc cx.depth
   if cx.depth > TTT_CNJ_ExprDepthCap:
     raise jinjaErr("expression nests deeper than TTT_CNJ_ExprDepthCap = " & $TTT_CNJ_ExprDepthCap,
@@ -726,9 +682,8 @@ proc skipExpr(c: JinjaRenderContext, cx: var Cx, minPrec: int) =
   cx.dry = wasDry
 
 proc argList(c: JinjaRenderContext, cx: var Cx): Args =
-  ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
-  ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
-  ## carrier in call order, no per-call sequence.
+  ## Parses a parenthesised argument list with `name = expr` keyword arguments, a keyword
+  ## keeping its span, arguments filling the fixed-capacity argument list in call order.
   advance(c.tmpl, cx)
   while not isPunct(cx, ")"):
     var nameLo = NoLink
@@ -757,9 +712,8 @@ proc argList(c: JinjaRenderContext, cx: var Cx): Args =
   advance(c.tmpl, cx)
 
 proc postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
-  ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
-  ## An integer constant after a dot is a subscript, `m.content.0` spelling
-  ## `m.content[0]` the way upstream Jinja does.
+  ## Applies attr, subscript, call, filter and test chains, which bind tighter than any
+  ## operator. An integer constant after a dot is a subscript.
   var v = v
   while true:
     # An operator reading the chained value renders a pending macro call first, through
@@ -998,13 +952,8 @@ proc primary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
   postfix(c, cx, v)
 
 proc unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
-  ## Parses `not`, unary `-` and `+`, then a primary.
-  ## - `not` binds looser than the comparisons, its operand parsing at comparison
-  ##   binding power through `expr`, whose entry counts the operand walk toward
-  ##   `TTT_CNJ_ExprDepthCap` however deep the chain, so `not a == 5` tests `a == 5`
-  ## - unary `-` and `+` bind tighter than any comparison, their chain recursing here
-  ##   without re-entering `expr`, so each recursion counts one level itself,
-  ##   `enterDepth` at the leg's entry and a `dec` once the operand is evaluated
+  ## Parses `not`, unary `-` and `+`, then a primary, `not` binding looser than
+  ## the comparisons, the unary chain recursing here and counting one depth level per leg.
   if isWord(c.tmpl, cx, "not"):
     advance(c.tmpl, cx)
     let operandLo = cx.tok.lo
@@ -1036,11 +985,8 @@ proc unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
     primary(c, cx)
 
 func arith(op: Op, a, b: JinjaVal, opLo: int): JinjaVal =
-  ## Combines two numbers, or two strings and two sequences under `+`.
-  ## `%` follows Python's floor rule, the result taking the divisor's sign, so `-3 % 2` is `1`.
-  ##
-  ## Integer `+` and `-` check their result, an overflow raising a located
-  ## `JinjaError` at the operator, never an uncatchable `OverflowDefect`.
+  ## Combines two numbers, or two strings and two sequences under `+`, `%` following
+  ## Python's floor rule, integer overflow raising a located `JinjaError`.
   case op
   of opAdd:
     if a.kind == vkInt and b.kind == vkInt:
@@ -1102,9 +1048,9 @@ func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
   boolVal(r)
 
 proc binOp(c: JinjaRenderContext, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
-  ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
-  ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
-  ## before the truth test, a boolean position reading the output's bytes.
+  ## Evaluates the right operand of `op` and combines it with `lhs`.
+  ## `and` and `or` skip the operand they do not evaluate and render a pending macro
+  ## call on the left first.
   case op
   of opAnd:
     let l = forceOperand(c, cx, lhs)
@@ -1177,15 +1123,8 @@ proc binOp(c: JinjaRenderContext, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int):
     if cx.dry: undefinedVal() else: cmpOne(op, lhs, rhs, opLo)
 
 func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
-  ## Reports whether a depth-zero `if` survives in `tmpl.jinja[at..<stop)`. Byte scan, not a parse.
-  ## Guarantees:
-  ## - quoted text and bracketed subexpressions are skipped, so the scan never misses a ternary
-  ## - the scan stops at the unit's own delimiters, a depth-zero `,`, `:`,
-  ##   or an unmatched closer, so an `if` past them belongs to an enclosing
-  ##   expression or to a sibling dict entry, never to this one
-  ## - it can only over-report, costing one extra walk
-  ##   while keeping the answer correct
-  ## An expression holding no `if`, the corpus majority, is walked exactly once.
+  ## Reports whether a depth-zero `if` survives in `tmpl.jinja[at..<stop)`, a byte scan
+  ## stopping at the unit's own delimiters that can only over-report.
   var i = at
   var depth = 0
   var q: char = '\0'
@@ -1244,18 +1183,9 @@ proc scanTernary(c: JinjaRenderContext, cx: var Cx, headLo: int): Ternary =
   cx.dry = dry
 
 proc expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
-  ## Parses and evaluates one expression, Pratt-style:
-  ##   prefix parse --> infix loop at binding power >= `minPrec` --> ternary scan
-  ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
-  ##   resolved before its head runs
-  ## - the condition is evaluated once and exactly one branch is, which keeps a branch holding
-  ##   `raise_exception` or `strftime_now` from acting while unelected
-  ##
-  ## Depth contract:
-  ## - every entry counts one level toward `TTT_CNJ_ExprDepthCap`, dry walks included, so skipped
-  ##   operands and the ternary scan are bounded like evaluated ones
-  ## - one exit decrements, the ternary legs included, so an entry is never left counted
-  ## A stray `if` ends the expression, and `evalRange` reports the tail text.
+  ## Parses and evaluates one expression, Pratt-style, a ternary claimed before precedence
+  ## climbing runs, exactly one branch evaluated. Every walker entry counts one level toward
+  ## `TTT_CNJ_ExprDepthCap` and one exit decrements. A stray `if` ends the expression.
   enterDepth(cx)
   var v: JinjaVal
   var ranTernary = false
@@ -1319,8 +1249,6 @@ proc evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
 proc evalSpan*(c: JinjaRenderContext, lo, hi: int32): JinjaVal =
-  ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
-  ## Contract:
-  ## - a nil forcer making a consumed macro call a reported gap
-  ## - a macro call that is a whole expression returns pending, for the emit step to stream
+  ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]`, the entry every
+  ## expression-bearing step uses, a nil forcer making a consumed macro call a reported gap.
   evalRange(c, lo.int, hi.int, 0)

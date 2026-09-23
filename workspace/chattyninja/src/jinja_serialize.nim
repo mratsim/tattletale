@@ -19,39 +19,31 @@ import jinja_data_model {.all.}
 
 const
   SerChunkCap = 40
-    ## Initial capacity of the literal queue, sized past the longest fixed rendering:
-    ## - the longest `tojson` escape is the UTF-16 surrogate pair (12 bytes)
-    ## - the longest atom rendering a float repr is 26 bytes
-    ## - the macro form `<macro ` plus one int64 plus `>` is 30 bytes with quotes
-    ## A literal longer than the capacity grows the queue.
+    ## Initial capacity of the literal queue, sized past the longest fixed rendering.
+    ## A longer literal grows the queue.
 
   SerStartCap = 256
     ## First `serString` drain buffer, doubled by `setLen` until the rendering completes.
 
 type
   SerMode* = enum
-    ## Mode of a serializer, `smStr` rendering Python `str()` and `repr()` output text,
-    ## `smJson` rendering the `tojson` filter form.
+    ## Mode of a serializer, Python `str()`/`repr()` text in `smStr`, the `tojson` form in `smJson`.
     smStr, smJson
 
   SerWalk = enum
-    ## Character unit a quoted string body advances by, whole runes for the `tojson` escaping
-    ## rules and single bytes for the Python repr escaping rules.
+    ## Character unit a quoted string body advances by, whole runes in `smJson`, single bytes in `smStr`.
     wkRune, wkByte
 
   SerAfter = enum
-    ## Activity following the string body being written, closing the value's quote or closing
-    ## a mapping key's quote before the separator and the entry value.
+    ## Activity following the string body, closing the value's or the mapping key's quote.
     saValue, saKey
 
   SerNext = enum
-    ## Activity a finished separator hands to, rendering the value in `v` or the mapping key
-    ## in `s` as a quoted string body.
+    ## Activity a finished separator hands to, the entry value or the mapping key.
     nxDispatch, nxKey
 
   SerPhase = enum
-    ## Pending activity of a serializer. Queued chunk bytes and the pending separator drain
-    ## before the phase advances.
+    ## Pending activity of a serializer, queued bytes draining before the phase advances.
     spDispatch, spStr, spRaw, spSep, spClose, spDone
 
   SerFrame = object
@@ -64,11 +56,7 @@ type
   Ser = object
     ## Defunctional serializer for one `JinjaVal`, rendering byte by byte into the caller's
     ## window with every pause point in the fields below, so a drain resumed through the same
-    ## `Ser` never re-emits a byte:
-    ## - queued literals and separators drain from the chunk buffer and `sep`, unquoted
-    ##   string bodies copy straight from `s`
-    ## - quoted string bodies, container brackets and entries advance through the phases
-    ## - a lazy `range` renders its list form arithmetically, one element per index
+    ## `Ser` never re-emits a byte.
     mode: SerMode
     opts: JsonOpts
       ## `tojson` knobs, read in `smJson` mode only
@@ -184,14 +172,13 @@ func hex4(sb: var Cursor, c: int) =
 
 
 func serEnsure(js: var Ser, need: int) =
-  ## Grows the literal queue to hold `need` bytes. Capacity never shrinks, so the drain
-  ## windows the queue's fixed renderings open stay valid between queue calls.
+  ## Grows the literal queue to hold `need` bytes, the capacity never shrinking so a drain
+  ## window stays valid between queue calls.
   if js.buf.len < need:
     js.buf.setLen(need)
 
 func serQueue(js: var Ser, s: openArray[char]) =
-  ## Queues literal bytes for draining, the queue growing to any-length `s` under
-  ## the accumulation contract, capacity kept across drains.
+  ## Queues literal bytes for draining, the queue growing to any-length `s`, capacity kept across drains.
   serEnsure(js, s.len)
   js.blen = s.len
   js.bpos = 0
@@ -288,13 +275,8 @@ func serFinish(js: var Ser) =
     js.phase = spClose
 
 func serDispatch(js: var Ser) =
-  ## Renders the value in `v`, one literal or string body at a time.
-  ##
-  ## Each container stack entry pushed below counts the value-graph depth toward
-  ## `TTT_CNJ_ValueDepthCap`, a breach raising a `JinjaError` with `NoOffset`, `Ser`
-  ## carrying no template location:
-  ## - deeply nested data raises past the cap
-  ## - a cyclic graph, whose nesting is unbounded, raises the same way
+  ## Renders the value in `v`, one literal or string body at a time, a container stack
+  ## entry per nesting level counting toward `TTT_CNJ_ValueDepthCap` and raising on breach.
   let v = js.v
   template capDepth =
     ## One open container stack entry per nesting level.
@@ -452,9 +434,8 @@ func serStep(js: var Ser) =
     discard
 
 func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) =
-  ## Repositions `js` before the first byte of `v`'s rendering:
-  ## - takes the value over from the caller for the drain
-  ## - keeps the container stack's capacity for the next derived value rendered through it
+  ## Repositions `js` before the first byte of `v`'s rendering, taking the value over
+  ## from the caller and keeping the container stack's capacity for the next rendering.
   js.mode = mode
   js.opts = opts
   js.phase = spDispatch
@@ -483,11 +464,8 @@ func serDone*(js: Ser): bool =
   js.phase == spDone and js.bpos == js.blen and js.sepos == js.sep.len
 
 func pullSer*(js: var Ser, dst: var openArray[char]): int =
-  ## Returns the rendering's next bytes, written into `dst[0 ..< result]`.
-  ## Resumable drain, every position advancing only past bytes already handed out, so a window
-  ## smaller than the rendering drains across calls through the same `js`:
-  ## - the rendering is complete when `serDone` holds
-  ## - a call with window room always writes at least one byte unless the rendering is done
+  ## Returns the rendering's next bytes, written into `dst[0 ..< result]`, every position
+  ## advancing only past bytes already handed out, so a small window drains across calls.
   while result < dst.len:
     if js.bpos < js.blen:
       let take = min(dst.len - result, js.blen - js.bpos)
@@ -514,7 +492,6 @@ func pullSer*(js: var Ser, dst: var openArray[char]): int =
 
 func serString(js: var Ser): string =
   ## Returns the rendering as one fresh string, the caller-side drain-and-grow form.
-  ## Buffer growth starts at 256 bytes and doubles until the rendering completes.
   var cap = SerStartCap
   result = newString(cap)
   var written = 0
@@ -528,9 +505,8 @@ func serString(js: var Ser): string =
   result.setLen(written)
 
 func pyStr*(v: JinjaVal): string =
-  ## Returns the value as template output text. Strings pass through unchanged, everything
-  ## else takes its Python `str()` form, undefined rendering empty.
-  ## Caller-side drain-and-grow over the serializer, one buffer doubling until done.
+  ## Returns the value as template output text, strings passing through unchanged,
+  ## everything else taking its Python `str()` form, undefined rendering empty.
   if v.kind == vkStr:
     return v.s
   var js = serValue(v, smStr)

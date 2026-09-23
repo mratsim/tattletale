@@ -8,7 +8,7 @@
 # | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 # | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                     |
 # | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                     |
-# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pullInto` walks the arena through `steps`, all control state in the context's `RenderState` |
+# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pullInto` walks the node list through `steps`, all control state in the context's `RenderState` |
 # | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
 # | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                                 |
 # Resumption state for a re-entered step lives in the render state's row stack, never in a node.
@@ -29,19 +29,15 @@ import jinja_interpolation {.all.}
 
 type
   Step = proc (c: JinjaRenderContext, n: int32) {.nimcall.}
-    ## One construct's step.
-    ## - writes only through `c.state`, leaving `c.state.curNode` on the node control enters next
-    ## - expressions resolve names against the context's scopes, root and clock,
-    ##   reaching the statement tier only through `c.force`
+    ## One construct's step, writing only through `c.state` and leaving `curNode` on the node control enters next.
 
 proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal
 
 proc startMacro(c: JinjaRenderContext, lo, hi: int, call: DeferredMacroCall, retNode: int32)
 
 proc forceCondCall(c: JinjaRenderContext, v: JinjaVal, lo, hi: int32): JinjaVal =
-  ## Renders a pending macro call read in a boolean position to its output value, the branch
-  ## test then reading the output's bytes, matching every other macro-call forcing leg.
-  ## `lo` and `hi` bound the boolean expression the raise reports when no forcer was supplied.
+  ## Renders a macro call read in boolean position to its output value, `lo` and `hi` bounding
+  ## the raise reported when no forcer was supplied.
   if c.force.isNil:
     raise jinjaErr("a macro call result was consumed where no macro forcer was supplied", lo, hi - lo)
   c.force(c, v.pc.mc, v.pc.args)
@@ -78,21 +74,15 @@ func emitStr(st: var RenderState, s: sink string) =
   st.pend = Piece(pos: 0, kind: pkStr, s: s)
 
 func emitCut(st: var RenderState, v: sink JinjaVal) =
-  ## Makes a cut value the pending piece, moving the value's string out of the caller's
-  ## value so the cut drains from render-state storage with no copy, an empty cut
-  ## queueing nothing, the same empty check `emitStr` applies.
+  ## Makes a cut value the pending piece, moving the string out of the caller's value, an empty cut queueing nothing.
   if v.lo == v.hi:
     return
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   st.pend = Piece(pos: 0, kind: pkCut, raw: move v.raw, clo: v.lo, chi: v.hi)
 
 func emitValue(st: var RenderState, v: sink JinjaVal) =
-  ## Makes a derived value the pending piece, taking over the caller's value so the engine
-  ## never copies an emit value, the serializer in `st.lazy` draining into the caller's
-  ## window across pullInto calls, byte-exact with `pyStr`.
-  ##
-  ## The caller routes `vkStr` to `emitStr` and `vkCut` to `emitCut` first, so the value
-  ## here never carries either kind.
+  ## Makes a derived value the pending piece, taking over the caller's value, the serializer
+  ## in `st.lazy` draining across pullInto calls byte-exact with `pyStr`.
   doAssert st.pend.kind == pkNone, "a step queued a piece while one was still pending"
   serReset(st.lazy, v, smStr)
   st.pend = Piece(kind: pkLazy)
@@ -120,7 +110,7 @@ func bindName(st: var RenderState, name: int32, val: JinjaVal) =
 # Steps:
 #
 # Every step reads its node's payload through the `nd` slot-accessor templates, which expand
-# textually onto the arena entry. Render code never binds a `Node` value, a binding running
+# textually onto the node entry. Render code never binds a `Node` value, a binding running
 # SmallSeq's `=copy` and heap-allocating a spilled payload's block (7% of corpus nodes spill).
 
 func stepVerbatim(c: JinjaRenderContext, n: int32) {.nimcall.} =
@@ -130,9 +120,8 @@ func stepVerbatim(c: JinjaRenderContext, n: int32) {.nimcall.} =
   c.state.curNode = nd.succ
 
 proc stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## Evaluates the expression span and hands the result on as the pending piece, or enters
-  ## a whole-expression macro call's body instead, the body's output pieces draining
-  ## through the caller's window until the row closes.
+  ## Evaluates the expression span, a whole-expression macro call entering its body instead,
+  ## the body's pieces draining until the row closes.
   template nd: Node = c.tmpl.nodes[n]
   var v = evalSpan(c, nd.lo, nd.hi)
   if v.kind == vkCall:
@@ -148,7 +137,7 @@ proc stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
 
 proc stepIf(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
-  ## A pending macro call in the condition renders to its output bytes before the tec.state.
+  ## A pending macro call in the condition renders to its output bytes before the truth test.
   template nd: Node = c.tmpl.nodes[n]
   var v = evalSpan(c, nd.lo, nd.hi)
   if v.kind == vkCall:
@@ -191,12 +180,7 @@ func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
 
 func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
-  ## and the shared raise leg for everything else.
-  ##
-  ## - the iterable arrives rendered where it can hold a pending call,
-  ##   `stepFor` coercing before the dispatch
-  ## - the cursor answers the random access
-  ##   `loop.previtem` and `loop.nextitem` give, per index
+  ## and the shared raise leg for everything else. `stepFor` coerces a pending call first.
   case v.kind
   of vkSeq: iterSeq(v)
   of vkDict, vkNs: iterMapping(v)
@@ -219,27 +203,16 @@ func bindTargets(c: JinjaRenderContext, n: int32, item: JinjaVal) =
       c.state.bindName(nd.targetAt(i), item.xs.items[i])
 
 proc filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
-  ## Evaluates one filter clause in boolean position, a pending macro call rendering
-  ## to its output value, the result tested for truth.
-  ## Returns the keep decision.
-  ## - a caller may discard it, walking every remaining item by the shared cursor
-  ## - the clause's raises and side effects are the only observable behavior there
+  ## Evaluates one filter clause in boolean position, a macro call rendering
+  ## to its output value before the truth test. Returns the keep decision.
   var evaluated = evalSpan(c, lo, hi)
   if evaluated.kind == vkCall:
     evaluated = forceCondCall(c, evaluated, lo, hi)
   isTruthy(evaluated, lo)
 
 proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
-  ## Per-item loop step shared by the re-entry advance and the empty-body drain.
-  ## Moves the shared cursor one item, binds the loop targets and runs the filter clause.
-  ##
-  ## Returns the keep decision, "advance into the body" in boolean position, never
-  ## "done walking", exhaustion read off the cursor, `lp.idx >= lp.loopLen`.
-  ## - the cursor increment stays committed while `bindTargets` and the filter clause run,
-  ##   filters reading `loop.index0` and friends seeing the just-entered item
-  ## - the clause runs at most once per item, through `filterKeep`'s contract
-  ## - a raise in either propagates to the caller per the pullInto contract, bytes written
-  ##   by the failing call discarded, a repull resuming after the failed item
+  ## Per-item loop step moving the shared cursor one item, binding the loop targets, running
+  ## the filter clause, the keep decision returned. Exhaustion reads off the cursor.
   template nd: Node = c.tmpl.nodes[n]
   inc lp.idx
   let idx = lp.idx
@@ -251,21 +224,14 @@ proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
     result = filterKeep(c, nd.filterLo, nd.filterHi)
 
 func closeRow(st: var RenderState, at: int, next: int32) =
-  ## Leaves the current row's construct, truncating scopes to the row's `scopeAt` mark,
-  ## truncating rows to `at` (dropping the closed row and any abandoned rows above it)
-  ## and landing `st.curNode` on `next`, the caller's continuation node.
-  ## - `scopeAt` is the scope state at row entry, so the pop removes exactly the range
-  ##   the row opened, every enclosing row's bindings surviving the close
-  ## - a raise abandons the render instead, no partial close running on the raise path
-  ##   (a forced macro body discards its nested session wholesale)
+  ## Leaves the row's construct, truncating scopes to the row's `scopeAt` mark,
+  ## rows to `at`, landing `curNode` on `next`. A raise abandons the render, no partial close.
   st.scopes.setLen(st.rows[at].scopeAt)
   st.curNode = next
   st.rows.setLen(at)
 
 proc advanceFor(c: JinjaRenderContext, n: int32) =
-  ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
-  ## re-enters the body, or closes the row and continues past the loop, the close popping
-  ## the scope to the row's entry mark.
+  ## Re-entry path moving the cursor to the next filter-passing item, re-entering the body, or closing the row and continuing past the loop.
   template nd: Node = c.tmpl.nodes[n]
   while true:
     let fi = c.state.rows.len - 1
@@ -276,16 +242,7 @@ proc advanceFor(c: JinjaRenderContext, n: int32) =
   c.state.curNode = nd.child
 
 proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## `{% for %}`:
-  ##   a matching row on top of the stack means advance, anything else means set up the iteration.
-  ##
-  ## An empty body completes inline at set-up, its row and scope closing as the re-entry path
-  ## closes them on exhauc.state.
-  ## - with no filter clause the bindings are unobservable, the close popping the scope,
-  ##   so the construct is a no-op past `succ`
-  ## - with a filter clause every item binds and runs it, item 0's clause before
-  ##   body entry, so a clause raising on data raises located exactly
-  ##   as the non-empty path would
+  ## `{% for %}` advances on a matching row, otherwise sets up the iteration, an empty body completing inline and a filter clause per item.
   template nd: Node = c.tmpl.nodes[n]
   if c.state.rows.len > 0 and c.state.rows[^1].kind == frFor and c.state.rows[^1].node == n:
     advanceFor(c, n)
@@ -352,26 +309,14 @@ func outsideEveryFor(tmpl: CompiledTemplate, lo, hi: int32): void {.noreturn.} =
       " %}` ran outside every `{% for %}`", int(lo), int(hi - lo))
 
 func closeMacroRow(st: var RenderState, at: int, next: int32) =
-  ## Closes the macro row at index `at` through `closeRow`, the close both a body-end
-  ## close and a break's boundary stop take.
-  ## - every row above the boundary drops with the close, the depth count falling with it
-  ## - control continues at `next`, the row's return node, queued pieces draining to the caller
+  ## Closes the macro row at index `at` through `closeRow`, the boundary stop a break takes,
+  ## control continuing at the row's return node.
   closeRow(st, at, next)
   dec st.macroDepth
 
 func stepBreak(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## Unwinds to the nearest for-row, stopping at a macro-call boundary so a break cannot cross out of its macro.
-  ## `{% continue %}` shares the node kind, the keyword span discriminating the two.
-  ## A continue leaves the for-row and its scope in place, the loop's advance step running next.
-  ##
-  ## Contract:
-  ## - generation body rows above the for-row are abandoned on the walk, the partial span
-  ##   of each abandoned generation closing at the position reached, no scope popped
-  ##   (generation rows push none)
-  ## - a continue raises located at a macro-call boundary, a break with no for-row above
-  ##   the next macro boundary ends that macro body early, the same close a body-end close takes
-  ## - the walk is bounded by the row-stack depth, one pass per row, a break reaching past
-  ##   every row raising located
+  ## Unwinds to the nearest for-row. A break stops at the next macro-call boundary, a continue
+  ## leaves the for-row and its scope in place, generation rows above abandon their partial spans.
   template nd: Node = c.tmpl.nodes[n]
   # Continue discriminates from break over the keyword span, trailing whitespace trimmed.
   var kwHi = int(nd.hi)
@@ -423,15 +368,8 @@ func stepSetBlock(c: JinjaRenderContext, n: int32) {.nimcall.} =
       nd.lo.int, nd.hi.int)
 
 func stepGeneration(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## `{% generation %}` renders its body byte for byte as without it, the span of the model's turn recorded around it.
-  ##
-  ## Contract:
-  ## - entry → record the root-output position, re-entry → close the span at the position reached
-  ##   (every step dispatch runs with the pending piece retired, so the closing position counts the body's bytes exactly)
-  ##
-  ## - an empty body records an empty span, no row opened for a body that never re-enters
-  ## - the body adds no scope and pops none, bindings landing in the enclosing scope
-  ## - spans accumulate in `RenderState.spans`, readable once the render drained
+  ## `{% generation %}` renders its body byte for byte, the model's turn span recorded around
+  ## it in `RenderState.spans`, an empty body an empty span and the body adding no scope.
   template nd: Node = c.tmpl.nodes[n]
   if c.state.rows.len > 0 and c.state.rows[^1].kind == frGeneration and c.state.rows[^1].node == n:
     c.state.spans.add (c.state.rows[^1].spanStart, c.state.cur)
@@ -449,9 +387,8 @@ func stepGeneration(c: JinjaRenderContext, n: int32) {.nimcall.} =
   c.state.curNode = nd.child
 
 func stepMacroDef(c: JinjaRenderContext, n: int32) {.nimcall.} =
-  ## Binds a macro value and emits nothing, the body never running here. A macro row
-  ## arriving back on the definition node closes instead, the body's output pieces drained
-  ## through the caller's window, control continuing at the row's return node.
+  ## Binds a macro value and emits nothing, the body never running here. A row arriving
+  ## back on the definition node closes and drains its pieces.
   template nd: Node = c.tmpl.nodes[n]
   if c.state.rows.len > 0 and c.state.rows[^1].kind == frMacro and c.state.rows[^1].node == n:
     closeMacroRow(c.state, c.state.rows.len - 1, c.state.rows[^1].retNode)
@@ -463,9 +400,7 @@ func stepMacroDef(c: JinjaRenderContext, n: int32) {.nimcall.} =
 const
   CaptureDrainCap = 256
     ## Stack buffer `capturePend` hands to `pullSer` per drain call, sized to hold a whole
-    ## scalar rendering in the common case so the capture copies in one grow.
-    ## - matched to `SerChunkCap` in jinja_serialize, the serializer queue's initial capacity
-    ## - both hold one serializer chunk per drain step
+    ## scalar rendering so the capture copies in one grow.
 
   Steps: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
@@ -474,18 +409,8 @@ const
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
 proc bindMacroArgs(c: JinjaRenderContext, n: int32, args: var Args, lo, hi: int) =
-  ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
-  ## each parameter carrying its interned name id and default expression span in the node tail.
-  ##
-  ## Binding order:
-  ## - positionals bind by their own count, keywords by name, defaults last
-  ## - each default is evaluated after those before it are bound, inside the macro
-  ##   scope that a default sees in Jinja
-  ## Raises located, `lo` and `hi` bounding the call site and `NoOffset` when the forcing
-  ## side has none:
-  ## - a positional past the parameter list
-  ## - a positional after a keyword argument
-  ## - a keyword naming no parameter or repeating one already bound
+  ## Binds one macro call's parameters in a fresh scope, positional arguments by count,
+  ## keyword arguments by name, defaults evaluated in order inside the macro scope. Mismatches raise located.
   template nd: Node = c.tmpl.nodes[n]
   template argErr(what: string) {.dirty.} =
     if lo == NoOffset:
@@ -581,11 +506,8 @@ func capturePend(c: JinjaRenderContext, outp: var string) =
     c.state.pend = Piece(kind: pkNone)
 
 proc startMacro(c: JinjaRenderContext, lo, hi: int, call: DeferredMacroCall, retNode: int32) =
-  ## Opens a macro row and enters the body.
-  ## Contract:
-  ## - the body's output pieces drain through the caller's window until the row closes on the definition node
-  ## - an empty body emits nothing, its row closing at once, the tail continuing at the return node
-  ## - depth is capped, and a breach raises, `lo` and `hi` bounding the call's site
+  ## Opens a macro row and enters the body, the body's pieces draining until the row closes
+  ## on the definition node, depth capped with a located raise on breach.
   if c.state.macroDepth >= TTT_CNJ_MacroDepthCap:
     raise jinjaErr("macro nesting reached TTT_CNJ_MacroDepthCap = " & $TTT_CNJ_MacroDepthCap & " on `" &
         c.symbols.names[call.mc.name] & "`", lo, hi - lo)
@@ -603,31 +525,22 @@ proc startMacro(c: JinjaRenderContext, lo, hi: int, call: DeferredMacroCall, ret
     c.state.curNode = call.mc.body
 
 proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal =
-  ## Statement tier side of the macro forcer.
-  ## Contract:
-  ## - the body runs on a second session constructed explicitly over the caller's
-  ##   artifact refs, so the caller's scopes, rows, program counter, depth and pending
-  ##   piece are untouched by construction, a raise abandoning the nested session
+  ## Statement tier side of the macro forcer, the body running on a second render context
+  ## over the caller's artifact refs, the caller's render state untouched by construction.
 
-  ## - the capture is transient, the nested session discarded once its pieces drain
-  ##   into the result value's string, shared dict writes staying visible
-  ##
-  ## Body state and depth:
-  ## - the body's expressions resolve against the nested session's scopes, a snapshot
-  ##   of the caller's scope chain taken at the force point, so a body binding
-  ##   or a nested streamed call never mutates the caller's scopes
-  ## - depth is capped against the inherited depth, so the cap chains across nested forces,
-  ##   and a breach raises
+  ## Capture is transient, the nested render context discarded once its pieces drain into
+  ## the result value's string, expressions resolving against a snapshot of the caller's
+  ## scope chain, depth capped against the inherited depth.
   doAssert c.state.pend.kind == pkNone,
       "a macro body was forced while the driver still held a pending piece"
   if c.state.macroDepth >= TTT_CNJ_MacroDepthCap:
     raise jinjaErr("macro nesting reached TTT_CNJ_MacroDepthCap = " & $TTT_CNJ_MacroDepthCap & " on `" &
         c.symbols.names[mc.name] & "` (forced call)")
-  # Nested-session shape, reproducing the field-copy semantics the corpus verifies:
-  # - the same artifact refs and the same stateless force handle
+  # Nested-context shape, reproducing the field-copy semantics the corpus verifies:
+  # - the same artifact refs and the same stateless force callable
   # - a snapshot of the caller's render state taken at the force point, the caller's
   #   scopes staying visible to the body through the innermost-first scan
-  # - the body's bindings and rows accumulating on the snapshot, the whole session
+  # - the body's bindings and rows accumulating on the snapshot, the whole nested context
   #   abandoned once the capture drains
   var c2 = JinjaRenderContext(tmpl: c.tmpl, symbols: c.symbols,
       state: c.state, force: c.force)
@@ -672,9 +585,10 @@ func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, 
   ## Contract:
   ## - `clock` is the epoch `strftime_now` reads, never artifact state, so one artifact
   ##   renders reproducibly under different clocks
-  ## - `sym` is the parse-built arena by ref, every render over the artifact holding the same heap object, no borrow contract
+  ## - `sym` is the parse-built interned-name table by ref, every render over the artifact
+  ##   holding the same heap object, no borrow contract
   # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
-  # completing on the first pullInto, so the program counter starts past the arena.
+  # completing on the first pullInto, so the program counter starts past the node list.
   JinjaRenderContext(tmpl: tmpl, symbols: sym, force: forceMacro,
       state: RenderState(curNode: (if tmpl.nodes.len == 0: NoLink else: 0), cur: 0,
           pend: Piece(kind: pkNone),
@@ -684,7 +598,7 @@ proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
-  ## Resumption state is `c.state`, so consumers over one artifact each hold a session
+  ## Resumption state is `c.state`, so consumers over one artifact each hold a context
   ## from `startRender` and own their delivery position.
   ##
   ## Delivery contract:
@@ -759,24 +673,12 @@ proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
-iterator items*(c: JinjaRenderContext, buf: var openArray[char]): openArray[char] =
-  ## Yields the render through the caller's window, one `pullInto` call per iteration.
-  ## - the call fills `buf`, the yielded view borrows `buf[0 ..< result]`, and `cur`
-  ##   counts bytes handed out, so a stop mid-render resumes consistently
-  ## - the chunk is whatever window the caller gave, a bigger window fewer calls
-  ## - the consumer must finish with the yielded view before the loop advances
-  while true:
-    let n = pullInto(c, buf)
-    if n == 0:
-      break
-    yield buf.toOpenArray(0, n - 1)
-
 proc pullAll*(c: JinjaRenderContext): string =
   ## Returns the whole render in one call, one stack buffer drained through `pullInto`
   ## until the render reports 0.
   ## - `pullAll` owns its window, the only delivery path with an engine-chosen size
   ## - the caller's window composes with `cur`, so a consumer that counts bytes first
-  ##   can redeliver from a fresh session without a counting pass
+  ##   can redeliver from a fresh context without a counting pass
   var buf: array[4096, char]
   while true:
     let n = pullInto(c, buf)
