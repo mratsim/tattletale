@@ -479,7 +479,7 @@ proc testEqualityRejectsChange() =
 proc testCorpusDelivery() =
 
   const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47", "glm47flash",
-      "glm53flash", "gptoss20b", "kimik26", "kimi", "lagunaxs21", "lfm25", "ling30",
+      "glm53flash", "gptoss20b", "kimik26", "kimi_linear", "lagunaxs21", "lfm25", "ling30",
       "mimo25", "minimaxm27", "minimaxm3", "mistral7bv01", "moonlight",
       "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38", "qwen38flashnext"]
   # Suite discovery is the const list, not the directory. A suite dir added under corpus/
