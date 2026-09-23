@@ -204,9 +204,15 @@ proc anchorRows(suite: string): seq[AnchorRow] =
 # ── Measurement ──────────────────────────────────────────────────────────────
 
 proc renderOnce(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
-  ## Renders once, whole, through the `pullAll` interface, exactly as the test suites do.
+  ## Renders once, whole, through the buffered `pullInto` drain loop, exactly as the test suites do.
   var c = startRender(tmpl, sym, ctx, clock)
-  pullAll(c)
+  var buf: array[4096, char]
+  while true:
+    let n = pullInto(c, buf)
+    if n == 0:
+      break
+    for i in 0 ..< n:
+      result.add buf[i]
 
 proc renderN(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64, n: int): int =
   ## Renders `n` times and returns the accumulated output byte count, so the loop
@@ -532,7 +538,7 @@ proc benchPullWindows(): void =
   ## Pull-window timing over the corpus anchor rows, harness identical to the corpus
   ## timing anchor:
   ## - 500 warm-up renders, then median of 15 timed runs of `iters` full-corpus passes
-  ## - window sizes 256 B and 4 KiB sit beside the one-shot `pullAll` render
+  ## - window sizes 256 B and 4 KiB sit beside the one-shot `renderToString` render
   echo "pull-window timing anchor (median of 15 runs, warm-up uncounted)"
   for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
     let (m, sym) = parseTemplate(suiteTemplateSource(suite))

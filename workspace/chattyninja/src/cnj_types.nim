@@ -6,7 +6,7 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
 # interned-name table, the per-instantiation render state, the name-resolution reads
 # and the macro-force callable. The dispatch table, the render context bundle
-# and the `pullInto`/`pullAll` delivery interface live in cnj_engine.nim.
+# and the `pullInto` delivery interface lives in cnj_engine.nim.
 #
 # Dataflow of one render, the record types here shared across the module boundary
 #

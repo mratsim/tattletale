@@ -1248,7 +1248,7 @@ proc evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-proc evalSpan*(c: JinjaRenderContext, lo, hi: int32): JinjaVal =
+proc evalSpan(c: JinjaRenderContext, lo, hi: int32): JinjaVal =
   ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]`, the entry every
   ## expression-bearing step uses, a nil forcer making a consumed macro call a reported gap.
   evalRange(c, lo.int, hi.int, 0)

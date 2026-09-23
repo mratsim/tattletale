@@ -8,8 +8,9 @@
 ##   window with every pause point in its fields, so a drain resumed through the same
 ##   `Ser` never re-emits a byte
 ## - the internal renderers `pyStrInto` and `pyReprInto` write a value into a caller-owned `Cursor`
-## - `serReset`, `serDone` and `pullSer` drive a held `Ser`, `pyStr` and `toJson`
-##   are the one-call consumer entry points
+## - `serReset`, `serDone` and `pullSer` drive a held `Ser`, `pyStr` is the one-call
+##   string render over `pyStrInto`
+## - `toJson` is the one consumer entry point
 
 # Public API:
 #   toJson with JsonOpts. Every other entry stays serializer plumbing between the src modules.
@@ -26,7 +27,7 @@ const
     ## First `serString` drain buffer, doubled by `setLen` until the rendering completes.
 
 type
-  SerMode* = enum
+  SerMode = enum
     ## Mode of a serializer, Python `str()`/`repr()` text in `smStr`, the `tojson` form in `smJson`.
     smStr, smJson
 
@@ -433,7 +434,7 @@ func serStep(js: var Ser) =
   of spRaw, spDone:
     discard
 
-func serReset*(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) =
+func serReset(js: var Ser, v: sink JinjaVal, mode: SerMode, opts = JsonOpts()) =
   ## Repositions `js` before the first byte of `v`'s rendering, taking the value over
   ## from the caller and keeping the container stack's capacity for the next rendering.
   js.mode = mode
@@ -459,11 +460,11 @@ func serValue(v: JinjaVal, mode: SerMode, opts = JsonOpts()): Ser =
   result = Ser(mode: mode, opts: opts)
   serReset(result, v, mode, opts)
 
-func serDone*(js: Ser): bool =
+func serDone(js: Ser): bool =
   ## Returns whether the rendering is complete and every queued byte drained.
   js.phase == spDone and js.bpos == js.blen and js.sepos == js.sep.len
 
-func pullSer*(js: var Ser, dst: var openArray[char]): int =
+func pullSer(js: var Ser, dst: var openArray[char]): int =
   ## Returns the rendering's next bytes, written into `dst[0 ..< result]`, every position
   ## advancing only past bytes already handed out, so a small window drains across calls.
   while result < dst.len:
@@ -504,7 +505,7 @@ func serString(js: var Ser): string =
     result.setLen(cap)
   result.setLen(written)
 
-func pyStr*(v: JinjaVal): string =
+func pyStr(v: JinjaVal): string =
   ## Returns the value as template output text, strings passing through unchanged,
   ## everything else taking its Python `str()` form, undefined rendering empty.
   if v.kind == vkStr:

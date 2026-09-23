@@ -37,20 +37,20 @@ const
     "chars", "default", "ensure_ascii", "separators"]
     ## Keyword names the builtins read, indexed by `ArgKeyword`.
 
-func findIn*[N: enum](names: array[N, string], n: openArray[char]): int =
+func findIn[N: enum](names: array[N, string], n: openArray[char]): int =
   ## Returns the index of `n` in a registry's name column, or -1 when the name is unknown,
   ## each entry compared against the caller's bytes without building a string.
   for k, v in names:
     if v == n:
       return k.ord
   -1
-func gapWhat*(what: string, name: openArray[char]): void {.noreturn.} =
+func gapWhat(what: string, name: openArray[char]): void {.noreturn.} =
   ## Reports a declared registry name that no template in the corpus uses.
   ## Only this report quotes `name`, so the span copies here alone.
   let quoted = spanString(name)
   raise jinjaErr(what & " `" & quoted & "` is not implemented; no template in the corpus uses it", cause = ceUnimplemented)
 
-func argKeyword*(name: openArray[char]): ArgKeyword =
+func argKeyword(name: openArray[char]): ArgKeyword =
   ## Returns the builtin keyword `name` selects, `akNone` when no builtin reads that keyword.
   for k in akChars .. akSeparators:
     if name == ArgKeywordNames[k]:
@@ -59,7 +59,7 @@ func argKeyword*(name: openArray[char]): ArgKeyword =
 
 # Argument helpers:
 
-func getArg*(args: var Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
+func getArg(args: var Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaVal =
   ## Returns the argument bound under `kw`, else the `pos`-th positional in call order,
   ## else `default`. Positionals bind by their own count.
   if kw != akNone:

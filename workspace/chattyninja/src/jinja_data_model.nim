@@ -35,7 +35,7 @@ const
     ## - cyclic graphs raise the same way, their nesting unbounded
 
 const
-  NoOffset* = -1
+  NoOffset = -1
     ## `JinjaError.offset` marker for a raise site with no template location in scope
   NoLink = -1'i32
     ## Marks an absent link or span in a node payload slot.
@@ -75,7 +75,7 @@ type
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
     vkCall, vkRange, vkCut
 
-  SeqVal* = ref object
+  SeqVal = ref object
     ## Shared sequence of values, the `vkSeq` payload.
     items*: seq[JinjaVal]
 
@@ -84,11 +84,11 @@ type
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
-  RangeVal* = object
+  RangeVal = object
     ## Lazy `range(start, stop, step)` bounds, elements computed per index and never materialized, an immutable value inline in the range value.
     start*, stop*, step*: int64
 
-  LoopState* = ref object
+  LoopState = ref object
     ## Cursor over the iterable a `for` walks, `xs` borrowing the payload or holding
     ## the materialized copy, `r` the lazy range, `idx` the cursor position.
     xs*: SeqVal
@@ -113,7 +113,7 @@ type
   Args = SmallSeq[ArgsCap, Arg]
     ## One call's arguments in call order, filled by moves, read by borrows, `ArgsCap` inline.
 
-  DeferredMacroCall* = ref object
+  DeferredMacroCall = ref object
     ## A macro call whose body has not run, holding the bound macro and its evaluated arguments.
     ## Rendering the value runs the body.
     mc*: MacroVal
@@ -121,7 +121,7 @@ type
     args*: Args
       ## evaluated arguments in call order
 
-  MacroVal* = object
+  MacroVal = object
     ## Bound macro over three immutable `nkMacroDef` node indexes (name, body, node), nothing shared.
     name*: int32
     body*: int32
@@ -156,27 +156,27 @@ type
 
 
 
-func jinjaErr*(what: string, offset = NoOffset, span = 0, cause = ceNone): JinjaError =
+func jinjaErr(what: string, offset = NoOffset, span = 0, cause = ceNone): JinjaError =
   ## Returns an unraised template error. Raise sites with a template location in scope pass
   ## `offset`, plus `span` when the offending construct's length is known:
   ##   raise jinjaErr("unclosed `{% raw %}` opened at byte " & $openAt, openAt)
   JinjaError(what: what, offset: offset, span: span, cause: cause)
 
-func over*(s: var openArray[char]): Cursor =
+func over(s: var openArray[char]): Cursor =
   ## Returns a cursor over the whole byte span of `s`, capacity the span's length.
   Cursor(buf: toOpenArray(s, 0, s.len - 1))
 
-func measureBuf*(): Cursor =
+func measureBuf(): Cursor =
   ## Returns a measuring cursor, appends advancing `len` and touching no byte.
   Cursor(buf: toOpenArray(EmptyWindow, 0, -1), measuring: true)
 
-func spanString*(s: openArray[char]): string =
+func spanString(s: openArray[char]): string =
   ## Returns a fresh string holding the bytes of `s`, one allocation bounded by the span.
   result = newString(s.len)
   if s.len > 0:
     copyMem(addr result[0], unsafeAddr s[0], s.len)
 
-func addView*(outp: var string, view: openArray[char]) =
+func addView(outp: var string, view: openArray[char]) =
   ## Appends the bytes of `view` to `outp`, one grow and one copy, no intermediate
   ## string. The string-side counterpart of `Cursor.add(openArray[char])`.
   ##
@@ -199,7 +199,7 @@ func windowOverflow(sb: Cursor, need: int) {.noreturn.} =
   raise jinjaErr("render window capacity " & $sb.buf.len & " exceeded, " & $shortfall &
       " more bytes needed", cause = ceWindow)
 
-func add*(sb: var Cursor, c: char) =
+func add(sb: var Cursor, c: char) =
   ## Appends one byte, raising when the window cannot hold it.
   if sb.measuring:
     inc sb.len
@@ -209,7 +209,7 @@ func add*(sb: var Cursor, c: char) =
   sb.buf[sb.len] = c
   inc sb.len
 
-func add*(sb: var Cursor, s: openArray[char]) =
+func add(sb: var Cursor, s: openArray[char]) =
   ## Appends a byte span, reading `s` in place, raising when it does not fit.
   if s.len == 0:
     return
@@ -221,7 +221,7 @@ func add*(sb: var Cursor, s: openArray[char]) =
   copyMem(addr sb.buf[sb.len], unsafeAddr s[0], s.len)
   sb.len += s.len
 
-func addInt*(sb: var Cursor, i: int64) =
+func addInt(sb: var Cursor, i: int64) =
   ## Appends the decimal form of `i`, matching `$i`.
   var digits: array[20, char]
   var n = 0
@@ -239,7 +239,7 @@ func addInt*(sb: var Cursor, i: int64) =
   for j in countdown(n - 1, 0):
     sb.add digits[j]
 
-func addFloat*(sb: var Cursor, f: float64) =
+func addFloat(sb: var Cursor, f: float64) =
   ## Appends Python's `str()` for a float, integral values keeping one decimal place,
   ## the shortest float repr coming from `$f`, one allocation per append.
   let s = $f
@@ -247,7 +247,7 @@ func addFloat*(sb: var Cursor, f: float64) =
   if '.' notin s and 'e' notin s and 'E' notin s and 'n' notin s and 'i' notin s:
     sb.add ".0"
 
-func addRune*(sb: var Cursor, r: Rune) =
+func addRune(sb: var Cursor, r: Rune) =
   ## Appends `r` as its UTF-8 bytes, matching `toUTF8` for every reachable codepoint.
   let c = ord(r)
   if c > 0x10FFFF:
@@ -285,9 +285,9 @@ func strVal*(s: string): JinjaVal = JinjaVal(kind: vkStr, s: s)
 func seqVal*(xs: seq[JinjaVal]): JinjaVal = JinjaVal(kind: vkSeq, xs: SeqVal(items: xs))
 func dictVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkDict, d: d)
 func nsVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
-func loopVal*(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
-func macroVal*(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
-func callVal*(pc: DeferredMacroCall): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
+func loopVal(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
+func macroVal(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
+func callVal(pc: DeferredMacroCall): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
 func rangeVal*(start, stop, step: int64): JinjaVal =
   ## Returns the lazy range value over `start`, `stop` and `step`.
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
@@ -297,11 +297,12 @@ func cutVal*(s: sink string, lo, hi: int32): JinjaVal =
   ## - `s` moves in, so the cut shares the source's buffer
   ## - the cut materializes its string only where a consumer stores or re-computes it
   ##
-  ##   let (a, b) = stripSpan(v.s, chars, true, true)
-  ##   cutVal(v.s, a.int32, b.int32)
+  ##   cutVal(text, 4'i32, 9'i32)
+  ##
+  ## renders the 5 bytes `text[4 ..< 9]`, the strip span the caller's to compute.
   JinjaVal(kind: vkCut, raw: s, lo: lo, hi: hi)
 
-func materializeVal*(v: JinjaVal): JinjaVal =
+func materializeVal(v: JinjaVal): JinjaVal =
   ## Returns the materialized form of `v`:
   ## - a cut becomes its string value, one copy of the surviving bytes
   ## - every other kind passes through unchanged
@@ -313,7 +314,7 @@ func materializeVal*(v: JinjaVal): JinjaVal =
   else:
     v
 
-func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
+func rangeLen(r: RangeVal, lo = NoOffset, hi = 0): int =
   ## Returns the element count of the range, Python's `len(range(start, stop, step))`:
   ## a step against the span's direction answers 0.
   ##
@@ -344,7 +345,7 @@ func rangeLen*(r: RangeVal, lo = NoOffset, hi = 0): int =
     raise jinjaErr(what, lo, hi - lo)
   int(n)
 
-func rangeAt*(r: RangeVal, i: int): JinjaVal =
+func rangeAt(r: RangeVal, i: int): JinjaVal =
   ## Returns element `i` of the range, `i` in `0 ..< rangeLen(r)`.
   ## The element `start + i * step` computes in unsigned space, where the arithmetic
   ## is exact, every element of a bounded, direction-consistent range lying in int64:
@@ -415,29 +416,29 @@ func rangeContains(r: RangeVal, needle: JinjaVal): bool =
   else:
     result = false
 
-func loopLen*(lp: LoopState): int =
+func loopLen(lp: LoopState): int =
   ## Returns the element count the cursor walks, the lazy range's arithmetic count
   ## or the borrowed-or-materialized sequence's length.
   if lp.isRange: lp.r.rangeLen else: lp.xs.items.len
 
-func loopItem*(lp: LoopState, i: int): JinjaVal =
+func loopItem(lp: LoopState, i: int): JinjaVal =
   ## Returns element `i` of the cursor's iterable, `i` in `0 ..< loopLen`,
   ## computed from the bounds for a lazy range.
   if lp.isRange: lp.r.rangeAt(i) else: lp.xs.items[i]
 
-iterator argItems*(a: var Args): var Arg =
+iterator argItems(a: var Args): var Arg =
   ## Iterates `Args` in call order, each yielded by borrow.
   for i in 0 ..< a.len:
     yield a[i]
 
-func codepointVals*(s: string): seq[JinjaVal] =
+func codepointVals(s: string): seq[JinjaVal] =
   ## Returns one single-codepoint string value per codepoint of `s`, in order.
   var acc = newSeq[JinjaVal]()
   for r in s.runes:
     acc.add strVal($r)
   acc
 
-func isTruthy*(v: JinjaVal, at: int = NoOffset): bool =
+func isTruthy(v: JinjaVal, at: int = NoOffset): bool =
   ## Returns Jinja truthiness, undefined, none, zero, empty text and empty containers false.
   ## `at` locates the raise a held call carries when a caller tests one without rendering it
   ## first:
@@ -563,7 +564,7 @@ func eqVal*(a, b: JinjaVal, offset = NoOffset): bool =
   ##   never running off the C stack
   eqValAt(a, b, 0, offset)
 
-func cmpVal*(a, b: JinjaVal): int =
+func cmpVal(a, b: JinjaVal): int =
   ## Returns -1, 0 or 1 for an ordering comparison, numbers ordering numerically, text ordering
   ## by codepoint, anything else a template error, matching Jinja.
   if a.kind in {vkInt, vkFloat} and b.kind in {vkInt, vkFloat}:
@@ -610,7 +611,7 @@ func containsValAt(haystack, needle: JinjaVal, depth: int, offset: int): bool =
   else:
     raise jinjaErr("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)
 
-func containsVal*(haystack, needle: JinjaVal, offset = NoOffset): bool =
+func containsVal(haystack, needle: JinjaVal, offset = NoOffset): bool =
   ## Returns Jinja `in`:
   ## - membership for sequences, keys for mappings, substring for strings
   ## - arithmetic membership for a lazy range
@@ -618,7 +619,7 @@ func containsVal*(haystack, needle: JinjaVal, offset = NoOffset): bool =
   ##   never running off the C stack
   containsValAt(haystack, needle, 0, offset)
 
-func stripSpan*(s, chars: openArray[char], left, right: bool): tuple[a, b: int] =
+func stripSpan(s, chars: openArray[char], left, right: bool): tuple[a, b: int] =
   ## Returns the byte range of `s` that survives stripping the leading and/or trailing
   ## characters of `chars`, the way Python's `str.strip`, `lstrip` and `rstrip` cut.
   ##

@@ -55,4 +55,4 @@ Delivery contract:
 - A cursor append that does not fit its borrowed cursor window raises `JinjaError`
   with cause `ceWindow`, naming the shortfall.
 
-`pullAll(context)` returns the whole render in one call.
+`renderToString(source, root)` compiles and renders in one call.

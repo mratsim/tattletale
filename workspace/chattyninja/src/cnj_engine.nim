@@ -19,7 +19,7 @@
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 # Public API:
-#   startRender, pullInto, pullAll and renderToString. Everything else is engine plumbing.
+#   startRender, pullInto and renderToString. Everything else is engine plumbing.
 
 import cnj_types {.all.}
 import jinja_data_model {.all.}
@@ -673,22 +673,18 @@ proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
-proc pullAll*(c: JinjaRenderContext): string =
-  ## Returns the whole render in one call, one stack buffer drained through `pullInto`
-  ## until the render reports 0.
-  ## - `pullAll` owns its window, the only delivery path with an engine-chosen size
-  ## - the caller's window composes with `cur`, so a consumer that counts bytes first
-  ##   can redeliver from a fresh context without a counting pass
+proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
+  ## Returns the whole render of `src` over the value `root`, compiling and rendering in one call.
+  ##
+  ## - compiling happens at the scope that owns `src`, the artifact borrowing the template
+  ##   text and never outliving it
+  ## - the one-shot entry owns its drain, the render pulled through a stack window
+  ##   that is drained until it reports 0
+  let (tmpl, sym) = parseTemplate(src)
+  var c = startRender(tmpl, sym, root, clock)
   var buf: array[4096, char]
   while true:
     let n = pullInto(c, buf)
     if n == 0:
       break
     addView(result, buf.toOpenArray(0, n - 1))
-
-proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
-  ## Compiles and renders in one call, compiling at the scope that owns `src`, the artifact
-  ## borrowing the template text and never outliving it.
-  let (tmpl, sym) = parseTemplate(src)
-  var c = startRender(tmpl, sym, root, clock)
-  pullAll(c)

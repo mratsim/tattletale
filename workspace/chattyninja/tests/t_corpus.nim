@@ -9,7 +9,7 @@
 ##
 ## Every recorded corpus row walks the delivery paths and the window contract:
 ##
-## - byte-exact delivery of every ok row through `pullAll`, a buffered pull loop,
+## - byte-exact delivery of every ok row through a buffered `pullInto` drain loop,
 ##   windowed consumers, every err row raising the recorded error, declared gaps loud,
 ##   and every ok row's generation spans asserted verbatim on every delivery path
 ## - the window contract, the for-filter raise with repull-resume, the macro scope pop,
@@ -86,7 +86,7 @@ type PullChunks[N: static int] = object
   ##
   ## Contract:
   ## - the tail window carries the remainder when the render length is not a multiple of N
-  ## - a full drain equals the whole-render `pullAll`, the next pull after it reports 0
+  ## - a full drain equals the whole-render `renderToString`, the next pull after it reports 0
   ## - partial consumption resumes from the driver's fields, no byte re-handed
   ##
   ## The compiled template stays at the consumer's scope, `CompiledTemplate.jinja` borrowing
@@ -390,9 +390,15 @@ proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock:
   result.spans = c.state.spans
 
 proc renderAllPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): string =
-  ## Renders through `pullAll` with a fresh render context.
+  ## Renders whole through the buffered `pullInto` drain loop, a fresh render context.
   var c = startRender(m, sym, ctx, clock)
-  pullAll(c)
+  var buf: array[4096, char]
+  while true:
+    let n = pullInto(c, buf)
+    if n == 0:
+      break
+    for i in 0 ..< n:
+      result.add buf[i]
 
 
 func pullChunks[N: static int](c: JinjaRenderContext): PullChunks[N] =
@@ -414,7 +420,13 @@ proc renderAllSpans(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, cl
   ## Renders one row whole and returns the bytes plus the driver's recorded generation spans,
   ## byte coordinates into the bytes.
   var d = startRender(m, sym, ctx, clock)
-  result.text = pullAll(d)
+  var buf: array[4096, char]
+  while true:
+    let n = pullInto(d, buf)
+    if n == 0:
+      break
+    for i in 0 ..< n:
+      result.text.add buf[i]
   result.spans = d.state.spans
 
 func cpIndex(s: string, byteAt: int): int =
@@ -835,7 +847,7 @@ proc testValueBoundary() =
   let (pulled, _) = renderPull(m, tables, ctx, 0.0, 8)
   doAssert pulled == want, "the 8-byte pull render differs across the value boundary"
   let whole = renderAllPull(m, tables, ctx, 0.0)
-  doAssert whole == want, "pullAll differs across the value boundary"
+  doAssert whole == want, "the buffered pull render differs across the value boundary"
 
 
 # Span pieces copy out of `CompiledTemplate.jinja` and drain across calls byte-exact.

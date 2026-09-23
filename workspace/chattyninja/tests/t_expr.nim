@@ -507,7 +507,13 @@ proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, s
   ## Renders whole and returns the bytes plus the driver's recorded generation spans.
   let (tmpl, sym) = parseTemplate(src)
   var d = startRender(tmpl, sym, JinjaVal(kind: vkUndefined))
-  result.text = pullAll(d)
+  var buf: array[4096, char]
+  while true:
+    let n = pullInto(d, buf)
+    if n == 0:
+      break
+    for i in 0 ..< n:
+      result.text.add buf[i]
   result.spans = d.state.spans
 
 proc testGenerationSpanShape() =
