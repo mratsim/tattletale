@@ -268,32 +268,17 @@ proc gemm_strided*[T: SomeNumber](
 when isMainModule:
   # Tests
   block:
-    let a = [[1.0, 2, 3], [1.0, 1, 1], [1.0, 1, 1]]
+    let a = [[1.0, 2, 3],
+             [1.0, 1, 1],
+             [1.0, 1, 1]]
 
-    let b = [[1.0, 1], [1.0, 1], [1.0, 1]]
+    let b = [[1.0, 1],
+             [1.0, 1],
+             [1.0, 1]]
 
-    let ab = [[6.0, 6], [3.0, 3], [3.0, 3]]
-
-    var res_ab: array[3, array[2, float]]
-    gemm_strided(
-      3, 2, 3,
-      1.0,  a[0][0].unsafeAddr, 3, 1,
-            b[0][0].unsafeAddr, 2, 1,
-      0.0,  res_ab[0][0].addr,  2, 1
-      )
-
-    # echo "expected: ", ab
-    # echo "result: ", res_ab
-
-    doAssert res_ab == ab, $res_ab
-    echo "SUCCESS\n"
-
-  block:
-    let a = [[1.0, 2, 3], [4.0, 5, 6], [7.0, 8, 9]]
-
-    let b = [[1.0, 1], [1.0, 1], [1.0, 1]]
-
-    let ab = [[ 6.0,  6], [15.0, 15], [24.0, 24]]
+    let ab = [[6.0, 6],
+              [3.0, 3],
+              [3.0, 3]]
 
     var res_ab: array[3, array[2, float]]
     gemm_strided(
@@ -310,11 +295,42 @@ when isMainModule:
     echo "SUCCESS\n"
 
   block:
-    let a = [[1.0,2,3], [4.0,5,6]]
+    let a = [[1.0, 2, 3],
+             [4.0, 5, 6],
+             [7.0, 8, 9]]
 
-    let b = [[7.0,  8], [9.0, 10], [11.0,12]]
+    let b = [[1.0, 1],
+             [1.0, 1],
+             [1.0, 1]]
 
-    let ab = [[ 58.0, 64], [139.0,154]]
+    let ab = [[ 6.0,  6],
+              [15.0, 15],
+              [24.0, 24]]
+
+    var res_ab: array[3, array[2, float]]
+    gemm_strided(
+      3, 2, 3,
+      1.0,  a[0][0].unsafeAddr, 3, 1,
+            b[0][0].unsafeAddr, 2, 1,
+      0.0,  res_ab[0][0].addr,  2, 1
+      )
+
+    # echo "expected: ", ab
+    # echo "result: ", res_ab
+
+    doAssert res_ab == ab, $res_ab
+    echo "SUCCESS\n"
+
+  block:
+    let a = [[1.0,2,3],
+             [4.0,5,6]]
+
+    let b = [[7.0,  8],
+             [9.0, 10],
+             [11.0,12]]
+
+    let ab = [[ 58.0, 64],
+              [139.0,154]]
 
     var res_ab: array[2, array[2, float]]
     gemm_strided(
@@ -333,10 +349,14 @@ when isMainModule:
   block:
     # example from http://www.intmath.com/matrices-determinants/matrix-multiplication-examples.php
     echo "\n## (M x K) * (K x N) with M < N"
-    let a = [[-2,-3,-1], [ 3, 0, 4]]
-    let b = [[ 1, 5, 2,-1], [-3, 0, 3, 4], [ 6,-2, 7,-4]]
+    let a = [[-2,-3,-1],
+             [ 3, 0, 4]]
+    let b = [[ 1, 5, 2,-1],
+             [-3, 0, 3, 4],
+             [ 6,-2, 7,-4]]
 
-    let ab = [[ 1,-8,-20, -6], [27, 7, 34,-19]]
+    let ab = [[ 1,-8,-20, -6],
+              [27, 7, 34,-19]]
 
     var res_ab: array[2, array[4, int]]
     gemm_strided(
@@ -355,10 +375,21 @@ when isMainModule:
   block:
     # from http://www.calcul.com/show/calculator/matrix-multiplication_;5;5;5;5?matrix1=[[%225%22,%226%22,%225%22,%228%22],[%228%22,%222%22,%228%22,%228%22],[%220%22,%225%22,%224%22,%220%22],[%224%22,%220%22,%225%22,%226%22],[%224%22,%225%22,%220%22,%223%22]]&matrix2=[[%225%22,%223%22,%226%22,%220%22],[%225%22,%222%22,%223%22,%223%22],[%228%22,%228%22,%222%22,%220%22],[%227%22,%227%22,%220%22,%220%22]]&operator=*
     echo "\n## (M x K) * (K x N) with M > N and M > block-size (4x4)"
-    let a =  [[5,6,5,8], [8,2,8,8], [0,5,4,0], [4,0,5,6], [4,5,0,3]]
-    let b =  [[5,3,6,0], [5,2,3,3], [8,8,2,0], [7,7,0,0]]
+    let a =  [[5,6,5,8],
+              [8,2,8,8],
+              [0,5,4,0],
+              [4,0,5,6],
+              [4,5,0,3]]
+    let b =  [[5,3,6,0],
+              [5,2,3,3],
+              [8,8,2,0],
+              [7,7,0,0]]
 
-    let ab = [[151,123,58,18], [170,148,70, 6], [ 57, 42,23,15], [102, 94,34, 0], [ 66, 43,39,15]]
+    let ab = [[151,123,58,18],
+              [170,148,70, 6],
+              [ 57, 42,23,15],
+              [102, 94,34, 0],
+              [ 66, 43,39,15]]
 
     var res_ab: array[5, array[4, int]]
     gemm_strided(
@@ -375,12 +406,21 @@ when isMainModule:
     echo "SUCCESS\n"
 
   block:
-    let a =  [[2, 4,  3,  1,  3,  1,  3,  1], [4, 3,  2,  4,  1,  0,  0,  0]]
+    let a =  [[2, 4,  3,  1,  3,  1,  3,  1],
+              [4, 3,  2,  4,  1,  0,  0,  0]]
 
 
-    let b =  [[2, 2], [2, 1], [0, 3], [0, 1], [0, 2], [4, 3], [3, 3], [2, 1]]
+    let b =  [[2, 2],
+              [2, 1],
+              [0, 3],
+              [0, 1],
+              [0, 2],
+              [4, 3],
+              [3, 3],
+              [2, 1]]
 
-    let ab = [[27,37], [14,23]]
+    let ab = [[27,37],
+              [14,23]]
 
     var res_ab: array[2, array[2, int]]
     gemm_strided(
@@ -397,10 +437,18 @@ when isMainModule:
     echo "SUCCESS\n"
 
   block:
-    let a =  [[2, 1], [1, 3], [2, 1], [1, 0], [3, 4], [2, 4], [3, 1], [4, 0]]
+    let a =  [[2, 1],
+              [1, 3],
+              [2, 1],
+              [1, 0],
+              [3, 4],
+              [2, 4],
+              [3, 1],
+              [4, 0]]
 
 
-    let b =  [[2, 2,  0,  4,  0,  0,  4,  2], [2, 1,  2,  1,  2,  4,  4,  1]]
+    let b =  [[2, 2,  0,  4,  0,  0,  4,  2],
+              [2, 1,  2,  1,  2,  4,  4,  1]]
 
     let ab = [[ 6,  5,  2,  9,  2,  4, 12,  5],
               [ 8,  5,  6,  7,  6, 12, 16,  5],

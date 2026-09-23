@@ -3,21 +3,21 @@
 # Distributed under the Apache v2 License (license terms are at http://www.apache.org/licenses/LICENSE-2.0).
 # This file may not be copied, modified, or distributed except according to those terms.
 
-const TTT_LASER_MEM_ALIGN*{.intdefine.} = 64
+const LASER_MEM_ALIGN*{.intdefine.} = 64
 static:
-  assert TTT_LASER_MEM_ALIGN != 0, "Alignment " & $TTT_LASER_MEM_ALIGN & "must be a power of 2"
-  assert (TTT_LASER_MEM_ALIGN and (TTT_LASER_MEM_ALIGN - 1)) == 0, "Alignment " & $TTT_LASER_MEM_ALIGN & "must be a power of 2"
+  assert LASER_MEM_ALIGN != 0, "Alignment " & $LASER_MEM_ALIGN & "must be a power of 2"
+  assert (LASER_MEM_ALIGN and (LASER_MEM_ALIGN - 1)) == 0, "Alignment " & $LASER_MEM_ALIGN & "must be a power of 2"
 
 template withCompilerOptimHints*() =
   # See https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
   # and https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html#Common-Variable-Attributes
 
-  # Variable is created aligned by TTT_LASER_MEM_ALIGN.
+  # Variable is created aligned by LASER_MEM_ALIGN.
   # This is useful to ensure an object can be loaded
   # in a minimum amount of cache lines load
   # For example, the stack part of tensors are 128 bytes and can be loaded in 2 cache lines
   # but would require 3 loads if they are misaligned.
-  {.pragma: align_variable, codegenDecl: "$# $# __attribute__((aligned(" & $TTT_LASER_MEM_ALIGN & ")))".}
+  {.pragma: align_variable, codegenDecl: "$# $# __attribute__((aligned(" & $LASER_MEM_ALIGN & ")))".}
 
   # Variable. Pointer does not alias any existing valid pointers.
   when not defined(vcc):
@@ -50,9 +50,7 @@ when defined(cpp):
   proc static_cast[T: ptr](input: pointer): T
     {.importcpp: "static_cast<'0>(@)".}
 
-template assume_aligned*[T](data: ptr T, alignment: static int = TTT_LASER_MEM_ALIGN): ptr T =
-  ## Returns `data` with the compiler told it is `alignment`-aligned, the pointer unchanged.
-  ## The default alignment is the `TTT_LASER_MEM_ALIGN` config point.
+template assume_aligned*[T](data: ptr T, alignment: static int = LASER_MEM_ALIGN): ptr T =
   when defined(cpp) and withBuiltins: # builtin_assume_aligned returns void pointers, this does not compile in C++, they must all be typed
     static_cast[ptr T](builtin_assume_aligned(data, alignment))
   elif withBuiltins:
@@ -95,8 +93,8 @@ template withCompilerFunctionHints() =
   ## is public and inline (because hot and pure cascade to all cunfctions called)
   ## and they cannot be stacked easily: (hot, pure) will only apply the last
 
-  # Function. Returned pointer is aligned to TTT_LASER_MEM_ALIGN
-  {.pragma: aligned_ptr_result, codegenDecl: "__attribute__((assume_aligned(" & $TTT_LASER_MEM_ALIGN & ")) $# $#$#".}
+  # Function. Returned pointer is aligned to LASER_MEM_ALIGN
+  {.pragma: aligned_ptr_result, codegenDecl: "__attribute__((assume_aligned(" & $LASER_MEM_ALIGN & ")) $# $#$#".}
 
   # Function. Returned pointer cannot alias any other valid pointer and no pointers to valid object occur in any
   # storage pointed to.

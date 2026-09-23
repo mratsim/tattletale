@@ -54,7 +54,7 @@ else:
 # https://github.com/zy97140/omp-benchmark-for-pytorch/blob/master/benchmark-data/IntelR-XeonR-Platinum-8180-CPU.md
 
 
-const TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE*{.intdefine.} = 1024
+const OMP_MEMORY_BOUND_GRAIN_SIZE*{.intdefine.} = 1024
   ## This is the minimum amount of work per physical cores
   ## for memory-bound processing.
   ## - "copy" and "addition" are considered memory-bound
@@ -79,7 +79,7 @@ const TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE*{.intdefine.} = 1024
   ##   - http://studio.myrian.fr/openmp-et-num_threads/
   ##     > 2x2ms overhead when changing num_threads from 16->6->16
 
-const TTT_LASER_OMP_NON_CONTIGUOUS_SCALE_FACTOR*{.intdefine.} = 4
+const OMP_NON_CONTIGUOUS_SCALE_FACTOR*{.intdefine.} = 4
   ## Due to striding computation, we can use a lower grainsize
   ## for non-contiguous tensors
 
@@ -233,15 +233,15 @@ template omp_parallel_for_default*(
   ## https://github.com/nim-lang/Nim/issues/9414 is solved.
   ## Compared to omp_parallel_for the following are set by default
   ## - omp_grain_size:
-  ##     The default `TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE` (1024) suits
-  ##     contiguous copy or add operations, override it by passing
-  ##     `-d:TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE=123456` to the compiler.
-  ##     A value of 1 always parallelizes the loop.
+  ##     The default `OMP_MEMORY_BOUND_GRAIN_SIZE` is suitable for
+  ##     contiguous copy or add operations. It's 1024 and can be changed
+  ##     by passing `-d:OMP_MEMORY_BOUND_GRAIN_SIZE=123456` during compilation.
+  ##     A value of 1 will always parallelize the loop.
   ## - simd is used by default
   omp_parallel_for(
         index,
         length,
-        omp_grain_size = TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE,
+        omp_grain_size = OMP_MEMORY_BOUND_GRAIN_SIZE,
         use_simd = true,
         body
         )
@@ -334,14 +334,14 @@ template omp_parallel_chunks_default*(
   ## https://github.com/nim-lang/Nim/issues/9414 is solved.
   ## Compared to omp_parallel_for the following are set by default
   ## - omp_grain_size:
-  ##     The default `TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE` (1024) suits
-  ##     contiguous copy or add operations, override it by passing
-  ##     `-d:TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE=123456` to the compiler.
-  ##     A value of 1 always parallelizes the loop.
+  ##     The default `OMP_MEMORY_BOUND_GRAIN_SIZE` is suitable for
+  ##     contiguous copy or add operations. It's 1024 and can be changed
+  ##     by passing `-d:OMP_MEMORY_BOUND_GRAIN_SIZE=123456` during compilation.
+  ##     A value of 1 will always parallelize the loop.
   omp_parallel_chunks(
     length,
     chunk_offset, chunk_size,
-    omp_grain_size = TTT_LASER_OMP_MEMORY_BOUND_GRAIN_SIZE,
+    omp_grain_size = OMP_MEMORY_BOUND_GRAIN_SIZE,
     body
   )
 

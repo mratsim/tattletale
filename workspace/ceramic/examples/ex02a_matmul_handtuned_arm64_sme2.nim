@@ -88,7 +88,8 @@ template pack_layout*(zd: Layout, transposed: static bool): auto =
   ## compact, then the remaining dimension scaled by the tile size.
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
-  let restCompact = make_layout(zd.shape[1], when transposed: LayoutRight else: LayoutLeft)
+  let restCompact = make_layout(zd.shape[1],
+    when transposed: LayoutRight else: LayoutLeft)
   let restScaled = mapLeavesWith(restCompact):
     (it_sh, it_st * tile_size)
   nested_product(tileCompact, restScaled)
@@ -135,23 +136,23 @@ proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__built
 ## target, so the off-arm64 fallback compiles.
 proc builtin_assume_aligned*(p: pointer, alignment: csize_t): pointer {.importc: "__builtin_assume_aligned", nodecl.}
 
-const TTT_SIMD_ARCH {.strdefine.} = "auto"
+const simdArch {.strdefine.} = "auto"
 
-when TTT_SIMD_ARCH == "auto":
+when simdArch == "auto":
   when defined(arm64):
     const resolvedArch = "sme"
   else:
     const resolvedArch = "generic"
-elif TTT_SIMD_ARCH == "sme":
+elif simdArch == "sme":
   when defined(arm64):
     const resolvedArch = "sme"
   else:
-    {.error: "TTT_SIMD_ARCH='sme' requires an arm64 target with SME (Apple M4 or newer).".}
+    {.error: "simdArch='sme' requires an arm64 target with SME (Apple M4 or newer).".}
 else:
   const resolvedArch = "generic"
 
 when resolvedArch == "generic":
-  {.warning: "SIMD arch is 'generic'. For SME acceleration compile with -d:TTT_SIMD_ARCH=sme on arm64.".}
+  {.warning: "SIMD arch is 'generic'. For SME acceleration compile with -d:simdArch=sme on arm64.".}
 
 proc simdArchString*(): string = resolvedArch
 

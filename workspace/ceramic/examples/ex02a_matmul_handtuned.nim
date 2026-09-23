@@ -70,7 +70,8 @@ genEpilogue(epilogue_relu):
 template pack_layout*(zd: Layout; transposed: static bool): auto =
   let tileCompact = make_layout(zd.shape[0], LayoutLeft)
   let tile_size = product(zd.shape[0])
-  let restCompact = make_layout(zd.shape[1], when transposed: LayoutRight else: LayoutLeft)
+  let restCompact = make_layout(zd.shape[1],
+    when transposed: LayoutRight else: LayoutLeft)
   let restScaled = mapLeavesWith(restCompact):
     (it_sh, it_st * tile_size)
   nested_product(tileCompact, restScaled)
@@ -110,9 +111,9 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 import workspace/cpuplatforms/x86/simd_x86
 
-const TTT_SIMD_ARCH {.strdefine.} = "auto"
+const simdArch {.strdefine.} = "auto"
 
-when TTT_SIMD_ARCH == "auto":
+when simdArch == "auto":
   when defined(amd64):
     when defined(avx512f):
       import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
@@ -124,19 +125,19 @@ when TTT_SIMD_ARCH == "auto":
       const resolvedArch = "generic"
   else:
     const resolvedArch = "generic"
-elif TTT_SIMD_ARCH == "avx512":
+elif simdArch == "avx512":
   import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx512
   const resolvedArch = "avx512"
-elif TTT_SIMD_ARCH == "avx_fma":
+elif simdArch == "avx_fma":
   import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_avx_fma_ex02a
   const resolvedArch = "avx_fma"
 else:
   const resolvedArch = "generic"
 
 when resolvedArch == "generic":
-  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:TTT_SIMD_ARCH=avx_fma or -d:TTT_SIMD_ARCH=avx512.".}
+  {.warning: "SIMD arch is 'generic'. For SIMD acceleration compile with -d:simdArch=avx_fma or -d:simdArch=avx512.".}
 
-when TTT_SIMD_ARCH != "auto":
+when simdArch != "auto":
   # Manual SIMD arch override — ensure C++ compiler gets the right flags
   when resolvedArch == "avx_fma":
     {.passC: "-mavx -mfma".}
