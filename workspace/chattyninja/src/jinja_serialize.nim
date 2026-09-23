@@ -15,7 +15,7 @@
 #   toJson with JsonOpts. Every other entry stays serializer plumbing between the src modules.
 
 import std/unicode
-import jinja_data_model
+import jinja_data_model {.all.}
 
 const
   SerChunkCap = 40
@@ -61,7 +61,7 @@ type
     idx: int
       ## entry the serializer writes next
 
-  Ser* = object
+  Ser = object
     ## Defunctional serializer for one `JinjaVal`, rendering byte by byte into the caller's
     ## window with every pause point in the fields below, so a drain resumed through the same
     ## `Ser` never re-emits a byte:

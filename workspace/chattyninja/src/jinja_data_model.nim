@@ -12,15 +12,16 @@
 ##   raising `JinjaError` with message, cause and template byte location
 
 # Public API:
-#   JinjaVal with ValueKind, the value constructors, dictSet and dictGet over DictVal,
-#   JinjaError with cause and location, toJson and JsonOpts, and the value caps.
+#   JinjaVal with ValueKind, the value constructors, eqVal, dictSet and dictGet over DictVal,
+#   JinjaError with cause and location, JsonOpts and the value caps. Everything else is
+#   value plumbing, cross-module code importing it through `import x {.all.}`.
 
 import std/unicode
 import workspace/data_structures/src/small_seqs
 export small_seqs
 
 const
-  ArgsCap* = 3
+  ArgsCap = 3
     ## Argument capacity of one call's `Args` carrier, past it `SmallSeq` spills to the heap.
 
 const
@@ -47,7 +48,7 @@ const
 const
   NoOffset* = -1
     ## `JinjaError.offset` marker for a raise site with no template location in scope
-  NoLink* = -1'i32
+  NoLink = -1'i32
     ## Marks an absent link or absent span in every node payload slot.
   EmptyWindow: array[0, char] = []
     ## empty span backing the measuring cursor
@@ -70,7 +71,7 @@ type
     cause*: JinjaCause
       ## kind of failure, `ceRaiseCall` a `raise_exception` call, `ceUnimplemented` a declared gap, `ceWindow` a window-capacity overflow
 
-  Cursor* = object
+  Cursor = object
     ## Appends bytes into a borrowed window. An append that does not fit raises `JinjaError`
     ## with cause `ceWindow`, naming capacity and shortfall, never growing the window.
     ## Measuring mode counts bytes without writing, the presize pass of a two-pass render.
@@ -119,7 +120,7 @@ type
     ## a positional argument or a keyword no builtin reads.
     akNone, akChars, akDefault, akEnsureAscii, akSeparators
 
-  Arg* = object
+  Arg = object
     ## One call or filter argument, keyword-bound when `nameLo` is not `NoLink`.
     nameLo*, nameHi*: int32
       ## keyword name span into `CompiledTemplate.jinja`, `NoLink` in `nameLo` for a positional argument
@@ -127,7 +128,7 @@ type
       ## keyword slot named by that span, `akNone` when no builtin reads that keyword
     val*: JinjaVal
 
-  Args* = SmallSeq[ArgsCap, Arg]
+  Args = SmallSeq[ArgsCap, Arg]
     ## One call's arguments in call order, filled by moves, read by borrows, `ArgsCap` inline.
 
   DeferredMacroCall* = ref object

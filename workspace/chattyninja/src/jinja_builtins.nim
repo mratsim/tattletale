@@ -14,7 +14,9 @@
 ##   and the injected clock through the context, which this module cannot see
 
 import std/unicode
-import cnj_types, jinja_data_model, jinja_serialize
+import cnj_types {.all.}
+import jinja_data_model {.all.}
+import jinja_serialize {.all.}
 
 type
   FilterProc = proc (v: JinjaVal, args: var Args): JinjaVal {.nimcall, noSideEffect.}

@@ -48,7 +48,8 @@
 # Public API:
 #   parseTemplate. Every other entry stays parse-tier plumbing between the src modules.
 
-import cnj_types, jinja_data_model
+import cnj_types {.all.}
+import jinja_data_model {.all.}
 import workspace/data_structures/src/small_seqs
 
 func at(s: openArray[char], prefix: openArray[char], i: int): bool =

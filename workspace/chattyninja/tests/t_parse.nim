@@ -15,7 +15,10 @@
 ##   $ nim test_chattyninja
 
 import std/[os, strutils]
-import cnj_types, jinja_data_model, cnj_parse, cnj_engine
+import cnj_types {.all.}
+import jinja_data_model {.all.}
+import cnj_parse {.all.}
+import cnj_engine {.all.}
 
 const root = currentSourcePath().parentDir
 

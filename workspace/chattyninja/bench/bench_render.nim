@@ -31,7 +31,11 @@
 ## - no `doAssert` anywhere, a failing doAssert hangs under `-d:nimAllocStats`
 
 import std/[algorithm, importutils, monotimes, os, strformat, strutils, times]
-import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, cnj_engine
+import cnj_types {.all.}
+import jinja_data_model {.all.}
+import jinja_serialize {.all.}
+import cnj_parse {.all.}
+import cnj_engine {.all.}
 import workspace/data_structures/src/small_seqs
 import corpus/fixture_loader
 

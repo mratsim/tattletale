@@ -43,10 +43,12 @@
 #   The `forceMacro` contract in cnj_engine states the snapshot's exact shape.
 
 # Public API:
-#   JinjaRenderContext, RenderState, the compiled artifact, the slot accessors,
-#   the name-resolution reads and the depth and step caps.
+#   JinjaRenderContext, the compiled artifact (CompiledTemplate, CompiledSymbols)
+#   and the depth, nesting and step caps. Everything else is render plumbing,
+#   cross-module code importing it through `import x {.all.}`.
 
-import jinja_data_model, jinja_serialize
+import jinja_data_model {.all.}
+import jinja_serialize {.all.}
 import workspace/data_structures/src/small_seqs
 
 type
@@ -68,7 +70,7 @@ type
     nkVerbatim, nkEmit, nkIf, nkFor, nkBreak, nkSet, nkSetNamespace, nkSetBlock, nkGeneration,
     nkMacroDef
 
-  Node* = object
+  Node = object
     ## POD node in one append-only arena, `kind` naming the construct, a node's executable
     ## meaning a pure function of `kind` through `steps`, so the artifact stays data.
     ## Every payload reference is one int32 slot, `NoLink` (-1) marking an absent link or span:
@@ -127,8 +129,8 @@ const
   # nested loop test lands in the low thousands. 1_000_000 keeps ample headroom.
   TTT_CNJ_StepBudget* {.intdefine.} = 1_000_000
 
-  Whitespace* = {' ', '\t', '\n', '\r', '\v', '\f'}
-  WsNameChars* = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
+  Whitespace = {' ', '\t', '\n', '\r', '\v', '\f'}
+  WsNameChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
 
 # Payload slot accessors
 #
@@ -159,10 +161,10 @@ const
   ## One slot position per construct role, plus the two variable-tail bases. Parse and render
   ## index through the same constants, so a slot-layout move is one shared edit.
   SlotLo = 0
-  SlotHi* = 1
-  SlotSucc* = 2
-  SlotChild* = 3
-  SlotAlt* = 4
+  SlotHi = 1
+  SlotSucc = 2
+  SlotChild = 3
+  SlotAlt = 4
   SlotLoopName = 4
   SlotFilterLo = 5
   SlotFilterHi = 6
@@ -175,71 +177,71 @@ const
     ## First `nkMacroDef` parameter slot, each parameter one name id then its default span,
     ## three slots in all.
 
-template lo*(nd: Node): int32 =
+template lo(nd: Node): int32 =
   ## Payload span start into `CompiledTemplate.jinja`, or the `nkMacroDef` macro name id.
   nd.slots[SlotLo]
 
-template hi*(nd: Node): int32 =
+template hi(nd: Node): int32 =
   ## Payload span end into `CompiledTemplate.jinja`, exclusive.
   nd.slots[SlotHi]
 
-template succ*(nd: Node): int32 =
+template succ(nd: Node): int32 =
   ## Next node in program order by arena index, `NoLink` once the artifact is exhausted.
   nd.slots[SlotSucc]
 
-template child*(nd: Node): int32 =
+template child(nd: Node): int32 =
   ## First node of the body by arena index, or the `nkSet` target name id.
   nd.slots[SlotChild]
 
-template alt*(nd: Node): int32 =
+template alt(nd: Node): int32 =
   ## Next `nkIf` level in the else/elif chain by arena index, `NoLink` when the chain ends.
   nd.slots[SlotAlt]
 
-template loopName*(nd: Node): int32 =
+template loopName(nd: Node): int32 =
   ## Interned `loop` name id of `nkFor`, bound so render never interns at lookup time.
   nd.slots[SlotLoopName]
 
-template filterLo*(nd: Node): int32 =
+template filterLo(nd: Node): int32 =
   ## `nkFor` filter clause span start into `CompiledTemplate.jinja`, `NoLink` when the header has no `if`.
   nd.slots[SlotFilterLo]
 
-template filterHi*(nd: Node): int32 =
+template filterHi(nd: Node): int32 =
   ## `nkFor` filter clause span end into `CompiledTemplate.jinja`, exclusive.
   nd.slots[SlotFilterHi]
 
-template target*(nd: Node): int32 =
+template target(nd: Node): int32 =
   ## Interned namespace name id of `nkSetNamespace`.
   nd.slots[SlotNsTarget]
 
-template field*(nd: Node): int32 =
+template field(nd: Node): int32 =
   ## Interned member name id of `nkSetNamespace`.
   nd.slots[SlotNsField]
 
-template macroName*(nd: Node): int32 =
+template macroName(nd: Node): int32 =
   ## Interned macro name id that `nkMacroDef` binds.
   nd.slots[SlotMacroName]
 
-template targetCount*(nd: Node): int32 =
+template targetCount(nd: Node): int32 =
   ## Number of `nkFor` target name ids in the payload tail.
   nd.slots.len - ForTargetsBase
 
-template targetAt*(nd: Node, i: int): int32 =
+template targetAt(nd: Node, i: int): int32 =
   ## `nkFor` target name id `i`, `i` in `0 ..< nd.targetCount`.
   nd.slots[ForTargetsBase + i]
 
-template paramCount*(nd: Node): int32 =
+template paramCount(nd: Node): int32 =
   ## Number of `nkMacroDef` parameters in the payload tail.
   (nd.slots.len - MacroParamsBase) div 3
 
-template paramNameAt*(nd: Node, k: int): int32 =
+template paramNameAt(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` interned name id, `k` in `0 ..< nd.paramCount`.
   nd.slots[MacroParamsBase + 3 * k]
 
-template paramDefLoAt*(nd: Node, k: int): int32 =
+template paramDefLoAt(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` default span start, `NoLink` when the parameter has no default.
   nd.slots[MacroParamsBase + 3 * k + 1]
 
-template paramDefHiAt*(nd: Node, k: int): int32 =
+template paramDefHiAt(nd: Node, k: int): int32 =
   ## `nkMacroDef` parameter `k` default span end, exclusive, meaningful only while
   ## `paramDefLoAt` is not `NoLink`.
   nd.slots[MacroParamsBase + 3 * k + 2]
@@ -249,7 +251,7 @@ type
   RowKind* = enum
     frFor, frGeneration, frMacro
 
-  Row* = object
+  Row = object
     ## Render-state row, the only place re-entry is discriminated. `node` is the row's
     ## identity and matches the node being entered, nothing about resumption living in the node.
     node*: int32
@@ -271,18 +273,18 @@ type
       retNode*: int32
         ## node control returns to once the body ends
 
-  Binding* = object
+  Binding = object
     ## One scope entry:
     ##   an interned name bound to a value.
     name*: int32
     val*: JinjaVal
 
-  Scope* = seq[Binding]
+  Scope = seq[Binding]
 
   PieceKind* = enum
     pkNone, pkSpan, pkStr, pkCut, pkLazy
 
-  Piece* = object
+  Piece = object
     ## Pending output piece:
     ## - span pieces deliver straight out of `CompiledTemplate.jinja`
     ## - string and cut pieces are owned by the render state, the string materialized,
@@ -305,7 +307,7 @@ type
       nil
         ## rendered by the serializer in `RenderState.lazy`, no payload here
 
-  RenderState* = object
+  RenderState = object
     ## All per-instantiation render control state, owned by the pullInto consumer, nothing
     ## reachable from `CompiledTemplate`, so two instantiations over one artifact cannot
     ## interfere. Lives only at the step tier, the expression evaluator never seeing it.
@@ -345,7 +347,7 @@ type
       ## the engine's macro-force handle, bound once at `startRender`, stateless,
       ## every session carrying the same callable
 
-  MacroForcer* = proc (c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal {.nimcall.}
+  MacroForcer = proc (c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal {.nimcall.}
     ## Runs one macro body to completion on a second session built over the caller's
     ## artifact refs, the captured text returned as a string value.
     ## Contract:
@@ -363,7 +365,7 @@ func findName(t: CompiledSymbols, name: openArray[char]): int32 =
       return int32 i
   NoLink
 
-func scopeHas*(st: var RenderState, id: int32, val: var JinjaVal): bool =
+func scopeHas(st: var RenderState, id: int32, val: var JinjaVal): bool =
   ## Scope scan innermost first, returning true with `val` set when `id` is bound.
   ## A binding to an undefined value is still a binding, so the root lookup never sees it.
   for si in countdown(st.scopes.len - 1, 0):
@@ -373,7 +375,7 @@ func scopeHas*(st: var RenderState, id: int32, val: var JinjaVal): bool =
         return true
   false
 
-func lookupName*(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
+func lookupName(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
   ## Returns the binding of `name` in one render, resolving the scopes innermost first,
   ## then the render context root dict, then undefined.
   ## Absence is a value, never an error, `is defined` testing for exactly that shape.
@@ -386,7 +388,7 @@ func lookupName*(c: JinjaRenderContext, name: openArray[char]): JinjaVal =
   undefinedVal()
 
 
-proc internName*(t: var CompiledSymbols, name: openArray[char]): int32 =
+proc internName(t: var CompiledSymbols, name: openArray[char]): int32 =
   ## Returns the interned id of `name`, inserting the one arena copy when absent.
   ## - a carried name allocates nothing
   ## - a new name copies exactly once into `CompiledSymbols.names`

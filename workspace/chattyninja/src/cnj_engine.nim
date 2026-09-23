@@ -21,7 +21,11 @@
 # Public API:
 #   startRender, pullInto, pullAll and renderToString. Everything else is engine plumbing.
 
-import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
+import cnj_types {.all.}
+import jinja_data_model {.all.}
+import jinja_serialize {.all.}
+import cnj_parse {.all.}
+import jinja_interpolation {.all.}
 
 type
   Step = proc (c: JinjaRenderContext, n: int32) {.nimcall.}
@@ -463,7 +467,7 @@ const
     ## - matched to `SerChunkCap` in jinja_serialize, the serializer queue's initial capacity
     ## - both hold one serializer chunk per drain step
 
-  Steps*: array[NodeKind, Step] = [
+  Steps: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
     stepGeneration, stepMacroDef
   ]

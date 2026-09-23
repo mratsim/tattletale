@@ -19,7 +19,10 @@
 #   a render from a branch Jinja would not have entered
 
 import std/[math, parseutils, unicode]
-import cnj_types, jinja_data_model, jinja_serialize, jinja_builtins
+import cnj_types {.all.}
+import jinja_data_model {.all.}
+import jinja_serialize {.all.}
+import jinja_builtins {.all.}
 
 type
   ExKind = enum
