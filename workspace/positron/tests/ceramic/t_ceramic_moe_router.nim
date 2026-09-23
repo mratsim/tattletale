@@ -154,10 +154,11 @@ const MoeRouterMsl = metal:
 # whose host body is a discard, so std/math's exp2 cannot be called here
 proc exp2fHost(x: cfloat): cfloat {.importc: "exp2f", header: "<math.h>".}
 
+from ../../src/kernels/ceramic/math_consts import Log2e
+
 const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
-  Log2E = 1.4426950408889634'f32
 
 proc elRound(fam: Family, v: float32): float32 =
   ## One round-to-nearest-even round into the family dtype and back to fp32.
@@ -234,7 +235,7 @@ proc naiveRouter(fam: Family, x, w: seq[uint16]; T, H, E, K: int, Scale: float32
     # the crucible export table also carries an exp2 device builtin whose
     # host body is a discard, so exp2fHost is the only host exp2 here
     for e in 0 ..< E:
-      p[e] = exp2fHost((logits[e] - lm) * Log2E)
+      p[e] = exp2fHost((logits[e] - lm) * Log2e)
       ls += p[e]
     var order = newSeq[int32](E)
     for e in 0 ..< E:
@@ -284,8 +285,8 @@ proc naiveWeightFor(fam: Family, logits: seq[float32]; t, E, K: int;
   var sumSel = 0.0'f64
   for slot in 0 ..< K:
     let e = logits[t * E + ids[slot].int]
-    sumSel += exp2fHost((e - lm) * Log2E).float64
-  let p = exp2fHost((logits[t * E + target.int] - lm) * Log2E).float64
+    sumSel += exp2fHost((e - lm) * Log2e).float64
+  let p = exp2fHost((logits[t * E + target.int] - lm) * Log2e).float64
   elRound(fam, (p / sumSel * Scale).float32).uint16
 
 proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;

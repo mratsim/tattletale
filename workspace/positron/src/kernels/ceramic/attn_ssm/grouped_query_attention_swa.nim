@@ -74,6 +74,7 @@
 import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
+from ../math_consts import Log2e
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -175,7 +176,7 @@ proc swa_attn_fwd*(
   o_reg.zero()
   # log2(e), the exp2-form scale. Gemma-4 text attention uses scale 1.0,
   # so q_mul applies in fp32 after the mma, keeping the fp16 Q unscaled.
-  let q_mul = 1.44269504089'f32
+  let q_mul = Log2e
   for kv_idx in kvStart ..< kvEnd:
     let base = kv_idx * 8 * rowStride + kvHead * int32(D)
     k_reg.loadTile(gl_k, (base, 0, 0, 0))

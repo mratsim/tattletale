@@ -12,3 +12,8 @@
 const Log2e* = 1.4426950408889634'f32
   ## f32 log base 2 of e, the scale factor of the exp2-based decay and silu
   ## spellings. Metal has no exp device builtin, so e^x is spelled exp2(x·log2e).
+
+const InvSqrt128* = 0.088388347648'f32
+  ## 1/sqrt(128), the Hadamard-128 normalization factor of the EXL3
+  ## incoherence processing and the fp32 attention q scale.
+  ## hadamard_transforms' INV_SQRT_128 is an alias of this constant.

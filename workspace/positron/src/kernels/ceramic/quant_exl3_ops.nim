@@ -55,6 +55,7 @@
 import workspace/crucible
 import workspace/ceramic
 import ./tile_io_rows
+from ./math_consts import InvSqrt128
 
 # ═════════════════════════════════════════════════════════════════════
 #  The fragment-layout FWHT-128
@@ -124,7 +125,7 @@ proc hadamard128*[A: static MmaAtom](
     butterflyCore(rv, lane)
     for s in 0'i32 ..< 32:
       tiles[s shr 2].frags[n][(s shr 1) and 1].frag[s and 1] =
-        (rv[s] * 0.088388347648'f32).to(float16)
+        (rv[s] * InvSqrt128).to(float16)
 
 proc hadamard128*[A: static MmaAtom](
     tiles: var array[4, RtLeft[float16, 32, 32, A]]) {.device.} =
@@ -143,7 +144,7 @@ proc hadamard128*[A: static MmaAtom](
     butterflyCore(rv, lane)
     for s in 0'i32 ..< 32:
       tiles[s shr 3].frags[n][(s shr 1) and 3].frag[s and 1] =
-        (rv[s] * 0.088388347648'f32).to(float16)
+        (rv[s] * InvSqrt128).to(float16)
 
 # ═════════════════════════════════════════════════════════════════════
 #  dequantTrellis: the on-the-fly fp16 weight-tile decode

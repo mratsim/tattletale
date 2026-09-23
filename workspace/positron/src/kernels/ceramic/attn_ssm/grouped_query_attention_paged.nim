@@ -104,6 +104,7 @@
 import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
+from ../math_consts import Log2e, InvSqrt128
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -212,8 +213,8 @@ proc paged_attn_fwd*(
   max_vec.neg_infty()
   norm_vec.zero()
   o_reg.zero()
-  let q_mul = (if D == 128: 0.08838834764'f32 else: 0.125'f32) *
-              1.44269504089'f32
+  let q_mul = (if D == 128: InvSqrt128 else: 0.125'f32) *
+              Log2e
   q_reg.mul(q_reg, q_mul)
   for kv_idx in 0'i32 ..< kvBlocks:
     let pageIdx = (kv_idx * 8) div page_size
