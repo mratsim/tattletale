@@ -200,7 +200,7 @@ proc anchorRows(suite: string): seq[AnchorRow] =
 # ── Measurement ──────────────────────────────────────────────────────────────
 
 proc renderOnce(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
-  ## Renders once, whole, through the pull interface, exactly as the test suites do.
+  ## Renders once, whole, through the `pullAll` interface, exactly as the test suites do.
   var c = startRender(tmpl, sym, ctx, clock)
   pullAll(c)
 
@@ -476,7 +476,7 @@ proc renderWindowN(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, 
   for _ in 0 ..< n:
     var c = startRender(tmpl, sym, ctx, clock)
     while true:
-      let got = pull(c, buf.toOpenArray(0, windowSize - 1))
+      let got = pullInto(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
         break
       result += got
@@ -487,7 +487,7 @@ proc pullCallsPerPass(tmpl: CompiledTemplate, sym: CompiledSymbols, rs: seq[Anch
   for r in rs:
     var c = startRender(tmpl, sym, r.ctx, r.clock)
     while true:
-      let got = pull(c, buf.toOpenArray(0, windowSize - 1))
+      let got = pullInto(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
         break
       inc result

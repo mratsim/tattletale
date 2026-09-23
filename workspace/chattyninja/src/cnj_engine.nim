@@ -4,13 +4,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Compiled chattyninja templates and their render driver.
-# | Step     | Behavior                                                                                                                                                  |
-# | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                 |
-# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                 |
-# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pull` walks the arena through `steps`, all control state in the context's `RenderState` |
-# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                  |
-# | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                             |
+# | Step     | Behavior                                                                                                                                                      |
+# | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                     |
+# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                     |
+# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pullInto` walks the arena through `steps`, all control state in the context's `RenderState` |
+# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
+# | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                                 |
 # Resumption state for a re-entered step lives in the render state's row stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
 # single-entry, parse time backpatching its branch bodies past the whole chain.
@@ -19,7 +19,7 @@
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 # Public API:
-#   startRender, pull, pullAll and renderToString. Everything else is engine plumbing.
+#   startRender, pullInto, pullAll and renderToString. Everything else is engine plumbing.
 
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
@@ -85,7 +85,7 @@ func emitCut(st: var RenderState, v: sink JinjaVal) =
 func emitValue(st: var RenderState, v: sink JinjaVal) =
   ## Makes a derived value the pending piece, taking over the caller's value so the engine
   ## never copies an emit value, the serializer in `st.lazy` draining into the caller's
-  ## window across pull calls, byte-exact with `pyStr`.
+  ## window across pullInto calls, byte-exact with `pyStr`.
   ##
   ## The caller routes `vkStr` to `emitStr` and `vkCut` to `emitCut` first, so the value
   ## here never carries either kind.
@@ -234,7 +234,7 @@ proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
   ## - the cursor increment stays committed while `bindTargets` and the filter clause run,
   ##   filters reading `loop.index0` and friends seeing the just-entered item
   ## - the clause runs at most once per item, through `filterKeep`'s contract
-  ## - a raise in either propagates to the caller per the pull contract, bytes written
+  ## - a raise in either propagates to the caller per the pullInto contract, bytes written
   ##   by the failing call discarded, a repull resuming after the failed item
   template nd: Node = c.tmpl.nodes[n]
   inc lp.idx
@@ -460,8 +460,8 @@ const
   CaptureDrainCap = 256
     ## Stack buffer `capturePend` hands to `pullSer` per drain call, sized to hold a whole
     ## scalar rendering in the common case so the capture copies in one grow.
-    ## - paired with `SerChunkCap` in jinja_serialize, the serializer's queue cap
-    ## - both bound one serializer chunk per drain step
+    ## - matched to `SerChunkCap` in jinja_serialize, the serializer queue's initial capacity
+    ## - both hold one serializer chunk per drain step
 
   Steps*: array[NodeKind, Step] = [
     stepVerbatim, stepEmit, stepIf, stepFor, stepBreak, stepSet, stepSetNs, stepSetBlock,
@@ -640,7 +640,7 @@ proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal =
   #   - the outer row closed and dropped a row below the entry count
   #   - the flow reached mc.node with no row beyond the entry set open
   # TTT_CNJ_MacroDepthCap bounds nesting, not iterations, so the force walk keeps
-  # its own step counter with the budget `pull` enforces, a breach raising
+  # its own step counter with the budget `pullInto` enforces, a breach raising
   # located at the node the walk reached.
   let baseRows = c2.state.rows.len
   var node = mc.body
@@ -670,13 +670,13 @@ func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, 
   ##   renders reproducibly under different clocks
   ## - `sym` is the parse-built arena by ref, every render over the artifact holding the same heap object, no borrow contract
   # A zero-node artifact (empty or comment-only text) dispatches nothing, its render
-  # completing on the first pull, so the program counter starts past the arena.
+  # completing on the first pullInto, so the program counter starts past the arena.
   JinjaRenderContext(tmpl: tmpl, symbols: sym, force: forceMacro,
       state: RenderState(curNode: (if tmpl.nodes.len == 0: NoLink else: 0), cur: 0,
           pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
-proc pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
+proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
@@ -750,29 +750,32 @@ proc pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
     let n = st.curNode
     inc steps
     if steps > TTT_CNJ_StepBudget:
-      raise jinjaErr("one pull call stepped past TTT_CNJ_StepBudget = " & $TTT_CNJ_StepBudget &
+      raise jinjaErr("one pullInto call stepped past TTT_CNJ_StepBudget = " & $TTT_CNJ_StepBudget &
           ", the render walk is not terminating", tmpl.nodes[n].lo.int,
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
-iterator items*(c: JinjaRenderContext): openArray[char] =
-  ## Pulls the render in chunks of at most `TTT_CNJ_ChunkSize` bytes, one `pull` call per chunk.
-  ## - a chunk borrows the iterator's local window, so a consumer must finish with it before
-  ##   advancing the loop
-  ## - `cur` counts bytes handed out, so a stop mid-render resumes consistently
-  var buf: array[TTT_CNJ_ChunkSize, char]
+iterator items*(c: JinjaRenderContext, buf: var openArray[char]): openArray[char] =
+  ## Yields the render through the caller's window, one `pullInto` call per iteration.
+  ## - the call fills `buf`, the yielded view borrows `buf[0 ..< result]`, and `cur`
+  ##   counts bytes handed out, so a stop mid-render resumes consistently
+  ## - the chunk is whatever window the caller gave, a bigger window fewer calls
+  ## - the consumer must finish with the yielded view before the loop advances
   while true:
-    let n = pull(c, buf)
+    let n = pullInto(c, buf)
     if n == 0:
       break
     yield buf.toOpenArray(0, n - 1)
 
 proc pullAll*(c: JinjaRenderContext): string =
-  ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
-  ## that counts bytes first can redeliver from a fresh session without a counting pass.
-  var buf: array[TTT_CNJ_ChunkSize, char]
+  ## Returns the whole render in one call, one stack buffer drained through `pullInto`
+  ## until the render reports 0.
+  ## - `pullAll` owns its window, the only delivery path with an engine-chosen size
+  ## - the caller's window composes with `cur`, so a consumer that counts bytes first
+  ##   can redeliver from a fresh session without a counting pass
+  var buf: array[4096, char]
   while true:
-    let n = pull(c, buf)
+    let n = pullInto(c, buf)
     if n == 0:
       break
     addView(result, buf.toOpenArray(0, n - 1))

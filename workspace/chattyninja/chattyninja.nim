@@ -7,7 +7,7 @@
 ## Explicit re-export list, the whole package surface. A module's own `*` surface is Nim's
 ## cross-module plumbing, not API, and nothing under `src/` re-exports.
 ##
-## - the render tier, `startRender`, `pull`, `pullAll` and `renderToString`, and `parseTemplate`
+## - the render tier, `startRender`, `pullInto`, `pullAll` and `renderToString`, and `parseTemplate`
 ## - the data tier, `JinjaVal` with `ValueKind`, the constructors, `dictSet`/`dictGet`, `JinjaError`
 ## - the caller objects, `JinjaRenderContext`, `RenderState` and the compiled artifact behind `parseTemplate`
 ##
@@ -17,7 +17,7 @@ import ./src/cnj_engine
 import ./src/cnj_types, ./src/jinja_data_model, ./src/jinja_serialize, ./src/cnj_parse
 
 # Render driver and parser.
-export cnj_engine.startRender, cnj_engine.pull, cnj_engine.pullAll,
+export cnj_engine.startRender, cnj_engine.pullInto, cnj_engine.pullAll,
     cnj_engine.renderToString, cnj_parse.parseTemplate
 
 # Compiled artifact, render state and the caller's objects.
@@ -33,7 +33,7 @@ export cnj_types.JinjaRenderContext, cnj_types.RenderState, cnj_types.CompiledTe
     cnj_types.paramDefLoAt, cnj_types.paramDefHiAt,
     cnj_types.SlotHi, cnj_types.SlotSucc, cnj_types.SlotChild, cnj_types.SlotAlt,
     cnj_types.TTT_CNJ_MacroDepthCap, cnj_types.TTT_CNJ_ExprDepthCap, cnj_types.TTT_CNJ_ParseNestingCap,
-    cnj_types.TTT_CNJ_ChunkSize, cnj_types.TTT_CNJ_StepBudget
+    cnj_types.TTT_CNJ_StepBudget
 
 # Values and their construction, the dict reads, the error and the JSON form.
 export jinja_data_model.JinjaVal, jinja_data_model.ValueKind, jinja_data_model.SeqVal,

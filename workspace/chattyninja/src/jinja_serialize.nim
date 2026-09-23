@@ -19,11 +19,11 @@ import jinja_data_model
 
 const
   SerChunkCap = 40
-    ## Capacity of the literal queue, bounding every queued literal. The longest `tojson`
-    ## escape is the UTF-16 surrogate pair (12 bytes), the longest atom rendering a float repr
-    ## (26 bytes), the macro form `<macro ` plus one int64 plus `>` (30 bytes with quotes).
-    ## - paired with `CaptureDrainCap` in cnj_engine, the capture's drain buffer
-    ## - both bound one serializer chunk per drain step
+    ## Initial capacity of the literal queue, sized past the longest fixed rendering:
+    ## - the longest `tojson` escape is the UTF-16 surrogate pair (12 bytes)
+    ## - the longest atom rendering a float repr is 26 bytes
+    ## - the macro form `<macro ` plus one int64 plus `>` is 30 bytes with quotes
+    ## A literal longer than the capacity grows the queue.
 
   SerStartCap = 256
     ## First `serString` drain buffer, doubled by `setLen` until the rendering completes.
@@ -91,10 +91,11 @@ type
       ## separator the `spSep` phase writes
     sepos: int
       ## bytes of `sep` already written
-    buf: array[SerChunkCap, char]
-      ## literal queue draining byte by byte
+    buf: string
+      ## literal queue draining byte by byte, grown to the longest literal queued,
+      ## the capacity kept across drains
     blen, bpos: int
-      ## queued bytes in `buf` and the read position
+      ## queued bytes in `buf[0 ..< blen]` and the read position
     stack: seq[SerFrame]
       ## open containers, outermost first
     closeSeq: bool
@@ -182,19 +183,24 @@ func hex4(sb: var Cursor, c: int) =
     sb.add Digits[(c shr sh) and 0xF]
 
 
+func serEnsure(js: var Ser, need: int) =
+  ## Grows the literal queue to hold `need` bytes. Capacity never shrinks, so the drain
+  ## windows the queue's fixed renderings open stay valid between queue calls.
+  if js.buf.len < need:
+    js.buf.setLen(need)
+
 func serQueue(js: var Ser, s: openArray[char]) =
-  ## Queues literal bytes for draining, `s` at most `SerChunkCap` bytes long.
-  ## A longer literal raises `JinjaError` naming the queue's capacity.
+  ## Queues literal bytes for draining, the queue growing to any-length `s` under
+  ## the accumulation contract, capacity kept across drains.
+  serEnsure(js, s.len)
   js.blen = s.len
   js.bpos = 0
-  if s.len > SerChunkCap:
-    raise jinjaErr("serializer literal of " & $s.len & " bytes exceeds the " &
-        $SerChunkCap & "-byte queue")
   if s.len > 0:
     copyMem(addr js.buf[0], unsafeAddr s[0], s.len)
 
 func serQueueRune(js: var Ser, r: Rune) =
   ## Queues one rune per the `tojson` escaping rules, the filter's HTML post-pass included.
+  serEnsure(js, SerChunkCap)
   var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
   let x = ord(r)
   if x == ord('"'):
@@ -308,6 +314,7 @@ func serDispatch(js: var Ser) =
         else: (if v.b: "True" else: "False"))
     serFinish(js)
   of vkInt, vkFloat:
+    serEnsure(js, SerChunkCap)
     var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
     if v.kind == vkInt:
       c.addInt v.i
@@ -350,6 +357,7 @@ func serDispatch(js: var Ser) =
     serQueue(js, if js.mode == smJson: "\"\\u003cLoopContext\\u003e\"" else: "<LoopContext>")
     serFinish(js)
   of vkMacro:
+    serEnsure(js, SerChunkCap)
     var c = Cursor(buf: toOpenArray(js.buf, 0, js.buf.high), len: 0)
     if js.mode == smJson:
       c.add "\"\\u003cmacro "

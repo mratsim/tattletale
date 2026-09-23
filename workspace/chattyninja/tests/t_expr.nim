@@ -41,7 +41,7 @@ func peopleCtx(): JinjaVal =
       ("tags", seqVal(@[strVal("x"), strVal("y")])),
       ("active", boolVal(true)))
 
-# Compiled with `-d:TTT_CNJ_StepBudget=32` (a dedicated runCmd in config.nims), one pull
+# Compiled with `-d:TTT_CNJ_StepBudget=32` (a dedicated runCmd in config.nims), one pullInto
 # call past 32 dispatches raises located. This variant runs alone and quits.
 # Compilations without the define run a 1M budget, the full expression tier.
 when TTT_CNJ_StepBudget == 32:
@@ -55,7 +55,7 @@ when TTT_CNJ_StepBudget == 32:
     doAssert "TTT_CNJ_StepBudget = 32" in raised, raised
 
     # A macro body forced for capture walks its own dispatch loop, so it carries
-    # the same budget as `pull`, and a 64-iteration for inside a forced body
+    # the same budget as `pullInto`, and a 64-iteration for inside a forced body
     # steps past 32.
     raised = ""
     try:
@@ -968,7 +968,7 @@ proc main() =
     # StepBudget=32 compilation runs alone, its two raises observed, and the
     # process quits before the full expression tier.
     testStepBudgetRaisesLocated()
-    echo "t_expr: the 32-step budget raise observed on pull and macro force"
+    echo "t_expr: the 32-step budget raise observed on pullInto and macro force"
     quit(0)
 
   testLiteralsAndLookups()

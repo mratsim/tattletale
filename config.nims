@@ -178,13 +178,12 @@ proc chattyninjaCmd(filename, extraDefines: string): string =
 
 task test_chattyninja, "Test workspace/chattyninja template engine suites":
   withDir(ProjectRoot):
-    # The allocation arm compiles t_corpus.nim alone under -d:nimAllocStats and
-    # TTT_CNJ_ChunkSize=7, since TTT_CNJ_ChunkSize changes the pullAll iteration the counted
-    # renders go through.
+    # The allocation arm compiles t_corpus.nim alone under -d:nimAllocStats, the counted
+    # render window owned by the test itself (its own 7-byte buffer, no engine define).
     runCmd(chattyninjaCmd("t_corpus.nim", ""))
     runCmd(chattyninjaCmd("t_parse.nim", ""))
     runCmd(chattyninjaCmd("t_expr.nim", ""))
-    runCmd(chattyninjaCmd("t_corpus.nim", " -d:nimAllocStats -d:TTT_CNJ_ChunkSize=7"))
+    runCmd(chattyninjaCmd("t_corpus.nim", " -d:nimAllocStats"))
     # The TTT_CNJ_StepBudget arm: the suite's own `-d:TTT_CNJ_StepBudget=32` block asserts the
     # step-counter backstop's raise and quits before the full tier runs.
     runCmd(chattyninjaCmd("t_expr.nim", " -d:TTT_CNJ_StepBudget=32"))

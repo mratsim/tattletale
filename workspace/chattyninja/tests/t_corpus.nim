@@ -372,13 +372,13 @@ func pieceRemaining(p: Piece): int =
 
 proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64, cap: int): tuple[
     text: string, spans: seq[tuple[start, stop: int]]] =
-  ## Renders through `pull` with a `cap`-byte caller buffer, accumulating every fill.
+  ## Renders through `pullInto` with a `cap`-byte caller buffer, accumulating every fill.
   ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
   ## into the bytes.
   var c = startRender(m, sym, ctx, clock)
   var buf = newSeq[char](cap)
   while true:
-    let n = pull(c, buf)
+    let n = pullInto(c, buf)
     if n == 0:
       break
     for i in 0 ..< n:
@@ -397,10 +397,10 @@ func pullChunks[N: static int](c: JinjaRenderContext): PullChunks[N] =
 
 iterator items[N: static int](p: var PullChunks[N]): openArray[char] =
   ## Yields the render as bounded windows:
-  ## - one `pull` call fills the window, the view carries at most N bytes
+  ## - one `pullInto` call fills the window, the view carries at most N bytes
   ## - the tail window closes the render, a 0 count ends the stream
   while true:
-    let n = pull(p.c, p.buf)
+    let n = pullInto(p.c, p.buf)
     if n == 0:
       break
     yield p.buf.toOpenArray(0, n - 1)
@@ -639,25 +639,25 @@ proc testBoundaryShapes() =
   # A buffer larger than the whole render takes everything in one pull, then reports 0.
   var dBig = startRender(m, tables, row.context, row.clock)
   var big = newSeq[char](want.len + 1)
-  let n1 = pull(dBig, big)
+  let n1 = pullInto(dBig, big)
   doAssert n1 == want.len, "an oversized buffer took " & $n1 & " of " & $want.len & " bytes"
   doAssert bytesOf(big, n1) == want, "the one-pull render differs from the recorded bytes"
-  doAssert pull(dBig, big) == 0, "a completed render kept returning bytes"
+  doAssert pullInto(dBig, big) == 0, "a completed render kept returning bytes"
 
   # A buffer exactly the render size also drains in one pull.
   var dExact = startRender(m, tables, row.context, row.clock)
   var exact = newSeq[char](want.len)
-  let n2 = pull(dExact, exact)
+  let n2 = pullInto(dExact, exact)
   doAssert n2 == want.len, "an exact-size buffer took " & $n2 & " of " & $want.len & " bytes"
   doAssert bytesOf(exact, n2) == want, "the exact-size render differs from the recorded bytes"
-  doAssert pull(dExact, exact) == 0, "a completed render kept returning bytes"
+  doAssert pullInto(dExact, exact) == 0, "a completed render kept returning bytes"
 
   # A 1-byte buffer gives every byte its own pull, which forces mid-piece drains.
   var dOne = startRender(m, tables, row.context, row.clock)
   var one: array[1, char]
   var acc = ""
   while true:
-    let n = pull(dOne, one)
+    let n = pullInto(dOne, one)
     if n == 0:
       break
     doAssert n == 1, "a 1-byte buffer pull returned " & $n
@@ -670,7 +670,7 @@ proc testBoundaryShapes() =
   var head = ""
   block stopEarly:
     for _ in 0 ..< 3:
-      let n = pull(dStop, window)
+      let n = pullInto(dStop, window)
       if n == 0:
         break
       head.add bytesOf(window, n)
@@ -678,7 +678,7 @@ proc testBoundaryShapes() =
   doAssert head == want[0 ..< head.len], "the bytes before the stop diverged from the recording"
   var tail = ""
   while true:
-    let n = pull(dStop, one)
+    let n = pullInto(dStop, one)
     if n == 0:
       break
     tail.add one[0]
@@ -696,13 +696,13 @@ proc testZeroCapacityBuffer() =
 
   var d = startRender(m, tables, row.context, row.clock)
   var empty: array[0, char]
-  doAssert pull(d, empty) == 0, "a zero-capacity buffer did not report 0"
+  doAssert pullInto(d, empty) == 0, "a zero-capacity buffer did not report 0"
 
   # the untouched driver still delivers the whole render byte-exact
   var acc = ""
   var window = newSeq[char](256)
   while true:
-    let n = pull(d, window)
+    let n = pullInto(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -772,7 +772,7 @@ proc testLazyWindowDrain() =
   while true:
     if d.state.pend.kind == pkLazy:
       inc lazyPieces
-    let n = pull(d, window)
+    let n = pullInto(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -798,7 +798,7 @@ proc testConcatWindowDrain() =
   while true:
     if d.state.pend.kind == pkStr:
       inc lazyPulls
-    let n = pull(d, window)
+    let n = pullInto(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -855,7 +855,7 @@ proc testSpanDrain() =
   while true:
     if d.state.pend.kind == pkSpan:
       inc spanPulls
-    let n = pull(d, window)
+    let n = pullInto(d, window)
     if n == 0:
       break
     acc.add bytesOf(window, n)
@@ -894,7 +894,7 @@ proc testFilterRaiseRepull() =
   var message = ""
   try:
     while true:
-      let n = pull(d, win1)
+      let n = pullInto(d, win1)
       if n == 0:
         break
       acc.add bytesOf(win1, n)
@@ -909,7 +909,7 @@ proc testFilterRaiseRepull() =
   # Repull skips nothing. The integer item stays consumed and the render completes.
   var rest = newSeq[char](64)
   while true:
-    let n = pull(d, rest)
+    let n = pullInto(d, rest)
     if n == 0:
       break
     acc.add bytesOf(rest, n)
@@ -924,7 +924,7 @@ proc testFilterRaiseRepull() =
   var wideRaised = false
   try:
     while true:
-      let n = pull(dWide, wide)
+      let n = pullInto(dWide, wide)
       if n == 0:
         break
       wideAcc.add bytesOf(wide, n)
@@ -934,7 +934,7 @@ proc testFilterRaiseRepull() =
   doAssert wideAcc == "", "the failing call returned bytes: <" & wideAcc & ">"
   var wideRest = ""
   while true:
-    let n = pull(dWide, wide)
+    let n = pullInto(dWide, wide)
     if n == 0:
       break
     wideRest.add bytesOf(wide, n)
@@ -1023,7 +1023,7 @@ proc testAllocDrainWindow() =
     discard renderAllPull(m, tables, row.context, row.clock)
     discard renderToString(src, row.context, row.clock)
 
-  # A pull that enters on a pending piece with bytes left only drains it, no step runs,
+  # A pullInto call that enters on a pending piece with bytes left only drains it, no step runs,
   # so it must allocate nothing.
   var d = startRender(m, tables, row.context, row.clock)
   var one: array[1, char]
@@ -1032,27 +1032,32 @@ proc testAllocDrainWindow() =
   while true:
     let pending = d.state.pend.kind != pkNone and pieceRemaining(d.state.pend) > 0
     let before = getAllocStats()
-    let n = pull(d, one)
+    let n = pullInto(d, one)
     let used = (getAllocStats() - before).allocCount
     if n == 0:
       break
     acc.add one[0]
     if pending:
       inc drainCalls
-      doAssert used == 0, "a pull that only drained pending bytes allocated " & $used
+      doAssert used == 0, "a pullInto that only drained pending bytes allocated " & $used
   doAssert acc == row.rendered, "the counted render disagrees with the recorded bytes"
   doAssert drainCalls > 0, "no pending-piece drain was counted"
   echo "t_corpus alloc: ", drainCalls, " pending-piece drain calls, all 0 allocs"
 
   # Whole-render comparison:
-  # the pull path against the string path, whose count also covers parsing the template
-  # and therefore bounds the pull total from above.
+  # the pullInto path against the string path, whose count also covers parsing the template
+  # and therefore bounds the pull total from above. The counted render
+  # pulls into the test's own 7-byte buffer, exercising the smallest-window path.
   var dTotal = startRender(m, tables, row.context, row.clock)
+  var seven: array[7, char]
   let pullAllocs = allocsOf:
-    discard pullAll(dTotal)
+    while true:
+      let n = pullInto(dTotal, seven)
+      if n == 0:
+        break
   let strAllocs = allocsOf:
     discard renderToString(src, row.context, row.clock)
-  doAssert pullAllocs <= strAllocs, "the pull render allocated " & $pullAllocs &
+  doAssert pullAllocs <= strAllocs, "the pullInto render allocated " & $pullAllocs &
       " against the string render's " & $strAllocs
   echo "t_corpus alloc: full pull render ", pullAllocs, " allocs, string render ", strAllocs,
       " allocs"
@@ -1103,7 +1108,7 @@ proc testAllocMicro() =
     let (m, tables) = parseTemplate(src)
     let want = renderToString(src, ctx, 0.0)
     doAssert renderAllPull(m, tables, ctx, 0.0) == want,
-        "the micro pull render differs from the string render for " & src
+        "the micro pullInto render differs from the string render for " & src
     allocsOf:
       for _ in 0 ..< n:
         discard renderAllPull(m, tables, ctx, 0.0)
@@ -1154,18 +1159,18 @@ proc testAllocSerializer() =
     seqVal(@[dictVal(tool)])
 
   # Direct tojson of the tool schema. The writer drains into a growable buffer with no
-  # presize pass, so a call costs one allocation for the buffer plus one for the stack
-  # behind the schema's two nested containers.
+  # presize pass, so a call costs one allocation for the buffer, one for the literal queue's
+  # grown capacity and one for the stack behind the schema's two nested containers.
   let tools = toolsVal()
   # warm-up call, excluded from the counted region
   discard toJson(tools)
   let tjAllocs = allocsOf:
     for _ in 0 ..< iters:
       discard toJson(tools)
-  doAssert tjAllocs <= 2 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
-      " allocations per call against the measured two"
+  doAssert tjAllocs <= 3 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
+      " allocations per call against the measured three"
 
-  # Same schema through the pull render, driver setup uncounted:
+  # Same schema through the pullInto render, driver setup uncounted:
   # the counted region holds only the pull loop, and the render costs
   # the filter's argument list plus the serializer's container stack.
   const tJson = "{{ tools|tojson }}"
@@ -1179,11 +1184,11 @@ proc testAllocSerializer() =
   var bufWarm = newSeq[char](256)
   var warm = ""
   while true:
-    let n = pull(dWarm, bufWarm)
+    let n = pullInto(dWarm, bufWarm)
     if n == 0:
       break
     warm.add bytesOf(bufWarm, n)
-  doAssert warm == want, "the pull render differs from the string render"
+  doAssert warm == want, "the pullInto render differs from the string render"
 
   var buf = newSeq[char](256)
   var renderAllocs = 0
@@ -1191,12 +1196,12 @@ proc testAllocSerializer() =
     var di = startRender(m, tables, ctx, 0.0)
     let renderCost = allocsOf:
       while true:
-        let n = pull(di, buf)
+        let n = pullInto(di, buf)
         if n == 0:
           break
     renderAllocs += renderCost
-  doAssert renderAllocs <= 3 * iters, "the tojson pull render cost " &
-      $(renderAllocs div iters) & " allocations per render against the measured three"
+  doAssert renderAllocs <= 4 * iters, "the tojson pullInto render cost " &
+      $(renderAllocs div iters) & " allocations per render against the measured four"
 
   # A container emit costs one allocation per emit for the lookup copy plus one per
   # render for the serializer's container stack, over the loop machinery.
@@ -1218,7 +1223,7 @@ proc testAllocSerializer() =
     var bufWarm2 = newSeq[char](256)
     var accWarm = ""
     while true:
-      let got = pull(dWarm2, bufWarm2)
+      let got = pullInto(dWarm2, bufWarm2)
       if got == 0:
         break
       accWarm.add bytesOf(bufWarm2, got)
@@ -1229,7 +1234,7 @@ proc testAllocSerializer() =
       var bi = newSeq[char](256)
       let renderCost = allocsOf:
         while true:
-          let got = pull(di, bi)
+          let got = pullInto(di, bi)
           if got == 0:
             break
       total += renderCost
@@ -1243,7 +1248,7 @@ proc testAllocSerializer() =
       $(strEmits - loopOnly) & " allocations beyond the loop baseline"
   # A container emit through the lazy piece costs one allocation per emit over the string
   # emit and one per render for the serializer's container stack.
-  doAssert dictEmits <= strEmits + iters * 11, "the container emit cost " &
+  doAssert dictEmits <= strEmits + iters * 12, "the container emit cost " &
       $(dictEmits - strEmits) & " allocations beyond the string emit"
 
   echo "t_corpus alloc: tojson direct ", tjAllocs div iters, "/call, tojson render ",

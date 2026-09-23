@@ -6,7 +6,7 @@
 # Core data of the chattyninja engine. Covers the compiled artifact, the parse-built
 # symbol arena, the per-instantiation render state, the name-resolution reads
 # and the macro-force handle. The dispatch table, the render context bundle
-# and the `items` pull interface live in cnj_engine.nim.
+# and the `pullInto`/`items` delivery interface live in cnj_engine.nim.
 #
 # Dataflow of one render, the record types here shared across the module boundary
 #
@@ -14,7 +14,7 @@
 #     │  cnj_parse splits tags, scans keywords, appends arena nodes, interns names once
 #     ▼
 #   CompiledTemplate + CompiledSymbols (read-only artifact + heap-shared interned-name arena)
-#     │  cnj_engine dispatches pull() steps over the arena
+#     │  cnj_engine dispatches pullInto() steps over the arena
 #     ▼
 #   JinjaRenderContext = the heap session every render call holds (tmpl + symbols + state + force)
 #     │  cnj_engine dispatches Steps[c.tmpl.nodes[n].kind](c, n), each step one ref borrow of the session
@@ -30,7 +30,7 @@
 #   RenderState, one per render, owned by the caller's session object
 #     ├─ rows     pushed by step* entry, popped by closeRow, one close path
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
-#     ├─ pend     one Piece, set by emit steps, drained by pull or capturePend, reset to pkNone
+#     ├─ pend     one Piece, set by emit steps, drained by pullInto or capturePend, reset to pkNone
 #
 #   force, the engine's macro-force handle, bound once at `startRender` into the session, stateless,
 #     every session carrying the same callable
@@ -44,7 +44,7 @@
 
 # Public API:
 #   JinjaRenderContext, RenderState, the compiled artifact, the slot accessors,
-#   the name-resolution reads and the depth and window caps.
+#   the name-resolution reads and the depth and step caps.
 
 import jinja_data_model, jinja_serialize
 import workspace/data_structures/src/small_seqs
@@ -121,13 +121,9 @@ const
   # with margin and bounds the walk on adversarial input, a breach raising located at the tag.
   TTT_CNJ_ParseNestingCap* {.intdefine.} = 64
 
-  # Output pieces reach the consumer in slices of at most this many bytes, which is what lets `cur`
-  # compose with chunking.
-  TTT_CNJ_ChunkSize* {.intdefine.} = 4096
-
-  # Step-dispatch bound of one `pull` call. One call dispatches at most this many steps,
+  # Step-dispatch bound of one `pullInto` call. One call dispatches at most this many steps,
   # a breach raising located at the node the walk reached. The corpus suite completes
-  # with 240 and fails with 230, so no corpus pull dispatches past 240, and a 200x200
+  # with 240 and fails with 230, so no corpus render dispatches past 240, and a 200x200
   # nested loop test lands in the low thousands. 1_000_000 keeps ample headroom.
   TTT_CNJ_StepBudget* {.intdefine.} = 1_000_000
 
@@ -310,13 +306,13 @@ type
         ## rendered by the serializer in `RenderState.lazy`, no payload here
 
   RenderState* = object
-    ## All per-instantiation render control state, owned by the pull consumer, nothing
+    ## All per-instantiation render control state, owned by the pullInto consumer, nothing
     ## reachable from `CompiledTemplate`, so two instantiations over one artifact cannot
     ## interfere. Lives only at the step tier, the expression evaluator never seeing it.
     curNode*: int32
       ## node program counter, `NoLink` once the artifact is exhausted
     cur*: int
-      ## bytes of root output delivered so far, composed with the chunking window
+      ## bytes of root output delivered so far, composed with the caller's delivery window
     pend*: Piece
     rows*: seq[Row]
       ## re-entry stack holding for, capture and generation rows
