@@ -7,34 +7,23 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_naive
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_smoke.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_fp16.nim
 ##
-## One-launch fused GDN decoder layer smoke, one seeded launch
-## of the `qwen35_moe` mega kernel at grid (950, 1, 1). Checks:
-## - launch success, non-degenerate outputs, sync counters
-## - untouched-memory sentinels, fresh-relaunch bit-identity
-## - an informational naive-vs-mega diff
+## One-launch fused GDN decoder layer smoke, the fp16 family row.
+## Same launch shape as the bf16 row, `t_ceramic_mega_gdn_smoke.nim`.
+## The same seeded generation recipe stored as fp16 bit patterns.
 ##
-## The bands live in the comparison tier, this smoke owns none.
+## The mega kernel's fp16 instantiation against the fp16 naive chain:
 ##
-## No-copy binding:
-## - page-aligned pointers with page-multiple byte lengths
-## - anything else copy-ins, the kernel's in-place writes are lost
-## - every buffer's byte length is asserted a `HostPageSize` multiple
-##   before the launch
+## - launch success under the bounded wait, non-degenerate outputs, sync counters
+## - read-unchanged sentinels, fresh-relaunch bit-identity
+## - an informational fp16 naive-vs-mega diff over the shared outputs
 ##
-## Sequence: seeded inputs and weights → page buffers → one launch →
-## sync counters, sentinels → snapshot → restore and relaunch →
-## bit compare → informational naive diff.
+## The band model lives in the comparison tier, `ceramic_mega_gdn_composition.nim`,
+## the bf16 rows. This suite asserts a generous sanity bound only.
 ##
-## | check       | contract                                                                    |
-## | ----------- | --------------------------------------------------------------------------- |
-## | page fit    | every buffer's byte length is a `HostPageSize` multiple before the launch   |
-## | launch      | one seeded launch completes, the outputs written over non-degenerate ranges |
-## | wave sync   | the 13 stage counters land exactly on the per-stage threadgroup totals      |
-## | sentinels   | kernel-written buffers stay in extent, kernel-read buffers bit-identical    |
-## | determinism | the relaunch over restored state and counters is bit-identical              |
-## | comparison  | informational max abs difference over the mega-vs-naive shared outputs      |
+## The fp16 chain's per-op round keeps its reassociation
+## and transcendental differences within the bf16 row's class.
 
 import std/[strformat, math, times]
 import workspace/crucible
@@ -43,40 +32,48 @@ import ../../src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
 import ../naive/naive_rng
 import ../naive/naive_tensors
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut
+from ../naive/naive_grouped_mm import GmmFamily, gmmF16
 import ceramic_pagebuf
-import mega_bounded_wait
 import ceramic_fam
+import mega_bounded_wait
 
-# ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
+const GridThreads: int = block:
+  ## One launch's threadgroup count, the 13 stage blocks summed.
+  var t: int = 0
+  for c in WaveCounts:
+    t += c.int
+  t
 
-const MegaGdnMsl = metal:
-  proc qwen35_gdn_layer_bf16(
+# ─── Device entry, one launch of the mega's fp16 instantiation ────────
+
+const MegaGdnFp16Msl = metal:
+  proc gdn_moe_layer_fp16(
       counters: ptr UncheckedArray[uint32],
-      bfA: ptr UncheckedArray[bfloat16],
+      bfA: ptr UncheckedArray[float16],
       f32A: ptr UncheckedArray[float32],
-      xPrev, rPrev: ptr UncheckedArray[bfloat16],
+      xPrev, rPrev: ptr UncheckedArray[float16],
       state: ptr UncheckedArray[float32],
-      ring: ptr UncheckedArray[bfloat16],
+      ring: ptr UncheckedArray[float16],
       norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
       routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW:
-        ptr UncheckedArray[bfloat16],
+        ptr UncheckedArray[float16],
       aLog: ptr UncheckedArray[float32],
-      dtBias: ptr UncheckedArray[bfloat16],
+      dtBias: ptr UncheckedArray[float16],
       eps: float32) {.global.} =
-    gdnMoeLayerWalk[bfloat16, true](counters, bfA, f32A, xPrev, rPrev, state, ring,
-      norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
+    gdnMoeLayerWalk[float16, true](counters, bfA, f32A, xPrev, rPrev, state,
+      ring, norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
       routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW,
       aLog, dtBias, eps)
 
-# ─── Host, the seeded layer pass ─────────────────────────────────────
+# ─── Host, the seeded layer pass in fp16 bits ────────────────────────
 
-const Seed = 0xC04D0601'u64
+const Seed = 0xC04D0602'u64
 const Eps = 1.0e-6'f32
 const NumCounters = 13
 
 type BigHost = object
-  ## Seeded layer pass inputs and weights, bf16 bit patterns shared
-  ## by the mega and the naive sides through their exact fp32 widenings.
+  ## Seeded layer pass inputs and weights, fp16 bit patterns shared
+  ## with the naive side through the exact fp32 widenings.
   x, r: seq[uint16]
   norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W: seq[uint16]
   routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW: seq[uint16]
@@ -86,15 +83,14 @@ type BigHost = object
   ring: seq[uint16]
 
 proc randBits(rng: var NaiveRng; n: int; lo, hi: float32): seq[uint16] =
-  ## `n` bf16 bit patterns of uniform samples in [lo, hi].
+  ## `n` fp16 bit patterns of uniform samples in [lo, hi].
   result = newSeq[uint16](n)
   for i in 0 ..< n:
-    result[i] = f32ToBf16(rng.nextF32(lo, hi))
+    result[i] = fp32ToFp16(rng.nextF32(lo, hi))
 
 proc buildBigHost(seed: uint64): BigHost =
-  ## Seeded inputs and weights at the Qwen bf16 class geometry, the same
-  ## generation recipe as the naive composition suite so both sides see
-  ## identical bits, modest magnitudes so no stage saturates.
+  ## Seeded inputs and weights at the same generation recipe as the bf16
+  ## smoke (modest magnitudes so no stage saturates), stored as fp16 bits.
   var rng = initNaiveRng(seed)
   result.x = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
   result.r = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
@@ -124,7 +120,7 @@ proc buildBigHost(seed: uint64): BigHost =
   result.ring = randBits(rng, ConvDim * RingWidth, -1.0'f32, 1.0'f32)
 
 proc fillBf(buf: var PageBuf[uint16], src: seq[uint16]) =
-  ## Copies bf16 bit patterns into a page buffer, the extent then the tail.
+  ## Copies family-dtype bit patterns into a page buffer.
   doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
     "no-copy binding needs a page-multiple byte length"
   for i in 0 ..< src.len:
@@ -137,33 +133,23 @@ proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
   for i in 0 ..< src.len:
     buf.hostPtr[i] = src[i]
 
-proc bfRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
-  ## Widened magnitude maximum over one bf16 arena section.
+proc famRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
+  ## Widened magnitude maximum over one fp16 arena section.
   for i in off ..< off + count:
-    result = max(result, abs(bf16ToF32(buf.hostPtr[i])))
+    result = max(result, abs(fp16ToFp32(buf.hostPtr[i])))
 
-proc maxDiffFam(megaBf: PageBuf[uint16]; megaOff: int;
-    naive: seq[uint16]): float32 =
-  ## Elementwise absolute difference maximum, bf16 widened.
-  doAssert megaBf.elems >= megaOff + naive.len
-  for i in 0 ..< naive.len:
-    let a = bf16ToF32(megaBf.hostPtr[megaOff + i])
-    let b = bf16ToF32(naive[i])
-    result = max(result, abs(a - b))
-
-proc maxDiff(megaBf: PageBuf[uint16]; megaOff: int;
-    naive: seq[uint16]): float32 =
+proc maxDiffF16(megaBf: PageBuf[uint16]; megaOff: int; naive: seq[uint16]): float32 =
   ## Elementwise absolute difference maximum between a mega arena section
-  ## and the naive side's row, both widened from bf16.
+  ## and the naive side's row, both widened from fp16.
   doAssert megaBf.elems >= megaOff + naive.len
   for i in 0 ..< naive.len:
-    let a = bf16ToF32(megaBf.hostPtr[megaOff + i])
-    let b = bf16ToF32(naive[i])
+    let a = fp16ToFp32(megaBf.hostPtr[megaOff + i])
+    let b = fp16ToFp32(naive[i])
     result = max(result, abs(a - b))
 
-proc smokeChecks(engine: HwEngine, big: BigHost) =
-  ## One seeded launch with the sync, sentinel, determinism
-  ## and informational comparison checks around it.
+proc fp16Checks(engine: HwEngine, big: BigHost) =
+  ## One seeded fp16 launch, the sync, sentinel, determinism
+  ## and naive-comparison checks around it.
   var
     counters = allocPageBuf[uint32](NumCounters)
     bfA = allocPageBuf[uint16](BfArenaLen)
@@ -211,11 +197,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   fillF32(aLog, big.aLog); fillF32(state, big.state)
   fillBf(ring, big.ring)
 
-  # the no-copy contract, every byte length a page multiple (asserted in the fills)
-  doAssert counters.elems * sizeof(uint32) mod HostPageSize == 0
-  doAssert bfA.elems * sizeof(uint16) mod HostPageSize == 0
-  doAssert f32A.elems * sizeof(float32) mod HostPageSize == 0
-
   var
     countersPA = counters.pa()
     bfAPA = bfA.pa()
@@ -244,28 +225,18 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     dtBiasPA = dtBias.pa()
 
   proc launch(): bool {.gcsafe.} =
-    # No host-side counter zeroing, the kernel re-zeroes all counters
-    # at the launch's end and the page allocator's zero fill covers the first launch.
-    # This launch pair is the relaunch-determinism proof without host zeroing.
-    engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
-      ("qwen35_gdn_layer_bf16", countersPA,
+    engine.run << (grid: (GridThreads, 1, 1), blk: (32, 1, 1)) >>
+      ("gdn_moe_layer_fp16", countersPA,
         (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
          norm1WPA, qkvWPA, zWPA, aWPA, bWPA, convWPA,
          onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
     result = true
-  # The bounded wait on every launch, a wedged waveWait spin reports
-  # the stuck stage's counters and exits, never an unbounded host spin.
   runMegaBounded(launch, counters.hostPtr, StageNames)
 
-  # state and ring snapshots are the launch's pre-image,
-  # the relaunch restores them
-  # the arena snapshots are taken after the launch, they hold
-  # the outputs the relaunch must reproduce bit for bit
   let stateSnap = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readInto(ring.hostPtr, ConvDim * RingWidth)
-
   discard launch()
 
   proc waveSyncCheck() =
@@ -275,11 +246,11 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
         &"stage counter {i} {counters.hostPtr[i]} want 0 (the launch-end reset)"
 
   proc outputRanges() =
-    let moeMax = bfRangeMax(bfA, sMoeOut, Hidden)
-    let h1Max = bfRangeMax(bfA, sH1, Hidden)
-    let blockMax = bfRangeMax(bfA, sBlockOut, Hidden)
-    let yMax = bfRangeMax(bfA, sY, NumVHeads * HeadVDim)
-    echo &"[mega smoke] output maxima moeOut {moeMax:.4f} h1 {h1Max:.4f} " &
+    let moeMax = famRangeMax(bfA, sMoeOut, Hidden)
+    let h1Max = famRangeMax(bfA, sH1, Hidden)
+    let blockMax = famRangeMax(bfA, sBlockOut, Hidden)
+    let yMax = famRangeMax(bfA, sY, NumVHeads * HeadVDim)
+    echo &"[mega fp16] output maxima moeOut {moeMax:.4f} h1 {h1Max:.4f} " &
       &"blockOut {blockMax:.4f} y {yMax:.4f}"
     doAssert moeMax > 0.0'f32, "moeOut degenerate"
     doAssert h1Max > 0.0'f32, "h1 degenerate"
@@ -291,8 +262,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   proc sentinels() =
     assertTailZero(bfA, BfArenaLen)
     assertTailZero(f32A, F32ArenaLen)
-    for i in NumCounters ..< counters.elems:
-      doAssert counters.hostPtr[i] == 0'u32, "counters tail written"
     assertReadUnchanged(xPrev, big.x)
     assertReadUnchanged(rPrev, big.r)
     assertReadUnchanged(norm1W, big.norm1W)
@@ -323,7 +292,6 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
   let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
 
-  # the informational comparison, no band, the comparison tier owns it
   block comparison:
     var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
     stateN.data = big.state
@@ -333,14 +301,25 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
       big.norm1W, big.qkvW, big.zW, big.aW, big.bW, big.convW, big.onormW,
       big.outprojW, big.norm2W, big.routerW, big.gateUpW, big.downW,
       big.sharedGW, big.sharedUW, big.sharedDW, big.sharedGVW, big.aLog,
-      big.dtBias, Eps)
-    echo &"[mega smoke] naive walk {epochTime() - t0:.2f} s"
-    let dMoe = maxDiff(bfA, sMoeOut, naiveOut.moeOut)
-    let dH1 = maxDiff(bfA, sH1, naiveOut.h1)
-    let dBlock = maxDiff(bfA, sBlockOut, naiveOut.blockOut)
-    let dY = maxDiffFam(bfA, sY, naiveOut.y)
-    echo &"[mega smoke] informational max abs diff vs naive " &
-      &"moeOut {dMoe:.4f} h1 {dH1:.4f} blockOut {dBlock:.4f} y {dY:.4f}"
+      big.dtBias, Eps, gmmF16)
+    echo &"[mega fp16] naive walk {epochTime() - t0:.2f} s"
+    let dMoe = maxDiffF16(bfA, sMoeOut, naiveOut.moeOut)
+    let dH1 = maxDiffF16(bfA, sH1, naiveOut.h1)
+    let dBlock = maxDiffF16(bfA, sBlockOut, naiveOut.blockOut)
+    let dY = maxDiffF16(bfA, sY, naiveOut.y)
+    var yArg = 0
+    for i in 0 ..< naiveOut.y.len:
+      if abs(fp16ToFp32(bfA.hostPtr[sY + i]) - fp16ToFp32(naiveOut.y[i])) >
+          abs(fp16ToFp32(bfA.hostPtr[sY + yArg]) - fp16ToFp32(naiveOut.y[yArg])):
+        yArg = i
+    echo &"[mega fp16] y argmax {yArg} mega {fp16ToFp32(bfA.hostPtr[sY + yArg]):.6f} " &
+      &"naive {fp16ToFp32(naiveOut.y[yArg]):.6f}"
+    echo &"[mega fp16] informational max abs diff vs naive " &
+      &"moeOut {dMoe:.5f} h1 {dH1:.5f} blockOut {dBlock:.5f} y {dY:.5f}"
+    doAssert dMoe < 0.1'f32, "moeOut outside the sanity bound"
+    doAssert dH1 < 0.1'f32, "h1 outside the sanity bound"
+    doAssert dBlock < 0.1'f32, "blockOut outside the sanity bound"
+    doAssert dY < 0.1'f32, "y outside the sanity bound"
 
   # the relaunch, restored arenas, state and ring, zeroed counters
   for i in 0 ..< BfArenaLen: bfA.hostPtr[i] = bfSnap[i]
@@ -357,15 +336,15 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
     doAssert state.hostPtr[i] == statePost[i], &"state differs at {i}"
   for i in 0 ..< ConvDim * RingWidth:
     doAssert ring.hostPtr[i] == ringPost[i], &"ring differs at {i}"
-  echo "[mega smoke] relaunch bit-identical, wave sync exact"
+  echo "[mega fp16] relaunch bit-identical, wave sync exact"
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
-  engine.ingest(MegaGdnMsl)
+  engine.ingest(MegaGdnFp16Msl)
   let t0 = epochTime()
-  smokeChecks(engine, buildBigHost(Seed))
-  echo &"[mega smoke] wall clock {epochTime() - t0:.2f} s"
-  echo "CERAMIC MEGA GDN SMOKE VERDICT: one launch, wave sync, sentinels, determinism"
+  fp16Checks(engine, buildBigHost(Seed))
+  echo &"[mega fp16] wall clock {epochTime() - t0:.2f} s"
+  echo "CERAMIC MEGA GDN FP16 VERDICT: one fp16 launch, wave sync, sentinels, determinism, naive-chain row"
 
 main()

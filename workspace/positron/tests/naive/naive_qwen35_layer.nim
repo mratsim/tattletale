@@ -96,7 +96,8 @@ type LayerOut* = object
   moeOut*: seq[uint16]
 
 proc moeDecodeBody*(x: seq[uint16];
-    routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW: seq[uint16]):
+    routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW: seq[uint16];
+    fam: GmmFamily = gmmBf16):
     tuple[ids: seq[int32], w: seq[float32], partial: seq[float32], moeOut: seq[uint16]] =
   ## One token's MoE decode body, the mega's slot-group walk over the landed
   ## grouped-GEMM reference:
@@ -112,45 +113,46 @@ proc moeDecodeBody*(x: seq[uint16];
   ## - ids, w, the recomputed router's top-K expert ids and weights
   ## - partial, the (K+1, H) fp32 partial rows in the mega's partial contract
   ## - moeOut, the merged output row
-  let (ids, w) = naiveSoftmaxTopKRouter(x, routerW, NumExperts, H, TopK, 1.0'f32)
+  let (ids, w) = naiveSoftmaxTopKRouter(x, routerW, NumExperts, H, TopK, 1.0'f32, fam)
   result.partial = newSeq[float32]((TopK + 1) * H)
   for slot in 0 ..< TopK:
     let id = ids[slot].int
     # gate/up walk, one-expert cube over the fused (2I, H) weight rows
     let guData = gateUpW[(id * 2 * Inter) * H ..< ((id + 1) * 2 * Inter) * H]
     let guCube = NaiveCube[uint16](planes: 1, rows: 2 * Inter, cols: H, data: guData)
-    let gu = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: H, data: x), guCube, @[1'i32])
+    let gu = naiveGroupedMmSums(fam, NaiveMat[uint16](rows: 1, cols: H, data: x), guCube, @[1'i32])
     var hBits = newSeq[uint16](Inter)
     for i in 0 ..< Inter:
-      hBits[i] = naiveSiluMulEl(gu.data[i], gu.data[Inter + i])
+      hBits[i] = naiveSiluMulEl(gu.data[i], gu.data[Inter + i], fam)
     # down walk, one-expert cube (H, I) over the expert's (H, I) weight rows
     let dnData = downW[id * H * Inter ..< (id + 1) * H * Inter]
     let dnCube = NaiveCube[uint16](planes: 1, rows: H, cols: Inter, data: dnData)
-    let dn = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: Inter, data: hBits), dnCube, @[1'i32])
+    let dn = naiveGroupedMmSums(fam, NaiveMat[uint16](rows: 1, cols: Inter, data: hBits), dnCube, @[1'i32])
     for e in 0 ..< H:
       result.partial[slot * H + e] = w[slot] * dn.data[e]
   # shared expert walk, the scalar then the separate projections
-  let gateVal = naiveSharedGate(x, sharedGVW, H)
-  let sg = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: H, data: x),
+  let gateVal = naiveSharedGate(x, sharedGVW, H, fam)
+  let sg = naiveGroupedMmSums(fam, NaiveMat[uint16](rows: 1, cols: H, data: x),
     NaiveCube[uint16](planes: 1, rows: Inter, cols: H, data: sharedGW), @[1'i32])
-  let su = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: H, data: x),
+  let su = naiveGroupedMmSums(fam, NaiveMat[uint16](rows: 1, cols: H, data: x),
     NaiveCube[uint16](planes: 1, rows: Inter, cols: H, data: sharedUW), @[1'i32])
   var hsBits = newSeq[uint16](Inter)
   for i in 0 ..< Inter:
-    hsBits[i] = naiveSiluMulEl(sg.data[i], su.data[i])
-  let sd = naiveGroupedMmSums(gmmBf16, NaiveMat[uint16](rows: 1, cols: Inter, data: hsBits),
+    hsBits[i] = naiveSiluMulEl(sg.data[i], su.data[i], fam)
+  let sd = naiveGroupedMmSums(fam, NaiveMat[uint16](rows: 1, cols: Inter, data: hsBits),
     NaiveCube[uint16](planes: 1, rows: H, cols: Inter, data: sharedDW), @[1'i32])
   for e in 0 ..< H:
     result.partial[TopK * H + e] = gateVal * sd.data[e]
   result.ids = ids
   result.w = w
-  result.moeOut = naiveMoeMerge(result.partial, TopK, H)
+  result.moeOut = naiveMoeMerge(result.partial, TopK, H, fam)
 
 proc naiveQwen35GdnLayer*(state: var NaiveCube[float32], ring: var seq[uint16];
     x, r: seq[uint16];
     norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W: seq[uint16];
     routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW: seq[uint16];
-    aLog: seq[float32], dtBias: seq[uint16]; eps: float32): LayerOut =
+    aLog: seq[float32], dtBias: seq[uint16]; eps: float32;
+    fam: GmmFamily = gmmBf16): LayerOut =
   ## One token's layer pass over the landed naive ops, the mega's 13-stage order,
   ## the state and ring updated in place.
   ##
@@ -161,34 +163,34 @@ proc naiveQwen35GdnLayer*(state: var NaiveCube[float32], ring: var seq[uint16];
   doAssert convW.len == ConvDim * ConvKernel, "conv weight shape mismatch"
 
   # Stage 1, add + norm1
-  let n1 = naiveRmsNormRes(x, r, norm1W, H, eps)
+  let n1 = naiveRmsNormRes(x, r, norm1W, H, eps, fam)
   result.stream = n1.stream
   result.norm1 = n1.normed
 
   # Stage 2, qkv GEMV (one 32-row block at M = 1)
-  result.qkvCol = naiveDenseLinear(n1.normed, qkvW, ConvDim, H)
+  result.qkvCol = naiveDenseLinear(n1.normed, qkvW, ConvDim, H, fam)
 
   # Stage 3, z GEMV
-  result.z = naiveDenseLinear(n1.normed, zW, Hv * Dv, H)
+  result.z = naiveDenseLinear(n1.normed, zW, Hv * Dv, H, fam)
 
   # Stage 4, a/b GEMVs
-  result.a = naiveDenseLinear(n1.normed, aW, Hv, H)
-  result.b = naiveDenseLinear(n1.normed, bW, Hv, H)
+  result.a = naiveDenseLinear(n1.normed, aW, Hv, H, fam)
+  result.b = naiveDenseLinear(n1.normed, bW, Hv, H, fam)
 
   # Stage 5, conv + ring roll, the conv input column the fused qkv projection column
-  result.conv = naiveCausalConvSiluStep(convW, ring, result.qkvCol, ConvDim, ConvKernel)
+  result.conv = naiveCausalConvSiluStep(convW, ring, result.qkvCol, ConvDim, ConvKernel, fam)
 
   # Stage 6, q/k l2norm, 16 heads × 128 each, q from rows 0..2048, k from 2048..4096
   result.qn = newSeq[uint16](Hk * Dk)
   result.kn = newSeq[uint16](Hk * Dk)
   for h in 0 ..< Hk:
     result.qn[h * Dk ..< (h + 1) * Dk] =
-      naiveL2NormRow(result.conv[h * Dk ..< (h + 1) * Dk], Dk)
+      naiveL2NormRow(result.conv[h * Dk ..< (h + 1) * Dk], Dk, fam)
     result.kn[h * Dk ..< (h + 1) * Dk] =
-      naiveL2NormRow(result.conv[(Hk * Dk) + h * Dk ..< (Hk * Dk) + (h + 1) * Dk], Dk)
+      naiveL2NormRow(result.conv[(Hk * Dk) + h * Dk ..< (Hk * Dk) + (h + 1) * Dk], Dk, fam)
 
   # Stage 7, g/beta
-  let gates = naiveGdnGates(result.a, result.b, dtBias, aLog, Hv)
+  let gates = naiveGdnGates(result.a, result.b, dtBias, aLog, Hv, fam)
   result.g = gates.g
   result.beta = gates.beta
 
@@ -201,19 +203,19 @@ proc naiveQwen35GdnLayer*(state: var NaiveCube[float32], ring: var seq[uint16];
   vMat.data = newSeq[float32](Hv * Dv)
   var betaF = newSeq[float32](Hv)
   for i in 0 ..< Hk * Dk:
-    qMat.data[i] = bf16ToF32(result.qn[i])
-    kMat.data[i] = bf16ToF32(result.kn[i])
+    qMat.data[i] = gmmWiden(fam, result.qn[i])
+    kMat.data[i] = gmmWiden(fam, result.kn[i])
   for bh in 0 ..< Hv:
-    betaF[bh] = bf16ToF32(result.beta[bh])
+    betaF[bh] = gmmWiden(fam, result.beta[bh])
     for d in 0 ..< Dv:
       vMat.data[bh * Dv + d] =
-        bf16ToF32(result.conv[(2 * Hk * Dk) + bh * Dv + d])
+        gmmWiden(fam, result.conv[(2 * Hk * Dk) + bh * Dv + d])
   var yMat = NaiveMat[float32](rows: Hv, cols: Dv)
   yMat.data = newSeq[float32](Hv * Dv)
   gdnDecodeStep(state, yMat, qMat, kMat, vMat, betaF, result.g, Hv, Hk, HkRatio)
   result.y = newSeq[uint16](Hv * Dv)
   for i in 0 ..< Hv * Dv:
-    result.y[i] = f32ToBf16(yMat.data[i])
+    result.y[i] = gmmRoundEl(fam, yMat.data[i])
 
   # Stage 9, o_norm, one gated RMSNorm row per value head
   result.normed = newSeq[uint16](Hv * Dv)
@@ -221,16 +223,16 @@ proc naiveQwen35GdnLayer*(state: var NaiveCube[float32], ring: var seq[uint16];
     result.normed[bh * Dv ..< (bh + 1) * Dv] = naiveRmsNormGated(
       result.y[bh * Dv ..< (bh + 1) * Dv],
       result.z[bh * Dv ..< (bh + 1) * Dv],
-      onormW[bh * Dv ..< (bh + 1) * Dv], Dv, eps)
+      onormW[bh * Dv ..< (bh + 1) * Dv], Dv, eps, fam)
 
   # Stage 10, out_proj
-  result.blockOut = naiveDenseLinear(result.normed, outprojW, H, Hv * Dv)
+  result.blockOut = naiveDenseLinear(result.normed, outprojW, H, Hv * Dv, fam)
 
   # Stage 11, fold + norm2, the fold's sum the new residual
-  let n2 = naiveRmsNormRes(result.stream, result.blockOut, norm2W, H, eps)
+  let n2 = naiveRmsNormRes(result.stream, result.blockOut, norm2W, H, eps, fam)
   result.h1 = n2.stream
   result.normed2 = n2.normed
 
   # Stages 12 + 13, the MoE decode then the merge
-  let moe = moeDecodeBody(result.normed2, routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW)
+  let moe = moeDecodeBody(result.normed2, routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW, fam)
   result.moeOut = moe.moeOut
