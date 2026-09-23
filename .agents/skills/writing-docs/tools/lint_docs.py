@@ -337,6 +337,9 @@ BANNED = [
      r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
      None, "lawyer and justification prose is banned, state the contract "
            "(what the surface exports, not why the choice is defensible)"),
+    (r"\bhooks?\b",
+     lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
+     "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
 ]
 
 LICENSE_SHAPE = re.compile(

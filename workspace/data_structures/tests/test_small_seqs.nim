@@ -542,7 +542,7 @@ else:
 
 # ─── Non-trivial elements ────────────────────────────────────────────────────
 #
-# `string` elements, the hooks working element-wise,
+# `string` elements, the =destroy/=sink/=copy operators working element-wise,
 # every dead slot staying zeroed, no copy or sink touching a destroyed element.
 
 proc strChecks =
@@ -656,7 +656,7 @@ proc spillSlotHygiene =
   echo "spill slot hygiene ok"
 
 proc polluteHeap =
-  # Recycled blocks of the shape the hooks allocate, one 48-byte spill
+  # Recycled blocks of the shape the operators allocate, one 48-byte spill
   # block per row, its live slot holding a freed string payload pointer.
   var junk: seq[SmallSeq[3, string]]
   for k in 0 ..< 100:
@@ -721,7 +721,7 @@ proc sinkRefillHygiene =
 # ─── Copy reuse and move ordering ────────────────────────────────────────────
 
 proc selfCopyGuardChecks =
-  # A same-object copy is a no-op, the hooks would otherwise destroy
+  # A same-object copy is a no-op, the operators would otherwise destroy
   # the elements and read them back from the destroyed slots.
   var s: SmallSeq[3, string]
   for i in 0 ..< 5:
@@ -789,8 +789,8 @@ proc copyReusesTailChecks =
   doAssert f[1] == 8'i32
   doAssert g == [7'i32, 8]
 
-proc sinkHookContractChecks =
-  # Sink contract exercised through a direct hook call, whatever move
+proc sinkContractChecks =
+  # Sink contract exercised through direct =sink calls, whatever move
   # lowering surrounds it, the source's fields being read into locals
   # before the first destination write.
   var src: SmallSeq[3, string]
@@ -816,7 +816,7 @@ proc main =
   layoutChecks()
   selfCopyGuardChecks()
   copyReusesTailChecks()
-  sinkHookContractChecks()
+  sinkContractChecks()
   strChecks()
   prefixNeverMoves()
   boundaryChecks()
