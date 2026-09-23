@@ -349,7 +349,7 @@ type
       ## the engine's macro-force handle, bound once at `startRender`, stateless,
       ## every session carrying the same callable
 
-  MacroForcer* = proc (c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  MacroForcer* = proc (c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal {.nimcall.}
     ## Runs one macro body to completion on a second session built over the caller's
     ## artifact refs, the captured text returned as a string value.
     ## Contract:

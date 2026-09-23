@@ -49,9 +49,11 @@ type
     ##   `cap` is 0 or at least `N`, `overflow` is nil exactly while `cap <= N`,
     ##   element `i` sits at `arr[i]` below `N` and `overflow[i - N]` past it.
     ##
-    ## A trivial `T` is required. `supportsCopyMem` is false for managed memory and for a type
-    ## defining `=destroy` or `=copy`, so `SmallSeq` cannot hold `SmallSeq`, `string`, `seq`
-    ## or `ref`, while Nim containers stay free to hold values of such a type.
+    ## `T` may be trivial or not:
+    ## - trivial `T`, the hooks working with `copyMem`
+    ## - managed or hook-carrying `T` (`string`, `ref`, an object over one, a `SmallSeq` itself), the hooks working element-wise
+    ## - the non-trivial hooks keep every dead slot zeroed, so no copy or sink
+    ##   touches a destroyed element
     len: int32
     cap: int32
     arr: array[N, T]
@@ -61,37 +63,92 @@ const SmallSeqMaxCapacity = high(int32)
   # Buffer growth stops below the `int32` range, `cap` and `len` are that wide.
 
 
-proc `=destroy`*[N, T](s: var SmallSeq[N, T]) {.raises: [].} =
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  if s.overflow != nil:
-    dealloc(s.overflow)
+proc `=destroy`*[N, T](s: var SmallSeq[N, T]) =
+  when supportsCopyMem(T):
+    if s.overflow != nil:
+      dealloc(s.overflow)
+  else:
+    for i in 0 ..< int(s.len):
+      `=destroy`(s[i])
+    if s.overflow != nil:
+      dealloc(s.overflow)
 
-proc `=sink`*[N, T](dst: var SmallSeq[N, T], src: SmallSeq[N, T]) {.raises: [].} =
-  ## Takes over the source tail pointer, no deep copy.
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  if dst.overflow != nil:
-    dealloc(dst.overflow)
-  dst.len = src.len
-  dst.cap = src.cap
-  copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
-  dst.overflow = src.overflow
+proc `=sink`*[N, T](dst: var SmallSeq[N, T], src: SmallSeq[N, T]) =
+  ## Takes over the source elements, no deep copy.
+  when supportsCopyMem(T):
+    if dst.overflow != nil:
+      dealloc(dst.overflow)
+    dst.len = src.len
+    dst.cap = src.cap
+    copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
+    dst.overflow = src.overflow
+  else:
+    # Sink contract, the source being immutable, elements move out through
+    # unsafeAddr views:
+    #
+    # - the tail block arrives fresh and zeroed, the moves landing on zero slots
+    # - a slot the source does not refill is destroyed and zeroed here, a plain
+    #   assignment over a live slot doing its own destroy first
+    # - the source destroy touches only moved-from nil elements
+    for i in 0 ..< N:
+      if i < int(src.len):
+        dst.arr[i] = move unsafeAddr(src.arr[i])[]
+      elif i < int(dst.len):
+        `=destroy`(dst.arr[i])
+        zeroMem(addr dst.arr[i], sizeof(T))
+    if dst.overflow != nil:
+      for i in N ..< int(dst.len):
+        `=destroy`(dst.overflow[i - N])
+      dealloc(dst.overflow)
+    dst.len = src.len
+    dst.cap = src.cap
+    dst.overflow = nil
+    if src.overflow != nil:
+      dst.overflow = cast[ptr UncheckedArray[T]](alloc((int(src.cap) - N) * sizeof(T)))
+      # A move assignment destroys the slot's prior content first, so every
+      # slot of the fresh block must be zero before the loop.
+      zeroMem(dst.overflow, (int(src.cap) - N) * sizeof(T))
+      for i in N ..< int(src.len):
+        dst.overflow[i - N] = move unsafeAddr(src.overflow[i - N])[]
 
 proc `=copy`*[N, T](dst: var SmallSeq[N, T], src {.noalias.}: SmallSeq[N, T]) =
   ## Deep-copies into a fresh tail.
-  when not supportsCopyMem(T):
-    {.error: "T must be a trivial type".}
-  `=destroy`(dst)
-  dst.len = src.len
-  dst.cap = src.cap
-  copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
-  dst.overflow = nil
-  if src.overflow != nil:
-    # The block covers all cap - N slots, the copy covers the live len - N.
-    dst.overflow = cast[ptr UncheckedArray[T]](alloc((int(src.cap) - N) * sizeof(T)))
-    if src.len > N:
-      copyMem(dst.overflow, src.overflow, (int(src.len) - N) * sizeof(T))
+  when supportsCopyMem(T):
+    `=destroy`(dst)
+    dst.len = src.len
+    dst.cap = src.cap
+    copyMem(addr dst.arr, unsafeAddr src.arr, sizeof(src.arr))
+    dst.overflow = nil
+    if src.overflow != nil:
+      # A fresh tail block covers all cap - N slots, the copy covering the live len - N.
+      dst.overflow = cast[ptr UncheckedArray[T]](alloc((int(src.cap) - N) * sizeof(T)))
+      if src.len > N:
+        copyMem(dst.overflow, src.overflow, (int(src.len) - N) * sizeof(T))
+  else:
+    # A slot the source refills is overwritten by the assignment, which
+    # destroys the old element first. A slot the source does not refill is
+    # destroyed and zeroed here.
+    for i in 0 ..< N:
+      if i < int(src.len):
+        dst.arr[i] = src.arr[i]
+      elif i < int(dst.len):
+        `=destroy`(dst.arr[i])
+        zeroMem(addr dst.arr[i], sizeof(T))
+    if dst.overflow != nil:
+      for i in N ..< int(dst.len):
+        `=destroy`(dst.overflow[i - N])
+      dealloc(dst.overflow)
+    dst.len = src.len
+    dst.cap = src.cap
+    dst.overflow = nil
+    if src.overflow != nil:
+      dst.overflow = cast[ptr UncheckedArray[T]](alloc((int(src.cap) - N) * sizeof(T)))
+      # A copy assignment destroys the slot's prior content first, so every
+      # slot of the fresh block must be zero before the loop.
+      zeroMem(dst.overflow, (int(src.cap) - N) * sizeof(T))
+      if src.len > N:
+        for i in N ..< int(src.len):
+          dst.overflow[i - N] = src.overflow[i - N]
 
 func init*[N: static int; T](_: type SmallSeq[N, T]): SmallSeq[N, T] =
   ## Empty sequence, inline buffer only, no allocation.
@@ -132,8 +189,19 @@ proc grow[N, T](s: var SmallSeq[N, T], newCap: int) =
   # newCap counts total slots, only the tail is ever realloced.
   if newCap > SmallSeqMaxCapacity:
     raise newException(ArithmeticDefect, "SmallSeq capacity would overflow int32")
-  s.overflow = cast[ptr UncheckedArray[T]](
-    realloc0(s.overflow, (int(s.cap) - N) * sizeof(T), (newCap - N) * sizeof(T)))
+  when supportsCopyMem(T):
+    s.overflow = cast[ptr UncheckedArray[T]](
+      realloc0(s.overflow, (int(s.cap) - N) * sizeof(T), (newCap - N) * sizeof(T)))
+  else:
+    let p = cast[ptr UncheckedArray[T]](alloc((newCap - N) * sizeof(T)))
+    # A move assignment destroys the slot's prior content first, so every
+    # slot of the fresh block must be zero before the loop.
+    zeroMem(p, (newCap - N) * sizeof(T))
+    if s.overflow != nil:
+      for i in N ..< int(s.len):
+        p[i - N] = move s.overflow[i - N]
+      dealloc(s.overflow)
+    s.overflow = p
   s.cap = int32(newCap)
 
 proc add*[N, T](s: var SmallSeq[N, T], value: sink T) =
@@ -179,4 +247,10 @@ func `==`*[N, T](s: SmallSeq[N, T], other: openArray[T]): bool =
 
 func clear*[N, T](s: var SmallSeq[N, T]) =
   ## Resets `len` to 0 and keeps the heap block for reuse.
+  ##
+  ## Non-trivial elements are destroyed and their slots zeroed, keeping every
+  ## dead slot zeroed.
+  when not supportsCopyMem(T):
+    for i in 0 ..< int(s.len):
+      reset(s[i])
   s.len = 0

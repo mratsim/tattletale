@@ -24,17 +24,17 @@
 import cnj_types, jinja_data_model, jinja_serialize, cnj_parse, jinja_interpolation
 
 type
-  Step = proc (c: JinjaRenderContext, n: int32) {.nimcall, noSideEffect.}
+  Step = proc (c: JinjaRenderContext, n: int32) {.nimcall.}
     ## One construct's step.
     ## - writes only through `c.state`, leaving `c.state.curNode` on the node control enters next
     ## - expressions resolve names against the context's scopes, root and clock,
     ##   reaching the statement tier only through `c.force`
 
-func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal
+proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal
 
-func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32)
+proc startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32)
 
-func forceCondCall(c: JinjaRenderContext, v: JinjaVal, lo, hi: int32): JinjaVal =
+proc forceCondCall(c: JinjaRenderContext, v: JinjaVal, lo, hi: int32): JinjaVal =
   ## Renders a pending macro call read in a boolean position to its output value, the branch
   ## test then reading the output's bytes, matching every other macro-call forcing leg.
   ## `lo` and `hi` bound the boolean expression the raise reports when no forcer was supplied.
@@ -125,7 +125,7 @@ func stepVerbatim(c: JinjaRenderContext, n: int32) {.nimcall.} =
   c.state.emitSpan(nd.lo, nd.hi)
   c.state.curNode = nd.succ
 
-func stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
+proc stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Evaluates the expression span and hands the result on as the pending piece, or enters
   ## a whole-expression macro call's body instead, the body's output pieces draining
   ## through the caller's window until the row closes.
@@ -142,7 +142,7 @@ func stepEmit(c: JinjaRenderContext, n: int32) {.nimcall.} =
     c.state.emitValue(v)
   c.state.curNode = nd.succ
 
-func stepIf(c: JinjaRenderContext, n: int32) {.nimcall.} =
+proc stepIf(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Chooses a branch once, branch bodies terminating past the chain, so no row exists for it.
   ## A pending macro call in the condition renders to its output bytes before the tec.state.
   template nd: Node = c.tmpl.nodes[n]
@@ -214,7 +214,7 @@ func bindTargets(c: JinjaRenderContext, n: int32, item: JinjaVal) =
     for i in 0 ..< ntargets:
       c.state.bindName(nd.targetAt(i), item.xs.items[i])
 
-func filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
+proc filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
   ## Evaluates one filter clause in boolean position, a pending macro call rendering
   ## to its output value, the result tested for truth.
   ## Returns the keep decision.
@@ -225,7 +225,7 @@ func filterKeep(c: JinjaRenderContext, lo, hi: int32): bool =
     evaluated = forceCondCall(c, evaluated, lo, hi)
   isTruthy(evaluated, lo)
 
-func forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
+proc forStep(c: JinjaRenderContext, n: int32, lp: LoopState): bool =
   ## Per-item loop step shared by the re-entry advance and the empty-body drain.
   ## Moves the shared cursor one item, binds the loop targets and runs the filter clause.
   ##
@@ -258,7 +258,7 @@ func closeRow(st: var RenderState, at: int, next: int32) =
   st.curNode = next
   st.rows.setLen(at)
 
-func advanceFor(c: JinjaRenderContext, n: int32) =
+proc advanceFor(c: JinjaRenderContext, n: int32) =
   ## Re-entry path. Moves the shared cursor to the next item passing the filter clause,
   ## re-enters the body, or closes the row and continues past the loop, the close popping
   ## the scope to the row's entry mark.
@@ -271,7 +271,7 @@ func advanceFor(c: JinjaRenderContext, n: int32) =
     return
   c.state.curNode = nd.child
 
-func stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
+proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## `{% for %}`:
   ##   a matching row on top of the stack means advance, anything else means set up the iteration.
   ##
@@ -323,7 +323,7 @@ func stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
       return
   c.state.curNode = nd.child
 
-func stepSet(c: JinjaRenderContext, n: int32) {.nimcall.} =
+proc stepSet(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## Single-target `{% set %}`, the target carried as an interned name id in the child slot,
   ## emitting nothing, the pending piece untouched.
   template nd: Node = c.tmpl.nodes[n]
@@ -396,7 +396,7 @@ func stepBreak(c: JinjaRenderContext, n: int32) {.nimcall.} =
     dec k
   outsideEveryFor(c.tmpl, nd.lo, nd.hi)
 
-func stepSetNs(c: JinjaRenderContext, n: int32) {.nimcall.} =
+proc stepSetNs(c: JinjaRenderContext, n: int32) {.nimcall.} =
   ## `ns.field = expr`, mutating the shared namespace mapping in place, visible to every
   ## holder of the `DictVal` ref, and emitting nothing.
   template nd: Node = c.tmpl.nodes[n]
@@ -469,7 +469,7 @@ const
   ]
     ## Dispatch table, total over `NodeKind`, a new kind without a step a compile error.
 
-func bindMacroArgs(c: JinjaRenderContext, n: int32, args: Args, lo, hi: int) =
+proc bindMacroArgs(c: JinjaRenderContext, n: int32, args: var Args, lo, hi: int) =
   ## Binds one macro call's parameters in a fresh scope, read from the `nkMacroDef` node at `n`,
   ## each parameter carrying its interned name id and default expression span in the node tail.
   ##
@@ -494,16 +494,16 @@ func bindMacroArgs(c: JinjaRenderContext, n: int32, args: Args, lo, hi: int) =
   var used: array[ArgsCap, bool]
   var posCount = 0
   var firstKeyword = -1
-  for i in 0 ..< args.n:
-    if args.vals[i].nameLo == NoLink:
+  for i in 0 ..< args.len:
+    if args[i].nameLo == NoLink:
       inc posCount
     elif firstKeyword < 0:
       firstKeyword = i
   if posCount > nparams:
     argErr("macro `" & macroName & "` takes at most " & $nparams & " positional argument(s)")
   if firstKeyword >= 0:
-    for i in firstKeyword + 1 ..< args.n:
-      if args.vals[i].nameLo == NoLink:
+    for i in firstKeyword + 1 ..< args.len:
+      if args[i].nameLo == NoLink:
         argErr("a positional argument follows a keyword argument in the call to `" &
             macroName & "`")
   for k in 0 ..< nparams:
@@ -511,19 +511,19 @@ func bindMacroArgs(c: JinjaRenderContext, n: int32, args: Args, lo, hi: int) =
     var bound = false
     if k < posCount:
       var seen = 0
-      for i in 0 ..< args.n:
-        if args.vals[i].nameLo == NoLink:
+      for i in 0 ..< args.len:
+        if args[i].nameLo == NoLink:
           if seen == k:
-            val = args.vals[i].val
+            val = args[i].val
             used[i] = true
             bound = true
             break
           inc seen
     else:
-      for i in 0 ..< args.n:
-        if not used[i] and args.vals[i].nameLo != NoLink and
-            keywordName(args.vals[i]) == c.symbols.names[nd.paramNameAt(k)]:
-          val = args.vals[i].val
+      for i in 0 ..< args.len:
+        if not used[i] and args[i].nameLo != NoLink and
+            keywordName(args[i]) == c.symbols.names[nd.paramNameAt(k)]:
+          val = args[i].val
           used[i] = true
           bound = true
           break
@@ -533,19 +533,19 @@ func bindMacroArgs(c: JinjaRenderContext, n: int32, args: Args, lo, hi: int) =
       else:
         val = evalSpan(c, nd.paramDefLoAt(k), nd.paramDefHiAt(k))
     c.state.bindName(nd.paramNameAt(k), val)
-  for i in 0 ..< args.n:
-    if used[i] or args.vals[i].nameLo == NoLink:
+  for i in 0 ..< args.len:
+    if used[i] or args[i].nameLo == NoLink:
       continue
     var known = false
     for k in 0 ..< nparams:
-      if keywordName(args.vals[i]) == c.symbols.names[nd.paramNameAt(k)]:
+      if keywordName(args[i]) == c.symbols.names[nd.paramNameAt(k)]:
         known = true
         break
     if known:
       argErr("macro `" & macroName & "` got multiple values for argument `" &
-          spanString(keywordName(args.vals[i])) & "`")
+          spanString(keywordName(args[i])) & "`")
     argErr("macro `" & macroName & "` takes no keyword argument `" &
-        spanString(keywordName(args.vals[i])) & "`")
+        spanString(keywordName(args[i])) & "`")
 
 func capturePend(c: JinjaRenderContext, outp: var string) =
   ## Appends the pending piece's bytes to `outp` and retires the piece, the capture form
@@ -576,7 +576,7 @@ func capturePend(c: JinjaRenderContext, outp: var string) =
       copyMem(addr outp[at], addr buf[0], n)
     c.state.pend = Piece(kind: pkNone)
 
-func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32) =
+proc startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNode: int32) =
   ## Opens a macro row and enters the body.
   ## Contract:
   ## - the body's output pieces drain through the caller's window until the row closes on the definition node
@@ -598,7 +598,7 @@ func startMacro(c: JinjaRenderContext, lo, hi: int, call: PendingCallVal, retNod
   else:
     c.state.curNode = call.mc.body
 
-func forceMacro(c: JinjaRenderContext, mc: MacroVal, args: Args): JinjaVal =
+proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal =
   ## Statement tier side of the macro forcer.
   ## Contract:
   ## - the body runs on a second session constructed explicitly over the caller's
@@ -676,7 +676,7 @@ func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, 
           pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
-func pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
+proc pull*(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
@@ -767,7 +767,7 @@ iterator items*(c: JinjaRenderContext): openArray[char] =
       break
     yield buf.toOpenArray(0, n - 1)
 
-func pullAll*(c: JinjaRenderContext): string =
+proc pullAll*(c: JinjaRenderContext): string =
   ## Returns the whole render in one call. Chunking composes with `cur`, so a consumer
   ## that counts bytes first can redeliver from a fresh session without a counting pass.
   var buf: array[TTT_CNJ_ChunkSize, char]

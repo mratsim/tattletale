@@ -42,7 +42,7 @@ type
     dry: bool
     depth: int
 
-  GlobalProc = proc (c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal {.nimcall, noSideEffect.}
+  GlobalProc = proc (c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal {.nimcall, noSideEffect.}
     ## A call to a template global. `namespace` and `dict` store a keyword name as a dict key.
     ## - `lo` and `hi` bound the global's name token, the location the raise sites report
     ## - globals read the template text and the context's clock, and write nothing
@@ -122,7 +122,7 @@ const
     ## under a unary minus. The lexer emits a marker token for it, any other past-range
     ## magnitude still raising in `parseIntToken`.
 
-func checkArgOrder(a: Args, lo, hi: int) =
+func checkArgOrder(a: var Args, lo, hi: int) =
   ## Raises located at the filter, method or test call when a positional argument follows
   ## a keyword one, the order `bindMacroArgs` already rejects for macros, a positional
   ## past a keyword otherwise binding under no parameter and silently dropping.
@@ -291,7 +291,7 @@ func argName(tmpl: CompiledTemplate, a: Arg): openArray[char] =
   ## marking a positional argument, which has no name to read.
   tmpl.jinja.toOpenArray(a.nameLo.int, a.nameHi.int - 1)
 
-func forceCall(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
+proc forceCall(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Renders one pending macro call to its output value, the primitive `forceOperand`
   ## routes every value-position forcing through, the handle carried by `c.force`.
   ## Raises at `cx.tok.lo` when no macro forcer was supplied.
@@ -300,7 +300,7 @@ func forceCall(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
         cx.tok.lo)
   c.force(c, v.pc.mc, v.pc.args)
 
-func forceOperand(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
+proc forceOperand(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Returns `v` with a pending macro call rendered to its output value, the value-position
   ## forcing contract held in one proc.
   ## - reached from every truth test, `and`/`or` left operand, ternary condition,
@@ -534,30 +534,30 @@ func subslice(v, lo, hi, step: JinjaVal, hasLo, hasHi, hasStep, isSlice: bool): 
       dst.steppedSliceInto(v.s, a, b, by)
       strVal(win)
 
-func argDict(tmpl: CompiledTemplate, args: Args): DictVal =
+func argDict(tmpl: CompiledTemplate, args: var Args): DictVal =
   ## Returns one mapping holding the call's arguments, keyword names as dict keys.
   var dv = DictVal()
   for a in args.argItems:
     dv.dictSet(argKey(tmpl, a), a.val)
   dv
 
-func namespaceGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
+func namespaceGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
   nsVal(argDict(c.tmpl, args))
 
-func dictGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
+func dictGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   dictVal(argDict(c.tmpl, args))
 
-func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
+func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## `range(a, b, step)`:
   ##   the lazy bounds value. Elements compute per index, the serializer rendering the list
   ##   form arithmetically and a `for` walking the same arithmetic, so a range never materializes.
   var a = 0'i64
   var b = 0'i64
   var step = 1'i64
-  for i in 0 ..< args.n:
-    let x = args.vals[i]
+  for i in 0 ..< args.len:
+    let x = args[i]
     if x.val.kind != vkInt:
       raise jinjaErr("`range` needs integer bounds", lo, hi - lo)
     case i
@@ -613,7 +613,7 @@ func threeDigits(n: int): string =
   while result.len < 3:
     result = '0' & result
 
-func strftimeGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
+func strftimeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## Renders the format against the render state's injected epoch, never the wall clock,
   ## which is what keeps two render instantiations over one artifact byte-identical.
   let fmt = pyStr(getArg(args, 0, akNone, strVal("")))
@@ -642,7 +642,7 @@ func strftimeGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
     inc i, 2
   strVal(acc)
 
-func raiseExceptionGlobal(c: JinjaRenderContext, lo, hi: int, args: Args): JinjaVal =
+func raiseExceptionGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## Corpus `err_*` rows record exactly this raise:
   ##   the message verbatim, the raise call's name-token span as `offset` and `span`, cause `ceRaiseCall`.
   raise jinjaErr(pyStr(getArg(args, 0, akNone, strVal(""))), lo, hi - lo, cause = ceRaiseCall)
@@ -656,8 +656,8 @@ const
 
 # Walker:
 
-func evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal
-func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal
+proc evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal
+proc expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal
 
 
 const OpSpelling: array[Op, string] = [
@@ -715,14 +715,14 @@ template enterDepth(cx: var Cx) =
     raise jinjaErr("expression nests deeper than TTT_CNJ_ExprDepthCap = " & $TTT_CNJ_ExprDepthCap,
         cx.tok.lo)
 
-func skipExpr(c: JinjaRenderContext, cx: var Cx, minPrec: int) =
+proc skipExpr(c: JinjaRenderContext, cx: var Cx, minPrec: int) =
   ## Advances the cursor over an expression without evaluating it, how `and`, `or` and the ternary skip the text they do not run.
   let wasDry = cx.dry
   cx.dry = true
   discard expr(c, cx, minPrec)
   cx.dry = wasDry
 
-func argList(c: JinjaRenderContext, cx: var Cx): Args =
+proc argList(c: JinjaRenderContext, cx: var Cx): Args =
   ## Parses a parenthesised argument list with `name = expr` keyword arguments, the opening paren the lookahead. A keyword keeps its span
   ## and gains a builtin keyword slot, so binding one costs no string. Arguments fill the fixed-capacity
   ## carrier in call order, no per-call sequence.
@@ -742,7 +742,7 @@ func argList(c: JinjaRenderContext, cx: var Cx): Args =
       else:
         cx = save
     let v = forceOperand(c, cx, expr(c, cx, 1))
-    result.addArg(Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v))
+    result.add Arg(nameLo: nameLo, nameHi: nameHi, kw: kw, val: v)
     if isPunct(cx, ","):
       advance(c.tmpl, cx)
       if isPunct(cx, ")"):
@@ -753,7 +753,7 @@ func argList(c: JinjaRenderContext, cx: var Cx): Args =
     raise jinjaErr("argument list is not closed", cx.tok.lo)
   advance(c.tmpl, cx)
 
-func postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
+proc postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
   ## Applies attr, subscript, call, filter and test chains, which bind tighter than any operator.
   ## An integer constant after a dot is a subscript, `m.content.0` spelling
   ## `m.content[0]` the way upstream Jinja does.
@@ -779,7 +779,7 @@ func postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
       let (lo, hi) = (cx.tok.lo, cx.tok.hi)
       advance(c.tmpl, cx)
       if isPunct(cx, "("):
-        let a = argList(c, cx)
+        var a = argList(c, cx)
         if cx.dry:
           v = undefinedVal()
           continue
@@ -825,7 +825,7 @@ func postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
         subslice(v, lo, hi, step, hasLo, hasHi, hasStep, isSlice)
     elif isPunct(cx, "("):
       let callLo = cx.tok.lo
-      let a = argList(c, cx)
+      var a = argList(c, cx)
       v =
         if cx.dry:
           undefinedVal()
@@ -881,7 +881,7 @@ func postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
       break
   v
 
-func primary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
+proc primary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
   ## Parses a literal, a name, a parenthesised group, an array literal or a dict literal,
   ## then the postfix chain.
   var v: JinjaVal
@@ -924,7 +924,7 @@ func primary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
         let bound = if cx.dry: undefinedVal() else: lookupName(c, c.tmpl.wordSpan(lo, hi))
         isGlobal = bound.kind == vkUndefined
       if isGlobal:
-        let a = argList(c, cx)
+        var a = argList(c, cx)
         if cx.dry:
           v = undefinedVal()
         else:
@@ -994,7 +994,7 @@ func primary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
       raise jinjaErr("unexpected `" & spelled & "` starting an expression at byte " & $cx.tok.lo, cx.tok.lo, cx.tok.hi - cx.tok.lo)
   postfix(c, cx, v)
 
-func unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
+proc unary(c: JinjaRenderContext, cx: var Cx): JinjaVal =
   ## Parses `not`, unary `-` and `+`, then a primary.
   ## - `not` binds looser than the comparisons, its operand parsing at comparison
   ##   binding power through `expr`, whose entry counts the operand walk toward
@@ -1098,7 +1098,7 @@ func cmpOne(op: Op, a, b: JinjaVal, at: int): JinjaVal =
     else: raise jinjaErr("unknown comparison `" & OpSpelling[op] & "`")
   boolVal(r)
 
-func binOp(c: JinjaRenderContext, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
+proc binOp(c: JinjaRenderContext, cx: var Cx, lhs: JinjaVal, op: Op, opLo: int): JinjaVal =
   ## Evaluates the right operand of `op` and combines it with `lhs`. `and` and `or` skip the operand they do not evaluate, every other
   ## infix evaluating both sides. `and` and `or` render a pending macro call on the left
   ## before the truth test, a boolean position reading the output's bytes.
@@ -1207,7 +1207,7 @@ func ifWordAhead(tmpl: CompiledTemplate, at, stop: int): bool =
     inc i
   false
 
-func scanTernary(c: JinjaRenderContext, cx: var Cx, headLo: int): Ternary =
+proc scanTernary(c: JinjaRenderContext, cx: var Cx, headLo: int): Ternary =
   ## Measures the ternary spans starting at `headLo`, leaving the cursor past the whole ternary. A walk that lands on no ternary restores
   ## the cursor to the head, so the caller evaluates the expression normally. Nothing is evaluated here.
   let head = cx
@@ -1240,7 +1240,7 @@ func scanTernary(c: JinjaRenderContext, cx: var Cx, headLo: int): Ternary =
   result.isTernary = true
   cx.dry = dry
 
-func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
+proc expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
   ## Parses and evaluates one expression, Pratt-style:
   ##   prefix parse --> infix loop at binding power >= `minPrec` --> ternary scan
   ## - a ternary binds loosest, and no other operator holds binding power 1, so the ternary is
@@ -1306,7 +1306,7 @@ func expr(c: JinjaRenderContext, cx: var Cx, minPrec: int): JinjaVal =
   dec cx.depth
   v
 
-func evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
+proc evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
   ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]` in its own cursor.
   ## - `depth` seeds the nesting counter, so a sub-span reached through a ternary still counts toward `TTT_CNJ_ExprDepthCap`
   var cx = Cx(pos: lo, stop: hi, dry: false, depth: depth)
@@ -1315,7 +1315,7 @@ func evalRange(c: JinjaRenderContext, lo, hi: int, depth = 0): JinjaVal =
   if cx.tok.kind != exEof:
     raise jinjaErr("expression has trailing text at byte " & $cx.tok.lo, cx.tok.lo)
 
-func evalSpan*(c: JinjaRenderContext, lo, hi: int32): JinjaVal =
+proc evalSpan*(c: JinjaRenderContext, lo, hi: int32): JinjaVal =
   ## Evaluates the expression held in `c.tmpl.jinja[lo..<hi]`, the entry every expression-bearing step uses.
   ## Contract:
   ## - a nil forcer making a consumed macro call a reported gap

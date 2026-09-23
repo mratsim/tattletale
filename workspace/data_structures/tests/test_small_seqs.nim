@@ -533,18 +533,198 @@ else:
   proc allocChecks =
     echo "allocator block counts skipped: compile with -d:nimAllocStats to run them"
 
+# ─── Non-trivial elements ────────────────────────────────────────────────────
+#
+# `string` elements, the hooks working element-wise,
+# every dead slot staying zeroed, no copy or sink touching a destroyed element.
+
+proc strChecks =
+  var s: SmallSeq[3, string]
+  for i in 0 ..< 8:
+    s.add "x" & $i
+  doAssert s.len == 8
+  doAssert s.overflow != nil
+  doAssert s[5] == "x5"
+  # A copy dups every live element, the two payloads staying independent.
+  var d = s
+  d[5] = "changed"
+  doAssert s[5] == "x5"
+  doAssert d[5] == "changed"
+  # Sink moves the live elements out, the source left empty and droppable.
+  var m: SmallSeq[3, string]
+  m = move s
+  doAssert m.len == 8
+  doAssert m[7] == "x7"
+  doAssert s.len == 0
+  doAssert m == @["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+  # Clear destroys the elements and zeroes their slots, a refill then reads clean.
+  m.clear()
+  doAssert m.len == 0
+  m.add "fresh"
+  doAssert m[0] == "fresh"
+  doAssert m.arr[1] == ""
+  # A copy over a non-empty destination replaces every slot, live or dead,
+  # the source's dead slots arriving zero, never stale.
+  var r: SmallSeq[3, string]
+  r.add "a"
+  r.add "b"
+  r = d
+  doAssert r.len == 8
+  doAssert r[1] == "x1"
+  doAssert r[2] == "x2"
+  # A zero value sinks and copies clean.
+  var z: SmallSeq[3, string]
+  var z2: SmallSeq[3, string]
+  z2 = move z
+  z2 = SmallSeq[3, string].init
+  doAssert z2.len == 0
+  doAssert z2.overflow == nil
+  # A spilled four-element row, allocation counts measured:
+  # - growth, one block alloc
+  # - a copy, the block plus one dup per live element, three inline and one overflowed, and one dealloc from the measured rebind
+  # - a sink, the block alone, the elements moving
+  when defined(nimAllocStats):
+    privateAccess(AllocStats)
+    proc counts(a: AllocStats): (int, int) =
+      (a.allocCount, a.deallocCount)
+    var els: array[4, string]
+    for i in 0 ..< 4:
+      els[i] = "e" & $i
+    block:
+      let before = getAllocStats()
+      var s4: SmallSeq[3, string]
+      for i in 0 ..< 4:
+        s4.add move els[i]
+      doAssert s4.len == 4
+      doAssert s4[3] == "e3"
+      let measured = counts(getAllocStats() - before)
+      echo "spill growth to 4 strings: ", measured
+      doAssert measured == (1, 0), $measured
+      let beforeCopy = getAllocStats()
+      var dup = s4
+      doAssert dup.overflow != s4.overflow
+      doAssert dup[3] == "e3"
+      dup[3] = "other"
+      doAssert s4[3] == "e3"
+      let measuredCopy = counts(getAllocStats() - beforeCopy)
+      echo "deep copy of a spilled 4-string row: ", measuredCopy
+      doAssert measuredCopy == (5, 1), $measuredCopy
+      var taken: SmallSeq[3, string]
+      taken = move s4
+      doAssert taken.len == 4
+      doAssert taken[3] == "e3"
+      doAssert s4.len == 0
+
+proc spillSlotHygiene =
+  ## A spilled row's fresh tail block arrives with its dead slots zeroed.
+  ## A sink that first fills a dead slot therefore never destroys stale bytes
+  ## left from an earlier life.
+  ##
+  ## Heap pollution precedes the sink, the recycled block replacing memory
+  ## the allocator hands back out.
+  var junk = newSeq[string]()
+  for i in 0 ..< 200:
+    junk.add newString(64)
+    junk[^1][0] = 'x'
+  junk.setLen(0)
+  var s: SmallSeq[3, string]
+  for i in 0 ..< 4:
+    s.add "e" & $i
+  doAssert s[3] == "e3"
+  # Sink over a spilled destination, the source's live elements moving into
+  # a tail block whose dead slots are zero.
+  var src: SmallSeq[3, string]
+  for i in 0 ..< 5:
+    src.add "f" & $i
+  s = move src
+  doAssert s.len == 5
+  doAssert s[4] == "f4"
+  # Copy over a spilled destination, the copy building a fresh tail block
+  # independent of the source's.
+  var c = s
+  doAssert c[4] == "f4"
+  c[4] = "g4"
+  doAssert s[4] == "f4"
+  c.clear()
+  echo "spill slot hygiene ok"
+
+proc polluteHeap =
+  # Recycled blocks of the shape the hooks allocate, one 48-byte spill
+  # block per row, its live slot holding a freed string payload pointer.
+  var junk: seq[SmallSeq[3, string]]
+  for k in 0 ..< 100:
+    var row: SmallSeq[3, string]
+    for i in 0 ..< 4:
+      row.add "j" & $k
+    junk.add row
+  junk = newSeq[SmallSeq[3, string]](0)
+
+proc sinkRefillHygiene =
+  ## Sink, growth and copy all place live elements into a fresh tail block.
+  ## An element assignment destroys the slot's prior content first, so a fresh
+  ## block must arrive fully zeroed before any element loop runs.
+  ##
+  ## Zeroing only the dead tail afterwards still lets the first assignment
+  ## destroy stale heap bytes.
+  ##
+  ## Heap pollution of the matching block size stands in for the allocator's
+  ## recycled memory, the zero page hiding the bug otherwise.
+  polluteHeap()
+  # Sink refill over a spilled destination, the fresh tail block taking
+  # the source's overflow elements through sink assignments.
+  var s: SmallSeq[3, string]
+  for i in 0 ..< 4:
+    s.add "e" & $i
+  var src: SmallSeq[3, string]
+  for i in 0 ..< 5:
+    src.add "f" & $i
+  s = move src
+  doAssert s[3] == "f3" and s[4] == "f4"
+  # Copy refill over a spilled destination, the fresh tail block taking
+  # the source's overflow elements through plain assignments.
+  var c = s
+  doAssert c[3] == "f3" and c[4] == "f4"
+  doAssert s[3] == "f3"
+  # Growth move over a live spilled row, the fresh block taking the row's
+  # elements through sink assignments.
+  polluteHeap()
+  var g: SmallSeq[3, string]
+  for i in 0 ..< 4:
+    g.add "g" & $i
+  for i in 4 ..< 7:
+    g.add "g" & $i
+  doAssert g[6] == "g6" and g[0] == "g0"
+  # A spilled short source, its fresh tail block taking no elements at all,
+  # the later adds then sinking into the block's dead slots.
+  polluteHeap()
+  var short: SmallSeq[3, string]
+  for i in 0 ..< 4:
+    short.add "s" & $i
+  var dst: SmallSeq[3, string]
+  for i in 0 ..< 4:
+    dst.add "d" & $i
+  dst = move short
+  doAssert dst.len == 4 and dst[3] == "s3"
+  dst.add "x"
+  dst.add "y"
+  doAssert dst[4] == "x" and dst[5] == "y"
+  echo "sink refill hygiene ok"
+
 proc main =
   layoutChecks()
+  strChecks()
   prefixNeverMoves()
   boundaryChecks()
   boundsCheckTests()
   inlineChecks()
   zeroValueChecks()
   growthChecks()
+  sinkRefillHygiene()
   mutationChecks()
   iterationChecks()
   equalityChecks()
   clearChecks()
+  spillSlotHygiene()
   allocChecks()
   echo "small_seq: layout, index split, retention and move checks passed"
 

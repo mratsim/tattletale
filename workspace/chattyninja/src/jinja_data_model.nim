@@ -16,11 +16,12 @@
 #   JinjaError with cause and location, toJson and JsonOpts, and the value caps.
 
 import std/unicode
+import workspace/data_structures/src/small_seqs
+export small_seqs
 
 const
-  ArgsCap* = 8
-    ## Inline capacity of one call's argument carrier. The most arguments one corpus
-    ## call passes is 2. A call past the cap is a template error, reported at the call.
+  ArgsCap* = 3
+    ## Argument capacity of one call's `Args` carrier, past it `SmallSeq` spills to the heap.
 
 const
   TTT_CNJ_RangeElemCap* {.intdefine.} = 1_000_000
@@ -82,11 +83,7 @@ type
 
 type
   ValueKind* = enum
-    ## Jinja value tiers the corpus reaches, float carried for JSON fidelity only,
-    ## no template in the corpus doing float arithmetic:
-    ## - `vkCall` holds a macro call whose body has not run
-    ## - `vkCut` holds a stripped span of a string, rendering as its sub-span bytes
-    ##   and materializing only where a consumer stores or re-computes it
+    ## Runtime type a `JinjaVal` carries, discriminated by `kind`.
     vkUndefined, vkNone, vkBool, vkInt, vkFloat, vkStr, vkSeq, vkDict, vkNs, vkLoop, vkMacro,
     vkCall, vkRange, vkCut
 
@@ -95,16 +92,12 @@ type
     items*: seq[JinjaVal]
 
   DictVal* = ref object
-    ## Insertion-ordered mapping, `vkNs` reusing it. All holders share
-    ## one reference, so changes made through any holder reach the others.
+    ## Insertion-ordered mapping, `vkNs` reusing it, every holder sharing one reference so changes reach all.
     keys*: seq[string]
     vals*: seq[JinjaVal]
 
   RangeVal* = object
-    ## Lazy `range(start, stop, step)` bounds. Elements compute per index, the range never
-    ## materializing. The serializer renders the list form arithmetically and a `for` over it
-    ## walks the same arithmetic through `LoopState.r`, the bounds a 24-byte
-    ## immutable value inline in the range value, nothing shared, nothing mutable.
+    ## Lazy `range(start, stop, step)` bounds, elements computed per index and never materialized, an immutable value inline in the range value.
     start*, stop*, step*: int64
 
   LoopState* = ref object
@@ -128,22 +121,14 @@ type
 
   Arg* = object
     ## One call or filter argument, keyword-bound when `nameLo` is not `NoLink`.
-    ## A keyword keeps its template span into `CompiledTemplate.jinja`, a keyword name
-    ## carrying no interned `CompiledSymbols.names` entry.
     nameLo*, nameHi*: int32
       ## keyword name span into `CompiledTemplate.jinja`, `NoLink` in `nameLo` for a positional argument
     kw*: ArgKeyword
       ## keyword slot named by that span, `akNone` when no builtin reads that keyword
     val*: JinjaVal
 
-  Args* = object
-    ## Fixed-capacity inline carrier of one call's arguments in call order. `argList` fills it and every
-    ## callee reads it. No per-call sequence, the carrier living on the stack
-    ## at the call site and moving whole into a pending macro call.
-    ## Move-only. Callees read or consume the carrier, a by-value pass fails to compile.
-    n*: int
-      ## arguments carried, at most `ArgsCap`
-    vals*: array[ArgsCap, Arg]
+  Args* = SmallSeq[ArgsCap, Arg]
+    ## One call's arguments in call order, filled by moves, read by borrows, `ArgsCap` inline.
 
   PendingCallVal* = ref object
     ## ref for value size, not for sharing.
@@ -157,10 +142,7 @@ type
       ## evaluated arguments in call order
 
   MacroVal* = object
-    ## A bound macro. `node` is the `nkMacroDef` arena index and the body's terminators land on it, so a call detects its end by arriving
-    ## back there, name and parameters read from the definition node's payload slots at call time.
-    ## A value type over three immutable arena indexes, one instance per
-    ## call-site read, nothing shared and nothing mutable.
+    ## Bound macro over three immutable `nkMacroDef` arena indexes (name, body, node), nothing shared.
     name*: int32
     body*: int32
     node*: int32
@@ -178,6 +160,7 @@ type
     of vkLoop: lp*: LoopState
     of vkMacro: mc*: MacroVal
     of vkCall: pc*: PendingCallVal
+      ## a macro call whose body has not run
     of vkRange: r*: RangeVal
     of vkCut:
       raw*: string
@@ -194,7 +177,6 @@ type
 
 
 
-func `=copy`(dst: var Args, src: Args) {.error: "Args moves whole, it is never copied".}
 func jinjaErr*(what: string, offset = NoOffset, span = 0, cause = ceNone): JinjaError =
   ## Returns an unraised template error. Raise sites with a template location in scope pass
   ## `offset`, plus `span` when the offending construct's length is known:
@@ -464,17 +446,10 @@ func loopItem*(lp: LoopState, i: int): JinjaVal =
   ## computed from the bounds for a lazy range.
   if lp.isRange: lp.r.rangeAt(i) else: lp.xs.items[i]
 
-func addArg*(a: var Args, v: sink Arg) =
-  ## Appends one argument to the carrier, raising when the call would exceed `ArgsCap`.
-  if a.n >= ArgsCap:
-    raise jinjaErr("a call carries more than " & $ArgsCap & " arguments")
-  a.vals[a.n] = v
-  inc a.n
-
-iterator argItems*(a: Args): lent Arg =
-  ## Iterates the carrier's arguments in call order.
-  for i in 0 ..< a.n:
-    yield a.vals[i]
+iterator argItems*(a: var Args): var Arg =
+  ## Iterates the carrier's arguments in call order, each yielded by borrow.
+  for i in 0 ..< a.len:
+    yield a[i]
 
 func codepointVals*(s: string): seq[JinjaVal] =
   ## Returns one single-codepoint string value per codepoint of `s`, in order.
