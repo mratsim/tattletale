@@ -42,6 +42,8 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
 # ─── Local device helpers ────────────────────────────────────────────
+# tiles-allow zeroTailRows is the row-bounded tile io machinery, it needs a bounded-IO
+# tile-io primitive (row-guarded load/store over register tiles)
 proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
     tile: var RtLeft[T, R, C, A], r0, rowLimit: int32) {.device.} =
   ## Zeroes the tile's rows from the `rowLimit` boundary up. Argument `r0` is the tile's
@@ -50,9 +52,7 @@ proc zeroTailRows[R, C: static int; A: static MmaAtom; T](
   const rowTiles = R div M
   const colTiles = C div A.getN()
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
+  let row = laneRowOf(A)
   for n in 0 ..< rowTiles:
     if r0 + int32(n * M + row) >= rowLimit:
       for m in 0 ..< colTiles:
@@ -78,6 +78,8 @@ proc loadTileRowsGated[R, C: static int; A: static MmaAtom; T](
   if r0 + int32(R) > rowLimit:
     zeroTailRows(tile, r0, rowLimit)
 
+# tiles-allow storeTailRows is the row-bounded tile io machinery, it needs a bounded-IO
+# tile-io primitive (row-guarded load/store over register tiles)
 proc storeTailRows[R, C: static int; A: static MmaAtom; T](
     gl: GlView[T],
     tile: RtLeft[T, R, C, A],
@@ -89,10 +91,8 @@ proc storeTailRows[R, C: static int; A: static MmaAtom; T](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
+  let row = laneRowOf(A)
+  let col = laneColOf(A)
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
   var dst = local_tile_dyn(gl, R, C, o)
   for n in 0 ..< rowTiles:
@@ -133,7 +133,7 @@ proc rowRstd[El; R, C: static int; A: static MmaAtom](
   sq.mul(y32, y32)
   var sumVec: rv(float32, R, C)
   sumVec.row_sum(sq)
-  result = rsqrt(sumVec.data[0] / float32(C) + eps)
+  result = rsqrt(sumVec.rowScalar() / float32(C) + eps)
 
 proc rmsWeightElem*[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
@@ -142,35 +142,26 @@ proc rmsWeightElem*[El; R, C: static int; A: static MmaAtom](
   ## - Epilogue first half, recorded chain's first two rounds:
   ## - `dst = bf16(w · bf16(y · rstd))`, the weighted RMSNorm output the silu stage multiplies.
   let rstd = rowRstd(y, eps)
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let normed = roundToRne[El](y.frags[n][m].frag[v].float32 * rstd)
-        dst.frags[n][m].frag[v] =
-          roundToRne[El](w.frags[n][m].frag[v].float32 * normed.float32)
+  var y32: rt_l(float32, R, C, A)
+  y32.widen(y)
+  var w32: rt_l(float32, R, C, A)
+  w32.widen(w)
+  var normed: rt_l(float32, R, C, A)
+  normed.map(y32, roundToRne[El](x * rstd).float32)
+  dst.map2(w32, normed, roundToRne[El](x * y))
 
 proc siluMulElem*[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
     x, gate: RtLeft[El, R, C, A]) {.device.} =
   ## - Epilogue second half, recorded chain's final round:
   ## - `dst = bf16(x · silu(g))`, the silu in f32 over the widened gated operand, no intermediate bf16 round on the silu.
-  var x32: rt_l(float32, R, C)
+  var x32: rt_l(float32, R, C, A)
   x32.widen(x)
-  var g32: rt_l(float32, R, C)
+  var g32: rt_l(float32, R, C, A)
   g32.widen(gate)
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let g = g32.frags[n][m].frag[v]
-        let silu32 = g / (1.0'f32 + exp2((-g) * Log2e))
-        dst.frags[n][m].frag[v] =
-          roundToRne[El](x32.frags[n][m].frag[v] * silu32)
+  var silu32: rt_l(float32, R, C, A)
+  silu32.map(g32, x / (1.0'f32 + exp2((-x) * Log2e)))
+  dst.map2(x32, silu32, roundToRne[El](x * y))
 
 proc rmsNormGatedElem*[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
@@ -181,21 +172,19 @@ proc rmsNormGatedElem*[El; R, C: static int; A: static MmaAtom](
   ##   of rmsWeightElem and siluMulElem, the bf16 `weighted` intermediate
   ##   held in registers with no memory round-trip.
   let rstd = rowRstd(y, eps)
-  var g32: rt_l(float32, R, C)
+  var g32: rt_l(float32, R, C, A)
   g32.widen(gate)
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let normed = roundToRne[El](y.frags[n][m].frag[v].float32 * rstd)
-        let weighted =
-          roundToRne[El](w.frags[n][m].frag[v].float32 * normed.float32)
-        let g = g32.frags[n][m].frag[v]
-        let silu32 = g / (1.0'f32 + exp2((-g) * Log2e))
-        dst.frags[n][m].frag[v] =
-          roundToRne[El](weighted.float32 * silu32)
+  var y32: rt_l(float32, R, C, A)
+  y32.widen(y)
+  var w32: rt_l(float32, R, C, A)
+  w32.widen(w)
+  var normed: rt_l(float32, R, C, A)
+  normed.map(y32, roundToRne[El](x * rstd).float32)
+  var weighted: rt_l(float32, R, C, A)
+  weighted.map2(w32, normed, roundToRne[El](x * y).float32)
+  var silu32: rt_l(float32, R, C, A)
+  silu32.map(g32, x / (1.0'f32 + exp2((-x) * Log2e)))
+  dst.map2(weighted, silu32, roundToRne[El](x * y))
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 

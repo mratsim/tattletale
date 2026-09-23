@@ -48,34 +48,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # are zero-filled and never read.
 # ─── Local device extensions ─────────────────────────────────────────
 
-proc roundStoreElem[El; R, C: static int; A: static MmaAtom](
-    dst: var RtLeft[El, R, C, A],
-    src: RtLeft[float32, R, C, A]) {.device.} =
-  ## `dst[r][c] = El(src[r][c])`, one RNE round per storage write, the eager matmul's
-  ## output round. The frag walk follows the loadTile lane→element mapping, the tiles
-  ## agree element for element.
-  ##
-  ## Atom contract:
-  ## - the atom A is shared by both operands
-  ## - `rt_l`'s default atom is `getTileConfig(float32, T)` for every element T (tile_algebra/tiles.nim)
-  ## - so the fp32 accumulator tile and the storage tile always share one
-  ##   geometry class and the frag indices agree
-  ##
-  ## A mismatched-atom call site fails to infer A and does not compile.
-  static:
-    doAssert R mod A.getM() == 0 and C mod A.getN() == 0,
-      "roundStoreElem: the tile geometry must cover whole atom tiles"
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        when El is bfloat16:
-          dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].bfloat16
-        else:
-          dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].to(float16)
-
 # ─── The kernel ───────────────────────────────────────────────────────
 
 proc dense_linear_tile_fwd*[El; N, K, TileC: static int](
@@ -117,5 +89,5 @@ proc dense_linear_tile_fwd*[El; N, K, TileC: static int](
     a.loadTileRows(gdX, (r0, 0, 0, kk), rem)
     b.loadTile(gdW, (0, 0, tx, kk))
     acc.mma_AB(a, b)
-  roundStoreElem(outT, acc)
+  roundEl[El](outT, acc)
   gdOut.storeTileRows(outT, (r0, 0, 0, tx), rem)

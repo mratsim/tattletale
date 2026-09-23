@@ -125,37 +125,24 @@ proc gdnDecodeStepTileAt*[T](
   prod.mul(s, k32)
   var kvVec: rv(float32, TileR, Dk)
   kvVec.row_sum(prod)
-  let kvMem = kvVec.data[0]
+  let kvMem = kvVec.rowScalar()
 
-  let v32 = vT.frags[0][0].frag[0].float32
+  let v32 = vT.laneScalar().float32
   let delta = beta[bh].float32 * (v32 - kvMem)
 
-  const rowTiles = TileR div atom.getM()
-  const colTiles = Dk div atom.getN()
-  const vpt = atom.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        s.frags[n][m].frag[v] =
-          s.frags[n][m].frag[v] + k32.frags[n][m].frag[v] * delta
+  s.addScaled(k32, delta)
 
   let scale = rsqrt(float32(Dk))
   var q32: rt_l(float32, TileR, Dk)
   q32.widen(qT)
   var oProd: rt_l(float32, TileR, Dk)
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        oProd.frags[n][m].frag[v] =
-          s.frags[n][m].frag[v] * (q32.frags[n][m].frag[v] * scale)
+  oProd.map2(s, q32, x * (y * scale))
   var oVec: rv(float32, TileR, Dk)
   oVec.row_sum(oProd)
-  let oVal = oVec.data[0]
+  let oVal = oVec.rowScalar()
 
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (lane, 0)).toIntVal()
-  let rowIn = cell mod 8
-  let colIn = cell div 8
+  let rowIn = laneRowOf(APPLE_8x8x8_F32)
+  let colIn = laneColOf(APPLE_8x8x8_F32)
   if colIn == 0:
       y[yLin + dvBlock * 8 + int32(rowIn)] = roundToRne[T](oVal)
   glState.storeTile(s, (headLin, 0, dvBlock, 0))

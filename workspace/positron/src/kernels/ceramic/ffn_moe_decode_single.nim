@@ -37,6 +37,8 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # tile_io_rows ships fp16 variants only. The bf16 guards live
 # module-local (the ffn_silu and grouped_query_attention_paged precedent).
 
+# tiles-allow loadTileRowsBounded is the row-bounded tile io machinery, it needs
+# one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
 proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
     tile: var RtLeft[El, R, C, A],
     gl: GlView[El],
@@ -50,9 +52,8 @@ proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
+  let row = laneRowOf(A)
+  let col = laneColOf(A)
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
   let src = local_tile_dyn(gl, R, C, o)
   for n in 0 ..< rowTiles:
@@ -63,6 +64,8 @@ proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
         else:
           tile.frags[n][m].frag[v] = roundToRne[El](0.0'f32)
 
+# tiles-allow storeTileRowsBounded is the row-bounded tile io machinery, it needs
+# one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
 proc storeTileRowsBounded[El; R, C: static int; A: static MmaAtom](
     gl: GlView[El],
     tile: RtLeft[El, R, C, A],
@@ -76,9 +79,8 @@ proc storeTileRowsBounded[El; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
+  let row = laneRowOf(A)
+  let col = laneColOf(A)
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
   var dst = local_tile_dyn(gl, R, C, o)
   for n in 0 ..< rowTiles:
@@ -123,17 +125,13 @@ proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
   ## - the silu result rounds to bf16 (RNE)
   ## - the bf16-rounded silu times the fp32 up operand rounds once at the store
   ##   (the eager chain)
-  const rowTiles = R div A.getM()
-  const colTiles = C div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let g = gHalf.frags[n][m].frag[v]
-        let s = g / (1.0'f32 + exp2(-g * Log2e))
-        dst.frags[n][m].frag[v] =
-          roundToRne[El](roundToRne[El](s).float32 * uHalf.frags[n][m].frag[v])
+  dst.map2(gHalf, uHalf) do:
+    let g = x
+    let s = g / (1.0'f32 + exp2(-g * Log2e))
+    roundToRne[El](roundToRne[El](s).float32 * y)
 
+# tiles-allow storeRowsScaledF32 is the row-bounded tile io machinery, it needs
+# one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
 proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
     dst: ptr UncheckedArray[float32],
     tile: RtLeft[float32, R, C, A],
@@ -162,9 +160,8 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod M
-  let c = cell div M
+  let r = laneRowOf(A)
+  let c = laneColOf(A)
   for n in 0 ..< rowTiles:
     if rowIdx[n] >= 0 and r == 0:
       for m in 0 ..< colTiles:

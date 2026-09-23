@@ -84,36 +84,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 #  Local device extensions: the routing and activation arithmetic
 #  ═════════════════════════════════════════════════════════════════════
 
-proc accScale[A: static MmaAtom](
-    dst: var RtLeft[float32, 32, 32, A],
-    src: RtLeft[float32, 32, 32, A],
-    s: float32) {.device.} =
-  ## `dst[r][c] += s · src[r][c]`:
-  ##   the weighted routed accumulation
-  ## over the 4 slots.
-  const rowTiles = 32 div A.getM()
-  const colTiles = 32 div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] =
-          dst.frags[n][m].frag[v] + s * src.frags[n][m].frag[v]
-
-proc addStore16[A: static MmaAtom](
-    dst: var RtLeft[float16, 32, 32, A],
-    routed, shared: RtLeft[float32, 32, 32, A]) {.device.} =
-  ## `dst[r][c] = fp16(routed[r][c] + shared[r][c])`:
-  ##   the output's one fp16 RNE round.
-  const rowTiles = 32 div A.getM()
-  const colTiles = 32 div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        dst.frags[n][m].frag[v] =
-          (routed.frags[n][m].frag[v] + shared.frags[n][m].frag[v]).to(float16)
-
 # ═════════════════════════════════════════════════════════════════════
 #  The kernel, the runtime-config entry
 #  ═════════════════════════════════════════════════════════════════════
@@ -161,22 +131,19 @@ proc actMul16[A: static MmaAtom](
   ##
   ## The frag walk uses the loadTile lane→element mapping, so the operands agree elementwise.
   ## Tile-internal, the walk bounds stay static.
-  const rowTiles = 32 div A.getM()
-  const colTiles = 32 div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let g = gHalf.frags[n][m].frag[v]
-        var a: float32
-        if activation == ActSilu:
-          a = g / (1.0'f32 + exp2(-g * Log2e))
-        else:
-          let s = InvSqrt2Pi * (g + GeluCoef * g * g * g)
-          let th = 1.0'f32 - 2.0'f32 / (exp2(2.0'f32 * s * Log2e) + 1.0'f32)
-          a = 0.5'f32 * g * (1.0'f32 + th)
-        dst.frags[n][m].frag[v] = (a * uHalf.frags[n][m].frag[v]).to(float16)
+  dst.map2(gHalf, uHalf) do:
+    let g = x
+    var a: float32
+    if activation == ActSilu:
+      a = g / (1.0'f32 + exp2(-g * Log2e))
+    else:
+      let s = InvSqrt2Pi * (g + GeluCoef * g * g * g)
+      let th = 1.0'f32 - 2.0'f32 / (exp2(2.0'f32 * s * Log2e) + 1.0'f32)
+      a = 0.5'f32 * g * (1.0'f32 + th)
+    (a * y).to(float16)
 
+# tiles-allow gatherSigmoidScores is a simdgroup lane machine, it needs a lane-permute gather
+# primitive (simdShuffle over fragment pairs)
 proc gatherSigmoidScores[A, AL: static MmaAtom](
     scores: var RtLeft[float32, 8, ScoreChunk * ScoreChunks, A],
     chunk: RtLeft[float32, 32, ScoreChunk, AL],
@@ -199,9 +166,8 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
       AL.getVpt() == A.getVpt(),
       "gatherSigmoidScores: both atoms must share the lane→fragment cell mapping"
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8          # the destination row = expert div 8
-  let c0 = cell div 8         # the lane's col pair base
+  let r = laneRowOf(AL)       # the destination row = expert div 8
+  let c0 = laneColOf(AL)      # the lane's col pair base
   let e0 = int32(8 * r + c0)  # the lane's experts inside the chunk
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< ScoreChunk div 8:
@@ -215,6 +181,8 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
         if ScoreChunk * chunkIndex + e0 + 1 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g1 * Log2e))
         else: -3.402823466e38'f32
 
+# tiles-allow topkRouted is the masked-copy selection machine, it needs a fragment-indexed
+# top-K primitive (per-fragment expert mapping over the tile)
 proc topkRouted[A: static MmaAtom](
     scores: RtLeft[float32, 8, ScoreChunk * ScoreChunks, A],
     topK, eCount: int32,
@@ -243,10 +211,8 @@ proc topkRouted[A: static MmaAtom](
   for m in 0 ..< ScoreChunks:
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
     sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8
-  let c0 = cell div 8
+  let r = laneRowOf(A)
+  let c0 = laneColOf(A)
   for slot in 0'i32 ..< topK:
     var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
     for m in 1 ..< ScoreChunks:
@@ -503,13 +469,13 @@ proc moe_fwd*(
         a.loadTileBounded(glH, (t * top_k + slot, 0, 0, kk), 1, moe_intermediate)
         b16.loadTileBounded(glDown, (ids[slot], 0, nt, kk), hidden, moe_intermediate)
         d.mma_AB(a, b16)
-      routed.accScale(d, w[slot])
+      routed.addScaled(d, w[slot])
     sh.zero()
     for s in 0'i32 ..< n_shared_experts:
       for kk in 0'i32 ..< iSteps:
         a.loadTileBounded(glHs, (t, s, 0, kk), 1, moe_intermediate)
         b16.loadTileBounded(glSd, (s, 0, nt, kk), hidden, moe_intermediate)
         sh.mma_AB(a, b16)
-    out16.addStore16(routed, sh)
+    out16.map2(routed, sh, (x + y).to(float16))
     glOut.storeTileMasked(out16, (t, 0, 0, nt), 1,
       min(hidden - nt * 32, 32'i32))

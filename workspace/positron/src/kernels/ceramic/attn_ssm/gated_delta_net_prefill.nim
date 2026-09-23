@@ -114,9 +114,6 @@ proc gdnPrefillChunkScanAt*[El](
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane cumulogdecay/u local arrays are sized by ChunkC"
-  const rowTiles = TileR div atom.getM()
-  const colTiles = Dk div atom.getN()
-  const vpt = atom.getVpt()
 
   let hk = ((bh mod Hv) div hkRatio) + ((bh div Hv) * Hk)
   let headLin = bh * Dv * Dk
@@ -130,10 +127,8 @@ proc gdnPrefillChunkScanAt*[El](
   var s: rt_l(float32, TileR, Dk)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
 
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (lane, 0)).toIntVal()
-  let rowIn = cell mod 8
-  let colIn = cell div 8
+  let rowIn = laneRowOf(APPLE_8x8x8_F32)
+  let colIn = laneColOf(APPLE_8x8x8_F32)
   let scale = rsqrt(float32(Dk))
 
   var cumulogdecay: array[ChunkC, float32]   # in-block cumulative log decay, identical on every lane
@@ -162,7 +157,7 @@ proc gdnPrefillChunkScanAt*[El](
       var kVec: rv(float32, TileR, Dk)
       kVec.row_sum(kProd)
       let decayT = exp2(cumulogdecay[t] * Log2e)
-      let gRead = decayT * kVec.data[0]
+      let gRead = decayT * kVec.rowScalar()
 
       let bt = beta[bh * T + gt].float32
       let v32 = v[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)].float32
@@ -179,7 +174,7 @@ proc gdnPrefillChunkScanAt*[El](
         var kkVec: rv(float32, TileR, Dk)
         kkVec.row_sum(kkProd)
         let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
-        uacc += pdts * kkVec.data[0] * uLoc[sIdx]
+        uacc += pdts * kkVec.rowScalar() * uLoc[sIdx]
       let ut = bt * (v32 - gRead) - bt * uacc
       uLoc[t] = ut
 
@@ -188,16 +183,13 @@ proc gdnPrefillChunkScanAt*[El](
       qT.loadTile(glQ, (kLinT, 0, 0, 0))
       var q32: rt_l(float32, TileR, Dk)
       q32.widen(qT)
-      for n in 0 ..< rowTiles:
-        for m in 0 ..< colTiles:
-          for f in 0 ..< vpt:
-            q32.frags[n][m].frag[f] = q32.frags[n][m].frag[f] * scale
+      q32.mul(q32, scale)
 
       var qProd: rt_l(float32, TileR, Dk)
       qProd.mul(s, q32)
       var qVec: rv(float32, TileR, Dk)
       qVec.row_sum(qProd)
-      var yVal = decayT * qVec.data[0]
+      var yVal = decayT * qVec.rowScalar()
       for sIdx in 0 .. t:
         var ksT: rt_l(El, TileR, Dk)
         ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
@@ -208,7 +200,7 @@ proc gdnPrefillChunkScanAt*[El](
         var qkVec: rv(float32, TileR, Dk)
         qkVec.row_sum(qkProd)
         let pdts = exp2((cumulogdecay[t] - cumulogdecay[sIdx]) * Log2e)
-        yVal += pdts * qkVec.data[0] * uLoc[sIdx]
+        yVal += pdts * qkVec.rowScalar() * uLoc[sIdx]
 
       if colIn == 0:
           y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = roundToRne[El](yVal)
@@ -223,10 +215,7 @@ proc gdnPrefillChunkScanAt*[El](
       ksT.loadTile(glK, (kHeadLin + (c0 + int32(sIdx)) * Dk, 0, 0, 0))
       var ks32: rt_l(float32, TileR, Dk)
       ks32.widen(ksT)
-      for n in 0 ..< rowTiles:
-        for m in 0 ..< colTiles:
-          for f in 0 ..< vpt:
-            s.frags[n][m].frag[f] = s.frags[n][m].frag[f] + ks32.frags[n][m].frag[f] * ws
+      s.addScaled(ks32, ws)
     c0 += int32(cLen)
 
   glState.storeTile(s, (headLin, 0, dvBlock, 0))

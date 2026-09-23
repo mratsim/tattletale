@@ -37,6 +37,7 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Local device extensions: the score passes ───────────────────────
 
+# tiles-allow gatherScores is a simdgroup lane machine, it needs a lane-permute gather primitive (simdShuffle over fragment pairs)
 proc gatherScores[A, AL: static MmaAtom; F: static int](
     scores: var RtLeft[float32, 8, F, A],
     chunk: RtLeft[float32, 32, 64, AL],
@@ -54,8 +55,7 @@ proc gatherScores[A, AL: static MmaAtom; F: static int](
       AL.getVpt() == A.getVpt(),
       "gatherScores: both atoms must share the lane→fragment cell mapping"
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8          # the destination row = expert div 8
+  let r = laneRowOf(AL)       # the destination row = expert div 8
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< 8:
     let g0 = simdShuffle(chunk.frags[0][m].frag[0], uint32(srcLane))
@@ -64,28 +64,8 @@ proc gatherScores[A, AL: static MmaAtom; F: static int](
       scores.frags[0][destFrag].frag[0] = g0
       scores.frags[0][destFrag].frag[1] = g1
 
-proc roundScoresFp16[A: static MmaAtom; F: static int](
-    scores: var RtLeft[float32, 8, F, A]) {.device.} =
-  ## In-place fp16 round of the score tile's raw logits, one RNE round per logit
-  ## before the softmax, the softmax form's matmul-output round on fp16
-  const colFrags = F div 8
-  const vpt = A.getVpt()
-  for m in 0 ..< colFrags:
-    for v in 0 ..< vpt:
-      scores.frags[0][m].frag[v] =
-        scores.frags[0][m].frag[v].to(float16).to(float32)
-
-proc roundScoresBf16[A: static MmaAtom; F: static int](
-    scores: var RtLeft[float32, 8, F, A]) {.device.} =
-  ## In-place bf16 round of the score tile's raw logits, one RNE round per logit
-  ## before the softmax, the softmax form's matmul-output round on bf16
-  const colFrags = F div 8
-  const vpt = A.getVpt()
-  for m in 0 ..< colFrags:
-    for v in 0 ..< vpt:
-      scores.frags[0][m].frag[v] =
-        scores.frags[0][m].frag[v].bfloat16.float32
-
+# tiles-allow softmaxScores needs tile-wide max/sum reductions that read the fragment lanes
+# directly (a full-tile reduce over RtLeft fragments)
 proc softmaxScores[A: static MmaAtom; F: static int](
     scores: var RtLeft[float32, 8, F, A]) {.device.} =
   ## - In-place fp32 softmax over the score tile's El-rounded logits:
@@ -98,27 +78,16 @@ proc softmaxScores[A: static MmaAtom; F: static int](
   for m in 1 ..< colFrags:
     lm = max(lm, scores.frags[0][m].frag[0])
     lm = max(lm, scores.frags[0][m].frag[1])
-  lm = max(lm, simdShuffleDown(lm, 16'u32))
-  lm = max(lm, simdShuffleDown(lm, 8'u32))
-  lm = max(lm, simdShuffleDown(lm, 4'u32))
-  lm = max(lm, simdShuffleDown(lm, 2'u32))
-  lm = max(lm, simdShuffleDown(lm, 1'u32))
-  lm = simdShuffle(lm, 0'u32)
+  lm = warpReduce(lm, max)
   var ls = 0.0'f32
   for m in 0 ..< colFrags:
     for v in 0 ..< vpt:
       ls += exp2((scores.frags[0][m].frag[v] - lm) * Log2e)
-  ls += simdShuffleDown(ls, 16'u32)
-  ls += simdShuffleDown(ls, 8'u32)
-  ls += simdShuffleDown(ls, 4'u32)
-  ls += simdShuffleDown(ls, 2'u32)
-  ls += simdShuffleDown(ls, 1'u32)
-  ls = simdShuffle(ls, 0'u32)
-  for m in 0 ..< colFrags:
-    for v in 0 ..< vpt:
-      scores.frags[0][m].frag[v] =
-        exp2((scores.frags[0][m].frag[v] - lm) * Log2e) / ls
+  ls = warpReduce(ls, `+`)
+  scores.map(scores, exp2((x - lm) * Log2e) / ls)
 
+# tiles-allow topkScores is the masked-copy selection machine, it needs a fragment-indexed
+# top-K primitive (per-fragment expert mapping over the tile)
 proc topkScores[A: static MmaAtom; F, K: static int](
     scores: RtLeft[float32, 8, F, A],
     ids: var array[K, int32],
@@ -144,20 +113,14 @@ proc topkScores[A: static MmaAtom; F, K: static int](
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
     sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
   let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8
-  let c0 = cell div 8
+  let r = laneRowOf(A)
+  let c0 = laneColOf(A)
   for slot in 0 ..< K:
     var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
     for m in 1 ..< F div 8:
       lm = max(lm, sel.frags[0][m].frag[0])
       lm = max(lm, sel.frags[0][m].frag[1])
-    lm = max(lm, simdShuffleDown(lm, 16'u32))
-    lm = max(lm, simdShuffleDown(lm, 8'u32))
-    lm = max(lm, simdShuffleDown(lm, 4'u32))
-    lm = max(lm, simdShuffleDown(lm, 2'u32))
-    lm = max(lm, simdShuffleDown(lm, 1'u32))
-    lm = simdShuffle(lm, 0'u32)
+    lm = warpReduce(lm, max)
     var localCand = int32(1 shl 30)
     for m in 0 ..< F div 8:
       let e0 = int32(64 * m + 8 * r + c0)
@@ -165,12 +128,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
         localCand = min(localCand, e0)
       if sel.frags[0][m].frag[1] == lm:
         localCand = min(localCand, e0 + 1)
-    var cand = min(localCand, simdShuffleDown(localCand, 16'u32))
-    cand = min(cand, simdShuffleDown(cand, 8'u32))
-    cand = min(cand, simdShuffleDown(cand, 4'u32))
-    cand = min(cand, simdShuffleDown(cand, 2'u32))
-    cand = min(cand, simdShuffleDown(cand, 1'u32))
-    cand = simdShuffle(cand, 0'u32)
+    let cand = warpReduce(localCand, min)
     if cand >= int32(8 * F):
       # Unmatched top-K candidate:
       # a NaN/Inf-poisoned score pass compares false against NaN everywhere,
@@ -246,10 +204,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
       b64.loadTile(glRouter, (0, 0, cs, kk))
       dR.mma_AB(a, b64)
     scores.gatherScores(dR, cs)
-  when El is bfloat16:
-    scores.roundScoresBf16()
-  else:
-    scores.roundScoresFp16()
+  roundEl[El](scores, scores)
   scores.softmaxScores()
   scores.topkScores(ids, w)
   var sumW = 0.0'f32
@@ -262,10 +217,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
       # every weight is zero (the poisoned pass) or the sum underflowed,
       # a 0/0 store would NaN the weight and everything downstream
       w[slot] = 0.0'f32
-    when El is bfloat16:
-      w[slot] = w[slot].bfloat16.float32
-    else:
-      w[slot] = w[slot].to(float16).to(float32)
+    w[slot] = roundToRne[El](w[slot]).float32
 
 # ─── The router-only entry ───────────────────────────────────────────
 
@@ -284,10 +236,7 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
   moeRoute[El, H, E, K, Scale](x, router_w, t, idsReg, wReg)
   for slot in 0 ..< K:
     ids[t * K + slot] = idsReg[slot]
-    when El is bfloat16:
-      rout_w[t * K + slot] = wReg[slot].bfloat16
-    else:
-      rout_w[t * K + slot] = wReg[slot].to(float16)
+    rout_w[t * K + slot] = roundToRne[El](wReg[slot])
 
 # ─── The shared-expert gate logit ────────────────────────────────────
 
@@ -311,7 +260,7 @@ proc sharedGateLogit*[El; H: static int](
     a.loadTileRows(glX, (t, 0, 0, kk), 1)
     b.loadTile(glSgw, (0, 0, 0, kk))
     sg.mma_AB(a, b)
-  result = simdShuffle(sg.frags[0][0].frag[0], 0'u32)
+  result = simdShuffle(sg.laneScalar(), 0'u32)
 
 # ─── The fp32-partial merge (decode regime) ──────────────────────────
 
@@ -339,10 +288,7 @@ proc moe_decode_merge_at*[El; H, K: static int](
   var acc = 0.0'f32
   for y in 0'i32 ..< K + 1:
     acc += partial[int(t * (K + 1) + y) * H + int(col)]
-  when El is bfloat16:
-    out_r[t * H + col] = acc.bfloat16
-  else:
-    out_r[t * H + col] = acc.to(float16)
+  out_r[t * H + col] = roundToRne[El](acc)
 
 proc moe_decode_merge*[El; H, K: static int](
     out_r: ptr UncheckedArray[El],         # (num_tokens, H) routed+shared output

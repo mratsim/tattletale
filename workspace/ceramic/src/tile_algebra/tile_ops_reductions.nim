@@ -346,7 +346,7 @@ template warpReduce*[V](x: V, combine: untyped): V =
   ## and a cross-lane sum of the exponentials:
   ##
   ##   ls = warpReduce(ls, `+`)  # the lane-0-reduced sum on every lane
-  var acc {.inject.} = x
+  var acc = x
   acc = combine(acc, simdShuffleDown(acc, 16'u32))
   acc = combine(acc, simdShuffleDown(acc, 8'u32))
   acc = combine(acc, simdShuffleDown(acc, 4'u32))
