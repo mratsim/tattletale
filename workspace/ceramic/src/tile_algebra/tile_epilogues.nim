@@ -220,6 +220,47 @@ func apply*[T; R, C: static int; A: static MmaAtom](
             op.alpha * AB.frags[n][m].frag[v] +
             op.beta * op.C.data[int(cOff) + int(v) * int(op.C.csc)]
 
+func apply*[T; R, C: static int; A: static MmaAtom](
+    op: EpiAXPBYStrided[T],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    CReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = α·AB + β·CReg, per owned slot, the C operand a register tile.
+  ##
+  ## Contract:
+  ##   - C arrives bounded-loaded, the boundary loader already applied
+  ##     the runtime strides, so op.C is never dereferenced
+  ##   - out-of-range lanes hold the zero fill
+  ##   - β = 0 skips the C term (the caller may skip the C load entirely),
+  ##     α = 1 skips the multiply
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = toIntVal(A.valuesPerThread(opC))
+  if op.beta == T(0):
+    if op.alpha == T(1):
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = AB.frags[n][m].frag[v]
+    else:
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+  elif op.alpha == T(1):
+    for n in 0 ..< rowTiles:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          tmp.frags[n][m].frag[v] =
+            AB.frags[n][m].frag[v] + op.beta * CReg.frags[n][m].frag[v]
+  else:
+    for n in 0 ..< rowTiles:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          tmp.frags[n][m].frag[v] =
+            op.alpha * AB.frags[n][m].frag[v] +
+            op.beta * CReg.frags[n][m].frag[v]
+
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAddBias
 # ═════════════════════════════════════════════════════════════════════════
@@ -253,6 +294,26 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
       for v in 0 ..< vpt:
         tmp.frags[n][m].frag[v] =
           AB.frags[n][m].frag[v] + op.bias_gmem[n, m, v]
+
+func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
+    op: EpiAddBias[T, Sh, StB],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    BiasReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = AB + BiasReg, per owned slot, the bias a bounded register tile.
+  ##
+  ## Contract:
+  ##   - the bias_gmem view stays unsharded and never dereferenced
+  ##   - out-of-range columns carry the zero fill, so the add is inert
+  ##     on the lanes the masked store drops
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = toIntVal(A.valuesPerThread(opC))
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        tmp.frags[n][m].frag[v] =
+          AB.frags[n][m].frag[v] + BiasReg.frags[n][m].frag[v]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiLinearBiasReLU
@@ -288,3 +349,18 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
       for v in 0 ..< vpt:
         tmp.frags[n][m].frag[v] =
           max(AB.frags[n][m].frag[v] + op.bias_gmem[n, m, v], T(0))
+
+func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
+    op: EpiLinearBiasReLU[T, Sh, StB],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    BiasReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = max(0, AB + BiasReg), per owned slot, the bias a bounded register tile with the EpiAddBias register shard contract.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = toIntVal(A.valuesPerThread(opC))
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        tmp.frags[n][m].frag[v] =
+          max(AB.frags[n][m].frag[v] + BiasReg.frags[n][m].frag[v], T(0))
