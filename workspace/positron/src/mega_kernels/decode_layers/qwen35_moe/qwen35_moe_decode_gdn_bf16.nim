@@ -66,6 +66,9 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # ─── Geometry + arena map ────────────────────────────────────────────
 
 const
+  # Make generic over the model config and dtype:
+  # - the dims, section lists and stage tables derive from them
+  # - the tile atoms need a backend context at host typecheck time
   Hidden* = 2048
     ## Layer width:
     ##   the norm rows, the MoE hidden and the out_proj rows.
