@@ -187,6 +187,9 @@ task test_chattyninja, "Test workspace/chattyninja template engine suites":
     # The TTT_CNJ_StepBudget arm: the suite's own `-d:TTT_CNJ_StepBudget=32` block asserts the
     # step-counter backstop's raise and quits before the full tier runs.
     runCmd(chattyninjaCmd("t_expr.nim", " -d:TTT_CNJ_StepBudget=32"))
+    # The typed-surface referee: every corpus row re-rendered over a real `ChatContext`
+    # through the package surface alone, byte-exact against the same ledger.
+    runCmd(chattyninjaCmd("t_chat_api.nim", ""))
 
 # Granular transformer suite tasks
 # ===================================================
