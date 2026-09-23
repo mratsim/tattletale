@@ -12,7 +12,7 @@ Templates compile to a flat append-only `seq[Node]` arena, a POD of six
 |-----------------|---------------------------------------------------------------------|
 | `src/`          | engine modules                                                      |
 | `tests/`        | suites driven by the `test_chattyninja` task, plus the corpus       |
-| `tests/corpus/` | 18 model template suites, 106 recorded rows, expected bytes |
+| `tests/corpus/` | 23 model template suites, 124 recorded rows, expected bytes |
 
 `nim test_chattyninja` verifies the extracted fixtures before any render test trusts them.
 

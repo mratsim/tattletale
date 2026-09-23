@@ -478,9 +478,10 @@ proc testEqualityRejectsChange() =
 
 proc testCorpusDelivery() =
 
-  const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47flash", "glm53flash",
-      "gptoss20b", "kimi", "lagunaxs21", "lfm25", "ling30", "mimo25", "mistral7bv01",
-      "moonlight", "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38flashnext"]
+  const parseable = ["deepseekv2lite", "gemma3", "gemma4", "glm47", "glm47flash",
+      "glm53flash", "gptoss20b", "kimik26", "kimi", "lagunaxs21", "lfm25", "ling30",
+      "mimo25", "minimaxm27", "minimaxm3", "mistral7bv01", "moonlight",
+      "northminicode10", "qwen3", "qwen35", "qwen36", "qwen38", "qwen38flashnext"]
   # Suite discovery is the const list, not the directory. A suite dir added under corpus/
   # would walk zero rows silently, so the dir count is checked against the list.
   var suiteDirs = 0
@@ -603,9 +604,9 @@ proc testCorpusDelivery() =
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
       "two renders of the same artifact through fresh drivers differed"
 
-  doAssert okExact == 81, "expected 81 rendered ok rows across 18 suites, checked " & $okExact
-  doAssert gapRows == 9, "expected 9 gap rows across 18 suites, skipped " & $gapRows
-  doAssert errRaised == 16, "expected 16 err rows, checked " & $errRaised
+  doAssert okExact == 94, "expected 94 rendered ok rows across 23 suites, checked " & $okExact
+  doAssert gapRows == 9, "expected 9 gap rows across 23 suites, skipped " & $gapRows
+  doAssert errRaised == 21, "expected 21 err rows, checked " & $errRaised
 
 
 # Window-capacity contract of the delivery `Cursor`:
@@ -1289,7 +1290,7 @@ proc main() =
     testAllocDrainWindow()
     testAllocMicro()
     testAllocSerializer()
-  echo "t_corpus: 81 ok rows byte-exact through pull, compose and render, 9 gap rows loud, " &
-      "16 err rows raise the recorded error"
+  echo "t_corpus: 94 ok rows byte-exact through pull, compose and render, 9 gap rows loud, " &
+      "21 err rows raise the recorded error"
 
 main()
