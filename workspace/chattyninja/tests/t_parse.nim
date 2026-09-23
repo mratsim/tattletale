@@ -115,7 +115,7 @@ proc testIfSuffixedIterable() =
 # defers the check to its call site and parses.
 proc testTopLevelBreakRaisesLocated() =
   try:
-    discard parseTemplate("{% break %}")
+    discard parseJinjaTemplate("{% break %}")
     doAssert false, "a top-level break parsed instead of raising"
   except JinjaError as e:
     doAssert "`{% break %}` is outside any `{% for %}`" in e.what, e.what
@@ -125,12 +125,12 @@ proc testTopLevelBreakRaisesLocated() =
 # Construct nesting is capped at TTT_CNJ_ParseNestingCap, a template nested past it raising located
 # at the offending tag, never exhausting the dispatch stack. Nesting at the cap parses.
 proc testNestingCapRaisesLocated() =
-  discard parseTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap) & "y" &
+  discard parseJinjaTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap) & "y" &
       repeat("{% endif %}", TTT_CNJ_ParseNestingCap))
   var reported = ""
   var at = -1
   try:
-    discard parseTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap + 1) & "y" &
+    discard parseJinjaTemplate(repeat("{% if x %}", TTT_CNJ_ParseNestingCap + 1) & "y" &
         repeat("{% endif %}", TTT_CNJ_ParseNestingCap + 1))
     doAssert false, "nesting past the cap parsed instead of raising"
   except JinjaError as e:
@@ -144,10 +144,10 @@ proc testNestingCapRaisesLocated() =
 # An `{% elif %}` chain recurses `parseIf` outside any body walk, so the chain depth counts
 # toward TTT_CNJ_ParseNestingCap too. A modest chain parses, a chain past the cap raising located.
 proc testElifChainNestingCap() =
-  discard parseTemplate("{% if z %}a" & repeat("{% elif z %}a", 10) & "{% endif %}")
+  discard parseJinjaTemplate("{% if z %}a" & repeat("{% elif z %}a", 10) & "{% endif %}")
   var reported = ""
   try:
-    discard parseTemplate("{% if z %}a" & repeat("{% elif z %}a", 20000) & "{% endif %}")
+    discard parseJinjaTemplate("{% if z %}a" & repeat("{% elif z %}a", 20000) & "{% endif %}")
     doAssert false, "an elif chain past the cap parsed instead of raising"
   except JinjaError as e:
     reported = e.what
@@ -169,7 +169,7 @@ proc testTruncationRaisesLocated() =
     var reported = ""
     var at = -1
     try:
-      discard parseTemplate(t)
+      discard parseJinjaTemplate(t)
       doAssert false, "a truncated or degenerate template parsed: " & t
     except JinjaError as e:
       reported = e.what
@@ -182,7 +182,7 @@ proc testTruncationRaisesLocated() =
 # which carries no location by the gap raise's contract.
 proc testLoneEndmacroGapRaises() =
   try:
-    discard parseTemplate("{% endmacro %}")
+    discard parseJinjaTemplate("{% endmacro %}")
     doAssert false, "a lone endmacro parsed"
   except JinjaError as e:
     doAssert e.cause == ceUnimplemented and "endmacro" in e.what, e.what
@@ -196,12 +196,12 @@ proc testLoneEndmacroGapRaises() =
 proc testSetWithoutTargetNameRaises() =
   for setNoName in ["{% set %}A", "{% set = 3 %}"]:
     try:
-      discard parseTemplate(setNoName)
+      discard parseJinjaTemplate(setNoName)
       doAssert false, "a nameless set parsed: " & setNoName
     except JinjaError as e:
       doAssert "needs a target" in e.what, e.what
   try:
-    discard parseTemplate("{% set x%}3{{ x }}")
+    discard parseJinjaTemplate("{% set x%}3{{ x }}")
     doAssert false, "a set with no endset parsed"
   except JinjaError as e:
     doAssert "endset" in e.what, e.what
@@ -247,7 +247,7 @@ proc testWhitespaceRuleSweep() =
 proc main() =
   # One recorded suite, parsed once and shared by reference across the tests.
   let src = readFile(root / "corpus" / "deepseekv2lite" / "deepseekv2lite.jinja")
-  let (tmpl, symbols) = parseTemplate(src)
+  let (tmpl, symbols) = parseJinjaTemplate(src)
 
   testNkIfBodyWalk(tmpl)
   testWhitespaceControls()

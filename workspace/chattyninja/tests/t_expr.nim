@@ -505,8 +505,8 @@ proc testContinueAtMacroBoundary() =
 # of the output it produced, byte coordinates into the render, read after the drain.
 proc renderWithSpans(src: string): tuple[text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders whole and returns the bytes plus the driver's recorded generation spans.
-  let (tmpl, sym) = parseTemplate(src)
-  var d = startRender(tmpl, sym, JinjaVal(kind: vkUndefined))
+  let (tmpl, sym) = parseJinjaTemplate(src)
+  var d = startJinjaRender(tmpl, sym, JinjaVal(kind: vkUndefined))
   var buf: array[4096, char]
   while true:
     let n = pullInto(d, buf)

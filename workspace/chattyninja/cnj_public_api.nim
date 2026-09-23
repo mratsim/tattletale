@@ -3,26 +3,29 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Chattyninja package umbrella.
-## Explicit re-export list, the package surface. A module's own `*` surface outside these
-## names is Nim's cross-module plumbing, not API, and nothing under `src/` re-exports.
+## Chattyninja public API. This file IS the package surface, everything a consumer
+## may name, nothing else.
 ##
-## - the render tier, `parseTemplate`, `startRender`, `pullInto` and `renderToString`,
-##   over the compiled artifact and the caller's `JinjaRenderContext`
+## - the render tier, `parseJinjaTemplate`, `startJinjaRender`, `pullInto`,
+##   `renderToString`, over the compiled artifact and the caller's `JinjaRenderContext`
 ## - the data tier, `JinjaVal` with `ValueKind`, the value constructors, `eqVal`,
 ##   `dictSet`/`dictGet` over `DictVal`, the `tojson` form `toJson` with `JsonOpts`,
-##   and `JinjaError` with its cause
+##   `JinjaError` with its cause
 ## - the depth, nesting, step and element caps
 ##
-## `jinja_interpolation`, `jinja_builtins` and every module's internals stay internal,
-## cross-module code importing them through `import x {.all.}`.
+## Source modules sit under `import x {.all.}`. The surface above is exported by name,
+## so the home modules carry no export stars. The internals of every module, including
+## `jinja_interpolation` and `jinja_builtins`, stay reachable only through `import x {.all.}`.
 
-import ./src/cnj_engine
-import ./src/cnj_types, ./src/jinja_data_model, ./src/jinja_serialize, ./src/cnj_parse
+import ./src/cnj_engine {.all.}
+import ./src/cnj_types {.all.}
+import ./src/jinja_data_model {.all.}
+import ./src/jinja_serialize {.all.}
+import ./src/cnj_parse {.all.}
 
 # Render driver and parser.
-export cnj_engine.startRender, cnj_engine.pullInto,
-    cnj_engine.renderToString, cnj_parse.parseTemplate
+export cnj_engine.startJinjaRender, cnj_engine.pullInto,
+    cnj_engine.renderToString, cnj_parse.parseJinjaTemplate
 
 # Compiled artifact, render session and the knobs.
 export cnj_types.JinjaRenderContext, cnj_types.CompiledTemplate, cnj_types.CompiledSymbols,

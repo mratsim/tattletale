@@ -32,11 +32,11 @@
 #     ├─ scopes   owned by rows (scopeAt marks the base), trimmed on close
 #     ├─ pend     one Piece, set by emit steps, drained by pullInto or capturePend, reset to pkNone
 #
-#   force, the engine's macro-force callable, bound once at `startRender` into the context, stateless,
+#   force, the engine's macro-force callable, bound once at `startJinjaRender` into the context, stateless,
 #     every context carrying the same callable
 #
 #   A context is a ref by construction, one heap object per render, and cannot be copied.
-#   A second render over one artifact opens a second context through `startRender`.
+#   A second render over one artifact opens a second context through `startJinjaRender`.
 #
 #   A forced macro body runs on an explicitly constructed second context, over the same
 #   artifact refs and a snapshot of the caller's render state.
@@ -66,7 +66,7 @@ type
       ## Payload slots, capacity 5 the measured corpus knee, a variable `nkFor` or `nkMacroDef`
       ## payload spilling to one heap block at parse time.
 
-  CompiledTemplate* = ref object
+  CompiledTemplate = ref object
     ## Read-only compiled template, shared across renders with two fields and no mutable state,
     ## so one artifact serves any number of render instantiations.
     ##
@@ -76,7 +76,7 @@ type
     jinja*: openArray[char]
     nodes*: seq[Node]
 
-  CompiledSymbols* = ref object
+  CompiledSymbols = ref object
     ## Parse-built interned-name table, read-only at render and shared by every render
     ## over its artifact, node name slots indexing into it. Name resolution is one
     ## linear scan over `names`, parse-time only.
@@ -87,19 +87,19 @@ const
 
   # Macro recursion is the engine's only render-time recursion, a call running synchronously
   # to completion into a capture sink. 16 bounds the stack on bad input.
-  TTT_CNJ_MacroDepthCap* {.intdefine.} = 16
+  TTT_CNJ_MacroDepthCap {.intdefine.} = 16
 
   # Expression-walker recursion bound, deepest corpus paren nesting 3, 24 clears it
   # with margin, far below the C stack overflow depth.
-  TTT_CNJ_ExprDepthCap* {.intdefine.} = 24
+  TTT_CNJ_ExprDepthCap {.intdefine.} = 24
 
   # Parse-time nesting bound of the parser's dispatch recursion, one level per
   # body-carrying construct. 64 clears the corpus with margin, a breach raising at the tag.
-  TTT_CNJ_ParseNestingCap* {.intdefine.} = 64
+  TTT_CNJ_ParseNestingCap {.intdefine.} = 64
 
   # Step-dispatch bound of one `pullInto` call, corpus renders staying below 240, a breach
   # raising located at the node the walk reached.
-  TTT_CNJ_StepBudget* {.intdefine.} = 1_000_000
+  TTT_CNJ_StepBudget {.intdefine.} = 1_000_000
 
   Whitespace = {' ', '\t', '\n', '\r', '\v', '\f'}
   WsNameChars = {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}
@@ -291,21 +291,21 @@ type
     lazy*: Ser
       ## serializer state machine of a pending lazy piece, repositioned from byte 0 per value
 
-  JinjaRenderContext* = ref object
-    ## One heap render context per render, opened by `startRender` and owned by the caller,
+  JinjaRenderContext = ref object
+    ## One heap render context per render, opened by `startJinjaRender` and owned by the caller,
     ## holding the shared artifact, the shared interned-name table ref, one per-instantiation
     ## render state and the engine's macro-force callable.
     ## - a context is a ref and is never copied, borrows are ref borrows, and there
     ##   are no threads in the engine, so a field write through one borrow is
     ##   visible to every other borrow of the same context
     ## - a consumer that stops mid-render resumes through the same context object.
-    ##   A second render over the artifact opens a second context through `startRender`
+    ##   A second render over the artifact opens a second context through `startJinjaRender`
     tmpl*: CompiledTemplate
     symbols*: CompiledSymbols
       ## the parse-built interned-name table, shared by ref with the parse caller, no lifetime contract
     state*: RenderState
     force*: MacroForcer
-      ## the engine's macro-force callable, bound once at `startRender`, stateless
+      ## the engine's macro-force callable, bound once at `startJinjaRender`, stateless
 
   MacroForcer = proc (c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal {.nimcall.}
     ## Runs one macro body to completion on a second render context built over the caller's

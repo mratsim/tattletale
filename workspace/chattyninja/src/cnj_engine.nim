@@ -4,13 +4,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Compiled chattyninja templates and their render driver.
-# | Step     | Behavior                                                                                                                                                      |
-# | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-# | parse    | `parseTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                     |
-# | load     | `parseTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                     |
-# | render   | `startRender` opens a `JinjaRenderContext` over the artifact and `pullInto` walks the node list through `steps`, all control state in the context's `RenderState` |
-# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                      |
-# | force    | `startRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                                 |
+# | Step     | Behavior                                                                                                                                                               |
+# | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+# | parse    | `parseJinjaTemplate` appends nodes in source order, resolving the whitespace policy and interning names into `CompiledSymbols`                                         |
+# | load     | `parseJinjaTemplate` returns the artifact borrowing the template text, so it holds no mutable state and cannot outlive the text it points into                         |
+# | render   | `startJinjaRender` opens a `JinjaRenderContext` over the artifact and `pullInto` walks the node list through `steps`, all control state in the context's `RenderState` |
+# | dispatch | `steps` is total over `NodeKind`, so a node's meaning is a pure function of its kind and no node carries a proc field or program counter                               |
+# | force    | `startJinjaRender` binds the macro forcer into the context, expressions reading the render state's scopes, root and clock directly                                     |
 # Resumption state for a re-entered step lives in the render state's row stack, never in a node.
 # `nkFor`, `nkSetBlock` and `nkGeneration` are re-entered by their bodies, `nkIf`
 # single-entry, parse time backpatching its branch bodies past the whole chain.
@@ -19,7 +19,7 @@
 #   from the repo root, `nim test_chattyninja` builds and runs every suite with its variants.
 
 # Public API:
-#   startRender, pullInto and renderToString. Everything else is engine plumbing.
+#   startJinjaRender, pullInto and renderToString. Everything else is engine plumbing.
 
 import cnj_types {.all.}
 import jinja_data_model {.all.}
@@ -578,7 +578,7 @@ proc forceMacro(c: JinjaRenderContext, mc: MacroVal, args: var Args): JinjaVal =
 
 # Render driver:
 
-func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): JinjaRenderContext =
+func startJinjaRender(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, clock = 0.0): JinjaRenderContext =
   ## Returns a render context over the shared artifact, ready to render `root`, the render
   ## context dict with `messages`, `tools`, `add_generation_prompt` and template kwargs.
   ##
@@ -594,12 +594,12 @@ func startRender*(tmpl: CompiledTemplate, sym: CompiledSymbols, root: JinjaVal, 
           pend: Piece(kind: pkNone),
           scopes: @[(default(Scope))], root: root, clock: clock))
 
-proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
+proc pullInto(c: JinjaRenderContext, buf: var openArray[char]): int =
   ## Returns the render's next bytes, written into `buf[0 ..< result]`.
   ##
   ## Ownership sits with the caller, whose buffer capacity is the delivery window.
   ## Resumption state is `c.state`, so consumers over one artifact each hold a context
-  ## from `startRender` and own their delivery position.
+  ## from `startJinjaRender` and own their delivery position.
   ##
   ## Delivery contract:
   ## - `c.state.pend.pos` and `c.state.cur` advance before the call returns, so a consumer
@@ -673,15 +673,15 @@ proc pullInto*(c: JinjaRenderContext, buf: var openArray[char]): int =
           tmpl.nodes[n].hi.int - tmpl.nodes[n].lo.int)
     Steps[c.tmpl.nodes[n].kind](c, n)
 
-proc renderToString*(src: string, root: JinjaVal, clock = 0.0): string =
+proc renderToString(src: string, root: JinjaVal, clock = 0.0): string =
   ## Returns the whole render of `src` over the value `root`, compiling and rendering in one call.
   ##
   ## - compiling happens at the scope that owns `src`, the artifact borrowing the template
   ##   text and never outliving it
   ## - the one-shot entry owns its drain, the render pulled through a stack window
   ##   that is drained until it reports 0
-  let (tmpl, sym) = parseTemplate(src)
-  var c = startRender(tmpl, sym, root, clock)
+  let (tmpl, sym) = parseJinjaTemplate(src)
+  var c = startJinjaRender(tmpl, sym, root, clock)
   var buf: array[4096, char]
   while true:
     let n = pullInto(c, buf)

@@ -46,7 +46,7 @@ type
     ctx: JinjaVal
 
   Compiled = object
-    ## One parsed template plus its bench label, the parse pair of one `parseTemplate` call.
+    ## One parsed template plus its bench label, the parse pair of one `parseJinjaTemplate` call.
     ##
     ## Borrow contract:
     ## `CompiledTemplate.jinja` borrows the template text, so `src` must outlive
@@ -205,7 +205,7 @@ proc anchorRows(suite: string): seq[AnchorRow] =
 
 proc renderOnce(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock = 0.0): string =
   ## Renders once, whole, through the buffered `pullInto` drain loop, exactly as the test suites do.
-  var c = startRender(tmpl, sym, ctx, clock)
+  var c = startJinjaRender(tmpl, sym, ctx, clock)
   var buf: array[4096, char]
   while true:
     let n = pullInto(c, buf)
@@ -301,7 +301,7 @@ when defined(benchAlloc):
     ## Parse-time allocations for one template.
     ## One parse is counted after an uncounted warm-up parse of a tiny template.
     let a = allocsOf:
-      discard parseTemplate(src)
+      discard parseJinjaTemplate(src)
     fmt"{a:8d} allocs/parse"
 
   proc corpusAllocAnchor(suite: string, iters: int): string =
@@ -309,7 +309,7 @@ when defined(benchAlloc):
     ##
     ## - one full warm-up pass over every row, uncounted
     ## - then counted passes, reported per row and as the suite mean
-    let (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let (m, sym) = parseJinjaTemplate(suiteTemplateSource(suite))
     let rs = anchorRows(suite)
     for _ in 0 ..< 3: # warm-up pass over every row, uncounted
       for r in rs:
@@ -342,7 +342,7 @@ when defined(benchAlloc):
     for (name, src) in [("verbatim", tVerbatim), ("for-loop", tLoop),
                         ("for-empty", tLoopEmpty), ("emit", tEmit), ("emit x2", tEmit2),
                         ("emit-const", tEmitConst), ("if/else", tIf), ("tools|tojson", tJson)]:
-      let (m, sym) = parseTemplate(src)
+      let (m, sym) = parseJinjaTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
@@ -354,7 +354,7 @@ when defined(benchAlloc):
                         ("emit-int", "{% for m in messages %}{{ 1 }}{% endfor %}"),
                         ("emit-bracket", "{% for m in messages %}{{ m['content'] }}{% endfor %}"),
                         ("emit-concat", "{% for m in messages %}{{ m.role ~ 'x' }}{% endfor %}")]:
-      let (m, sym) = parseTemplate(src)
+      let (m, sym) = parseJinjaTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
       let a = allocsOf:
         for _ in 0 ..< iters:
@@ -379,8 +379,8 @@ when defined(benchAlloc):
       for _ in 0 ..< 1000:
         discard msg1.d.dictGet("content")
     echo &"  micro dictGet(content)   {dg.float64 / 1000.0:5.2f} allocs/call"
-    let (pm, psyms) = parseTemplate("{{ m.content }}")
-    var pcx = startRender(pm, psyms, ctx, 0.0)
+    let (pm, psyms) = parseJinjaTemplate("{{ m.content }}")
+    var pcx = startJinjaRender(pm, psyms, ctx, 0.0)
     let cv = msg1.d.dictGet("content")
     let pc = allocsOf:
       for _ in 0 ..< 1000:
@@ -404,14 +404,14 @@ proc compileHf(): seq[Compiled] =
   ## Templates in `parseGapLabels` are skipped with a note, any other parse
   ## failure raises and fails the bench.
   when defined(benchAlloc):
-    discard parseTemplate("{% if x %}a{% endif %}") # warm-up parse, uncounted
+    discard parseJinjaTemplate("{% if x %}a{% endif %}") # warm-up parse, uncounted
   for (label, dir) in HfModels:
     if label in parseGapLabels:
       echo &"parse {label:11} SKIP  declared gap, skipped"
       continue
     let path = HfModelsRoot / dir / "chat_template.jinja"
     let src = readFile(path)
-    let (tmpl, sym) = parseTemplate(src)
+    let (tmpl, sym) = parseJinjaTemplate(src)
     when defined(benchAlloc):
       let census = spillCensus(tmpl.nodes)
       echo &"parse {label:11} OK    {tmpl.nodes.len} nodes, {census.summary}, " &
@@ -457,7 +457,7 @@ proc benchCorpus(): void =
   else:
     echo "corpus timing anchor (median of 15 runs, warm-up uncounted)"
     for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-      let (m, sym) = parseTemplate(suiteTemplateSource(suite))
+      let (m, sym) = parseJinjaTemplate(suiteTemplateSource(suite))
       let rs = anchorRows(suite)
       discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
       var best: seq[float64]
@@ -484,7 +484,7 @@ proc renderWindowN(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, 
   ## count accumulated across renders, so the loop consumes every render.
   var buf: array[4096, char]
   for _ in 0 ..< n:
-    var c = startRender(tmpl, sym, ctx, clock)
+    var c = startJinjaRender(tmpl, sym, ctx, clock)
     while true:
       let got = pullInto(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
@@ -495,7 +495,7 @@ proc pullCallsPerPass(tmpl: CompiledTemplate, sym: CompiledSymbols, rs: seq[Anch
   ## Pull calls that returned bytes, one untimed pass over every row.
   var buf: array[4096, char]
   for r in rs:
-    var c = startRender(tmpl, sym, r.ctx, r.clock)
+    var c = startJinjaRender(tmpl, sym, r.ctx, r.clock)
     while true:
       let got = pullInto(c, buf.toOpenArray(0, windowSize - 1))
       if got == 0:
@@ -541,7 +541,7 @@ proc benchPullWindows(): void =
   ## - window sizes 256 B and 4 KiB sit beside the one-shot `renderToString` render
   echo "pull-window timing anchor (median of 15 runs, warm-up uncounted)"
   for (suite, iters) in [("deepseekv2lite", 400), ("qwen3", 150)]:
-    let (m, sym) = parseTemplate(suiteTemplateSource(suite))
+    let (m, sym) = parseJinjaTemplate(suiteTemplateSource(suite))
     let rs = anchorRows(suite)
     discard renderN(m, sym, rs[0].ctx, rs[0].clock, 500) # warm-up pass, not counted
     var line = &"  {suite:14} "

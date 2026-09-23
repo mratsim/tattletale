@@ -46,7 +46,7 @@
 # so a truncated template fails at load with that error, never renders short.
 
 # Public API:
-#   parseTemplate. Every other entry stays parse-tier plumbing between the src modules.
+#   parseJinjaTemplate. Every other entry stays parse-tier plumbing between the src modules.
 
 import cnj_types {.all.}
 import jinja_data_model {.all.}
@@ -791,7 +791,7 @@ proc parseBody(p: var Parser, stopKws: openArray[string]): Head =
     open = fresh
   Head(head: head, tails: open)
 
-proc parseTemplate*(src: string): (CompiledTemplate, CompiledSymbols) =
+proc parseJinjaTemplate(src: string): (CompiledTemplate, CompiledSymbols) =
   ## Compiles template text to the shared artifact plus its `CompiledSymbols`, interned
   ## names built in parse order and read-only at render.
   ##

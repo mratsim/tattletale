@@ -379,7 +379,7 @@ proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock:
   ## Renders through `pullInto` with a `cap`-byte caller buffer, accumulating every fill.
   ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
   ## into the bytes.
-  var c = startRender(m, sym, ctx, clock)
+  var c = startJinjaRender(m, sym, ctx, clock)
   var buf = newSeq[char](cap)
   while true:
     let n = pullInto(c, buf)
@@ -391,7 +391,7 @@ proc renderPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock:
 
 proc renderAllPull(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, clock: float64): string =
   ## Renders whole through the buffered `pullInto` drain loop, a fresh render context.
-  var c = startRender(m, sym, ctx, clock)
+  var c = startJinjaRender(m, sym, ctx, clock)
   var buf: array[4096, char]
   while true:
     let n = pullInto(c, buf)
@@ -419,7 +419,7 @@ proc renderAllSpans(m: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, cl
     text: string, spans: seq[tuple[start, stop: int]]] =
   ## Renders one row whole and returns the bytes plus the driver's recorded generation spans,
   ## byte coordinates into the bytes.
-  var d = startRender(m, sym, ctx, clock)
+  var d = startJinjaRender(m, sym, ctx, clock)
   var buf: array[4096, char]
   while true:
     let n = pullInto(d, buf)
@@ -448,7 +448,7 @@ proc renderChunked[N: static int](m: CompiledTemplate, sym: CompiledSymbols, ctx
   ## Renders one row through `N`-byte windows, accumulating every window.
   ## Returns the render bytes and the driver's recorded generation spans, byte coordinates
   ## into the bytes.
-  var pc = pullChunks[N](startRender(m, sym, ctx, clock))
+  var pc = pullChunks[N](startJinjaRender(m, sym, ctx, clock))
   for w in pc.items():
     for ch in w:
       result.text.add ch
@@ -511,7 +511,7 @@ proc testCorpusDelivery() =
   var errRaised = 0
   for suite in parseable:
     let src = templateSource(suite)
-    let (m, tables) = parseTemplate(src)
+    let (m, tables) = parseJinjaTemplate(src)
     for r in rows(suite):
       if r.expectError:
         # Error outcome, not a wrong success. The match compares the recorded
@@ -601,7 +601,7 @@ proc testCorpusDelivery() =
   # Render invariance under fresh drivers:
   # the same compiled template rendered twice delivers byte-equal output.
   let srcKeep = templateSource("moonlight")
-  let (mKeep, tablesKeep) = parseTemplate(srcKeep)
+  let (mKeep, tablesKeep) = parseJinjaTemplate(srcKeep)
   let rowKeep = rows("moonlight")[0]
   doAssert renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock) ==
       renderAllPull(mKeep, tablesKeep, rowKeep.context, rowKeep.clock),
@@ -648,12 +648,12 @@ proc testWindowContract() =
 proc testBoundaryShapes() =
 
   let src = templateSource("deepseekv2lite")
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
   let want = row.rendered
 
   # A buffer larger than the whole render takes everything in one pull, then reports 0.
-  var dBig = startRender(m, tables, row.context, row.clock)
+  var dBig = startJinjaRender(m, tables, row.context, row.clock)
   var big = newSeq[char](want.len + 1)
   let n1 = pullInto(dBig, big)
   doAssert n1 == want.len, "an oversized buffer took " & $n1 & " of " & $want.len & " bytes"
@@ -661,7 +661,7 @@ proc testBoundaryShapes() =
   doAssert pullInto(dBig, big) == 0, "a completed render kept returning bytes"
 
   # A buffer exactly the render size also drains in one pull.
-  var dExact = startRender(m, tables, row.context, row.clock)
+  var dExact = startJinjaRender(m, tables, row.context, row.clock)
   var exact = newSeq[char](want.len)
   let n2 = pullInto(dExact, exact)
   doAssert n2 == want.len, "an exact-size buffer took " & $n2 & " of " & $want.len & " bytes"
@@ -669,7 +669,7 @@ proc testBoundaryShapes() =
   doAssert pullInto(dExact, exact) == 0, "a completed render kept returning bytes"
 
   # A 1-byte buffer gives every byte its own pull, which forces mid-piece drains.
-  var dOne = startRender(m, tables, row.context, row.clock)
+  var dOne = startJinjaRender(m, tables, row.context, row.clock)
   var one: array[1, char]
   var acc = ""
   while true:
@@ -681,7 +681,7 @@ proc testBoundaryShapes() =
   doAssert acc == want, "the 1-byte render differs from the recorded bytes"
 
   # A consumer that stops mid-drain and resumes never re-receives a byte.
-  var dStop = startRender(m, tables, row.context, row.clock)
+  var dStop = startJinjaRender(m, tables, row.context, row.clock)
   var window = newSeq[char](16)
   var head = ""
   block stopEarly:
@@ -707,10 +707,10 @@ proc testBoundaryShapes() =
 proc testZeroCapacityBuffer() =
 
   let src = templateSource("deepseekv2lite")
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
 
-  var d = startRender(m, tables, row.context, row.clock)
+  var d = startJinjaRender(m, tables, row.context, row.clock)
   var empty: array[0, char]
   doAssert pullInto(d, empty) == 0, "a zero-capacity buffer did not report 0"
 
@@ -732,9 +732,9 @@ proc testPartialConsumptionResumes() =
 
   for suite in ["moonlight", "qwen3"]:
     let src = templateSource(suite)
-    let (m, tables) = parseTemplate(src)
+    let (m, tables) = parseJinjaTemplate(src)
     let r = rows(suite)[0]
-    var pc = pullChunks[7](startRender(m, tables, r.context, r.clock))
+    var pc = pullChunks[7](startJinjaRender(m, tables, r.context, r.clock))
     var head = ""
     var stoppedMidPiece = false
     for w in pc.items():
@@ -779,9 +779,9 @@ proc testLazyWindowDrain() =
 
   let ctx = listCtx()
   let src = "{{ m }}"
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
 
-  var d = startRender(m, tables, ctx, 0.0)
+  var d = startJinjaRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var lazyPieces = 0
@@ -804,10 +804,10 @@ proc testConcatWindowDrain() =
 
   let ctx = listCtx()
   let src = "{{ m ~ '::' ~ m }}"
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let want = listRepr & "::" & listRepr
 
-  var d = startRender(m, tables, ctx, 0.0)
+  var d = startJinjaRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var lazyPulls = 0
@@ -840,7 +840,7 @@ proc testValueBoundary() =
   dictSet(ctxd, "messages", seqVal(msgs))
   let ctx = dictVal(ctxd)
 
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == longA & longB, "the string render is not the contents concatenation"
 
@@ -859,12 +859,12 @@ proc testSpanDrain() =
   var ctxd = DictVal()
   dictSet(ctxd, "m", strVal("emit"))
   let ctx = dictVal(ctxd)
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let want = renderToString(src, ctx, 0.0)
   doAssert want == verbatim & "emit", "the string render is not the expected bytes"
 
   # A window far below the verbatim run forces span pieces through several pulls.
-  var d = startRender(m, tables, ctx, 0.0)
+  var d = startJinjaRender(m, tables, ctx, 0.0)
   var window = newSeq[char](8)
   var acc = ""
   var spanPulls = 0
@@ -894,7 +894,7 @@ proc testFilterRaiseRepull() =
   let ctx = dictVal(cd)
   # `x[0]` raises on the integer item and passes the strings through the filter comparison.
   let src = "pre{% for x in xs if x[0] == 'a' %}[{{ x }}]{% endfor %}post"
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let want = "pre[aa][ab]post"
   # One-shot render propagates the same raise, the filtered strings never reaching it.
   try:
@@ -903,7 +903,7 @@ proc testFilterRaiseRepull() =
   except JinjaError as e:
     doAssert "not subscriptable" in e.what, e.what
 
-  var d = startRender(m, tables, ctx, 0.0)
+  var d = startJinjaRender(m, tables, ctx, 0.0)
   var win1 = newSeq[char](1)
   var acc = ""
   var raised = false
@@ -934,7 +934,7 @@ proc testFilterRaiseRepull() =
   # Wide window. The prefix and the failed item's evaluation land in one call, whose
   # window bytes are discarded and never reach the caller. The repull resumes after them,
   # discarded prefix included.
-  var dWide = startRender(m, tables, ctx, 0.0)
+  var dWide = startJinjaRender(m, tables, ctx, 0.0)
   var wide = newSeq[char](64)
   var wideAcc = ""
   var wideRaised = false
@@ -1029,7 +1029,7 @@ template allocsOf(body: untyped): int =
 proc testAllocDrainWindow() =
 
   let src = templateSource("deepseekv2lite")
-  let (m, tables) = parseTemplate(src)
+  let (m, tables) = parseJinjaTemplate(src)
   let row = loadRow("deepseekv2lite", "assistant_history")
 
   # Warm-up renders, uncounted:
@@ -1041,7 +1041,7 @@ proc testAllocDrainWindow() =
 
   # A pullInto call that enters on a pending piece with bytes left only drains it, no step runs,
   # so it must allocate nothing.
-  var d = startRender(m, tables, row.context, row.clock)
+  var d = startJinjaRender(m, tables, row.context, row.clock)
   var one: array[1, char]
   var acc = ""
   var drainCalls = 0
@@ -1064,7 +1064,7 @@ proc testAllocDrainWindow() =
   # the pullInto path against the string path, whose count also covers parsing the template
   # and therefore bounds the pull total from above. The counted render
   # pulls into the test's own 7-byte buffer, exercising the smallest-window path.
-  var dTotal = startRender(m, tables, row.context, row.clock)
+  var dTotal = startJinjaRender(m, tables, row.context, row.clock)
   var seven: array[7, char]
   let pullAllocs = allocsOf:
     while true:
@@ -1121,7 +1121,7 @@ proc testAllocMicro() =
 
   template countRenders(src: string, n: int): int =
     ## Warms one pull render uncounted, then totals `n` pull renders through `getAllocStats()` deltas.
-    let (m, tables) = parseTemplate(src)
+    let (m, tables) = parseJinjaTemplate(src)
     let want = renderToString(src, ctx, 0.0)
     doAssert renderAllPull(m, tables, ctx, 0.0) == want,
         "the micro pullInto render differs from the string render for " & src
@@ -1193,10 +1193,10 @@ proc testAllocSerializer() =
   var cd = DictVal()
   dictSet(cd, "tools", tools)
   let ctx = dictVal(cd)
-  let (m, tables) = parseTemplate(tJson)
+  let (m, tables) = parseJinjaTemplate(tJson)
   let want = renderToString(tJson, ctx, 0.0)
 
-  var dWarm = startRender(m, tables, ctx, 0.0)
+  var dWarm = startJinjaRender(m, tables, ctx, 0.0)
   var bufWarm = newSeq[char](256)
   var warm = ""
   while true:
@@ -1209,7 +1209,7 @@ proc testAllocSerializer() =
   var buf = newSeq[char](256)
   var renderAllocs = 0
   for _ in 0 ..< iters:
-    var di = startRender(m, tables, ctx, 0.0)
+    var di = startJinjaRender(m, tables, ctx, 0.0)
     let renderCost = allocsOf:
       while true:
         let n = pullInto(di, buf)
@@ -1233,9 +1233,9 @@ proc testAllocSerializer() =
   template countRenders(src: string, n: int): int =
     ## Warms one pull render uncounted, then totals `n` renders through
     ## `getAllocStats()` deltas with one driver per render, as above.
-    var (mm, ts) = parseTemplate(src)
+    var (mm, ts) = parseJinjaTemplate(src)
     let wantLocal = renderToString(src, loopCtx, 0.0)
-    var dWarm2 = startRender(mm, ts, loopCtx, 0.0)
+    var dWarm2 = startJinjaRender(mm, ts, loopCtx, 0.0)
     var bufWarm2 = newSeq[char](256)
     var accWarm = ""
     while true:
@@ -1246,7 +1246,7 @@ proc testAllocSerializer() =
     doAssert accWarm == wantLocal, "the micro render differs for " & src
     var total = 0
     for _ in 0 ..< n:
-      var di = startRender(mm, ts, loopCtx, 0.0)
+      var di = startJinjaRender(mm, ts, loopCtx, 0.0)
       var bi = newSeq[char](256)
       let renderCost = allocsOf:
         while true:

@@ -25,10 +25,10 @@ const
     ## Argument capacity of one call's `Args`, past it `SmallSeq` spills to the heap.
 
 const
-  TTT_CNJ_RangeElemCap* {.intdefine.} = 1_000_000
+  TTT_CNJ_RangeElemCap {.intdefine.} = 1_000_000
     ## Element bound of one lazy `range`, checked eagerly at construction and at every
     ## count or drain, a breach raising a located `JinjaError`.
-  TTT_CNJ_ValueDepthCap* {.intdefine.} = 1000
+  TTT_CNJ_ValueDepthCap {.intdefine.} = 1000
     ## Recursion bound over the value graph fed host-provided data, corpus nesting
     ## in the single digits. Every walker raises a `JinjaError` on breach, located
     ## where a template position is in scope.
@@ -48,7 +48,7 @@ type
     ## to classify a declared construct, registry name or filter demand.
     ceNone, ceRaiseCall, ceUnimplemented, ceWindow
 
-  JinjaError* = ref object of CatchableError
+  JinjaError = ref object of CatchableError
     ## Template-level failure, the one error type the engine raises.
     ## The message lives in `what`, the inherited `msg` staying empty.
     offset*: int
@@ -79,7 +79,7 @@ type
     ## Shared sequence of values, the `vkSeq` payload.
     items*: seq[JinjaVal]
 
-  DictVal* = ref object
+  DictVal = ref object
     ## Insertion-ordered mapping, `vkNs` reusing it, every holder sharing one reference so changes reach all.
     keys*: seq[string]
     vals*: seq[JinjaVal]
@@ -127,7 +127,7 @@ type
     body*: int32
     node*: int32
 
-  JinjaVal* = object
+  JinjaVal = object
     ## One Jinja value, discriminated by `kind`.
     case kind*: ValueKind
     of vkUndefined, vkNone: nil
@@ -147,7 +147,7 @@ type
       lo*, hi*: int32
         ## byte bounds of the surviving sub-span, rendering as `raw[lo ..< hi]`
 
-  JsonOpts* = object
+  JsonOpts = object
     ## `tojson` knobs the corpus passes, `ensure_ascii` and `separators`.
     ## `ensureAscii` defaults to false, non-ASCII emitted as raw UTF-8.
     ensureAscii*: bool = false
@@ -269,30 +269,30 @@ func addRune(sb: var Cursor, r: Rune) =
     sb.add char(0x80 or ((c shr 6) and 0x3F))
     sb.add char(0x80 or (c and 0x3F))
 
-func undefinedVal*(): JinjaVal =
+func undefinedVal(): JinjaVal =
   ## Returns the absent-binding value, rendering empty, failing truthiness, equaling only itself.
   JinjaVal(kind: vkUndefined)
 
-func noneVal*(): JinjaVal =
+func noneVal(): JinjaVal =
   ## Returns Python's `None`, rendering `None`, failing truthiness, distinct from undefined.
   JinjaVal(kind: vkNone)
 
-func boolVal*(b: bool): JinjaVal = JinjaVal(kind: vkBool, b: b)
-func intVal*(i: int64): JinjaVal = JinjaVal(kind: vkInt, i: i)
-func intVal*(i: int): JinjaVal = JinjaVal(kind: vkInt, i: int64 i)
-func floatVal*(f: float64): JinjaVal = JinjaVal(kind: vkFloat, f: f)
-func strVal*(s: string): JinjaVal = JinjaVal(kind: vkStr, s: s)
-func seqVal*(xs: seq[JinjaVal]): JinjaVal = JinjaVal(kind: vkSeq, xs: SeqVal(items: xs))
-func dictVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkDict, d: d)
-func nsVal*(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
+func boolVal(b: bool): JinjaVal = JinjaVal(kind: vkBool, b: b)
+func intVal(i: int64): JinjaVal = JinjaVal(kind: vkInt, i: i)
+func intVal(i: int): JinjaVal = JinjaVal(kind: vkInt, i: int64 i)
+func floatVal(f: float64): JinjaVal = JinjaVal(kind: vkFloat, f: f)
+func strVal(s: string): JinjaVal = JinjaVal(kind: vkStr, s: s)
+func seqVal(xs: seq[JinjaVal]): JinjaVal = JinjaVal(kind: vkSeq, xs: SeqVal(items: xs))
+func dictVal(d: DictVal): JinjaVal = JinjaVal(kind: vkDict, d: d)
+func nsVal(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
 func loopVal(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
 func macroVal(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
 func callVal(pc: DeferredMacroCall): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
-func rangeVal*(start, stop, step: int64): JinjaVal =
+func rangeVal(start, stop, step: int64): JinjaVal =
   ## Returns the lazy range value over `start`, `stop` and `step`.
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))
 
-func cutVal*(s: sink string, lo, hi: int32): JinjaVal =
+func cutVal(s: sink string, lo, hi: int32): JinjaVal =
   ## Returns the stripped cut of `s`, rendering as the bytes of `s[lo ..< hi]`:
   ## - `s` moves in, so the cut shares the source's buffer
   ## - the cut materializes its string only where a consumer stores or re-computes it
@@ -458,7 +458,7 @@ func isTruthy(v: JinjaVal, at: int = NoOffset): bool =
   of vkMacro: true
   of vkCall: raise jinjaErr("a macro call result must be rendered before a truthiness test", at)
 
-func dictGet*(d: DictVal, key: openArray[char]): JinjaVal =
+func dictGet(d: DictVal, key: openArray[char]): JinjaVal =
   ## Returns the value under `key`, undefined when absent. Absence is a value, never an error:
   ##   that is what makes `is defined` and `.get` fall back work. Comparison reads `key` in place,
   ##   a span lookup allocating nothing.
@@ -467,7 +467,7 @@ func dictGet*(d: DictVal, key: openArray[char]): JinjaVal =
       return d.vals[i]
   undefinedVal()
 
-func dictSet*(d: DictVal, key: string, val: JinjaVal) =
+func dictSet(d: DictVal, key: string, val: JinjaVal) =
   ## Binds `key`, replacing in place so every holder of the same DictVal observes the change.
   for i, k in d.keys:
     if k == key:
@@ -555,7 +555,7 @@ func eqValAt(a, b: JinjaVal, depth: int, offset: int): bool =
   of vkCut: false
   of vkUndefined, vkBool, vkInt, vkFloat: false
 
-func eqVal*(a, b: JinjaVal, offset = NoOffset): bool =
+func eqVal(a, b: JinjaVal, offset = NoOffset): bool =
   ## Returns Jinja `==`:
   ## - numbers compare across tiers, containers element-wise, undefined
   ##   equaling only undefined

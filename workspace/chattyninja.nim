@@ -4,7 +4,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Chattyninja entry point.
-## Re-exports the package umbrella at `workspace/chattyninja/chattyninja.nim`.
+## Re-exports the package public API at `workspace/chattyninja/cnj_public_api.nim`.
 
-import workspace/chattyninja/chattyninja
-export chattyninja
+import workspace/chattyninja/cnj_public_api
+export cnj_public_api

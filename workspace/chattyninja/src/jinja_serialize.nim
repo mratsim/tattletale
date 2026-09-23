@@ -513,7 +513,7 @@ func pyStr(v: JinjaVal): string =
   var js = serValue(v, smStr)
   serString(js)
 
-func toJson*(v: JinjaVal, opts = JsonOpts()): string =
+func toJson(v: JinjaVal, opts = JsonOpts()): string =
   ## Returns the `tojson` filter rendering, non-ASCII as raw UTF-8 unless the template
   ## passes `ensure_ascii`, Jinja's HTML escaping applied as the filter's post-pass.
   ## Caller-side drain-and-grow over the serializer, no presize pass.

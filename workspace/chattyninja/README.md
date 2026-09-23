@@ -34,11 +34,11 @@ The corpus carries the ground truth, so no tokenizer or model call happens at te
 
 ## Pull API
 
-`parseTemplate(src)` compiles template text once into the shared render artifact,
+`parseJinjaTemplate(src)` compiles template text once into the shared render artifact,
 the `(CompiledTemplate, CompiledSymbols)` pair. The artifact borrows the template
 text and is read-only at render, so one pair serves any number of renders.
 
-`startRender(tmpl, sym, root, clock)` returns a fresh `Context` over the artifact,
+`startJinjaRender(tmpl, sym, root, clock)` returns a fresh `Context` over the artifact,
 ready to render the context dict `root`. `clock` is the epoch `strftime_now` reads.
 
 `pull(context, buf)` writes the render's next bytes into a caller-owned presized
