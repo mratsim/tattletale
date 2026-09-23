@@ -33,48 +33,7 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# ─── Module-local bf16 row-bounded tile load ─────────────────────────
-# tile_io_rows ships fp16 variants only, the bf16 guard lives module-local
-# (the ffn_silu and grouped_query_attention_paged precedent)
 # The router writes ids and weights elementwise, so it needs no bounded store
-
-proc loadTileRowsBf16[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[bfloat16, R, C, A],
-    gl: GlView[bfloat16],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for bf16 tiles:
-  ## tile plane rows origin[2]·R + r at or above `rowLimit` are zero-filled, not read.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  let src = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
-          tile.frags[n][m].frag[v] = src[row + n * M, col + m * N + v]
-        else:
-          tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
-
-proc loadRowsE[El; R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[El, R, C, A],
-    gl: GlView[El],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for the 16-bit storage element El:
-  ## the tile_io_rows fp16 proc or the module-local bf16 guard.
-  when El is bfloat16:
-    loadTileRowsBf16(tile, gl, origin, rowLimit)
-  else:
-    tile.loadTileRows(gl, origin, rowLimit)
 
 # ─── Local device extensions: the score passes ───────────────────────
 
@@ -283,7 +242,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   for cs in 0'i32 ..< E div 64:
     dR.zero()
     for kk in 0'i32 ..< H div 16:
-      a.loadRowsE(glX, (t, 0, 0, kk), 1)
+      a.loadTileRows(glX, (t, 0, 0, kk), 1)
       b64.loadTile(glRouter, (0, 0, cs, kk))
       dR.mma_AB(a, b64)
     scores.gatherScores(dR, cs)
@@ -349,7 +308,7 @@ proc sharedGateLogit*[El; H: static int](
   var b: rt_r(El, 16, 8)
   sg.zero()
   for kk in 0'i32 ..< H div 16:
-    a.loadRowsE(glX, (t, 0, 0, kk), 1)
+    a.loadTileRows(glX, (t, 0, 0, kk), 1)
     b.loadTile(glSgw, (0, 0, 0, kk))
     sg.mma_AB(a, b)
   result = simdShuffle(sg.frags[0][0].frag[0], 0'u32)

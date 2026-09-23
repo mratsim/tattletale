@@ -42,84 +42,10 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# ─── Module-local row-bounded tile io over the 16-bit element ────────
-# tile_io_rows ships fp16 variants only, so the bf16 guards live
-# module-local (the silu_and_mul and moe_fwd precedent).
-# The loadRowsE/storeRowsE dispatchers follow the moe_fwd E-generic spelling.
-
-proc loadTileRowsBf16[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[bfloat16, R, C, A],
-    gl: GlView[bfloat16],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ##  Row-bounded loadTile for bf16 tiles: `tile-plane rows`
-  ## origin[2]·R + r at or above `rowLimit` are zero-filled, not read.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  let src = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
-          tile.frags[n][m].frag[v] = src[row + n * M, col + m * N + v]
-        else:
-          tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
-
-proc storeTileRowsBf16[R, C: static int; A: static MmaAtom](
-    gl: GlView[bfloat16],
-    tile: RtLeft[bfloat16, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ##  Row-bounded storeTile for bf16 tiles: `tile-plane rows`
-  ## origin[2]·R + r at or above `rowLimit` are not written.
-  const M = A.getM()
-  const N = A.getN()
-  const rowTiles = R div M
-  const colTiles = C div N
-  const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let row = cell mod M
-  let col = cell div M
-  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
-  var dst = local_tile_dyn(gl, R, C, o)
-  for n in 0 ..< rowTiles:
-    if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
-
-proc loadRowsE[El; R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[El, R, C, A],
-    gl: GlView[El],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ##  Row-bounded loadTile dispatching to the `tile_io_rows' fp16` proc
-  ##  or the module-local bf16 guard, for the 16-bit element El.
-  when El is bfloat16:
-    loadTileRowsBf16(tile, gl, origin, rowLimit)
-  else:
-    tile.loadTileRows(gl, origin, rowLimit)
-
-proc storeRowsE[El; R, C: static int; A: static MmaAtom](
-    gl: GlView[El],
-    tile: RtLeft[El, R, C, A],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for the 16-bit element El.
-  when El is bfloat16:
-    storeTileRowsBf16(gl, tile, origin, rowLimit)
-  else:
-    gl.storeTileRows(tile, origin, rowLimit)
-
+# ─── Row-bounded tile io ─────────────────────────────────────────────
+# tile_io_rows' loadTileRows/storeTileRows cover every 16-bit element:
+# the load guards each element before the access, rows past `rowLimit`
+# are zero-filled and never read.
 # ─── Local device extensions ─────────────────────────────────────────
 
 proc roundStoreElem[El; R, C: static int; A: static MmaAtom](
@@ -188,8 +114,8 @@ proc dense_linear_tile_fwd*[El; N, K, TileC: static int](
   var b: rt_r(El, 16, TileC)
   acc.zero()
   for kk in 0'i32 ..< K div 16:
-    a.loadRowsE(gdX, (r0, 0, 0, kk), rem)
+    a.loadTileRows(gdX, (r0, 0, 0, kk), rem)
     b.loadTile(gdW, (0, 0, tx, kk))
     acc.mma_AB(a, b)
   roundStoreElem(outT, acc)
-  gdOut.storeRowsE(outT, (r0, 0, 0, tx), rem)
+  gdOut.storeTileRows(outT, (r0, 0, 0, tx), rem)
