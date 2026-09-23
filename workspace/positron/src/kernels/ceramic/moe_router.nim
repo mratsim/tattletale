@@ -8,7 +8,7 @@
 # ──────────────────  moe_router (the Qwen softmax routing op)  ──────────────────
 
 ## Qwen3.5/3.6 MoE router on the ceramic Tile API, the qwen35_moe mega decode kernel's softmax routing form.
-## GLM sigmoid form stays in `moe_fwd.nim`, out of contract here.
+## GLM sigmoid form stays in `ffn_moe.nim`, out of contract here.
 ##
 ## | contract    | value                                                                                                             |
 ## | ----------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -18,7 +18,7 @@
 ## | shapes      | E a multiple of the 64-expert chunk, H a multiple of the 16-wide K step and of the 32-wide merge lane tile        |
 ## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge` grid (T, H div 32, 1)                              |
 ##
-## Shared internals with `moe_fwd.nim`:
+## Shared internals with `ffn_moe.nim`:
 ##
 ## | aspect     | value                                                                                                 |
 ## | ---------- | ----------------------------------------------------------------------------------------------------- |
@@ -35,7 +35,7 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Module-local bf16 row-bounded tile load ─────────────────────────
 # tile_io_rows ships fp16 variants only, the bf16 guard lives module-local
-# (the silu_and_mul and paged_attn precedent)
+# (the ffn_silu and grouped_query_attention_paged precedent)
 # The router writes ids and weights elementwise, so it needs no bounded store
 
 proc loadTileRowsBf16[R, C: static int; A: static MmaAtom](

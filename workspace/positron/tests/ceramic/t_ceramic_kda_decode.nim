@@ -99,7 +99,7 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/sequence_mixers/state_space/kda/kda_decode_single
-import ../../src/kernels/ceramic/sequence_mixers/state_space/gdn/gdn_decode_single
+import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_kda

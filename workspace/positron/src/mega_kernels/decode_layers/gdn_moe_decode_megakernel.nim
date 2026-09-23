@@ -54,12 +54,12 @@
 from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
-import ../../kernels/ceramic/dense_linear
+import ../../kernels/ceramic/linear
 import ../../kernels/ceramic/tile_widen
-import ../../kernels/ceramic/moe_fwd_decode
+import ../../kernels/ceramic/ffn_moe_decode_single
 import ../../kernels/ceramic/moe_router
-import ../../kernels/ceramic/o_norm_gated
-import ../../kernels/ceramic/sequence_mixers/state_space/gdn/gdn_decode_single
+import ../../kernels/ceramic/attn_ssm/gated_delta_net_o_norm
+import ../../kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -274,7 +274,7 @@ proc softplusDev(x: float32): float32 {.device.} =
 
 proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) {.device.} =
   ## One threadgroup's pass over the (Hidden) norm row in the bias-one RmsNormOne
-  ## spelling. The scalar spelling stays local, rms_norm_res_in's fp16
+  ## spelling. The scalar spelling stays local, norm.nim's fp16
   ## exllamav3 residual+norm chain does not serve the recorded bf16 contract.
   ##
   ## | aspect    | contract                                                                                            |
@@ -340,7 +340,7 @@ proc f32InvSqrt(x: float32): float32 {.device.} =
 
 proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   ## One l2-normalized row in the recorded chain's rounding pipeline.
-  ## The scalar spelling stays local, qk_norm_rope's tile-op l2 chain
+  ## The scalar spelling stays local, grouped_query_attention_qk_norm_rope's tile-op l2 chain
   ## does not serve this rounding pipeline.
   ##
   ## | step                | rounding                                                    |

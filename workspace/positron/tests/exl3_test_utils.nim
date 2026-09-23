@@ -9,7 +9,7 @@
 ## trellis dequant reference (funnel window, codebook decode table,
 ## tensor-core shuffle) that rebuilds the [K, N] fp16 weight matrix the
 ## fused kernels dequantize on the fly, and the torch FWHT-128 plus the
-## worst-difference metric the manual_exl3_* tests share.
+## worst-difference metric the manual linear_exl3_* tests share.
 
 import std/bitops
 import workspace/libtorch

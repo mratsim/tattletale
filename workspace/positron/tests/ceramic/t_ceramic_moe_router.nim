@@ -69,7 +69,7 @@ import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/moe_router
-import ../../src/kernels/ceramic/moe_fwd_decode
+import ../../src/kernels/ceramic/ffn_moe_decode_single
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
