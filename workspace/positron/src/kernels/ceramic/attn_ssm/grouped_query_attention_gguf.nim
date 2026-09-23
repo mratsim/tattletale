@@ -4,6 +4,9 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# TODO - manual_grouped_query_attention_gguf_fp16 fails its Metal run (Metal library compile fails)
+#   fix owned by the runtime-dims genericity pass over this kernel
+
 
 # ############################################################
 #

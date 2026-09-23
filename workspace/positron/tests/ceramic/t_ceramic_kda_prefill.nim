@@ -118,7 +118,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/sequence_mixers/state_space/kda/kda_prefill
+import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_prefill
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_kda

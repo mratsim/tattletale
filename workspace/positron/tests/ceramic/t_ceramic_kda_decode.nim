@@ -9,7 +9,7 @@
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_kda_decode.nim
 ##
-## Ceramic KDA decode step suite, `src/kernels/ceramic/sequence_mixers/state_space/kda/kda_decode_single.nim`
+## Ceramic KDA decode step suite, `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single.nim`
 ## compared per element against the naive `kdaDecodeStep`:
 ## - the naive reference is per-sequence, B sequences take B independent naive calls
 ## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
@@ -98,7 +98,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/sequence_mixers/state_space/kda/kda_decode_single
+import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 import ../naive/naive_rng
 import ../naive/naive_tensors

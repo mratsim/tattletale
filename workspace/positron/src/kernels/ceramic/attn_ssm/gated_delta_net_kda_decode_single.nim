@@ -54,7 +54,7 @@
 ## - the f32 state buffer persists across steps and launches with no in-kernel reset,
 ##   the host owns the layout and the lifetime
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
-from ../../../math_consts import Log2e
+from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
