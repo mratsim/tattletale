@@ -23,7 +23,7 @@ import ./tiles
 template shardShape*[R, C: static int; A: static MmaAtom](): untyped =
   ## Per-lane shape of an epilogue operand view: (rowTiles, colTiles, vpt).
   (Int[R div A.getM()](), Int[C div A.getN()](),
-   Int[toIntVal(A.valuesPerThread(opC))]())
+   Int[A.valuesPerThread(opC).toIntVal()]())
 
 template shardStrides*[R, C: static int; A: static MmaAtom](
     strideRow, strideCol: static int): untyped =
@@ -45,7 +45,7 @@ template shardView*[T; R, C: static int; A: static MmaAtom](
                 uint32(cell div A.getM()) * uint32(strideCol)
   make_view(buf +% baseOff,
             make_layout((Int[R div A.getM()](), Int[C div A.getN()](),
-                         Int[toIntVal(A.valuesPerThread(opC))]()),
+                         Int[A.valuesPerThread(opC).toIntVal()]()),
                         (Int[A.getM() * strideRow](), Int[A.getN() * strideCol](),
                          Int[strideCol]())))
 

@@ -131,7 +131,7 @@ proc kdaDecodeStepTileAt*[T](
   # the exp2 form (see the module doc), one tile mul into the state.
   # gT is dead past the decay, the output walk uses its own oProd tile.
   gT.mul(gT, Log2e)
-  exp2(gT, gT)
+  gT.exp2(gT)
   s.mul(s, gT)
 
   # kv_mem[row] = Σ_dkc decayed[row][dkc]·k[dkc] over the decayed state, the k

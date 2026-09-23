@@ -58,9 +58,9 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
   ## Ragged shapes with gmem-operand epilogues go through the bounded procs
   ## below (gemm, linear, linear_relu), which load their operands into
   ## bounded register tiles.
-  let gd_a = gd(A, shape = (1, 1, N, K), stride = (0, 0, rsa, csa))
-  let gd_b = gd(B, shape = (1, 1, M, K), stride = (0, 0, csb, rsb))
-  let gd_d = gd(D, shape = (1, 1, N, M), stride = (0, 0, rsd, csd))
+  let gd_a = A.gd(shape = (1, 1, N, K), stride = (0, 0, rsa, csa))
+  let gd_b = B.gd(shape = (1, 1, M, K), stride = (0, 0, csb, rsb))
+  let gd_d = D.gd(shape = (1, 1, N, M), stride = (0, 0, rsd, csd))
 
   const TileDim = 32
   const tileK = 16
@@ -77,13 +77,13 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
 
   let kTiles = (K + int32(tileK) - 1) div int32(tileK)
   for k in 0'i32 ..< kTiles:
-    loadTileBounded(a_rtl, gd_a, (0, 0, OUTPUT_Y, k), N, K)
-    loadTileBounded(b_rtr, gd_b, (0, 0, OUTPUT_X, k), M, K)
+    a_rtl.loadTileBounded(gd_a, (0, 0, OUTPUT_Y, k), N, K)
+    b_rtr.loadTileBounded(gd_b, (0, 0, OUTPUT_X, k), M, K)
     d_rtl.mma_AB(a_rtl, b_rtr)
 
-  var o = shard(epi, buf1, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
+  var o = epi.shard(buf1, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
   o.apply(d_rtl, d_rtl)
-  storeTileMasked(gd_d, d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)
+  gd_d.storeTileMasked( d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)
 
 proc gemm_with_epilogue*[TIn, TOut; Epi](
     D: ptr UncheckedArray[TOut], rsd, csd: int32,
@@ -130,10 +130,10 @@ proc gemm_with_bias_epilogue*[TIn, TOut; Epi](
   ##     past the column count, and the masked store drops those lanes anyway
   const TileDim = 32
   const tileK = 16
-  let gd_a = gd(A, shape = (1, 1, N, K), stride = (0, 0, K, 1))
-  let gd_b = gd(B, shape = (1, 1, M, K), stride = (0, 0, 1, M))
-  let gd_d = gd(D, shape = (1, 1, N, M), stride = (0, 0, M, 1))
-  let gd_bias = gd(Bias, shape = (1, 1, N, M), stride = (0, 0, 0, 1))
+  let gd_a = A.gd(shape = (1, 1, N, K), stride = (0, 0, K, 1))
+  let gd_b = B.gd(shape = (1, 1, M, K), stride = (0, 0, 1, M))
+  let gd_d = D.gd(shape = (1, 1, N, M), stride = (0, 0, M, 1))
+  let gd_bias = Bias.gd(shape = (1, 1, N, M), stride = (0, 0, 0, 1))
 
   var a_rtl: rt_l(TIn, TileDim, tileK)
   var b_rtr: rt_r(TIn, tileK, TileDim)
@@ -147,18 +147,18 @@ proc gemm_with_bias_epilogue*[TIn, TOut; Epi](
 
   let kTiles = (K + int32(tileK) - 1) div int32(tileK)
   for k in 0'i32 ..< kTiles:
-    loadTileBounded(a_rtl, gd_a, (0, 0, OUTPUT_Y, k), N, K)
-    loadTileBounded(b_rtr, gd_b, (0, 0, OUTPUT_X, k), M, K)
+    a_rtl.loadTileBounded(gd_a, (0, 0, OUTPUT_Y, k), N, K)
+    b_rtr.loadTileBounded(gd_b, (0, 0, OUTPUT_X, k), M, K)
     d_rtl.mma_AB(a_rtl, b_rtr)
 
   var bias_rtl: rt_l(float32, TileDim, TileDim, getTileConfig(float32, TIn))
-  loadTileBounded(bias_rtl, gd_bias, (0, 0, OUTPUT_Y, OUTPUT_X), N, M)
+  bias_rtl.loadTileBounded(gd_bias, (0, 0, OUTPUT_Y, OUTPUT_X), N, M)
 
   # The bias shard of `epi` is a type-compatibility placeholder, the bounded
   # register tile feeds the apply, so bias_gmem is never dereferenced.
-  var o = shard(epi, Bias, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
+  var o = epi.shard(Bias, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
   o.apply(d_rtl, d_rtl, bias_rtl)
-  storeTileMasked(gd_d, d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)
+  gd_d.storeTileMasked( d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)
 
 proc linear*[TIn, TOut](D: ptr UncheckedArray[TOut], A, B: ptr UncheckedArray[TIn],
                         Bias: ptr UncheckedArray[float32], N, K, M: int32) {.device.} =
@@ -191,10 +191,10 @@ proc gemm*[TIn, TOut](D: ptr UncheckedArray[TOut],
   ##     masked at the real M×N extent, β = 0 skips the C load
   const TileDim = 32
   const tileK = 16
-  let gd_a = gd(A, shape = (1, 1, M, K), stride = (0, 0, rsa, csa))
-  let gd_b = gd(B, shape = (1, 1, N, K), stride = (0, 0, csb, rsb))
-  let gd_c = gd(C, shape = (1, 1, M, N), stride = (0, 0, rsc, csc))
-  let gd_d = gd(D, shape = (1, 1, M, N), stride = (0, 0, N, 1))
+  let gd_a = A.gd(shape = (1, 1, M, K), stride = (0, 0, rsa, csa))
+  let gd_b = B.gd(shape = (1, 1, N, K), stride = (0, 0, csb, rsb))
+  let gd_c = C.gd(shape = (1, 1, M, N), stride = (0, 0, rsc, csc))
+  let gd_d = D.gd(shape = (1, 1, M, N), stride = (0, 0, N, 1))
 
   var a_rtl: rt_l(TIn, TileDim, tileK)
   var b_rtr: rt_r(TIn, tileK, TileDim)
@@ -208,14 +208,14 @@ proc gemm*[TIn, TOut](D: ptr UncheckedArray[TOut],
 
   let kTiles = (K + int32(tileK) - 1) div int32(tileK)
   for k in 0'i32 ..< kTiles:
-    loadTileBounded(a_rtl, gd_a, (0, 0, OUTPUT_Y, k), M, K)
-    loadTileBounded(b_rtr, gd_b, (0, 0, OUTPUT_X, k), N, K)
+    a_rtl.loadTileBounded(gd_a, (0, 0, OUTPUT_Y, k), M, K)
+    b_rtr.loadTileBounded(gd_b, (0, 0, OUTPUT_X, k), N, K)
     d_rtl.mma_AB(a_rtl, b_rtr)
 
   var c_rtl: rt_l(float32, TileDim, TileDim, getTileConfig(float32, TIn))
   if beta != 0.0'f32:
-    loadTileBounded(c_rtl, gd_c, (0, 0, OUTPUT_Y, OUTPUT_X), M, N)
+    c_rtl.loadTileBounded(gd_c, (0, 0, OUTPUT_Y, OUTPUT_X), M, N)
 
-  var o = shard(initEpiAXPBY(alpha, beta, C, rsc, csc), C, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
+  var o = initEpiAXPBY(alpha, beta, C, rsc, csc).shard(C, (0, 0, OUTPUT_Y, OUTPUT_X), d_rtl)
   o.apply(d_rtl, d_rtl, c_rtl)
-  storeTileMasked(gd_d, d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)
+  gd_d.storeTileMasked( d_rtl, (0, 0, OUTPUT_Y, OUTPUT_X), validM, validN)

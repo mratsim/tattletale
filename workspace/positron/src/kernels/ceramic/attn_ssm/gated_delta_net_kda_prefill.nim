@@ -181,7 +181,7 @@ proc kdaPrefillChunkScanAt*[El](
           for f in 0 ..< vpt:
             dT.frags[n][m].frag[f] = cumulogdecayT.frags[n][m].frag[f]
       dT.mul(dT, Log2e)
-      exp2(dT, dT)
+      dT.exp2(dT)
 
       # G_t = Σ_dk dT[dk]·k_t[dk]·S_carry[row][dk], the decayed carry read
       # against the key, BEFORE the kv contraction (the recurrence's step order)
@@ -269,7 +269,7 @@ proc kdaPrefillChunkScanAt*[El](
     cumulogdecayEnd.loadTile(glCumulogdecay, (kHeadLin + gtEnd * Dk, 0, 0, 0))
     var dEnd: rt_l(float32, TileR, Dk)
     dEnd.mul(cumulogdecayEnd, Log2e)
-    exp2(dEnd, dEnd)
+    dEnd.exp2(dEnd)
     s.mul(s, dEnd)
     for sIdx in 0 ..< cLen:
       var ks32: rt_l(float32, TileR, Dk)
