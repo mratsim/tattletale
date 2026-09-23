@@ -65,7 +65,8 @@ proc checkExl3Linear(): bool =
   ## the fp32 accumulation-order noise between the torch matmuls and
   ## the Metal mma, while a broken FWHT scale, dequant placement or
   ## codebook shows up as O(1) errors.
-  let cases = [(1, 128, 128, 5), (32, 256, 256, 5), (64, 128, 256, 5), (8, 256, 128, 3), (16, 128, 128, 8)]
+  let cases = [(1, 128, 128, 5), (32, 256, 256, 5), (64, 128, 256, 5),
+               (8, 256, 128, 3), (16, 128, 128, 8)]
   var worstAll = 0.0'f32
   for d in 0 ..< cases.len:
     let (M, K, N, bits) = cases[d]

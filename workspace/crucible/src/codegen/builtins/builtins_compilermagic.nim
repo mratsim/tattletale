@@ -8,11 +8,11 @@
 
 type CompileTarget* = enum
   ctNone
-  ctCuda
-  ctMetal
-  ctOpenCL
-  ctVulkan
-  ctWebGPU
+  ctCuda   
+  ctMetal  
+  ctOpenCL 
+  ctVulkan 
+  ctWebGPU 
 
 var crucibleCompileTarget* {.compileTime.}: CompileTarget = ctNone
   ## Compile-time backend tag consulted by ccGetBackend.

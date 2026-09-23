@@ -995,7 +995,9 @@ proc checkKvQuant() =
           kf[idx] = (if l == 1: 100.0'f32 * base else: base)
           vf[idx] = (if l == 1: 100.0'f32 * base else: base)
   for (bits, compander) in [(8, 0), (8, 1)]:
-    let (rt, cross) = kvRoundTrip(kf, vf, blockTable, numPages, numLayers, layer, numSeqs, maxPages, rows, kvHeads, D, bits, compander)
+    let (rt, cross) = kvRoundTrip(kf, vf, blockTable, numPages, numLayers,
+                                  layer, numSeqs, maxPages, rows, kvHeads,
+                                  D, bits, compander)
     echo &"  bits={bits} compander={compander}: rt worst |Δ| = {rt} cross |Δ| = {cross}"
     doAssert rt <= 64.0'f32, "round-trip error exceeds the lossy bound"
     doAssert cross > 64.0'f32, "dequant output matches layer 0's content"
@@ -1059,7 +1061,8 @@ proc runKvQuantSuite*(engine: var auto; shapes: var ShapeCases): uint32 =
          &"num_pages={d.numPages} (gapped)"
     for bits in [2, 4, 8]:
       for compander in [0, 1]:
-        let res = runKvCombo(engine, d, bits, compander, 0.65'f32, tag = &"case{dIdx}", st, hAll)
+        let res = runKvCombo(engine, d, bits, compander, 0.65'f32,
+                             tag = &"case{dIdx}", st, hAll)
         worstByBits[bits][compander] = max(worstByBits[bits][compander], res.worstRt)
         if dIdx == 0:
           # hash checks: the first case's combos must never drift

@@ -67,7 +67,8 @@ proc checkExl3Gemv(): bool =
   ## MMODE 0 m = 1 fast path and the MMODE 1 m ≤ 8 path. The 5e-3 bound
   ## is ~40 fp16 ulps at the ~1e-1 output magnitude, far above the fp32
   ## accumulation-order noise of the torch matmuls vs the Metal mma.
-  let cases = [(1, 256, 256, 5, 0), (1, 128, 128, 3, 0), (8, 256, 128, 5, 1), (5, 128, 256, 8, 1)]
+  let cases = [(1, 256, 256, 5, 0), (1, 128, 128, 3, 0), (8, 256, 128, 5, 1),
+               (5, 128, 256, 8, 1)]
   var worstAll = 0.0'f32
   for d in 0 ..< cases.len:
     let (M, K, N, bits, mmode) = cases[d]

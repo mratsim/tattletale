@@ -30,8 +30,10 @@ proc runStrided(engine: var auto; M, N, K: int;
   for k in 0 ..< K:
     for n in 0 ..< N:
       Bh[bBase + k * rsb + n * csb] = fp32ToFp16(float32(1 + 3 * k + 11 * n))
-  let pA = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](Ah[0].unsafeAddr), len: aSize, off: aBase)
-  let pB = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](Bh[0].unsafeAddr), len: bSize, off: bBase)
+  let pA = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](Ah[0].unsafeAddr),
+                          len: aSize, off: aBase)
+  let pB = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](Bh[0].unsafeAddr),
+                          len: bSize, off: bBase)
   var D = newSeq[float32](M * N)
   engine.run << (grid: (N div 32, M div 32), blk: (32, 1)) >> (
     "fusedGemm", D,

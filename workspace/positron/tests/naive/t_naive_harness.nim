@@ -225,13 +225,15 @@ proc main =
       "cube element access disagrees with plane-major layout"
     # Hand-computed round-to-nearest-even truth on a cube, bf16
     # (the tie and up cases of the mat block above):
-    var bfIn = NaiveCube[float32](planes: 1, rows: 1, cols: 2, data: @[1.00390625'f32, 1.0039215087890625'f32])
+    var bfIn = NaiveCube[float32](planes: 1, rows: 1, cols: 2,
+      data: @[1.00390625'f32, 1.0039215087890625'f32])
     let bfOut = widenBf16(narrowBf16(bfIn))
     doAssert bfOut.data[0] == 1.0'f32 and bfOut.data[1] == 1.0078125'f32,
       "cube bf16 roundtrip wrong"
     # Hand-computed round-to-nearest-even truth on a cube, fp16
     # (the tie and up cases of the mat block above):
-    var hIn = NaiveCube[float32](planes: 1, rows: 1, cols: 2, data: @[1.00048828125'f32, 1.00048840045928955078125'f32])
+    var hIn = NaiveCube[float32](planes: 1, rows: 1, cols: 2,
+      data: @[1.00048828125'f32, 1.00048840045928955078125'f32])
     let hOut = widenF16(narrowF16(hIn))
     doAssert hOut.data[0] == 1.0'f32 and hOut.data[1] == 1.0009765625'f32,
       "cube fp16 roundtrip wrong"

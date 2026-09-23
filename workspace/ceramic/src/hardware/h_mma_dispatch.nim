@@ -250,7 +250,8 @@ macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
   let dElem = "float32"
   let aElem = "uint32"
   let bElem = "uint32"
-  let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d", dElem, aElem, bElem, dElem)
+  let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d",
+                                 dElem, aElem, bElem, dElem)
 
   # scalar register locals, one per fragment element:
   #   d0..d(dV-1): var float32, seeded from the accumulator, written back after

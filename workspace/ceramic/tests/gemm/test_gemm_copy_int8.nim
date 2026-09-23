@@ -41,7 +41,8 @@ proc runInt8PartitionTests =
     const TILE_M = 16
     const TILE_K = 8
     const copyUnits = 2   # (16·8) div (16·4)
-    const pL = thrfrg_copy(make_layout((TILE_M, TILE_K), (1, TILE_M)), CpAsyncAtom[int8], blockSize)
+    const pL = thrfrg_copy(make_layout((TILE_M, TILE_K), (1, TILE_M)),
+                           CpAsyncAtom[int8], blockSize)
     for tid in 0 ..< blockSize:
       let origin = crd2idx(pL, tid)
       let sub = slice(pL, (tid, _, _))
@@ -63,7 +64,8 @@ proc runInt8PartitionTests =
     const TILE_K = 8
     const copyUnits = 2
     const ldA = 80
-    const pL = thrfrg_copy(make_layout((TILE_M, TILE_K), (1, ldA)), CpAsyncAtom[int8], blockSize)
+    const pL = thrfrg_copy(make_layout((TILE_M, TILE_K), (1, ldA)),
+                           CpAsyncAtom[int8], blockSize)
     for tid in 0 ..< blockSize:
       let origin = crd2idx(pL, tid)
       let sub = slice(pL, (tid, _, _))

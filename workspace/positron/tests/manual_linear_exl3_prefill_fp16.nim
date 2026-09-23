@@ -67,7 +67,8 @@ proc checkExl3Gemm(): bool =
   ## M ≤ 32 decode shapes, the M = 64 grid.y boundary and the cb2
   ## codebook. The 5e-3 bound is ~40 fp16 ulps at the ~1e-1 output
   ## magnitude, far above the fp32 accumulation-order noise of the torch matmuls.
-  let cases = [(16, 128, 128, 5, 0), (8, 256, 256, 3, 0), (32, 256, 128, 8, 0), (64, 128, 256, 5, 0), (16, 128, 256, 5, 2)]
+  let cases = [(16, 128, 128, 5, 0), (8, 256, 256, 3, 0), (32, 256, 128, 8, 0),
+               (64, 128, 256, 5, 0), (16, 128, 256, 5, 2)]
   var worstAll = 0.0'f32
   for d in 0 ..< cases.len:
     let (M, K, N, bits, cb) = cases[d]

@@ -10,8 +10,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 ## One-launch decode step of a Qwen3.5/3.6-35B-A3B GDN decoder layer on the ceramic Tile API.
-## One token per launch, the 13 stages composed inline from the tile kernels under `workspace/positron/src/kernels/`
-## (see `workspace/positron/src/kernels/README.md`, the inline tile composition contract), no exit to the host between stages.
+## One token per launch, the 13 stages composed inline from the tile kernels in `src/kernels/`, no exit to the host between stages.
 ##
 ## Stage order, one launch = one token's layer pass, every consumer's producers preceding it:
 ##
@@ -146,7 +145,8 @@ const
   F32ArenaLen* = sPartial + (TopK + 1) * Hidden
     ## f32 arena extent in elements (≈ 72 KiB).
 
-const StageBlocks*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512, 4, 32, 1, 9, 64]
+const StageBlocks*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
+    4, 32, 1, 9, 64]
   ## One stage table, the 13 stages' threadgroup blocks in counter-index
   ## order. The dispatcher's stage boundaries and the stage counters'
   ## expected counts both derive from this table.

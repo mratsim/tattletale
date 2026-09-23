@@ -4,17 +4,22 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 ## Run command, from the repo root:
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_mixer.nim
 ##
 ## Mixer-internals tier for the `qwen35_moe` fused GDN decoder layer.
-## One launch of the static `HaveNorm = false` entry at grid (876, 1, 1) = `StageEnds[9]`,
-## the norm bookends and the MoE tail compiled out.
 ##
-## norm1 row → host preload → conv → split → l2norm → g/beta → recurrence → out_proj
-## The conv, split, l2norm, g/beta, recurrence and out_proj anchors are judged without
-## the norm's reduction band compounding through them.
+## One launch of the static `HaveNorm = false` entry at grid
+## (876, 1, 1) = `StageEnds[9]`, stages 0..9 with the norm bookends
+## and the MoE tail compiled out.
+##
+## The projection stages read the host-preloaded normed row, the walk
+## stopping after the out_proj row.
+##
+## The conv, split, l2norm, g/beta, recurrence and out_proj anchors are
+## judged without the norm's reduction band compounding through them.
 ##
 ## | check       | contract                                                                    |
 ## | ----------- | --------------------------------------------------------------------------- |
@@ -26,10 +31,9 @@
 ## | determinism | the relaunch over restored state and ring is bit-identical                  |
 ##
 ## No-copy binding:
-## - page-aligned pointers with page-multiple byte lengths, anything else copy-ins and the in-place writes are lost
 ##
-## No-copy binding:
-## - page-aligned pointers with page-multiple byte lengths, anything else copy-ins and the in-place writes are lost
+## - page-aligned pointers with page-multiple byte lengths
+## - anything else copy-ins, in-place writes are lost
 ##
 import std/[strformat, math, times]
 import workspace/crucible
@@ -246,7 +250,8 @@ proc naiveChain(w: Weights; norm1: seq[uint16]; carryIn: Carry): NaiveLo =
   result.g = gates.g
   result.beta = gates.beta
   let vBase = 2 * NumKHeads * HeadKDim
-  var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
+  var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+    cols: HeadKDim)
   stateN.data = carryIn.state
   var yN = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
   yN.data = newSeq[float32](NumVHeads * HeadVDim)
@@ -585,13 +590,15 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   #   The tap dot is spelling-identical serial arithmetic over exact bf16 products,
   #   the local band the silu class and the stores
   var ringPrime = preM.ring
-  let convPrime = naiveCausalConvSiluStep(w.convW, ringPrime, qkvM, ConvDim, ConvKernel)
+  let convPrime = naiveCausalConvSiluStep(w.convW, ringPrime, qkvM,
+    ConvDim, ConvKernel)
   let convSens = sensOf(convPrime, lo.conv)
   result.conv = newSeq[float64](ConvDim)
   let convPrimeW = widen(convPrime)
   let convMW = widen(convM)
   for c in 0 ..< ConvDim:
-    let local = (RelSilu + 4.0 * U32) * max(abs(convPrimeW[c]), abs(convMW[c])) + 2.0 * UBf * (abs(convMW[c]) + abs(convPrimeW[c])) +
+    let local = (RelSilu + 4.0 * U32) * max(abs(convPrimeW[c]),
+      abs(convMW[c])) + 2.0 * UBf * (abs(convMW[c]) + abs(convPrimeW[c])) +
       FloorBf
     result.conv[c] = local + convSens[c]
 
@@ -688,14 +695,16 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   let vBase = 2 * NumKHeads * HeadKDim
   let vM = convM[vBase ..< vBase + NumVHeads * HeadVDim]
   let vN = lo.conv[vBase ..< vBase + NumVHeads * HeadVDim]
-  var stM32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
+  var stM32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+    cols: HeadKDim)
   stM32.data = preM.state
   var yM32 = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
   yM32.data = newSeq[float32](NumVHeads * HeadVDim)
   gdnDecodeStep(stM32, yM32, toF32Mat(qnM, NumKHeads, HeadKDim),
     toF32Mat(knM, NumKHeads, HeadKDim), toF32Mat(vM, NumVHeads, HeadVDim),
     toF32Vec(betaM, NumVHeads), gM, NumVHeads, NumKHeads, HkRatio)
-  var stN32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
+  var stN32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+    cols: HeadKDim)
   stN32.data = preN.state
   var yN32 = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
   yN32.data = newSeq[float32](NumVHeads * HeadVDim)
@@ -760,7 +769,8 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
     let zRow = zM[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let wRow = w.onormW[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let normedPrime = naiveRmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
-    let normedSens = sensOf(normedPrime, lo.normed[bh * HeadVDim ..< (bh + 1) * HeadVDim])
+    let normedSens = sensOf(normedPrime,
+      lo.normed[bh * HeadVDim ..< (bh + 1) * HeadVDim])
     let yW = widen(yRow)
     var sumSq = 0.0'f64
     var sumSqAbs = 0.0'f64
@@ -777,7 +787,8 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
 
   # Stage 10:
   #   the out projection GEMV
-  let blockPrime = naiveDenseLinear(normedM, w.outprojW, H, NumVHeads * HeadVDim)
+  let blockPrime = naiveDenseLinear(normedM, w.outprojW, H,
+    NumVHeads * HeadVDim)
   result.blockOut = gemvBars(normedM, w.outprojW, blockPrime, lo.blockOut,
     H, NumVHeads * HeadVDim)
 

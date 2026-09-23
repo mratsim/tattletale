@@ -61,7 +61,8 @@ proc swaAttnReference(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, w
     for j in 0 ..< numKv:
       maskF[i * numKv + j] = if j <= qOffset + i and j >= qOffset + i - window + 1: 0.0'f32 else: float32(NegInf)
   let mt = toTensor(maskF).reshape(1, numQo, numKv)
-  let o4 = scaled_dot_product_attention(q4, k4, v4, attn_mask = some(mt), scale = some(1.0'f64), enable_gqa = H > Nkv)
+  let o4 = scaled_dot_product_attention(q4, k4, v4, attn_mask = some(mt),
+             scale = some(1.0'f64), enable_gqa = H > Nkv)
   result = o4.transpose(1, 2).reshape(numQo, H, D)
 
 proc checkSwaAttn(): bool =

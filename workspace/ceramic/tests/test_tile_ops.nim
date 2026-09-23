@@ -303,7 +303,8 @@ proc checkEpiApply() =
   for i in 0 ..< cbuf.len:
     cbuf[i] = float32(i)
   let cptr = cast[ptr UncheckedArray[float32]](addr cbuf[0])
-  var o2 = shard(initEpiAXPBY(2'f32, 3'f32, cView(float32, 8, 8, cptr)), cptr, (0'i32, 0'i32, 1'i32, 2'i32), d)
+  var o2 = shard(initEpiAXPBY(2'f32, 3'f32, cView(float32, 8, 8, cptr)),
+                 cptr, (0'i32, 0'i32, 1'i32, 2'i32), d)
   o2.apply(d, ab)
   doAssert d.frags[0][0].frag[0] == 2'f32 * (-3.0'f32) + 3'f32 * 80.0'f32,
     "axpby owned cell 0 mismatch"

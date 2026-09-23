@@ -177,7 +177,9 @@ proc checkPagedAttn(): bool =
   let kf = scaledRand(numPages * numLayers * pageSize, Nkv * D, 2.0'f32)
   let vf = scaledRand(numPages * numLayers * pageSize, Nkv * D, 2.0'f32)
   let qf = scaledRand(nQo, H * D, 2.0'f32)
-  let actual = pagedAttnKernel(qf, kf, vf, blockTable, cacheSeqlens, cuSeqlensQ, numSeqs, H, Nkv, maxPages, numLayers, layer, nQo, D)
+  let actual = pagedAttnKernel(qf, kf, vf, blockTable, cacheSeqlens,
+                               cuSeqlensQ, numSeqs, H, Nkv, maxPages,
+                               numLayers, layer, nQo, D)
   let expected = pagedAttnReference(qf, kf, vf, blockTable, cacheSeqlens,
                                     cuSeqlensQ, qLens, numPages, numLayers,
                                     layer, maxPages, pageSize, numSeqs, H,

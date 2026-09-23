@@ -60,7 +60,8 @@ type
 #  declareAtoms — parser + generator
 # ═════════════════════════════════════════════════════════════════════════
 
-const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount", "aLayout", "bLayout", "cLayout", "instr"]
+const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount",
+                       "aLayout", "bLayout", "cLayout", "instr"]
   ## The property keys every atom must declare, in declaration order.
   ## The generated const name is `NAME_key`.
 

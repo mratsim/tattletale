@@ -156,7 +156,8 @@ proc genIQ4_XS*(K, N, seed: int): seq[uint8] =
 #  The decode-table reconstruction (file order, one fp16 RNE per element)
 #  ═════════════════════════════════════════════════════════════════════
 
-const kvaluesIQ4NL = [-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113]
+const kvaluesIQ4NL = [-127, -104, -83, -65, -49, -35, -22, -10,
+                       1, 13, 25, 38, 53, 69, 89, 113]
   ## 16-entry IQ4_NL codebook: the fp32 multiply factor of nibble v.
 
 func decodeWeightsQ8_0*(packed: seq[uint8], K, N: int): seq[uint16] =

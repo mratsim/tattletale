@@ -130,7 +130,9 @@ func cosize*(layout: Layout): auto =
       for i in 0 ..< shT.len:
         let s = newTree(nnkBracketExpr, sh, newLit(i))
         let d = newTree(nnkBracketExpr, st, newLit(i))
-        let term = newCall(bindSym"*", newCall(bindSym"-", s, one), newCall(bindSym"abs", d))
+        let term = newCall(bindSym"*",
+          newCall(bindSym"-", s, one),
+          newCall(bindSym"abs", d))
         result = newCall(bindSym"+", result, term)
   cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
