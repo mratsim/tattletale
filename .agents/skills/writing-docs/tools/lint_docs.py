@@ -316,6 +316,8 @@ BANNED = [
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
      "cite the command and its output that prove the claim"),
+    (r"\bfollow(?:s|ing|ed)?\b", None,
+     "name the thing directly, the item, the preceding entries, or restate the mechanism"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
