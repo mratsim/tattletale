@@ -76,6 +76,31 @@ const dispatchCode = metal:
     output[1] = fp16Tiles
     output[2] = bf16Tiles
 
+# Setter-then-block order, the module-scope setter's host default
+# survives every DSL block above.
+# Inside a block, the tag stays that block's own target.
+const hostBackendAfterBlocks = ccGetBackend()
+
+# Block-then-setter order, the host default updated after the blocks,
+# host code sees it.
+crucibleSetBackend(ctCuda)
+const hostBackendAfterSetter = ccGetBackend()
+
+# Mismatched targets, a Metal block after a ctCuda host default,
+# host code still keeps ctCuda.
+const mismatchedOrderCode = metal:
+  proc orderProbe(output: ptr UncheckedArray[int]) {.global.} =
+    when ccGetBackend() == ctMetal: output[0] = 7
+    else: output[0] = 8
+const hostBackendAfterMismatchedBlock = ccGetBackend()
+
+proc hostBackendRuntime(): int =
+  ## Branch the final host default selects at this proc's compile time,
+  ## the suite executes it below.
+  when ccGetBackend() == ctMetal: 2
+  elif ccGetBackend() == ctCuda: 1
+  else: 0
+
 # Dispatch selected at instantiation on `ccGetBackend()`.
 # The dispatch lives in a generic proc body outside the DSL block.
 proc probeBackend[T](x: T): int =
@@ -166,6 +191,19 @@ proc runTest() =
       engine.ingest(setterBlockCode)
       var res: array[1, int32]
       engine.run("setterProbe", res, ())
+      check res[0] == 7'i32
+
+    test "the host default survives metal blocks, both orders":
+      check hostBackendAfterBlocks == ctMetal
+      check hostBackendAfterSetter == ctCuda
+      check hostBackendAfterMismatchedBlock == ctCuda
+
+    test "the host default's runtime probe and a mismatched-order block, on-device":
+      check hostBackendRuntime() == 1
+      var engine = bkMetal.init()
+      engine.ingest(mismatchedOrderCode)
+      var res: array[1, int32]
+      engine.run("orderProbe", res, ())
       check res[0] == 7'i32
 
 when isMainModule:
