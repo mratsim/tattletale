@@ -10,7 +10,7 @@
 
 ## One-launch GDN+MoE decoder layer graph on the ceramic Tile API, derived
 ## from a runtime-parsed model config (`GdnMoeCfg`), the parts delta-zero
-## checked against the baked tables of qwen35_moe_decode_gdn_bf16.nim:
+## checked against the baked tables of gdn_moe_decode_megakernel.nim:
 ##
 ## - `bfWidths`/`bfOffsets` and `f32Widths`/`f32Offsets`, the scratch section shapes and the accumulated offsets
 ## - `stages` and `waveTotal`, one threadgroup interval per stage, contiguous over the 13 stages

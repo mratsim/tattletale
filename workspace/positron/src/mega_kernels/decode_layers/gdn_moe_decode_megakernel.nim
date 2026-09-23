@@ -51,14 +51,14 @@
 ## | geometry | the Qwen bf16 class: hidden 2048, convDim 8192, Hv 32, Hk 16, Dk = Dv = 128, conv kernel 4, router softmax top-8 over 256 experts, intermediate 512 |
 ## | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 
-from ../../../kernels/ceramic/math_consts import Log2e
+from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
-import ../../../kernels/ceramic/dense_linear
-import ../../../kernels/ceramic/moe_fwd_decode
-import ../../../kernels/ceramic/moe_router
-import ../../../kernels/ceramic/o_norm_gated
-import ../../../kernels/ceramic/sequence_mixers/state_space/gdn/gdn_decode_single
+import ../../kernels/ceramic/dense_linear
+import ../../kernels/ceramic/moe_fwd_decode
+import ../../kernels/ceramic/moe_router
+import ../../kernels/ceramic/o_norm_gated
+import ../../kernels/ceramic/sequence_mixers/state_space/gdn/gdn_decode_single
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra

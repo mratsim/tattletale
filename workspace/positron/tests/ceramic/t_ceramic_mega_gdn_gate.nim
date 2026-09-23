@@ -27,7 +27,7 @@
 import std/[strformat, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/mega_kernels/decode_layers/qwen35_moe/qwen35_moe_decode_gdn_bf16
+import ../../src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf

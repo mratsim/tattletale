@@ -17,7 +17,7 @@
 
 import std/strutils
 import workspace/positron/src/mega_kernels/decode_layers/gdn_moe_layer_graph
-import workspace/positron/src/mega_kernels/decode_layers/qwen35_moe/qwen35_moe_decode_gdn_bf16
+import workspace/positron/src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
 
 template test(label: string; body: untyped) =
   block:
