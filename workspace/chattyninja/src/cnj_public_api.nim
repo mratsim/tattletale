@@ -20,13 +20,13 @@ import ./cnj_types {.all.}
 import ./cnj_parse {.all.}
 import ./cnj_engine {.all.}
 import ./jinja_data_model {.all.}
-import ./chat_context
+import ./chat_completions
 
 # Types, error and chat-context exports the public signatures name.
 export cnj_types.CompiledTemplate, cnj_types.CompiledSymbols,
     cnj_types.JinjaRenderContext,
     jinja_data_model.JinjaCause, jinja_data_model.JinjaError,
-    chat_context
+    chat_completions
 
 # Render tier, parse once and render over the shared artifact.
 
