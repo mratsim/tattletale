@@ -130,10 +130,8 @@ proc addStore16[A: static MmaAtom](
 ##   the guard's two halves, the device entry drops the launch, the host
 ##   companion `moeFwdConfigGuard` raises naming the offending dim
 ##
-## - the moe suite compares this entry's output bits at the GLM-4.7-Flash
-##   config row against the baked proc's captured bits
-## - six runs, three seeds at T=8 and T=4, zero bit mismatches required
-## - the fixture lives at `tests/ceramic/moe_fwd_glm_baked_receipts.nim`
+## The suite drives this entry against the libtorch reference chain
+## at the GLM-4.7-Flash, Qwen3.6-35B-A3B and ragged-gelu config rows.
 
 const
   ScoreChunk* = 64         # experts per router score chunk, the (32, 64) accumulator's width

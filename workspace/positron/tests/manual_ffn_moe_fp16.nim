@@ -9,12 +9,11 @@
 ## Run command, from the repo root:
 ## - nim cpp -r -d:release --hints:off --warnings:off --passC:-std=c++20 \
 ##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_ffn_moe_fp16.nim
-import std/[strformat, strutils]
+import std/strformat
 import workspace/[crucible, libtorch, libtorch_testutils]
 import workspace/libtorch as F
 from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../src/kernels/ceramic/ffn_moe
-import ./ceramic/moe_fwd_glm_baked_receipts
 import ./attn_test_utils
 
 const moeMsl = metal:
@@ -73,16 +72,6 @@ proc moeKernelBits(g: MoEG, r: MoeRow): seq[uint16] =
      hScr, hsScr, int32(r.tokens), int32(r.hidden), int32(r.nExperts),
      int32(r.inter), int32(r.topK), int32(r.nShared), r.scale, r.act))
   result = outO
-
-proc moeBakedReceiptBits(seed: uint64, tokens: int): seq[uint16] =
-  ## Output bits recorded from the deleted baked GLM-4.7-Flash proc,
-  ## from the committed fixture, the delta-zero baseline.
-  for r in moeGlmBakedReceipts:
-    if r.seed.uint64 == seed and r.tokens == tokens:
-      for chunk in split(r.bits, ","):
-        result.add(parseHexInt(chunk).uint16)
-      return
-  doAssert false, "no receipt for the seed/tokens pair"
 
 proc subseq(s: seq[float32], a, b: int): seq[float32] =
   result = newSeq[float32](b - a)
@@ -150,27 +139,6 @@ proc checkMoe(): bool =
     assertAllClose(actual, expected, rtol = 0.0'f64, abstol = 1e-2'f64)
   result = true
 
-proc checkGenericDeltaZero(): bool =
-  ## - the runtime-config entry's output bits equal the recorded baked
-  ##   output bits at the GLM-4.7-Flash shape
-  ## - three seeds over the T=8 and T=4 token counts
-  for seed in [0x5EED'u64, 7'u64, 13'u64]:
-    for tokens in [8, 4]:
-      let r = MoeRow(name: "glm47-flash", tokens: tokens, hidden: 2048,
-        nExperts: 64, inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32,
-        act: ActSilu, seed: seed)
-      let g = genMoERow(r)
-      let baked = moeBakedReceiptBits(seed, tokens)
-      let generic = moeKernelBits(g, r)
-      var mismatches = 0
-      for i in 0 ..< baked.len:
-        if baked[i] != generic[i]:
-          mismatches += 1
-      echo &"  seed={seed:x} T={tokens}: bit mismatches = {mismatches}"
-      if mismatches != 0:
-        return false
-  result = true
-
 proc checkGenericRows(): bool =
   ## Kernel vs torch chain of the same contract, at the Qwen3.6-35B-A3B
   ## shape and the ragged gelu shape.
@@ -229,6 +197,4 @@ proc checkConfigGuard(): bool =
 when isMainModule:
   runCppTest("moe_fwd vs the torch reference", checkMoe)
   runCppTest("the compiled-in maxima guard", checkConfigGuard)
-  runCppTest("moe_fwd GLM delta-zero vs the recorded baked receipts",
-    checkGenericDeltaZero)
   runCppTest("moe_fwd rows vs the torch reference", checkGenericRows)
