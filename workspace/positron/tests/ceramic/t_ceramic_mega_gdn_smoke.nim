@@ -246,10 +246,9 @@ proc smokeChecks(engine: HwEngine, big: BigHost) =
          downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
     result = true
-  # Pre-image, both arenas, state and ring before the first launch,
-  # the relaunch restores them.
-  # Launch reads touch xPrev, rPrev and the kernel weights only.
-  # Outputs live in the arenas.
+  # Pre-image, both arenas, state, ring, xPrev, rPrev and the kernel
+  # weights before the first launch, the relaunch restores them.
+  # Outputs live in the arenas, launch reads the state and ring only.
   let bfPre = readInto(bfA.hostPtr, BfArenaLen)
   let f32Pre = readInto(f32A.hostPtr, F32ArenaLen)
   let statePre = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)

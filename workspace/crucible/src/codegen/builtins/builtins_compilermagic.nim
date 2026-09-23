@@ -34,8 +34,8 @@ macro crucibleSetBackend*(target: static CompileTarget) =
   crucibleHostBackend = target
 
 proc ccGetBackend*(): CompileTarget {.compileTime.} =
-  ## Returns the backend the enclosing DSL block compiles for, the host
-  ## default outside any block.
+  ## Returns the backend of the enclosing DSL block.
+  ## Outside any block, the host default.
   ## Usage: `when ccGetBackend() == ctMetal: ...` selects the Metal branch.
   ##
   ## Valid call sites:
