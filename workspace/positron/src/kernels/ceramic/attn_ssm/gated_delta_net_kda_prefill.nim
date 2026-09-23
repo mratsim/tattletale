@@ -208,7 +208,7 @@ proc kdaPrefillChunkScanAt*[El](
         # - the argument stays ≤ 0 (cumulogdecay decreases along t), no intermediate
         #   exceeds 1, exp2 cannot overflow
         # - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once
-## | cumulogdecay_s |
+        #   |cumulogdecay_s| passes exp2's range, the resulting Inf × dT → 0 product NaNs the carry
         #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
         for n in 0 ..< rowTiles:
