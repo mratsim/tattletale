@@ -8,7 +8,7 @@
 ##
 ## Run command, from the repo root:
 ## - nim cpp -r --hints:off --warnings:off \
-##   nim cpp -r --hints:off --warnings:off \
+##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_grouped_query_attention_paged_fp16.nim
 
 import std/[strformat, options, math, sequtils]
 import workspace/crucible

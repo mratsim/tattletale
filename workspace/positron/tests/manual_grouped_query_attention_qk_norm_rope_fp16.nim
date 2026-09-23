@@ -8,7 +8,7 @@
 ##
 ## Run command, from the repo root:
 ## - nim cpp -r --hints:off --warnings:off \
-##   nim cpp -r --hints:off --warnings:off \
+##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_grouped_query_attention_qk_norm_rope_fp16.nim
 
 import std/[math, strformat]
 import workspace/[crucible, ceramic, libtorch]

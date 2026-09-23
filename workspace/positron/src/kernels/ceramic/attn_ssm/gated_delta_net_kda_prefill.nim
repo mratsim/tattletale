@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
 # ───────────────  KDA prefill (chunked scan over T tokens, one launch)  ───────────────
@@ -20,16 +20,16 @@
 ## | H_t       | Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
 ## | carry     | S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
 ##
-## | contract      | value                                                                                                                                        |
-## | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                     |
-## | q, k, g, β    | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to the element dtype (the recorded per-channel contract)           |
-## | cumulogdecay  | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g (the GateForm formula stays host-side)                              |
-## | v, y          | (B·Hv, T, Dv) element dtype each, y gets one round-to-nearest-even per element                                                               |
-## | element dtype | one compile-time element type (`kdaPrefillChunkScan`'s `El` generic)                                                                         |
-## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                 |
-## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                   |
-## | decay / q̃    | exp2(cumulogdecay·log2e) per channel in-device, log2e is the shared `math_consts.Log2e`, q̃ = per-element division by the runtime f32 qScale |
+## | contract      | value                                                                                                                                                 |
+## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                              |
+## | q, k, g, β    | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to the element dtype (the recorded per-channel contract)                    |
+## | cumulogdecay  | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g                                                                              |
+## | chunk reset   | the cumulogdecay host prefix resets at every t with t mod ChunkC == 0, ChunkC the kernel's static chunk length (the GateForm formula stays host-side) |
+## | v, y          | (B·Hv, T, Dv) element dtype each, y gets one round-to-nearest-even per element                                                                        |
+## | element dtype | one compile-time element type (`kdaPrefillChunkScan`'s `El` generic)                                                                                  |
+## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                          |
+## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                            |
 ##
 ## | contract                  | value                                                                                                                             |
 ## | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |

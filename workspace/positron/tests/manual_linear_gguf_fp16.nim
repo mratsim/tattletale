@@ -8,7 +8,7 @@
 ##
 ## Run command, from the repo root:
 ## - nim cpp -r --hints:off --warnings:off \
-##   nim cpp -r --hints:off --warnings:off \
+##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_linear_gguf_fp16.nim
 
 import std/strformat, workspace/crucible, workspace/ceramic
 import workspace/libtorch, workspace/libtorch as F
