@@ -19,7 +19,7 @@
   ## | contract   | value                                                                                              |
   ## | ---------- | -------------------------------------------------------------------------------------------------- |
   ## | router     | the `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
-  ## | storage    | bfloat16, the decode composition's production dtype                                                |
+  ## | storage    | the family dtype (bf16 or fp16), the decode composition's storage element                          |
   ## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down    |
   ## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
   ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
@@ -28,6 +28,7 @@ import math_consts
 import workspace/crucible
 import workspace/ceramic
 import ./moe_router
+import ./tile_widen
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
@@ -36,13 +37,13 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # tile_io_rows ships fp16 variants only. The bf16 guards live
 # module-local (the silu_and_mul and paged_attn precedent).
 
-proc loadTileRowsBf16[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[bfloat16, R, C, A],
-    gl: GlView[bfloat16],
+proc loadTileRowsBounded[El; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[El, R, C, A],
+    gl: GlView[El],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for bf16 tiles. Tile plane rows origin[2]·R + r at or above `rowLimit`
-  ## are zero-filled, not read.
+  ## Row-bounded loadTile for family-dtype tiles. Tile plane rows origin[2]·R + r at or above
+  ## `rowLimit` are zero-filled, not read.
   const M = A.getM()
   const N = A.getN()
   const rowTiles = R div M
@@ -60,15 +61,15 @@ proc loadTileRowsBf16[R, C: static int; A: static MmaAtom](
         if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
           tile.frags[n][m].frag[v] = src[row + n * M, col + m * N + v]
         else:
-          tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
+          tile.frags[n][m].frag[v] = roundToRne[El](0.0'f32)
 
-proc storeTileRowsBf16[R, C: static int; A: static MmaAtom](
-    gl: GlView[bfloat16],
-    tile: RtLeft[bfloat16, R, C, A],
+proc storeTileRowsBounded[El; R, C: static int; A: static MmaAtom](
+    gl: GlView[El],
+    tile: RtLeft[El, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for bf16 tiles. Tile plane rows origin[2]·R + r at or above `rowLimit`
-  ## are not written.
+  ## Row-bounded storeTile for family-dtype tiles. Tile plane rows origin[2]·R + r at or above
+  ## `rowLimit` are not written.
   const M = A.getM()
   const N = A.getN()
   const rowTiles = R div M
@@ -86,26 +87,26 @@ proc storeTileRowsBf16[R, C: static int; A: static MmaAtom](
         for v in 0 ..< vpt:
           dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
 
-proc loadRowsE[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[bfloat16, R, C, A],
-    gl: GlView[bfloat16],
+proc loadRowsBounded[El; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[El, R, C, A],
+    gl: GlView[El],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile for the bfloat16 storage element.
-  loadTileRowsBf16(tile, gl, origin, rowLimit)
+  ## Row-bounded loadTile for the family-dtype storage element.
+  loadTileRowsBounded(tile, gl, origin, rowLimit)
 
-proc storeRowsE[R, C: static int; A: static MmaAtom](
-    gl: GlView[bfloat16],
-    tile: RtLeft[bfloat16, R, C, A],
+proc storeRowsBounded[El; R, C: static int; A: static MmaAtom](
+    gl: GlView[El],
+    tile: RtLeft[El, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for the bfloat16 storage element.
-  storeTileRowsBf16(gl, tile, origin, rowLimit)
+  ## Row-bounded storeTile for the family-dtype storage element.
+  storeTileRowsBounded(gl, tile, origin, rowLimit)
 
 # ─── Local device extensions: the activation and partial arithmetic ──
 
-proc siluMulElemEager[R, C: static int; A: static MmaAtom](
-    dst: var RtLeft[bfloat16, R, C, A],
+proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[El, R, C, A],
     gHalf, uHalf: RtLeft[float32, R, C, A]) {.device.} =
   ## Expert activation, `dst[r][c] = bf16(silu(gHalf[r][c]) · uHalf[r][c])` over
   ## the fp32 g/u accumulator operands. The frag walk follows the loadTile
@@ -131,7 +132,7 @@ proc siluMulElemEager[R, C: static int; A: static MmaAtom](
         let g = gHalf.frags[n][m].frag[v]
         let s = g / (1.0'f32 + exp2(-g * Log2e))
         dst.frags[n][m].frag[v] =
-          (s.bfloat16.float32 * uHalf.frags[n][m].frag[v]).bfloat16
+          roundToRne[El](roundToRne[El](s).float32 * uHalf.frags[n][m].frag[v])
 
 proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
     dst: ptr UncheckedArray[float32],
@@ -173,16 +174,16 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
 
 # ─── The decode slot-group walk ───────────────────────────────────────
 
-proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
+proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     SharedGate: static bool](
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
-    x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_vec_w: ptr UncheckedArray[bfloat16] = nil,
+    x, router_w, gate_up_w, down_w: ptr UncheckedArray[El],
+    shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[El],
+    shared_gate_vec_w: ptr UncheckedArray[El] = nil,
         # (1, H), read only when SharedGate
         # non-null is the caller's obligation whenever SharedGate is true
-    h_scratch: ptr UncheckedArray[bfloat16],     # (num_tokens, K, I) working buffer
-    hs_scratch: ptr UncheckedArray[bfloat16],    # (num_tokens, I) working buffer
+    h_scratch: ptr UncheckedArray[El],     # (num_tokens, K, I) working buffer
+    hs_scratch: ptr UncheckedArray[El],    # (num_tokens, I) working buffer
     t, y: int32) {.device.} =
   ## One (token, slot) pair's decode walk, `t` the token, `y` the slot group, routed y < K, the shared group y = K.
   ## `moe_fwd_decode` is the grid-driven wrapper, the megakernel composes this core inline.
@@ -223,29 +224,29 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
   let glH = h_scratch.gd(shape = (-1, -1, -1, -1), stride = (I, I, I, 1))
   let glHs = hs_scratch.gd(shape = (-1, -1, -1, -1), stride = (I, 0, I, 1))
 
-  var gHalf: rt_l(float32, 32, 32, getTileConfig(float32, bfloat16))
-  var uHalf: rt_l(float32, 32, 32, getTileConfig(float32, bfloat16))
-  var h16: rt_l(bfloat16, 32, 32)
-  var d: rt_l(float32, 32, 32, getTileConfig(float32, bfloat16))
-  var a: rt_l(bfloat16, 32, 16)
-  var b16: rt_r(bfloat16, 16, 32)
+  var gHalf: rt_l(float32, 32, 32, getTileConfig(float32, El))
+  var uHalf: rt_l(float32, 32, 32, getTileConfig(float32, El))
+  var hFam: rt_l(El, 32, 32)
+  var d: rt_l(float32, 32, 32, getTileConfig(float32, El))
+  var a: rt_l(El, 32, 16)
+  var bFam: rt_r(El, 16, 32)
 
   if y < K:
     var ids: array[K, int32]
     var w: array[K, float32]
-    moeRoute[bfloat16, H, E, K, Scale](x, router_w, t, ids, w)
+    moeRoute[El, H, E, K, Scale](x, router_w, t, ids, w)
     # ── gate/up walk for ids[y] -> h_scratch[t, y] ──
     for nt in 0'i32 ..< I div 32:
       gHalf.zero()
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
-        a.loadRowsE(glX, (t, 0, 0, kk), 1)
-        b16.loadTile(glGu, (ids[y], 0, nt, kk))
-        gHalf.mma_AB(a, b16)
-        b16.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
-        uHalf.mma_AB(a, b16)
-      h16.siluMulElemEager(gHalf, uHalf)
-      glH.storeRowsE(h16, (t * K + y, 0, 0, nt), 1)
+        a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
+        bFam.loadTile(glGu, (ids[y], 0, nt, kk))
+        gHalf.mma_AB(a, bFam)
+        bFam.loadTile(glGu, (ids[y], 0, nt + I div 32, kk))
+        uHalf.mma_AB(a, bFam)
+      hFam.siluMulElemEager(gHalf, uHalf)
+      glH.storeRowsBounded(hFam, (t * K + y, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -257,9 +258,9 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
     for nt in 0'i32 ..< H div 32:
       d.zero()
       for kk in 0'i32 ..< I div 16:
-        a.loadRowsE(glH, (t * K + y, 0, 0, kk), 1)
-        b16.loadTile(glDown, (ids[y], 0, nt, kk))
-        d.mma_AB(a, b16)
+        a.loadRowsBounded(glH, (t * K + y, 0, 0, kk), 1)
+        bFam.loadTile(glDown, (ids[y], 0, nt, kk))
+        d.mma_AB(a, bFam)
       var rowIdx = [int32(t * (K + 1) + y), -1'i32, -1'i32, -1'i32]
       var rowS = [w[y], 0.0'f32, 0.0'f32, 0.0'f32]
       storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)
@@ -267,21 +268,21 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
     # ── shared gate scalar (the moe_fwd chain's rounding form) ──
     var gateVal = 1.0'f32
     when SharedGate:
-      let l32 = sharedGateLogit[bfloat16, H](x, shared_gate_vec_w, t)
-      gateVal = (1.0'f32 / (1.0'f32 +
-        exp2(-l32 * Log2e))).bfloat16.float32
+      let l32 = sharedGateLogit[El, H](x, shared_gate_vec_w, t)
+      gateVal = roundToRne[El](1.0'f32 / (1.0'f32 +
+        exp2(-l32 * Log2e))).float32
     # ── shared expert activation -> hs_scratch[t] ──
     for nt in 0'i32 ..< I div 32:
       gHalf.zero()
       uHalf.zero()
       for kk in 0'i32 ..< H div 16:
-        a.loadRowsE(glX, (t, 0, 0, kk), 1)
-        b16.loadTile(glSg, (0, 0, nt, kk))
-        gHalf.mma_AB(a, b16)
-        b16.loadTile(glSu, (0, 0, nt, kk))
-        uHalf.mma_AB(a, b16)
-      h16.siluMulElemEager(gHalf, uHalf)
-      glHs.storeRowsE(h16, (t, 0, 0, nt), 1)
+        a.loadRowsBounded(glX, (t, 0, 0, kk), 1)
+        bFam.loadTile(glSg, (0, 0, nt, kk))
+        gHalf.mma_AB(a, bFam)
+        bFam.loadTile(glSu, (0, 0, nt, kk))
+        uHalf.mma_AB(a, bFam)
+      hFam.siluMulElemEager(gHalf, uHalf)
+      glHs.storeRowsBounded(hFam, (t, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier ordering that cross-lane read
@@ -293,29 +294,29 @@ proc moe_fwd_decode_at*[H, E, K, I: static int; Scale: static float32;
     for nt in 0'i32 ..< H div 32:
       d.zero()
       for kk in 0'i32 ..< I div 16:
-        a.loadRowsE(glHs, (t, 0, 0, kk), 1)
-        b16.loadTile(glSd, (0, 0, nt, kk))
-        d.mma_AB(a, b16)
+        a.loadRowsBounded(glHs, (t, 0, 0, kk), 1)
+        bFam.loadTile(glSd, (0, 0, nt, kk))
+        d.mma_AB(a, bFam)
       var rowIdx = [int32(t * (K + 1) + K), -1'i32, -1'i32, -1'i32]
       var rowS = [gateVal, 0.0'f32, 0.0'f32, 0.0'f32]
       storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)
 
-proc moe_fwd_decode*[H, E, K, I: static int; Scale: static float32;
+proc moe_fwd_decode*[El; H, E, K, I: static int; Scale: static float32;
     SharedGate: static bool](
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
-    x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[bfloat16],
-    shared_gate_vec_w: ptr UncheckedArray[bfloat16] = nil,
+    x, router_w, gate_up_w, down_w: ptr UncheckedArray[El],
+    shared_gate_w, shared_up_w, shared_down_w: ptr UncheckedArray[El],
+    shared_gate_vec_w: ptr UncheckedArray[El] = nil,
         # (1, H), read only when SharedGate
         # non-null is the caller's obligation whenever SharedGate is true
-    h_scratch: ptr UncheckedArray[bfloat16],     # (num_tokens, K, I) working buffer
-    hs_scratch: ptr UncheckedArray[bfloat16]) {.device.} =  # (num_tokens, I) buffer
+    h_scratch: ptr UncheckedArray[El],     # (num_tokens, K, I) working buffer
+    hs_scratch: ptr UncheckedArray[El]) {.device.} =  # (num_tokens, I) buffer
   ##  Grid-driven form of `moe_fwd_decode_at`:
   ##    grid (num_tokens, K+1, 1)
   ## at 32 lanes, one (token, slot) pair per threadgroup.
   let t = int32(threadgroup_position_in_grid.x)
   let y = int32(threadgroup_position_in_grid.y)
-  moe_fwd_decode_at[H, E, K, I, Scale, SharedGate](
+  moe_fwd_decode_at[El, H, E, K, I, Scale, SharedGate](
     partial, x, router_w, gate_up_w, down_w,
     shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
     h_scratch, hs_scratch, t, y)

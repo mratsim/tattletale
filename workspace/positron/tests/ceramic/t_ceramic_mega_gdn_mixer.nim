@@ -68,7 +68,7 @@ const MixerMsl = metal:
       aLog: ptr UncheckedArray[float32],
       dtBias: ptr UncheckedArray[bfloat16],
       eps: float32) {.global.} =
-    qwen35GdnLayerWalk[false](counters, bfA, f32A, xPrev, rPrev, state, ring,
+    gdnMoeLayerWalk[bfloat16, false](counters, bfA, f32A, xPrev, rPrev, state, ring,
       norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
       routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW,
       aLog, dtBias, eps)

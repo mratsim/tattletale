@@ -109,7 +109,7 @@ const MoEFwdDecodeMsl = metal:
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
       h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
-    moe_fwd_decode[2048, 256, 8, 512, 1.0'f32, true](
+    moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 1.0'f32, true](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
       h_scratch, hs_scratch)
@@ -120,7 +120,7 @@ const MoEFwdDecodeMsl = metal:
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
       h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
-    moe_fwd_decode[2048, 256, 8, 512, 1.0'f32, false](
+    moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 1.0'f32, false](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
       h_scratch, hs_scratch)
@@ -131,7 +131,7 @@ const MoEFwdDecodeMsl = metal:
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
       h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
-    moe_fwd_decode[2048, 256, 8, 512, 2.0'f32, true](
+    moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 2.0'f32, true](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
       h_scratch, hs_scratch)

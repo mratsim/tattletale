@@ -51,3 +51,13 @@ proc widen*[A, B: static MmaAtom; T: bfloat16|float16; R, C: static int](
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         dst.frags[n][m].frag[v] = src.frags[n][m].frag[v].float32
+
+# ─── Family-dtype narrowing ──────────────────────────────────────────
+
+proc roundToRne*[T: bfloat16|float16](x: float32): T {.device.} =
+  ## One round-to-nearest-even of an f32 value into the family dtype,
+  ## the scalar counterpart of the mma epilogue's single-round contract.
+  when T is bfloat16:
+    x.bfloat16
+  else:
+    x.to(float16)

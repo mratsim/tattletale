@@ -15,22 +15,22 @@
 ##
 ## Stage order, one launch = one token's layer pass, every consumer's producers preceding it:
 ##
-## | stage | role             | threadgroups | counter | stage block |
-## | ----- | ---------------- | ------------ | ------- | ----------- |
-## | 1     | add + norm1      | 1            | 0       | 0           |
-## | 2     | qkv GEMV         | 128          | 1       | 1..128      |
-## | 3     | z GEMV           | 64           | 2       | 129..192    |
-## | 4     | a/b GEMV         | 2            | 3       | 193..194    |
-## | 5     | conv + ring roll | 128          | 4       | 195..322    |
-## | 6     | q/k l2norm       | 4            | 5       | 323..326    |
-## | 7     | g + beta         | 1            | 6       | 327         |
-## | 8     | GDN step         | 512          | 7       | 328..839    |
-## | 9     | o_norm           | 4            | 8       | 840..843    |
-## | 10    | out_proj         | 32           | 9       | 844..875    |
-## | 11    | fold + norm2     | 1            | 10      | 876         |
-## | 12    | MoE decode       | 9            | 11      | 877..885    |
-## | 13    | merge            | 64           | 12      | 886..949    |
-## | grid  | (950, 1, 1), 32-lane threadgroups, the stage role read from grid.x via static boundaries | | | |
+## | stage | role                                                                                     | threadgroups | counter | stage block |
+## | ----- | ---------------------------------------------------------------------------------------- | ------------ | ------- | ----------- |
+## | 1     | add + norm1                                                                              | 1            | 0       | 0           |
+## | 2     | qkv GEMV                                                                                 | 128          | 1       | 1..128      |
+## | 3     | z GEMV                                                                                   | 64           | 2       | 129..192    |
+## | 4     | a/b GEMV                                                                                 | 2            | 3       | 193..194    |
+## | 5     | conv + ring roll                                                                         | 128          | 4       | 195..322    |
+## | 6     | q/k l2norm                                                                               | 4            | 5       | 323..326    |
+## | 7     | g + beta                                                                                 | 1            | 6       | 327         |
+## | 8     | GDN step                                                                                 | 512          | 7       | 328..839    |
+## | 9     | o_norm                                                                                   | 4            | 8       | 840..843    |
+## | 10    | out_proj                                                                                 | 32           | 9       | 844..875    |
+## | 11    | fold + norm2                                                                             | 1            | 10      | 876         |
+## | 12    | MoE decode                                                                               | 9            | 11      | 877..885    |
+## | 13    | merge                                                                                    | 64           | 12      | 886..949    |
+## | grid  | (950, 1, 1), 32-lane threadgroups, the stage role read from grid.x via static boundaries |              |         |             |
 ##
 ## Two entries share one dispatcher, with the mixer serving mixer-internals parity
 ## (the conv, split, l2norm, g/beta, recurrence and out_proj anchors judged without the norm's reduction band compounding):
@@ -55,6 +55,7 @@ from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 import ../../kernels/ceramic/dense_linear
+import ../../kernels/ceramic/tile_widen
 import ../../kernels/ceramic/moe_fwd_decode
 import ../../kernels/ceramic/moe_router
 import ../../kernels/ceramic/o_norm_gated
@@ -271,24 +272,24 @@ proc softplusDev(x: float32): float32 {.device.} =
   }
   """.}
 
-proc normRow(x, y, normW, stream, outp: ptr UncheckedArray[bfloat16], eps: float32) {.device.} =
+proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) {.device.} =
   ## One threadgroup's pass over the (Hidden) norm row in the bias-one RmsNormOne
   ## spelling. The scalar spelling stays local, rms_norm_res_in's fp16
   ## exllamav3 residual+norm chain does not serve the recorded bf16 contract.
   ##
-  ## | aspect    | contract                                                                                         |
-  ## | --------- | ------------------------------------------------------------------------------------------------ |
-  ## | variance  | taken over the rounded row sums of squares, one bf16 round each                                  |
-  ## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one bf16 round at the store                                   |
-  ## | lane walk | per lane the serial element walk of the RowLaneSpan block, the partial row-sum of squares in f32 |
-  ## | reduction | a 5-step lane butterfly with the rstd broadcast, per-lane serial f32 sums plus a lane butterfly  |
-  ## | barrier   | every lane re-reads only its own stored elements, no threadgroup barrier                         |
-  ## | rounding  | the rstd lands inside the recorded chain's bf16 band, the reference rows pricing the difference  |
+  ## | aspect    | contract                                                                                            |
+  ## | --------- | --------------------------------------------------------------------------------------------------- |
+  ## | variance  | taken over the rounded row sums of squares, one bf16 round each                                     |
+  ## | multiply  | rstd-first order `(x·rstd)·(1+w)`, one bf16 round at the store                                      |
+  ## | lane walk | per lane the serial element walk of the RowLaneSpan block, the partial row-sum of squares in f32    |
+  ## | reduction | a 5-step lane butterfly with the rstd broadcast, per-lane serial f32 sums plus a lane butterfly     |
+  ## | barrier   | every lane re-reads only its own stored elements, no threadgroup barrier                            |
+  ## | rounding  | the rstd lands inside the recorded chain's rounding band, the reference rows pricing the difference |
   let lane = int32(thread_index_in_threadgroup)
   let base = lane * RowLaneSpan
   var acc = 0.0'f32
   for e in base ..< base + RowLaneSpan:
-    let s = (x[e].float32 + y[e].float32).bfloat16
+    let s = roundToRne[T](x[e].float32 + y[e].float32)
     stream[e] = s
     acc += s.float32 * s.float32
   var total = acc
@@ -301,14 +302,14 @@ proc normRow(x, y, normW, stream, outp: ptr UncheckedArray[bfloat16], eps: float
   let rstd = rsqrt(total / float32(Hidden) + eps)
   for e in base ..< base + RowLaneSpan:
     outp[e] =
-      (stream[e].float32 * rstd * (normW[e].float32 + 1.0'f32)).bfloat16
+      roundToRne[T](stream[e].float32 * rstd * (normW[e].float32 + 1.0'f32))
 
-proc convRingChannels(convW, ring, xCol, outCol: ptr UncheckedArray[bfloat16], chanBase: int32) {.device.} =
+proc convRingChannels[T](convW, ring, xCol, outCol: ptr UncheckedArray[T], chanBase: int32) {.device.} =
   ## One threadgroup's ConvDim div 64 channels of the decode conv step
   ## in the recorded two-round spelling:
   ## - the f32 tap dot over the ring's (RingWidth) history taps
-  ##   then the step column, one bf16 round
-  ## - the silu in f32 over the widened value, one bf16 round
+  ##   then the step column, one family-dtype round
+  ## - the silu in f32 over the widened value, one family-dtype round
   ## - the ring rolls in the same walk, the step's pre-conv column
   ##   landing in the newest slot, the history shifting down,
   ##   each channel independent of its neighbors
@@ -320,10 +321,10 @@ proc convRingChannels(convW, ring, xCol, outCol: ptr UncheckedArray[bfloat16], c
     for j in 0'i32 ..< RingWidth:
       acc += convW[c * ConvKernel + j].float32 * ring[c * RingWidth + j].float32
     acc += convW[c * ConvKernel + RingWidth].float32 * xCol[c].float32
-    let tapped = acc.bfloat16
+    let tapped = roundToRne[T](acc)
     let sig = tapped.float32 /
       (1.0'f32 + exp2((-tapped.float32) * Log2e))
-    outCol[c] = sig.bfloat16
+    outCol[c] = roundToRne[T](sig)
     ring[c * RingWidth + 0] = ring[c * RingWidth + 1]
     ring[c * RingWidth + 1] = ring[c * RingWidth + 2]
     ring[c * RingWidth + 2] = xCol[c]
@@ -337,61 +338,61 @@ proc f32InvSqrt(x: float32): float32 {.device.} =
   `result` = 1.0f / sqrt(`x`);
   """.}
 
-proc l2normRow(x, outp: ptr UncheckedArray[bfloat16], cols: int32) {.device.} =
+proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   ## One l2-normalized row in the recorded chain's rounding pipeline.
   ## The scalar spelling stays local, qk_norm_rope's tile-op l2 chain
   ## does not serve this rounding pipeline.
   ##
-  ## | step                | rounding                                                             |
-  ## | ------------------- | -------------------------------------------------------------------- |
-  ## | elementwise squares | round to bf16                                                        |
-  ## | row sum             | f32 serial accumulation, the sum rounds to bf16                      |
-  ## | sum + eps, rsqrt    | the sum rounds to bf16, the rsqrt computes in f32 and rounds to bf16 |
-  ## | normalization       | the multiply rounds to bf16 per element                              |
+  ## | step                | rounding                                                    |
+  ## | ------------------- | ----------------------------------------------------------- |
+  ## | elementwise squares | round to the family dtype                                   |
+  ## | row sum             | f32 serial accumulation, the sum rounds to the family dtype |
+  ## | sum + eps, rsqrt    | the sum rounds, the rsqrt computes in f32 and rounds        |
+  ## | normalization       | the multiply rounds per element                             |
   ##
   ## Every lane walks the whole row serially, all lanes compute identical sums,
   ## the lanes then scatter the multiply.
   var acc = 0.0'f32
   for c in 0'i32 ..< cols:
     let xi = x[c].float32
-    acc += (xi * xi).bfloat16.float32
-  let sumBf = acc.bfloat16.float32
+    acc += roundToRne[T](xi * xi).float32
+  let sumFam = roundToRne[T](acc).float32
   let inv =
-    f32InvSqrt((sumBf + 1.0e-6'f32).bfloat16.float32).bfloat16.float32
+    roundToRne[T](f32InvSqrt(roundToRne[T](sumFam + 1.0e-6'f32).float32)).float32
   var i = int32(thread_index_in_threadgroup)
   while i < cols:
-    outp[i] = (x[i].float32 * inv).bfloat16
+    outp[i] = roundToRne[T](x[i].float32 * inv)
     i += 32
 
-proc gateValues(aRow, bRow, dtBias: ptr UncheckedArray[bfloat16],
+proc gateValues[T](aRow, bRow, dtBias: ptr UncheckedArray[T],
     aLog: ptr UncheckedArray[float32],
     g: ptr UncheckedArray[float32],
-    beta: ptr UncheckedArray[bfloat16]) {.device.} =
+    beta: ptr UncheckedArray[T]) {.device.} =
   ## Recurrence values g and beta over the Hv heads, one head per lane,
   ## in the recorded spellings:
   ## - g stays f32 end to end with no round,
   ##   g = -exp(A_log)·softplus(a + dt_bias)
-  ## - beta = sigmoid(b) with one bf16 round
+  ## - beta = sigmoid(b) with one family-dtype round
   let h = int32(thread_index_in_threadgroup)
   let x = aRow[h].float32 + dtBias[h].float32
   g[h] = -exp2(aLog[h] * Log2e) * softplusDev(x)
-  beta[h] = (1.0'f32 / (1.0'f32 +
-      exp2((-bRow[h].float32) * Log2e))).bfloat16
+  beta[h] = roundToRne[T](1.0'f32 / (1.0'f32 +
+      exp2((-bRow[h].float32) * Log2e)))
 
 # ─── The dispatcher ───────────────────────────────────────────────────
 
-proc qwen35GdnLayerWalk*[HaveNorm: static bool](
+proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
     counters: ptr UncheckedArray[uint32],
-    bfA: ptr UncheckedArray[bfloat16],
+    bfA: ptr UncheckedArray[T],
     f32A: ptr UncheckedArray[float32],
-    xPrev, rPrev: ptr UncheckedArray[bfloat16],
+    xPrev, rPrev: ptr UncheckedArray[T],
     state: ptr UncheckedArray[float32],
-    ring: ptr UncheckedArray[bfloat16],
+    ring: ptr UncheckedArray[T],
     norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W,
     routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW:
-      ptr UncheckedArray[bfloat16],
+      ptr UncheckedArray[T],
     aLog: ptr UncheckedArray[float32],
-    dtBias: ptr UncheckedArray[bfloat16],
+    dtBias: ptr UncheckedArray[T],
     eps: float32) {.device.} =
   ## Decode regime, one token per launch:
   ## - the MoE composition and the fold hardcode the token coordinate 0
@@ -419,21 +420,21 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     waveAdd(counters, 0)
   elif tx < int32(EndStageQkv):
     waveWait(counters, 0, 1)
-    dense_linear_tile_fwd[bfloat16, 8192, 2048, 64](
+    dense_linear_tile_fwd[T, 8192, 2048, 64](
       (bfA +% sQkvCol), (bfA +% sNorm1), qkvW, 1, tx - 1, 0)
     waveAdd(counters, 1)
   elif tx < int32(EndStageZ):
     waveWait(counters, 0, 1)
-    dense_linear_tile_fwd[bfloat16, 4096, 2048, 64](
+    dense_linear_tile_fwd[T, 4096, 2048, 64](
       (bfA +% sZ), (bfA +% sNorm1), zW, 1, tx - int32(EndStageQkv), 0)
     waveAdd(counters, 2)
   elif tx < int32(EndStageAbProj):
     waveWait(counters, 0, 1)
     if tx == int32(EndStageZ):
-      dense_linear_tile_fwd[bfloat16, 32, 2048, 32](
+      dense_linear_tile_fwd[T, 32, 2048, 32](
         (bfA +% sA), (bfA +% sNorm1), aW, 1, 0, 0)
     else:
-      dense_linear_tile_fwd[bfloat16, 32, 2048, 32](
+      dense_linear_tile_fwd[T, 32, 2048, 32](
         (bfA +% sB), (bfA +% sNorm1), bW, 1, 0, 0)
     waveAdd(counters, 3)
   elif tx < int32(EndStageConv):
@@ -487,7 +488,7 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
     waveAdd(counters, 8)
   elif tx < int32(EndStageOutProj):
     waveWait(counters, 8, 4)
-    dense_linear_tile_fwd[bfloat16, 2048, 4096, 64](
+    dense_linear_tile_fwd[T, 2048, 4096, 64](
       (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 1, tx - int32(EndStageONorm), 0)
     waveAdd(counters, 9)
     when not HaveNorm:
@@ -509,14 +510,14 @@ proc qwen35GdnLayerWalk*[HaveNorm: static bool](
   elif tx < int32(EndStageMoeDecode):
     when HaveNorm:
       waveWait(counters, 10, 1)
-      moe_fwd_decode_at[2048, 256, 8, 512, 1.0'f32, true]((f32A +% sPartial), (bfA +% sNormed2), routerW, gateUpW,
+      moe_fwd_decode_at[T, 2048, 256, 8, 512, 1.0'f32, true]((f32A +% sPartial), (bfA +% sNormed2), routerW, gateUpW,
         downW, sharedGW, sharedUW, sharedDW, sharedGVW,
         (bfA +% sH), (bfA +% sHs), 0, tx - int32(EndStageFoldNorm2))
     waveAdd(counters, 11)
   else:
     when HaveNorm:
       waveWait(counters, 11, 9)
-      moe_decode_merge_at[bfloat16, 2048, 8](
+      moe_decode_merge_at[T, 2048, 8](
         (bfA +% sMoeOut), (f32A +% sPartial), 0, tx - int32(EndStageMoeDecode))
     waveAdd(counters, 12)
     # Launch-end counter self-reset, the merge's last threadgroup (tx 949)
