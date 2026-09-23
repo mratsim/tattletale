@@ -7,52 +7,62 @@
 
 # ############################################################
 #
-#     Mixture-of-experts forward (moe_fwd): Tile API port
+#     Mixture-of-experts forward (moe_fwd):
+#       Tile API port
 #
 # ############################################################
 
-## Mixture-of-experts forward on the ceramic Tile API.
-## Implements the Glm4MoeLiteMoE routing, the NaiveMoe experts and the shared MLP for the GLM-4.7-Flash dims.
-## Experimental: not a production kernel, known gaps below, not fixed.
+## Mixture-of-experts forward on the ceramic Tile API, the runtime-config
+## entry `moe_fwd`, the fused routed-plus-shared expert body whose section
+## dims derive from `gdn_moe_layer_graph`'s MoE section.
 ##
-## Dataflow per token (fp32 arithmetic over fp16-rounded inputs):
+## - experimental, not a production kernel, known gaps below
+## - the dims come from the caller's config, the shape contract named out below
 ##
-##   router:  x --> router_w @ --> logits (64) --> sigmoid --> s
-##            top-4 of s (lowest-index tiebreak) --> w = s/(sum(w)+1e-20)·1.8
-##   experts: per slot e = top4[slot]:
+## Per-token dataflow, fp32 arithmetic over fp16-rounded inputs:
+##
+##   router   x --> router_w @ --> logits (n_routed_experts)
+##            --> sigmoid --> s
+##            top-K of s (lowest-index tiebreak)
+##            --> w = s/(sum(w)+1e-20)·routed_scaling
+##   experts  per slot e = ids[slot]
 ##            x --> gate_up_w[e] @ --> (gHalf, uHalf)
-##                  --> h = silu(gHalf)·uHalf (1536) --> fp16 round
-##                  --> h_scratch[t, slot]
-##            routed = Σ_slot w[slot] · (down_w[e] @ h_scratch[t, slot])
-##   shared:  x --> shared_gate_up_w @ --> (gs, us)
-##                  --> hs = silu(gs)·us (1536) --> fp16 round
-##                  --> hs_scratch[t]
-##            out_r[t] = fp16(routed + shared_down_w @ hs_scratch[t])
+##                  --> h = act(gHalf)·uHalf (moe_intermediate)
+##                  --> fp16 round --> h_scratch[t, slot]
+##            routed = Σ_slot w[slot]·(down_w[e] @ h_scratch[t, slot])
+##   shared   x --> shared_gate_up_w[s] @ --> (gs, us)
+##                  --> hs = act(gs)·us --> fp16 round --> hs_scratch[t, s]
+##            out_r[t] = fp16(routed + Σ_s shared_down_w[s] @ hs_scratch[t, s])
 ##
-## The model's group selection (n_group = 1, topk_group = 1, zero bias)
-## selects all 64 experts, so the group step is a no-op.
-## The top-4 runs directly over the sigmoid scores.
+## Buffers, all fp16, every extent a runtime dim:
 ##
-## `moe_fwd_generic` below drives the same chain from runtime model-config
-## values. Ragged tails run through `loadTileBounded`/`storeTileMasked`.
+##   | buffer     | shape                                            |
+##   | ---------- | ------------------------------------------------ |
+##   | out_r, x   | (num_tokens, hidden)                             |
+##   | router_w   | (n_routed_experts, hidden)                       |
+##   | gate_up_w  | (n_routed_experts, 2·moe_intermediate, hidden)   |
+##   | down_w     | (n_routed_experts, hidden, moe_intermediate)     |
+##   | shared_*   | (n_shared_experts, ·), the same fusion           |
+##   | h_scratch  | (num_tokens, top_k, moe_intermediate), scratch   |
+##   | hs_scratch | (num_tokens, n_shared_experts, moe_intermediate) |
 ##
-## Buffers:
-##   - out_r: (num_tokens, 2048) fp16 routed + shared output
-##   - x: (num_tokens, 2048) fp16
-##   - router_w: (64, 2048) fp16
-##   - gate_up_w: (64, 3072, 2048) fp16 fused g|up weight (g 0:1536, up 1536:3072)
-##   - down_w: (64, 2048, 1536) fp16
-##   - shared_gate_up_w: (3072, 2048) fp16
-##   - shared_down_w: (2048, 1536) fp16
-##   - h_scratch: (num_tokens, 4, 1536) fp16 working buffer
-##   - hs_scratch: (num_tokens, 1536) fp16 working buffer
+## The gate_up shapes fuse the g and up halves, g at 0:moe_intermediate.
+##
+## Ragged tails run through `loadTileBounded`/`storeTileMasked`.
+##
+## The compiled-in fixed maxima, `n_routed_experts <= ScoreChunk·ScoreChunks`
+## and `top_k <= MaxTopK`, are misconfig guards, not shape forks.
+##
+## - the register tiles size once for the largest accepted config
+## - a config beyond one stops before launch, the device half drops it
+##   and the host companion `moeFwdConfigGuard` raises naming the dim
 ##
 ## Known production gaps (documented, not fixed):
-##   - one token per threadgroup: no expert-batched B tiles, no x
-##     reuse across the per-slot projections (x re-read from global
-##     per N-tile)
+##   - one token per threadgroup:
+##     no expert-batched B tiles, no x
+##     reuse across the per-slot projections (x re-read from global per N-tile)
 ##   - the router weight is fp16 (the reference router is fp32)
-##   - the top-4 is a fixed 4-pass register selection, no score
+##   - the top-K is a fixed-pass register selection, no score
 ##     sorting output
 
 import workspace/crucible
@@ -63,53 +73,22 @@ import ./tile_io_rows
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra
 
-# The real GLM-4.7-Flash dims, baked as module constants.
-#
-# - the kernel is non-generic, so tile types spell the atoms explicitly
-# - default atoms (rt_l/rv without an atom argument) need a backend tag
-#   for getTileConfig, which crucibleSetBackend makes resolvable
-# - on Metal those defaults resolve to the Apple simdgroup atoms,
-#   whose codegen (simdgroup_multiply_accumulate)
-#   differs from the universal arithmetic atoms spelled below
-#
-# Spelled members stay so generated kernels remain byte-identical.
+# Tile atoms are spelled explicitly, no defaults:
+# - the explicit atom locks the tile's codegen across call sites
+# - the universal arithmetic atoms below, not the Apple simdgroup
+#   defaults `crucibleSetBackend` resolves for implicit atoms
 
-
-const
-  HiddenDim = 2048          # the model hidden size
-  NumRoutedExperts = 64     # n_routed_experts
-  MoeIntermediate = 1536    # moe_intermediate_size, also the shared MLP width
-  TopK = 4                  # num_experts_per_tok
-  GateUpOut = 3072          # 2 · MoeIntermediate, the fused g|u width
-  RoutedScaling = 1.8'f32   # routed_scaling_factor
 
 # ═════════════════════════════════════════════════════════════════════
 #  Local device extensions: the routing and activation arithmetic
 #  ═════════════════════════════════════════════════════════════════════
 
-proc siluMul16[A: static MmaAtom](
-    dst: var RtLeft[float16, 32, 32, A],
-    gHalf, uHalf: RtLeft[float32, 32, 32, A]) {.device.} =
-  ## `dst[r][c] = fp16(silu(gHalf[r][c]) · uHalf[r][c])`: the expert
-  ## activation with one fp16 RNE round (the h_scratch contract).
-  ## The silu is fp32 from the fp32 gHalf operand, g / (1 + exp2(−g·log2e)),
-  ## and the product is fp32 with one fp16 round at the end.
-  ## The frag walk follows the loadTile lane→element mapping, so the operands agree elementwise.
-  const rowTiles = 32 div A.getM()
-  const colTiles = 32 div A.getN()
-  const vpt = A.getVpt()
-  for n in 0 ..< rowTiles:
-    for m in 0 ..< colTiles:
-      for v in 0 ..< vpt:
-        let g = gHalf.frags[n][m].frag[v]
-        let s = g / (1.0'f32 + exp2(-g * Log2e))
-        dst.frags[n][m].frag[v] = (s * uHalf.frags[n][m].frag[v]).to(float16)
-
 proc accScale[A: static MmaAtom](
     dst: var RtLeft[float32, 32, 32, A],
     src: RtLeft[float32, 32, 32, A],
     s: float32) {.device.} =
-  ## `dst[r][c] += s · src[r][c]`: the weighted routed accumulation
+  ## `dst[r][c] += s · src[r][c]`:
+  ##   the weighted routed accumulation
   ## over the 4 slots.
   const rowTiles = 32 div A.getM()
   const colTiles = 32 div A.getN()
@@ -123,7 +102,8 @@ proc accScale[A: static MmaAtom](
 proc addStore16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     routed, shared: RtLeft[float32, 32, 32, A]) {.device.} =
-  ## `dst[r][c] = fp16(routed[r][c] + shared[r][c])`: the output's one fp16 RNE round.
+  ## `dst[r][c] = fp16(routed[r][c] + shared[r][c])`:
+  ##   the output's one fp16 RNE round.
   const rowTiles = 32 div A.getM()
   const colTiles = 32 div A.getN()
   const vpt = A.getVpt()
@@ -133,212 +113,8 @@ proc addStore16[A: static MmaAtom](
         dst.frags[n][m].frag[v] =
           (routed.frags[n][m].frag[v] + shared.frags[n][m].frag[v]).to(float16)
 
-proc gatherScores[AL, AS: static MmaAtom](
-    scores: var RtLeft[float32, 8, 8, AS],
-    logits: RtLeft[float32, 32, 64, AL]) {.device.} =
-  ## Redistributes the 64 row-0 router logits of the (32, 64)
-  ## accumulator into the (8, 8) score tile: element (r, c) holds
-  ## sigmoid(logit of expert 8r + c), 2 values per lane across all 32
-  ## lanes. The row-0 logits live in the accumulator's lanes
-  ## {0, 1, 8, 9} (2 per col-frag). Destination lane d pulls its pair
-  ## from the source lane `d and 9` (the row-0 owner of the same col
-  ## pair). The lane→expert mapping follows the universal AC fragment
-  ## layout of both tiles (a wrong mapping shows up as a routing
-  ## mismatch, not a value error).
-  static:
-    doAssert AL.getM() == AS.getM() and AL.getN() == AS.getN() and
-      AL.getVpt() == AS.getVpt(),
-      "gatherScores: both atoms must share the lane→fragment cell mapping"
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8          # the destination row = expert div 8
-  let srcLane = lane and 9    # the row-0 owner of the lane's col pair
-  for m in 0 ..< 8:
-    let g0 = simdShuffle(logits.frags[0][m].frag[0], uint32(srcLane))
-    let g1 = simdShuffle(logits.frags[0][m].frag[1], uint32(srcLane))
-    if m == r:
-      scores.frags[0][0].frag[0] =
-        1.0'f32 / (1.0'f32 + exp2(-g0 * Log2e))
-      scores.frags[0][0].frag[1] =
-        1.0'f32 / (1.0'f32 + exp2(-g1 * Log2e))
-
-proc topk4[A: static MmaAtom](
-    scores: RtLeft[float32, 8, 8, A],
-    top4: var array[4, int32],
-    w: var array[4, float32]) {.device.} =
-  ## Selects the 4 largest router scores of the (8, 8) score tile:
-  ## the top-4 of the sigmoid values with the lowest-index tiebreak.
-  ## The weights come from the original tile. The selection runs on
-  ## a masked copy. Per pass: the local max of the lane's 2 scores,
-  ## a 5-step simdShuffleDown max tree (deltas 16, 8, 4, 2, 1)
-  ## broadcast from lane 0, the candidate expert indices where
-  ## score == max (no match = 64) reduced by a 5-step min tree
-  ## broadcast from lane 0, and the found expert masked to −inf in
-  ## the selection copy.
-  var sel: RtLeft[float32, 8, 8, A]
-  sel.frags[0][0].frag[0] = scores.frags[0][0].frag[0]
-  sel.frags[0][0].frag[1] = scores.frags[0][0].frag[1]
-  let lane = int(thread_index_in_threadgroup)
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod 8
-  let c0 = cell div 8
-  let e0 = int32(8 * r + c0)
-  let e1 = e0 + 1
-  for slot in 0 ..< 4:
-    var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
-    lm = max(lm, simdShuffleDown(lm, 16'u32))
-    lm = max(lm, simdShuffleDown(lm, 8'u32))
-    lm = max(lm, simdShuffleDown(lm, 4'u32))
-    lm = max(lm, simdShuffleDown(lm, 2'u32))
-    lm = max(lm, simdShuffleDown(lm, 1'u32))
-    lm = simdShuffle(lm, 0'u32)
-    var cand = 64'i32
-    if sel.frags[0][0].frag[0] == lm:
-      cand = e0
-    if sel.frags[0][0].frag[1] == lm:
-      cand = min(cand, e1)
-    cand = min(cand, simdShuffleDown(cand, 16'u32))
-    cand = min(cand, simdShuffleDown(cand, 8'u32))
-    cand = min(cand, simdShuffleDown(cand, 4'u32))
-    cand = min(cand, simdShuffleDown(cand, 2'u32))
-    cand = min(cand, simdShuffleDown(cand, 1'u32))
-    cand = simdShuffle(cand, 0'u32)
-    top4[slot] = cand
-    let rw = int(cand div 8)
-    let cw = int(cand mod 8)
-    let own = (cw div 2 mod 2) + 2 * (rw mod 2) + 4 * ((rw div 2) mod 2) +
-              8 * (cw div 4 mod 2) + 16 * ((rw div 4) mod 2)
-    let w0 = simdShuffle(scores.frags[0][0].frag[0], uint32(own))
-    let w1 = simdShuffle(scores.frags[0][0].frag[1], uint32(own))
-    w[slot] = if (cw mod 2) == 0: w0 else: w1
-    if e0 == cand:
-      sel.frags[0][0].frag[0] = -3.402823466e38'f32
-    if e1 == cand:
-      sel.frags[0][0].frag[1] = -3.402823466e38'f32
-
 # ═════════════════════════════════════════════════════════════════════
-#  The kernel
-#  ═════════════════════════════════════════════════════════════════════
-
-proc moe_fwd*(
-    out_r: ptr UncheckedArray[float16],   # (num_tokens, 2048) fp16 routed+shared output
-    x: ptr UncheckedArray[float16],       # (num_tokens, 2048) fp16
-    router_w: ptr UncheckedArray[float16],# (64, 2048) fp16
-    gate_up_w: ptr UncheckedArray[float16],# (64, 3072, 2048) fp16 (expert, g|up)
-    down_w: ptr UncheckedArray[float16],  # (64, 2048, 1536) fp16
-    shared_gate_up_w: ptr UncheckedArray[float16], # (3072, 2048) fp16
-    shared_down_w: ptr UncheckedArray[float16],    # (2048, 1536) fp16
-    h_scratch: ptr UncheckedArray[float16],  # (num_tokens, 4, 1536) fp16 working buffer
-    hs_scratch: ptr UncheckedArray[float16], # (num_tokens, 1536) fp16 working buffer
-    num_tokens: int32) {.device.} =
-  ## Computes the module doc's contract for one token:
-  ##   - the router GEMV + in-register top-4
-  ##   - the 4 per-slot expert activations into h_scratch
-  ##   - the shared expert activation into hs_scratch
-  ##   - the weighted routed + shared down projections
-  ##   - the fp16 output store
-  ##
-  ## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup.
-  ## The expert sets differ per token, so a shared-B tile across rows
-  ## is impossible. Every tile load/store carries the token
-  ## or the h_scratch row in the origin's batch component. The tile's
-  ## 32 plane rows have only row 0 real, and origin[2] steps in 32-row
-  ## units.
-  ##
-  ## GEMMs: 32-row tiles loaded row-bounded to 1 (only row 0 real),
-  ## 16-wide K-steps (128 over 2048) with mma_AB into fp32
-  ## accumulators. The router GEMV fills a (32, 64) accumulator.
-  ## The 64 row-0 logits redistribute into an (8, 8) score tile,
-  ## 2 values per lane. The top-4 runs as 4 passes over the tile
-  ## (the gatherScores and topk4 device procs).
-  ## Register budget: ~2 live 32×32 fp32 accumulators (the gHalf/uHalf pair) plus transients.
-  ## The h intermediates round to fp16 and land in the working buffers, which are not caller padding.
-  let t = int32(threadgroup_position_in_grid.x)
-
-  let glX = x.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))
-  let glOut = out_r.gd(shape = (-1, -1, -1, -1), stride = (2048, 0, 2048, 1))
-  let glRouter = router_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
-  let glGu = gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (GateUpOut * 2048, 0, 2048, 1))
-  let glDown = down_w.gd(shape = (-1, -1, -1, -1), stride = (2048 * 1536, 0, 1536, 1))
-  let glSgu = shared_gate_up_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 2048, 1))
-  let glSd = shared_down_w.gd(shape = (-1, -1, -1, -1), stride = (1, 0, 1536, 1))
-  let glH = h_scratch.gd(shape = (-1, -1, -1, -1), stride = (1536, 1536, 1536, 1))
-  let glHs = hs_scratch.gd(shape = (-1, -1, -1, -1), stride = (1536, 0, 1536, 1))
-
-  var dR: rt_l(float32, 32, NumRoutedExperts, UNIVERSAL_8x8x8_F32F16F16F32)
-  var a: rt_l(float16, 32, 16, UNIVERSAL_8x8x8_F32F16F16F32)
-  var b16: rt_r(float16, 16, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var b64: rt_r(float16, 16, NumRoutedExperts, UNIVERSAL_8x8x8_F32F16F16F32)
-  var scores: rt_l(float32, 8, 8, UNIVERSAL_8x8x8_F32F32F32F32)
-  var top4: array[4, int32]
-  var w: array[4, float32]
-  var gHalf: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var uHalf: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var h16: rt_l(float16, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var routed: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var d: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var sh: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-  var out16: rt_l(float16, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
-
-  # ── router GEMV (64 outputs, row 0 real) + sigmoid top-4 ──
-  dR.zero()
-  for kk in 0'i32 ..< HiddenDim div 16:
-    a.loadTileRows(glX, (t, 0, 0, kk), 1)
-    b64.loadTile(glRouter, (0, 0, 0, kk))
-    dR.mma_AB(a, b64)
-  scores.gatherScores(dR)
-  scores.topk4(top4, w)
-  var sumW = w[0] + w[1] + w[2] + w[3] + 1e-20'f32
-  for slot in 0 ..< 4:
-    w[slot] = w[slot] / sumW * RoutedScaling
-
-  # ── shared expert activation: hs = silu(gs) · us -> hs_scratch ──
-  for nt in 0'i32 ..< MoeIntermediate div 32:
-    gHalf.zero()
-    uHalf.zero()
-    for kk in 0'i32 ..< HiddenDim div 16:
-      a.loadTileRows(glX, (t, 0, 0, kk), 1)
-      b16.loadTile(glSgu, (0, 0, nt, kk))
-      gHalf.mma_AB(a, b16)
-      b16.loadTile(glSgu, (0, 0, nt + MoeIntermediate div 32, kk))
-      uHalf.mma_AB(a, b16)
-    h16.siluMul16(gHalf, uHalf)
-    glHs.storeTileRows(h16, (t, 0, 0, nt), 1)
-
-  # ── the 4 routed expert activations -> h_scratch[t, slot] ──
-  for slot in 0 ..< TopK:
-    for nt in 0'i32 ..< MoeIntermediate div 32:
-      gHalf.zero()
-      uHalf.zero()
-      for kk in 0'i32 ..< HiddenDim div 16:
-        a.loadTileRows(glX, (t, 0, 0, kk), 1)
-        b16.loadTile(glGu, (top4[slot], 0, nt, kk))
-        gHalf.mma_AB(a, b16)
-        b16.loadTile(glGu, (top4[slot], 0, nt + MoeIntermediate div 32, kk))
-        uHalf.mma_AB(a, b16)
-      h16.siluMul16(gHalf, uHalf)
-      glH.storeTileRows(h16, (t * 4 + slot, 0, 0, nt), 1)
-
-  # ── output: routed = Σ w[slot]·down_w[e] @ h, + shared, fp16 store ──
-  for nt in 0'i32 ..< HiddenDim div 32:
-    routed.zero()
-    for slot in 0 ..< TopK:
-      d.zero()
-      for kk in 0'i32 ..< MoeIntermediate div 16:
-        a.loadTileRows(glH, (t * 4 + slot, 0, 0, kk), 1)
-        b16.loadTile(glDown, (top4[slot], 0, nt, kk))
-        d.mma_AB(a, b16)
-      routed.accScale(d, w[slot])
-    sh.zero()
-    for kk in 0'i32 ..< MoeIntermediate div 16:
-      a.loadTileRows(glHs, (t, 0, 0, kk), 1)
-      b16.loadTile(glSd, (0, 0, nt, kk))
-      sh.mma_AB(a, b16)
-    out16.addStore16(routed, sh)
-    glOut.storeTileRows(out16, (t, 0, 0, nt), 1)
-
-# ═════════════════════════════════════════════════════════════════════
-#  The runtime-dims generic entry
+#  The kernel, the runtime-config entry
 #  ═════════════════════════════════════════════════════════════════════
 
 ## | aspect         | contract                                                 |
@@ -352,11 +128,12 @@ proc moe_fwd*(
 ##   - 64 experts per score chunk, at most 8 chunks, n_routed_experts <= 512
 ##   - at most MaxTopK routing slots
 ##   the guard's two halves, the device entry drops the launch, the host
-##   companion `moeFwdGenericConfigGuard` raises naming the offending dim
+##   companion `moeFwdConfigGuard` raises naming the offending dim
 ##
-## GLM-4.7-Flash's baked `moe_fwd` constants above are one config point of this function.
-## With those values the two entries produce the same output,
-## verified bit-exact by the moe suite.
+## - the moe suite compares this entry's output bits at the GLM-4.7-Flash
+##   config row against the baked proc's captured bits
+## - six runs, three seeds at T=8 and T=4, zero bit mismatches required
+## - the fixture lives at `tests/ceramic/moe_fwd_glm_baked_receipts.nim`
 
 const
   ScoreChunk* = 64         # experts per router score chunk, the (32, 64) accumulator's width
@@ -377,7 +154,7 @@ proc actMul16[A: static MmaAtom](
   ## activation with one fp16 RNE round (the h_scratch contract),
   ## the activation picked at runtime.
   ##
-  ## - ActSilu, g / (1 + exp2(−g·log2e)), the baked `siluMul16` form
+  ## - ActSilu, g / (1 + exp2(−g·log2e)), the silu form
   ## - ActGeluTanh, 0.5·g·(1 + tanh(s)), s = InvSqrt2Pi·(g + GeluCoef·g³)
   ##
   ## The gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
@@ -457,11 +234,12 @@ proc topkRouted[A: static MmaAtom](
   ##
   ## An unmatched pass, a NaN/Inf-poisoned score comparing false against
   ## everything so no score equals the max, routes the slot to expert
-  ## eCount − 1 with zero weight. For eCount ≥ 1 that id stays inside
-  ## [0, eCount), for eCount = 0 the slot id is −1, the no-expert
-  ## config the entry's dims guard rejects before launch.
+  ## eCount − 1 with zero weight.
   ##
-  ## The downstream expert-row reads stay in bounds.
+  ## - eCount ≥ 1, that id stays inside [0, eCount)
+  ## - eCount = 0, the slot id is −1, the no-expert config the entry's
+  ##   dims guard rejects before launch, the downstream expert-row reads
+  ##   stay in bounds
   var sel: RtLeft[float32, 8, ScoreChunk * ScoreChunks, A]
   for m in 0 ..< ScoreChunks:
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
@@ -484,8 +262,7 @@ proc topkRouted[A: static MmaAtom](
     # A candidate index above every real expert index. The min reduction
     # over indices leaves the sentinel standing only when no score matched
     # the max, so the `cand >= ScoreChunk * ScoreChunks` test below fires.
-    # The baked top-K's sentinel was the sigmoid-bound 1.0 read as an index.
-    # This sentinel is index-space too, it needs only to exceed
+    # The sentinel is index-space, it needs only to exceed
     # ScoreChunk·ScoreChunks (512) and 1 shl 30 clears that with margin
     # for any score values.
     var localCand = int32(1 shl 30)
@@ -523,10 +300,10 @@ proc topkRouted[A: static MmaAtom](
         if e0 + 1 == cand:
           sel.frags[0][m].frag[1] = -3.402823466e38'f32
 
-proc moeFwdGenericConfigGuard*(
+proc moeFwdConfigGuard*(
     num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
     n_shared_experts: int32) =
-  ## Host-side half of `moe_fwd_generic`'s compiled-in maxima guard.
+  ## Host-side half of `moe_fwd`'s compiled-in maxima guard.
   ##
   ## Raises with the offending dimension named. The device entry itself
   ## only drops the launch, the GPU has no message channel, so a caller
@@ -537,9 +314,9 @@ proc moeFwdGenericConfigGuard*(
   ##   - n_shared_experts at least 0
   ##   - n_routed_experts inside [1, ScoreChunk·ScoreChunks], top_k inside [1, MaxTopK]
   ##
-  ## `moeFwdGenericConfigGuard(8, 2048, 64, 1536, 4, 1)` returns, the accepted GLM row.
-  ## `moeFwdGenericConfigGuard(8, 2048, 1024, 1536, 4, 1)` raises AssertionDefect naming n_routed_experts,
-  ## the expert max times the chunk width.
+  ## `moeFwdConfigGuard(8, 2048, 64, 1536, 4, 1)` returns, the accepted 64-expert/4-slot row.
+  ## `moeFwdConfigGuard(8, 2048, 1024, 1536, 4, 1)` raises AssertionDefect naming
+  ## n_routed_experts, the expert max times the chunk width.
   doAssert num_tokens >= 1, "num_tokens must be at least 1"
   doAssert hidden >= 1, "hidden must be at least 1"
   doAssert moe_intermediate >= 1, "moe_intermediate must be at least 1"
@@ -549,7 +326,7 @@ proc moeFwdGenericConfigGuard*(
   doAssert top_k >= 1 and top_k <= MaxTopK,
     "top_k outside [1, " & $MaxTopK & "]"
 
-proc moe_fwd_generic*(
+proc moe_fwd*(
     out_r: ptr UncheckedArray[float16],              # (num_tokens, hidden) fp16 output
     x: ptr UncheckedArray[float16],                  # (num_tokens, hidden) fp16 activations
     router_w: ptr UncheckedArray[float16],           # (n_routed_experts, hidden) fp16 router weight
@@ -565,7 +342,7 @@ proc moe_fwd_generic*(
     activation: int32) {.device.} =
   ## Runtime model-config values drive the module doc's chain through this entry.
   ##
-  ## Routing, the GLM sigmoid skeleton.
+  ## Routing, the sigmoid skeleton.
   ##
   ##   logits → sigmoid → top-K (lowest-index tiebreak)
   ##          → w = s/(sum(w)+1e-20)·routed_scaling
@@ -591,7 +368,7 @@ proc moe_fwd_generic*(
   ## A config beyond the compiled-in fixed maxima, n_routed_experts >
   ## ScoreChunk·ScoreChunks (512) or top_k > MaxTopK, or a non-positive dim, stops before launch.
   ##
-  ## The entry drops the launch, `moeFwdGenericConfigGuard`
+  ## The entry drops the launch, `moeFwdConfigGuard`
   ## reports naming the offending dimension, the caller
   ## runs the companion before each `engine.run` launch.
   ##
@@ -613,11 +390,11 @@ proc moe_fwd_generic*(
   ##     the last chunk's tail experts masked to −float32 max
   ##
   ## Grid (num_tokens, 1, 1) at 32 lanes, one token per threadgroup,
-  ## the baked `moe_fwd`'s geometry. Register budget near 2 live 32×32
-  ## fp32 accumulators (the gHalf/uHalf pair) plus transients.
+  ## register budget near 2 live 32×32 fp32 accumulators
+  ## (the gHalf/uHalf pair) plus transients.
   # The register tiles are compiled-in maxima, a config beyond one would
   # write past them. The entry drops the launch, the host companion
-  # `moeFwdGenericConfigGuard` reports and the caller runs it before each launch.
+  # `moeFwdConfigGuard` reports and the caller runs it before each launch.
   if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
       n_shared_experts < 0 or
       n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or
