@@ -21,7 +21,7 @@
 
 import std/[json, os, options, tables, algorithm, strutils]
 import workspace/zstd/zstd_highlevel
-import workspace/chattyninja
+import jinja_data_model {.all.}
 
 const
   FixturesDir* = currentSourcePath().parentDir()
