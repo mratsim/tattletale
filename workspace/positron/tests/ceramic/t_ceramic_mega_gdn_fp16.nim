@@ -287,7 +287,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   waveSyncCheck()
   outputRanges()
   sentinels()
-  let bfSnap = readInto(fpA.hostPtr, BfArenaLen)
+  let fpSnap = readInto(fpA.hostPtr, BfArenaLen)
   let f32Snap = readInto(f32A.hostPtr, F32ArenaLen)
   let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
@@ -322,14 +322,14 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     doAssert dY < 0.1'f32, "y outside the sanity bound"
 
   # the relaunch, restored arenas, state and ring, zeroed counters
-  for i in 0 ..< BfArenaLen: fpA.hostPtr[i] = bfSnap[i]
+  for i in 0 ..< BfArenaLen: fpA.hostPtr[i] = fpSnap[i]
   for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = f32Snap[i]
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = stateSnap[i]
   for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = ringSnap[i]
   discard launch()
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
-    doAssert fpA.hostPtr[i] == bfSnap[i], &"bf arena differs at {i}"
+    doAssert fpA.hostPtr[i] == fpSnap[i], &"fp16 arena differs at {i}"
   for i in 0 ..< F32ArenaLen:
     doAssert f32A.hostPtr[i] == f32Snap[i], &"f32 arena differs at {i}"
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
