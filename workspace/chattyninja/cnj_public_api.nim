@@ -9,7 +9,9 @@
 ## - the render tier, `parseJinjaTemplate`, `startJinjaRender`, `pullInto`,
 ##   `renderToString`, over the compiled artifact and the caller's `JinjaRenderContext`
 ## - the data tier, the value constructors and `JinjaError`, the whole-mapping
-##   dict form `dictVal` over key/value pairs, the `tojson` form `toJson`
+##   dict form `dictVal` over key/value pairs, the `tojson` form `toJson`.
+##   The mutable-mapping form stays engine-internal and the caller never names it,
+##   templates reaching `namespace()` through the engine's global machinery
 ## - the depth, nesting, step and element caps
 ##
 ## Source modules sit under `import x {.all.}`. The surface above is exported by name,
@@ -40,7 +42,7 @@ export jinja_data_model.JinjaVal,
     jinja_data_model.TTT_CNJ_ValueDepthCap,
     jinja_data_model.undefinedVal, jinja_data_model.noneVal, jinja_data_model.boolVal,
     jinja_data_model.intVal, jinja_data_model.floatVal, jinja_data_model.strVal,
-    jinja_data_model.seqVal, jinja_data_model.dictVal, jinja_data_model.nsVal,
-    jinja_data_model.rangeVal, jinja_data_model.cutVal
+    jinja_data_model.seqVal, jinja_data_model.dictVal, jinja_data_model.rangeVal,
+    jinja_data_model.cutVal
 
 export jinja_serialize.toJson
