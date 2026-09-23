@@ -660,7 +660,8 @@ def nim_prose_lines(text):
     def banner_rule(s):
         core = s.lstrip("#").strip()
         return bool(core) and set(core) <= {"#", " "} or \
-            bool(core) and set(core) <= {"-", " "}
+            bool(core) and set(core) <= {"-", " "} or \
+            bool(core) and set(core) <= {"═", " "}
 
     for i, raw in enumerate(raws, 1):
         line = raw.rstrip()
@@ -673,9 +674,15 @@ def nim_prose_lines(text):
             in_block_comment = True
             continue
         if s.startswith("##"):
+            if LICENSE_SHAPE.match(s.lstrip("#").strip()):
+                # The license header is fixed legal text, exempt here the
+                # same way the `#`-comment branch exempts it
+                continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
         if s.startswith("///"):
+            if LICENSE_SHAPE.match(s.lstrip("/").strip()):
+                continue
             out.append((i, s[3:].strip(), "doc", comment_indent(s[3:]), False))
             continue
         if s.startswith("#"):
