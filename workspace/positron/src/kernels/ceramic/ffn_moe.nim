@@ -487,6 +487,13 @@ proc moe_fwd*(
       glH.storeTileMasked(h16, (t * top_k + slot, 0, 0, nt), 1,
         min(moe_intermediate - nt * 32, 32'i32))
 
+  # ── threadgroup barrier ──
+  # the output walk re-reads the whole threadgroup's stored scratch rows
+  # from device memory, the barrier ordering that cross-lane read
+  # after the stores (mem_device, the scratch rows in device memory)
+  {.emit: """
+  threadgroup_barrier(mem_flags::mem_device);
+  """.}
   # ── output: routed = Σ w[slot]·down_w[e] @ h, + shared, fp16 store ──
   for nt in 0'i32 ..< hTiles:
     routed.zero()

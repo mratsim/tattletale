@@ -210,11 +210,18 @@ static:
 # ─── Wave sync (device-memory counters, seq_cst fences) ──────────────
 
 proc waveAdd(counters: ptr UncheckedArray[uint32], idx: int32) {.device.} =
-  ## One increment per threadgroup, lane 0 only, after the release
-  ## fence that orders the stage's writes.
+  ## One increment per threadgroup, lane 0 only.
+  ##
+  ## - the barrier orders every lane's stage writes before the increment
+  ## - the release fence orders lane 0's own memory operations
+  ## - every call site is threadgroup-uniform at the barrier, all
+  ##   lanes run it
   ##
   ## Toolchain constraint, no acquire/release loads or stores are spelled, the fences
   ## carry the ordering and the increment stays relaxed.
+  {.emit: """
+  threadgroup_barrier(mem_flags::mem_device);
+  """.}
   if thread_index_in_threadgroup != 0:
     return
   {.emit: """
