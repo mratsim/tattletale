@@ -353,7 +353,7 @@ type PrefillInputs = object
   gVals: seq[float32]
   state0: seq[float32]
 
-proc l2NormalizeRows(dst: var seq[uint16], fam: Family, rows, cols: int, rng: var NaiveRng) =
+proc l2NormalizeRows(dst: var seq[uint16], dt: Dtype, rows, cols: int, rng: var NaiveRng) =
   ## Fills `dst` with l2-normalized family-dtype rows, the kernel contract's
   ## post-l2norm query/key shape:
   ##
@@ -363,24 +363,24 @@ proc l2NormalizeRows(dst: var seq[uint16], fam: Family, rows, cols: int, rng: va
     for c in 0 ..< cols:
       let x = rng.nextF32(-1.0'f32, 1.0'f32).float64
       norm2 += x * x
-      dst[r * cols + c] = toFamBits(fam, x.float32)
+      dst[r * cols + c] = toDtypeBits(dt, x.float32)
     let inv = 1.0 / sqrt(norm2)
     for c in 0 ..< cols:
-      dst[r * cols + c] = toFamBits(fam,
-        (famWiden(fam, dst[r * cols + c]).float64 * inv).float32)
+      dst[r * cols + c] = toDtypeBits(dt,
+        (widenDtype(dt, dst[r * cols + c]).float64 * inv).float32)
 
-proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false): PrefillInputs =
+proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false): PrefillInputs =
   var qBits = newSeq[uint16](qkRows * T * Dk)
   var kBits = newSeq[uint16](qkRows * T * Dk)
-  l2NormalizeRows(qBits, fam, qkRows * T, Dk, rng)
-  l2NormalizeRows(kBits, fam, qkRows * T, Dk, rng)
+  l2NormalizeRows(qBits, dt, qkRows * T, Dk, rng)
+  l2NormalizeRows(kBits, dt, qkRows * T, Dk, rng)
   var vBits = newSeq[uint16](bhMax * T * Dv)
   for i in 0 ..< bhMax * T * Dv:
-    vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+    vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
   var betaBits = newSeq[uint16](bhMax * T)
   for i in 0 ..< bhMax * T:
-    betaBits[i] = (if betaZero: toFamBits(fam, 0.0'f32)
-                   else: toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32)))
+    betaBits[i] = (if betaZero: toDtypeBits(dt, 0.0'f32)
+                   else: toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32)))
   var gVals = newSeq[float32](bhMax * T)
   for i in 0 ..< bhMax * T:
     # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
@@ -396,7 +396,7 @@ proc takeInputs(fam: Family, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, g
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstCont, suiteWorstYUlp = 0.0'f64
 
-proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
+proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (family dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   const Dv = 16
@@ -407,11 +407,11 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
   let stateElems = bhMax * Dv * Dk
   let yElems = bhMax * T * Dv
   let kernelName =
-    if fam == famF16:
+    if dt == dtypeF16:
       if chunkLen == 32: "cer_gdn_prefill_fp16_c32" else: "cer_gdn_prefill_fp16_c64"
     else:
       if chunkLen == 32: "cer_gdn_prefill_bf16_c32" else: "cer_gdn_prefill_bf16_c64"
-  let uFam = if fam == famBf16: UBf16 else: UF16
+  let uFam = if dt == dtypeBf16: UBf16 else: UF16
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](yElems)
@@ -486,18 +486,18 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
     qw.data = newSeq[float64](qkRows * T * Dk)
     kw.data = newSeq[float64](qkRows * T * Dk)
     for i in 0 ..< qkRows * T * Dk:
-      qw.data[i] = famWiden64(fam, si.qBits[i])
-      kw.data[i] = famWiden64(fam, si.kBits[i])
+      qw.data[i] = widenDtype64(dt, si.qBits[i])
+      kw.data[i] = widenDtype64(dt, si.kBits[i])
     var vw = NaiveCube[float64](planes: bhMax, rows: T, cols: Dv)
     vw.data = newSeq[float64](bhMax * T * Dv)
     for i in 0 ..< bhMax * T * Dv:
-      vw.data[i] = famWiden64(fam, si.vBits[i])
+      vw.data[i] = widenDtype64(dt, si.vBits[i])
     var bw = NaiveMat[float64](rows: bhMax, cols: T)
     bw.data = newSeq[float64](bhMax * T)
     var gw = NaiveMat[float64](rows: bhMax, cols: T)
     gw.data = newSeq[float64](bhMax * T)
     for i in 0 ..< bhMax * T:
-      bw.data[i] = famWiden64(fam, si.betaBits[i])
+      bw.data[i] = widenDtype64(dt, si.betaBits[i])
       gw.data[i] = si.gVals[i].float64
 
     # the naive references are per-sequence, B sequences take B independent naive
@@ -557,12 +557,12 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
           for r in 0 ..< Dv:
             let i = (bh * T + t) * Dv + r
             let yWant = yN[i]
-            let yGot = famWiden(fam, yB.hostPtr[i]).float64
+            let yGot = widenDtype(dt, yB.hostPtr[i]).float64
             let yDiff = abs(yGot - yWant)
             doAssert yDiff <= bars.barY[i],
               &"y outside the bar at (bh {bh}, t {t}, r {r}): " &
               &"{yDiff:.3e} > {bars.barY[i]:.3e}"
-            let uAt = famUlp(fam, yWant)
+            let uAt = dtypeUlp(dt, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -581,7 +581,7 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
           &"continuity outside the bar at element {i}: {cDiff:.3e} > {contBar[i]:.3e}"
         if contBar[i] > 0.0: worstCont = max(worstCont, cDiff / contBar[i])
 
-  proc snap(): tuple[st: seq[float32], y: seq[uint16]] =
+  proc snapshot(): tuple[st: seq[float32], y: seq[uint16]] =
     var st = newSeq[float32](stateElems)
     for i in 0 ..< stateElems: st[i] = stateB.hostPtr[i]
     var yy = newSeq[uint16](yElems)
@@ -592,25 +592,25 @@ proc runCase(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, T, chunkLen: int
   var case0: tuple[st: seq[float32], y: seq[uint16]]
   const cases = 4
   for caseId in 0 ..< cases:
-    let si = takeInputs(fam, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride,
+    let si = takeInputs(dt, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride,
       gHiOverride, betaZero)
     judge(si, record = true)
-    if caseId == 0: case0 = snap()
+    if caseId == 0: case0 = snapshot()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
-    let si = takeInputs(fam, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride,
+    let si = takeInputs(dt, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride,
       gHiOverride, betaZero)
     judge(si, record = false)
-    let again = snap()
+    let again = snapshot()
     for i in 0 ..< stateElems:
       doAssert again.st[i] == case0.st[i], "state differs run to run"
     for i in 0 ..< yElems:
       doAssert again.y[i] == case0.y[i], "y differs run to run"
 
-  echo &"[{label} {famName(fam)} T={T} C={chunkLen}] cases={cases} launches={launches} | " &
+  echo &"[{label} {dtypeName(dt)} T={T} C={chunkLen}] cases={cases} launches={launches} | " &
     &"state worst |ΔS| {worstState:.3e}, worst bar usage {worstStateUse:.3f} | " &
-    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
+    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -630,61 +630,61 @@ proc main =
 
   proc secF16T8 =
     let t0 = epochTime()
-    runCase(engine, famF16, 1, 1, 1, 1, 8, 32, 0xC04D0401'u64,
+    runCase(engine, dtypeF16, 1, 1, 1, 1, 8, 32, 0xC04D0401'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16T64 =
     let t0 = epochTime()
-    runCase(engine, famF16, 1, 1, 1, 1, 64, 32, 0xC04D0402'u64,
+    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 0xC04D0402'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCase(engine, famF16, 4, 2, 2, 2, 256, 32, 0xC04D0403'u64,
+    runCase(engine, dtypeF16, 4, 2, 2, 2, 256, 32, 0xC04D0403'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Tail =
     let t0 = epochTime()
-    runCase(engine, famF16, 1, 1, 1, 1, 100, 32, 0xC04D0404'u64,
+    runCase(engine, dtypeF16, 1, 1, 1, 1, 100, 32, 0xC04D0404'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16C64 =
     let t0 = epochTime()
-    runCase(engine, famF16, 1, 1, 1, 1, 64, 64, 0xC04D0405'u64,
+    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 64, 0xC04D0405'u64,
       "chunk64 Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16T8 =
     let t0 = epochTime()
-    runCase(engine, famBf16, 1, 1, 1, 1, 8, 32, 0xC04D0406'u64,
+    runCase(engine, dtypeBf16, 1, 1, 1, 1, 8, 32, 0xC04D0406'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Tail =
     let t0 = epochTime()
-    runCase(engine, famBf16, 1, 1, 1, 1, 100, 32, 0xC04D0407'u64,
+    runCase(engine, dtypeBf16, 1, 1, 1, 1, 100, 32, 0xC04D0407'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa64 =
     let t0 = epochTime()
-    runCase(engine, famBf16, 4, 2, 2, 2, 256, 64, 0xC04D0408'u64,
+    runCase(engine, dtypeBf16, 4, 2, 2, 2, 256, 64, 0xC04D0408'u64,
       "gqa64 Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCase(engine, famF16, 1, 1, 1, 1, 64, 32, 0xC04D04A7'u64,
+    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCase(engine, famBf16, 1, 1, 1, 1, 64, 32, 0xC04D04A8'u64,
+    runCase(engine, dtypeBf16, 1, 1, 1, 1, 64, 32, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

@@ -230,7 +230,7 @@ proc launchMega(engine: HwEngine; m: var MegaBuffers) =
   for i in 0 ..< NumCounters:
     doAssert m.counters.hostPtr[i] == 0'u32,
       &"stage counter {i} {m.counters.hostPtr[i]} want 0 (the launch-end reset)"
-proc snapMega(m: MegaBuffers): Snap =
+proc snapshotMega(m: MegaBuffers): Snapshot =
   ## One launch's full snapshot.
   result.bf = readInto(m.bfA.hostPtr, BfArenaLen)
   result.f32 = readInto(m.f32A.hostPtr, F32ArenaLen)
@@ -308,7 +308,7 @@ type Bars = object
   minGap, gapBar: float64
 
 proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
-    snap: Snap): Bars =
+    snapshot: Snapshot): Bars =
   ## One walk's per-element bars from the observed operands. Each stage's landed local band
   ## at the mega's section values plus the exact sensitivity of the naive op
   ## to the observed operand deviation.
@@ -316,24 +316,24 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
   ## Returns with `gateClear` false when the router's tie region is hit.
   ## Caller regenerates the token, the bars discarded.
   let
-    streamM = snap.secBf(sStream, H)
-    norm1M = snap.secBf(sNorm1, H)
-    qkvM = snap.secBf(sQkvCol, ConvDim)
-    zM = snap.secBf(sZ, NumVHeads * HeadVDim)
-    aM = snap.secBf(sA, NumVHeads)
-    bM = snap.secBf(sB, NumVHeads)
-    convM = snap.secBf(sConv, ConvDim)
-    qnM = snap.secBf(sQN, NumKHeads * HeadKDim)
-    knM = snap.secBf(sKN, NumKHeads * HeadKDim)
-    gM = snap.secF32(sG, NumVHeads)
-    betaM = snap.secBf(sBeta, NumVHeads)
-    yM = snap.secBf(sY, NumVHeads * HeadVDim)
-    normedM = snap.secBf(sNormed, NumVHeads * HeadVDim)
-    blockOutM = snap.secBf(sBlockOut, H)
-    h1M = snap.secBf(sH1, H)
-    normed2M = snap.secBf(sNormed2, H)
-    moeOutM = snap.secBf(sMoeOut, H)
-    partialM = snap.secF32(sPartial, (TopK + 1) * H)
+    streamM = snapshot.secBf(sStream, H)
+    norm1M = snapshot.secBf(sNorm1, H)
+    qkvM = snapshot.secBf(sQkvCol, ConvDim)
+    zM = snapshot.secBf(sZ, NumVHeads * HeadVDim)
+    aM = snapshot.secBf(sA, NumVHeads)
+    bM = snapshot.secBf(sB, NumVHeads)
+    convM = snapshot.secBf(sConv, ConvDim)
+    qnM = snapshot.secBf(sQN, NumKHeads * HeadKDim)
+    knM = snapshot.secBf(sKN, NumKHeads * HeadKDim)
+    gM = snapshot.secF32(sG, NumVHeads)
+    betaM = snapshot.secBf(sBeta, NumVHeads)
+    yM = snapshot.secBf(sY, NumVHeads * HeadVDim)
+    normedM = snapshot.secBf(sNormed, NumVHeads * HeadVDim)
+    blockOutM = snapshot.secBf(sBlockOut, H)
+    h1M = snapshot.secBf(sH1, H)
+    normed2M = snapshot.secBf(sNormed2, H)
+    moeOutM = snapshot.secBf(sMoeOut, H)
+    partialM = snapshot.secF32(sPartial, (TopK + 1) * H)
 
   # Stage 1:
   #   the stream rounds the same fp32 add on both sides, asserted bit-exact.
@@ -381,14 +381,14 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
   let qkvNW = widen(lo.qkvCol)
   for c in 0 ..< ConvDim:
     for j in 0 ..< RingWidth - 1:
-      doAssert snap.ring[c * RingWidth + j] ==
+      doAssert snapshot.ring[c * RingWidth + j] ==
         preM.ring[c * RingWidth + j + 1], "the mega's ring roll is not a copy"
       doAssert postN.ring[c * RingWidth + j] ==
         preN.ring[c * RingWidth + j + 1],
         "the naive's ring roll is not a copy"
       result.ring[c * RingWidth + j] =
         abs(preMW[c * RingWidth + j + 1] - preNW[c * RingWidth + j + 1])
-    doAssert snap.ring[c * RingWidth + RingWidth - 1] == qkvM[c],
+    doAssert snapshot.ring[c * RingWidth + RingWidth - 1] == qkvM[c],
       "the mega's ring tail is not the step column"
     doAssert postN.ring[c * RingWidth + RingWidth - 1] == lo.qkvCol[c],
       "the naive's ring tail is not the step column"
@@ -551,7 +551,7 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
     let relOut = relRstd + 4.0 * UBf + 2.0 * U32 + RelSilu
     when TTT_DEBUG_OROW:
       if bh < 2:
-        let normedMSec = snap.secBf(sNormed, NumVHeads * HeadVDim)
+        let normedMSec = snapshot.secBf(sNormed, NumVHeads * HeadVDim)
         var lineY = "[dbg] y  :"
         var lineZ = "[dbg] z  :"
         var lineM = "[dbg] nmM:"
@@ -667,8 +667,8 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
       "the expert id order diverges inside the tie region"
   result.partialN = bodyN.partial
   result.partial = newSeq[float64]((TopK + 1) * H)
-  let hM = snap.secBf(sH, TopK * Inter)
-  let hsM = snap.secBf(sHs, Inter)
+  let hM = snapshot.secBf(sH, TopK * Inter)
+  let hsM = snapshot.secBf(sHs, Inter)
   let hMW = widen(hM)
   let hsMW = widen(hsM)
   var logitBarLocal = newSeq[float64](NumExperts)
@@ -813,31 +813,31 @@ proc walkBars(w: Weights; preM, preN, postN: Carry; lo: LayerOut;
       2.0 * UBf * (abs(bf16ToF32(moeOutM[e]).float64) +
       abs(bf16ToF32(lo.moeOut[e]).float64)) + FloorBf
 
-proc judgeAll(bars: Bars; snap: Snap; postN: Carry; lo: LayerOut;
+proc judgeAll(bars: Bars; snapshot: Snapshot; postN: Carry; lo: LayerOut;
     u: var Usage) =
   ## One walk's per-element judgment, the 20 fields against their bars.
-  judgeExactBf(0, snap.secBf(sStream, H), lo.stream, u)
-  judgeBf(1, snap.secBf(sNorm1, H), lo.norm1, bars.norm1, u)
-  judgeBf(2, snap.secBf(sQkvCol, ConvDim), lo.qkvCol, bars.qkv, u)
-  judgeBf(3, snap.secBf(sZ, NumVHeads * HeadVDim), lo.z, bars.z, u)
-  judgeBf(4, snap.secBf(sA, NumVHeads), lo.a, bars.a, u)
-  judgeBf(5, snap.secBf(sB, NumVHeads), lo.b, bars.b, u)
-  judgeBf(6, snap.secBf(sConv, ConvDim), lo.conv, bars.conv, u)
-  judgeBf(7, snap.secBf(sQN, NumKHeads * HeadKDim), lo.qn, bars.qn, u)
-  judgeBf(8, snap.secBf(sKN, NumKHeads * HeadKDim), lo.kn, bars.kn, u)
-  judgeF32(9, snap.secF32(sG, NumVHeads), lo.g, bars.g, u)
-  judgeBf(10, snap.secBf(sBeta, NumVHeads), lo.beta, bars.beta, u)
-  judgeBf(11, snap.secBf(sY, NumVHeads * HeadVDim), lo.y, bars.y, u)
-  judgeBf(12, snap.secBf(sNormed, NumVHeads * HeadVDim), lo.normed,
+  judgeExactBf(0, snapshot.secBf(sStream, H), lo.stream, u)
+  judgeBf(1, snapshot.secBf(sNorm1, H), lo.norm1, bars.norm1, u)
+  judgeBf(2, snapshot.secBf(sQkvCol, ConvDim), lo.qkvCol, bars.qkv, u)
+  judgeBf(3, snapshot.secBf(sZ, NumVHeads * HeadVDim), lo.z, bars.z, u)
+  judgeBf(4, snapshot.secBf(sA, NumVHeads), lo.a, bars.a, u)
+  judgeBf(5, snapshot.secBf(sB, NumVHeads), lo.b, bars.b, u)
+  judgeBf(6, snapshot.secBf(sConv, ConvDim), lo.conv, bars.conv, u)
+  judgeBf(7, snapshot.secBf(sQN, NumKHeads * HeadKDim), lo.qn, bars.qn, u)
+  judgeBf(8, snapshot.secBf(sKN, NumKHeads * HeadKDim), lo.kn, bars.kn, u)
+  judgeF32(9, snapshot.secF32(sG, NumVHeads), lo.g, bars.g, u)
+  judgeBf(10, snapshot.secBf(sBeta, NumVHeads), lo.beta, bars.beta, u)
+  judgeBf(11, snapshot.secBf(sY, NumVHeads * HeadVDim), lo.y, bars.y, u)
+  judgeBf(12, snapshot.secBf(sNormed, NumVHeads * HeadVDim), lo.normed,
     bars.normed, u)
-  judgeBf(13, snap.secBf(sBlockOut, H), lo.blockOut, bars.blockOut, u)
-  judgeBf(14, snap.secBf(sH1, H), lo.h1, bars.h1, u)
-  judgeBf(15, snap.secBf(sNormed2, H), lo.normed2, bars.normed2, u)
-  judgeBf(16, snap.secBf(sMoeOut, H), lo.moeOut, bars.moeOut, u)
-  judgeF32(17, snap.secF32(sPartial, (TopK + 1) * H), bars.partialN,
+  judgeBf(13, snapshot.secBf(sBlockOut, H), lo.blockOut, bars.blockOut, u)
+  judgeBf(14, snapshot.secBf(sH1, H), lo.h1, bars.h1, u)
+  judgeBf(15, snapshot.secBf(sNormed2, H), lo.normed2, bars.normed2, u)
+  judgeBf(16, snapshot.secBf(sMoeOut, H), lo.moeOut, bars.moeOut, u)
+  judgeF32(17, snapshot.secF32(sPartial, (TopK + 1) * H), bars.partialN,
     bars.partial, u)
-  judgeF32(18, snap.state, postN.state, bars.state, u)
-  judgeBf(19, snap.ring, postN.ring, bars.ring, u)
+  judgeF32(18, snapshot.state, postN.state, bars.state, u)
+  judgeBf(19, snapshot.ring, postN.ring, bars.ring, u)
 
 type Comparison = object
   ## One walk's full comparison result:
@@ -845,7 +845,7 @@ type Comparison = object
   ## the snapshot and the naive outputs.
   bars: Bars
   postN: Carry
-  snap: Snap
+  snapshot: Snapshot
   lo: LayerOut
 
 proc compareWalk(engine: HwEngine; m: var MegaBuffers; w: Weights;
@@ -857,11 +857,11 @@ proc compareWalk(engine: HwEngine; m: var MegaBuffers; w: Weights;
   fillF32(m.state, preM.state)
   fillBf(m.ring, preM.ring)
   launchMega(engine, m)
-  result.snap = snapMega(m)
+  result.snapshot = snapshotMega(m)
   let nw = naiveWalk(w, tok, preN)
   result.postN = nw.carry
   result.lo = nw.lo
-  result.bars = walkBars(w, preM, preN, nw.carry, nw.lo, result.snap)
+  result.bars = walkBars(w, preM, preN, nw.carry, nw.lo, result.snapshot)
 
 proc runNormCheck*(engine: HwEngine) =
   ## Fused add+norm against the composed naive norm:
@@ -943,7 +943,7 @@ proc runComparison*(engine: HwEngine) =
       while true:
         let cw = compareWalk(engine, m, w, tok, carry0, carry0)
         if cw.bars.gateClear:
-          judgeAll(cw.bars, cw.snap, cw.postN, cw.lo, usage)
+          judgeAll(cw.bars, cw.snapshot, cw.postN, cw.lo, usage)
           echo &"[comparison] case {caseId}: router gap " &
             &"{cw.bars.minGap:.3e} > tie-region bar " &
             &"{cw.bars.gapBar:.3e}, {regen} samples regenerated"
@@ -978,11 +978,11 @@ proc runChain*(engine: HwEngine) =
       while true:
         let cw = compareWalk(engine, m, w, tok, carryM, carryN)
         if cw.bars.gateClear:
-          judgeAll(cw.bars, cw.snap, cw.postN, cw.lo, usage)
+          judgeAll(cw.bars, cw.snapshot, cw.postN, cw.lo, usage)
           echo &"[chain] step {step}: y worst {usage.worst[11]:.3f}, " &
             &"state worst {usage.worst[18]:.3f}, moeOut worst " &
             &"{usage.worst[16]:.3f}, {regen} samples regenerated"
-          carryM = Carry(state: cw.snap.state, ring: cw.snap.ring)
+          carryM = Carry(state: cw.snapshot.state, ring: cw.snapshot.ring)
           carryN = cw.postN
           break found
         inc regen

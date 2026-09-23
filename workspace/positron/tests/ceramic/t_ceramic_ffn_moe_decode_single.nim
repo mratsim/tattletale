@@ -432,7 +432,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
 
   prefillPartial(partial, Rows)
   discard launch()
-  let snap = readAll()
+  let snapshot = readAll()
 
   # the naive walk and the per-element judgment, one token at a time
   let xSeq = readSeq(xB.hostPtr, tokens * H)
@@ -458,7 +458,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
         sumAbsLinks(xw, routerWSeq, id * H, H) +
         2.0 * UBf * abs(logitOf(xTok, routerWSeq, id).float64) + FloorBf
       worst = max(worst, judgeSlotPartials(t, slot, id, nw, xw,
-        gateUpWSeq, downWSeq, snap.h, snap.partial, logitBar))
+        gateUpWSeq, downWSeq, snapshot.h, snapshot.partial, logitBar))
     # the shared row's gate-weight band, the scalar logit's reduction class
     let gvP = nw.gvP.float64
     var gvAbs = 0.0'f64
@@ -470,7 +470,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     else:
       0.0'f64
     worst = max(worst, judgeSharedPartial(t, nw, xw, sharedGWSeq,
-      sharedUWSeq, sharedDWSeq, snap.hs, snap.partial, gateBar))
+      sharedUWSeq, sharedDWSeq, snapshot.hs, snapshot.partial, gateBar))
 
   if not useGate:
     # the poisoned gate weight vector, never read, so the shared row holds

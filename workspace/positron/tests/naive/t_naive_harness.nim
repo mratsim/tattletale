@@ -118,12 +118,12 @@ proc main =
       p[i] = uint16(i + 1)
     assertTailUntouched(g)
     var buf = @[1'u16, 2, 3, 4, 5, 6]
-    let snap = snapshotSeq(toOpenArray(buf, 2, 4))
+    let snapshot = snapshotSeq(toOpenArray(buf, 2, 4))
     buf[3] = 99
-    doAssert countChanged(toOpenArray(buf, 2, 4), snap) == 1,
+    doAssert countChanged(toOpenArray(buf, 2, 4), snapshot) == 1,
       "detector missed a changed element"
     buf[3] = 4
-    doAssert countChanged(toOpenArray(buf, 2, 4), snap) == 0,
+    doAssert countChanged(toOpenArray(buf, 2, 4), snapshot) == 0,
       "detector reported a phantom change"
 
   runTimed "guarded tail raises on a corrupted tail element":

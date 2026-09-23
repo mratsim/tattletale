@@ -134,7 +134,7 @@ type StepSnap = object
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
-proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
+proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (family dtype, shape) combination over `cases` independent seeded
   ## runs of `steps` decode steps each, judged per element against the naive
   ## reference under the band model, case 0 relaunched bit-identical.
@@ -143,14 +143,14 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kernelName = if fam == famF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
+  let kernelName = if dt == dtypeF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
   # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
   # meaning derive the span from the step count (no edge case wants gLo = 0)
   let gLo = if gLoOverride != 0.0'f32: gLoOverride
             else: (if steps == 1: -3.0'f32 else: -0.5'f32)
   let gHi = if gLoOverride != 0.0'f32: gHiOverride
             else: (if steps == 1: -0.1'f32 else: -0.01'f32)
-  let uFam = if fam == famBf16: UBf16 else: UF16
+  let uFam = if dt == dtypeBf16: UBf16 else: UF16
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -225,12 +225,12 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
       var vF = newSeq[float32](bhMax * Dv)
       var betaF = newSeq[float32](bhMax)
       for i in 0 ..< qkRows * dk:
-        qF[i] = famWiden(fam, si.qBits[i])
-        kF[i] = famWiden(fam, si.kBits[i])
+        qF[i] = widenDtype(dt, si.qBits[i])
+        kF[i] = widenDtype(dt, si.kBits[i])
       for i in 0 ..< bhMax * Dv:
-        vF[i] = famWiden(fam, si.vBits[i])
+        vF[i] = widenDtype(dt, si.vBits[i])
       for h in 0 ..< bhMax:
-        betaF[h] = famWiden(fam, si.betaBits[h])
+        betaF[h] = widenDtype(dt, si.betaBits[h])
 
       # state bars from the naive pre-step state
       var barS = newSeq[float64](stateElems)
@@ -311,13 +311,13 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
           let barY = 2.0 * uFam * abs(yWant) +
             (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
             2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = famWiden(fam, yB.hostPtr[bh * Dv + r]).float64
+          let yGot = widenDtype(dt, yB.hostPtr[bh * Dv + r]).float64
           let yDiff = abs(yGot - yWant)
           if judge:
             doAssert yDiff <= barY,
               &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
               &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = famUlp(fam, yWant)
+            let uAt = dtypeUlp(dt, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -351,13 +351,13 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
       var betaBits = newSeq[uint16](bhMax)
       var gVals = newSeq[float32](bhMax)
       for i in 0 ..< qkRows * dk:
-        qBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
-        kBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+        qBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+        kBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
       for i in 0 ..< bhMax * Dv:
-        vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+        vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
       for h in 0 ..< bhMax:
-        betaBits[h] = (if betaZero: toFamBits(fam, 0.0'f32)
-                       else: toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32)))
+        betaBits[h] = (if betaZero: toDtypeBits(dt, 0.0'f32)
+                       else: toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32)))
         gVals[h] = rng.nextF32(gLo, gHi)
       result.add(StepInputs(qBits: qBits, kBits: kBits, vBits: vBits,
         betaBits: betaBits, gVals: gVals))
@@ -392,9 +392,9 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {famName(fam)} Dk={dk}] steps={steps} cases={cases} " &
+  echo &"[{label} {dtypeName(dt)} Dk={dk}] steps={steps} cases={cases} " &
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
+    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -411,49 +411,49 @@ proc main =
 
   proc secF16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0401'u64,
+    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0401'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0402'u64,
+    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0402'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0403'u64,
+    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0403'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0404'u64,
+    runCombo(engine, dtypeBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0404'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D0405'u64,
+    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D0405'u64,
       "chain gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D0406'u64,
+    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D0406'u64,
       "chain baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
+    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
+    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

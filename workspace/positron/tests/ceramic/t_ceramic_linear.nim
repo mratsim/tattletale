@@ -83,7 +83,7 @@ const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
 
-proc naiveLinearF32(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] =
+proc naiveLinearF32(dt: Dtype, x, w: seq[uint16]; M, N, K: int): seq[float64] =
   ## Independent host reference at fp32 arithmetic over the exact widenings.
   ## This is the exact-dot form.
   ##
@@ -94,24 +94,24 @@ proc naiveLinearF32(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] 
     for n in 0 ..< N:
       var acc = 0.0'f32
       for k in 0 ..< K:
-        acc += famWiden(fam, x[m * K + k]) * famWiden(fam, w[n * K + k])
+        acc += widenDtype(dt, x[m * K + k]) * widenDtype(dt, w[n * K + k])
       result[m * N + n] = acc.float64
 
-proc naiveLinearF64(fam: Family, x, w: seq[uint16]; M, N, K: int): seq[float64] =
+proc naiveLinearF64(dt: Dtype, x, w: seq[uint16]; M, N, K: int): seq[float64] =
   ## Exact fp64 widening of the same dot, the naive side's own cross-check.
   result = newSeq[float64](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:
       var acc = 0.0'f64
       for k in 0 ..< K:
-        acc += famWiden(fam, x[m * K + k]).float64 *
-          famWiden(fam, w[n * K + k]).float64
+        acc += widenDtype(dt, x[m * K + k]).float64 *
+          widenDtype(dt, w[n * K + k]).float64
       result[m * N + n] = acc
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
 var suiteWorstUse = 0.0'f64
 
-proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
+proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
     seed: uint64; label: string; kernelName: string) =
   ## One (family dtype, shape) combination over `cases` independent seeded runs,
   ## judged per element under the band, case 0 relaunched bit-identical,
@@ -127,7 +127,7 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
   var outPA = outB.pa()
   var xPA = xB.pa()
   var wPA = wB.pa()
-  let uFam = if fam == famBf16: 3.90625e-3 else: 4.8828125e-4
+  let uFam = if dt == dtypeBf16: 3.90625e-3 else: 4.8828125e-4
   let gridX = int32(N div TileC)
   let gridY = int32((M + 31) div 32)
 
@@ -141,9 +141,9 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
     var xBits = newSeq[uint16](nX)
     var wBits = newSeq[uint16](nW)
     for i in 0 ..< nX:
-      xBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      xBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     for i in 0 ..< nW:
-      wBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      wBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     result = (xBits, wBits)
 
   proc load(bits: tuple[x, w: seq[uint16]]) =
@@ -165,17 +165,17 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
           (xPA, wPA, int32(N), int32(K), int32(M), int32(tx), int32(ty)))
     inc launches, gridX * gridY
 
-  proc snapOut(): seq[uint16] =
+  proc snapshotOut(): seq[uint16] =
     result = newSeq[uint16](nOut)
     for i in 0 ..< nOut:
       result[i] = outB.hostPtr[i]
 
-  var case0Snap: seq[uint16]
+  var case0Snapshot: seq[uint16]
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
-    let want = naiveLinearF32(fam, bits.x, bits.w, M, N, K)
-    let want64 = naiveLinearF64(fam, bits.x, bits.w, M, N, K)
+    let want = naiveLinearF32(dt, bits.x, bits.w, M, N, K)
+    let want64 = naiveLinearF64(dt, bits.x, bits.w, M, N, K)
     load(bits)
     launch()
     sentinels(bits)
@@ -184,11 +184,11 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
         let idx = m * N + n
         var sumAbs = 0.0'f64
         for k in 0 ..< K:
-          sumAbs += abs(famWiden(fam, bits.x[m * K + k]).float64 *
-            famWiden(fam, bits.w[n * K + k]).float64)
+          sumAbs += abs(widenDtype(dt, bits.x[m * K + k]).float64 *
+            widenDtype(dt, bits.w[n * K + k]).float64)
         let bar = 2.0 * uFam * abs(want[idx]) +
           2.0 * K.float64 * U32 * sumAbs + FloorSub
-        let got = famWiden(fam, outB.hostPtr[idx]).float64
+        let got = widenDtype(dt, outB.hostPtr[idx]).float64
         let diff = abs(got - want[idx])
         doAssert diff <= bar,
           &"out outside the bar at (m {m}, n {n}, case {caseId}): " &
@@ -203,13 +203,13 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
         let idx = m * N + n
         var sumAbs = 0.0'f64
         for k in 0 ..< K:
-          sumAbs += abs(famWiden(fam, bits.x[m * K + k]).float64 *
-            famWiden(fam, bits.w[n * K + k]).float64)
+          sumAbs += abs(widenDtype(dt, bits.x[m * K + k]).float64 *
+            widenDtype(dt, bits.w[n * K + k]).float64)
         let barNaive = K.float64 * U32 * sumAbs
         doAssert abs(want[idx] - want64[idx]) <= barNaive,
           "naive fp32 dot outside its own band of fp64"
     if caseId == 0:
-      case0Snap = snapOut()
+      case0Snapshot = snapshotOut()
 
   block determinism:
     var rng0 = initNaiveRng(seed)
@@ -217,11 +217,11 @@ proc runCombo(engine: HwEngine; fam: Family, M, N, K, TileC, cases: int;
     load(bits0)
     launch()
     sentinels(bits0)
-    let again = snapOut()
+    let again = snapshotOut()
     for i in 0 ..< nOut:
-      doAssert again[i] == case0Snap[i], "out differs run to run"
+      doAssert again[i] == case0Snapshot[i], "out differs run to run"
 
-  echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
+  echo &"[{label} {dtypeName(dt)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"
   suiteCases += cases
   suiteLaunches += launches
@@ -233,21 +233,21 @@ proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(DenseLinearMsl)
-  runCombo(engine, famBf16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
+  runCombo(engine, dtypeBf16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
     "cer_dense_linear_bf16")
-  runCombo(engine, famF16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
+  runCombo(engine, dtypeF16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
     "cer_dense_linear_f16")
-  runCombo(engine, famBf16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
+  runCombo(engine, dtypeBf16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
     "cer_dense_linear_bf16")
-  runCombo(engine, famF16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
+  runCombo(engine, dtypeF16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
     "cer_dense_linear_f16")
-  runCombo(engine, famBf16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
+  runCombo(engine, dtypeBf16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
     "cer_dense_linear_bf16")
-  runCombo(engine, famBf16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
+  runCombo(engine, dtypeBf16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
     "cer_dense_linear_bf16_tilec32")
-  runCombo(engine, famBf16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
+  runCombo(engine, dtypeBf16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
     "cer_dense_linear_bf16")
-  runCombo(engine, famF16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
+  runCombo(engine, dtypeF16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
     "cer_dense_linear_f16")
   echo &"CERAMIC DENSE_LINEAR VERDICT: cases={suiteCases} launches={suiteLaunches} " &
     &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"

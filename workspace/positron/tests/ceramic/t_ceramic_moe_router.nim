@@ -160,11 +160,11 @@ const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
 
-proc elRound(fam: Family, v: float32): float32 =
+proc elRound(dt: Dtype, v: float32): float32 =
   ## One round-to-nearest-even round into the family dtype and back to fp32.
-  if fam == famBf16: bf16ToF32(f32ToBf16(v)) else: fp16ToFp32(fp32ToFp16(v))
+  if dt == dtypeBf16: bf16ToF32(f32ToBf16(v)) else: fp16ToFp32(fp32ToFp16(v))
 
-proc dotRawLogits(fam: Family, x, w: seq[uint16]; T, H, E: int;
+proc dotRawLogits(dt: Dtype, x, w: seq[uint16]; T, H, E: int;
     chunkWalk: bool): seq[float32] =
   ## Raw fp32 logits over the exact widenings under the two accumulation orders
   ## the reassociation bound covers
@@ -181,12 +181,12 @@ proc dotRawLogits(fam: Family, x, w: seq[uint16]; T, H, E: int;
         for kk in 0 ..< H div 16:
           var c = 0.0'f32
           for j in 0 ..< 16:
-            c += famWiden(fam, x[t * H + kk * 16 + j]) *
-              famWiden(fam, w[e * H + kk * 16 + j])
+            c += widenDtype(dt, x[t * H + kk * 16 + j]) *
+              widenDtype(dt, w[e * H + kk * 16 + j])
           acc += c
       else:
         for k in 0 ..< H:
-          acc += famWiden(fam, x[t * H + k]) * famWiden(fam, w[e * H + k])
+          acc += widenDtype(dt, x[t * H + k]) * widenDtype(dt, w[e * H + k])
       result[t * E + e] = acc
 
 proc reassocDelta(H: int, sumAbs: float64): float64 =
@@ -198,7 +198,7 @@ proc reassocDelta(H: int, sumAbs: float64): float64 =
   ## - the mma intra-chunk order's 15-term bound on top
   (float64(H + H div 16 + 28) * U32) * sumAbs
 
-proc naiveSharedGateDot(fam: Family, x, sgw: seq[uint16]; T, H: int): seq[float32] =
+proc naiveSharedGateDot(dt: Dtype, x, sgw: seq[uint16]; T, H: int): seq[float32] =
   ## Host reference for the shared-expert scalar logit, a sequential fp32 dot over
   ## the exact family widenings, the kernel returning the raw fp32 logit too
   ## No family round on either side.
@@ -206,10 +206,10 @@ proc naiveSharedGateDot(fam: Family, x, sgw: seq[uint16]; T, H: int): seq[float3
   for t in 0 ..< T:
     var acc = 0.0'f32
     for k in 0 ..< H:
-      acc += famWiden(fam, x[t * H + k]) * famWiden(fam, sgw[k])
+      acc += widenDtype(dt, x[t * H + k]) * widenDtype(dt, sgw[k])
     result[t] = acc
 
-proc naiveRouter(fam: Family, x, w: seq[uint16]; T, H, E, K: int, Scale: float32):
+proc naiveRouter(dt: Dtype, x, w: seq[uint16]; T, H, E, K: int, Scale: float32):
     tuple[ids: seq[int32], routW: seq[uint16], logits: seq[float32]] =
   ## Independent host reference for the softmax form's rounding chain in fp32
   ##
@@ -224,8 +224,8 @@ proc naiveRouter(fam: Family, x, w: seq[uint16]; T, H, E, K: int, Scale: float32
     for e in 0 ..< E:
       var acc = 0.0'f32
       for k in 0 ..< H:
-        acc += famWiden(fam, x[t * H + k]) * famWiden(fam, w[e * H + k])
-      logits[e] = elRound(fam, acc)
+        acc += widenDtype(dt, x[t * H + k]) * widenDtype(dt, w[e * H + k])
+      logits[e] = elRound(dt, acc)
       result.logits[t * E + e] = logits[e]
     var lm = -3.402823466e38'f32
     for e in 0 ..< E:
@@ -258,7 +258,7 @@ proc naiveRouter(fam: Family, x, w: seq[uint16]; T, H, E, K: int, Scale: float32
     for slot in 0 ..< K:
       let weight = p[sel[slot]] / sumSel * Scale
       result.routW[t * K + slot] =
-        if fam == famBf16: f32ToBf16(weight) else: fp32ToFp16(weight)
+        if dt == dtypeBf16: f32ToBf16(weight) else: fp32ToFp16(weight)
 
 proc elSlack(uFam: float64, l: float32): float64 =
   ## One El grid step's rounding slack at logit l
@@ -274,7 +274,7 @@ proc pairTieBound(uFam: float64, H: int, sumAbsA, sumAbsB: float64;
   reassocDelta(H, sumAbsA) + reassocDelta(H, sumAbsB) +
     elSlack(uFam, lA) + elSlack(uFam, lB)
 
-proc naiveWeightFor(fam: Family, logits: seq[float32]; t, E, K: int;
+proc naiveWeightFor(dt: Dtype, logits: seq[float32]; t, E, K: int;
     ids: seq[int32]; Scale: float32; target: int32): uint16 =
   ## Naive chain's routing weight for expert `target`, renormalized over the set
   ## `ids` in slot order, used when the kernel's top-K set differs from the naive
@@ -287,12 +287,12 @@ proc naiveWeightFor(fam: Family, logits: seq[float32]; t, E, K: int;
     let e = logits[t * E + ids[slot].int]
     sumSel += exp2fHost((e - lm) * Log2e).float64
   let p = exp2fHost((logits[t * E + target.int] - lm) * Log2e).float64
-  elRound(fam, (p / sumSel * Scale).float32).uint16
+  elRound(dt, (p / sumSel * Scale).float32).uint16
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
 var suiteWorstUse = 0.0'f64
 
-proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
+proc runCombo(engine: HwEngine; dt: Dtype, T, H, E, K, cases: int;
     seed: uint64; scale: float32; label: string) =
   ## One (family dtype, shape, Scale) combination over `cases` independent seeded runs
   ##
@@ -312,15 +312,15 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
   var wPA = wB.pa()
   var xPA = xB.pa()
   var rWPA = rWB.pa()
-  var kernelName = if fam == famBf16:
+  var kernelName = if dt == dtypeBf16:
     (if H == 2048: "cer_moe_route_bf16_mega" else: "cer_moe_route_bf16_small")
   else:
     "cer_moe_route_f16_mega"
   if scale != 1.0'f32:
-    doAssert fam == famBf16 and H == 2048,
+    doAssert dt == dtypeBf16 and H == 2048,
       "the Scale 2.0 binding exists only at the mega bf16 shape"
     kernelName = kernelName & "_s2"
-  let uFam = if fam == famBf16: 3.90625e-3 else: 4.8828125e-4
+  let uFam = if dt == dtypeBf16: 3.90625e-3 else: 4.8828125e-4
 
   var worstUse = 0.0'f64
   var exactW = 0
@@ -334,9 +334,9 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
     var xBits = newSeq[uint16](nX)
     var wBits = newSeq[uint16](nW)
     for i in 0 ..< nX:
-      xBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      xBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     for i in 0 ..< nW:
-      wBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      wBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     result = (xBits, wBits)
 
   proc load(bits: tuple[x, w: seq[uint16]]) =
@@ -360,20 +360,20 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
       (kernelName, idsPA, (wPA, xPA, rWPA, int32(T)))
     inc launches
 
-  proc snap(): tuple[ids: seq[int32], w: seq[uint16]] =
+  proc snapshot(): tuple[ids: seq[int32], w: seq[uint16]] =
     result.ids = newSeq[int32](nIds)
     result.w = newSeq[uint16](nIds)
     for i in 0 ..< nIds:
       result.ids[i] = idsB.hostPtr[i]
       result.w[i] = wB.hostPtr[i]
 
-  var case0Snap: tuple[ids: seq[int32], w: seq[uint16]]
+  var case0Snapshot: tuple[ids: seq[int32], w: seq[uint16]]
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
-    let want = naiveRouter(fam, bits.x, bits.w, T, H, E, K, scale)
-    let seqLogits = dotRawLogits(fam, bits.x, bits.w, T, H, E, false)
-    let chunkLogits = dotRawLogits(fam, bits.x, bits.w, T, H, E, true)
+    let want = naiveRouter(dt, bits.x, bits.w, T, H, E, K, scale)
+    let seqLogits = dotRawLogits(dt, bits.x, bits.w, T, H, E, false)
+    let chunkLogits = dotRawLogits(dt, bits.x, bits.w, T, H, E, true)
     # the ids' reassociation premise, re-demonstrated per token per run
     # the 16-wide-chunk walk of the kernel's mma accumulation stays inside
     # the stated fp32 bound against the naive sequential sum
@@ -382,8 +382,8 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
       for e in 0 ..< E:
         var sa = 0.0'f64
         for k in 0 ..< H:
-          sa += abs(famWiden(fam, bits.x[t * H + k]).float64 *
-            famWiden(fam, bits.w[e * H + k]).float64)
+          sa += abs(widenDtype(dt, bits.x[t * H + k]).float64 *
+            widenDtype(dt, bits.w[e * H + k]).float64)
         sumAbs[t * E + e] = sa
         let bar = reassocDelta(H, sa)
         let diff = abs(chunkLogits[t * E + e].float64 - seqLogits[t * E + e].float64)
@@ -394,7 +394,7 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
     load(bits)
     launch()
     sentinels(bits)
-    let got = snap()
+    let got = snapshot()
     for t in 0 ..< T:
       # token-level tie-region bookkeeping, the naive El logits, the max logit,
       # and the set membership on both sides
@@ -450,15 +450,15 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
         # the routing weights carry the band, a swapped slot is judged against
         # the naive weights recomputed over the kernel's own set, the bar widened
         # by the exp2 amplification of the tie-region logit spread
-        let gotW = famWiden(fam, got.w[idx]).float64
+        let gotW = widenDtype(dt, got.w[idx]).float64
         doAssert gotW <= prev, "routing weights not descending"
         prev = gotW
-        var wantW = famWiden(fam, want.routW[idx]).float64
+        var wantW = widenDtype(dt, want.routW[idx]).float64
         var bar = uFam.float64 * abs(wantW) +
           float64(E + K + 4) * U32 * abs(wantW) + FloorSub
         if gE != wE:
-          wantW = famWiden(fam,
-            naiveWeightFor(fam, want.logits, t, E, K, gotRow, scale,
+          wantW = widenDtype(dt,
+            naiveWeightFor(dt, want.logits, t, E, K, gotRow, scale,
               int32(gE))).float64
           bar = uFam.float64 * abs(wantW) +
             float64(E + K + 4) * U32 * abs(wantW) +
@@ -476,7 +476,7 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
         inc total
       totalSwaps += swaps
     if caseId == 0:
-      case0Snap = got
+      case0Snapshot = got
 
   block determinism:
     # identical inputs give identical top-K sets, bit-identical ids and weights
@@ -485,12 +485,12 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
     load(bits0)
     launch()
     sentinels(bits0)
-    let again = snap()
+    let again = snapshot()
     for i in 0 ..< nIds:
-      doAssert again.ids[i] == case0Snap.ids[i], "ids differ run to run"
-      doAssert again.w[i] == case0Snap.w[i], "routing weights differ run to run"
+      doAssert again.ids[i] == case0Snapshot.ids[i], "ids differ run to run"
+      doAssert again.w[i] == case0Snapshot.w[i], "routing weights differ run to run"
 
-  echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
+  echo &"[{label} {dtypeName(dt)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exactW}/{total}, " &
     &"tie-region swaps {totalSwaps}, reassociation use {reassocWorst:.3f}"
   suiteCases += cases
@@ -499,7 +499,7 @@ proc runCombo(engine: HwEngine; fam: Family, T, H, E, K, cases: int;
   suiteExact += exactW
   suiteTotal += total
 
-proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
+proc runSharedGateCombo(engine: HwEngine; dt: Dtype; T, cases: int;
     seed: uint64; label: string) =
   ## Shared-expert scalar GEMV at the mega binding (H = 2048), one raw fp32
   ## logit per token against the (1, H) shared expert row weight, the family
@@ -529,9 +529,9 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
     var xBits = newSeq[uint16](nX)
     var sgwBits = newSeq[uint16](H)
     for i in 0 ..< nX:
-      xBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      xBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     for k in 0 ..< H:
-      sgwBits[k] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+      sgwBits[k] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
     result = (xBits, sgwBits)
 
   proc load(bits: tuple[x, sgw: seq[uint16]]) =
@@ -547,33 +547,33 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
     assertReadUnchanged(sgwB, bits.sgw)
 
   proc launch =
-    let kernelName = if fam == famBf16: "cer_shared_gate_bf16" else: "cer_shared_gate_f16"
+    let kernelName = if dt == dtypeBf16: "cer_shared_gate_bf16" else: "cer_shared_gate_f16"
     engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
       (kernelName, outPA, (xPA, sgwPA))
     inc launches
 
-  proc snap(): seq[float32] =
+  proc snapshot(): seq[float32] =
     result = newSeq[float32](T)
     for t in 0 ..< T:
       result[t] = outB.hostPtr[t]
 
-  var case0Snap: seq[float32]
+  var case0Snapshot: seq[float32]
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
-    let want = naiveSharedGateDot(fam, bits.x, bits.sgw, T, H)
+    let want = naiveSharedGateDot(dt, bits.x, bits.sgw, T, H)
     load(bits)
     launch()
     sentinels(bits)
-    let got = snap()
+    let got = snapshot()
     for t in 0 ..< T:
       doAssert got[t] != poison, &"shared gate logit never stored at token {t}"
       # the kernel walks 16-wide mma chunks, the naive side a sequential fp32 sum,
       # the band covers both orders' fp32 forward error, the store is raw fp32
       var sumAbs = 0.0'f64
       for k in 0 ..< H:
-        sumAbs += abs(famWiden(fam, bits.x[t * H + k]).float64 *
-          famWiden(fam, bits.sgw[k]).float64)
+        sumAbs += abs(widenDtype(dt, bits.x[t * H + k]).float64 *
+          widenDtype(dt, bits.sgw[k]).float64)
       let bar = 2.0 * float64(H) * U32 * sumAbs + FloorSub
       let diff = abs(got[t].float64 - want[t].float64)
       doAssert diff <= bar,
@@ -583,7 +583,7 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
       if got[t] == want[t]:
         inc exact
     if caseId == 0:
-      case0Snap = got
+      case0Snapshot = got
 
   block determinism:
     # identical inputs give a bit-identical raw fp32 logit run to run
@@ -592,11 +592,11 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
     load(bits0)
     launch()
     sentinels(bits0)
-    let again = snap()
+    let again = snapshot()
     for t in 0 ..< T:
-      doAssert again[t] == case0Snap[t], "shared gate logit differs run to run"
+      doAssert again[t] == case0Snapshot[t], "shared gate logit differs run to run"
 
-  echo &"[{label} {famName(fam)}] cases={cases} launches={launches} " &
+  echo &"[{label} {dtypeName(dt)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{cases * T}"
   suiteCases += cases
   suiteLaunches += launches
@@ -604,7 +604,7 @@ proc runSharedGateCombo(engine: HwEngine; fam: Family; T, cases: int;
   suiteExact += exact
   suiteTotal += cases * T
 
-proc runMergeCombo(engine: HwEngine; fam: Family; T, H, K, cases: int;
+proc runMergeCombo(engine: HwEngine; dt: Dtype; T, H, K, cases: int;
     seed: uint64; kernelName: string) =
   ## fp32-partial merge, judged bit-exact against the same sequential fp32
   ## slot-order sum, one El round at the store on both sides, `kernelName`
@@ -638,13 +638,13 @@ proc runMergeCombo(engine: HwEngine; fam: Family; T, H, K, cases: int;
         var acc = 0.0'f32
         for y in 0 ..< K + 1:
           acc += partB.hostPtr[t * (K + 1) * H32 + y * H32 + col]
-        want[t * H32 + col] = toFamBits(fam, acc)
+        want[t * H32 + col] = toDtypeBits(dt, acc)
     for i in 0 ..< nOut:
       doAssert outB.hostPtr[i] == want[i],
         &"merge output not bit-identical at element {i}, case {caseId}"
       if outB.hostPtr[i] == want[i]:
         inc exact
-  echo &"[merge {famName(fam)}] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
+  echo &"[merge {dtypeName(dt)}] cases={cases} launches={launches} bit-exact {exact}/{nOut*cases}"
   suiteCases += cases
   suiteLaunches += launches
   suiteExact += exact
@@ -738,7 +738,7 @@ proc runPoisonedRouter(engine: HwEngine) =
     engine.run << (grid: (T, H div 32, 1), blk: (32, 1, 1)) >>
       ("cer_moe_merge_bf16_mega", outPA, partPA)
 
-  proc snap(): tuple[ids: seq[int32], w: seq[uint16], part: seq[float32], outRow: seq[uint16]] =
+  proc snapshot(): tuple[ids: seq[int32], w: seq[uint16], part: seq[float32], outRow: seq[uint16]] =
     result.ids = newSeq[int32](nIds)
     result.w = newSeq[uint16](nIds)
     result.part = newSeq[float32](T * (K + 1) * H)
@@ -753,7 +753,7 @@ proc runPoisonedRouter(engine: HwEngine) =
 
   loadSentinels()
   launchChain()
-  let got = snap()
+  let got = snapshot()
   for t in 0 ..< T:
     for slot in 0 ..< K:
       let id = got.ids[t * K + slot]
@@ -780,7 +780,7 @@ proc runPoisonedRouter(engine: HwEngine) =
   # the relaunch, bit-identical ids, weights, partials and merged row
   loadSentinels()
   launchChain()
-  let again = snap()
+  let again = snapshot()
   for i in 0 ..< nIds:
     doAssert again.ids[i] == got.ids[i], "poisoned pass ids differ run to run"
     doAssert again.w[i] == got.w[i], "poisoned pass weights differ run to run"
@@ -792,7 +792,7 @@ proc runPoisonedRouter(engine: HwEngine) =
     &"weights the zero pattern, routed partials exactly zero, " &
     &"chain relaunched bit-identical"
 
-proc checkReassociation(fam: Family; T, H, E: int; seed: uint64) =
+proc checkReassociation(dt: Dtype; T, H, E: int; seed: uint64) =
   ## Standalone reassociation check over fresh seeds beyond the committed combos
   ##
   ## - the 16-wide-chunk walk, the kernel's mma accumulation structure, must sit
@@ -803,19 +803,19 @@ proc checkReassociation(fam: Family; T, H, E: int; seed: uint64) =
   var x = newSeq[uint16](nX)
   var w = newSeq[uint16](E * H)
   for i in 0 ..< nX:
-    x[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+    x[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
   for i in 0 ..< w.len:
-    w[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
-  let seqLogits = dotRawLogits(fam, x, w, T, H, E, false)
-  let chunkLogits = dotRawLogits(fam, x, w, T, H, E, true)
+    w[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+  let seqLogits = dotRawLogits(dt, x, w, T, H, E, false)
+  let chunkLogits = dotRawLogits(dt, x, w, T, H, E, true)
   var worstUse = 0.0'f64
   var checks = 0
   for t in 0 ..< T:
     for e in 0 ..< E:
       var sa = 0.0'f64
       for k in 0 ..< H:
-        sa += abs(famWiden(fam, x[t * H + k]).float64 *
-          famWiden(fam, w[e * H + k]).float64)
+        sa += abs(widenDtype(dt, x[t * H + k]).float64 *
+          widenDtype(dt, w[e * H + k]).float64)
       let bar = reassocDelta(H, sa)
       let diff = abs(chunkLogits[t * E + e].float64 - seqLogits[t * E + e].float64)
       doAssert diff <= bar,
@@ -824,7 +824,7 @@ proc checkReassociation(fam: Family; T, H, E: int; seed: uint64) =
       worstUse = max(worstUse, diff / bar)
       inc checks
   suiteWorstUse = max(suiteWorstUse, worstUse)
-  echo &"[reassociation {famName(fam)} H{H} seed 0x{seed:x}] worst bar " &
+  echo &"[reassociation {dtypeName(dt)} H{H} seed 0x{seed:x}] worst bar " &
     &"usage {worstUse:.3f} over {checks} logits, chunk walk vs sequential sum"
 
 
@@ -832,23 +832,23 @@ proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(MoeRouterMsl)
-  runCombo(engine, famBf16, 8, 2048, 256, 8, 8, 0xC04D0521'u64, 1.0'f32,
+  runCombo(engine, dtypeBf16, 8, 2048, 256, 8, 8, 0xC04D0521'u64, 1.0'f32,
     "router mega")
-  runCombo(engine, famF16, 8, 2048, 256, 8, 8, 0xC04D0522'u64, 1.0'f32,
+  runCombo(engine, dtypeF16, 8, 2048, 256, 8, 8, 0xC04D0522'u64, 1.0'f32,
     "router mega")
-  runCombo(engine, famBf16, 4, 256, 64, 4, 8, 0xC04D0523'u64, 1.0'f32,
+  runCombo(engine, dtypeBf16, 4, 256, 64, 4, 8, 0xC04D0523'u64, 1.0'f32,
     "router small")
-  runCombo(engine, famBf16, 8, 2048, 256, 8, 8, 0xC04D0528'u64, 2.0'f32,
+  runCombo(engine, dtypeBf16, 8, 2048, 256, 8, 8, 0xC04D0528'u64, 2.0'f32,
     "router mega scale 2")
-  runSharedGateCombo(engine, famBf16, 8, 8, 0xC04D0527'u64, "shared gate")
-  runSharedGateCombo(engine, famF16, 8, 8, 0xC04D0531'u64, "shared gate")
-  runMergeCombo(engine, famBf16, 8, 256, 8, 8, 0xC04D0524'u64, "cer_moe_merge_bf16")
-  runMergeCombo(engine, famF16, 8, 256, 8, 8, 0xC04D0532'u64, "cer_moe_merge_f16")
-  runMergeCombo(engine, famBf16, 8, 2048, 8, 2, 0xC04D0529'u64, "cer_moe_merge_bf16_mega")
+  runSharedGateCombo(engine, dtypeBf16, 8, 8, 0xC04D0527'u64, "shared gate")
+  runSharedGateCombo(engine, dtypeF16, 8, 8, 0xC04D0531'u64, "shared gate")
+  runMergeCombo(engine, dtypeBf16, 8, 256, 8, 8, 0xC04D0524'u64, "cer_moe_merge_bf16")
+  runMergeCombo(engine, dtypeF16, 8, 256, 8, 8, 0xC04D0532'u64, "cer_moe_merge_f16")
+  runMergeCombo(engine, dtypeBf16, 8, 2048, 8, 2, 0xC04D0529'u64, "cer_moe_merge_bf16_mega")
   runPoisonedRouter(engine)
-  checkReassociation(famBf16, 8, 2048, 256, 0xC04D0525'u64)
-  checkReassociation(famF16, 8, 2048, 256, 0xC04D0526'u64)
-  checkReassociation(famBf16, 4, 256, 64, 0xC04D0530'u64)
+  checkReassociation(dtypeBf16, 8, 2048, 256, 0xC04D0525'u64)
+  checkReassociation(dtypeF16, 8, 2048, 256, 0xC04D0526'u64)
+  checkReassociation(dtypeBf16, 4, 256, 64, 0xC04D0530'u64)
   echo &"CERAMIC MOE_ROUTER VERDICT: cases={suiteCases} launches={suiteLaunches} " &
     &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"
 

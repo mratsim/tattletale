@@ -308,17 +308,17 @@ proc widenF32*(s: seq[float32]): seq[float64] =
   for i in 0 ..< s.len:
     result[i] = s[i].float64
 
-proc readBf*(snap: seq[uint16]; off, len: int): seq[uint16] =
+proc readBf*(snapshot: seq[uint16]; off, len: int): seq[uint16] =
   ## One bf16 arena section's snapshot.
-  doAssert off + len <= snap.len
-  result = snap[off ..< off + len]
+  doAssert off + len <= snapshot.len
+  result = snapshot[off ..< off + len]
 
-proc readF32Sec*(snap: seq[float32]; off, len: int): seq[float32] =
+proc readF32Sec*(snapshot: seq[float32]; off, len: int): seq[float32] =
   ## One fp32 arena section's snapshot.
-  doAssert off + len <= snap.len
-  result = snap[off ..< off + len]
+  doAssert off + len <= snapshot.len
+  result = snapshot[off ..< off + len]
 
-type Snap* = object
+type Snapshot* = object
   ## One launch's arena and carry snapshots, observed operand values:
   ##
   ##   full bf16 arena, full fp32 arena, post-launch state and ring
@@ -327,11 +327,11 @@ type Snap* = object
   state*: seq[float32]
   ring*: seq[uint16]
 
-proc secBf*(s: Snap; off, len: int): seq[uint16] {.inline.} =
+proc secBf*(s: Snapshot; off, len: int): seq[uint16] {.inline.} =
   ## One bf16 section of the snapshot.
   readBf(s.bf, off, len)
 
-proc secF32*(s: Snap; off, len: int): seq[float32] {.inline.} =
+proc secF32*(s: Snapshot; off, len: int): seq[float32] {.inline.} =
   ## One fp32 section of the snapshot.
   readF32Sec(s.f32, off, len)
 

@@ -71,14 +71,14 @@ proc assertTailUntouched*[T](g: GuardedTail[T]) =
       "guarded tail element " & $i & " was modified: expected " &
       $g.fillPattern & ", got " & $g.data[i]
 
-func countChanged*[T](data, snap: openArray[T]): int =
+func countChanged*[T](data, snapshot: openArray[T]): int =
   ## Returns the number of positions where the two sequences differ
   ## bitwise. A detector test asserts the count directly,
   ## an unchanged-region check asserts the count is zero.
-  doAssert data.len == snap.len,
-    "sequence length mismatch: data " & $data.len & ", snap " & $snap.len
+  doAssert data.len == snapshot.len,
+    "sequence length mismatch: data " & $data.len & ", snapshot " & $snapshot.len
   for i in 0 ..< data.len:
-    if data[i] != snap[i]: inc result
+    if data[i] != snapshot[i]: inc result
 
 func snapshotSeq*[T](data: openArray[T]): seq[T] =
   ## Returns a copy of `data` for a later countChanged check, a region

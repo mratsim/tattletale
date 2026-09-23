@@ -16,6 +16,16 @@
 ## - one query head reads one key head
 ## - the key head is `queryHead div (numQueryHeads div numKeyHeads)`
 ##
+## Register-tile naming convention, shared by the gdn and kda kernels:
+##
+## | name    | holds                                                            |
+## | ------- | ---------------------------------------------------------------- |
+## | `<x>T`  | the element-dtype register tile of operand x, loaded from memory |
+## | `<x>32` | the fp32 register tile of the same operand                       |
+##
+## An fp32-storage operand loads straight into its `32` form, an element-dtype
+## operand widens its `T` form into the `32` form.
+##
 ## A template, so the arithmetic inlines into host launcher code and {.device.} kernel bodies alike.
 
 template keyHeadOf*(queryHead, numQueryHeads, numKeyHeads: int32): int32 =

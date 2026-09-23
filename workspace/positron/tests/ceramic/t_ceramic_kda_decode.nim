@@ -182,7 +182,7 @@ type StepSnap = object
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
-proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
+proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
   ## One (family dtype, shape, edge) combination over `cases` independent seeded runs
   ## of `steps` decode steps each, judged per element against the naive reference
   ## under the band model, case 0 relaunched bit-identical.
@@ -191,8 +191,8 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kernelName = if fam == famF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
-  let uFam = if fam == famBf16: UBf16 else: UF16
+  let kernelName = if dt == dtypeF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
+  let uFam = if dt == dtypeBf16: UBf16 else: UF16
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -273,7 +273,7 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
         kF[i] = si.kVals[i]
         gF[i] = si.gVals[i]
       for i in 0 ..< bhMax * Dv:
-        vF[i] = famWiden(fam, si.vBits[i])
+        vF[i] = widenDtype(dt, si.vBits[i])
       for h in 0 ..< bhMax:
         betaF[h] = si.betaVals[h]
 
@@ -361,13 +361,13 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
           let barY = 2.0 * uFam * abs(yWant) +
             (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
             2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = famWiden(fam, yB.hostPtr[bh * Dv + r]).float64
+          let yGot = widenDtype(dt, yB.hostPtr[bh * Dv + r]).float64
           let yDiff = abs(yGot - yWant)
           if judge:
             doAssert yDiff <= barY,
               &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
               &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = famUlp(fam, yWant)
+            let uAt = dtypeUlp(dt, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -405,7 +405,7 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
         kVals[i] = rng.nextF32(-1.0'f32, 1.0'f32)
         gVals[i] = rng.nextF32(gLo, gHi)
       for i in 0 ..< bhMax * Dv:
-        vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+        vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
       for h in 0 ..< bhMax:
         if betaZero:
           betaVals[h] = 0.0'f32
@@ -444,9 +444,9 @@ proc runCombo(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, steps, case
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {famName(fam)} Dk={dk}] steps={steps} cases={cases} " &
+  echo &"[{label} {dtypeName(dt)} Dk={dk}] steps={steps} cases={cases} " &
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {famName(fam)} ulp, " &
+    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -464,19 +464,19 @@ type CrossInputs = object
   g0: float32
   state0: seq[float32]
 
-proc takeCrossInputs(rng: var NaiveRng, fam: Family, qkRows, bhMax, stateElems: int): CrossInputs =
+proc takeCrossInputs(rng: var NaiveRng, dt: Dtype, qkRows, bhMax, stateElems: int): CrossInputs =
   ## Seeded cross-check inputs, the KDA side reads the exact f32 widenings.
   var qBits = newSeq[uint16](qkRows * 32)
   var kBits = newSeq[uint16](qkRows * 32)
   var vBits = newSeq[uint16](bhMax * 16)
   var betaBits = newSeq[uint16](bhMax)
   for i in 0 ..< qkRows * 32:
-    qBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
-    kBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+    qBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+    kBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
   for i in 0 ..< bhMax * 16:
-    vBits[i] = toFamBits(fam, rng.nextF32(-1.0'f32, 1.0'f32))
+    vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
   for h in 0 ..< bhMax:
-    betaBits[h] = toFamBits(fam, rng.nextF32(0.2'f32, 0.8'f32))
+    betaBits[h] = toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32))
   let g0 = rng.nextF32(-3.0'f32, -0.1'f32)
   var state0 = newSeq[float32](stateElems)
   for i in 0 ..< stateElems:
@@ -484,7 +484,7 @@ proc takeCrossInputs(rng: var NaiveRng, fam: Family, qkRows, bhMax, stateElems: 
   CrossInputs(qBits: qBits, kBits: kBits, vBits: vBits, betaBits: betaBits,
     g0: g0, state0: state0)
 
-proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases: int, seed: uint64, label: string) =
+proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: int, seed: uint64, label: string) =
   ## Uniform-g kernel-tier cross-check, ceramic KDA vs ceramic GDN.
   ##
   ## - both kernels get family-exact operands, the GDN side's family bits widened
@@ -496,9 +496,9 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kdaName = if fam == famF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
-  let gdnName = if fam == famF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
-  let uFam = if fam == famBf16: UBf16 else: UF16
+  let kdaName = if dt == dtypeF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
+  let gdnName = if dt == dtypeF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
+  let uFam = if dt == dtypeBf16: UBf16 else: UF16
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -537,15 +537,15 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
     for i in 0 ..< qkRows * dk:
       kFamB.hostPtr[i] = ci.kBits[i]
       qFamB.hostPtr[i] = ci.qBits[i]
-      kF32B.hostPtr[i] = famWiden(fam, ci.kBits[i])
-      qF32B.hostPtr[i] = famWiden(fam, ci.qBits[i])
+      kF32B.hostPtr[i] = widenDtype(dt, ci.kBits[i])
+      qF32B.hostPtr[i] = widenDtype(dt, ci.qBits[i])
       gMatB.hostPtr[i] = ci.g0
     for i in 0 ..< bhMax * Dv:
       vB.hostPtr[i] = ci.vBits[i]
     for h in 0 ..< bhMax:
       gHeadB.hostPtr[h] = ci.g0
       betaFamB.hostPtr[h] = ci.betaBits[h]
-      betaF32B.hostPtr[h] = famWiden(fam, ci.betaBits[h])
+      betaF32B.hostPtr[h] = widenDtype(dt, ci.betaBits[h])
     for i in 0 ..< stateElems:
       stateB.hostPtr[i] = ci.state0[i]
     for i in 0 ..< bhMax * Dv:
@@ -575,7 +575,7 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
     assertTailZero(stateB, stateElems)
     var kWant = newSeq[float32](qkRows * dk)
     for i in 0 ..< qkRows * dk:
-      kWant[i] = famWiden(fam, ci.kBits[i])
+      kWant[i] = widenDtype(dt, ci.kBits[i])
     assertReadUnchanged(kF32B, kWant)
     let stateK = readInto(stateB.hostPtr, stateElems)
     let yK = readInto(yB.hostPtr, bhMax * Dv)
@@ -609,17 +609,17 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
         var yAbs = 0.0'f64
         for c in 0 ..< dk:
           let idx = (bh * Dv + r) * dk + c
-          let qs = famWiden(fam, ci.qBits[hk * dk + c]).float64 * gdnScale
+          let qs = widenDtype(dt, ci.qBits[hk * dk + c]).float64 * gdnScale
           yAbs += abs(stateG[idx].float64 * qs)
-        let yWant = famWiden(fam, yG[bh * Dv + r]).float64
+        let yWant = widenDtype(dt, yG[bh * Dv + r]).float64
         let barY = 2.0 * uFam * abs(yWant) +
           (RelQScaleX + 2.0 * U32) * yAbs + FloorSub
-        let yGot = famWiden(fam, yK[bh * Dv + r]).float64
+        let yGot = widenDtype(dt, yK[bh * Dv + r]).float64
         let yDiff = abs(yGot - yWant)
         doAssert yDiff <= barY,
           &"cross-check y outside the bar at (bh {bh}, r {r}, case {caseId}): " &
           &"{yDiff:.3e} > {barY:.3e}"
-        let uAt = famUlp(fam, yWant)
+        let uAt = dtypeUlp(dt, yWant)
         if uAt > 0.0 and yDiff > 0.0:
           worstYUlp = max(worstYUlp, yDiff / uAt)
         if yDiff == 0.0:
@@ -634,17 +634,17 @@ proc runCrossCheck(engine: HwEngine, fam: Family, Hv, Hk, hkRatio, B, dk, cases:
   var refState: seq[float32]
   var refY: seq[uint16]
   for caseId in 0 ..< cases:
-    let ci = takeCrossInputs(rng, fam, qkRows, bhMax, stateElems)
+    let ci = takeCrossInputs(rng, dt, qkRows, bhMax, stateElems)
     runCase(ci, caseId, judge = true, refState, refY)
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
-    let ci0 = takeCrossInputs(rng0, fam, qkRows, bhMax, stateElems)
+    let ci0 = takeCrossInputs(rng0, dt, qkRows, bhMax, stateElems)
     runCase(ci0, 0, judge = false, refState, refY)
 
-  echo &"[{label} {famName(fam)} Dk={dk}] cross-check cases={cases} " &
+  echo &"[{label} {dtypeName(dt)} Dk={dk}] cross-check cases={cases} " &
     &"launches={launches} | state bit-exact all | y worst {worstYUlp:.2f} " &
-    &"{famName(fam)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+    &"{dtypeName(dt)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
   suiteWorstUse = max(suiteWorstUse, worstYUse)
@@ -659,61 +659,61 @@ proc main =
 
   proc secF16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A1'u64,
+    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A1'u64,
       "baseline Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A2'u64,
+    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A2'u64,
       "gqa Hk=2/Hv=4/B=2", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A3'u64,
+    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A3'u64,
       "baseline Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A4'u64,
+    runCombo(engine, dtypeBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A4'u64,
       "gqa Hk=2/Hv=4/B=2", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, famF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D04A5'u64,
+    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D04A5'u64,
       "chain gqa Hk=2/Hv=4/B=2", -0.5'f32, -0.01'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, famBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D04A6'u64,
+    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D04A6'u64,
       "chain baseline Hk=1/Hv=1/B=1", -0.5'f32, -0.01'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
+    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCombo(engine, famF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
+    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32, betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secCrossF16 =
     let t0 = epochTime()
-    runCrossCheck(engine, famF16, 4, 2, 2, 2, 32, 64, 0xC04D04A9'u64,
+    runCrossCheck(engine, dtypeF16, 4, 2, 2, 2, 32, 64, 0xC04D04A9'u64,
       "cross-check gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secCrossBf16 =
     let t0 = epochTime()
-    runCrossCheck(engine, famBf16, 4, 2, 2, 2, 32, 64, 0xC04D04AA'u64,
+    runCrossCheck(engine, dtypeBf16, 4, 2, 2, 2, 32, 64, 0xC04D04AA'u64,
       "cross-check gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
