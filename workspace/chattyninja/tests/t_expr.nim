@@ -599,9 +599,7 @@ proc testLoneEqualsInCallArgsRaises() =
 proc testMappingMethods() =
   let withPeople = ctx(("people", peopleCtx()))
 
-  doAssert render("people.keys()", withPeople) == "['name', 'age', 'tags', 'active']"
   doAssert render("people.items()", withPeople)[0 ..< 15] == "[['name', 'ada'"
-  doAssert render("people.values()", withPeople)[0 ..< 10] == "['ada', 36"
   doAssert render("people.get('name')", withPeople) == "ada"
   doAssert render("people.get('nope', 'fb')", withPeople) == "fb"
 

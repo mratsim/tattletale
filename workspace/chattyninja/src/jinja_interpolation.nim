@@ -49,7 +49,7 @@ type
     ## the template text and the context's clock, and writing nothing.
 
   GlobalName = enum
-    gNamespace, gRange, gStrftimeNow, gRaiseException, gDict, gLipsum, gCycler, gJoiner
+    gNamespace, gRange, gStrftimeNow, gRaiseException
 
   Op = enum
     ## Infix operator an expression token spells, word operators and punctuator spellings alike,
@@ -402,7 +402,7 @@ func steppedSliceInto(sb: var Cursor, s: string, a, b, by: int) =
 
 const
   GlobalNames: array[GlobalName, string] = [
-    "namespace", "range", "strftime_now", "raise_exception", "dict", "lipsum", "cycler", "joiner"
+    "namespace", "range", "strftime_now", "raise_exception"
   ]
 
 func loopAttr(v: JinjaVal, name: openArray[char]): JinjaVal =
@@ -510,9 +510,6 @@ func namespaceGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaV
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
   nsVal(argDict(c.tmpl, args))
 
-func dictGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
-  dictVal(argDict(c.tmpl, args))
-
 func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## `range(a, b, step)`, the lazy bounds value, elements computing per index, never materializing.
   var a = 0'i64
@@ -611,7 +608,7 @@ func raiseExceptionGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): J
 
 const
   GlobalProcs: array[GlobalName, GlobalProc] = [
-    namespaceGlobal, rangeGlobal, strftimeGlobal, raiseExceptionGlobal, dictGlobal, nil, nil, nil
+    namespaceGlobal, rangeGlobal, strftimeGlobal, raiseExceptionGlobal
   ]
 
 # Lookup:

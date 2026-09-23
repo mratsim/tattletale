@@ -22,15 +22,12 @@ type
   MethodProc = proc (v: JinjaVal, args: var Args): JinjaVal {.nimcall, noSideEffect.}
   FilterName* = enum
     fTojson, fLength, fTrim, fDefault, fJoin, fLower, fUpper, fCapitalize, fList, fSafe, fDictsort,
-    fMap, fSelect, fReject, fReplace, fIndent, fTruncate, fReverse, fWordcount, fSum, fMin, fMax,
-    fAbs, fRound, fBatch, fSlice, fUnique, fGroupby, fAttr, fCenter, fEscape, fTitle
+    fMap
   TestName* = enum
     tString, tDefined, tUndefined, tMapping, tSequence, tIterable, tNone, tBoolean, tTrue, tFalse,
-    tNumber, tInteger, tFloat, tFilter, tTest, tSameas, tIn, tEqualTo, tDivisibleby, tEscaped,
-    tEven, tOdd, tLower, tUpper, tCallable
+
   MethodName* = enum
-    mGet, mItems, mKeys, mValues, mSplit, mStrip, mLstrip, mRstrip, mStartswith, mEndswith, mLower,
-    mUpper, mTitle, mReplace, mFind, mCount, mFormat, mPop, mUpdate
+    mGet, mItems, mSplit, mStrip, mLstrip, mRstrip, mStartswith, mEndswith
 
 const
   ArgKeywordNames: array[akChars .. akSeparators, string] = [
@@ -77,18 +74,14 @@ func getArg(args: var Args, pos: int, kw: ArgKeyword, default: JinjaVal): JinjaV
 const
   FilterNames*: array[FilterName, string] = [
     "tojson", "length", "trim", "default", "join", "lower", "upper", "capitalize", "list", "safe",
-    "dictsort", "map", "select", "reject", "replace", "indent", "truncate", "reverse", "wordcount",
-    "sum", "min", "max", "abs", "round", "batch", "slice", "unique", "groupby", "attr", "center",
-    "escape", "title"
+    "dictsort", "map"
   ]
   TestNames*: array[TestName, string] = [
     "string", "defined", "undefined", "mapping", "sequence", "iterable", "none", "boolean", "true",
-    "false", "number", "integer", "float", "filter", "test", "sameas", "in", "equalto",
-    "divisibleby", "escaped", "even", "odd", "lower", "upper", "callable"
+    "false"
   ]
   MethodNames*: array[MethodName, string] = [
-    "get", "items", "keys", "values", "split", "strip", "lstrip", "rstrip", "startswith",
-    "endswith", "lower", "upper", "title", "replace", "find", "count", "format", "pop", "update"
+    "get", "items", "split", "strip", "lstrip", "rstrip", "startswith", "endswith"
   ]
 
 func tojsonFilter(v: JinjaVal, args: var Args): JinjaVal =
@@ -223,10 +216,6 @@ func noneTest(v: JinjaVal, args: var Args): bool = v.kind == vkNone
 func booleanTest(v: JinjaVal, args: var Args): bool = v.kind == vkBool
 func trueTest(v: JinjaVal, args: var Args): bool = v.kind == vkBool and v.b
 func falseTest(v: JinjaVal, args: var Args): bool = v.kind == vkBool and not v.b
-func numberTest(v: JinjaVal, args: var Args): bool = v.kind in {vkInt, vkFloat}
-func integerTest(v: JinjaVal, args: var Args): bool = v.kind == vkInt
-func floatTest(v: JinjaVal, args: var Args): bool = v.kind == vkFloat
-
 func getMethod(v: JinjaVal, args: var Args): JinjaVal =
   ## `d.get(key, default)`. Absence yields the default, itself undefined when unsupplied.
   if v.kind notin {vkDict, vkNs}:
@@ -249,19 +238,6 @@ func itemsMethod(v: JinjaVal, args: var Args): JinjaVal =
     seqVal(acc)
   else:
     raise jinjaErr("`items` needs a mapping or a sequence")
-
-func keysMethod(v: JinjaVal, args: var Args): JinjaVal =
-  if v.kind notin {vkDict, vkNs}:
-    raise jinjaErr("`keys` needs a mapping")
-  var acc = newSeq[JinjaVal](v.d.keys.len)
-  for i, k in v.d.keys:
-    acc[i] = strVal(k)
-  seqVal(acc)
-
-func valuesMethod(v: JinjaVal, args: var Args): JinjaVal =
-  if v.kind notin {vkDict, vkNs}:
-    raise jinjaErr("`values` needs a mapping")
-  seqVal(v.d.vals)
 
 func splitMethod(v: JinjaVal, args: var Args): JinjaVal =
   ## `s.split(sep)` over non-overlapping occurrences, an empty separator splitting per codepoint,
@@ -342,27 +318,7 @@ const
     fList: listFilter,
     fSafe: safeFilter,
     fDictsort: nil,
-    fMap: nil,
-    fSelect: nil,
-    fReject: nil,
-    fReplace: nil,
-    fIndent: nil,
-    fTruncate: nil,
-    fReverse: nil,
-    fWordcount: nil,
-    fSum: nil,
-    fMin: nil,
-    fMax: nil,
-    fAbs: nil,
-    fRound: nil,
-    fBatch: nil,
-    fSlice: nil,
-    fUnique: nil,
-    fGroupby: nil,
-    fAttr: nil,
-    fCenter: nil,
-    fEscape: nil,
-    fTitle: nil
+    fMap: nil
   ]
 
   TestProcs*: array[TestName, TestProc] = [tString: stringTest,
@@ -374,41 +330,15 @@ const
     tNone: noneTest,
     tBoolean: booleanTest,
     tTrue: trueTest,
-    tFalse: falseTest,
-    tNumber: numberTest,
-    tInteger: integerTest,
-    tFloat: floatTest,
-    tFilter: nil,
-    tTest: nil,
-    tSameas: nil,
-    tIn: nil,
-    tEqualTo: nil,
-    tDivisibleby: nil,
-    tEscaped: nil,
-    tEven: nil,
-    tOdd: nil,
-    tLower: nil,
-    tUpper: nil,
-    tCallable: nil
+    tFalse: falseTest
   ]
 
   MethodProcs*: array[MethodName, MethodProc] = [mGet: getMethod,
     mItems: itemsMethod,
-    mKeys: keysMethod,
-    mValues: valuesMethod,
     mSplit: splitMethod,
     mStrip: stripMethod,
     mLstrip: lstripMethod,
     mRstrip: rstripMethod,
     mStartswith: startswithMethod,
-    mEndswith: endswithMethod,
-    mLower: nil,
-    mUpper: nil,
-    mTitle: nil,
-    mReplace: nil,
-    mFind: nil,
-    mCount: nil,
-    mFormat: nil,
-    mPop: nil,
-    mUpdate: nil
+    mEndswith: endswithMethod
   ]
