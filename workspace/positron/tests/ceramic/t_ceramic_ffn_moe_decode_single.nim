@@ -64,33 +64,36 @@ const MoEFwdDecodeMsl = metal:
       x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
-      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
+      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32]) {.global.} =
     moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 1.0'f32, true](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
-      h_scratch, hs_scratch)
+      h_scratch, hs_scratch, scores_scratch)
 
   proc cer_moe_fwd_nogate(
       partial: ptr UncheckedArray[float32],
       x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
-      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
+      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32]) {.global.} =
     moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 1.0'f32, false](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
-      h_scratch, hs_scratch)
+      h_scratch, hs_scratch, scores_scratch)
 
   proc cer_moe_fwd_scale2(
       partial: ptr UncheckedArray[float32],
       x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
-      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
+      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32]) {.global.} =
     moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 2.0'f32, true](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
-      h_scratch, hs_scratch)
+      h_scratch, hs_scratch, scores_scratch)
 
 # ─── Case runners ─────────────────────────────────────────────────────
 
@@ -161,8 +164,11 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     xB = allocPageBuf[uint16](tokens * H)
     hB = allocPageBuf[uint16](tokens * K * I)
     hsB = allocPageBuf[uint16](tokens * I)
+    scoresScratch = allocPageBuf[float32](tokens * (K + 1) * E)
+      ## the router selection's per-(token, slot-group) score rows
   defer:
     freePageBuf(partial); freePageBuf(xB); freePageBuf(hB); freePageBuf(hsB)
+    freePageBuf(scoresScratch)
 
   var rng = initPropRng(seed)
   fillRngBf(xB, rng, tokens * H, -1.0'f32, 1.0'f32)
@@ -185,12 +191,13 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
   var sharedGVPA = if poisonGateVec: poisonedGV.pa() else: w.sharedGV.pa()
   var hPA = hB.pa()
   var hsPA = hsB.pa()
+  var scoresPA = scoresScratch.pa()
 
   proc launch(): bool {.gcsafe.} =
     engine.run << (grid: (tokens, K + 1, 1), blk: (32, 1, 1)) >>
       (entry, partialPA,
         (xPA, routerWPA, gateUpWPA, downWPA, sharedGWPA, sharedUWPA,
-         sharedDWPA, sharedGVPA, hPA, hsPA))
+         sharedDWPA, sharedGVPA, hPA, hsPA, scoresPA))
     inc suiteLaunches
     result = true
 

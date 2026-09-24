@@ -80,30 +80,34 @@ const MoeRouterMsl = metal:
   proc cer_moe_route_bf16_mega(
       ids: ptr UncheckedArray[int32],
       rout_w, x, router_w: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32],
       num_tokens: int32) {.global.} =
     moe_route_fwd[bfloat16, 2048, 256, 8, 1.0'f32](
-      ids, rout_w, x, router_w, num_tokens)
+      ids, rout_w, x, router_w, scores_scratch, num_tokens)
 
   proc cer_moe_route_f16_mega(
       ids: ptr UncheckedArray[int32],
       rout_w, x, router_w: ptr UncheckedArray[float16],
+      scores_scratch: ptr UncheckedArray[float32],
       num_tokens: int32) {.global.} =
     moe_route_fwd[float16, 2048, 256, 8, 1.0'f32](
-      ids, rout_w, x, router_w, num_tokens)
+      ids, rout_w, x, router_w, scores_scratch, num_tokens)
 
   proc cer_moe_route_bf16_small(
       ids: ptr UncheckedArray[int32],
       rout_w, x, router_w: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32],
       num_tokens: int32) {.global.} =
     moe_route_fwd[bfloat16, 256, 64, 4, 1.0'f32](
-      ids, rout_w, x, router_w, num_tokens)
+      ids, rout_w, x, router_w, scores_scratch, num_tokens)
 
   proc cer_moe_route_bf16_mega_s2(
       ids: ptr UncheckedArray[int32],
       rout_w, x, router_w: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32],
       num_tokens: int32) {.global.} =
     moe_route_fwd[bfloat16, 2048, 256, 8, 2.0'f32](
-      ids, rout_w, x, router_w, num_tokens)
+      ids, rout_w, x, router_w, scores_scratch, num_tokens)
 
   proc cer_moe_merge_bf16_mega(
       out_r: ptr UncheckedArray[bfloat16],
@@ -117,11 +121,12 @@ const MoeRouterMsl = metal:
       x, router_w, gate_up_w, down_w: ptr UncheckedArray[bfloat16],
       shared_gate_w, shared_up_w, shared_down_w,
       shared_gate_vec_w: ptr UncheckedArray[bfloat16],
-      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16]) {.global.} =
+      h_scratch, hs_scratch: ptr UncheckedArray[bfloat16],
+      scores_scratch: ptr UncheckedArray[float32]) {.global.} =
     moe_fwd_decode[bfloat16, 2048, 256, 8, 512, 1.0'f32, true](
       partial, x, router_w, gate_up_w, down_w,
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
-      h_scratch, hs_scratch)
+      h_scratch, hs_scratch, scores_scratch)
 
   proc cer_shared_gate_bf16(
       outp: ptr UncheckedArray[float32],
@@ -330,12 +335,16 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
   var wB = allocPageBuf[uint16](nIds)
   var xB = allocPageBuf[uint16](nX)
   var rWB = allocPageBuf[uint16](nW)
+  var sB = allocPageBuf[float32](T * E)
+    ## the router selection's per-token score rows, the kernel's own scratch
   defer:
     freePageBuf(idsB); freePageBuf(wB); freePageBuf(xB); freePageBuf(rWB)
+    freePageBuf(sB)
   var idsPA = idsB.pa()
   var wPA = wB.pa()
   var xPA = xB.pa()
   var rWPA = rWB.pa()
+  var sPA = sB.pa()
   var kernelName = if dt == kBfloat16:
     (if H == 2048: "cer_moe_route_bf16_mega" else: "cer_moe_route_bf16_small")
   else:
@@ -382,7 +391,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
 
   proc launch =
     engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
-      (kernelName, idsPA, (wPA, xPA, rWPA, int32(T)))
+      (kernelName, idsPA, (wPA, xPA, rWPA, sPA, int32(T)))
     inc launches
 
   proc record(): tuple[ids: seq[int32], w: seq[uint16]] =
@@ -709,11 +718,13 @@ proc runPoisonedRouter(engine: HwEngine) =
   var suB = allocPageBuf[uint16](I * H)
   var sdB = allocPageBuf[uint16](H * I)
   var gvB = allocPageBuf[uint16](H)
+  var sB = allocPageBuf[float32](T * E)
+  var sFwdB = allocPageBuf[float32](T * (K + 1) * E)
   defer:
     freePageBuf(idsB); freePageBuf(wB); freePageBuf(xB); freePageBuf(rWB)
     freePageBuf(partB); freePageBuf(hB); freePageBuf(hsB); freePageBuf(outB)
     freePageBuf(guB); freePageBuf(dWB); freePageBuf(sgB); freePageBuf(suB)
-    freePageBuf(sdB); freePageBuf(gvB)
+    freePageBuf(sdB); freePageBuf(gvB); freePageBuf(sB); freePageBuf(sFwdB)
   var idsPA = idsB.pa()
   var wPA = wB.pa()
   var xPA = xB.pa()
@@ -728,6 +739,8 @@ proc runPoisonedRouter(engine: HwEngine) =
   var suPA = suB.pa()
   var sdPA = sdB.pa()
   var gvPA = gvB.pa()
+  var sPA = sB.pa()
+  var sFwdPA = sFwdB.pa()
 
   # the poisoned pass, NaN bits across the router weight, the activations finite
   var rng = initPropRng(Seed)
@@ -757,10 +770,10 @@ proc runPoisonedRouter(engine: HwEngine) =
 
   proc launchChain() =
     engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
-      ("cer_moe_route_bf16_mega", idsPA, (wPA, xPA, rWPA, int32(T)))
+      ("cer_moe_route_bf16_mega", idsPA, (wPA, xPA, rWPA, sPA, int32(T)))
     engine.run << (grid: (T, K + 1, 1), blk: (32, 1, 1)) >>
       ("cer_moe_fwd_bf16_mega", partPA,
-        (xPA, rWPA, guPA, dWPA, sgPA, suPA, sdPA, gvPA, hPA, hsPA))
+        (xPA, rWPA, guPA, dWPA, sgPA, suPA, sdPA, gvPA, hPA, hsPA, sFwdPA))
     engine.run << (grid: (T, H div 32, 1), blk: (32, 1, 1)) >>
       ("cer_moe_merge_bf16_mega", outPA, partPA)
 

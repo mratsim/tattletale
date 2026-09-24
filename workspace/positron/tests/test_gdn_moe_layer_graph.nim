@@ -63,7 +63,8 @@ proc testQwenArenaLengths =
     let g = deriveGdnLayerGraph(qwen36Cfg())
     doAssert g.bfArenaLen == BfArenaLen,
       "derived bf16 extent " & $g.bfArenaLen & " must equal the baked " & $BfArenaLen
-    doAssert g.f32Offsets[f32G] == sG and g.f32Offsets[f32Partial] == sPartial
+    doAssert g.f32Offsets[f32G] == sG and g.f32Offsets[f32Partial] == sPartial and
+      g.f32Offsets[f32Scores] == sScores
     doAssert g.f32ArenaLen == F32ArenaLen,
       "derived f32 extent " & $g.f32ArenaLen & " must equal the baked " & $F32ArenaLen
 
@@ -88,7 +89,8 @@ proc testQwenSectionWidths =
     doAssert g.bfWidths[bfZ] == NumVHeads * HeadVDim
     doAssert g.bfWidths[bfH] == TopK * Inter and g.bfWidths[bfHs] == Inter
     doAssert g.bfWidths[bfQn] == NumKHeads * HeadKDim
-    doAssert g.f32Widths[f32Partial] == (TopK + 1) * Hidden
+    doAssert g.f32Widths[f32Partial] == (TopK + 1) * Hidden and
+      g.f32Widths[f32Scores] == (TopK + 1) * NumExperts
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GLM-4.7-Flash instantiation, the MoE dims with no GDN mixer
@@ -122,8 +124,9 @@ proc testGlm47Sections =
         9728, 11776, 13824, 15872, 17920]
     doAssert g.bfOffsets == wantOffsets
     doAssert g.bfArenaLen == 19968
-    doAssert g.f32Widths[f32G] == 0 and g.f32Widths[f32Partial] == 5 * 2048
-    doAssert g.f32ArenaLen == 10240
+    doAssert g.f32Widths[f32G] == 0 and g.f32Widths[f32Partial] == 5 * 2048 and
+      g.f32Widths[f32Scores] == 5 * 64
+    doAssert g.f32ArenaLen == 10560
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Graph invariants, both configs

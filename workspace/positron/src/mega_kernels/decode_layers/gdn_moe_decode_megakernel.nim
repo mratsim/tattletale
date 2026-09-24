@@ -148,8 +148,13 @@ const
     ##   log-decay values (Hv).
   sPartial* = sG + NumVHeads
     ## MoE fp32 partials, (TopK+1)·Hidden.
-  F32ArenaLen* = sPartial + (TopK + 1) * Hidden
-    ## f32 arena extent in elements (≈ 72 KiB).
+  sScores* = sPartial + (TopK + 1) * Hidden
+    ## MoE router selection scratch, (TopK+1)·NumExperts fp32, one
+    ## expert-count score row per slot-group threadgroup of the MoE decode
+    ## stage:
+    ## - each threadgroup private to its slice of the staged softmax scores
+  F32ArenaLen* = sScores + (TopK + 1) * NumExperts
+    ## f32 arena extent in elements (≈ 81 KiB).
 
 const StageBlocks*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
     4, 32, 1, 9, 64]
@@ -251,7 +256,8 @@ static:
     "StageEnds must reproduce the dispatcher's recorded stage boundaries"
   doAssert sZ == 8192 and sH == 32864 and sMoeOut == 37472 and
     sBlockOut == 47712, "bf16 arena anchors must match the recorded offsets"
-  doAssert BfArenaLen == 49760 and sPartial == 32 and F32ArenaLen == 18464,
+  doAssert BfArenaLen == 49760 and sPartial == 32 and
+    sScores == 18464 and F32ArenaLen == 20768,
     "the arena extents must match the recorded lengths"
 
 
@@ -589,7 +595,8 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
       waveWait(counters, int32(WaitMoeDecodeC), WaitMoeDecodeT)
       moe_fwd_decode_at[T, 2048, 256, 8, 512, 1.0'f32, true]((f32A +% sPartial), (bfA +% sNormed2), routerW, gateUpW,
         downW, sharedGW, sharedUW, sharedDW, sharedGVW,
-        (bfA +% sH), (bfA +% sHs), 0, tx - int32(EndStageFoldNorm2))
+        (bfA +% sH), (bfA +% sHs), (f32A +% sScores),
+        0, tx - int32(EndStageFoldNorm2))
     waveAdd(counters, 11)
   else:
     when HaveNorm:

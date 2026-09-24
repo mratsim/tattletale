@@ -79,7 +79,7 @@ type BfSectionKind* = enum
 
 type F32SectionKind* = enum
   ## F32 scratch sections in arena order.
-  f32G, f32Partial
+  f32G, f32Partial, f32Scores
 
 type StageKind* = enum
   ## Stages 1..13 in counter-index order, one stage branch per threadgroup
@@ -105,7 +105,7 @@ const BfSectionNames*: array[BfSectionKind, string] = [
     "h", "hs", "moe-out", "h1", "normed2", "stream", "norm1", "block-out"]
   ## Section labels, the diagnostics' spellings.
 
-const F32SectionNames*: array[F32SectionKind, string] = ["g", "partial"]
+const F32SectionNames*: array[F32SectionKind, string] = ["g", "partial", "scores"]
   ## F32 section labels, the diagnostics' spellings.
 
 type StageRow* = object
@@ -195,12 +195,14 @@ func bfSectionWidth(cfg: GdnMoeCfg, s: BfSectionKind): int32 =
   of bfMoeOut, bfH1, bfNormed2, bfStream, bfNorm1, bfBlockOut: cfg.hidden
 
 func f32SectionWidth(cfg: GdnMoeCfg, s: F32SectionKind): int32 =
-  ## One f32 section's shape at `cfg`, `numVHeads` log-decay rows plus
-  ## `(topK + 1)·hidden` MoE fp32 partials, the log-decay section collapsing
-  ## to 0 on a no-mixer layer.
+  ## One f32 section's shape at `cfg`:
+  ## - f32G spans `numVHeads` log-decay rows, 0 on a no-mixer layer
+  ## - f32Partial spans `(topK + 1)·hidden` MoE fp32 partials
+  ## - f32Scores spans `(topK + 1)·numExperts` router score rows
   case s
   of f32G: cfg.numVHeads
   of f32Partial: (cfg.topK + 1) * cfg.hidden
+  of f32Scores: (cfg.topK + 1) * cfg.numExperts
 
 proc deriveGdnLayerGraph*(cfg: GdnMoeCfg): LayerGraph =
   ## Derives the layer graph at `cfg`.

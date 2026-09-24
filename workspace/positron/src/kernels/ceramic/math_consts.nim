@@ -13,6 +13,10 @@ const Log2e* = 1.4426950408889634'f32
   ## f32 log base 2 of e, the scale factor of the exp2-based decay and silu
   ## spellings. Metal has no exp device builtin, so e^x is spelled exp2(x·log2e).
 
+const fp32Lowest* = -3.402823466e38'f32
+  ## -float32 max, the selection machines' mask value, a selected expert's
+  ## score is overwritten with it and no later pass can match the masked cell.
+
 const InvSqrt2Pi* = 0.7978845608028654'f32
   ## sqrt(2/pi), the factor of the gelu_pytorch_tanh spelling,
   ## 0.5·g·(1 + tanh(InvSqrt2Pi·(g + GeluCoef·g³))).

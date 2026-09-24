@@ -20,10 +20,10 @@
 ##
 ## Shared internals with `ffn_moe.nim`:
 ##
-## | aspect     | value                                                                                                 |
-## | ---------- | ----------------------------------------------------------------------------------------------------- |
-## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `ownerLaneOfCell` fragment-cell mapping |
-## | extraction | the routers' score chains and atom layouts differ, the reduction trees stay module-local              |
+## | aspect     | value                                                                                                                 |
+## | ---------- | --------------------------------------------------------------------------------------------------------------------- |
+## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees                                                  |
+## | extraction | the routers' score chains and atom layouts differ, the reduction trees and the scratch-staged top-K stay module-local |
 ##
 import math_consts
 import workspace/crucible
@@ -36,6 +36,13 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # The router writes ids and weights elementwise, so it needs no bounded store
 
 # ─── Local device extensions: the score passes ───────────────────────
+
+const
+  ScoreChunk = 64
+    ## Experts per router score chunk, the (32, 64) chunk accumulator's width,
+    ## the shape `ffn_moe.nim` names `ScoreChunk` too.
+  Lanes = 32
+  ## Simdgroup lane count, the selection's expert-slice stride.
 
 # tiles-allow gatherScores is a simdgroup lane machine, it needs a lane-permute gather primitive (simdShuffle over fragment pairs)
 proc gatherScores[A, AL: static MmaAtom; F: static int](
@@ -87,114 +94,118 @@ proc softmaxScores[A: static MmaAtom; F: static int](
   ls = warpReduce(ls, `+`)
   scores.map(scores, exp2((x - lm) * Log2e) / ls)
 
-func ownerLaneOfCell(r, n: int32): int32 {.inline.} =
-  ## Simdgroup lane owning cell (r, n) at value 0 of the 8×8×8 atoms'
-  ## shared A/C fragment layout, the `Apple8x8_AC_Layout` /
-  ## `Universal8x8_AC_Layout` aliases of hardware/h_registry.nim
-  ##
-  ## - the layout maps five 2-way thread modes over the col-major
-  ##   m + 8·n offset with strides (16, 1, 2, 32, 4)
-  ## - the proc inverts the layout's lane → cell mapping, the lane
-  ##   bits b0..b4 decoding to row = b1+2b2+4b4 and col = 2b0+4b3 per
-  ##   the layout's documented mapping, the lane bits decoding the col-major
-  ##   m + 8·n offset back
-  (n div 2 mod 2) + 2 * (r mod 2) + 4 * ((r div 2) mod 2) +
-    8 * (n div 4 mod 2) + 16 * ((r div 4) mod 2)
-
-# tiles-allow topkScores is the masked-copy selection machine, it needs a fragment-indexed
-# top-K primitive (per-fragment expert mapping over the tile)
+# tiles-allow topkScores is the fragment staging machine, it needs a tile-level
+# scatter primitive (fragment cell → the expert-indexed score row)
 proc topkScores[A: static MmaAtom; F, K: static int](
     scores: RtLeft[float32, 8, F, A],
+    scratch: ptr UncheckedArray[float32],
     ids: var array[K, int32],
     w: var array[K, float32]) {.device.} =
-  ## - Selects the K largest scores of the (8, F) score tile, the lowest-index
-  ##   tiebreak top-K, the weights read back from the original tile
-  ## - each selection pass runs on a masked copy, one 5-step
-  ##   simdShuffleDown tree (deltas 16, 8, 4, 2, 1) broadcast from lane 0
-  ## - the candidate expert indices where score == max (no match = 8·F) get
-  ##   reduced by a 5-step min tree, the found expert masked to −float32 max
-  ##   in the selection copy
+  ## Selects the K largest scores of the (8, F) score tile, the lowest-index
+  ## tiebreak top-K, the weights read back from the staged scores.
   ##
-  ## simdShuffleDown max → candidate min → −float32 max mask
+  ## Dataflow: fragment (8, F) tile → staged `scratch` row → K selection
+  ## passes → `ids`, `w`
+  ##
+  ## The tile stages first, each lane writes its fragment cells to `scratch`
+  ## at the element's expert index, every one of the 8·F experts exactly one
+  ## writer (the AC layout's lane → cell mapping below).
+  ##
+  ## Each selection pass scans the linear expert vector, lane==expert-slice
+  ## ownership (`e = lane + m·32`), the reference-router shape shown below.
+  ## - vLLM's grouped_topk and topk_softmax, flashinfer's fused routing,
+  ##   sglang's moe_fused_gate all scan expert slices over plain memory
+  ## - the reductions are `simdShuffle` trees, no implementation reads a mma
+  ##   fragment at top-K time or inverts a fragment layout
+  ##
+  ## Per-slot walk:
+  ## - the slice's max reduced by the 5-step `simdShuffleDown` tree,
+  ##   the maximum broadcast on every lane
+  ## - the lowest expert with score == max reduced by a 5-step min tree,
+  ##   the found expert masked to −float32 max in `scratch`
+  ## - the weight is the unmasked staged score, which the owning lane
+  ##   preloads before its mask store and broadcasts with `simdShuffle`,
+  ##   a threadgroup barrier per slot then orders the next pass's reads
   ##
   ## Expert layout:
   ## - element (r, 8m + c) holds expert 64m + 8r + c, the per-chunk (8, 8)
   ##   mapping at chunk m
-  ## - the owner lane of expert e reads back through the same layout:
-  ##   the lane's bits b0..b4 give its row and col pair
-  ##   (row = b1+2b2+4b4, col = 2b0+4b3)
-  var sel: RtLeft[float32, 8, F, A]
-  for m in 0 ..< F div 8:
-    sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
-    sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
-  let lane = int(thread_index_in_threadgroup)
+  ## - the lane's fragment cells decode through the layout's lane bits
+  ##   b0..b4 (row = b1+2b2+4b4, col = 2b0+4b3), the mapping
+  ##   the `Apple8x8_AC_Layout` doc in `hardware/h_registry.nim` documents
+  ##
+  ## Poisoned pass:
+  ## - a NaN/Inf-poisoned score pass compares false against NaN everywhere,
+  ##   the group max is NaN and `==` never matches NaN, so no score equals
+  ##   the group max and the reduction keeps the sentinel
+  ## - the slot routes to the last expert (8·F − 1) with zero weight
+  ## - the ids stay inside [0, 8·F), the downstream expert-row reads stay
+  ##   inside bounds, and a fully poisoned score set routes every K slot
+  ##   down the unmatched branch, the normalized weights then sum to zero
+  const E = 8 * F
+  const colFrags = F div 8
+  const maskScore = fp32Lowest
+  static:
+    doAssert E mod Lanes == 0,
+      "topkScores: the lane-slice walk needs E a multiple of the 32 lanes"
+  let lane = int32(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
-  let r = cell mod A.getM()
-  let c0 = cell div A.getM()
+  let r = int32(cell mod A.getM())
+  let c0 = int32(cell div A.getM())
+  for m in 0 ..< colFrags:
+    let e0 = int32(ScoreChunk * m + A.getM() * r + c0)
+    scratch[e0] = scores.frags[0][m].frag[0]
+    scratch[e0 + 1] = scores.frags[0][m].frag[1]
+  # the selection's reads are cross-lane, the barrier orders them after the stores
+  threadgroup_barrier()
   for slot in 0 ..< K:
-    var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
-    for m in 1 ..< F div 8:
-      lm = max(lm, sel.frags[0][m].frag[0])
-      lm = max(lm, sel.frags[0][m].frag[1])
+    var lm = scratch[lane]
+    for m in 1'i32 ..< int32(E div Lanes):
+      lm = max(lm, scratch[lane + m * Lanes])
     lm = warpReduce(lm, max)
     var localCand = int32(1 shl 30)
-    for m in 0 ..< F div 8:
-      let e0 = int32(64 * m + 8 * r + c0)
-      if sel.frags[0][m].frag[0] == lm:
-        localCand = min(localCand, e0)
-      if sel.frags[0][m].frag[1] == lm:
-        localCand = min(localCand, e0 + 1)
+    for m in 0'i32 ..< int32(E div Lanes):
+      let e = lane + m * Lanes
+      if scratch[e] == lm:
+        localCand = min(localCand, e)
     let cand = warpReduce(localCand, min)
-    if cand >= int32(8 * F):
-      # Unmatched top-K candidate:
-      # a NaN/Inf-poisoned score pass compares false against NaN everywhere,
-      # so no score equals the group max and the reduction keeps the sentinel.
-      # - the slot routes to the last expert (8·F − 1) with zero weight
-      # - the ids stay in [0, 8·F), the downstream expert-row reads stay in bounds
-      # - with every score poisoned all K slots take this branch
-      #   and the normalized weights sum to zero
-      ids[slot] = int32(8 * F - 1)
+    if cand >= int32(E):
+      ids[slot] = int32(E - 1)
       w[slot] = 0.0'f32
     else:
       ids[slot] = cand
-    let mSel = cand div 64
-    let rest = cand mod 64
-    let rw = rest div 8
-    let cw = rest mod 8
-    if cand < int32(8 * F):
-      let own = uint32(ownerLaneOfCell(rw, cw))
-      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], own)
-      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], own)
-      w[slot] = if (cw mod 2) == 0: w0 else: w1
-      for m in 0 ..< F div 8:
-        let e0 = int32(64 * m + 8 * r + c0)
-        if e0 == cand:
-          sel.frags[0][m].frag[0] = -3.402823466e38'f32
-        if e0 + 1 == cand:
-          sel.frags[0][m].frag[1] = -3.402823466e38'f32
+      let own = cand mod Lanes
+      # the weight reads before the mask store, the owning lane preloads the unmasked staged score and the shuffle broadcasts it
+      w[slot] = simdShuffle(if own == lane: scratch[cand] else: 0.0'f32,
+        uint32(own))
+      if own == lane:
+        scratch[cand] = maskScore
+    threadgroup_barrier()
 
 # ─── The router core ─────────────────────────────────────────────────
 
 proc moeRoute*[El; H, E, K: static int; Scale: static float32](
     x, router_w: ptr UncheckedArray[El],
     t: int32,
+    scores_scratch: ptr UncheckedArray[float32],
     ids: var array[K, int32],
     w: var array[K, float32]) {.device.} =
   ## One token's top-K expert ids and routing weights, the chunked router
-  ## GEMV, the softmax form's score pass, the in-register top-K selection
-  ## by lowest index. Register-only, no logits scratch.
+  ## GEMV, the softmax form's score pass, the scratch-staged top-K selection
+  ## by lowest index.
   ##
   ## Parameters, pointers naming their dtypes, shapes bound at the call:
   ##
-  ## | parameter | shape, dtype, layout                                                                                                                         | producer        | unit               |
-  ## | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
-  ## | x         | (num_tokens, H) El, row-major, token `t`'s activation row, the router GEMV input                                                             | host-computed   | El                 |
-  ## | router_w  | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                                                       | host-computed   | El                 |
-  ## | t         | the token index, the caller's grid coordinate in the router-only entry                                                                       | device-computed | tokens             |
-  ## | ids       | K-element int32 register array, the top-K expert ids in score order, lowest index on ties, each in [0, E)                                    | this proc       | experts            |
-  ## | w         | K-element f32 register array, the normalized routing weights w[slot] = El(p[ids[slot]] / sum·Scale), fp32 carriers holding El-rounded values | this proc       | dimensionless      |
-  ## | H, E, K   | hidden, expert count and top-K, static compile-time; H a multiple of the 16-wide K step, E a multiple of the 64-expert chunk                 | compile-time    | elements / experts |
-  ## | Scale     | the routing-weight scale, static compile-time                                                                                                | compile-time    | dimensionless      |
+  ## | parameter      | shape, dtype, layout                                                                                                                         | producer        | unit               |
+  ## | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
+  ## | x              | (num_tokens, H) El, row-major, token `t`'s activation row, the router GEMV input                                                             | host-computed   | El                 |
+  ## | router_w       | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                                                       | host-computed   | El                 |
+  ## | t              | the token index, the caller's grid coordinate in the router-only entry                                                                       | device-computed | tokens             |
+  ## | ids            | K-element int32 register array, the top-K expert ids in score order, lowest index on ties, each in [0, E)                                    | this proc       | experts            |
+  ## | w              | K-element f32 register array, the normalized routing weights w[slot] = El(p[ids[slot]] / sum·Scale), fp32 carriers holding El-rounded values | this proc       | dimensionless      |
+  ## | H, E, K        | hidden, expert count and top-K, static compile-time; H a multiple of the 16-wide K step, E a multiple of the 64-expert chunk                 | compile-time    | elements / experts |
+  ## | Scale          | the routing-weight scale, static compile-time                                                                                                | compile-time    | dimensionless      |
+  ## | scores_scratch | E fp32 elements, threadgroup-private working scratch for the selection's staged score row, the content may be uninitialized                  | this proc       | f32                |
 
   ## Composed in-group per slot group by the mega kernel.
   ##
@@ -233,7 +244,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
     scores.gatherScores(dR, cs)
   scores.map(scores, roundToNearestEven[El](x).float32)
   scores.softmaxScores()
-  scores.topkScores(ids, w)
+  scores.topkScores(scores_scratch, ids, w)
   var sumW = 0.0'f32
   for slot in 0 ..< K:
     sumW += w[slot]
@@ -253,6 +264,7 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
     rout_w: ptr UncheckedArray[El],        # (num_tokens, K) routing weights
     x: ptr UncheckedArray[El],             # (num_tokens, H) activations
     router_w: ptr UncheckedArray[El],      # (E, H) router weight
+    scores_scratch: ptr UncheckedArray[float32], # (num_tokens, E) selection scratch
     num_tokens: int32) {.device.} =
   ## Router-only pass, one grid point per token, the launch host's entry.
   ## Stores the top-K expert ids and the El-rounded routing weights under
@@ -267,12 +279,14 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
   ## | rout_w         | (num_tokens, K) El, row-major, the El-rounded routing weights                                                 | this kernel   | dimensionless      |
   ## | x              | (num_tokens, H) El, row-major, the router GEMV inputs                                                         | host-computed | El                 |
   ## | router_w       | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                        | host-computed | El                 |
+  ## | scores_scratch | (num_tokens, E) f32, row-major, the selection's per-token staged score row, one E-slice per threadgroup, the content may be uninitialized | this kernel   | f32                |
   ## | num_tokens     | the token count                                                                                               | host-derived  | tokens             |
   ## | H, E, K, Scale | hidden, expert count, top-K and the routing-weight scale, static compile-time, same constraints as `moeRoute` | compile-time  | elements / experts |
   let t = int32(threadgroup_position_in_grid.x)
   var idsReg: array[K, int32]
   var wReg: array[K, float32]
-  moeRoute[El, H, E, K, Scale](x, router_w, t, idsReg, wReg)
+  moeRoute[El, H, E, K, Scale](x, router_w, t,
+    scores_scratch +% t * int32(E), idsReg, wReg)
   for slot in 0 ..< K:
     ids[t * K + slot] = idsReg[slot]
     rout_w[t * K + slot] = roundToNearestEven[El](wReg[slot])
