@@ -64,60 +64,20 @@ proc runCmd(cmd: string) =
   echo "=============================================================================================="
   exec cmd
 
-func testerCmd(path: string; extraFlags = ""; compiler = "nim c";
-    traced = true; nimcache = "nimcache/tests"): string =
-  ## One test-suite build+run command.
-  ## - traced (the default): the line-trace instrumentation every suite runs
-  ##   under, the debugging aid for a failing suite's line-level trace
-  ## - untraced (traced = false): the instrumentation off. Nim's incremental
-  ##   cache is keyed by module, not by compile flags, so an untraced build
-  ##   sharing the traced cache silently reuses traced objects; the untraced
-  ##   suites take their own nimcache directory and recompile their module
-  ##   subgraph once
+func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
   let filename = path.extractFilename()
-  let traceFlags = if traced:
-      " --stackTrace:on --lineTrace:on --lineDir:on --debugger:native "
-    else:
-      " --stackTrace:off --lineTrace:off --lineDir:off "
   return
     compiler & " -r" &
     (if extraFlags.len > 0: " " & extraFlags else: "") &
-    " -d:release" & traceFlags &
+    " -d:release --stackTrace:on --lineTrace:on --lineDir:on " &
+    " --debugger:native " &
     " --hints:off --warnings:off " &
     # One shared nimcache for every suite: the torch/transformer stack compiles
     # to ~150 MB of C++, and a per-suite cache recompiles it for every task.
     # Cache entries are keyed by module path, so shared modules compile once
     # across suites and only each suite's own modules add incremental cost.
-    &" --outdir:build/tests --nimcache:{nimcache} " &
+    &" --outdir:build/tests --nimcache:nimcache/tests " &
     path
-
-# The composition-tier segments: their subject is the per-element verdicts
-# they assert, not the line tracing, and the trace instrumentation slows their
-# CPU regen walks several-fold, past the per-test cap. They run untraced in
-# their own nimcache. Keyed on the segment marker, the import of the shared
-# composition driver, not a file list: a renamed or newly added composition
-# segment keeps the untraced build, and a mega_gdn suite built on its own
-# driver (gate, mixer, smoke) keeps the traced one.
-proc isCompositionSegment(path: string): bool =
-  if not path.extractFilename().startsWith("t_ceramic_mega_gdn_"):
-    return false
-  for line in readFile(path).splitLines():
-    let s = line.strip()
-    if (s.startsWith("import ") or s.startsWith("from ")) and
-        s.contains("ceramic_mega_gdn_composition"):
-      return true
-  return false
-
-proc suiteCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
-  ## The command a test suite runs under: traced for every suite except the
-  ## composition-tier segments (the `t_ceramic_mega_gdn_*` suites built on
-  ## the shared `ceramic_mega_gdn_composition` driver)
-  if isCompositionSegment(path):
-    testerCmd(path, extraFlags = extraFlags, compiler = compiler,
-      traced = false, nimcache = "nimcache/tests_composition")
-  else:
-    testerCmd(path, extraFlags = extraFlags, compiler = compiler)
-
 
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
@@ -192,7 +152,7 @@ iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): str
     if filename.endsWith(".nim") and (
       filename.startsWith("test_") or filename.startsWith("t_")
     ):
-      yield suiteCmd(filepath, extraFlags = extraFlags, compiler = compiler)
+      yield testerCmd(filepath, extraFlags = extraFlags, compiler = compiler)
 
 task test_libtorch, "Test workspace/libtorch":
   withDir(ProjectRoot):
@@ -585,12 +545,6 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 
-# The positron suites: the property suites (internal-consistency checks over
-# the production kernels: split invariance, step-count identity, idempotence,
-# with the seeded support surface in tests/properties/properties.nim) and
-# tests/ceramic, the launch-contract suites (seeded fixtures, sentinel and
-# determinism checks over the kernels). No recorded blobs, no model
-# checkpoints, the inputs come from the seeded PRNG.
 task test_positron_properties, "Test workspace/positron property suites":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/positron/tests/properties"):
