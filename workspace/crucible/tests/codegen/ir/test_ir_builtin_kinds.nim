@@ -36,6 +36,7 @@ block:
   doAssert coordBuiltinKind("threadgroups_per_grid") == gbkThreadgroupsPerGrid
   doAssert coordBuiltinKind("thread_index_in_threadgroup") == gbkThreadIndexInThreadgroup
   doAssert synchroBuiltinKind("threadgroup_barrier") == gbkThreadgroupBarrier
+  doAssert synchroBuiltinKind("threadgroup_barrier_device") == gbkThreadgroupBarrierDevice
   # Non-coordinate builtins stay unkinded and emit verbatim.
   doAssert coordBuiltinKind("printf") == gbkNone
   doAssert coordBuiltinKind("cvtaGenericToShared") == gbkNone
@@ -43,13 +44,13 @@ block:
   doAssert coordBuiltinKind("threadgroup_barrier") == gbkNone
   doAssert synchroBuiltinKind("printf") == gbkNone
   doAssert synchroBuiltinKind("thread_position_in_grid") == gbkNone
-  echo "  OK — resolution tables (6 coordinates, 1 barrier, gbkNone else)"
+  echo "  OK — resolution tables (6 coordinates, 2 barriers, gbkNone else)"
 
 static:
   # The tables hold exactly the catalog's canonical declarations
   # (the static assertion in gpu_types.nim enforces this at compile time).
   doAssert GpuCoordBuiltinKindByName.len == 6
-  doAssert GpuSynchroBuiltinKindByName.len == 1
+  doAssert GpuSynchroBuiltinKindByName.len == 2
 
 # ═══════════════════════════════════════════════════════════════════════
 # 2. Clone survival (the kind lives on the shared Symbol ref)

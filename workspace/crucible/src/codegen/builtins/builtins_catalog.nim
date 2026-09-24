@@ -13,7 +13,7 @@ import ./builtins_pragmas
 ## `thread_position_in_grid`, `threadgroup_position_in_grid`,
 ## `thread_position_in_threadgroup`, `threads_per_threadgroup`,
 ## `threadgroups_per_grid`, `thread_index_in_threadgroup`,
-## and `threadgroup_barrier`.
+## and the `threadgroup_barrier` / `threadgroup_barrier_device` pair.
 ## These are the MSL attribute names, so the Metal printer emits them verbatim.
 ## Every other backend spelling, such as CUDA `blockIdx`, OpenCL `get_global_id`,
 ## GLSL `gl_GlobalInvocationID`, or WGSL `global_id`, is a template alias.
@@ -65,8 +65,22 @@ let thread_index_in_threadgroup* {.builtin.}: uint32 = 0'u32
   ##   (WGSL `local_invocation_index`)
 
 proc threadgroup_barrier*() {.builtin.} = discard
-  ## Canonical workgroup barrier. Each backend printer emits its native spelling
+  ## Canonical workgroup barrier ordering threadgroup-address-space accesses.
+  ##
+  ## Each backend printer emits its native spelling
   ## (e.g. MSL `threadgroup_barrier(mem_flags::mem_threadgroup)`).
+  ##
+  ## Device-address-space exchanges need `threadgroup_barrier_device`, not
+  ## this barrier, since `mem_threadgroup` does not order device stores.
+
+proc threadgroup_barrier_device*()
+    {.builtin.} =
+  ## Workgroup barrier that orders device-address-space accesses.
+  ##
+  ## Precondition:
+  ## the buffers this fence orders live in the device address space,
+  ## the reverse fence is the plain `threadgroup_barrier` barrier.
+  discard
 
 # ═══════════════════════════════════════════════════════════
 # 1. Coordinates

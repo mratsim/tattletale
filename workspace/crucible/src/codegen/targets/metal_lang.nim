@@ -454,6 +454,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       # expands to the canonical call, so only this kind reaches the IR.
       # MSL spells the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
+    of gbkThreadgroupBarrierDevice:
+      # mem_device orders device-memory accesses, `mem_threadgroup` does not.
+      result = indentStr & "threadgroup_barrier(mem_flags::mem_device)"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:

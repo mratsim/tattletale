@@ -343,6 +343,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # expands to the canonical call, so only this kind reaches the IR.
       # CUDA spells it `__syncthreads()`.
       result = indentStr & "__syncthreads()"
+    of gbkThreadgroupBarrierDevice:
+      # `__syncthreads()` already orders global memory, the device-scope
+      # barrier needs no separate spelling.
+      result = indentStr & "__syncthreads()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:
