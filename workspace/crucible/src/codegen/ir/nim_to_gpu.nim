@@ -247,7 +247,10 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
       let p = inst.params[i]
       let numParams = p.len - 2
       let typIdx = p.len - 2
-      if p[typIdx].kind == nnkCommand and p[typIdx].len > 0 and p[typIdx][0].repr == "static":
+      # instantiation keeps the declaration spelling:
+      #   `static int` as nnkCommand, `static[int]` as nnkBracketExpr, both accepted
+      if p[typIdx].kind in {nnkCommand, nnkBracketExpr} and
+          p[typIdx].len > 0 and p[typIdx][0].repr == "static":
         for j in 0 ..< numParams:
           staticValueMask.add(curIdx + j)
       curIdx += numParams

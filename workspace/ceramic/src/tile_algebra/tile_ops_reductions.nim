@@ -353,4 +353,7 @@ template warpReduce*[V](x: var V, reductionOp: untyped): V =
   x = reductionOp(x, simdShuffleDown(x, 4'u32))
   x = reductionOp(x, simdShuffleDown(x, 2'u32))
   x = reductionOp(x, simdShuffleDown(x, 1'u32))
-  simdShuffle(x, 0'u32)
+  # the lane-0 broadcast lands back in `x`, the contract's "reduced value
+  # on every lane", the template's value the same broadcast
+  x = simdShuffle(x, 0'u32)
+  x

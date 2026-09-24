@@ -114,13 +114,18 @@ proc roundToNearestEven*[T](x: float32): T {.device.} =
   ## One round-to-nearest-even of an f32 value into the dtype `T`,
   ## the scalar counterpart of the mma epilogue's single-round contract.
   ##
-  ## - `T` is unconstrained
-  ## - the body keeps one variant per element dtype, a further dtype
-  ##   adds its own variant
+  ## - a dtype at or above fp32's precision passes through unrounded,
+  ##   the value is already its own RNE image
+  ## - a narrower dtype needs its own `when` branch here, the compile-time
+  ##   miss is an error, never a silent identity
   when T is bfloat16:
     x.bfloat16
-  else:
+  elif T is float16:
     x.to(float16)
+  elif T is float32:
+    x
+  else:
+    {.error: "roundToNearestEven: dtype " & $T & " needs its own RNE variant".}
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Tile element maps
