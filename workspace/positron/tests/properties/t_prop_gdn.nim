@@ -7,7 +7,7 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_properties
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests positron/tests/properties/t_prop_gdn.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_gdn.nim
 ##
 ## Property suite over the gated delta rule prefill scan and decode step, the production kernels from `src/kernels/ceramic/attn_ssm/`.
 ## - split invariance, one whole scan equals the segmented scan (y and state)
