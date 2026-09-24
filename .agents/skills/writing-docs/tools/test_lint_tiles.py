@@ -39,7 +39,7 @@ def run(snippet, rel="workspace/positron/src/kernels/ceramic/x.nim",
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / rel
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(snippet)
+        f.write_text(snippet, encoding="utf-8")
         findings = []
         lt.scan(f, snippet, findings, list(consts), builtins)
         return [(x.line, x.rule) for x in findings]
@@ -112,6 +112,16 @@ ok &= expect("pure loop bound quiet",
 ok &= expect("raw-emit fires",
              run(PROC % '  {.emit: """\n  threadgroup_barrier(mem_flags::mem_device);\n  """.}\n'),
              [(L3 + 2, "raw-emit")])
+# an emit closed on its own opening line must not swallow the body after it:
+# the one-line triple-quoted and the single-quoted spellings
+ok &= expect("one-line triple-quoted emit keeps the body scannable",
+             run(PROC % ('  {.emit: """threadgroup_barrier();""".}\n'
+                         '  discard d.frags[0][0].frag[0]\n')),
+             [(L3, "raw-emit"), (L3 + 1, "frag-walk")])
+ok &= expect("single-quoted emit keeps the body scannable",
+             run(PROC % ('  {.emit: "threadgroup_barrier();".}\n'
+                         '  discard d.frags[0][0].frag[0]\n')),
+             [(L3, "raw-emit"), (L3 + 1, "frag-walk")])
 
 # the literal matches the shared table value bitwise, the named constant stays quiet
 consts = [(struct.pack("<f", 1.4426950408889634), "Log2e")]
@@ -147,7 +157,7 @@ code = """proc host(x: int): int =
 with tempfile.TemporaryDirectory() as d:
     f = Path(d) / "workspace/positron/src/kernels/ceramic/y.nim"
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(code)
+    f.write_text(code, encoding="utf-8")
     findings = []
     lt.scan(f, code, findings, [], ())
 ok &= expect("host proc out of scope", [(x.line, x.rule) for x in findings], [])
@@ -209,8 +219,8 @@ def run_pair(a, b):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d) / "workspace" / "ceramic" / "src"
         root.mkdir(parents=True)
-        (root / "mod_a.nim").write_text(a)
-        (root / "mod_b.nim").write_text(b)
+        (root / "mod_a.nim").write_text(a, encoding="utf-8")
+        (root / "mod_b.nim").write_text(b, encoding="utf-8")
         findings = lt.lint([str(root)])
         return [(x.path.name, x.line, x.rule, x.warning) for x in findings]
 
@@ -249,12 +259,12 @@ ok &= expect("unresolved callee quiet",
 with tempfile.TemporaryDirectory() as d:
     f = Path(d) / "workspace/ceramic/src/solo.nim"
     f.parent.mkdir(parents=True)
-    f.write_text("proc solo(x: int): int =\n  x + 1\n")
+    f.write_text("proc solo(x: int): int =\n  x + 1\n", encoding="utf-8")
     res = lt.lint([str(Path(d) / "workspace/ceramic/src")])
 ok &= expect("one-liner alone never blocks",
              [(x.rule, x.warning) for x in res],
              [("one-liner", True)])
 
-cases = 31
+cases = 33
 print("ALL PASS" if ok else "FAILURES", "(%d cases)" % cases)
 sys.exit(0 if ok else 1)

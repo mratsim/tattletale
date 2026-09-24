@@ -275,6 +275,17 @@ def device_procs(lines):
             if EMIT_OPEN_RE.search(code):
                 # Collect the raw emit string for raw-emit, keep the other
                 # checks off the emitted target-language text.
+                # A one-line emit stays closed on its opening line:
+                # - a triple-quoted string carrying two quote runs
+                # - a single-quoted string with `.}` present
+                # Only an unterminated triple-quoted opener with exactly
+                # one quote run collects continuation lines, the file's
+                # remaining body past the emit otherwise stays scannable.
+                quotes = code.count('"""')
+                if quotes != 1:
+                    body.append((k + 1, "EMIT:" + code))
+                    k += 1
+                    continue
                 emit_lines = [code]
                 k += 1
                 while k < n:
@@ -942,11 +953,21 @@ def lint(paths, base=None):
 
     With base set, findings are scoped to the lines the diff from that commit adds, the added-line scoping lint_docs applies."""
     files = collect_files(paths)
-    consts = load_math_consts(files)
+    # Support tables come from the whole kernel roots, never the scan set alone,
+    # on every normal commit:
+    # - the pre-commit hook passes only the staged .nim paths
+    # - an unstaged math_consts.nim stays invisible to math-const
+    # - an unstaged generic callee stays invisible to explicit-generics
+    # The scan set stays the staged files, the base-commit scoping unchanged.
+    support = [Path(r) for r in KERNEL_ROOTS if Path(r).is_dir()]
+    consts = load_math_consts(list(files) + support)
     builtins = load_builtins()
     texts = [(f, f.read_text(encoding="utf-8", errors="replace")) for f in files]
+    support_files = collect_files(KERNEL_ROOTS)
+    support_texts = [(f, f.read_text(encoding="utf-8", errors="replace"))
+                     for f in support_files if f not in set(files)]
     generic_map = build_generic_map(
-        [(f, t.splitlines()) for f, t in texts])
+        [(f, t.splitlines()) for f, t in texts + support_texts])
     findings = []
     cache = {}
     for f, text in texts:
