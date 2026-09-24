@@ -396,12 +396,12 @@ proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   ## The scalar spelling stays local, grouped_query_attention_qk_norm_rope's tile-op l2 chain
   ## does not serve this rounding pipeline.
   ##
-  ## | step                | rounding                                                    |
-  ## | ------------------- | ----------------------------------------------------------- |
+  ## | step                | rounding                                                     |
+  ## | ------------------- | ------------------------------------------------------------ |
   ## | elementwise squares | round to the element dtype                                   |
   ## | row sum             | f32 serial accumulation, the sum rounds to the element dtype |
-  ## | sum + eps, rsqrt    | the sum rounds, the rsqrt computes in f32 and rounds        |
-  ## | normalization       | the multiply rounds per element                             |
+  ## | sum + eps, rsqrt    | the sum rounds, the rsqrt computes in f32 and rounds         |
+  ## | normalization       | the multiply rounds per element                              |
   ##
   ## Every lane walks the whole row serially, all lanes compute identical sums,
   ## the lanes then scatter the multiply.
@@ -473,7 +473,7 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
   ## | xPrev                                   | (Hidden, ) T, the layer input row                                                                                                                                          | host-computed (the previous layer's output)                                                       | T elements        |
   ## | rPrev                                   | (Hidden, ) T, the incoming residual row                                                                                                                                    | host-computed                                                                                     | T elements        |
   ## | state                                   | (B·Hv, Dv, Dk) f32, the persistent GDN recurrence state, head-major over (sequence, value head), written back in place                                                     | the previous launch writes it, the gdn-state stage rewrites it, the host owns layout and lifetime | f32, never rounds |
-  ## | ring                                    | (RingWidth, ConvDim) T, the conv history ring                                                                                                                              | host-preloaded with the launch's shifted history                                                  | T elements        |
+  ## | ring                                    | (ConvDim, RingWidth) T, the conv history ring (channel-major, convRingChannels indexes ring[c·RingWidth + j])                                                              | host-preloaded with the launch's shifted history                                                  | T elements        |
   ## | norm1W, norm2W                          | (Hidden, ) T norm weights                                                                                                                                                  | checkpoint, host-computed                                                                         | T elements        |
   ## | qkvW                                    | (ConvDim, Hidden) T, the fused qkv projection                                                                                                                              | checkpoint, host-computed                                                                         | T elements        |
   ## | zW                                      | (Hv·Dv, Hidden) T, the o_norm z projection                                                                                                                                 | checkpoint, host-computed                                                                         | T elements        |
@@ -484,8 +484,8 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
   ## | routerW                                 | (NumExperts, Hidden) T, the router weight                                                                                                                                  | checkpoint, host-computed                                                                         | T elements        |
   ## | gateUpW, downW                          | (NumExperts, 2·Inter, Hidden) fused gate/up and (NumExperts, Hidden, Inter) down, the routed-expert weights                                                                | checkpoint, host-computed                                                                         | T elements        |
   ## | sharedGW, sharedUW, sharedDW, sharedGVW | the separate shared-expert projections (the decode composition's shapes) and the (1, Hidden) shared-gate row                                                               | checkpoint, host-computed                                                                         | T elements        |
-  ## | aLog                                    | (Hk, ) f32 A_log, the canonicalized spelling                                                                                                                               | checkpoint, host-computed (the softplus fold device-side)                                         | dimensionless     |
-  ## | dtBias                                  | (Hk, ) T dt_bias                                                                                                                                                           | checkpoint, host-computed                                                                         | T elements        |
+  ## | aLog                                    | (Hv, ) f32 A_log, one per value head (gateValues reads one head per lane)                                                                                                  | checkpoint, host-computed (the softplus fold device-side)                                         | dimensionless     |
+  ## | dtBias                                  | (Hv, ) T dt_bias, one per value head                                                                                                                                       | checkpoint, host-computed                                                                         | T elements        |
   ## | eps                                     | f32, the norm epsilon, must be > 0                                                                                                                                         | host-computed                                                                                     | f32               |
   ## | HaveNorm                                | the mixer-vs-full-layer regime switch (see the geometry table)                                                                                                             | compile-time                                                                                      | static bool       |
   let tx = int32(threadgroup_position_in_grid.x)
