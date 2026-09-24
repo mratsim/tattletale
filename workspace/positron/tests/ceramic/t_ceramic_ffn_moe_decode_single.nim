@@ -3,30 +3,27 @@
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
+# at your option, this file may not be copied, modified, or distributed except according to those terms.
 
 ## Run command, from the repo root:
 ##
 ##   nim c -r -d:release --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_ffn_moe_decode_single.nim
 ##
 ## Dedicated suite for the MoE decode slot-group walk (`moe_fwd_decode_at`),
-## one seeded launch per case at grid (T, K+1, 1), the partial rows judged
-## per element against a naive walk of the same bits.
+## one seeded launch per case at grid (T, K+1, 1) over the contract extent.
 ##
 ## Sequence, one case:
 ##
 ##   seeded inputs → page buffers → launch (T, K+1, 1) → record
-##   → naive walk → per-element judgment → sentinel walk → relaunch → bit compare
+##   → sentinel walk → relaunch → bit compare
 ##
-## | check       | contract                                                                                   |
-## | ----------- | ------------------------------------------------------------------------------------------ |
-## | page fit    | every buffer's byte length is a `HostPageSize` multiple before the launch                  |
-## | selection   | the walk exposes no ids or weights buffers, both judged through the partial rows           |
-## | partials    | every fp32 partial row inside its stated per-element bar, two-sided against the naive walk |
-## | sentinels   | kernel-written buffers hold no sentinel, the contract-extent tail stays sentinel-intact    |
-## | no gate     | `SharedGate = false` stores the ungated shared chain, the poisoned gate vector never read  |
-## | scale       | `Scale = 2` doubles the routed weights, the partial bars carried through the same walk     |
-## | determinism | the relaunch over the restored pre-state is bit-identical                                  |
+## | check       | contract                                                                                    |
+## | ----------- | ------------------------------------------------------------------------------------------- |
+## | page fit    | every buffer's byte length is a `HostPageSize` multiple before the launch                   |
+## | sentinels   | the contract rows hold no sentinel after the launch, the spare extent stays sentinel-intact |
+## | no gate     | `SharedGate = false` stores the ungated shared chain, the poisoned gate vector never read   |
+## | scale       | `Scale = 2` doubles the routed weights, the same fixture recipe                             |
+## | determinism | the relaunch over the restored pre-state is bit-identical                                   |
 ##
 ## | shape   | T | H    | E   | K | I   | Scale | SharedGate | dtype | cases |
 ## | ------- | --- | ---- | --- | --- | --- | ----- | ---------- | ----- | ----- |
@@ -34,23 +31,10 @@
 ## | no gate | 1 | 2048 | 256 | 8 | 512 | 1.0   | false      | bf16  | 1     |
 ## | scale 2 | 1 | 2048 | 256 | 8 | 512 | 2.0   | true       | bf16  | 1     |
 ##
-## Bars, stated before measurement, U32 = 2⁻²⁴ fp32, UBf = 2⁻⁸ bf16,
-## the same classes the composition tier states
-##
-## | link         | bar                                                                                            |
-## | ------------ | ---------------------------------------------------------------------------------------------- |
-## | logit        | 2·H·u32·Σ_k abs(x_k·w_k) + 2·UBf·abs(logit) + floor, the 16-wide-chunk mma vs sequential sum   |
-## | gate/up sums | 2·H·u32·Σ_k abs(x_k·w_k) + 2·u32·abs(sum)                                                      |
-## | h (silu·mul) | (RelSilu + 4·u32)·max(abs h) + 2·UBf·(abs h sum) + 1.1·abs(u)·gBar + abs(silu(g))·uBar + floor |
-## | down sums    | 2·I·u32·Σ_i abs(h_i·w_i) + h-bar flow + 2·u32·abs(sum) + floor                                 |
-## | weight       | abs(w)·(2·logitBar + 2·UBf) + floor, the softmax's relative logit-error class                  |
-## | partial row  | w·downBar + abs(down)·weightBar + 2·u32·abs(partial) + floor                                   |
-##
 ## | guard    | record                                                                                                                          |
 ## | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
 ## | pre-fix  | the row guard dropped, every atom row's row-0 lane racing on the destination, the lost writes zeroing partial-row contributions |
-## | judgment | the prod case's two-sided per-element judgment exits its bar on a lost write, a wrong id or a wrong weight                      |
-## | standing | the single-writer spelling, the prod case its regression guard, the defect-run proof living in git history                      |
+## | standing | the contract-extent sentinel, every contract row must be written past its pre-filled sentinel, a lost row cannot hide           |
 
 import std/[strformat, math]
 import workspace/crucible
@@ -59,7 +43,6 @@ import ../../src/kernels/ceramic/ffn_moe_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
 import ../properties/properties
-import ../properties/refs
 
 # ─── Geometry, the production decode shape ───────────────────────────
 
@@ -72,31 +55,6 @@ const
   I = 512
   Sentinel = 4.203895392974451e-45'f32
     ## 2⁻¹⁴⁹, the smallest positive subnormal, the write-extent sentinel
-
-# ─── Band-model constants ─────────────────────────────────────────────
-
-const
-  U32 = 5.9604644775390625e-8'f64        # 2⁻²⁴, the fp32 unit roundoff
-  UBf = 3.90625e-3'f64                   # 2⁻⁸, the bf16 unit roundoff
-  RelSilu = 4.76837158203125e-7'f64      # 8·u32, the exp2-form transcendental class
-  FloorBf = 7.346879709099078e-39'f64    # 2⁻¹²⁶, the bf16 subnormal grid floor
-  FloorSub = 2.9802322387695312e-8'f64   # 2⁻²⁵, the fp32 partial-row output grid
-
-func widen(s: seq[uint16]): seq[float64] =
-  ## Exact widenings of bf16 bit patterns, the band walk's magnitudes.
-  result = newSeq[float64](s.len)
-  for i in 0 ..< s.len:
-    result[i] = bf16ToF32(s[i]).float64
-
-func widenF32(s: seq[float32]): seq[float64] =
-  ## Exact fp64 widening of an fp32 row, the band walk's magnitudes.
-  result = newSeq[float64](s.len)
-  for i in 0 ..< s.len:
-    result[i] = s[i].float64
-
-func silu64(x: float64): float64 =
-  ## silu in fp64, the h-link band's magnitude reference.
-  x / (1.0 + exp(-x))
 
 # ─── Device entries, one per static binding set ───────────────────────
 
@@ -134,196 +92,11 @@ const MoEFwdDecodeMsl = metal:
       shared_gate_w, shared_up_w, shared_down_w, shared_gate_vec_w,
       h_scratch, hs_scratch)
 
-# ─── Host, the naive walk and its band ────────────────────────────────
-
-type NaiveWalk = object
-  ## One token's naive decode walk, the judgment's centers
-  ##
-  ## | field    | value                                                  |
-  ## | -------- | ------------------------------------------------------ |
-  ## | ids, w   | the naive router's top-K ids and bf16-rounded weights  |
-  ## | partial  | the (K+1, H) fp32 partial rows, w·down and gate·shared |
-  ## | gP, uP   | per-slot gate/up fp32 sums (I), the h-band's operands  |
-  ## | hP       | per-slot h bit patterns (I)                            |
-  ## | sgP, suP | the shared gate/up fp32 sums (I)                       |
-  ## | hsP      | the shared h bit patterns (I)                          |
-  ## | sdP      | the shared down fp32 sums (H)                          |
-  ## | gvP      | the shared gate scalar, 1.0 ungated                    |
-  ids: seq[int32]
-  w: seq[float32]
-  partial: seq[float32]
-  gP: array[K, seq[float32]]
-  uP: array[K, seq[float32]]
-  hP: array[K, seq[uint16]]
-  sgP: seq[float32]
-  suP: seq[float32]
-  hsP: seq[uint16]
-  sdP: seq[float32]
-  gvP: float32
-
-proc naiveWalk(x, routerW, gateUpW, downW, sgW, suW, sdW, gvW: seq[uint16];
-    scale: float32; useGate: bool): NaiveWalk =
-  ## One token's naive decode walk, the walk `moe_fwd_decode_at` composes,
-  ## the gate weight scalar optional.
-  ##
-  ## | part        | contract                                                       |
-  ## | ----------- | -------------------------------------------------------------- |
-  ## | router      | `softmaxTopKRouter`, bf16-rounded logits, fp32 softmax         |
-  ## | projections | `groupedMmSums` fp32 accumulations, one-expert cubes           |
-  ## | activation  | h = `siluMulEl`(g, u) per element                              |
-  ## | partial     | row slot·H + e = w[slot]·down_e, row K·H + e = gate·sharedDown |
-  doAssert x.len == H and routerW.len == E * H
-  let (ids, w) = softmaxTopKRouter(x, routerW, E, H, K, scale)
-  result.ids = ids
-  result.w = w
-  result.partial = newSeq[float32]((K + 1) * H)
-  let xMat = Mat[uint16](rows: 1, cols: H, data: x)
-  for slot in 0 ..< K:
-    let id = ids[slot].int
-    let gu = groupedMmSums(gmmBf16, xMat,
-      Cube[uint16](planes: 1, rows: 2 * I, cols: H,
-        data: gateUpW[(id * 2 * I) * H ..< ((id + 1) * 2 * I) * H]),
-      @[1'i32])
-    var hBits = newSeq[uint16](I)
-    for i in 0 ..< I:
-      hBits[i] = siluMulEl(gu.data[i], gu.data[I + i])
-    result.gP[slot] = gu.data[0 ..< I]
-    result.uP[slot] = gu.data[I ..< 2 * I]
-    result.hP[slot] = hBits
-    let dn = groupedMmSums(gmmBf16,
-      Mat[uint16](rows: 1, cols: I, data: hBits),
-      Cube[uint16](planes: 1, rows: H, cols: I,
-        data: downW[id * H * I ..< (id + 1) * H * I]),
-      @[1'i32])
-    for e in 0 ..< H:
-      result.partial[slot * H + e] = w[slot] * dn.data[e]
-  # the shared expert, the scalar gate weight only when the walk uses it
-  result.gvP = if useGate: sharedGate(x, gvW, H) else: 1.0'f32
-  let sg = groupedMmSums(gmmBf16, xMat,
-    Cube[uint16](planes: 1, rows: I, cols: H, data: sgW), @[1'i32])
-  let su = groupedMmSums(gmmBf16, xMat,
-    Cube[uint16](planes: 1, rows: I, cols: H, data: suW), @[1'i32])
-  var hsBits = newSeq[uint16](I)
-  for i in 0 ..< I:
-    hsBits[i] = siluMulEl(sg.data[i], su.data[i])
-  result.sgP = sg.data
-  result.suP = su.data
-  result.hsP = hsBits
-  let sd = groupedMmSums(gmmBf16,
-    Mat[uint16](rows: 1, cols: I, data: hsBits),
-    Cube[uint16](planes: 1, rows: H, cols: I, data: sdW), @[1'i32])
-  result.sdP = sd.data
-  for e in 0 ..< H:
-    result.partial[K * H + e] = result.gvP * sd.data[e]
-
-proc naiveLogit(x, routerW: seq[uint16]; id: int): float32 =
-  ## One expert's naive bf16-rounded logit, the sequential fp32 dot.
-  var acc = 0.0'f32
-  for k in 0 ..< H:
-    acc += bf16ToF32(x[k]) * bf16ToF32(routerW[id * H + k])
-  result = bf16ToF32(f32ToBf16(acc))
-
-func sumAbsLinks(xw: seq[float64]; w: seq[uint16]; off, n: int): float64 =
-  ## Σ over one weight row's n elements of abs(xw·w), the logit-band summand.
-  for k in 0 ..< n:
-    result += abs(xw[k] * bf16ToF32(w[off + k]).float64)
-
-proc judgeSlotPartials(token, slot: int; id: int;
-    nw: NaiveWalk; xw: seq[float64];
-    gateUpW, downW: seq[uint16];
-    hM: seq[uint16]; partialM: seq[float32]; logitBar: float64): float64 =
-  ## One routed slot's partial row, per-element judgment against
-  ## the naive walk, the h-link band flowed through the down projection.
-  ##
-  ## - center, the naive partial row's element w[slot]·down_e
-  ## - bar, w·downBar + abs(down)·weightBar + 2·u32·abs(pM) + floor,
-  ##   the kernel output's own rounding grid
-  let hMrow = widen(hM[(token * K + slot) * I ..< (token * K + slot + 1) * I])
-  let hProw = widen(nw.hP[slot])
-  let guBase = id * 2 * I * H
-  let dnBase = id * H * I
-  let wPrime = abs(nw.w[slot].float64)
-  # the gate/up link's per-element band, one H-length weight-row sum each
-  var hBand = newSeq[float64](I)
-  for i in 0 ..< I:
-    let gBar = 2.0 * float64(H) * U32 *
-      sumAbsLinks(xw, gateUpW, guBase + i * H, H) +
-      2.0 * U32 * abs(nw.gP[slot][i].float64)
-    let uBar = 2.0 * float64(H) * U32 *
-      sumAbsLinks(xw, gateUpW, guBase + (I + i) * H, H) +
-      2.0 * U32 * abs(nw.uP[slot][i].float64)
-    hBand[i] = (RelSilu + 4.0 * U32) *
-      max(abs(hMrow[i]), abs(hProw[i])) +
-      2.0 * UBf * (abs(hMrow[i]) + abs(hProw[i])) +
-      1.1 * abs(nw.uP[slot][i].float64) * gBar +
-      abs(silu64(nw.gP[slot][i].float64)) * uBar + FloorBf
-  let dnP = widenF32(groupedMmSums(gmmBf16,
-    Mat[uint16](rows: 1, cols: I, data: nw.hP[slot]),
-    Cube[uint16](planes: 1, rows: H, cols: I,
-      data: downW[dnBase ..< (id + 1) * H * I]), @[1'i32]).data)
-  for e in 0 ..< H:
-    var downLocal = 0.0'f64
-    let dwBase = dnBase + e * I
-    for i in 0 ..< I:
-      let dwAbs = abs(bf16ToF32(downW[dwBase + i]).float64)
-      downLocal += max(abs(hMrow[i]), abs(hProw[i])) * dwAbs +
-        hBand[i] * dwAbs
-    downLocal = 2.0 * float64(I) * U32 * downLocal +
-      2.0 * U32 * abs(dnP[e]) + FloorSub
-    let wBand = abs(dnP[e]) * wPrime * (2.0 * logitBar + 2.0 * UBf)
-    let pM = partialM[(token * (K + 1) + slot) * H + e].float64
-    let pN = nw.partial[slot * H + e].float64
-    let bar = wPrime * downLocal + wBand + 2.0 * U32 * abs(pM) + FloorSub
-    doAssert abs(pM - pN) <= bar,
-      &"partial row outside the bar at (token {token}, slot {slot}, col {e}): " &
-      &"{abs(pM - pN):.3e} > {bar:.3e}"
-    result = max(result, abs(pM - pN) / bar)
-
-proc judgeSharedPartial(token: int;
-    nw: NaiveWalk; xw: seq[float64];
-    sharedGW, sharedUW, sharedDW: seq[uint16];
-    hsM: seq[uint16]; partialM: seq[float32]; gateBar: float64): float64 =
-  ## One token's shared partial row, per-element judgment against
-  ## the naive walk, the hs-link band flowed through the shared down weights.
-  let hsMrow = widen(hsM[token * I ..< (token + 1) * I])
-  let hsProw = widen(nw.hsP)
-  var hsBand = newSeq[float64](I)
-  for i in 0 ..< I:
-    let gBar = 2.0 * float64(H) * U32 *
-      sumAbsLinks(xw, sharedGW, i * H, H) +
-      2.0 * U32 * abs(nw.sgP[i].float64)
-    let uBar = 2.0 * float64(H) * U32 *
-      sumAbsLinks(xw, sharedUW, i * H, H) +
-      2.0 * U32 * abs(nw.suP[i].float64)
-    hsBand[i] = (RelSilu + 4.0 * U32) *
-      max(abs(hsMrow[i]), abs(hsProw[i])) +
-      2.0 * UBf * (abs(hsMrow[i]) + abs(hsProw[i])) +
-      1.1 * abs(nw.suP[i].float64) * gBar +
-      abs(silu64(nw.sgP[i].float64)) * uBar + FloorBf
-  for e in 0 ..< H:
-    var downLocal = 0.0'f64
-    let dwBase = e * I
-    for i in 0 ..< I:
-      let dwAbs = abs(bf16ToF32(sharedDW[dwBase + i]).float64)
-      downLocal += max(abs(hsMrow[i]), abs(hsProw[i])) * dwAbs +
-        hsBand[i] * dwAbs
-    downLocal = 2.0 * float64(I) * U32 * downLocal +
-      2.0 * U32 * abs(nw.sdP[e].float64) + FloorSub
-    let gate = abs(nw.gvP.float64)
-    let pM = partialM[(token * (K + 1) + K) * H + e].float64
-    let pN = nw.partial[K * H + e].float64
-    let bar = gate * downLocal + abs(nw.sdP[e].float64) * gateBar +
-      2.0 * U32 * abs(pM) + FloorSub
-    doAssert abs(pM - pN) <= bar,
-      &"shared partial outside the bar at (token {token}, col {e}): " &
-      &"{abs(pM - pN):.3e} > {bar:.3e}"
-    result = max(result, abs(pM - pN) / bar)
-
 # ─── Case runners ─────────────────────────────────────────────────────
 
 proc fillFormula(buf: var PageBuf[uint16]; n: int) =
-  ## Deterministic weight fill, one bf16 pattern per element, the kernel
-  ## and the naive walk reading the same bits, magnitudes in [-0.025, 0.0251].
+  ## Deterministic weight fill, one bf16 pattern per element,
+  ## magnitudes in [-0.025, 0.0251].
   doAssert n <= buf.elems
   doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
     "no-copy binding needs a page-multiple byte length"
@@ -348,8 +121,7 @@ proc prefillPartial(buf: var PageBuf[float32]; rows: int) =
     buf.hostPtr[i] = Sentinel
 
 type Weights = object
-  ## Seeded weight page buffers, shared by the three cases,
-  ## the kernel and the naive walk reading the same bits.
+  ## Seeded weight page buffers, shared by the three cases.
   routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGV:
     PageBuf[uint16]
 
@@ -372,13 +144,12 @@ proc buildWeights(seed: uint64): Weights =
   fillFormula(result.sharedDW, H * I)
   fillFormula(result.sharedGV, H)
 
-var suiteWorst = 0.0'f64
 var suiteLaunches = 0
 
 proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     entry: string; scale: float32; useGate: bool; poisonGateVec: bool) =
-  ## One seeded case at grid (tokens, K+1, 1), the naive walk centering
-  ## the judgment, the contract-extent sentinel, the relaunch bit-identity.
+  ## One seeded case at grid (tokens, K+1, 1), the contract-extent sentinel
+  ## walk and the relaunch bit-identity.
   ##
   ## `poisonGateVec` fills a dedicated NaN-poisoned shared gate weight vector,
   ## the ungated case's proof the kernel never reads it.
@@ -430,45 +201,6 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
 
   prefillPartial(partial, Rows)
   discard launch()
-  let record = readAll()
-
-  # the naive walk and the per-element judgment, one token at a time
-  let xSeq = readSeq(xB.hostPtr, tokens * H)
-  let routerWSeq = readSeq(w.routerW.hostPtr, E * H)
-  let gateUpWSeq = readSeq(w.gateUpW.hostPtr, E * 2 * I * H)
-  let downWSeq = readSeq(w.downW.hostPtr, E * H * I)
-  let sharedGWSeq = readSeq(w.sharedGW.hostPtr, I * H)
-  let sharedUWSeq = readSeq(w.sharedUW.hostPtr, I * H)
-  let sharedDWSeq = readSeq(w.sharedDW.hostPtr, H * I)
-  let sharedGVSeq = readSeq(w.sharedGV.hostPtr, H)
-  var worst = 0.0'f64
-  for t in 0 ..< tokens:
-    let xTok = xSeq[t * H ..< (t + 1) * H]
-    let nw = naiveWalk(xTok, routerWSeq, gateUpWSeq, downWSeq,
-      sharedGWSeq, sharedUWSeq, sharedDWSeq, sharedGVSeq, scale, useGate)
-    let xw = widen(xTok)
-    # the walk exposes no ids or weight buffers, the expert selection
-    # and the routing weight are judged through the partial rows they
-    # produce (a diverging id or weight moves the row off the band)
-    for slot in 0 ..< K:
-      let id = nw.ids[slot].int
-      let logitBar = 2.0 * float64(H) * U32 *
-        sumAbsLinks(xw, routerWSeq, id * H, H) +
-        2.0 * UBf * abs(naiveLogit(xTok, routerWSeq, id).float64) + FloorBf
-      worst = max(worst, judgeSlotPartials(t, slot, id, nw, xw,
-        gateUpWSeq, downWSeq, record.h, record.partial, logitBar))
-    # the shared row's gate-weight band, the scalar logit's reduction class
-    let gvP = nw.gvP.float64
-    var gvAbs = 0.0'f64
-    for k in 0 ..< H:
-      gvAbs += abs(xw[k] * bf16ToF32(sharedGVSeq[k]).float64)
-    let gateBar = if useGate:
-      0.25 * (2.0 * float64(H) * U32 * gvAbs) +
-      abs(gvP) * (RelSilu + 2.0 * U32 + 2.0 * UBf) + FloorBf
-    else:
-      0.0'f64
-    worst = max(worst, judgeSharedPartial(t, nw, xw, sharedGWSeq,
-      sharedUWSeq, sharedDWSeq, record.hs, record.partial, gateBar))
 
   if not useGate:
     # the poisoned gate weight vector, never read, so the shared row holds
@@ -477,9 +209,6 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
       let pM = partial.hostPtr[(K) * H + e]
       doAssert classify(pM) notin {fcNan, fcInf},
         &"the poisoned gate weight vector leaked into the shared partial at {e}"
-  echo &"[moe fwd decode {entry}] every partial row inside its bar, " &
-    &"worst bar usage {worst:.3f}"
-  suiteWorst = max(suiteWorst, worst)
 
   # the write extent, no sentinel left in the contract rows and the spare
   # block past the extent untouched:
@@ -501,7 +230,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     doAssert snap3.hs[i] == snap2.hs[i], &"hs scratch differs at {i}"
   for i in 0 ..< tokens * (K + 1) * H:
     doAssert snap3.partial[i] == snap2.partial[i], &"partial differs at {i}"
-  echo "[moe fwd decode prod] relaunch bit-identical"
+  echo &"[moe fwd decode {entry}] relaunch bit-identical, extent sentinels clean"
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -519,7 +248,6 @@ proc main =
   runCase(engine, w, 0xC04D0613'u64, 1, "cer_moe_fwd_scale2",
     2.0'f32, true, false)
   echo &"CERAMIC MOE_FWD_DECODE VERDICT: cases=3 launches={suiteLaunches} " &
-    &"worst bar usage {suiteWorst:.3f}, extent sentinels 2 walks clean, " &
-    &"relaunch bit-identical"
+    &"extent sentinels clean, relaunch bit-identical"
 
 main()

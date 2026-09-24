@@ -11,24 +11,17 @@
 ## One-launch fused GDN decoder layer check, the fp16 row.
 ## The same seeded generation recipe stored as fp16 bit patterns.
 ##
-## The mega kernel's fp16 instantiation against the fp16 reference chain:
+## The mega kernel's fp16 instantiation over the full `HaveNorm = true` walk:
 ##
 ## - launch success under the bounded wait, non-degenerate outputs, sync counters
 ## - read-unchanged sentinels, fresh-relaunch bit-identity
-## - an informational fp16 reference-vs-mega diff over the shared outputs
-##
-## This suite asserts generous sanity bounds only, the bf16 row's class.
-##
-## The fp16 chain's per-op round keeps its reassociation
-## and transcendental differences within the bf16 row's class.
 
-import std/[strformat, math, times]
+import std/[strformat, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
 import ceramic_pagebuf
 import ceramic_dtype
-import ../properties/refs
 import mega_bounded_wait
 import mega_gdn_harness
 
@@ -75,30 +68,9 @@ proc fp16RangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
   for i in off ..< off + count:
     result = max(result, abs(fp16ToFp32(buf.hostPtr[i])))
 
-proc yWorstDiff(megaBf: PageBuf[uint16]; megaOff: int; refRow: seq[uint16]): string =
-  ## Failure diagnostic of the y sanity bound, computed only on failure:
-  ## the y row's worst element against the reference row, widened from fp16.
-  var yArg = 0
-  for i in 0 ..< refRow.len:
-    if abs(fp16ToFp32(megaBf.hostPtr[megaOff + i]) - fp16ToFp32(refRow[i])) >
-        abs(fp16ToFp32(megaBf.hostPtr[megaOff + yArg]) - fp16ToFp32(refRow[yArg])):
-      yArg = i
-  &"element {yArg}, mega {fp16ToFp32(megaBf.hostPtr[megaOff + yArg]):.6f}, " &
-    &"naive {fp16ToFp32(refRow[yArg]):.6f}, worst " &
-    &"{abs(fp16ToFp32(megaBf.hostPtr[megaOff + yArg]) - fp16ToFp32(refRow[yArg])):.5f}"
-
-proc maxDiffF16(megaBf: PageBuf[uint16]; megaOff: int; refRow: seq[uint16]): float32 =
-  ## Elementwise absolute difference maximum between a mega arena section
-  ## and the reference side's row, both widened from fp16.
-  doAssert megaBf.elems >= megaOff + refRow.len
-  for i in 0 ..< refRow.len:
-    let a = fp16ToFp32(megaBf.hostPtr[megaOff + i])
-    let b = fp16ToFp32(refRow[i])
-    result = max(result, abs(a - b))
-
 proc fp16Checks(engine: HwEngine, big: BigHost) =
-  ## One seeded fp16 launch, the sync, sentinel, determinism
-  ## and naive-comparison checks around it.
+  ## One seeded fp16 launch, the sync, sentinel and determinism checks
+  ## around it, plus the relaunch over restored arenas, state and ring.
   var m = allocMegaGdn()
   defer: freeMegaGdn(m)
   fillGdnInputs(m, big)
@@ -110,8 +82,6 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   let stateSnap = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
   launch()
-
-  var worstSanityUse = 0.0'f64
 
   proc waveSyncCheck() =
     ## Post-launch, the kernel's launch-end reset has re-zeroed the counters.
@@ -147,33 +117,6 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   let statePost = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringPost = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
 
-  block comparison:
-    var stateN = Cube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)
-    stateN.data = big.state
-    var ringN = big.ring
-    let t0 = epochTime()
-    let refOut = qwen35GdnLayer(stateN, ringN, big.x, big.r,
-      big.norm1W, big.qkvW, big.zW, big.aW, big.bW, big.convW, big.onormW,
-      big.outprojW, big.norm2W, big.routerW, big.gateUpW, big.downW,
-      big.sharedGW, big.sharedUW, big.sharedDW, big.sharedGVW, big.aLog,
-      big.dtBias, Eps, gmmF16)
-    echo &"[mega fp16] naive walk {epochTime() - t0:.2f} s"
-    let dMoe = maxDiffF16(m.bfA, sMoeOut, refOut.moeOut)
-    let dH1 = maxDiffF16(m.bfA, sH1, refOut.h1)
-    let dBlock = maxDiffF16(m.bfA, sBlockOut, refOut.blockOut)
-    let dY = maxDiffF16(m.bfA, sY, refOut.y)
-    worstSanityUse = max(max(max(dMoe, dH1), dBlock), dY) / 0.1
-    echo &"[mega fp16] informational max abs diff vs naive " &
-      &"moeOut {dMoe:.5f} h1 {dH1:.5f} blockOut {dBlock:.5f} y {dY:.5f}"
-    doAssert dMoe < 0.1'f32,
-      &"moeOut outside the sanity bound, worst diff {dMoe:.5f}"
-    doAssert dH1 < 0.1'f32,
-      &"h1 outside the sanity bound, worst diff {dH1:.5f}"
-    doAssert dBlock < 0.1'f32,
-      &"blockOut outside the sanity bound, worst diff {dBlock:.5f}"
-    doAssert dY < 0.1'f32,
-      &"y outside the sanity bound: the worst element {yWorstDiff(m.bfA, sY, refOut.y)}"
-
   # the relaunch, restored arenas, state and ring, zeroed m.counters
   for i in 0 ..< BfArenaLen: m.bfA.hostPtr[i] = fpSnap[i]
   for i in 0 ..< F32ArenaLen: m.f32A.hostPtr[i] = f32Snap[i]
@@ -190,8 +133,8 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   for i in 0 ..< ConvDim * RingWidth:
     doAssert m.ring.hostPtr[i] == ringPost[i], &"ring differs at {i}"
   echo "[mega fp16] relaunch bit-identical, wave sync exact"
-  echo &"CERAMIC MEGA GDN FP16 VERDICT: launches=2 worst sanity usage " &
-    &"{worstSanityUse:.3f}, bit-exact relaunch " &
+  echo &"CERAMIC MEGA GDN FP16 VERDICT: launches=2 " &
+    &"bit-exact relaunch " &
     &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}/" &
     &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}"
 

@@ -42,7 +42,7 @@
 ##
 ## | provenance | source                                                                                                                                                            |
 ## | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the fp64 WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/properties/refs.nim, the same cumulogdecay, pairdecay, solve and carry formulas at fp32 |
+## | schedule   | the fp64 chunked WY/UT reassociation: per-chunk cumulogdecay, the A-matrix u solve in token order, one decayed carry read plus the u outer products |
 
 ##
 ## Implementation shape:

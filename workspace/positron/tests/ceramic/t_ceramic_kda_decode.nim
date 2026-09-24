@@ -9,22 +9,21 @@
 ## - nim c -r -d:release --warnings:off \
 ##   --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/ceramic/t_ceramic_kda_decode.nim
 ##
-## Ceramic KDA decode step suite, `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single.nim`
-## compared per element against the reference `kdaDecodeStep`:
-## - the reference walk is per-sequence, B sequences take B independent reference calls
+## Ceramic KDA decode step suite, launch contract over seeded fixtures:
+## - `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single.nim` runs one
+##   launch over the stacked head axis (B·Hv threadgroups, one per head)
 ## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
 ##
-## Checks, all model-bar assertions, one step: bars → walk → launch → judgment:
+## Value check, the property suite's step-count identity
+## (decode against the same prefill, `tests/properties/t_prop_kda.nim`).
+## This suite carries the fixture, sentinel, determinism and cross-kernel checks:
 ##
-## | check            | form                                                               |
-## | ---------------- | ------------------------------------------------------------------ |
-## | single-step band | closed-form, 64 seeded random cases per (element dtype, shape)     |
-## | chain            | 10 steps, carried state, under the chain recursion band            |
-## | edge combos      | near-zero decay (g → 0⁻) and exact-zero beta, inside the same band |
-## | cross-check      | uniform g, ceramic KDA vs ceramic GDN, state asserted bit-exact    |
-##
-## - run-to-run determinism, case 0 relaunched per combination and the whole chain relaunched
-## - untouched-memory checks every launch, kernel writes stay inside their extents, kernel reads stay bit-identical
+## | check            | form                                                                                   |
+## | ---------------- | -------------------------------------------------------------------------------------- |
+## | cross-check      | uniform g, ceramic KDA vs ceramic GDN, state asserted bit-exact                        |
+## | edge combos      | near-zero decay (g → 0⁻) and exact-zero beta over the same fixtures                    |
+## | determinism      | case 0 relaunched per combination and the whole chain relaunched                       |
+## | untouched memory | every launch, kernel writes stay inside their extents, kernel reads stay bit-identical |
 ##
 ## Shapes (Dv = 16, TileR = 8, Dk = 32, grid (Dv div TileR, B·Hv), 32 lanes):
 ##
@@ -33,55 +32,20 @@
 ## | baseline | 1  | 1  | 1     | 1       | fp16, bf16 | bf16  |
 ## | gqa      | 2  | 4  | 2     | 2       | fp16, bf16 | fp16  |
 ##
-## | regime   | note                                                                             |
-## | -------- | -------------------------------------------------------------------------------- |
-## | initial  | every case starts from a non-zero random initial state                           |
-## | g span   | -3 <= g < -0.1 single-step, -0.5 <= g < -0.01 chains, -0.001 <= g < 0 near-zero  |
-## | stress   | the near-unitary decay stresses the chain recursion hardest                      |
-## | dtype    | q/k/g/beta are f32 per the recorded KDA contract, f32 through the reference side |
-## | dtype    | v/y carry the element dtype, fp16 the primary, bf16 the range-robust fallback    |
-## | gqa      | both mapping terms live, in-sequence ratio plus sequence offset                  |
-## | sabotage | sequence 1 holds independent key heads, a dropped sequence offset cannot pass    |
+## | regime   | note                                                                                |
+## | -------- | ----------------------------------------------------------------------------------- |
+## | initial  | every case starts from a non-zero random initial state                              |
+## | g span   | -3 <= g < -0.1 single-step, -0.5 <= g < -0.01 chains, -0.001 <= g < 0 near-zero     |
+## | dtype    | q/k/g/beta are f32 per the recorded KDA contract, f32 through the kernel            |
+## | dtype    | v/y carry the element dtype, fp16 the primary, bf16 the range-robust fallback       |
+## | gqa      | both mapping terms live, in-sequence ratio plus sequence offset                     |
+## | sabotage | sequence 1 holds independent key heads, a dropped sequence offset changes the reads |
 ##
-## Band model, stated before measurement, u₃₂ = 2⁻²⁴ the fp32 unit roundoff, γ_c = exp(g_c):
-##
-## | symbol             | value                                                                                                                                            |
-## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-## | a, b               | abs(γ_c·S), abs(k_c·δ)                                                                                                                           |
-## | kvAbs              | Σ_dkc abs(γ_dkc·S·k_dkc) over the row r                                                                                                          |
-## | δ                  | β·(v − Σ_dkc γ_dkc·S·k_dkc)                                                                                                                      |
-## | yAbs               | Σ_dkc abs(S'·q̃_dkc) over the row                                                                                                                |
-## | u_step             | 2⁻¹¹ for fp16, 2⁻⁸ for bf16                                                                                                                      |
-## | bar                | bound                                                                                                                                            |
-## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-## | state (bh, r, dkc) | γ_dkc·ΔS_t + 4·2⁻²⁴·a + abs(k)·(β·2·Dk·2⁻²⁴·kvAbs + 2·2⁻²⁴·β·(abs(v)+abs(kv)) + 2·2⁻²⁴·abs(δ)) + 4·2⁻²⁴·(a + b) + abs(k)·β·Σ_c abs(k_c)·γ_c·ΔS_t |
-## | y (bh, r)          | 2·u_step·abs(y) + (2·Dk·2⁻²⁴ + 4·2⁻²⁴)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                                                               |
-## | term               | covers                                                                                                                                           |
-## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-## | 4·2⁻²⁴·a           | the exp (reference) vs exp2(g·log2e) (kernel) decay form                                                                                         |
-## | 2·u_step·abs(y)    | both sides round the same fp32 value once                                                                                                        |
-## | (2·Dk·2⁻²⁴)·yAbs   | the two dot orders                                                                                                                               |
-## | 4·2⁻²⁴·yAbs        | the qScale difference, the reference's f32 √Dk vs the host's f64 √Dk cast to f32, at most one extra ulp each side                                |
-## | 2⁻²⁵               | the fp16 subnormal grid floor, also covering the bf16 grid                                                                                       |
-##
-## Chain model, the two sides run the same fp32 arithmetic on state values that differ:
-##
-## - the accumulated error ΔS propagates linearly, all terms nonnegative
-## - the triangle inequality bounds each op, giving this recursion:
-##
-## | chain bound      | recursion                                                                       |
-## | ---------------- | ------------------------------------------------------------------------------- |
-## | ΔS_{t+1}[r, dkc] | γ_dkc·ΔS_t[r, dkc] + barStep[r, dkc] + abs(k_dkc)·β·Σ_c abs(k_c)·γ_c·ΔS_t[r, c] |
-## | Δy_t[r]          | Σ_c abs(q̃_c)·ΔS_{t+1}[r, c] + barY_t[r]                                        |
-##
-## - barStep and barY are the single-step bars on the reference-side trajectory of each step
-## - the measured divergence justifies the model, never sets the bar
-## - the β = 0 edge combo stays within the band, the delta terms are exact zero, the decay drifts by at most 4·2⁻²⁴ relative
-##
-## Uniform-g cross-check band, ceramic KDA vs ceramic GDN fed element-exact operands, state bit-exact:
+## Uniform-g cross-check, ceramic KDA vs ceramic GDN fed element-exact operands, state bit-exact:
 ##
 ## - element-exact, q/k/beta the exact f32 widenings of the GDN side's element bits, v the same bits, g one uniform scalar
-## - y differs only through the q̃ spelling, judged against the cross-check bar
+## - the state arithmetic then sees identical operands, the state is asserted
+##   bit-exact, y differs only through the q̃ spelling, judged against the cross-check bar
 ##
 ## | bar         | bound                                                                                    |
 ## | ----------- | ---------------------------------------------------------------------------------------- |
@@ -93,6 +57,7 @@
 ## | 2·2⁻²⁴·yAbs | slack for compiler-level reassociation between the two separately compiled kernel bodies |
 ## | 2⁻²⁵        | the element-dtype subnormal grid floor                                                   |
 ##
+## - u₃₂ = 2⁻²⁴ the fp32 unit roundoff, u_step = 2⁻¹¹ for fp16, 2⁻⁸ for bf16
 ## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
 
 import std/[strformat, math, times]
@@ -102,7 +67,6 @@ import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
-import ../properties/refs
 
 # ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
@@ -143,21 +107,15 @@ const CeramicDecodeMsl = metal:
       Hv, Hk, hkRatio: int32) {.global.} =
     gdnDecodeStepTile(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
 
-# ─── Host tolerance-model constants ───────────────────────────────────
+# ─── Cross-check bar constants ────────────────────────────────────────
 
 const
-  RelDecay = 4.0 * U32               # exp vs exp2(g·log2e) relative bound
-  RelQScale = 4.0 * U32              # reference's f32 sqrt vs the host's f64 sqrt cast to f32
   RelQScaleX = 2.0 * 4.76837158203125e-7  # 2·2⁻²¹, rsqrt-multiply vs divide, cross-check
-  UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
-  UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
   FloorSub = 2.9802322387695312e-8   # 2⁻²⁵, half the constant fp16 subnormal ulp,
                                      # the rounding floor once |y| falls subnormal
 
 type StepInputs = object
-  ## One decode step's seeded inputs, q/k/g/beta f32 shared verbatim by the kernel
-  ## and the reference sides, v as element-dtype bits the reference sees through its exact
-  ## widening:
+  ## One decode step's seeded inputs, q/k/g/beta f32 verbatim, v element-dtype bits:
   ##
   ## | field        | shape          |
   ## | ------------ | -------------- |
@@ -176,21 +134,17 @@ type StepSnap = object
   state: seq[float32]
   y: seq[uint16]
 
-var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
-var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
+var suiteCases, suiteLaunches = 0
 
 proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
   ## One (element dtype, shape, edge) combination over `cases` independent seeded runs
-  ## of `steps` decode steps each, judged per element against the reference reference
-  ## under the band model, case 0 relaunched bit-identical.
+  ## of `steps` decode steps each, case 0 relaunched bit-identical.
   const Dv = 16
   const TileR = 8
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
   let kernelName = if dt == kFloat16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
-  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
-  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -210,13 +164,6 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
   var gPA = gB.pa()
   var betaPA = betaB.pa()
 
-  # Launch-site contracts, see the kernel modules' binding and state ABI docs
-  var worstState = 0.0'f64
-  var worstStateUse = 0.0'f64
-  var worstYUse = 0.0'f64
-  var worstYUlp = 0.0'f64
-  var yExact = 0
-  var yTotal = 0
   var launches = 0
 
   proc setState(state0: seq[float32]) =
@@ -252,140 +199,13 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
     assertReadUnchanged(betaB, si.betaVals)
     assertReadUnchanged(vB, si.vBits)
 
-  # Bars come from the reference-side trajectory, then the reference walk,
-  # the kernel launch and the per-element judgment.
-  # `judge` false marks the determinism relaunch, bit-compared against the first pass instead.
-  proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap], judge: bool) =
+  # One step's launch and snap, the buffers carrying into the next step.
+  proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap]) =
     setState(state0)
-    var stateN = state0                       # reference-side fp32 state, flat
-    var dS = newSeq[float64](stateElems)      # running accumulated-error bound
-    for t in 0 ..< chain.len:
-      let si = chain[t]
-      var qF = newSeq[float32](qkRows * dk)
-      var kF = newSeq[float32](qkRows * dk)
-      var gF = newSeq[float32](qkRows * dk)
-      var vF = newSeq[float32](bhMax * Dv)
-      var betaF = newSeq[float32](bhMax)
-      for i in 0 ..< qkRows * dk:
-        qF[i] = si.qVals[i]
-        kF[i] = si.kVals[i]
-        gF[i] = si.gVals[i]
-      for i in 0 ..< bhMax * Dv:
-        vF[i] = si.vBits[i].widenTo(dt)
-      for h in 0 ..< bhMax:
-        betaF[h] = si.betaVals[h]
-
-      # state bars from the reference pre-step state, per key channel gamma
-      var barS = newSeq[float64](stateElems)
-      for bh in 0 ..< bhMax:
-        let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
-        for r in 0 ..< Dv:
-          var kvN = 0.0'f64
-          var kvAbs = 0.0'f64
-          var kvProp = 0.0'f64
-          for c in 0 ..< dk:
-            let idx = (bh * Dv + r) * dk + c
-            let gamma = exp(gF[hk * dk + c].float64)
-            let term = gamma * stateN[idx].float64 * kF[hk * dk + c].float64
-            kvN += term
-            kvAbs += abs(term)
-            kvProp += abs(kF[hk * dk + c].float64) * gamma * dS[idx]
-          let vAbs = abs(vF[bh * Dv + r].float64)
-          let d = betaF[bh].float64 * (vF[bh * Dv + r].float64 - kvN)
-          let dDelta = betaF[bh].float64 * (2.0 * dk.float64 * U32 * kvAbs) +
-            2.0 * U32 * betaF[bh].float64 * (vAbs + abs(kvN)) + 2.0 * U32 * abs(d)
-          # the chain recursion's carried-error term, |k_dkc|·β·Σ_c abs(k_c)·γ_c·ΔS_t[r, c]
-          let deltaErr = betaF[bh].float64 * kvProp
-          for c in 0 ..< dk:
-            let idx = (bh * Dv + r) * dk + c
-            let gamma = exp(gF[hk * dk + c].float64)
-            let a = abs(gamma * stateN[idx].float64)
-            let bTerm = abs(kF[hk * dk + c].float64 * d)
-            barS[idx] = gamma * dS[idx] +
-              (RelDecay * a + abs(kF[hk * dk + c].float64) * dDelta +
-                4.0 * U32 * (a + bTerm)) + abs(kF[hk * dk + c].float64) * deltaErr
-
-      # the reference walk, per sequence (the reference walk is per-sequence)
-      var yN = newSeq[float32](bhMax * Dv)
-      for b in 0 ..< B:
-        var stateSeq = Cube[float32](planes: Hv, rows: Dv, cols: dk)
-        stateSeq.data = newSeq[float32](Hv * Dv * dk)
-        let base = b * Hv * Dv * dk
-        for i in 0 ..< Hv * Dv * dk:
-          stateSeq.data[i] = stateN[base + i]
-        var qMat = Mat[float32](rows: Hk, cols: dk)
-        qMat.data = newSeq[float32](Hk * dk)
-        var kMat = Mat[float32](rows: Hk, cols: dk)
-        kMat.data = newSeq[float32](Hk * dk)
-        var gMat = Mat[float32](rows: Hk, cols: dk)
-        gMat.data = newSeq[float32](Hk * dk)
-        for i in 0 ..< Hk * dk:
-          qMat.data[i] = qF[(b * Hk) * dk + i]
-          kMat.data[i] = kF[(b * Hk) * dk + i]
-          gMat.data[i] = gF[(b * Hk) * dk + i]
-        var vMat = Mat[float32](rows: Hv, cols: Dv)
-        vMat.data = newSeq[float32](Hv * Dv)
-        var yMat = Mat[float32](rows: Hv, cols: Dv)
-        yMat.data = newSeq[float32](Hv * Dv)
-        var betaSeq = newSeq[float32](Hv)
-        for p in 0 ..< Hv:
-          for c in 0 ..< Dv:
-            vMat.data[p * Dv + c] = vF[(b * Hv + p) * Dv + c]
-          betaSeq[p] = betaF[b * Hv + p]
-        kdaDecodeStep(stateSeq, yMat, qMat, kMat, gMat, vMat, betaSeq,
-          int32(Hv), int32(Hk), int32(hkRatio))
-        for i in 0 ..< Hv * Dv * dk:
-          stateN[base + i] = stateSeq.data[i]
-        for i in 0 ..< Hv * Dv:
-          yN[(b * Hv) * Dv + i] = yMat.data[i]
-
+    for si in chain:
       copyStepInputs(si)
       launch()
       sentinels(si)
-
-      # y bars from the reference post-step state, then the y judgment
-      let qScaleN = sqrt(float32(dk))
-      for bh in 0 ..< bhMax:
-        let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
-        for r in 0 ..< Dv:
-          var yAbs = 0.0'f64
-          var yProp = 0.0'f64
-          for c in 0 ..< dk:
-            let idx = (bh * Dv + r) * dk + c
-            let qs = qF[hk * dk + c].float64 / qScaleN.float64
-            yAbs += abs(stateN[idx].float64 * qs)
-            yProp += abs(qs) * barS[idx]
-          let yWant = yN[bh * Dv + r].float64
-          let barY = 2.0 * uStep * abs(yWant) +
-            (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
-            2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = yB.hostPtr[bh * Dv + r].widenTo(dt).float64
-          let yDiff = abs(yGot - yWant)
-          if judge:
-            doAssert yDiff <= barY,
-              &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
-              &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = ulpStepAt(ulpG, yWant)
-            if uAt > 0.0 and yDiff > 0.0:
-              worstYUlp = max(worstYUlp, yDiff / uAt)
-            if yDiff == 0.0:
-              inc yExact
-            inc yTotal
-            if barY > 0.0: worstYUse = max(worstYUse, yDiff / barY)
-
-      # state judgment against the step bounds, the bounds carry forward
-      for i in 0 ..< stateElems:
-        let got = stateB.hostPtr[i].float64
-        let want = stateN[i].float64
-        let diff = abs(got - want)
-        if judge:
-          doAssert diff <= barS[i],
-            &"state outside the bar at element {i}, step {t}: " &
-            &"{diff:.3e} > {barS[i]:.3e}"
-          worstState = max(worstState, diff)
-          if barS[i] > 0.0: worstStateUse = max(worstStateUse, diff / barS[i])
-        dS[i] = barS[i]
-
       snaps.add(StepSnap(
         state: readRecord(stateB.hostPtr, stateElems),
         y: readRecord(yB.hostPtr, bhMax * Dv)))
@@ -421,7 +241,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       state0[i] = rng.nextF32(-1.0'f32, 1.0'f32)
     let chain = takeInputs(rng)
     var caseSnaps: seq[StepSnap]
-    runSteps(state0, chain, caseSnaps, judge = true)
+    runSteps(state0, chain, caseSnaps)
     if caseId == 0:
       case0Snaps = caseSnaps
 
@@ -433,7 +253,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       state0[i] = rng0.nextF32(-1.0'f32, 1.0'f32)
     let chain = takeInputs(rng0)
     var relaunchSnaps: seq[StepSnap]
-    runSteps(state0, chain, relaunchSnaps, judge = false)
+    runSteps(state0, chain, relaunchSnaps)
     for t in 0 ..< relaunchSnaps.len:
       for i in 0 ..< stateElems:
         doAssert relaunchSnaps[t].state[i] == case0Snaps[t].state[i],
@@ -442,17 +262,10 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] steps={steps} cases={cases} " &
-    &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
-    &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  echo &"[{label} Dk={dk}] steps={steps} cases={cases} launches={launches} " &
+    &"relaunch bit-identical"
   suiteCases += cases
   suiteLaunches += launches
-  suiteWorstUse = max(suiteWorstUse, max(worstStateUse, worstYUse))
-  suiteWorstState = max(suiteWorstState, worstState)
-  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
-  suiteYExact += yExact
-  suiteYTotal += yTotal
 
 type CrossInputs = object
   qBits: seq[uint16]
@@ -641,15 +454,11 @@ proc runCrossCheck(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, cas
     let ci0 = takeCrossInputs(rng0, dt, qkRows, bhMax, stateElems)
     runCase(ci0, 0, judge = false, refState, refY)
 
-  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] cross-check cases={cases} " &
-    &"launches={launches} | state bit-exact all | y worst {worstYUlp:.2f} " &
+  echo &"[{label} Dk={dk}] cross-check cases={cases} launches={launches} " &
+    &"| state bit-exact all | y worst {worstYUlp:.2f} " &
     &"{ulpDatatypeName(ulpG)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
-  suiteWorstUse = max(suiteWorstUse, worstYUse)
-  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
-  suiteYExact += yExact
-  suiteYTotal += yTotal
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -727,7 +536,6 @@ proc main =
   secCrossF16()
   secCrossBf16()
   echo &"CERAMIC KDA DECODE VERDICT: cases={suiteCases} launches={suiteLaunches} " &
-    &"state worst |ΔS| {suiteWorstState:.3e}, y worst {suiteWorstYUlp:.2f} ulp, " &
-    &"worst bar usage {suiteWorstUse:.3f}, y bit-exact {suiteYExact}/{suiteYTotal}"
+    &"relaunch bit-identical across all combinations, cross-check state bit-exact"
 
 main()

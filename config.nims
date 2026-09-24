@@ -588,9 +588,9 @@ task test_ceramic, "Test workspace/ceramic":
 # The positron suites: the property suites (internal-consistency checks over
 # the production kernels: split invariance, step-count identity, idempotence,
 # with the seeded support surface in tests/properties/properties.nim) and
-# tests/ceramic, the kernel comparisons judged against the reference walks in
-# tests/properties/refs.nim. No recorded blobs, no model checkpoints, the
-# inputs come from the seeded PRNG.
+# tests/ceramic, the launch-contract suites (seeded fixtures, sentinel and
+# determinism checks over the kernels). No recorded blobs, no model
+# checkpoints, the inputs come from the seeded PRNG.
 task test_positron_properties, "Test workspace/positron property suites":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/positron/tests/properties"):

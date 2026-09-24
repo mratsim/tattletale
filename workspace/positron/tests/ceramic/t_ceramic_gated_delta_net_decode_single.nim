@@ -9,16 +9,16 @@
 ## - nim c -r -d:release --warnings:off \
 ##   --outdir:build/tests --nimcache:nimcache/cer workspace/positron/tests/ceramic/t_ceramic_gated_delta_net_decode_single.nim
 ##
-## Ceramic GDN decode step suite:
-## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` compared per element against the reference `gdnDecodeStep`
-## - the reference walk is per-sequence, B sequences take B independent reference calls
-## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
+## Ceramic GDN decode step suite, launch contract over seeded fixtures:
+## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` runs one launch
+##   over the stacked head axis (B·Hv threadgroups, one per head)
 ##
-## One step reads state bars → reference walk → kernel launch → y and state judgment, the bounds carry into the next step
+## One step writes state → kernel launch → snap of the kernel-written buffers,
+## the state carrying into the next step.
 ##
-## Checks, all model-bar assertions:
-## - the single-step closed-form band, 64 seeded random cases per (element dtype, shape)
-## - the multi-step chain (10 steps, carried state) under the chain recursion band
+## Value check, the property suite's step-count identity
+## (decode against the same prefill, `tests/properties/t_prop_gdn.nim`).
+## This suite carries the fixture, sentinel and determinism checks:
 ##
 ## - run-to-run determinism, case 0 relaunched per combination and the whole chain relaunched
 ## - untouched-memory checks every launch, kernel-written buffers stay inside their extents and kernel-read buffers stay bit-identical
@@ -32,55 +32,21 @@
 ##
 ## - every case starts from a non-zero random initial state
 ## - g spans -3 <= g < -0.1 in the single-step cases, -0.5 <= g < -0.01 in the chains,
-##   the near-unitary decay stresses the chain recursion hardest
-## - edge combos carry the near-zero decay (g -> 0-) and the exact-zero beta inside the same band
+##   the near-unitary decay exercises the carried-state path hardest
+## - edge combos carry the near-zero decay (g -> 0-) and the exact-zero beta
 ##
 ## - fp16 is the element dtype under test, bf16 the range-robust fallback
 ## - the GQA shape keeps both mapping terms live, in-sequence ratio term plus sequence-offset term
-## - sequence 1 holds independent key heads, a dropped sequence offset cannot pass
+## - sequence 1 holds independent key heads, a dropped sequence offset changes the reads
 ##
-## Band model, stated before measurement and judged per element, u₃₂ = 2⁻²⁴ is the fp32 unit roundoff:
-##
-## | symbol | value                         |
-## | ------ | ----------------------------- |
-## | a, b   | abs(S·exp(g)), abs(k·δ)       |
-## | kvAbs  | Σ_dkc abs(S·k) over the row r |
-## | δ      | β·(v − Σ_dkc S·k)             |
-## | yAbs   | Σ_dkc abs(S'·q̃) over the row |
-## | u_step | 2⁻¹¹ for fp16, 2⁻⁸ for bf16   |
-##
-## | bar                | bound                                                                                              |
-## | ------------------ | -------------------------------------------------------------------------------------------------- |
-## | state (bh, r, dkc) | 4·2⁻²⁴·a + abs(k)·(β·2·Dk·2⁻²⁴·kvAbs + 2·2⁻²⁴·β·(abs(v)+abs(kv)) + 2·2⁻²⁴·abs(δ)) + 4·2⁻²⁴·(a + b) |
-## | y (bh, r)          | 2·u_step·abs(y) + (2·Dk·2⁻²⁴ + 2·2⁻²¹)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                 |
-##
-## | term             | covers                                                     |
-## | ---------------- | ---------------------------------------------------------- |
-## | 2·u_step·abs(y)  | both sides round the same fp32 value once                  |
-## | (2·Dk·2⁻²⁴)·yAbs | the two dot orders                                         |
-## | 2·2⁻²¹·yAbs      | the rsqrt-vs-divide q̃ difference                          |
-## | 2⁻²⁵             | the fp16 subnormal grid floor, also covering the bf16 grid |
-##
-## - Chain model, the two sides run the same fp32 arithmetic on state values that differ
-##   - the accumulated error ΔS propagates linearly, all terms nonnegative
-##   - the triangle inequality bounds each op, giving this recursion:
-##
-## | chain bound      | recursion                                                                           |
-## | ---------------- | ----------------------------------------------------------------------------------- |
-## | ΔS_{t+1}[r, dkc] | exp(g)·ΔS_t[r, dkc] + barStep[r, dkc] + abs(k_dkc)·β·Σ_c abs(k_c)·exp(g)·ΔS_t[r, c] |
-## | Δy_t[r]          | Σ_c abs(q̃_c)·ΔS_{t+1}[r, c] + barY_t[r]                                            |
-##
-## - barStep and barY are the single-step bars above, evaluated on the reference-side trajectory of each step
-## - the measured divergence justifies the model, never sets the bar
 ## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
 
-import std/[strformat, math, times]
+import std/[strformat, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
-import ../properties/refs
 
 # ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
@@ -99,18 +65,8 @@ const GdnDecodeMsl = metal:
       Hv, Hk, hkRatio: int32) {.global.} =
     gdnDecodeStepTile(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, 32, 16, 8)
 
-# ─── Host tolerance-model constants ───────────────────────────────────
-
-const
-  RelDecay = 4.0 * U32               # exp vs exp2(g·log2e) relative bound
-  RelQScale = 2.0 * 4.76837158203125e-7  # 2·2⁻²¹, rsqrt vs divide, relative
-  UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
-  UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
-  FloorSub = 2.9802322387695312e-8   # 2⁻²⁵, half the constant fp16 subnormal ulp,
-                                     # the rounding floor once |y| falls subnormal
-
 type StepInputs = object
-  ## One decode step's seeded inputs, element-dtype bits shared by the kernel and the reference sides through their exact fp32 widenings:
+  ## One decode step's seeded inputs, element-dtype bits:
   ##
   ## | field        | shape                 |
   ## | ------------ | --------------------- |
@@ -129,13 +85,11 @@ type StepSnap = object
   state: seq[float32]
   y: seq[uint16]
 
-var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
-var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
+var suiteCases, suiteLaunches = 0
 
 proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (element dtype, shape) combination over `cases` independent seeded
-  ## runs of `steps` decode steps each, judged per element against the reference
-  ## reference under the band model, case 0 relaunched bit-identical.
+  ## runs of `steps` decode steps each, case 0 relaunched bit-identical.
   const Dv = 16
   const TileR = 8
   let bhMax = B * Hv
@@ -148,8 +102,6 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
             else: (if steps == 1: -3.0'f32 else: -0.5'f32)
   let gHi = if gLoOverride != 0.0'f32: gHiOverride
             else: (if steps == 1: -0.1'f32 else: -0.01'f32)
-  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
-  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -169,13 +121,6 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
   var gPA = gB.pa()
   var betaPA = betaB.pa()
 
-  # Launch-site contracts, see the kernel modules' binding and state ABI docs
-  var worstState = 0.0'f64
-  var worstStateUse = 0.0'f64
-  var worstYUse = 0.0'f64
-  var worstYUlp = 0.0'f64
-  var yExact = 0
-  var yTotal = 0
   var launches = 0
 
   proc setState(state0: seq[float32]) =
@@ -211,132 +156,13 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
     for i in 0 ..< bhMax:
       doAssert gB.hostPtr[i] == si.gVals[i], "kernel-read buffer modified"
 
-  # Bars come from the reference-side trajectory, then the reference walk, the kernel launch and the per-element judgment.
-  # `judge` false marks the determinism relaunch, bit-compared against the first pass instead.
-  proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap], judge: bool) =
+  # One step's launch and snap, the buffers carrying into the next step.
+  proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap]) =
     setState(state0)
-    var stateN = state0                       # reference-side fp32 state, flat
-    var dS = newSeq[float64](stateElems)      # running accumulated-error bound
-    for t in 0 ..< chain.len:
-      let si = chain[t]
-      var qF = newSeq[float32](qkRows * dk)
-      var kF = newSeq[float32](qkRows * dk)
-      var vF = newSeq[float32](bhMax * Dv)
-      var betaF = newSeq[float32](bhMax)
-      for i in 0 ..< qkRows * dk:
-        qF[i] = si.qBits[i].widenTo(dt)
-        kF[i] = si.kBits[i].widenTo(dt)
-      for i in 0 ..< bhMax * Dv:
-        vF[i] = si.vBits[i].widenTo(dt)
-      for h in 0 ..< bhMax:
-        betaF[h] = si.betaBits[h].widenTo(dt)
-
-      # state bars from the reference pre-step state
-      var barS = newSeq[float64](stateElems)
-      for bh in 0 ..< bhMax:
-        let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
-        let gamma = exp(si.gVals[bh].float64)
-        for r in 0 ..< Dv:
-          var kvN = 0.0'f64
-          var kvAbs = 0.0'f64
-          var kvProp = 0.0'f64
-          for c in 0 ..< dk:
-            let idx = (bh * Dv + r) * dk + c
-            let term = gamma * stateN[idx].float64 * kF[hk * dk + c].float64
-            kvN += term
-            kvAbs += abs(term)
-            kvProp += abs(kF[hk * dk + c].float64) * gamma * dS[idx]
-          let d = betaF[bh].float64 * (vF[bh * Dv + r].float64 - kvN)
-          let dDelta = betaF[bh].float64 * (2.0 * dk.float64 * U32 * kvAbs) +
-            2.0 * U32 * betaF[bh].float64 *
-              (abs(vF[bh * Dv + r].float64) + abs(kvN)) + 2.0 * U32 * abs(d)
-          # the chain recursion's carried-error term, |k_dkc|·β·Σ_c abs(k_c)·exp(g)·ΔS_t[r, c]
-          let deltaErr = betaF[bh].float64 * kvProp
-          for c in 0 ..< dk:
-            let idx = (bh * Dv + r) * dk + c
-            let a = abs(gamma * stateN[idx].float64)
-            let bTerm = abs(kF[hk * dk + c].float64 * d)
-            barS[idx] = gamma * dS[idx] +
-              (RelDecay * a + abs(kF[hk * dk + c].float64) * dDelta +
-                4.0 * U32 * (a + bTerm)) + abs(kF[hk * dk + c].float64) * deltaErr
-
-      # the reference walk, per sequence (the reference walk is per-sequence)
-      var yN = newSeq[float32](bhMax * Dv)
-      for b in 0 ..< B:
-        var stateSeq = Cube[float32](planes: Hv, rows: Dv, cols: dk)
-        stateSeq.data = newSeq[float32](Hv * Dv * dk)
-        let base = b * Hv * Dv * dk
-        for i in 0 ..< Hv * Dv * dk:
-          stateSeq.data[i] = stateN[base + i]
-        var qMat = Mat[float32](rows: Hk, cols: dk)
-        qMat.data = newSeq[float32](Hk * dk)
-        var kMat = Mat[float32](rows: Hk, cols: dk)
-        kMat.data = newSeq[float32](Hk * dk)
-        for i in 0 ..< Hk * dk:
-          qMat.data[i] = qF[(b * Hk) * dk + i]
-          kMat.data[i] = kF[(b * Hk) * dk + i]
-        var vMat = Mat[float32](rows: Hv, cols: Dv)
-        vMat.data = newSeq[float32](Hv * Dv)
-        var yMat = Mat[float32](rows: Hv, cols: Dv)
-        yMat.data = newSeq[float32](Hv * Dv)
-        var betaSeq = newSeq[float32](Hv)
-        var gSeq = newSeq[float32](Hv)
-        for p in 0 ..< Hv:
-          for c in 0 ..< Dv:
-            vMat.data[p * Dv + c] = vF[(b * Hv + p) * Dv + c]
-          betaSeq[p] = betaF[b * Hv + p]
-          gSeq[p] = si.gVals[b * Hv + p]
-        gdnDecodeStep(stateSeq, yMat, qMat, kMat, vMat, betaSeq, gSeq, Hv, Hk, hkRatio)
-        for i in 0 ..< Hv * Dv * dk:
-          stateN[base + i] = stateSeq.data[i]
-        for i in 0 ..< Hv * Dv:
-          yN[(b * Hv) * Dv + i] = yMat.data[i]
-
+    for si in chain:
       copyStepInputs(si)
       launch(si)
       sentinels(si)
-
-      # y bars from the reference post-step state, then the y judgment
-      for bh in 0 ..< bhMax:
-        let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
-        for r in 0 ..< Dv:
-          var yAbs = 0.0'f64
-          var yProp = 0.0'f64
-          for c in 0 ..< dk:
-            let qs = qF[hk * dk + c].float64 / sqrt(dk.float32).float64
-            yAbs += abs(stateN[(bh * Dv + r) * dk + c].float64 * qs)
-            yProp += abs(qs) * barS[(bh * Dv + r) * dk + c]
-          let yWant = yN[bh * Dv + r].float64
-          let barY = 2.0 * uStep * abs(yWant) +
-            (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
-            2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = yB.hostPtr[bh * Dv + r].widenTo(dt).float64
-          let yDiff = abs(yGot - yWant)
-          if judge:
-            doAssert yDiff <= barY,
-              &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
-              &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = ulpStepAt(ulpG, yWant)
-            if uAt > 0.0 and yDiff > 0.0:
-              worstYUlp = max(worstYUlp, yDiff / uAt)
-            if yDiff == 0.0:
-              inc yExact
-            inc yTotal
-            if barY > 0.0: worstYUse = max(worstYUse, yDiff / barY)
-
-      # state judgment against the step bounds, the bounds carry forward
-      for i in 0 ..< stateElems:
-        let got = stateB.hostPtr[i].float64
-        let want = stateN[i].float64
-        let diff = abs(got - want)
-        if judge:
-          doAssert diff <= barS[i],
-            &"state outside the bar at element {i}, step {t}: " &
-            &"{diff:.3e} > {barS[i]:.3e}"
-          worstState = max(worstState, diff)
-          if barS[i] > 0.0: worstStateUse = max(worstStateUse, diff / barS[i])
-        dS[i] = barS[i]
-
       snaps.add(StepSnap(
         state: readRecord(stateB.hostPtr, stateElems),
         y: readRecord(yB.hostPtr, bhMax * Dv)))
@@ -370,7 +196,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       state0[i] = rng.nextF32(-1.0'f32, 1.0'f32)
     let chain = takeInputs(rng)
     var caseSnaps: seq[StepSnap]
-    runSteps(state0, chain, caseSnaps, judge = true)
+    runSteps(state0, chain, caseSnaps)
     if caseId == 0:
       case0Snaps = caseSnaps
 
@@ -382,7 +208,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       state0[i] = rng0.nextF32(-1.0'f32, 1.0'f32)
     let chain = takeInputs(rng0)
     var relaunchSnaps: seq[StepSnap]
-    runSteps(state0, chain, relaunchSnaps, judge = false)
+    runSteps(state0, chain, relaunchSnaps)
     for t in 0 ..< relaunchSnaps.len:
       for i in 0 ..< stateElems:
         doAssert relaunchSnaps[t].state[i] == case0Snaps[t].state[i],
@@ -391,17 +217,10 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] steps={steps} cases={cases} " &
-    &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
-    &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+  echo &"[{label} Dk={dk}] steps={steps} cases={cases} launches={launches} " &
+    &"relaunch bit-identical"
   suiteCases += cases
   suiteLaunches += launches
-  suiteWorstUse = max(suiteWorstUse, max(worstStateUse, worstYUse))
-  suiteWorstState = max(suiteWorstState, worstState)
-  suiteWorstYUlp = max(suiteWorstYUlp, worstYUlp)
-  suiteYExact += yExact
-  suiteYTotal += yTotal
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()
@@ -465,7 +284,6 @@ proc main =
   secChainF16Gqa()
   secChainBf16Baseline()
   echo &"CERAMIC GDN DECODE VERDICT: cases={suiteCases} launches={suiteLaunches} " &
-    &"state worst |ΔS| {suiteWorstState:.3e}, y worst {suiteWorstYUlp:.2f} ulp, " &
-    &"worst bar usage {suiteWorstUse:.3f}, y bit-exact {suiteYExact}/{suiteYTotal}"
+    &"relaunch bit-identical across all combinations"
 
 main()

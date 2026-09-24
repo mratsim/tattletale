@@ -45,7 +45,7 @@
 ##
 ## | provenance | source                                                                                                                                                                |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the fp64 WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/properties/refs.nim, the same per-channel cumulogdecay, pairdecay, solve and carry formulas |
+## | schedule   | the fp64 chunked WY/UT reassociation: per-channel cumulogdecay, the A-matrix u solve in token order, one per-channel decayed carry read plus the u outer products |
 ## | tiles      | the GDN chunk-scan tile schedule of attn_ssm/gated_delta_net_prefill.nim, applied to the KDA per-channel decay chain                                                  |
 
 ##
