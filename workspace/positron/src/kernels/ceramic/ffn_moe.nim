@@ -316,7 +316,9 @@ proc moe_fwd*(
   ##   logits → sigmoid → top-K (lowest-index tiebreak)
   ##          → w = s/(sum(w)+1e-20)·routed_scaling
   ##
-  ## Expected input, per model config row, tensors fp16:
+  ## Expected input, per model config row, all tensors fp16, row-major,
+  ## every extent a runtime dim. Weights and x come from the checkpoint,
+  ## the two scratch buffers and out_r are written by this kernel.
   ##
   ## - x, shape (num_tokens, hidden), one token per threadgroup
   ## - router_w, shape (n_routed_experts, hidden)
@@ -330,10 +332,14 @@ proc moe_fwd*(
   ## - h_scratch, shape (num_tokens, top_k, moe_intermediate), working buffer
   ## - hs_scratch, shape (num_tokens, n_shared_experts, moe_intermediate), working buffer
   ##
-  ## The scalars num_tokens, hidden, n_routed_experts, moe_intermediate,
-  ## top_k, n_shared_experts are int32, routed_scaling is float32,
-  ## activation is ActSilu or ActGeluTanh.
+  ## Scalar arguments:
   ##
+  ## - num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
+  ##   n_shared_experts, int32, host-derived from the model config,
+  ##   unit tokens / elements / experts / slots
+  ## - routed_scaling, float32, host-computed, dimensionless
+  ## - activation, ActSilu or ActGeluTanh, host-computed, the activation code,
+  ##   a non-member code reads as silu, the chain falls through to the tanh option
   ## A config beyond the compiled-in fixed maxima, n_routed_experts >
   ## ScoreChunk·ScoreChunks (512), top_k > MaxTopK or top_k > n_routed_experts, or a non-positive dim, stops before launch.
   ##

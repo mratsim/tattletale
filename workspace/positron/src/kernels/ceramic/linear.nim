@@ -109,6 +109,16 @@ proc dense_linear_tile_fwd*[El](
     W: ptr UncheckedArray[El], N, K, M: int32, tx, ty: int32) {.device.} =
   ## F.linear at the default tile width.
   ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call, grid
+  ## coordinates arriving from the grid:
+  ##
+  ## | parameter | shape, dtype, layout                                                                                                                     | producer                         | unit     |
+  ## | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------- |
+  ## | Out       | (M, N) El, row-major, the projection output, produced by the kernel, one round-to-nearest-even per element from the fp32 mma accumulator | this kernel                      | El       |
+  ## | X         | (M, K) El, row-major, the projection input                                                                                               | host-computed                    | El       |
+  ## | W         | (N, K) El, row-major, the F.linear weight layout the checkpoints store                                                                   | host-computed                    | El       |
+  ## | N, K, M   | the runtime projection shape (N output columns, K reduce length, M input rows)                                                           | host-derived                     | elements |
+  ## | tx, ty    | the weight column block (N div TileC grid) and the 32-row input block (ceil(M/32) grid)                                                  | device-computed grid coordinates | elements |
   ## Contract:
   ##   - TileC = 64, the 8 atom columns of the tile config's atoms
   ##   - El infers from the pointer arguments
@@ -120,6 +130,16 @@ proc dense_linear_tile32_fwd*[El](
     W: ptr UncheckedArray[El], N, K, M: int32, tx, ty: int32) {.device.} =
   ## F.linear at the narrow tile width.
   ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call, grid
+  ## coordinates arriving from the grid:
+  ##
+  ## | parameter | shape, dtype, layout                                                                                                                     | producer                         | unit     |
+  ## | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------- |
+  ## | Out       | (M, N) El, row-major, the projection output, produced by the kernel, one round-to-nearest-even per element from the fp32 mma accumulator | this kernel                      | El       |
+  ## | X         | (M, K) El, row-major, the projection input                                                                                               | host-computed                    | El       |
+  ## | W         | (N, K) El, row-major, the F.linear weight layout the checkpoints store                                                                   | host-computed                    | El       |
+  ## | N, K, M   | the runtime projection shape (N output columns, K reduce length, M input rows)                                                           | host-derived                     | elements |
+  ## | tx, ty    | the weight column block (N div TileC grid) and the 32-row input block (ceil(M/32) grid)                                                  | device-computed grid coordinates | elements |
   ## Contract:
   ##   - TileC = 32, the stage-4 a/b decay and beta GEMV binding of the mega composition,
   ##     its projection rows N = 32 sit below the default width

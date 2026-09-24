@@ -115,6 +115,23 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
   ## One (token, slot) pair's decode walk, `t` the token, `y` the slot group, routed y < K, the shared group y = K.
   ## `moe_fwd_decode` is the grid-driven wrapper, the megakernel composes this core inline.
   ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##
+  ## | parameter                     | shape, dtype, layout                                                                                                                                                    | producer                             | unit               |
+  ## | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
+  ## | partial                       | (num_tokens, K+1, H) f32, row-major, the fp32 partials, the row t·(K+1)+y written by this proc's slot group, the merge launch in moe_router applies the single El round | this proc, the merge launch reads it | f32                |
+  ## | x                             | (num_tokens, H) El, row-major, token `t`'s activation row                                                                                                               | host-computed                        | El                 |
+  ## | router_w                      | (E, H) El, row-major, the router weight                                                                                                                                 | host-computed                        | El                 |
+  ## | gate_up_w                     | (E, 2I, H) El, row-major, fused g/up, the g half at 0:I                                                                                                                 | host-computed                        | El                 |
+  ## | down_w                        | (E, H, I) El, row-major, the down projection                                                                                                                            | host-computed                        | El                 |
+  ## | shared_gate_w                 | (I, H) El, row-major, the shared gate projection                                                                                                                        | host-computed                        | El                 |
+  ## | shared_up_w                   | (I, H) El, row-major, the shared up projection                                                                                                                          | host-computed                        | El                 |
+  ## | shared_down_w                 | (H, I) El, row-major, the shared down projection                                                                                                                        | host-computed                        | El                 |
+  ## | shared_gate_vec_w             | (1, H) El, row-major, read only when the SharedGate static is true, non-null then is the caller's obligation                                                            | host-computed                        | El                 |
+  ## | h_scratch                     | (num_tokens, K, I) El, row-major, working buffer, the routed slot's fp16(act(g)·u) written at h_scratch[t, y]                                                           | this proc                            | El                 |
+  ## | hs_scratch                    | (num_tokens, I) El, row-major, working buffer, the shared group writes there                                                                                            | this proc                            | El                 |
+  ## | t, y                          | the token index and the slot group, y < K routed, y = K the shared group                                                                                                | device-computed (the wrapper's grid) | tokens / slots     |
+  ## | H, E, K, I, Scale, SharedGate | hidden, expert count, top-K, intermediate width, the routing-weight scale and the shared-gate switch, static compile-time, shape preconditions tabled below             | compile-time                         | elements / experts |
 ## | stage        | behavior                                                                                                                                                   |
 ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 ## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
@@ -238,9 +255,26 @@ proc moe_fwd_decode*[El; H, E, K, I: static int; Scale: static float32;
         # non-null is the caller's obligation whenever SharedGate is true
     h_scratch: ptr UncheckedArray[El],     # (num_tokens, K, I) working buffer
     hs_scratch: ptr UncheckedArray[El]) {.device.} =  # (num_tokens, I) buffer
-  ##  Grid-driven form of `moe_fwd_decode_at`:
-  ##    grid (num_tokens, K+1, 1)
-  ## at 32 lanes, one (token, slot) pair per threadgroup.
+  ## Grid-driven form of `moe_fwd_decode_at`.
+  ## Grid (num_tokens, K+1, 1) at 32 lanes, one (token, slot) pair per threadgroup.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call,
+  ## token index and slot group arriving from the grid:
+  ##
+  ## | parameter                     | shape, dtype, layout                                                                                                                        | producer      | unit               |
+  ## | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
+  ## | partial                       | (num_tokens, K+1, H) f32, row-major, the fp32 partials, produced by this kernel's slot groups, the merge launch applies the single El round | this kernel   | f32                |
+  ## | x                             | (num_tokens, H) El, row-major, the layer's activations                                                                                      | host-computed | El                 |
+  ## | router_w                      | (E, H) El, row-major, the router weight                                                                                                     | host-computed | El                 |
+  ## | gate_up_w                     | (E, 2I, H) El, row-major, fused g/up, the g half at 0:I                                                                                     | host-computed | El                 |
+  ## | down_w                        | (E, H, I) El, row-major, the down projection                                                                                                | host-computed | El                 |
+  ## | shared_gate_w                 | (I, H) El, row-major, the shared gate projection                                                                                            | host-computed | El                 |
+  ## | shared_up_w                   | (I, H) El, row-major, the shared up projection                                                                                              | host-computed | El                 |
+  ## | shared_down_w                 | (H, I) El, row-major, the shared down projection                                                                                            | host-computed | El                 |
+  ## | shared_gate_vec_w             | (1, H) El, row-major, read only when the SharedGate static is true, non-null then is the caller's obligation                                | host-computed | El                 |
+  ## | h_scratch                     | (num_tokens, K, I) El, row-major, working buffer, this kernel writes the routed slot activations there                                      | this kernel   | El                 |
+  ## | hs_scratch                    | (num_tokens, I) El, row-major, working buffer, the shared group writes there                                                                | this kernel   | El                 |
+  ## | H, E, K, I, Scale, SharedGate | hidden, expert count, top-K, intermediate width, the routing-weight scale and the shared-gate switch, static compile-time                   | compile-time  | elements / experts |
   let t = int32(threadgroup_position_in_grid.x)
   let y = int32(threadgroup_position_in_grid.y)
   moe_fwd_decode_at[El, H, E, K, I, Scale, SharedGate](

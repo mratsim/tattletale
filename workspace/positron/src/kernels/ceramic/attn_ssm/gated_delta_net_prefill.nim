@@ -103,6 +103,23 @@ proc gdnPrefillChunkScanAt*[El](
   ##
   ##   t 0 → t 1 → … → t ChunkC-1   u solve per t, sums over s ascending
   ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##
+  ## | parameter             | shape, dtype, layout                                                                                                                                                                         | producer                                                                                                             | unit                |
+  ## | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- |
+  ## | state                 | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state written back in place (S_carry entering the chunk, the carry update leaving it) | the previous chunk's launch writes it, this kernel reads and rewrites it in place, the host owns layout and lifetime | f32, never rounds   |
+  ## | y                     | (B·Hv, T, Dv) El, row-major, the whole token sequence's output, one round-to-nearest-even per element, stored row-bounded (out-of-range rows drop)                                           | this kernel                                                                                                          | El                  |
+  ## | k                     | (B·Hk, T, Dk) El, row-major, the keys, post-l2norm (the l2norm stays host-side)                                                                                                              | host-computed                                                                                                        | El                  |
+  ## | q                     | (B·Hk, T, Dk) El, row-major, the queries, post-l2norm, host-computed, q̃ scales by the device-side f32 1/√Dk, never rounded to the element dtype                                             | host-computed (the scale device-side)                                                                                | El                  |
+  ## | v                     | (B·Hv, T, Dv) El, row-major, the values                                                                                                                                                      | host-computed                                                                                                        | El                  |
+  ## | g                     | (B·Hv, T) f32 log decay, one decay per VALUE head, the GDN scalar decay, not a per-key-channel matrix                                                                                        | host-computed                                                                                                        | log2-decay exponent |
+  ## | beta                  | (B·Hv, T) El, one per value head and token, the delta weighting                                                                                                                              | host-computed                                                                                                        | dimensionless       |
+  ## | Hv, Hk                | value and key head counts, host-derived from the model config                                                                                                                                | host-computed                                                                                                        | heads               |
+  ## | hkRatio               | Hv div Hk, the GQA head ratio                                                                                                                                                                | host-computed                                                                                                        | dimensionless       |
+  ## | T                     | the token count, host-derived from the sequence length                                                                                                                                       | host-computed                                                                                                        | tokens              |
+  ## | Dk, Dv, TileR, ChunkC | static tile geometry (head dim, value dim, the row block height, the chunk length), the per-lane cumulogdecay/u local arrays are sized by ChunkC (≤ 64)                                      | compile-time                                                                                                         | elements            |
+  ## | dvBlock, bh           | the Dv div TileR row-block index and the (sequence, value head) flat head index                                                                                                              | device-computed grid coordinates                                                                                     | elements            |
+  ##
   ## Contract:
   ## - all state arithmetic is fp32, the state never rounds before the final in-place store
   ## - the state entering a chunk is S_carry, untouched until the chunk-end carry update
@@ -112,8 +129,9 @@ proc gdnPrefillChunkScanAt*[El](
   ##   the only dtype-dependent steps, the tile walk is dtype-mechanical
   ##
   ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
+  ## - the g precondition, finite and ≤ 0 by construction, no kernel clamp,
+  ##   a violating g explodes the f32 state
   ##
-  ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
   ## - generic only over the element dtype and the static shape, every (Dk, Dv, ChunkC)
   ##   binding needs its own call-site line
@@ -242,7 +260,24 @@ proc gdnPrefillChunkScan*[El](
     Hv, Hk, hkRatio, T: int32,
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
   ## Grid-driven form of `gdnPrefillChunkScanAt`, the caller's `metal:` entry wraps this proc.
-  ## - grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8
+  ## Grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call, grid coordinates arriving from the grid:
+  ##
+  ## | parameter             | shape, dtype, layout                                                                                                                                                                         | producer                                                                                                             | unit                |
+  ## | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- |
+  ## | state                 | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state written back in place (S_carry entering the chunk, the carry update leaving it) | the previous chunk's launch writes it, this kernel reads and rewrites it in place, the host owns layout and lifetime | f32, never rounds   |
+  ## | y                     | (B·Hv, T, Dv) El, row-major, the whole token sequence's output, one round-to-nearest-even per element, stored row-bounded (out-of-range rows drop)                                           | this kernel                                                                                                          | El                  |
+  ## | k                     | (B·Hk, T, Dk) El, row-major, the keys, post-l2norm (the l2norm stays host-side)                                                                                                              | host-computed                                                                                                        | El                  |
+  ## | q                     | (B·Hk, T, Dk) El, row-major, the queries, post-l2norm, host-computed, q̃ scales by the device-side f32 1/√Dk, never rounded to the element dtype                                             | host-computed (the scale device-side)                                                                                | El                  |
+  ## | v                     | (B·Hv, T, Dv) El, row-major, the values                                                                                                                                                      | host-computed                                                                                                        | El                  |
+  ## | g                     | (B·Hv, T) f32 log decay, one decay per VALUE head, the GDN scalar decay, not a per-key-channel matrix                                                                                        | host-computed                                                                                                        | log2-decay exponent |
+  ## | beta                  | (B·Hv, T) El, one per value head and token, the delta weighting                                                                                                                              | host-computed                                                                                                        | dimensionless       |
+  ## | Hv, Hk                | value and key head counts, host-derived from the model config                                                                                                                                | host-computed                                                                                                        | heads               |
+  ## | hkRatio               | Hv div Hk, the GQA head ratio                                                                                                                                                                | host-computed                                                                                                        | dimensionless       |
+  ## | T                     | the token count, host-derived from the sequence length                                                                                                                                       | host-computed                                                                                                        | tokens              |
+  ## | Dk, Dv, TileR, ChunkC | static tile geometry (head dim, value dim, the row block height, the chunk length), the per-lane cumulogdecay/u local arrays are sized by ChunkC (≤ 64)                                      | compile-time                                                                                                         | elements            |
+  ## | dvBlock, bh           | the Dv div TileR row-block index and the (sequence, value head) flat head index                                                                                                              | device-computed grid coordinates                                                                                     | elements            |
   let dvBlock = int32(threadgroup_position_in_grid.x)
   let bh = int32(threadgroup_position_in_grid.y)
   gdnPrefillChunkScanAt(state, y, k, q, v, g, beta, Hv, Hk, hkRatio, T,

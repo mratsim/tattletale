@@ -171,6 +171,18 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ## GEMV, the softmax form's score pass, the in-register top-K selection
   ## by lowest index. Register-only, no logits scratch.
   ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##
+  ## | parameter | shape, dtype, layout                                                                                                                         | producer        | unit               |
+  ## | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
+  ## | x         | (num_tokens, H) El, row-major, token `t`'s activation row, the router GEMV input                                                             | host-computed   | El                 |
+  ## | router_w  | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                                                       | host-computed   | El                 |
+  ## | t         | the token index, the caller's grid coordinate in the router-only entry                                                                       | device-computed | tokens             |
+  ## | ids       | K-element int32 register array, the top-K expert ids in score order, lowest index on ties, each in [0, E)                                    | this proc       | experts            |
+  ## | w         | K-element f32 register array, the normalized routing weights w[slot] = El(p[ids[slot]] / sum·Scale), fp32 carriers holding El-rounded values | this proc       | dimensionless      |
+  ## | H, E, K   | hidden, expert count and top-K, static compile-time; H a multiple of the 16-wide K step, E a multiple of the 64-expert chunk                 | compile-time    | elements / experts |
+  ## | Scale     | the routing-weight scale, static compile-time                                                                                                | compile-time    | dimensionless      |
+
   ## Composed in-group per slot group by the mega kernel.
   ##
   ## Contract:
@@ -229,9 +241,21 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
     x: ptr UncheckedArray[El],             # (num_tokens, H) activations
     router_w: ptr UncheckedArray[El],      # (E, H) router weight
     num_tokens: int32) {.device.} =
-  ## - Router-only pass, one grid point per token, the launch host's entry
-  ## - stores the top-K expert ids and the El-rounded routing weights under
-  ##   the `moeRoute` contract, grid (num_tokens, 1, 1) at 32 lanes
+  ## Router-only pass, one grid point per token, the launch host's entry.
+  ## Stores the top-K expert ids and the El-rounded routing weights under
+  ## the `moeRoute` contract, grid (num_tokens, 1, 1) at 32 lanes.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call,
+  ## token index arriving from the grid:
+  ##
+  ## | parameter      | shape, dtype, layout                                                                                          | producer      | unit               |
+  ## | -------------- | ------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
+  ## | ids            | (num_tokens, K) int32, row-major, the top-K expert ids, each in [0, E)                                        | this kernel   | experts            |
+  ## | rout_w         | (num_tokens, K) El, row-major, the El-rounded routing weights                                                 | this kernel   | dimensionless      |
+  ## | x              | (num_tokens, H) El, row-major, the router GEMV inputs                                                         | host-computed | El                 |
+  ## | router_w       | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                        | host-computed | El                 |
+  ## | num_tokens     | the token count                                                                                               | host-derived  | tokens             |
+  ## | H, E, K, Scale | hidden, expert count, top-K and the routing-weight scale, static compile-time, same constraints as `moeRoute` | compile-time  | elements / experts |
   let t = int32(threadgroup_position_in_grid.x)
   var idsReg: array[K, int32]
   var wReg: array[K, float32]
@@ -244,7 +268,16 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
 
 proc sharedGateLogit*[El; H: static int](
     x, sgw: ptr UncheckedArray[El], t: int32): float32 {.device.} =
-  ## Returns the raw fp32 shared-expert scalar logit of token t
+  ## Returns the raw fp32 shared-expert scalar logit of token t.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##
+  ## | parameter | shape, dtype, layout                                                                     | producer        | unit     |
+  ## | --------- | ---------------------------------------------------------------------------------------- | --------------- | -------- |
+  ## | x         | (num_tokens, H) El, row-major, token `t`'s activation row                                | host-computed   | El       |
+  ## | sgw       | (1, H) El, row-major, the shared-gate weight row, the checkpoint's shared-expert weights | host-computed   | El       |
+  ## | t         | the token index, the caller's grid coordinate                                            | device-computed | tokens   |
+  ## | H         | the hidden width, static compile-time, a multiple of the 16-wide K step                  | compile-time    | elements |
   ## - x[t] · shared_gate_vec_w[0], the (1, H) row weight as a one-output GEMV
   ##   over the same 16-wide K steps as the router
   ## - element (0, 0) of the (32, 8) accumulator carries the value on lane 0,
@@ -270,8 +303,17 @@ proc moe_decode_merge_at*[El; H, K: static int](
     out_r: ptr UncheckedArray[El],         # (num_tokens, H) routed+shared output
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
     t, nt: int32) {.device.} =
-  ## - Merge walk for one (token, column block) pair at caller coordinates,
-  ##   `t` the token and `nt` the H div 32 column block
+  ## Merge walk for one (token, column block) pair at caller coordinates,
+  ## `t` the token and `nt` the H div 32 column block.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##
+  ## | parameter | shape, dtype, layout                                                                                                                             | producer                         | unit               |
+  ## | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------ |
+  ## | out_r     | (num_tokens, H) El, row-major, the routed+shared expert output, produced by this proc, one El round per element at the store                     | this proc                        | El                 |
+  ## | partial   | (num_tokens, K+1, H) f32, row-major, the fp32 partials, one row per routing slot plus the shared expert last (slot order is the summation order) | the expert kernels               | f32                |
+  ## | t, nt     | the token index and the H div 32 column block                                                                                                    | device-computed grid coordinates | tokens / columns   |
+  ## | H, K      | hidden width and top-K, static compile-time, H a multiple of the 32-wide lane tile                                                               | compile-time                     | elements / experts |
   ## - sums the token's K+1 fp32 partial rows in slot order, the shared
   ##   contribution last, one El round at the store
   ## - the mega kernel composes this core inline
@@ -295,10 +337,20 @@ proc moe_decode_merge_at*[El; H, K: static int](
 proc moe_decode_merge*[El; H, K: static int](
     out_r: ptr UncheckedArray[El],         # (num_tokens, H) routed+shared output
     partial: ptr UncheckedArray[float32]) {.device.} =
-  ## - Grid-driven form of `moe_decode_merge_at`:
-  ## - grid (num_tokens, H div 32, 1) at 32 lanes, one output column per lane
-  ## - the partial row t·(K+1)+y holds slot y's fp32 contribution, the decode
-  ##   regime's partial-buffer contract
+  ## Grid-driven form of `moe_decode_merge_at`.
+  ## Grid (num_tokens, H div 32, 1) at 32 lanes, one output column per lane.
+  ##
+  ## The partial row t·(K+1)+y holds slot y's fp32 contribution, the decode
+  ## regime's partial-buffer contract.
+  ##
+  ## Parameters, pointers naming their dtypes, shapes bound at the call,
+  ## token index and column block arriving from the grid:
+  ##
+  ## | parameter | shape, dtype, layout                                                                                                                             | producer           | unit               |
+  ## | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------------------ |
+  ## | out_r     | (num_tokens, H) El, row-major, the routed+shared expert output, produced by this kernel, one El round per element at the store                   | this kernel        | El                 |
+  ## | partial   | (num_tokens, K+1, H) f32, row-major, the fp32 partials, one row per routing slot plus the shared expert last (slot order is the summation order) | the expert kernels | f32                |
+  ## | H, K      | hidden width and top-K, static compile-time, H a multiple of the 32-wide lane tile                                                               | compile-time       | elements / experts |
   static:
     doAssert H mod 32 == 0,
       "moe_decode_merge: H must be a multiple of the 32-wide lane tile"
