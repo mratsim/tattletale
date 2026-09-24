@@ -65,9 +65,8 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_o_norm
-import ../naive/naive_rng
-import ../naive/naive_tensors
 import ceramic_pagebuf
+import ceramic_dtype
 
 # ─── Device entry ─────────────────────────────────────────────────────
 
@@ -165,7 +164,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
   var total = 0
   var launches = 0
 
-  proc takeInputs(rng: var NaiveRng): CaseInputs =
+  proc takeInputs(rng: var PropRng): CaseInputs =
     ## Seeded inputs, bf16 bits for the gated norm operands x, gate and w.
     var xBits = newSeq[uint16](nElems)
     var gateBits = newSeq[uint16](nElems)
@@ -201,7 +200,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
       result[i] = outB.hostPtr[i]
 
   var case0record: seq[uint16]
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     let ci = takeInputs(rng)
     let want = naiveONorm(ci.xBits, ci.gateBits, ci.wBits, eps, M)
@@ -241,7 +240,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
       case0record = fused
 
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let ci0 = takeInputs(rng0)
     load(ci0)
     launchFused(ci0)

@@ -51,6 +51,19 @@ proc nextF32*(rng: var PropRng; lo, hi: float32): float32 =
   let unit = float32(rng.nextU64() shr 40) * (1.0'f32 / 16777216.0'f32)
   lo + unit * (hi - lo)
 
+proc nextInt*(rng: var PropRng; lo, hi: int): int =
+  ## Returns a uniform int in [lo, hi), using the high 32 bits
+  ## of the next stream value.
+  ## - the span `hi - lo` must stay at or below 2³², the width
+  ##   addressable by the sampled high bits
+  ## - a wider span leaves the upper part of the range unreachable,
+  ##   a caller bug the assert turns loud
+  doAssert hi > lo, "empty range [" & $lo & ", " & $hi & ")"
+  let span = uint64(hi - lo)
+  doAssert span <= 0xFFFF_FFFF'u64,
+    "nextInt span " & $span & " exceeds the 32-bit width of the sampled high bits"
+  lo + int((rng.nextU64() shr 32) mod span)
+
 # ─── Element-dtype bit surgery ───────────────────────────────────────
 
 type ScalarKind* = enum
@@ -142,6 +155,20 @@ type UlpDatatype* = enum
     ## bf16 storage, 7 mantissa bits, one step is 2^(binade - 7)
   ulpFp16
     ## fp16 storage, 10 mantissa bits, one step is 2^(binade - 10)
+
+proc binade*(v: float64): int =
+  ## Returns the binade index of a normal nonzero magnitude, a magnitude
+  ## |v| in [2^e, 2^(e+1)) reads binade e.
+  ##
+  ## Raises:
+  ## - ValueError for zero and non-finite input
+  if v == 0.0 or classify(v) in {fcInf, fcNegInf, fcNaN}:
+    raise newException(ValueError,
+      "binade of a zero or non-finite magnitude has no reference: " & $v)
+  var man: float64
+  var exp: int
+  man = frexp(abs(v), exp)
+  exp - 1
 
 proc binadeStep*(g: UlpDatatype, binade: int): float64 =
   ## Returns the width of one grid step for values in binade [2^e, 2^(e+1)).

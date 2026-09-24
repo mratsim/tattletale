@@ -23,7 +23,7 @@
 import std/[strformat]
 import workspace/crucible
 import ../../src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
-import ../naive/naive_rng
+import ../properties/properties
 import ceramic_pagebuf
 
 const NumCounters = 13
@@ -32,7 +32,7 @@ const NumCounters = 13
 
 type BigHost* = object
   ## Seeded layer pass inputs and weights, bit patterns both the mega
-  ## and the naive side widen exactly to fp32.
+  ## and the reference side widen exactly to fp32.
   x*, r*: seq[uint16]
   norm1W*, qkvW*, zW*, aW*, bW*, convW*, onormW*, outprojW*, norm2W*: seq[uint16]
   routerW*, gateUpW*, downW*, sharedGW*, sharedUW*, sharedDW*, sharedGVW*: seq[uint16]
@@ -41,7 +41,7 @@ type BigHost* = object
   state*: seq[float32]
   ring*: seq[uint16]
 
-proc randBits*(rng: var NaiveRng; n: int; lo, hi: float32;
+proc randBits*(rng: var PropRng; n: int; lo, hi: float32;
     toBits: proc(x: float32): uint16 {.nimcall.}): seq[uint16] =
   ## `n` bit patterns of uniform samples in [lo, hi], the dtype's rounding.
   result = newSeq[uint16](n)
@@ -52,7 +52,7 @@ proc buildBigHost*(seed: uint64;
     toBits: proc(x: float32): uint16 {.nimcall.}): BigHost =
   ## Seeded inputs and weights at the Qwen decode class geometry, modest
   ## magnitudes so no stage saturates, the dtype's rounding applied.
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   result.x = randBits(rng, Hidden, -1.0'f32, 1.0'f32, toBits)
   result.r = randBits(rng, Hidden, -1.0'f32, 1.0'f32, toBits)
   result.norm1W = randBits(rng, Hidden, -0.05'f32, 0.05'f32, toBits)

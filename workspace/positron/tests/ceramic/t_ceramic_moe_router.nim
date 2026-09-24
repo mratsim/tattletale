@@ -168,7 +168,7 @@ const
 
 proc elRound(dt: ScalarKind, v: float32): float32 =
   ## One round-to-nearest-even round into the element dtype and back to fp32.
-  if dt == kBfloat16: bf16ToF32(f32ToBf16(v)) else: fp16ToFp32(fp32ToFp16(v))
+  if dt == kBfloat16: naive_tensors.bf16ToF32(naive_tensors.f32ToBf16(v)) else: naive_tensors.fp16ToFp32(naive_tensors.fp32ToFp16(v))
 
 proc dotRawLogits(dt: ScalarKind, x, w: seq[uint16]; T, H, E: int;
     chunkWalk: bool): seq[float32] =
@@ -264,7 +264,7 @@ proc naiveRouter(dt: ScalarKind, x, w: seq[uint16]; T, H, E, K: int, Scale: floa
     for slot in 0 ..< K:
       let weight = p[sel[slot]] / sumSel * Scale
       result.routW[t * K + slot] =
-        if dt == kBfloat16: f32ToBf16(weight) else: fp32ToFp16(weight)
+        if dt == kBfloat16: naive_tensors.f32ToBf16(weight) else: naive_tensors.fp32ToFp16(weight)
 
 proc elSlack(uStep: float64, l: float32): float64 =
   ## One El grid step's rounding slack at logit l
@@ -716,19 +716,19 @@ proc runPoisonedRouter(engine: HwEngine) =
   for e in 0 ..< E * H:
     rWB.hostPtr[e] = 0x7FC0'u16
   for i in 0 ..< T * H:
-    xB.hostPtr[i] = f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
+    xB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
   # the expert and shared weights finite, expert E−1's rows live and in bounds
   for i in 0 ..< E * 2 * I * H:
-    guB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    guB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< E * H * I:
-    dWB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    dWB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< I * H:
-    sgB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
-    suB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    sgB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    suB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< H * I:
-    sdB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    sdB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< H:
-    gvB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    gvB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
 
   proc loadSentinels() =
     for i in 0 ..< nIds:
@@ -771,7 +771,7 @@ proc runPoisonedRouter(engine: HwEngine) =
         &"poisoned pass slot {slot} not on the unmatched branch's expert E−1: {id}"
       doAssert got.w[t * K + slot] == 0x0000'u16,
         &"poisoned pass weight not the zero pattern at slot {slot}: " &
-        &"0x{got.w[t * K + slot]:04x} = {bf16ToF32(got.w[t * K + slot])}"
+        &"0x{got.w[t * K + slot]:04x} = {naive_tensors.bf16ToF32(got.w[t * K + slot])}"
     # the routed partial rows, zero weight times a finite projection, exactly +0.0
     for slot in 0 ..< K:
       for e in 0 ..< H:
@@ -782,7 +782,7 @@ proc runPoisonedRouter(engine: HwEngine) =
     for e in 0 ..< H:
       doAssert classify(got.part[(t * (K + 1) + K) * H + e]) notin {fcNan, fcInf},
         &"poisoned pass shared partial not finite at col {e}"
-      let ob = bf16ToF32(got.outRow[t * H + e])
+      let ob = naive_tensors.bf16ToF32(got.outRow[t * H + e])
       doAssert classify(ob) notin {fcNan, fcInf},
         &"poisoned pass merged output not finite at col {e}"
   # the relaunch, bit-identical ids, weights, partials and merged row

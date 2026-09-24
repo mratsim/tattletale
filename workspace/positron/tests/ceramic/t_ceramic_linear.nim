@@ -50,8 +50,6 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/linear
-import ../naive/naive_rng
-import ../naive/naive_tensors
 import ceramic_pagebuf
 import ceramic_dtype
 
@@ -137,7 +135,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
   var total = 0
   var launches = 0
 
-  proc takeInputs(rng: var NaiveRng): tuple[x, w: seq[uint16]] =
+  proc takeInputs(rng: var PropRng): tuple[x, w: seq[uint16]] =
     ## Seeded inputs, element-dtype bits for x and w.
     var xBits = newSeq[uint16](nX)
     var wBits = newSeq[uint16](nW)
@@ -172,7 +170,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
       result[i] = outB.hostPtr[i]
 
   var case0record: seq[uint16]
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
     let want = naiveLinearF32(dt, bits.x, bits.w, M, N, K)
@@ -213,7 +211,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
       case0record = recordOut()
 
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let bits0 = takeInputs(rng0)
     load(bits0)
     launch()
