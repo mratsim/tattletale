@@ -15,7 +15,7 @@
 ##
 ## Sequence, one case:
 ##
-##   seeded inputs → page buffers → launch (T, K+1, 1) → snapshot
+##   seeded inputs → page buffers → launch (T, K+1, 1) → record
 ##   → naive walk → per-element judgment → sentinel walk → relaunch → bit compare
 ##
 ## | check       | contract                                                                                   |
@@ -28,13 +28,13 @@
 ## | scale       | `Scale = 2` doubles the routed weights, the partial bars carried through the same walk     |
 ## | determinism | the relaunch over the restored pre-state is bit-identical                                  |
 ##
-## | shape   | T | H    | E   | K | I   | Scale | SharedGate | family | cases |
-## | ------- | --- | ---- | --- | --- | --- | ----- | ---------- | ------ | ----- |
-## | prod    | 4 | 2048 | 256 | 8 | 512 | 1.0   | true       | bf16   | 1     |
-## | no gate | 1 | 2048 | 256 | 8 | 512 | 1.0   | false      | bf16   | 1     |
-## | scale 2 | 1 | 2048 | 256 | 8 | 512 | 2.0   | true       | bf16   | 1     |
+## | shape   | T | H    | E   | K | I   | Scale | SharedGate | dtype | cases |
+## | ------- | --- | ---- | --- | --- | --- | ----- | ---------- | ----- | ----- |
+## | prod    | 4 | 2048 | 256 | 8 | 512 | 1.0   | true       | bf16  | 1     |
+## | no gate | 1 | 2048 | 256 | 8 | 512 | 1.0   | false      | bf16  | 1     |
+## | scale 2 | 1 | 2048 | 256 | 8 | 512 | 2.0   | true       | bf16  | 1     |
 ##
-## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, UBf = 2⁻⁸ bf16,
+## Bars, stated before measurement, U32 = 2⁻²⁴ fp32, UBf = 2⁻⁸ bf16,
 ## the same classes the composition tier states
 ##
 ## | link         | bar                                                                                            |
@@ -432,7 +432,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
 
   prefillPartial(partial, Rows)
   discard launch()
-  let snapshot = readAll()
+  let record = readAll()
 
   # the naive walk and the per-element judgment, one token at a time
   let xSeq = readSeq(xB.hostPtr, tokens * H)
@@ -458,7 +458,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
         sumAbsLinks(xw, routerWSeq, id * H, H) +
         2.0 * UBf * abs(logitOf(xTok, routerWSeq, id).float64) + FloorBf
       worst = max(worst, judgeSlotPartials(t, slot, id, nw, xw,
-        gateUpWSeq, downWSeq, snapshot.h, snapshot.partial, logitBar))
+        gateUpWSeq, downWSeq, record.h, record.partial, logitBar))
     # the shared row's gate-weight band, the scalar logit's reduction class
     let gvP = nw.gvP.float64
     var gvAbs = 0.0'f64
@@ -470,7 +470,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
     else:
       0.0'f64
     worst = max(worst, judgeSharedPartial(t, nw, xw, sharedGWSeq,
-      sharedUWSeq, sharedDWSeq, snapshot.hs, snapshot.partial, gateBar))
+      sharedUWSeq, sharedDWSeq, record.hs, record.partial, gateBar))
 
   if not useGate:
     # the poisoned gate weight vector, never read, so the shared row holds

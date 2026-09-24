@@ -55,7 +55,7 @@ from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut,
     moeDecodeBody
 import ceramic_pagebuf
 import mega_bounded_wait
-import ceramic_fam
+import ceramic_dtype
 
 const TTT_DEBUG_OROW* {.booldefine.} = false
 const TTT_DEBUG_TIE* {.booldefine.} = false
@@ -308,18 +308,18 @@ proc widenF32*(s: seq[float32]): seq[float64] =
   for i in 0 ..< s.len:
     result[i] = s[i].float64
 
-proc readBf*(snapshot: seq[uint16]; off, len: int): seq[uint16] =
-  ## One bf16 arena section's snapshot.
-  doAssert off + len <= snapshot.len
-  result = snapshot[off ..< off + len]
+proc readBf*(record: seq[uint16]; off, len: int): seq[uint16] =
+  ## One bf16 arena section's record.
+  doAssert off + len <= record.len
+  result = record[off ..< off + len]
 
-proc readF32Sec*(snapshot: seq[float32]; off, len: int): seq[float32] =
-  ## One fp32 arena section's snapshot.
-  doAssert off + len <= snapshot.len
-  result = snapshot[off ..< off + len]
+proc readF32Sec*(record: seq[float32]; off, len: int): seq[float32] =
+  ## One fp32 arena section's record.
+  doAssert off + len <= record.len
+  result = record[off ..< off + len]
 
-type Snapshot* = object
-  ## One launch's arena and carry snapshots, observed operand values:
+type Record* = object
+  ## One launch's arena and carry records, observed operand values:
   ##
   ##   full bf16 arena, full fp32 arena, post-launch state and ring
   bf*: seq[uint16]
@@ -327,12 +327,12 @@ type Snapshot* = object
   state*: seq[float32]
   ring*: seq[uint16]
 
-proc secBf*(s: Snapshot; off, len: int): seq[uint16] {.inline.} =
-  ## One bf16 section of the snapshot.
+proc secBf*(s: Record; off, len: int): seq[uint16] {.inline.} =
+  ## One bf16 section of the record.
   readBf(s.bf, off, len)
 
-proc secF32*(s: Snapshot; off, len: int): seq[float32] {.inline.} =
-  ## One fp32 section of the snapshot.
+proc secF32*(s: Record; off, len: int): seq[float32] {.inline.} =
+  ## One fp32 section of the record.
   readF32Sec(s.f32, off, len)
 
 proc toF32Mat*(bits: seq[uint16]; rows, cols: int): NaiveMat[float32] =

@@ -18,7 +18,7 @@
 ##
 ## | check            | form                                                               |
 ## | ---------------- | ------------------------------------------------------------------ |
-## | single-step band | closed-form, 64 seeded random cases per (family dtype, shape)      |
+## | single-step band | closed-form, 64 seeded random cases per (element dtype, shape)     |
 ## | chain            | 10 steps, carried state, under the chain recursion band            |
 ## | edge combos      | near-zero decay (g → 0⁻) and exact-zero beta, inside the same band |
 ## | cross-check      | uniform g, ceramic KDA vs ceramic GDN, state asserted bit-exact    |
@@ -28,7 +28,7 @@
 ##
 ## Shapes (Dv = 16, TileR = 8, Dk = 32, grid (Dv div TileR, B·Hv), 32 lanes):
 ##
-## | shape    | Hk | Hv | batch | hkRatio | family     | chain |
+## | shape    | Hk | Hv | batch | hkRatio | dtype      | chain |
 ## | -------- | --- | --- | ----- | ------- | ---------- | ----- |
 ## | baseline | 1  | 1  | 1     | 1       | fp16, bf16 | bf16  |
 ## | gqa      | 2  | 4  | 2     | 2       | fp16, bf16 | fp16  |
@@ -39,7 +39,7 @@
 ## | g span   | -3 <= g < -0.1 single-step, -0.5 <= g < -0.01 chains, -0.001 <= g < 0 near-zero |
 ## | stress   | the near-unitary decay stresses the chain recursion hardest                     |
 ## | dtype    | q/k/g/beta are f32 per the recorded KDA contract, f32 through the naive side    |
-## | dtype    | v/y carry the family dtype, fp16 the primary, bf16 the range-robust fallback    |
+## | dtype    | v/y carry the element dtype, fp16 the primary, bf16 the range-robust fallback   |
 ## | gqa      | both mapping terms live, in-sequence ratio plus sequence offset                 |
 ## | sabotage | sequence 1 holds independent key heads, a dropped sequence offset cannot pass   |
 ##
@@ -51,15 +51,15 @@
 ## | kvAbs              | Σ_dkc abs(γ_dkc·S·k_dkc) over the row r                                                                                                          |
 ## | δ                  | β·(v − Σ_dkc γ_dkc·S·k_dkc)                                                                                                                      |
 ## | yAbs               | Σ_dkc abs(S'·q̃_dkc) over the row                                                                                                                |
-## | u_fam              | 2⁻¹¹ for fp16, 2⁻⁸ for bf16                                                                                                                      |
+## | u_step             | 2⁻¹¹ for fp16, 2⁻⁸ for bf16                                                                                                                      |
 ## | bar                | bound                                                                                                                                            |
 ## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 ## | state (bh, r, dkc) | γ_dkc·ΔS_t + 4·2⁻²⁴·a + abs(k)·(β·2·Dk·2⁻²⁴·kvAbs + 2·2⁻²⁴·β·(abs(v)+abs(kv)) + 2·2⁻²⁴·abs(δ)) + 4·2⁻²⁴·(a + b) + abs(k)·β·Σ_c abs(k_c)·γ_c·ΔS_t |
-## | y (bh, r)          | 2·u_fam·abs(y) + (2·Dk·2⁻²⁴ + 4·2⁻²⁴)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                                                                |
+## | y (bh, r)          | 2·u_step·abs(y) + (2·Dk·2⁻²⁴ + 4·2⁻²⁴)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                                                               |
 ## | term               | covers                                                                                                                                           |
 ## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 ## | 4·2⁻²⁴·a           | the exp (naive) vs exp2(g·log2e) (kernel) decay form                                                                                             |
-## | 2·u_fam·abs(y)     | both sides round the same fp32 value once                                                                                                        |
+## | 2·u_step·abs(y)    | both sides round the same fp32 value once                                                                                                        |
 ## | (2·Dk·2⁻²⁴)·yAbs   | the two dot orders                                                                                                                               |
 ## | 4·2⁻²⁴·yAbs        | the qScale difference, the naive's f32 √Dk vs the host's f64 √Dk cast to f32, at most one extra ulp each side                                    |
 ## | 2⁻²⁵               | the fp16 subnormal grid floor, also covering the bf16 grid                                                                                       |
@@ -78,20 +78,20 @@
 ## - the measured divergence justifies the model, never sets the bar
 ## - the β = 0 edge combo stays within the band, the delta terms are exact zero, the decay drifts by at most 4·2⁻²⁴ relative
 ##
-## Uniform-g cross-check band, ceramic KDA vs ceramic GDN fed family-exact operands, state bit-exact:
+## Uniform-g cross-check band, ceramic KDA vs ceramic GDN fed element-exact operands, state bit-exact:
 ##
-## - family-exact, q/k/beta the exact f32 widenings of the GDN side's family bits, v the same bits, g one uniform scalar
+## - element-exact, q/k/beta the exact f32 widenings of the GDN side's element bits, v the same bits, g one uniform scalar
 ## - y differs only through the q̃ spelling, judged against the cross-check bar
 ##
 ## | bar         | bound                                                                                    |
 ## | ----------- | ---------------------------------------------------------------------------------------- |
 ## | state       | bit-exact, identical f32 operands through identical fp32 ops                             |
-## | y (bh, r)   | 2·u_fam·abs(y) + (2·2⁻²¹ + 2·2⁻²⁴)·yAbs + 2⁻²⁵                                           |
+## | y (bh, r)   | 2·u_step·abs(y) + (2·2⁻²¹ + 2·2⁻²⁴)·yAbs + 2⁻²⁵                                          |
 ## | term        | covers                                                                                   |
 ## | ----------- | ---------------------------------------------------------------------------------------- |
 ## | 2·2⁻²¹·yAbs | the q̃ spelling, GDN's rsqrt-multiply vs KDA's divide by the runtime qScale              |
 ## | 2·2⁻²⁴·yAbs | slack for compiler-level reassociation between the two separately compiled kernel bodies |
-## | 2⁻²⁵        | the family-dtype subnormal grid floor                                                    |
+## | 2⁻²⁵        | the element-dtype subnormal grid floor                                                   |
 ##
 ## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
 
@@ -105,9 +105,9 @@ import ../naive/naive_tensors
 import ../naive/naive_kda
 import ../naive/naive_gdn
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 
-# ─── Device entries, one per (family dtype, Dk) binding ──────────────
+# ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
 const CeramicDecodeMsl = metal:
   # One `metal:` block for all four entries, the Metal engine's ingest replaces the previous
@@ -159,15 +159,15 @@ const
 
 type StepInputs = object
   ## One decode step's seeded inputs, q/k/g/beta f32 shared verbatim by the kernel
-  ## and the naive sides, v as family-dtype bits the naive side sees through its exact
+  ## and the naive sides, v as element-dtype bits the naive side sees through its exact
   ## widening:
   ##
-  ##   | field        | shape          |
-  ##   | ------------ | -------------- |
-  ##   | qVals, kVals | (B·Hk, Dk) f32 |
-  ##   | gVals        | (B·Hk, Dk) f32 |
-  ##   | vBits        | (B·Hv, Dv)     |
-  ##   | betaVals     | (B·Hv,) f32    |
+  ## | field        | shape          |
+  ## | ------------ | -------------- |
+  ## | qVals, kVals | (B·Hk, Dk) f32 |
+  ## | gVals        | (B·Hk, Dk) f32 |
+  ## | vBits        | (B·Hv, Dv)     |
+  ## | betaVals     | (B·Hv,) f32    |
   qVals: seq[float32]
   kVals: seq[float32]
   gVals: seq[float32]
@@ -175,15 +175,15 @@ type StepInputs = object
   betaVals: seq[float32]
 
 type StepSnap = object
-  ## Bit snapshots of one step's kernel-written buffers.
+  ## Bit records of one step's kernel-written buffers.
   state: seq[float32]
   y: seq[uint16]
 
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
-proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
-  ## One (family dtype, shape, edge) combination over `cases` independent seeded runs
+proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
+  ## One (element dtype, shape, edge) combination over `cases` independent seeded runs
   ## of `steps` decode steps each, judged per element against the naive reference
   ## under the band model, case 0 relaunched bit-identical.
   const Dv = 16
@@ -191,8 +191,9 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kernelName = if dt == dtypeF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
-  let uFam = if dt == dtypeBf16: UBf16 else: UF16
+  let kernelName = if dt == kFloat16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -273,7 +274,7 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         kF[i] = si.kVals[i]
         gF[i] = si.gVals[i]
       for i in 0 ..< bhMax * Dv:
-        vF[i] = widenDtype(dt, si.vBits[i])
+        vF[i] = si.vBits[i].widenTo(dt)
       for h in 0 ..< bhMax:
         betaF[h] = si.betaVals[h]
 
@@ -358,16 +359,16 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
             yAbs += abs(stateN[idx].float64 * qs)
             yProp += abs(qs) * barS[idx]
           let yWant = yN[bh * Dv + r].float64
-          let barY = 2.0 * uFam * abs(yWant) +
+          let barY = 2.0 * uStep * abs(yWant) +
             (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
             2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = widenDtype(dt, yB.hostPtr[bh * Dv + r]).float64
+          let yGot = yB.hostPtr[bh * Dv + r].widenTo(dt).float64
           let yDiff = abs(yGot - yWant)
           if judge:
             doAssert yDiff <= barY,
               &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
               &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = dtypeUlp(dt, yWant)
+            let uAt = ulpStepAt(ulpG, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -389,8 +390,8 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         dS[i] = barS[i]
 
       snaps.add(StepSnap(
-        state: readInto(stateB.hostPtr, stateElems),
-        y: readInto(yB.hostPtr, bhMax * Dv)))
+        state: readRecord(stateB.hostPtr, stateElems),
+        y: readRecord(yB.hostPtr, bhMax * Dv)))
 
   proc takeInputs(rng: var NaiveRng): seq[StepInputs] =
     ## Seeded inputs for one chain, q/k/g/beta f32 for every step.
@@ -405,7 +406,7 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         kVals[i] = rng.nextF32(-1.0'f32, 1.0'f32)
         gVals[i] = rng.nextF32(gLo, gHi)
       for i in 0 ..< bhMax * Dv:
-        vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+        vBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
       for h in 0 ..< bhMax:
         if betaZero:
           betaVals[h] = 0.0'f32
@@ -444,9 +445,9 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {dtypeName(dt)} Dk={dk}] steps={steps} cases={cases} " &
+  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] steps={steps} cases={cases} " &
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
+    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -464,19 +465,19 @@ type CrossInputs = object
   g0: float32
   state0: seq[float32]
 
-proc takeCrossInputs(rng: var NaiveRng, dt: Dtype, qkRows, bhMax, stateElems: int): CrossInputs =
+proc takeCrossInputs(rng: var NaiveRng, dt: ScalarKind, qkRows, bhMax, stateElems: int): CrossInputs =
   ## Seeded cross-check inputs, the KDA side reads the exact f32 widenings.
   var qBits = newSeq[uint16](qkRows * 32)
   var kBits = newSeq[uint16](qkRows * 32)
   var vBits = newSeq[uint16](bhMax * 16)
   var betaBits = newSeq[uint16](bhMax)
   for i in 0 ..< qkRows * 32:
-    qBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
-    kBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+    qBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
+    kBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
   for i in 0 ..< bhMax * 16:
-    vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+    vBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
   for h in 0 ..< bhMax:
-    betaBits[h] = toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32))
+    betaBits[h] = rng.nextF32(0.2'f32, 0.8'f32).narrowTo(dt)
   let g0 = rng.nextF32(-3.0'f32, -0.1'f32)
   var state0 = newSeq[float32](stateElems)
   for i in 0 ..< stateElems:
@@ -484,10 +485,10 @@ proc takeCrossInputs(rng: var NaiveRng, dt: Dtype, qkRows, bhMax, stateElems: in
   CrossInputs(qBits: qBits, kBits: kBits, vBits: vBits, betaBits: betaBits,
     g0: g0, state0: state0)
 
-proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: int, seed: uint64, label: string) =
+proc runCrossCheck(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, cases: int, seed: uint64, label: string) =
   ## Uniform-g kernel-tier cross-check, ceramic KDA vs ceramic GDN.
   ##
-  ## - both kernels get family-exact operands, the GDN side's family bits widened
+  ## - both kernels get element-exact operands, the GDN side's element bits widened
   ##   to f32 for q/k/beta, v the same bits, g the same uniform scalar
   ## - the state arithmetic then sees identical operands, the state is asserted
   ##   bit-exact, y differs only through the q̃ spelling against the cross-check bar
@@ -496,9 +497,10 @@ proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: i
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kdaName = if dt == dtypeF16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
-  let gdnName = if dt == dtypeF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
-  let uFam = if dt == dtypeBf16: UBf16 else: UF16
+  let kdaName = if dt == kFloat16: "cer_kda_step_fp16_dk32" else: "cer_kda_step_bf16_dk32"
+  let gdnName = if dt == kFloat16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -537,15 +539,15 @@ proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: i
     for i in 0 ..< qkRows * dk:
       kFamB.hostPtr[i] = ci.kBits[i]
       qFamB.hostPtr[i] = ci.qBits[i]
-      kF32B.hostPtr[i] = widenDtype(dt, ci.kBits[i])
-      qF32B.hostPtr[i] = widenDtype(dt, ci.qBits[i])
+      kF32B.hostPtr[i] = ci.kBits[i].widenTo(dt)
+      qF32B.hostPtr[i] = ci.qBits[i].widenTo(dt)
       gMatB.hostPtr[i] = ci.g0
     for i in 0 ..< bhMax * Dv:
       vB.hostPtr[i] = ci.vBits[i]
     for h in 0 ..< bhMax:
       gHeadB.hostPtr[h] = ci.g0
       betaFamB.hostPtr[h] = ci.betaBits[h]
-      betaF32B.hostPtr[h] = widenDtype(dt, ci.betaBits[h])
+      betaF32B.hostPtr[h] = ci.betaBits[h].widenTo(dt)
     for i in 0 ..< stateElems:
       stateB.hostPtr[i] = ci.state0[i]
     for i in 0 ..< bhMax * Dv:
@@ -575,17 +577,17 @@ proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: i
     assertTailZero(stateB, stateElems)
     var kWant = newSeq[float32](qkRows * dk)
     for i in 0 ..< qkRows * dk:
-      kWant[i] = widenDtype(dt, ci.kBits[i])
+      kWant[i] = ci.kBits[i].widenTo(dt)
     assertReadUnchanged(kF32B, kWant)
-    let stateK = readInto(stateB.hostPtr, stateElems)
-    let yK = readInto(yB.hostPtr, bhMax * Dv)
+    let stateK = readRecord(stateB.hostPtr, stateElems)
+    let yK = readRecord(yB.hostPtr, bhMax * Dv)
 
     loadCase(ci)
     launchGdn()
     assertTailZero(yB, bhMax * Dv)
     assertTailZero(stateB, stateElems)
-    let stateG = readInto(stateB.hostPtr, stateElems)
-    let yG = readInto(yB.hostPtr, bhMax * Dv)
+    let stateG = readRecord(stateB.hostPtr, stateElems)
+    let yG = readRecord(yB.hostPtr, bhMax * Dv)
 
     # the state is asserted bit-exact, identical f32 operands through identical fp32 ops
     for i in 0 ..< stateElems:
@@ -609,17 +611,17 @@ proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: i
         var yAbs = 0.0'f64
         for c in 0 ..< dk:
           let idx = (bh * Dv + r) * dk + c
-          let qs = widenDtype(dt, ci.qBits[hk * dk + c]).float64 * gdnScale
+          let qs = ci.qBits[hk * dk + c].widenTo(dt).float64 * gdnScale
           yAbs += abs(stateG[idx].float64 * qs)
-        let yWant = widenDtype(dt, yG[bh * Dv + r]).float64
-        let barY = 2.0 * uFam * abs(yWant) +
+        let yWant = yG[bh * Dv + r].widenTo(dt).float64
+        let barY = 2.0 * uStep * abs(yWant) +
           (RelQScaleX + 2.0 * U32) * yAbs + FloorSub
-        let yGot = widenDtype(dt, yK[bh * Dv + r]).float64
+        let yGot = yK[bh * Dv + r].widenTo(dt).float64
         let yDiff = abs(yGot - yWant)
         doAssert yDiff <= barY,
           &"cross-check y outside the bar at (bh {bh}, r {r}, case {caseId}): " &
           &"{yDiff:.3e} > {barY:.3e}"
-        let uAt = dtypeUlp(dt, yWant)
+        let uAt = ulpStepAt(ulpG, yWant)
         if uAt > 0.0 and yDiff > 0.0:
           worstYUlp = max(worstYUlp, yDiff / uAt)
         if yDiff == 0.0:
@@ -642,9 +644,9 @@ proc runCrossCheck(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, cases: i
     let ci0 = takeCrossInputs(rng0, dt, qkRows, bhMax, stateElems)
     runCase(ci0, 0, judge = false, refState, refY)
 
-  echo &"[{label} {dtypeName(dt)} Dk={dk}] cross-check cases={cases} " &
+  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] cross-check cases={cases} " &
     &"launches={launches} | state bit-exact all | y worst {worstYUlp:.2f} " &
-    &"{dtypeName(dt)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
+    &"{ulpDatatypeName(ulpG)} ulp, bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
   suiteWorstUse = max(suiteWorstUse, worstYUse)
@@ -659,61 +661,61 @@ proc main =
 
   proc secF16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A1'u64,
+    runCombo(engine, kFloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A1'u64,
       "baseline Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A2'u64,
+    runCombo(engine, kFloat16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A2'u64,
       "gqa Hk=2/Hv=4/B=2", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A3'u64,
+    runCombo(engine, kBfloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A3'u64,
       "baseline Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A4'u64,
+    runCombo(engine, kBfloat16, 4, 2, 2, 2, 32, 1, 64, 0xC04D04A4'u64,
       "gqa Hk=2/Hv=4/B=2", -3.0'f32, -0.1'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D04A5'u64,
+    runCombo(engine, kFloat16, 4, 2, 2, 2, 32, 10, 2, 0xC04D04A5'u64,
       "chain gqa Hk=2/Hv=4/B=2", -0.5'f32, -0.01'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D04A6'u64,
+    runCombo(engine, kBfloat16, 1, 1, 1, 1, 32, 10, 2, 0xC04D04A6'u64,
       "chain baseline Hk=1/Hv=1/B=1", -0.5'f32, -0.01'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
+    runCombo(engine, kFloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
+    runCombo(engine, kFloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", -3.0'f32, -0.1'f32, betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secCrossF16 =
     let t0 = epochTime()
-    runCrossCheck(engine, dtypeF16, 4, 2, 2, 2, 32, 64, 0xC04D04A9'u64,
+    runCrossCheck(engine, kFloat16, 4, 2, 2, 2, 32, 64, 0xC04D04A9'u64,
       "cross-check gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secCrossBf16 =
     let t0 = epochTime()
-    runCrossCheck(engine, dtypeBf16, 4, 2, 2, 2, 32, 64, 0xC04D04AA'u64,
+    runCrossCheck(engine, kBfloat16, 4, 2, 2, 2, 32, 64, 0xC04D04AA'u64,
       "cross-check gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

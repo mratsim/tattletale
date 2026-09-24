@@ -13,7 +13,7 @@
 ## | regimes     | the same kernel body at M = 1 (GEMV) and M > 32 (tail M-tile)                                              |
 ## | runtime     | the projection shape travels as runtime args, one device entry per dtype plus the TileC = 32 stage-4 entry |
 ##
-## | shape    | M  | N    | K    | TileC | family     | cases |
+## | shape    | M  | N    | K    | TileC | dtype      | cases |
 ## | -------- | --- | ---- | ---- | ----- | ---------- | ----- |
 ## | gemv     | 1  | 128  | 64   | 64    | bf16, fp16 | 32    |
 ## | gemm     | 37 | 192  | 160  | 64    | bf16, fp16 | 16    |
@@ -28,17 +28,17 @@
 ## | multi    | the multi-M-tile regime (grid.y = 3, two consecutive full 32-row tiles plus a 1-row tail), the rowLimit composition across consecutive straddling tiles is the fragile path |
 ## | N = 1    | the shared expert row GEMV cannot go through this kernel (N mod TileC), the router suite's shared-expert scalar entry covers it                                             |
 ##
-## Band model, stated before measurement, u32 = 2⁻²⁴ fp32, u_fam = 2⁻⁸ bf16 / 2⁻¹¹ fp16
+## Bars, stated before measurement, U32 = 2⁻²⁴ fp32, uStep = 2⁻⁸ bf16 / 2⁻¹¹ fp16
 ##
-## | bar        | bound                                          | covers                                  |
-## | ---------- | ---------------------------------------------- | --------------------------------------- |
-## | out (m, n) | 2·u_fam·abs(out) + 2·K·2⁻²⁴·Σk abs(x·w) + 2⁻²⁵ | the accumulator order, one RNE per side |
+## | bar        | bound                                           | covers                                  |
+## | ---------- | ----------------------------------------------- | --------------------------------------- |
+## | out (m, n) | 2·u_step·abs(out) + 2·K·2⁻²⁴·Σk abs(x·w) + 2⁻²⁵ | the accumulator order, one RNE per side |
 ##
 ## - 2·K·2⁻²⁴·Σk abs(x·w) covers the accumulator order, both sides sit within
 ##   K·2⁻²⁴·Σ abs terms of the exact dot, the kernel's 16-wide mma chain vs
 ##   the naive sequential fp32 sum, differences within twice that bound
-## - 2·u_fam·abs(out) covers the store round, the two sides round slightly different
-##   fp32 accumulators, each RNE within u_fam of its operand
+## - 2·u_step·abs(out) covers the store round, the two sides round slightly different
+##   fp32 accumulators, each RNE within u_step of its operand
 ## - the 2⁻²⁵ floor covers the fp16 subnormal output grid, also the bf16 grid
 ##
 ## - the fp64 cross-check keeps the reference side audited, the naive fp32 dot
@@ -53,9 +53,9 @@ import ../../src/kernels/ceramic/linear
 import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 
-# ─── Device entries, one per (family dtype, shape) binding ────────────
+# ─── Device entries, one per (element dtype, shape) binding ────────────
 
 const DenseLinearMsl = metal:
   # one device entry per dtype plus the TileC = 32 entry, the projection shape
@@ -83,7 +83,7 @@ const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
 
-proc naiveLinearF32(dt: Dtype, x, w: seq[uint16]; M, N, K: int): seq[float64] =
+proc naiveLinearF32(dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[float64] =
   ## Independent host reference at fp32 arithmetic over the exact widenings.
   ## This is the exact-dot form.
   ##
@@ -94,26 +94,26 @@ proc naiveLinearF32(dt: Dtype, x, w: seq[uint16]; M, N, K: int): seq[float64] =
     for n in 0 ..< N:
       var acc = 0.0'f32
       for k in 0 ..< K:
-        acc += widenDtype(dt, x[m * K + k]) * widenDtype(dt, w[n * K + k])
+        acc += x[m * K + k].widenTo(dt) * w[n * K + k].widenTo(dt)
       result[m * N + n] = acc.float64
 
-proc naiveLinearF64(dt: Dtype, x, w: seq[uint16]; M, N, K: int): seq[float64] =
+proc naiveLinearF64(dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[float64] =
   ## Exact fp64 widening of the same dot, the naive side's own cross-check.
   result = newSeq[float64](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:
       var acc = 0.0'f64
       for k in 0 ..< K:
-        acc += widenDtype(dt, x[m * K + k]).float64 *
-          widenDtype(dt, w[n * K + k]).float64
+        acc += x[m * K + k].widenTo(dt).float64 *
+          w[n * K + k].widenTo(dt).float64
       result[m * N + n] = acc
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
 var suiteWorstUse = 0.0'f64
 
-proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
+proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
     seed: uint64; label: string; kernelName: string) =
-  ## One (family dtype, shape) combination over `cases` independent seeded runs,
+  ## One (element dtype, shape) combination over `cases` independent seeded runs,
   ## judged per element under the band, case 0 relaunched bit-identical,
   ## `kernelName` selects the device entry
   let nOut = M * N
@@ -127,7 +127,8 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
   var outPA = outB.pa()
   var xPA = xB.pa()
   var wPA = wB.pa()
-  let uFam = if dt == dtypeBf16: 3.90625e-3 else: 4.8828125e-4
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
   let gridX = int32(N div TileC)
   let gridY = int32((M + 31) div 32)
 
@@ -137,13 +138,13 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
   var launches = 0
 
   proc takeInputs(rng: var NaiveRng): tuple[x, w: seq[uint16]] =
-    ## Seeded inputs, family-dtype bits for x and w.
+    ## Seeded inputs, element-dtype bits for x and w.
     var xBits = newSeq[uint16](nX)
     var wBits = newSeq[uint16](nW)
     for i in 0 ..< nX:
-      xBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+      xBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
     for i in 0 ..< nW:
-      wBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+      wBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
     result = (xBits, wBits)
 
   proc load(bits: tuple[x, w: seq[uint16]]) =
@@ -165,12 +166,12 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
           (xPA, wPA, int32(N), int32(K), int32(M), int32(tx), int32(ty)))
     inc launches, gridX * gridY
 
-  proc snapshotOut(): seq[uint16] =
+  proc recordOut(): seq[uint16] =
     result = newSeq[uint16](nOut)
     for i in 0 ..< nOut:
       result[i] = outB.hostPtr[i]
 
-  var case0Snapshot: seq[uint16]
+  var case0record: seq[uint16]
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
@@ -184,11 +185,11 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
         let idx = m * N + n
         var sumAbs = 0.0'f64
         for k in 0 ..< K:
-          sumAbs += abs(widenDtype(dt, bits.x[m * K + k]).float64 *
-            widenDtype(dt, bits.w[n * K + k]).float64)
-        let bar = 2.0 * uFam * abs(want[idx]) +
+          sumAbs += abs(bits.x[m * K + k].widenTo(dt).float64 *
+            bits.w[n * K + k].widenTo(dt).float64)
+        let bar = 2.0 * uStep * abs(want[idx]) +
           2.0 * K.float64 * U32 * sumAbs + FloorSub
-        let got = widenDtype(dt, outB.hostPtr[idx]).float64
+        let got = outB.hostPtr[idx].widenTo(dt).float64
         let diff = abs(got - want[idx])
         doAssert diff <= bar,
           &"out outside the bar at (m {m}, n {n}, case {caseId}): " &
@@ -203,13 +204,13 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
         let idx = m * N + n
         var sumAbs = 0.0'f64
         for k in 0 ..< K:
-          sumAbs += abs(widenDtype(dt, bits.x[m * K + k]).float64 *
-            widenDtype(dt, bits.w[n * K + k]).float64)
+          sumAbs += abs(bits.x[m * K + k].widenTo(dt).float64 *
+            bits.w[n * K + k].widenTo(dt).float64)
         let barNaive = K.float64 * U32 * sumAbs
         doAssert abs(want[idx] - want64[idx]) <= barNaive,
           "naive fp32 dot outside its own band of fp64"
     if caseId == 0:
-      case0Snapshot = snapshotOut()
+      case0record = recordOut()
 
   block determinism:
     var rng0 = initNaiveRng(seed)
@@ -217,11 +218,11 @@ proc runCombo(engine: HwEngine; dt: Dtype, M, N, K, TileC, cases: int;
     load(bits0)
     launch()
     sentinels(bits0)
-    let again = snapshotOut()
+    let again = recordOut()
     for i in 0 ..< nOut:
-      doAssert again[i] == case0Snapshot[i], "out differs run to run"
+      doAssert again[i] == case0record[i], "out differs run to run"
 
-  echo &"[{label} {dtypeName(dt)}] cases={cases} launches={launches} " &
+  echo &"[{label} {ulpDatatypeName(ulpG)}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"
   suiteCases += cases
   suiteLaunches += launches
@@ -233,21 +234,21 @@ proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(DenseLinearMsl)
-  runCombo(engine, dtypeBf16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
+  runCombo(engine, kBfloat16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
     "cer_dense_linear_bf16")
-  runCombo(engine, dtypeF16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
+  runCombo(engine, kFloat16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
     "cer_dense_linear_f16")
-  runCombo(engine, dtypeBf16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
+  runCombo(engine, kBfloat16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
     "cer_dense_linear_bf16")
-  runCombo(engine, dtypeF16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
+  runCombo(engine, kFloat16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
     "cer_dense_linear_f16")
-  runCombo(engine, dtypeBf16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
+  runCombo(engine, kBfloat16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
     "cer_dense_linear_bf16")
-  runCombo(engine, dtypeBf16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
+  runCombo(engine, kBfloat16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
     "cer_dense_linear_bf16_tilec32")
-  runCombo(engine, dtypeBf16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
+  runCombo(engine, kBfloat16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
     "cer_dense_linear_bf16")
-  runCombo(engine, dtypeF16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
+  runCombo(engine, kFloat16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
     "cer_dense_linear_f16")
   echo &"CERAMIC DENSE_LINEAR VERDICT: cases={suiteCases} launches={suiteLaunches} " &
     &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"

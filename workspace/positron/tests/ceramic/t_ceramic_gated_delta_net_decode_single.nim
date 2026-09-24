@@ -17,7 +17,7 @@
 ## One step reads state bars → naive walk → kernel launch → y and state judgment, the bounds carry into the next step
 ##
 ## Checks, all model-bar assertions:
-## - the single-step closed-form band, 64 seeded random cases per (family dtype, shape)
+## - the single-step closed-form band, 64 seeded random cases per (element dtype, shape)
 ## - the multi-step chain (10 steps, carried state) under the chain recursion band
 ##
 ## - run-to-run determinism, case 0 relaunched per combination and the whole chain relaunched
@@ -25,7 +25,7 @@
 ##
 ## Shapes (Dv = 16, TileR = 8, Dk = 32, grid (Dv div TileR, B·Hv), 32 lanes):
 ##
-## | shape    | Hk | Hv | batch | hkRatio | family     | chain |
+## | shape    | Hk | Hv | batch | hkRatio | dtype      | chain |
 ## | -------- | --- | --- | ----- | ------- | ---------- | ----- |
 ## | baseline | 1  | 1  | 1     | 1       | fp16, bf16 | bf16  |
 ## | gqa      | 2  | 4  | 2     | 2       | fp16, bf16 | fp16  |
@@ -35,7 +35,7 @@
 ##   the near-unitary decay stresses the chain recursion hardest
 ## - edge combos carry the near-zero decay (g -> 0-) and the exact-zero beta inside the same band
 ##
-## - fp16 is the family dtype under test, bf16 the range-robust fallback
+## - fp16 is the element dtype under test, bf16 the range-robust fallback
 ## - the GQA shape keeps both mapping terms live, in-sequence ratio term plus sequence-offset term
 ## - sequence 1 holds independent key heads, a dropped sequence offset cannot pass
 ##
@@ -47,16 +47,16 @@
 ## | kvAbs  | Σ_dkc abs(S·k) over the row r |
 ## | δ      | β·(v − Σ_dkc S·k)             |
 ## | yAbs   | Σ_dkc abs(S'·q̃) over the row |
-## | u_fam  | 2⁻¹¹ for fp16, 2⁻⁸ for bf16   |
+## | u_step | 2⁻¹¹ for fp16, 2⁻⁸ for bf16   |
 ##
 ## | bar                | bound                                                                                              |
 ## | ------------------ | -------------------------------------------------------------------------------------------------- |
 ## | state (bh, r, dkc) | 4·2⁻²⁴·a + abs(k)·(β·2·Dk·2⁻²⁴·kvAbs + 2·2⁻²⁴·β·(abs(v)+abs(kv)) + 2·2⁻²⁴·abs(δ)) + 4·2⁻²⁴·(a + b) |
-## | y (bh, r)          | 2·u_fam·abs(y) + (2·Dk·2⁻²⁴ + 2·2⁻²¹)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                  |
+## | y (bh, r)          | 2·u_step·abs(y) + (2·Dk·2⁻²⁴ + 2·2⁻²¹)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                 |
 ##
 ## | term             | covers                                                     |
 ## | ---------------- | ---------------------------------------------------------- |
-## | 2·u_fam·abs(y)   | both sides round the same fp32 value once                  |
+## | 2·u_step·abs(y)  | both sides round the same fp32 value once                  |
 ## | (2·Dk·2⁻²⁴)·yAbs | the two dot orders                                         |
 ## | 2·2⁻²¹·yAbs      | the rsqrt-vs-divide q̃ difference                          |
 ## | 2⁻²⁵             | the fp16 subnormal grid floor, also covering the bf16 grid |
@@ -82,9 +82,9 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_gdn
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 
-# ─── Device entries, one per (family dtype, Dk) binding ──────────────
+# ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
 const GdnDecodeMsl = metal:
   proc cer_gdn_step_fp16_dk32(
@@ -112,14 +112,14 @@ const
                                      # the rounding floor once |y| falls subnormal
 
 type StepInputs = object
-  ## One decode step's seeded inputs, family-dtype bits shared by the kernel and the naive sides through their exact fp32 widenings:
+  ## One decode step's seeded inputs, element-dtype bits shared by the kernel and the naive sides through their exact fp32 widenings:
   ##
-  ##   | field        | shape                 |
-  ##   | ------------ | --------------------- |
-  ##   | qBits, kBits | (B·Hk, Dk)            |
-  ##   | vBits        | (B·Hv, Dv)            |
-  ##   | betaBits     | (B·Hv,)               |
-  ##   | gVals        | (B·Hv,) f32 log-decay |
+  ## | field        | shape                 |
+  ## | ------------ | --------------------- |
+  ## | qBits, kBits | (B·Hk, Dk)            |
+  ## | vBits        | (B·Hv, Dv)            |
+  ## | betaBits     | (B·Hv,)               |
+  ## | gVals        | (B·Hv,) f32 log-decay |
   qBits: seq[uint16]
   kBits: seq[uint16]
   vBits: seq[uint16]
@@ -127,15 +127,15 @@ type StepInputs = object
   gVals: seq[float32]
 
 type StepSnap = object
-  ## Bit snapshots of one step's kernel-written buffers.
+  ## Bit records of one step's kernel-written buffers.
   state: seq[float32]
   y: seq[uint16]
 
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
-proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
-  ## One (family dtype, shape) combination over `cases` independent seeded
+proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
+  ## One (element dtype, shape) combination over `cases` independent seeded
   ## runs of `steps` decode steps each, judged per element against the naive
   ## reference under the band model, case 0 relaunched bit-identical.
   const Dv = 16
@@ -143,14 +143,15 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
   let bhMax = B * Hv
   let qkRows = B * Hk
   let stateElems = bhMax * Dv * dk
-  let kernelName = if dt == dtypeF16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
+  let kernelName = if dt == kFloat16: "cer_gdn_step_fp16_dk32" else: "cer_gdn_step_bf16_dk32"
   # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
   # meaning derive the span from the step count (no edge case wants gLo = 0)
   let gLo = if gLoOverride != 0.0'f32: gLoOverride
             else: (if steps == 1: -3.0'f32 else: -0.5'f32)
   let gHi = if gLoOverride != 0.0'f32: gHiOverride
             else: (if steps == 1: -0.1'f32 else: -0.01'f32)
-  let uFam = if dt == dtypeBf16: UBf16 else: UF16
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](bhMax * Dv)
@@ -225,12 +226,12 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
       var vF = newSeq[float32](bhMax * Dv)
       var betaF = newSeq[float32](bhMax)
       for i in 0 ..< qkRows * dk:
-        qF[i] = widenDtype(dt, si.qBits[i])
-        kF[i] = widenDtype(dt, si.kBits[i])
+        qF[i] = si.qBits[i].widenTo(dt)
+        kF[i] = si.kBits[i].widenTo(dt)
       for i in 0 ..< bhMax * Dv:
-        vF[i] = widenDtype(dt, si.vBits[i])
+        vF[i] = si.vBits[i].widenTo(dt)
       for h in 0 ..< bhMax:
-        betaF[h] = widenDtype(dt, si.betaBits[h])
+        betaF[h] = si.betaBits[h].widenTo(dt)
 
       # state bars from the naive pre-step state
       var barS = newSeq[float64](stateElems)
@@ -308,16 +309,16 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
             yAbs += abs(stateN[(bh * Dv + r) * dk + c].float64 * qs)
             yProp += abs(qs) * barS[(bh * Dv + r) * dk + c]
           let yWant = yN[bh * Dv + r].float64
-          let barY = 2.0 * uFam * abs(yWant) +
+          let barY = 2.0 * uStep * abs(yWant) +
             (2.0 * dk.float64 * U32 + RelQScale) * yAbs +
             2.0 * U32 * abs(yWant) + FloorSub + yProp
-          let yGot = widenDtype(dt, yB.hostPtr[bh * Dv + r]).float64
+          let yGot = yB.hostPtr[bh * Dv + r].widenTo(dt).float64
           let yDiff = abs(yGot - yWant)
           if judge:
             doAssert yDiff <= barY,
               &"y outside the bar at (bh {bh}, r {r}, step {t}): " &
               &"{yDiff:.3e} > {barY:.3e}"
-            let uAt = dtypeUlp(dt, yWant)
+            let uAt = ulpStepAt(ulpG, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -339,11 +340,11 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         dS[i] = barS[i]
 
       snaps.add(StepSnap(
-        state: readInto(stateB.hostPtr, stateElems),
-        y: readInto(yB.hostPtr, bhMax * Dv)))
+        state: readRecord(stateB.hostPtr, stateElems),
+        y: readRecord(yB.hostPtr, bhMax * Dv)))
 
   proc takeInputs(rng: var NaiveRng): seq[StepInputs] =
-    ## Seeded inputs for one chain, family-dtype bits for every step.
+    ## Seeded inputs for one chain, element-dtype bits for every step.
     for step in 0 ..< steps:
       var qBits = newSeq[uint16](qkRows * dk)
       var kBits = newSeq[uint16](qkRows * dk)
@@ -351,13 +352,13 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
       var betaBits = newSeq[uint16](bhMax)
       var gVals = newSeq[float32](bhMax)
       for i in 0 ..< qkRows * dk:
-        qBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
-        kBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+        qBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
+        kBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
       for i in 0 ..< bhMax * Dv:
-        vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+        vBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
       for h in 0 ..< bhMax:
-        betaBits[h] = (if betaZero: toDtypeBits(dt, 0.0'f32)
-                       else: toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32)))
+        betaBits[h] = (if betaZero: 0.0'f32.narrowTo(dt)
+                       else: rng.nextF32(0.2'f32, 0.8'f32).narrowTo(dt))
         gVals[h] = rng.nextF32(gLo, gHi)
       result.add(StepInputs(qBits: qBits, kBits: kBits, vBits: vBits,
         betaBits: betaBits, gVals: gVals))
@@ -392,9 +393,9 @@ proc runCombo(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, dk, steps, cases:
         doAssert relaunchSnaps[t].y[i] == case0Snaps[t].y[i],
           "y differs run to run"
 
-  echo &"[{label} {dtypeName(dt)} Dk={dk}] steps={steps} cases={cases} " &
+  echo &"[{label} {ulpDatatypeName(ulpG)} Dk={dk}] steps={steps} cases={cases} " &
     &"launches={launches} | state worst |ΔS| {worstState:.3e}, worst bar usage " &
-    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
+    &"{worstStateUse:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -411,49 +412,49 @@ proc main =
 
   proc secF16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0401'u64,
+    runCombo(engine, kFloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0401'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0402'u64,
+    runCombo(engine, kFloat16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0402'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0403'u64,
+    runCombo(engine, kBfloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D0403'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0404'u64,
+    runCombo(engine, kBfloat16, 4, 2, 2, 2, 32, 1, 64, 0xC04D0404'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainF16Gqa =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 4, 2, 2, 2, 32, 10, 2, 0xC04D0405'u64,
+    runCombo(engine, kFloat16, 4, 2, 2, 2, 32, 10, 2, 0xC04D0405'u64,
       "chain gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secChainBf16Baseline =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 10, 2, 0xC04D0406'u64,
+    runCombo(engine, kBfloat16, 1, 1, 1, 1, 32, 10, 2, 0xC04D0406'u64,
       "chain baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCombo(engine, dtypeF16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
+    runCombo(engine, kFloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCombo(engine, dtypeBf16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
+    runCombo(engine, kBfloat16, 1, 1, 1, 1, 32, 1, 64, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

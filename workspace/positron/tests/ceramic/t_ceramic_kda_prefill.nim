@@ -47,7 +47,7 @@
 ##            └──→ S ← dEnd ⊙ carry read + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
 ##
 ## - the per-token walk instead applies exp(g) per token per channel, reading and updating the state each step
-## - both naive spellings run fp64, the ceramic core runs fp32 state math with family-dtype handoffs
+## - both naive spellings run fp64, the ceramic core runs fp32 state math with element-dtype handoffs
 ## - the judged divergence is the ceramic side's rounding against the fp64 chunked reference structure
 ##
 ## | site                    | bound                                                                                        |
@@ -60,7 +60,7 @@
 ## | q̃ scale                | relative ≤ 4·u₃₂ (f32 qScale vs the naive f64 divide, plus the division rounding)            |
 ## | u solve                 | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))                                  |
 ## | chunk carry             | decayed old state per channel + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)                      |
-## | y store                 | one family RNE, u_fam·abs(y) plus the subnormal grid floor                                   |
+## | y store                 | one element-dtype RNE, u_step·abs(y) plus the subnormal grid floor                           |
 ##
 ## - the exponent-sensitivity factors collapse (ln2·log2e = 1), a log-domain error cErr mapping to an equal relative error on exp2(c·log2e)
 ## - the reassociation budget per chunk is C token terms per sum (solve, y, carry) and Dk terms per dot over T/C chunks
@@ -71,7 +71,7 @@
 ##
 ## | bar            | bound                                                                                         |
 ## | -------------- | --------------------------------------------------------------------------------------------- |
-## | y (bh, t, r)   | Δy(t, r) + u_fam·abs(y_ref) + 2⁻²⁵                                                            |
+## | y (bh, t, r)   | Δy(t, r) + u_step·abs(y_ref) + 2⁻²⁵                                                           |
 ## | state (bh,r,c) | the carried ΔS recursion across chunks, chunk-local terms in the table below                  |
 ## | continuity     | barS + 2·(T·Dk)·2⁻⁵³·max(abs(S_chunked), abs(S_walk)), the fp64 chunked-vs-walk reassociation |
 ##
@@ -88,29 +88,29 @@
 ##
 ## Shapes (Dv = 16, TileR = 8, grid (Dv div TileR, B·Hv), 32 lanes, one launch walks all chunks):
 ##
-## | shape    | Hk | Hv | batch | hkRatio | family | T   | chunk | Dk |
-## | -------- | --- | --- | ----- | ------- | ------ | --- | ----- | --- |
-## | baseline | 1  | 1  | 1     | 1       | fp16   | 8   | 32    | 32 |
-## | baseline | 1  | 1  | 1     | 1       | fp16   | 64  | 32    | 32 |
-## | gqa      | 2  | 4  | 2     | 2       | fp16   | 256 | 32    | 32 |
-## | tail     | 1  | 1  | 1     | 1       | fp16   | 100 | 32    | 32 |
-## | chunk64  | 1  | 1  | 1     | 1       | fp16   | 64  | 64    | 32 |
-## | dk64     | 1  | 1  | 1     | 1       | fp16   | 64  | 32    | 64 |
-## | beta0    | 1  | 1  | 1     | 1       | fp16   | 64  | 32    | 32 |
-## | baseline | 1  | 1  | 1     | 1       | bf16   | 8   | 32    | 32 |
-## | tail     | 1  | 1  | 1     | 1       | bf16   | 100 | 32    | 32 |
-## | gqa64    | 2  | 4  | 2     | 2       | bf16   | 256 | 64    | 32 |
-## | overflow | 1  | 1  | 1     | 1       | fp16   | 64  | 64    | 32 |
-## | overflow | 1  | 1  | 1     | 1       | bf16   | 64  | 64    | 32 |
+## | shape    | Hk | Hv | batch | hkRatio | dtype | T   | chunk | Dk |
+## | -------- | --- | --- | ----- | ------- | ----- | --- | ----- | --- |
+## | baseline | 1  | 1  | 1     | 1       | fp16  | 8   | 32    | 32 |
+## | baseline | 1  | 1  | 1     | 1       | fp16  | 64  | 32    | 32 |
+## | gqa      | 2  | 4  | 2     | 2       | fp16  | 256 | 32    | 32 |
+## | tail     | 1  | 1  | 1     | 1       | fp16  | 100 | 32    | 32 |
+## | chunk64  | 1  | 1  | 1     | 1       | fp16  | 64  | 64    | 32 |
+## | dk64     | 1  | 1  | 1     | 1       | fp16  | 64  | 32    | 64 |
+## | beta0    | 1  | 1  | 1     | 1       | fp16  | 64  | 32    | 32 |
+## | baseline | 1  | 1  | 1     | 1       | bf16  | 8   | 32    | 32 |
+## | tail     | 1  | 1  | 1     | 1       | bf16  | 100 | 32    | 32 |
+## | gqa64    | 2  | 4  | 2     | 2       | bf16  | 256 | 64    | 32 |
+## | overflow | 1  | 1  | 1     | 1       | fp16  | 64  | 64    | 32 |
+## | overflow | 1  | 1  | 1     | 1       | bf16  | 64  | 64    | 32 |
 ##
 ## - the T = 100 case carries a non-divisible tail chunk, 3 full chunks plus 4 tokens
 ## - the overflow fixture's g ≈ −3 per token per channel, the 64-token chunk's
-##   |cumulogdecay| crosses the exp2 overflow bound 88.7 (log e units) inside the chunk
+## | cumulogdecay |
 ##
 ## - every case starts from a non-zero random initial state
 ## - the GQA shape keeps both head-mapping terms live, sequence 1 holding independent key heads
 ##
-## - fp16 is the family dtype under test, bf16 the range-robust fallback
+## - fp16 is the element dtype under test, bf16 the range-robust fallback
 ## - untouched-memory checks per launch, kernel-written buffers stay in their extents, kernel-read buffers stay bit-identical
 ## - run-to-run determinism, case 0 relaunched bit-identical per combination on Apple M4 Max
 
@@ -122,9 +122,9 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_kda
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 
-# ─── Device entries, one per (family dtype, chunk length, Dk) binding ──
+# ─── Device entries, one per (element dtype, chunk length, Dk) binding ──
 
 const KdaPrefillMsl = metal:
   proc cer_kda_prefill_fp16_c32(
@@ -205,7 +205,7 @@ proc kdaChunkTraceBars(
     s0w: NaiveCube[float64], qw, kw, gw: NaiveCube[float64], vw: NaiveCube[float64],
     bw: NaiveMat[float64],
     Hv, Hk, hkRatio, T, chunkLen, Dv, Dk: int,
-    uFam: float64, underflowFloors = false): TraceBars =
+    uStep: float64, underflowFloors = false): TraceBars =
   ## `underflowFloors` adds the fp32 exp2 underflow floor to every decay
   ## factor's relative bound
   ##
@@ -364,10 +364,10 @@ proc kdaChunkTraceBars(
             yAbsSum += bTerm
             yErr += bAbsA[t * chunkLen + s] * du[s * Dv + r] + dB * abs(uRef[s * Dv + r])
             yRef += bValA[t * chunkLen + s] * uRef[s * Dv + r]
-          # the adds round once per term, the family store rounds once per element
+          # the adds round once per term, the element-dtype store rounds once per element
           let dY = yErr + float64(t + 1) * U32 * yAbsSum + U32 * abs(yRef)
           result.barY[(bh * T + gt) * Dv + r] =
-            dY + uFam * abs(yRef) + FloorSub
+            dY + uStep * abs(yRef) + FloorSub
       # carry out of the chunk, the reference formula and its bound, per channel
       for r in 0 ..< Dv:
         for dk in 0 ..< Dk:
@@ -463,7 +463,7 @@ proc hostCumulogdecay(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chu
         else:
           dst[gi] = dst[gi - Dk] + g[gi]
 
-proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
+proc takeInputs(dt: ScalarKind, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
   ## `overflowG` generates the decay-overflow fixture's g, |g| ≈ 3 per token
   ## per channel so the 64-token chunk's |cumulogdecay| crosses the exp2 overflow
   ## bound 88.7 inside the chunk
@@ -479,7 +479,7 @@ proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen
   hostCumulogdecay(cumulogdecayVals, gVals, qkRows, T, Dk, chunkLen)
   var vBits = newSeq[uint16](bhMax * T * Dv)
   for i in 0 ..< bhMax * T * Dv:
-    vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+    vBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
   var betaVals = newSeq[float32](bhMax * T)
   for i in 0 ..< bhMax * T:
     betaVals[i] = if betaZero: 0.0'f32 else: rng.nextF32(0.2'f32, 0.8'f32)
@@ -492,8 +492,8 @@ proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstCont, suiteWorstYUlp = 0.0'f64
 
-proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string, overflowG = false) =
-  ## One (family dtype, shape) combination, judged per element against the fp64 chunked
+proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, Dk: int, betaZero: bool, seed: uint64, label: string, overflowG = false) =
+  ## One (element dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   ##
   ## `overflowG` runs the decay-overflow fixture, |cumulogdecay| past the exp2 overflow
@@ -508,13 +508,14 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
   let stateElems = bhMax * Dv * Dk
   let yElems = bhMax * T * Dv
   let kernelName =
-    if dt == dtypeF16:
+    if dt == kFloat16:
       if Dk == 64: "cer_kda_prefill_fp16_dk64_c32"
       elif chunkLen == 32: "cer_kda_prefill_fp16_c32"
       else: "cer_kda_prefill_fp16_c64"
     else:
       if chunkLen == 32: "cer_kda_prefill_bf16_c32" else: "cer_kda_prefill_bf16_c64"
-  let uFam = if dt == dtypeBf16: UBf16 else: UF16
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
   let qScale = float32(sqrt(float64(Dk)))
 
   var stateB = allocPageBuf[float32](stateElems)
@@ -597,7 +598,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
     var vw = NaiveCube[float64](planes: bhMax, rows: T, cols: Dv)
     vw.data = newSeq[float64](bhMax * T * Dv)
     for i in 0 ..< bhMax * T * Dv:
-      vw.data[i] = widenDtype64(dt, si.vBits[i])
+      vw.data[i] = si.vBits[i].widenTo(dt).float64
     var bw = NaiveMat[float64](rows: bhMax, cols: T)
     bw.data = newSeq[float64](bhMax * T)
     for i in 0 ..< bhMax * T:
@@ -631,7 +632,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
         yPerGlobal[(b * Hv) * T * Dv + i] = yWalk.data[i]
 
     let bars = kdaChunkTraceBars(s0w, qw, kw, gw, vw, bw,
-      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam,
+      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uStep,
       underflowFloors = overflowG)
 
     launch(si)
@@ -659,7 +660,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
         # output or the carried state is a failure on its own, the bars
         # would catch the same failure late
         for i in 0 ..< yElems:
-          let yc = classify(widenDtype(dt, yB.hostPtr[i]).float64)
+          let yc = classify(yB.hostPtr[i].widenTo(dt).float64)
           doAssert yc notin {fcNan, fcInf, fcNegInf},
             &"y not finite at element {i} (classify {yc})"
         for i in 0 ..< stateElems:
@@ -673,12 +674,12 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
           for r in 0 ..< Dv:
             let i = (bh * T + t) * Dv + r
             let yWant = yN[i]
-            let yGot = widenDtype(dt, yB.hostPtr[i]).float64
+            let yGot = yB.hostPtr[i].widenTo(dt).float64
             let yDiff = abs(yGot - yWant)
             doAssert yDiff <= bars.barY[i],
               &"y outside the bar at (bh {bh}, t {t}, r {r}): " &
               &"{yDiff:.3e} > {bars.barY[i]:.3e}"
-            let uAt = dtypeUlp(dt, yWant)
+            let uAt = ulpStepAt(ulpG, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -697,7 +698,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
           &"continuity outside the bar at element {i}: {cDiff:.3e} > {contBar[i]:.3e}"
         if contBar[i] > 0.0: worstCont = max(worstCont, cDiff / contBar[i])
 
-  proc snapshot(): tuple[st: seq[float32], y: seq[uint16]] =
+  proc record(): tuple[st: seq[float32], y: seq[uint16]] =
     var st = newSeq[float32](stateElems)
     for i in 0 ..< stateElems: st[i] = stateB.hostPtr[i]
     var yy = newSeq[uint16](yElems)
@@ -711,14 +712,14 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
     let si = takeInputs(dt, rng, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero,
       overflowG)
     judge(si, record = true)
-    if caseId == 0: case0 = snapshot()
+    if caseId == 0: case0 = record()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
     let si = takeInputs(dt, rng0, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero,
       overflowG)
     judge(si, record = false)
-    let again = snapshot()
+    let again = record()
     for i in 0 ..< stateElems:
       doAssert again.st[i] == case0.st[i], "state differs run to run"
     for i in 0 ..< yElems:
@@ -726,10 +727,10 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen, Dk: i
 
   let betaTag = (if betaZero: " beta=0" else: "") &
     (if overflowG: " overflow-g" else: "")
-  echo &"[{label} {dtypeName(dt)} T={T} C={chunkLen} Dk={Dk}{betaTag}] " &
+  echo &"[{label} {ulpDatatypeName(ulpG)} T={T} C={chunkLen} Dk={Dk}{betaTag}] " &
     &"cases={cases} launches={launches} | " &
     &"state worst |ΔS| {worstState:.3e}, worst bar usage {worstStateUse:.3f} | " &
-    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
+    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -749,61 +750,61 @@ proc main =
 
   proc secF16T8 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 8, 32, 32, false, 0xC04D04B1'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 8, 32, 32, false, 0xC04D04B1'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16T64 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 32, false, 0xC04D04B2'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 32, 32, false, 0xC04D04B2'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 4, 2, 2, 2, 256, 32, 32, false, 0xC04D04B3'u64,
+    runCase(engine, kFloat16, 4, 2, 2, 2, 256, 32, 32, false, 0xC04D04B3'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Tail =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 100, 32, 32, false, 0xC04D04B4'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 100, 32, 32, false, 0xC04D04B4'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16C64 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04B5'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04B5'u64,
       "chunk64 Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Dk64 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 64, false, 0xC04D04B6'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 32, 64, false, 0xC04D04B6'u64,
       "dk64 Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Beta0 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 32, true, 0xC04D04B7'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 32, 32, true, 0xC04D04B7'u64,
       "beta0 Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16T8 =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 8, 32, 32, false, 0xC04D04B8'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 8, 32, 32, false, 0xC04D04B8'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Tail =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 100, 32, 32, false, 0xC04D04B9'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 100, 32, 32, false, 0xC04D04B9'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa64 =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 4, 2, 2, 2, 256, 64, 32, false, 0xC04D04BA'u64,
+    runCase(engine, kBfloat16, 4, 2, 2, 2, 256, 64, 32, false, 0xC04D04BA'u64,
       "gqa64 Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
@@ -822,13 +823,13 @@ proc main =
     # the decay-overflow fixture, |cumulogdecay| crosses the exp2 overflow bound 88.7
     # inside the first 64-token chunk (g ≈ −3 per token per channel)
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BB'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BB'u64,
       "overflow Hk=1/Hv=1/B=1", overflowG = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Overflow =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BC'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 64, 64, 32, false, 0xC04D04BC'u64,
       "overflow Hk=1/Hv=1/B=1", overflowG = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

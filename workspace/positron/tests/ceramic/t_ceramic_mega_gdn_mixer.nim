@@ -45,7 +45,7 @@ import ../naive/naive_gdn
 import ../naive/naive_layer_ops
 import ceramic_pagebuf
 import mega_bounded_wait
-import ceramic_fam
+import ceramic_dtype
 
 # ─── Band-model constants (the composition tier's two-term model) ─────
 
@@ -426,7 +426,7 @@ proc assertUntouched(m: var MegaBuffers) =
   for i in sPartial ..< sPartial + (TopK + 1) * Hidden:
     doAssert m.f32A.hostPtr[i] == 7.0e30'f32, &"sPartial was touched at {i}"
 
-type Snapshot = object
+type Record = object
   ## One launch's judged sections and carry, the bit-identity
   ## compare's reference and the band walk's observed operands.
   qkv, z, a, b, conv, qn, kn, beta, y, normed, blockOut: seq[uint16]
@@ -435,23 +435,23 @@ type Snapshot = object
   ring: seq[uint16]
   norm1: seq[uint16]
 
-proc snapshotMega(m: MegaBuffers): Snapshot =
-  ## One launch's full snapshot of the judged sections.
-  result.norm1 = readInto(m.bfA.hostPtr +% sNorm1, H)
-  result.qkv = readInto(m.bfA.hostPtr +% sQkvCol, ConvDim)
-  result.z = readInto(m.bfA.hostPtr +% sZ, NumVHeads * HeadVDim)
-  result.a = readInto(m.bfA.hostPtr +% sA, NumVHeads)
-  result.b = readInto(m.bfA.hostPtr +% sB, NumVHeads)
-  result.conv = readInto(m.bfA.hostPtr +% sConv, ConvDim)
-  result.qn = readInto(m.bfA.hostPtr +% sQN, NumKHeads * HeadKDim)
-  result.kn = readInto(m.bfA.hostPtr +% sKN, NumKHeads * HeadKDim)
-  result.g = readInto(m.f32A.hostPtr +% sG, NumVHeads)
-  result.beta = readInto(m.bfA.hostPtr +% sBeta, NumVHeads)
-  result.y = readInto(m.bfA.hostPtr +% sY, NumVHeads * HeadVDim)
-  result.normed = readInto(m.bfA.hostPtr +% sNormed, NumVHeads * HeadVDim)
-  result.blockOut = readInto(m.bfA.hostPtr +% sBlockOut, H)
-  result.state = readInto(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  result.ring = readInto(m.ring.hostPtr, ConvDim * RingWidth)
+proc recordMega(m: MegaBuffers): Record =
+  ## One launch's full record of the judged sections.
+  result.norm1 = readRecord(m.bfA.hostPtr +% sNorm1, H)
+  result.qkv = readRecord(m.bfA.hostPtr +% sQkvCol, ConvDim)
+  result.z = readRecord(m.bfA.hostPtr +% sZ, NumVHeads * HeadVDim)
+  result.a = readRecord(m.bfA.hostPtr +% sA, NumVHeads)
+  result.b = readRecord(m.bfA.hostPtr +% sB, NumVHeads)
+  result.conv = readRecord(m.bfA.hostPtr +% sConv, ConvDim)
+  result.qn = readRecord(m.bfA.hostPtr +% sQN, NumKHeads * HeadKDim)
+  result.kn = readRecord(m.bfA.hostPtr +% sKN, NumKHeads * HeadKDim)
+  result.g = readRecord(m.f32A.hostPtr +% sG, NumVHeads)
+  result.beta = readRecord(m.bfA.hostPtr +% sBeta, NumVHeads)
+  result.y = readRecord(m.bfA.hostPtr +% sY, NumVHeads * HeadVDim)
+  result.normed = readRecord(m.bfA.hostPtr +% sNormed, NumVHeads * HeadVDim)
+  result.blockOut = readRecord(m.bfA.hostPtr +% sBlockOut, H)
+  result.state = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  result.ring = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
 
 proc launchMixer(engine: HwEngine; m: var MegaBuffers) =
   ## One launch at the mixer's grid, no host-side counter zeroing.
@@ -553,24 +553,24 @@ type Bars = object
   g, y, normed, blockOut, state, ring: seq[float64]
 
 proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
-    lo: NaiveLo; snapshot: Snapshot): Bars =
+    lo: NaiveLo; record: Record): Bars =
   ## One walk's per-element bars from the observed operands.
   ##
   ## Both sides share the preloaded norm1 row bit-exact,
   ## so the projection stages' sensitivity terms reduce to the two
   ## naive evaluations' deviation through the downstream operands.
   let
-    qkvM = snapshot.qkv
-    zM = snapshot.z
-    aM = snapshot.a
-    bM = snapshot.b
-    convM = snapshot.conv
-    qnM = snapshot.qn
-    knM = snapshot.kn
-    gM = snapshot.g
-    betaM = snapshot.beta
-    yM = snapshot.y
-    normedM = snapshot.normed
+    qkvM = record.qkv
+    zM = record.z
+    aM = record.a
+    bM = record.b
+    convM = record.conv
+    qnM = record.qn
+    knM = record.kn
+    gM = record.g
+    betaM = record.beta
+    yM = record.y
+    normedM = record.normed
 
   # Stages 2 to 4:
   #   the projection GEMVs. The preloaded norm1 row is the observed input,
@@ -611,14 +611,14 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   let qkvNW = widen(lo.qkvCol)
   for c in 0 ..< ConvDim:
     for j in 0 ..< RingWidth - 1:
-      doAssert snapshot.ring[c * RingWidth + j] ==
+      doAssert record.ring[c * RingWidth + j] ==
         preM.ring[c * RingWidth + j + 1], "the mega's ring roll is not a copy"
       doAssert lo.postRing[c * RingWidth + j] ==
         preN.ring[c * RingWidth + j + 1],
         "the naive's ring roll is not a copy"
       result.ring[c * RingWidth + j] =
         abs(preMW[c * RingWidth + j + 1] - preNW[c * RingWidth + j + 1])
-    doAssert snapshot.ring[c * RingWidth + RingWidth - 1] == qkvM[c],
+    doAssert record.ring[c * RingWidth + RingWidth - 1] == qkvM[c],
       "the mega's ring tail is not the step column"
     doAssert lo.postRing[c * RingWidth + RingWidth - 1] == lo.qkvCol[c],
       "the naive's ring tail is not the step column"
@@ -791,22 +791,22 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   result.blockOut = gemvBars(normedM, w.outprojW, blockPrime, lo.blockOut,
     H, NumVHeads * HeadVDim)
 
-proc judgeAll(bars: Bars; snapshot: Snapshot; lo: NaiveLo; u: var Usage) =
+proc judgeAll(bars: Bars; record: Record; lo: NaiveLo; u: var Usage) =
   ## One walk's per-element judgment, the 12 fields against their bars.
-  judgeBf(0, snapshot.qkv, lo.qkvCol, bars.qkv, u)
-  judgeBf(1, snapshot.z, lo.z, bars.z, u)
-  judgeBf(2, snapshot.a, lo.a, bars.a, u)
-  judgeBf(3, snapshot.b, lo.b, bars.b, u)
-  judgeBf(4, snapshot.conv, lo.conv, bars.conv, u)
-  judgeBf(5, snapshot.qn, lo.qn, bars.qn, u)
-  judgeBf(6, snapshot.kn, lo.kn, bars.kn, u)
-  judgeF32(7, snapshot.g, lo.g, bars.g, u)
-  judgeBf(8, snapshot.beta, lo.beta, bars.beta, u)
-  judgeBf(9, snapshot.y, lo.y, bars.y, u)
-  judgeBf(10, snapshot.normed, lo.normed, bars.normed, u)
-  judgeBf(11, snapshot.blockOut, lo.blockOut, bars.blockOut, u)
-  judgeF32(12, snapshot.state, lo.postState, bars.state, u)
-  judgeBf(13, snapshot.ring, lo.postRing, bars.ring, u)
+  judgeBf(0, record.qkv, lo.qkvCol, bars.qkv, u)
+  judgeBf(1, record.z, lo.z, bars.z, u)
+  judgeBf(2, record.a, lo.a, bars.a, u)
+  judgeBf(3, record.b, lo.b, bars.b, u)
+  judgeBf(4, record.conv, lo.conv, bars.conv, u)
+  judgeBf(5, record.qn, lo.qn, bars.qn, u)
+  judgeBf(6, record.kn, lo.kn, bars.kn, u)
+  judgeF32(7, record.g, lo.g, bars.g, u)
+  judgeBf(8, record.beta, lo.beta, bars.beta, u)
+  judgeBf(9, record.y, lo.y, bars.y, u)
+  judgeBf(10, record.normed, lo.normed, bars.normed, u)
+  judgeBf(11, record.blockOut, lo.blockOut, bars.blockOut, u)
+  judgeF32(12, record.state, lo.postState, bars.state, u)
+  judgeBf(13, record.ring, lo.postRing, bars.ring, u)
 
 # ─── The runner ───────────────────────────────────────────────────────
 
@@ -852,10 +852,10 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
   assertUntouched(m)
   assertNorm1Unchanged(m, norm1)
 
-  let snapshot = snapshotMega(m)
+  let record = recordMega(m)
   let lo = naiveChain(w, norm1, carry0)
-  let bars = walkBars(w, norm1, carry0, carry0, lo, snapshot)
-  judgeAll(bars, snapshot, lo, usage)
+  let bars = walkBars(w, norm1, carry0, carry0, lo, record)
+  judgeAll(bars, record, lo, usage)
 
   # the relaunch, the carry restored to its pre-image, the judged
   # sections rewritten over the first launch's own outputs
@@ -867,17 +867,17 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
   assertCounters(m)
   assertUntouched(m)
   assertNorm1Unchanged(m, norm1)
-  let snapRel = snapshotMega(m)
-  doAssert snapRel.state == snapshot.state,
+  let snapRel = recordMega(m)
+  doAssert snapRel.state == record.state,
     "the relaunch's state differs from the first launch's"
-  doAssert snapRel.ring == snapshot.ring,
+  doAssert snapRel.ring == record.ring,
     "the relaunch's ring differs from the first launch's"
-  doAssert snapRel.qkv == snapshot.qkv and snapRel.z == snapshot.z and
-    snapRel.a == snapshot.a and snapRel.b == snapshot.b and
-    snapRel.conv == snapshot.conv and snapRel.qn == snapshot.qn and
-    snapRel.kn == snapshot.kn and snapRel.beta == snapshot.beta and
-    snapRel.y == snapshot.y and snapRel.normed == snapshot.normed and
-    snapRel.blockOut == snapshot.blockOut and snapRel.g == snapshot.g,
+  doAssert snapRel.qkv == record.qkv and snapRel.z == record.z and
+    snapRel.a == record.a and snapRel.b == record.b and
+    snapRel.conv == record.conv and snapRel.qn == record.qn and
+    snapRel.kn == record.kn and snapRel.beta == record.beta and
+    snapRel.y == record.y and snapRel.normed == record.normed and
+    snapRel.blockOut == record.blockOut and snapRel.g == record.g,
     "the relaunch's judged sections differ from the first launch's"
   echo &"[mixer case {caseId}] relaunch bit-identical"
 

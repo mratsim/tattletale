@@ -9,7 +9,7 @@
 ## - nim test_positron_naive
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_fp16.nim
 ##
-## One-launch fused GDN decoder layer check, the fp16 family row.
+## One-launch fused GDN decoder layer check, the fp16 row.
 ## The same seeded generation recipe stored as fp16 bit patterns.
 ##
 ## The mega kernel's fp16 instantiation against the fp16 naive chain:
@@ -33,7 +33,7 @@ import ../naive/naive_tensors
 from ../naive/naive_qwen35_layer import naiveQwen35GdnLayer, LayerOut
 from ../naive/naive_grouped_mm import GmmFamily, gmmF16
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 import mega_bounded_wait
 
 const GridThreads: int = block:
@@ -119,7 +119,7 @@ proc buildBigHost(seed: uint64): BigHost =
   result.ring = randBits(rng, ConvDim * RingWidth, -1.0'f32, 1.0'f32)
 
 proc fillEl(buf: var PageBuf[uint16], src: seq[uint16]) =
-  ## Copies family-dtype bit patterns into a page buffer.
+  ## Copies element-dtype bit patterns into a page buffer.
   doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
     "no-copy binding needs a page-multiple byte length"
   for i in 0 ..< src.len:
@@ -132,7 +132,7 @@ proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
   for i in 0 ..< src.len:
     buf.hostPtr[i] = src[i]
 
-proc famRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
+proc fp16RangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
   ## Widened magnitude maximum over one fp16 arena section.
   for i in off ..< off + count:
     result = max(result, abs(fp16ToFp32(buf.hostPtr[i])))
@@ -247,8 +247,8 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
          sharedGVWPA, aLogPA, dtBiasPA, Eps))
   runMegaBounded(launch, counters.hostPtr, StageNames)
 
-  let stateSnap = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let ringSnap = readInto(ring.hostPtr, ConvDim * RingWidth)
+  let stateSnap = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let ringSnap = readRecord(ring.hostPtr, ConvDim * RingWidth)
   launch()
 
   proc waveSyncCheck() =
@@ -258,10 +258,10 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
         &"stage counter {i} {counters.hostPtr[i]} want 0 (the launch-end reset)"
 
   proc outputRanges() =
-    let moeMax = famRangeMax(fpA, sMoeOut, Hidden)
-    let h1Max = famRangeMax(fpA, sH1, Hidden)
-    let blockMax = famRangeMax(fpA, sBlockOut, Hidden)
-    let yMax = famRangeMax(fpA, sY, NumVHeads * HeadVDim)
+    let moeMax = fp16RangeMax(fpA, sMoeOut, Hidden)
+    let h1Max = fp16RangeMax(fpA, sH1, Hidden)
+    let blockMax = fp16RangeMax(fpA, sBlockOut, Hidden)
+    let yMax = fp16RangeMax(fpA, sY, NumVHeads * HeadVDim)
     echo &"[mega fp16] output maxima moeOut {moeMax:.4f} h1 {h1Max:.4f} " &
       &"blockOut {blockMax:.4f} y {yMax:.4f}"
     doAssert moeMax > 0.0'f32, "moeOut degenerate"
@@ -297,10 +297,10 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   waveSyncCheck()
   outputRanges()
   sentinels()
-  let fpSnap = readInto(fpA.hostPtr, BfArenaLen)
-  let f32Snap = readInto(f32A.hostPtr, F32ArenaLen)
-  let statePost = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let ringPost = readInto(ring.hostPtr, ConvDim * RingWidth)
+  let fpSnap = readRecord(fpA.hostPtr, BfArenaLen)
+  let f32Snap = readRecord(f32A.hostPtr, F32ArenaLen)
+  let statePost = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let ringPost = readRecord(ring.hostPtr, ConvDim * RingWidth)
 
   block comparison:
     var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim, cols: HeadKDim)

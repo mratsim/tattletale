@@ -21,16 +21,16 @@
 ##
 ## Inputs, all seeded xorshift64, fixture-free:
 ##
-## | input     | rule                                                                                                                   |
-## | --------- | ---------------------------------------------------------------------------------------------------------------------- |
-## | q, k      | l2-normalized per (head, token) row in fp32, then rounded to the family dtype, the kernel contract's post-l2norm shape |
-## | v, state0 | [-1, 1), the initial state never zero                                                                                  |
-## | beta      | [0.2, 0.8), edge combos carry the exact-zero beta and the near-zero decay (g -> 0-) inside the same band               |
-## | g         | [-0.5, -0.01) log-decay                                                                                                |
+## | input     | rule                                                                                                                    |
+## | --------- | ----------------------------------------------------------------------------------------------------------------------- |
+## | q, k      | l2-normalized per (head, token) row in fp32, then rounded to the element dtype, the kernel contract's post-l2norm shape |
+## | v, state0 | [-1, 1), the initial state never zero                                                                                   |
+## | beta      | [0.2, 0.8), edge combos carry the exact-zero beta and the near-zero decay (g -> 0-) inside the same band                |
+## | g         | [-0.5, -0.01) log-decay                                                                                                 |
 ##
 ## - the q, k normalization also keeps the delta-rule recursion bounded over 256 tokens in fp16 y range
 ##
-## - the family-dtype bits are the shared input, the naive sides widen them exactly, no input rounding divergence
+## - the element-dtype bits are the shared input, the naive sides widen them exactly, no input rounding divergence
 ##
 ## Band model, stated before measurement and judged per element, u₃₂ = 2⁻²⁴ the fp32
 ## unit roundoff. The chunked scan reassociates the per-token recurrence:
@@ -46,7 +46,7 @@
 ##            └──→ S ← decayed carry read + Σ_s pd(end, s)·k_s [x] u_s
 ##
 ## - the per-token walk instead applies exp(g) per token, reading and updating the state each step
-## - both naive spellings run fp64, the ceramic core runs fp32 state math with family-dtype handoffs
+## - both naive spellings run fp64, the ceramic core runs fp32 state math with element-dtype handoffs
 ## - the judged divergence is the ceramic side's rounding against the fp64 chunked reference structure
 ##
 ## | site             | bound                                                                    |
@@ -58,7 +58,7 @@
 ## | q̃ scale         | relative ≤ 2·2⁻²¹ (rsqrt-multiply vs the naive divide)                   |
 ## | u solve          | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))              |
 ## | chunk carry      | decayed old state + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)              |
-## | y store          | one family RNE, u_fam·abs(y) plus the subnormal grid floor               |
+## | y store          | one element-dtype RNE, u_step·abs(y) plus the subnormal grid floor       |
 ##
 ## - the reassociation budget per chunk is C token terms per sum (solve, y, carry) and Dk terms per dot over T/C chunks
 ##
@@ -69,7 +69,7 @@
 ##
 ## | bar            | bound                                                                                         |
 ## | -------------- | --------------------------------------------------------------------------------------------- |
-## | y (bh, t, r)   | Δy(t, r) + u_fam·abs(y_ref) + 2⁻²⁅                                                            |
+## | y (bh, t, r)   | Δy(t, r) + u_step·abs(y_ref) + 2⁻²⁅                                                           |
 ## | state (bh,r,c) | the carried ΔS recursion across chunks, chunk-local terms in the table below                  |
 ## | continuity     | barS + 2·(T·Dk)·2⁻⁵³·max(abs(S_chunked), abs(S_walk)), the fp64 chunked-vs-walk reassociation |
 ##
@@ -83,23 +83,23 @@
 ##
 ## Shapes (Dv = 16, TileR = 8, Dk = 32, grid (Dv div TileR, B·Hv), 32 lanes, one launch walks all chunks):
 ##
-## | shape    | Hk | Hv | batch | hkRatio | family | T   | chunk |
-## | -------- | --- | --- | ----- | ------- | ------ | --- | ----- |
-## | baseline | 1  | 1  | 1     | 1       | fp16   | 8   | 32    |
-## | baseline | 1  | 1  | 1     | 1       | fp16   | 64  | 32    |
-## | gqa      | 2  | 4  | 2     | 2       | fp16   | 256 | 32    |
-## | tail     | 1  | 1  | 1     | 1       | fp16   | 100 | 32    |
-## | chunk64  | 1  | 1  | 1     | 1       | fp16   | 64  | 64    |
-## | baseline | 1  | 1  | 1     | 1       | bf16   | 8   | 32    |
-## | tail     | 1  | 1  | 1     | 1       | bf16   | 100 | 32    |
-## | gqa64    | 2  | 4  | 2     | 2       | bf16   | 256 | 64    |
+## | shape    | Hk | Hv | batch | hkRatio | dtype | T   | chunk |
+## | -------- | --- | --- | ----- | ------- | ----- | --- | ----- |
+## | baseline | 1  | 1  | 1     | 1       | fp16  | 8   | 32    |
+## | baseline | 1  | 1  | 1     | 1       | fp16  | 64  | 32    |
+## | gqa      | 2  | 4  | 2     | 2       | fp16  | 256 | 32    |
+## | tail     | 1  | 1  | 1     | 1       | fp16  | 100 | 32    |
+## | chunk64  | 1  | 1  | 1     | 1       | fp16  | 64  | 64    |
+## | baseline | 1  | 1  | 1     | 1       | bf16  | 8   | 32    |
+## | tail     | 1  | 1  | 1     | 1       | bf16  | 100 | 32    |
+## | gqa64    | 2  | 4  | 2     | 2       | bf16  | 256 | 64    |
 ##
 ## - the T = 100 case carries a non-divisible tail chunk, 3 full chunks plus 4 tokens
 ## - every case starts from a non-zero random initial state
 ## - the GQA shape keeps both head-mapping terms live, the in-sequence ratio term
 ##   and the sequence-offset term, sequence 1 holding independent key heads
 ##
-## - fp16 is the family dtype under test, bf16 the range-robust fallback
+## - fp16 is the element dtype under test, bf16 the range-robust fallback
 ## - untouched-memory checks per launch, kernel-written buffers stay in their extents, kernel-read buffers stay bit-identical
 ## - run-to-run determinism, case 0 relaunched bit-identical per combination on Apple M4 Max
 
@@ -111,9 +111,9 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ../naive/naive_gdn
 import ceramic_pagebuf
-import ceramic_fam
+import ceramic_dtype
 
-# ─── Device entries, one per (family dtype, chunk length) binding ─────
+# ─── Device entries, one per (element dtype, chunk length) binding ─────
 
 const GdnPrefillMsl = metal:
   proc cer_gdn_prefill_fp16_c32(
@@ -174,7 +174,7 @@ proc gdnChunkTraceBars(
     s0w: NaiveCube[float64], qw, kw: NaiveCube[float64], vw: NaiveCube[float64],
     bw, gw: NaiveMat[float64],
     Hv, Hk, hkRatio, T, chunkLen, Dv, Dk: int,
-    uFam: float64): TraceBars =
+    uStep: float64): TraceBars =
   let bhMax = s0w.planes
   result.barY = newSeq[float64](bhMax * T * Dv)
   result.barS = newSeq[float64](bhMax * Dv * Dk)
@@ -285,10 +285,10 @@ proc gdnChunkTraceBars(
             yAbsSum += bTerm
             yErr += bAbs * du[s * Dv + r] + dB * abs(uRef[s * Dv + r])
             yRef += pdRefA[t * chunkLen + s] * qkdotA[t * chunkLen + s] * uRef[s * Dv + r]
-          # the adds round once per term, the family store rounds once per element
+          # the adds round once per term, the element-dtype store rounds once per element
           let dY = yErr + float64(t + 1) * U32 * yAbsSum + U32 * abs(yRef)
           result.barY[(bh * T + gt) * Dv + r] =
-            dY + uFam * abs(yRef) + FloorSub
+            dY + uStep * abs(yRef) + FloorSub
       # carry out of the chunk, the reference formula and its bound
       let decayEnd = exp(cumulogdecay[cLen - 1])
       for r in 0 ..< Dv:
@@ -336,7 +336,7 @@ proc sliceMat[T](m: NaiveMat[T], row0, rows: int): NaiveMat[T] =
 
 
 type PrefillInputs = object
-  ## One case's seeded inputs, family-dtype bits shared by the kernel and the naive
+  ## One case's seeded inputs, element-dtype bits shared by the kernel and the naive
   ## sides through their exact widenings:
   ##
   ## | field    | shape              |
@@ -353,34 +353,33 @@ type PrefillInputs = object
   gVals: seq[float32]
   state0: seq[float32]
 
-proc l2NormalizeRows(dst: var seq[uint16], dt: Dtype, rows, cols: int, rng: var NaiveRng) =
-  ## Fills `dst` with l2-normalized family-dtype rows, the kernel contract's
+proc l2NormalizeRows(dst: var seq[uint16], dt: ScalarKind, rows, cols: int, rng: var NaiveRng) =
+  ## Fills `dst` with l2-normalized element-dtype rows, the kernel contract's
   ## post-l2norm query/key shape:
   ##
-  ## - each fp32 row is normalized to unit l2 norm, then rounded to the family dtype
+  ## - each fp32 row is normalized to unit l2 norm, then rounded to the element dtype
   for r in 0 ..< rows:
     var norm2 = 0.0'f64
     for c in 0 ..< cols:
       let x = rng.nextF32(-1.0'f32, 1.0'f32).float64
       norm2 += x * x
-      dst[r * cols + c] = toDtypeBits(dt, x.float32)
+      dst[r * cols + c] = x.float32.narrowTo(dt)
     let inv = 1.0 / sqrt(norm2)
     for c in 0 ..< cols:
-      dst[r * cols + c] = toDtypeBits(dt,
-        (widenDtype(dt, dst[r * cols + c]).float64 * inv).float32)
+      dst[r * cols + c] = (dst[r * cols + c].widenTo(dt).float64 * inv).float32.narrowTo(dt)
 
-proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false): PrefillInputs =
+proc takeInputs(dt: ScalarKind, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false): PrefillInputs =
   var qBits = newSeq[uint16](qkRows * T * Dk)
   var kBits = newSeq[uint16](qkRows * T * Dk)
   l2NormalizeRows(qBits, dt, qkRows * T, Dk, rng)
   l2NormalizeRows(kBits, dt, qkRows * T, Dk, rng)
   var vBits = newSeq[uint16](bhMax * T * Dv)
   for i in 0 ..< bhMax * T * Dv:
-    vBits[i] = toDtypeBits(dt, rng.nextF32(-1.0'f32, 1.0'f32))
+    vBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
   var betaBits = newSeq[uint16](bhMax * T)
   for i in 0 ..< bhMax * T:
-    betaBits[i] = (if betaZero: toDtypeBits(dt, 0.0'f32)
-                   else: toDtypeBits(dt, rng.nextF32(0.2'f32, 0.8'f32)))
+    betaBits[i] = (if betaZero: 0.0'f32.narrowTo(dt)
+                   else: rng.nextF32(0.2'f32, 0.8'f32).narrowTo(dt))
   var gVals = newSeq[float32](bhMax * T)
   for i in 0 ..< bhMax * T:
     # the span overrides exist for the edge combos, gLo 0.0 is the sentinel
@@ -396,8 +395,8 @@ proc takeInputs(dt: Dtype, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk: int, gLo
 var suiteCases, suiteLaunches, suiteYExact, suiteYTotal = 0
 var suiteWorstUse, suiteWorstState, suiteWorstCont, suiteWorstYUlp = 0.0'f64
 
-proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
-  ## One (family dtype, shape) combination, judged per element against the fp64 chunked
+proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
+  ## One (element dtype, shape) combination, judged per element against the fp64 chunked
   ## reference and the fp64 per-token walk under the band model, relaunched bit-identical.
   const Dv = 16
   const Dk = 32
@@ -407,11 +406,12 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
   let stateElems = bhMax * Dv * Dk
   let yElems = bhMax * T * Dv
   let kernelName =
-    if dt == dtypeF16:
+    if dt == kFloat16:
       if chunkLen == 32: "cer_gdn_prefill_fp16_c32" else: "cer_gdn_prefill_fp16_c64"
     else:
       if chunkLen == 32: "cer_gdn_prefill_bf16_c32" else: "cer_gdn_prefill_bf16_c64"
-  let uFam = if dt == dtypeBf16: UBf16 else: UF16
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
 
   var stateB = allocPageBuf[float32](stateElems)
   var yB = allocPageBuf[uint16](yElems)
@@ -476,7 +476,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
     ## Naive references, bars, launch, sentinels and the per-element judgment.
     ## `record` false marks the determinism relaunch, bit-compared against the first pass.
     fillInputs(si)
-    # fp64 widened inputs, the naive sides consume exactly the family bits
+    # fp64 widened inputs, the naive sides consume exactly the element bits
     var s0w = NaiveCube[float64](planes: bhMax, rows: Dv, cols: Dk)
     s0w.data = newSeq[float64](stateElems)
     for i in 0 ..< stateElems:
@@ -486,18 +486,18 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
     qw.data = newSeq[float64](qkRows * T * Dk)
     kw.data = newSeq[float64](qkRows * T * Dk)
     for i in 0 ..< qkRows * T * Dk:
-      qw.data[i] = widenDtype64(dt, si.qBits[i])
-      kw.data[i] = widenDtype64(dt, si.kBits[i])
+      qw.data[i] = si.qBits[i].widenTo(dt).float64
+      kw.data[i] = si.kBits[i].widenTo(dt).float64
     var vw = NaiveCube[float64](planes: bhMax, rows: T, cols: Dv)
     vw.data = newSeq[float64](bhMax * T * Dv)
     for i in 0 ..< bhMax * T * Dv:
-      vw.data[i] = widenDtype64(dt, si.vBits[i])
+      vw.data[i] = si.vBits[i].widenTo(dt).float64
     var bw = NaiveMat[float64](rows: bhMax, cols: T)
     bw.data = newSeq[float64](bhMax * T)
     var gw = NaiveMat[float64](rows: bhMax, cols: T)
     gw.data = newSeq[float64](bhMax * T)
     for i in 0 ..< bhMax * T:
-      bw.data[i] = widenDtype64(dt, si.betaBits[i])
+      bw.data[i] = si.betaBits[i].widenTo(dt).float64
       gw.data[i] = si.gVals[i].float64
 
     # the naive references are per-sequence, B sequences take B independent naive
@@ -528,7 +528,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
         yPerGlobal[(b * Hv) * T * Dv + i] = yWalk.data[i]
 
     let bars = gdnChunkTraceBars(s0w, qw, kw, vw, bw, gw,
-      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uFam)
+      Hv, Hk, hkRatio, T, chunkLen, Dv, Dk, uStep)
 
     launch(si)
     sentinels(si)
@@ -557,12 +557,12 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
           for r in 0 ..< Dv:
             let i = (bh * T + t) * Dv + r
             let yWant = yN[i]
-            let yGot = widenDtype(dt, yB.hostPtr[i]).float64
+            let yGot = yB.hostPtr[i].widenTo(dt).float64
             let yDiff = abs(yGot - yWant)
             doAssert yDiff <= bars.barY[i],
               &"y outside the bar at (bh {bh}, t {t}, r {r}): " &
               &"{yDiff:.3e} > {bars.barY[i]:.3e}"
-            let uAt = dtypeUlp(dt, yWant)
+            let uAt = ulpStepAt(ulpG, yWant)
             if uAt > 0.0 and yDiff > 0.0:
               worstYUlp = max(worstYUlp, yDiff / uAt)
             if yDiff == 0.0:
@@ -581,7 +581,7 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
           &"continuity outside the bar at element {i}: {cDiff:.3e} > {contBar[i]:.3e}"
         if contBar[i] > 0.0: worstCont = max(worstCont, cDiff / contBar[i])
 
-  proc snapshot(): tuple[st: seq[float32], y: seq[uint16]] =
+  proc record(): tuple[st: seq[float32], y: seq[uint16]] =
     var st = newSeq[float32](stateElems)
     for i in 0 ..< stateElems: st[i] = stateB.hostPtr[i]
     var yy = newSeq[uint16](yElems)
@@ -595,22 +595,22 @@ proc runCase(engine: HwEngine, dt: Dtype, Hv, Hk, hkRatio, B, T, chunkLen: int, 
     let si = takeInputs(dt, rng, bhMax, qkRows, T, Dv, Dk, gLoOverride,
       gHiOverride, betaZero)
     judge(si, record = true)
-    if caseId == 0: case0 = snapshot()
+    if caseId == 0: case0 = record()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
     var rng0 = initNaiveRng(seed)
     let si = takeInputs(dt, rng0, bhMax, qkRows, T, Dv, Dk, gLoOverride,
       gHiOverride, betaZero)
     judge(si, record = false)
-    let again = snapshot()
+    let again = record()
     for i in 0 ..< stateElems:
       doAssert again.st[i] == case0.st[i], "state differs run to run"
     for i in 0 ..< yElems:
       doAssert again.y[i] == case0.y[i], "y differs run to run"
 
-  echo &"[{label} {dtypeName(dt)} T={T} C={chunkLen}] cases={cases} launches={launches} | " &
+  echo &"[{label} {ulpDatatypeName(ulpG)} T={T} C={chunkLen}] cases={cases} launches={launches} | " &
     &"state worst |ΔS| {worstState:.3e}, worst bar usage {worstStateUse:.3f} | " &
-    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {dtypeName(dt)} ulp, " &
+    &"continuity worst usage {worstCont:.3f} | y worst {worstYUlp:.2f} {ulpDatatypeName(ulpG)} ulp, " &
     &"bit-exact {yExact}/{yTotal}, worst bar usage {worstYUse:.3f}"
   suiteCases += cases
   suiteLaunches += launches
@@ -630,61 +630,61 @@ proc main =
 
   proc secF16T8 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 8, 32, 0xC04D0401'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 8, 32, 0xC04D0401'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16T64 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 0xC04D0402'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 32, 0xC04D0402'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Gqa =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 4, 2, 2, 2, 256, 32, 0xC04D0403'u64,
+    runCase(engine, kFloat16, 4, 2, 2, 2, 256, 32, 0xC04D0403'u64,
       "gqa Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16Tail =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 100, 32, 0xC04D0404'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 100, 32, 0xC04D0404'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secF16C64 =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 64, 0xC04D0405'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 64, 0xC04D0405'u64,
       "chunk64 Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16T8 =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 8, 32, 0xC04D0406'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 8, 32, 0xC04D0406'u64,
       "baseline Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Tail =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 100, 32, 0xC04D0407'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 100, 32, 0xC04D0407'u64,
       "tail Hk=1/Hv=1/B=1")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secBf16Gqa64 =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 4, 2, 2, 2, 256, 64, 0xC04D0408'u64,
+    runCase(engine, kBfloat16, 4, 2, 2, 2, 256, 64, 0xC04D0408'u64,
       "gqa64 Hk=2/Hv=4/B=2")
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeNearZeroG =
     let t0 = epochTime()
-    runCase(engine, dtypeF16, 1, 1, 1, 1, 64, 32, 0xC04D04A7'u64,
+    runCase(engine, kFloat16, 1, 1, 1, 1, 64, 32, 0xC04D04A7'u64,
       "edge g->0- Hk=1/Hv=1/B=1", -0.001'f32, 0.0'f32)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 
   proc secEdgeBetaZero =
     let t0 = epochTime()
-    runCase(engine, dtypeBf16, 1, 1, 1, 1, 64, 32, 0xC04D04A8'u64,
+    runCase(engine, kBfloat16, 1, 1, 1, 1, 64, 32, 0xC04D04A8'u64,
       "edge beta=0 Hk=1/Hv=1/B=1", betaZero = true)
     echo &"  wall clock {epochTime() - t0:.2f} s"
 

@@ -195,12 +195,12 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
     assertReadUnchanged(gateB, ci.gateBits)
     assertReadUnchanged(wB, ci.wBits)
 
-  proc snapshotOut(): seq[uint16] =
+  proc recordOut(): seq[uint16] =
     result = newSeq[uint16](nElems)
     for i in 0 ..< nElems:
       result[i] = outB.hostPtr[i]
 
-  var case0Snapshot: seq[uint16]
+  var case0record: seq[uint16]
   var rng = initNaiveRng(seed)
   for caseId in 0 ..< cases:
     let ci = takeInputs(rng)
@@ -208,7 +208,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
     load(ci)
     launchFused(ci)
     sentinels(ci)
-    let fused = snapshotOut()
+    let fused = recordOut()
 
     for m in 0 ..< M:
       let relRstd = relRstdOf(ci.xBits, eps, m)
@@ -238,16 +238,16 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
         "composed pair not bit-identical to the fused entry"
 
     if caseId == 0:
-      case0Snapshot = fused
+      case0record = fused
 
   block determinism:
     var rng0 = initNaiveRng(seed)
     let ci0 = takeInputs(rng0)
     load(ci0)
     launchFused(ci0)
-    let again = snapshotOut()
+    let again = recordOut()
     for i in 0 ..< nElems:
-      doAssert again[i] == case0Snapshot[i], "out differs run to run"
+      doAssert again[i] == case0record[i], "out differs run to run"
 
   echo &"[{label} M={M}] cases={cases} launches={launches} " &
     &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"

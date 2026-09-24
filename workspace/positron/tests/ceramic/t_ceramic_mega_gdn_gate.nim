@@ -68,7 +68,7 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
 import mega_bounded_wait
-import ceramic_fam
+import ceramic_dtype
 
 # ─── Expiry hook, the wedged outcome recorded instead of terminal ─────
 
@@ -360,10 +360,10 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   # Continuation pre-image:
   #   the launch above advanced state and ring, the arenas hold its outputs, the next launches replay one decode step
   #   from this exact pre-image with the same kernel-read rows.
-  let preBf = readInto(bfA.hostPtr, BfArenaLen)
-  let preF32 = readInto(f32A.hostPtr, F32ArenaLen)
-  let preState = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let preRing = readInto(ring.hostPtr, ConvDim * RingWidth)
+  let preBf = readRecord(bfA.hostPtr, BfArenaLen)
+  let preF32 = readRecord(f32A.hostPtr, F32ArenaLen)
+  let preState = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let preRing = readRecord(ring.hostPtr, ConvDim * RingWidth)
 
   # Reference continuation launch:
   #   one bounded launch over the restored pre-image, the counters host-zeroed,
@@ -371,10 +371,10 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   restorePreimage(preBf, preF32, preState, preRing)
   zeroCounters()
   runMegaBounded(launch, counters.hostPtr, StageNames)
-  let refBf = readInto(bfA.hostPtr, BfArenaLen)
-  let refF32 = readInto(f32A.hostPtr, F32ArenaLen)
-  let refState = readInto(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let refRing = readInto(ring.hostPtr, ConvDim * RingWidth)
+  let refBf = readRecord(bfA.hostPtr, BfArenaLen)
+  let refF32 = readRecord(f32A.hostPtr, F32ArenaLen)
+  let refState = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let refRing = readRecord(ring.hostPtr, ConvDim * RingWidth)
   countersZeroWhere("the reference continuation launch")
 
   # Self-reset case:
@@ -384,8 +384,8 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   restorePreimage(preBf, preF32, preState, preRing)
   countersZeroWhere("before the self-reset relaunch")
   runMegaBounded(launch, counters.hostPtr, StageNames)
-  let selfResetBf = readInto(bfA.hostPtr, BfArenaLen)
-  let selfResetF32 = readInto(f32A.hostPtr, F32ArenaLen)
+  let selfResetBf = readRecord(bfA.hostPtr, BfArenaLen)
+  let selfResetF32 = readRecord(f32A.hostPtr, F32ArenaLen)
   doAssert bitDiffCount(selfResetBf, refBf) == 0,
     "the self-reset relaunch's bf arena left the reference continuation"
   doAssert bitDiffCount(selfResetF32, refF32) == 0,
@@ -414,8 +414,8 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
       &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
       &"{BfArenaLen + F32ArenaLen}, stale-count garbage wedges the launch"
     quit(0)
-  let staleBf = readInto(bfA.hostPtr, BfArenaLen)
-  let staleF32 = readInto(f32A.hostPtr, F32ArenaLen)
+  let staleBf = readRecord(bfA.hostPtr, BfArenaLen)
+  let staleF32 = readRecord(f32A.hostPtr, F32ArenaLen)
   let staleBfMismatches = bitDiffCount(staleBf, refBf)
   let staleF32Mismatches = bitDiffCount(staleF32, refF32)
   echo &"[mega gate] stale-counter relaunch bf arena mismatches " &
