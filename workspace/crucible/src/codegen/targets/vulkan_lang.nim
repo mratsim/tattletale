@@ -397,10 +397,10 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # Vulkan spells it `barrier()`.
       result = indentStr & "barrier()"
     of gbkThreadgroupBarrierDevice:
-      # GLSL's barrier() orders shared memory, the buffer barrier adds
-      # the device-address-space ordering.
-      result = indentStr & "barrier()" & "\n" & indentStr &
-               "memoryBarrierBuffer()"
+      # GLSL's barrier() orders shared memory only, memoryBarrierBuffer()
+      # runs first, the buffer writes then ordered before the barrier
+      result = indentStr & "memoryBarrierBuffer();" & "\n" & indentStr &
+               "barrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:

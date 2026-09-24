@@ -14,9 +14,9 @@ import workspace/crucible
 
 const deviceExchangeMsl = metal:
   proc deviceExchangeKernel(output: ptr UncheckedArray[uint32]) {.global.} =
-    # Thread t writes the slot belonging to thread (63 - t), reads back
-    # the slot written by thread (63 - t), the exchange the fence orders.
-    output[blockIdx.x * 64'u32 + 63'u32 - thread_position_in_threadgroup.x] =
+    # Thread t writes its own slot, then copies the slot written by thread
+    # (63 - t) into its own slot, the exchange the fence orders.
+    output[blockIdx.x * 64'u32 + thread_position_in_threadgroup.x] =
       blockIdx.x * 64'u32 + thread_position_in_threadgroup.x
     threadgroup_barrier_device()
     output[blockIdx.x * 64'u32 + thread_position_in_threadgroup.x] =
@@ -34,7 +34,7 @@ proc runTest() =
       var res: array[128, uint32]
       engine.run<<(grid: (2, 1), blk: (64, 1))>>("deviceExchangeKernel", res, ())
       for i in 0 ..< 128:
-        check res[i] == uint32(i)
+        check res[i] == uint32((i div 64) * 64 + 63 - (i mod 64))
 
 when isMainModule:
   runTest()

@@ -450,9 +450,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # WGSL spells it `workgroupBarrier()`.
       result = indentStr & "workgroupBarrier()"
     of gbkThreadgroupBarrierDevice:
-      # WGSL has no combined barrier, the workgroup + storage pair orders
-      # both address spaces the device-scope barrier guards.
-      result = indentStr & "workgroupBarrier()" & "\n" & indentStr &
+      # WGSL has no combined barrier, workgroupBarrier() runs first,
+      # storageBarrier() then orders the storage address space
+      result = indentStr & "workgroupBarrier();" & "\n" & indentStr &
                "storageBarrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
