@@ -14,6 +14,7 @@
 ##   C[M, N] += α · f(A[M, K] × B[K, N]) + β · C[M, N]
 
 import std/math
+import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
@@ -108,8 +109,6 @@ proc autoTileParams(atom: static MmaAtom; T: typedesc; M, K: int): tuple[mc, kc:
 # ═══════════════════════════════════════════════════════════════════════════
 #  Micro-kernel dispatch
 # ═══════════════════════════════════════════════════════════════════════════
-
-import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 
 const simdArch {.strdefine.} = "auto"
 

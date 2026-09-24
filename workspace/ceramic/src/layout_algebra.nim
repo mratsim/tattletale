@@ -312,6 +312,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 # ═══════════════════════════════════════════════════════════════
 #  compose — layout composition
 # ═══════════════════════════════════════════════════════════════
+
 ##
 ## `compose(A, B)` produces a layout `R` such that `R(i) = A(B(i))`
 ## for all `i` in `0..cosize(B)-1`.
@@ -554,6 +555,7 @@ func logical_divide*(layout: Layout; tiler: tuple): auto {.inline.} =
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest
 # ═══════════════════════════════════════════════════════════════
+
 template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
   ## Unzip a logical_divide/logical_product result according to a tiler.
   ## Returns a rank-2 Layout: ((tile_modes), (rest_modes)).

@@ -74,6 +74,7 @@ import ../naive/naive_rng
 import ../naive/naive_tensors
 import ceramic_pagebuf
 import ceramic_dtype
+from ../../src/kernels/ceramic/math_consts import Log2e
 
 # ─── Device entries, one per (element dtype, shape) binding ────────────
 
@@ -154,7 +155,6 @@ const MoeRouterMsl = metal:
 # whose host body is a discard, so std/math's exp2 cannot be called here
 proc exp2fHost(x: cfloat): cfloat {.importc: "exp2f", header: "<math.h>".}
 
-from ../../src/kernels/ceramic/math_consts import Log2e
 
 const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,

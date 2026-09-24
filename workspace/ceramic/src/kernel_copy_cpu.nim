@@ -47,6 +47,7 @@ import ./tensors
 
 
 # ── compile-time helpers ────────────────────────────────────────
+
 proc flatTupleLen(t: NimNode): int {.compileTime.} =
   ## Count leaf elements in a (possibly nested) tuple type.
   if t.kind == nnkTupleConstr:

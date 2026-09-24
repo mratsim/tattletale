@@ -59,6 +59,7 @@ func getReductionTree*(A: static MmaAtom): ReductionTree =
 # ═════════════════════════════════════════════════════════════════════════
 #  The row-reduction family
 # ═════════════════════════════════════════════════════════════════════════
+
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
     dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A]) =

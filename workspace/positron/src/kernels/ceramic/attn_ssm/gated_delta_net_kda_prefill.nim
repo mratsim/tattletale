@@ -93,6 +93,11 @@
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
 from ../math_consts import Log2e
+import workspace/crucible
+import workspace/ceramic
+
+export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
+       ptr_arithmetic, tile_algebra
 
 template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
   ## Loads the k / cumulogdecay register-tile pair of one past token:
@@ -105,11 +110,6 @@ template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
   ##     flat row index `base`
   k32.loadTile(glK, (base, 0, 0, 0))
   cumulogdecayS.loadTile(glCumulogdecay, (base, 0, 0, 0))
-import workspace/crucible
-import workspace/ceramic
-
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 

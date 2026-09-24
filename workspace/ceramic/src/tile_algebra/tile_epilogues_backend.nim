@@ -52,6 +52,7 @@ template shardView*[T; R, C: static int; A: static MmaAtom](
 # ═════════════════════════════════════════════════════════════════════════
 #  Type introspection helpers
 # ═════════════════════════════════════════════════════════════════════════
+
 func isTensorViewType(n: NimNode): bool =
   n.kind == nnkBracketExpr and n[0].eqIdent("TensorView")
 
