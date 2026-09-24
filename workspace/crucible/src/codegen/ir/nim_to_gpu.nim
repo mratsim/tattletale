@@ -23,8 +23,7 @@ proc unwrapSingleStmt(n: NimNode): NimNode =
     n
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[],
-               inConstDef = false): GpuAst
+               staticValueMask: seq[int] = @[]): GpuAst
 
 proc isTypeDescNode(n: NimNode): bool =
   ## True when the node is a TYPE used as a value: a generic type parameter
@@ -41,6 +40,11 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
                          staticValueMask: seq[int] = @[]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
+  ## `staticValueMask` lists the indices of `static T` value parameters
+  ## in the ORIGINAL definition (nnkStaticTy)
+  ## - the instantiated type node of a static value param IS the value,
+  ##   so the mask is not re-derivable at the call site
+  ## - threaded from the generic-instantiation scan
   ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
   ## no runtime value in the emitted GPU source and the caller side erases the
   ## matching argument (see the nnkCall handler), keeping call/callee arity
@@ -327,9 +331,33 @@ proc buildEmitStmt(ctx: var GpuContext, reg: var TypeRegistry, emitArg: NimNode)
     else:
       result.parts.add GpuEmitPart(kind: peExpr, expr: ctx.toGpuAst(reg, part))
 
+proc toConstDefName(ctx: var GpuContext, identNode: NimNode): GpuAst =
+  ## Constexpr identifier for a `nnkConstDef`'s own name
+  ## - `toGpuAst` inlines a `nskConst` symbol to its value at reference sites
+  ## - a definition's own name must never inline into itself
+  ## - building it here keeps the `nskConst` branch on reference sites
+  if identNode.kind in {nnkIdent, nnkOpenSymChoice}:
+    result = newGpuIdent()
+    result.symbol.name = identNode.repr
+    return
+  let sanitized = identNode.repr.multiReplace(("`", "_"))
+  let s = sanitized & "_" & identNode.signatureHash()
+  if s notin ctx.sigTab:
+    result = newGpuIdent()
+    result.symbol.name = sanitized
+    result.symbol.iSym = s
+    if result.symbol.name == "_":
+      result.symbol.name = "underscore"
+    elif result.symbol.name.startsWith("tmpTuple_"):
+      result.symbol.name = "tmpTuple_" & $ctx.genSymCount
+      result.symbol.iSym = result.symbol.name & "_" & identNode.signatureHash()
+      inc ctx.genSymCount
+    ctx.sigTab[s] = result
+  else:
+    result = ctx.sigTab[s]
+
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[],
-               inConstDef = false): GpuAst =
+               staticValueMask: seq[int] = @[]): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
@@ -805,10 +833,10 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # name an undeclared global, device kernel globals only carry the device
     # proc's own const sections lifted from the body. The value expression is
     # getImpl(node)[2]. Recursing on the whole def would loop, the name child
-    # is also the ident. The const-def walker passes the definition's own name
-    # ident with `inConstDef = true`, so the inline fires only at reference
-    # sites. Symbol kind alone cannot distinguish the two.
-    if symKind(node) == nskConst and not inConstDef:
+    # is also the ident.
+    # Const-def names go through toConstDefName directly, so this branch
+    # sees reference sites only (a definition's own ident is never inlined).
+    if symKind(node) == nskConst:
       let impl = getImpl(node)
       let nameIdent = if impl[0].kind == nnkPragmaExpr: impl[0][0] else: impl[0]
       if node.lineinfo != nameIdent.lineinfo:
@@ -1054,7 +1082,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkConstDef:
     let identNode = if node[0].kind == nnkPragmaExpr: node[0][0] else: node[0]
     result = GpuAst(kind: gpuConstexpr,
-                    cIdent: ctx.toGpuAst(reg, identNode, inConstDef = true),
+                    cIdent: ctx.toConstDefName(identNode),
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
     result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later
