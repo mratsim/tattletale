@@ -50,6 +50,8 @@
 ## | geometry | the Qwen bf16 class: hidden 2048, convDim 8192, Hv 32, Hk 16, Dk = Dv = 128, conv kernel 4, router softmax top-8 over 256 experts, intermediate 512 |
 ## | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 
+from gdn_moe_layer_graph import stageNames
+export gdn_moe_layer_graph.stageNames
 from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
@@ -186,12 +188,54 @@ const
   EndStageMoeDecode* = StageEnds[11]
   EndStageMerge* = StageEnds[12]
 
-const StageNames*: array[13, string] = [
-    "norm1+residual", "qkv-gemv", "z-gemv", "ab-proj", "conv", "qk-l2norm",
-    "gate-values", "gdn-state", "o-norm", "out-proj", "fold+norm2",
-    "moe-fwd", "moe-merge"]
-  ## Stage labels for the bounded-wait expiry diagnostic, in counter-index
-  ## order over the dispatcher's 13 stages.
+const
+  # Dispatcher waveWait pairs, one spelling per pair, the ladder's
+  # call sites cast them at the call.
+  #
+  # - a bare const reference stays a symbolic identifier in the MSL,
+  #   the explicit cast folds
+  # - C names the counter index waited on, T names the target count,
+  #   the producer stage's threadgroup total
+  WaitQkvC* = 0'i32
+  WaitQkvT* = 1'u32
+
+  WaitZC* = 0'i32
+  WaitZT* = 1'u32
+
+  WaitAbProjC* = 0'i32
+  WaitAbProjT* = 1'u32
+
+  WaitConvC* = 1'i32
+  WaitConvT* = 128'u32
+
+  WaitQkL2normC* = 4'i32
+  WaitQkL2normT* = 128'u32
+
+  WaitGateValuesC* = 3'i32
+  WaitGateValuesT* = 2'u32
+
+  WaitGdnStateC1* = 5'i32
+  WaitGdnStateT1* = 4'u32
+  WaitGdnStateC2* = 4'i32
+  WaitGdnStateT2* = 128'u32
+  WaitGdnStateC3* = 6'i32
+  WaitGdnStateT3* = 1'u32
+  WaitONormC1* = 7'i32
+  WaitONormT1* = 512'u32
+  WaitONormC2* = 2'i32
+  WaitONormT2* = 64'u32
+  WaitOutProjC* = 8'i32
+  WaitOutProjT* = 4'u32
+
+  WaitFoldNorm2C* = 9'i32
+  WaitFoldNorm2T* = 32'u32
+
+  WaitMoeDecodeC* = 10'i32
+  WaitMoeDecodeT* = 1'u32
+
+  WaitMoeMergeC* = 11'i32
+  WaitMoeMergeT* = 9'u32
+
 
 static:
   var waveTotal = 0'u32
@@ -450,24 +494,23 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
 
   if tx == 0:
     when HaveNorm:
-      # Stage 1:
-      #   the residual add plus the bias-one norm1, one bf16
-      # round each. The deferred-add decoder contract, the norm
-      # consumes the rounded stream, the fold re-adds it downstream.
+      # the residual add plus the bias-one norm1, one bf16 round each,
+      # the deferred-add decoder contract, the norm consumes the rounded
+      # stream and the fold re-adds it downstream
       normRow(xPrev, rPrev, norm1W, (bfA +% sStream), (bfA +% sNorm1), eps)
     waveAdd(counters, 0)
   elif tx < int32(EndStageQkv):
-    waveWait(counters, 0, 1)
+    waveWait(counters, int32(WaitQkvC), WaitQkvT)
     dense_linear_tile_fwd(
       (bfA +% sQkvCol), (bfA +% sNorm1), qkvW, 8192, 2048, 1, tx - 1, 0)
     waveAdd(counters, 1)
   elif tx < int32(EndStageZ):
-    waveWait(counters, 0, 1)
+    waveWait(counters, int32(WaitZC), WaitZT)
     dense_linear_tile_fwd(
       (bfA +% sZ), (bfA +% sNorm1), zW, 4096, 2048, 1, tx - int32(EndStageQkv), 0)
     waveAdd(counters, 2)
   elif tx < int32(EndStageAbProj):
-    waveWait(counters, 0, 1)
+    waveWait(counters, int32(WaitAbProjC), WaitAbProjT)
     if tx == int32(EndStageZ):
       dense_linear_tile32_fwd(
         (bfA +% sA), (bfA +% sNorm1), aW, 32, 2048, 1, 0, 0)
@@ -476,15 +519,14 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
         (bfA +% sB), (bfA +% sNorm1), bW, 32, 2048, 1, 0, 0)
     waveAdd(counters, 3)
   elif tx < int32(EndStageConv):
-    waveWait(counters, 1, 128)
+    waveWait(counters, int32(WaitConvC), WaitConvT)
     convRingChannels(convW, ring, (bfA +% sQkvCol), (bfA +% sConv),
       (tx - int32(EndStageAbProj)) * 64)
     waveAdd(counters, 4)
   elif tx < int32(EndStageQkL2norm):
-    # Stage 6:
-    #   the q/k l2 normalization, 4 q rows then 4 k rows per threadgroup,
-    # gathered straight from the conv column's head rows.
-    waveWait(counters, 4, 128)
+    # the q/k l2 normalization, 4 q rows then 4 k rows per threadgroup,
+    # gathered straight from the conv column's head rows
+    waveWait(counters, int32(WaitQkL2normC), WaitQkL2normT)
     let row0 = (tx - int32(EndStageConv)) * 512
     for r in 0'i32 ..< 4:
       l2normRow((bfA +% sConv +% (row0 + r * 128)),
@@ -494,19 +536,18 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
         (bfA +% sKN +% (row0 + r * 128)), 128)
     waveAdd(counters, 5)
   elif tx == int32(EndStageQkL2norm):
-    waveWait(counters, 3, 2)
+    waveWait(counters, int32(WaitGateValuesC), WaitGateValuesT)
     gateValues((bfA +% sA), (bfA +% sB), dtBias, aLog,
       (f32A +% sG), (bfA +% sBeta))
     waveAdd(counters, 6)
   elif tx < int32(EndStageGdnState):
-    # Stage 8:
-    #   the gated-delta-rule step, one (head, Dv block) state
-    # tile per threadgroup, state updated in place. The value rows
-    # read straight out of the conv column's value channels.
+    # the gated-delta-rule step, one (head, Dv block) state tile per
+    # threadgroup with the state updated in place, the value rows read
+    # straight out of the conv column's value channels
     let local = tx - int32(EndStageGateValues)
-    waveWait(counters, 5, 4)
-    waveWait(counters, 4, 128)
-    waveWait(counters, 6, 1)
+    waveWait(counters, int32(WaitGdnStateC1), WaitGdnStateT1)
+    waveWait(counters, int32(WaitGdnStateC2), WaitGdnStateT2)
+    waveWait(counters, int32(WaitGdnStateC3), WaitGdnStateT3)
     gatedDeltaDecodeStepTileAt(state, (bfA +% sY), (bfA +% sKN), (bfA +% sQN),
       (bfA +% sConv +% (2 * NumKHeads * HeadKDim)), (f32A +% sG),
       (bfA +% sBeta), 0'f32, int32(NumVHeads), int32(NumKHeads), int32(HkRatio),
@@ -514,8 +555,8 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
       Dk = 128, Dv = 128, TileR = 8)
     waveAdd(counters, 7)
   elif tx < int32(EndStageONorm):
-    waveWait(counters, 7, 512)
-    waveWait(counters, 2, 64)
+    waveWait(counters, int32(WaitONormC1), WaitONormT1)
+    waveWait(counters, int32(WaitONormC2), WaitONormT2)
     # o_norm weight binding
     # - the checkpoint ships the per-head norm weights
     # - head bh's row sits at onormW[bh·Dv ..< (bh + 1)·Dv] over the (Hv, Dv)
@@ -525,7 +566,7 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
       onormW, 32, eps, tx - int32(EndStageGdnState), 128, 8, 128)
     waveAdd(counters, 8)
   elif tx < int32(EndStageOutProj):
-    waveWait(counters, 8, 4)
+    waveWait(counters, int32(WaitOutProjC), WaitOutProjT)
     dense_linear_tile_fwd(
       (bfA +% sBlockOut), (bfA +% sNormed), outprojW, 2048, 4096, 1,
       tx - int32(EndStageONorm), 0)
@@ -538,24 +579,23 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
         waveReset(counters, 13)
   elif tx == int32(EndStageOutProj):
     when HaveNorm:
-      # Stage 11:
-      #   the residual fold plus the bias-one post-LN norm,
-      # one store round each, the fold's sum becoming
-      # the new residual of the deferred-add contract.
-      waveWait(counters, 9, 32)
+      # the residual fold plus the bias-one post-LN norm, one store
+      # round each, the fold's sum becoming the deferred-add contract's
+      # new residual stream anchor
+      waveWait(counters, int32(WaitFoldNorm2C), WaitFoldNorm2T)
       normRow((bfA +% sStream), (bfA +% sBlockOut), norm2W,
         (bfA +% sH1), (bfA +% sNormed2), eps)
     waveAdd(counters, 10)
   elif tx < int32(EndStageMoeDecode):
     when HaveNorm:
-      waveWait(counters, 10, 1)
+      waveWait(counters, int32(WaitMoeDecodeC), WaitMoeDecodeT)
       moe_fwd_decode_at[T, 2048, 256, 8, 512, 1.0'f32, true]((f32A +% sPartial), (bfA +% sNormed2), routerW, gateUpW,
         downW, sharedGW, sharedUW, sharedDW, sharedGVW,
         (bfA +% sH), (bfA +% sHs), 0, tx - int32(EndStageFoldNorm2))
     waveAdd(counters, 11)
   else:
     when HaveNorm:
-      waveWait(counters, 11, 9)
+      waveWait(counters, int32(WaitMoeMergeC), WaitMoeMergeT)
       moe_decode_merge_at[T, 2048, 8](
         (bfA +% sMoeOut), (f32A +% sPartial), 0, tx - int32(EndStageMoeDecode))
     waveAdd(counters, 12)

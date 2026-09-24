@@ -22,7 +22,7 @@
 ##
 ## | aspect     | value                                                                                                 |
 ## | ---------- | ----------------------------------------------------------------------------------------------------- |
-## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `own` fragment-cell mapping |
+## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees, the `ownerLaneOfCell` fragment-cell mapping |
 ## | extraction | the routers' score chains and atom layouts differ, the reduction trees stay module-local              |
 ##
 import math_consts
@@ -87,6 +87,18 @@ proc softmaxScores[A: static MmaAtom; F: static int](
   ls = warpReduce(ls, `+`)
   scores.map(scores, exp2((x - lm) * Log2e) / ls)
 
+func ownerLaneOfCell(r, n: int32): int32 {.inline.} =
+  ## Simdgroup lane owning cell (r, n) at value 0 of the 8×8×8 atoms'
+  ## shared A/C fragment layout, the `Apple8x8_AC_Layout` /
+  ## `Universal8x8_AC_Layout` aliases of hardware/h_registry.nim
+  ##
+  ## - the layout maps five 2-way thread modes over the col-major
+  ##   m + 8·n offset with strides (16, 1, 2, 32, 4)
+  ## - the proc inverts the layout's lane → cell mapping, the lane
+  ##   bits b0..b4 decoding to row = b1+2b2+4b4 and col = 2b0+4b3 per
+  ##   the layout's documented mapping  (n div 2 mod 2) + 2 * (r mod 2) + 4 * ((r div 2) mod 2) +
+    8 * (n div 4 mod 2) + 16 * ((r div 4) mod 2)
+
 # tiles-allow topkScores is the masked-copy selection machine, it needs a fragment-indexed
 # top-K primitive (per-fragment expert mapping over the tile)
 proc topkScores[A: static MmaAtom; F, K: static int](
@@ -147,11 +159,10 @@ proc topkScores[A: static MmaAtom; F, K: static int](
     let rest = cand mod 64
     let rw = rest div 8
     let cw = rest mod 8
-    let own = (cw div 2 mod 2) + 2 * (rw mod 2) + 4 * ((rw div 2) mod 2) +
-              8 * (cw div 4 mod 2) + 16 * ((rw div 4) mod 2)
     if cand < int32(8 * F):
-      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], uint32(own))
-      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], uint32(own))
+      let own = uint32(ownerLaneOfCell(rw, cw))
+      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], own)
+      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], own)
       w[slot] = if (cw mod 2) == 0: w0 else: w1
       for m in 0 ..< F div 8:
         let e0 = int32(64 * m + 8 * r + c0)

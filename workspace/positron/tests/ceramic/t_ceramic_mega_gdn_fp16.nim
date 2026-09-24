@@ -109,7 +109,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
 
   proc launch() {.gcsafe.} =
     runMegaGdn(engine, m, "gdn_moe_layer_fp16", GridThreads, Eps)
-  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
 
   let stateSnap = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readRecord(m.ring.hostPtr, ConvDim * RingWidth)

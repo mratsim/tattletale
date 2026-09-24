@@ -212,7 +212,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   clock recorded, the launch-end reset's zero state asserted after.
   let t0 = epochTime()
   zeroCounters()
-  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
   let deadlineWall = epochTime() - t0
   echo &"[mega gate] deadline case wall {deadlineWall:.2f} s " &
     &"(the bounded wait's default deadline " &
@@ -234,7 +234,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   the full-buffer reads below are the reference continuation's bits.
   restorePreimage(preBf, preF32, preState, preRing)
   zeroCounters()
-  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
   let refBf = readRecord(m.bfA.hostPtr, BfArenaLen)
   let refF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
   let refState = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
@@ -247,7 +247,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   must be bit-identical to the reference continuation.
   restorePreimage(preBf, preF32, preState, preRing)
   countersZeroWhere("before the self-reset relaunch")
-  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
   let selfResetBf = readRecord(m.bfA.hostPtr, BfArenaLen)
   let selfResetF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
   doAssert bitDiffCount(selfResetBf, refBf) == 0,
@@ -266,7 +266,7 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   the producers run and the launch's output leaves the reference bits.
   restorePreimage(preBf, preF32, preState, preRing)
   garbageCounters()
-  runMegaBounded(launch, m.counters.hostPtr, StageNames,
+  runMegaBounded(launch, m.counters.hostPtr, stageNames,
     deadlineMs = 5000.0, onExpiry = recordStaleGateExpiry)
   let staleBf = readRecord(m.bfA.hostPtr, BfArenaLen)
   let staleF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)

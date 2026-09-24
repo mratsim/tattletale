@@ -111,6 +111,27 @@ template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
   k32.loadTile(glK, (base, 0, 0, 0))
   cumulogdecayS.loadTile(glCumulogdecay, (base, 0, 0, 0))
 
+template pairDecayTile(pdT, cumulogdecayT, cumulogdecayS) =
+  ## Pairdecay register tile of one (current, past) token pair.
+  ##
+  ## pdT[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e)
+  ## per key channel, the difference form
+  ## (dT·exp2(−cumulogdecay_s·log2e) in algebra).
+  ##
+  ## Expected input:
+  ##   - cumulogdecayT, cumulogdecayS the current and past token's
+  ##     log-decay tiles, cumulogdecay_t ≥ cumulogdecay_s elementwise
+  ##
+  ## Output:
+  ##   - pdT, a register tile of cumulogdecayT's (rows, Dk) shape
+  ##
+  ## - the argument stays ≤ 0, exp2 cannot overflow, no intermediate
+  ##   exceeds 1, the carry stays finite
+  ## - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows
+  ##   exp2 once |cumulogdecay_s| passes exp2's range, the resulting
+  ##   Inf × dT → 0 product NaNs the carry and the persistent state
+  pdT.map2(cumulogdecayT, cumulogdecayS, exp2((x - y) * Log2e))
+
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
 # tiles-allow kdaPrefillChunkScanAt carries the row-bounded y-store walk, it needs the bounded
@@ -235,16 +256,8 @@ proc kdaPrefillChunkScanAt*[El](
         var cumulogdecayS: rt_l(float32, TileR, Dk)
         pairDecayInto(ks32, cumulogdecayS, glK, glCumulogdecay,
           kHeadLin + (c0 + int32(sIdx)) * Dk)
-        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
-        #
-        # - the argument stays ≤ 0 (cumulogdecay decreases along t), no intermediate
-        #   exceeds 1, exp2 cannot overflow
-        # - the factorized spelling dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once
-        #   |cumulogdecay_s| passes exp2's range, the resulting Inf × dT → 0 product NaNs the carry
-        #   and the persistent state
         var pdT: rt_l(float32, TileR, Dk)
-        pdT.map2(cumulogdecayT, cumulogdecayS, exp2((x - y) * Log2e))
+        pairDecayTile(pdT, cumulogdecayT, cumulogdecayS)
         var kkProd: rt_l(float32, TileR, Dk)
         kkProd.mul(k32, ks32)
         kkProd.mul(kkProd, pdT)
@@ -271,9 +284,7 @@ proc kdaPrefillChunkScanAt*[El](
         pairDecayInto(ks32, cumulogdecayS, glK, glCumulogdecay,
           kHeadLin + (c0 + int32(sIdx)) * Dk)
         var pdT: rt_l(float32, TileR, Dk)
-        # pairdecay(t, s)[dk] = exp2((cumulogdecay_t[dk] − cumulogdecay_s[dk])·log2e) per key channel,
-        # the difference form (dT·exp2(−cumulogdecay_s·log2e) in algebra).
-        pdT.map2(cumulogdecayT, cumulogdecayS, exp2((x - y) * Log2e))
+        pairDecayTile(pdT, cumulogdecayT, cumulogdecayS)
         var qkProd: rt_l(float32, TileR, Dk)
         qkProd.mul(q32, ks32)
         qkProd.mul(qkProd, pdT)

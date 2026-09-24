@@ -375,7 +375,7 @@ proc launchMixer(engine: HwEngine; m: var MegaGdnBufs) =
   var mp = addr m
   proc dispatch() {.gcsafe.} =
     runMegaGdn(engine, mp[], "qwen35_gdn_mixer_bf16", int(StageEnds[9]), Eps)
-  runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
+  runMegaBounded(dispatch, m.counters.hostPtr, stageNames)
 
 proc assertCounters(m: var MegaGdnBufs) =
   ## All 13 counters read zero exactly after the launch,
