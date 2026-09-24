@@ -14,11 +14,11 @@
 ##
 ## Storage contract, every proc here:
 ##
-## | rule         | behavior                                                                                                                                                                                             |
-## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | storage      | family-dtype (bf16 or fp16) operands and results are stored as their uint16 bit patterns (the naive tier's convention, `naive_tensors`), widened exactly to fp32 for arithmetic                      |
-## | accumulation | fp32 sequential over the row, one RNE bf16 round at each storage handoff the kernel chain rounds at                                                                                                  |
-## | rsqrt        | the fp32 rsqrt is the correctly-rounded `1.0 / sqrt(x)`, the Metal approximate `rsqrt` builtin a different rounding class, that difference is a composition-band item, judged by the comparison tier |
+  ## | rule         | behavior                                                                                                                                                                                             |
+  ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  ## | storage      | family-dtype (bf16 or fp16) operands and results are stored as their uint16 bit patterns (the naive tier's convention, `naive_tensors`), widened exactly to fp32 for arithmetic                      |
+  ## | accumulation | fp32 sequential over the row, one RNE bf16 round at each storage handoff the kernel chain rounds at                                                                                                  |
+  ## | rsqrt        | the fp32 rsqrt is the correctly-rounded `1.0 / sqrt(x)`, the Metal approximate `rsqrt` builtin a different rounding class, that difference is a composition-band item, judged by the comparison tier |
 
 import std/math
 import naive_tensors
@@ -58,12 +58,12 @@ proc naiveRmsNormRes*(xPrev, rPrev, w: seq[uint16]; H: int; eps: float32;
   ##
   ## Returns:
   ##
-## | output    | value                                             |
-## | --------- | ------------------------------------------------- |
-## | stream    | s[e] = bf16(x[e] + r[e]), the new residual stream |
-## | acc       | sum_e widen(s[e])², fp32 serial over the row      |
-## | rstd      | 1/sqrt(acc/H + eps), fp32, no round               |
-## | normed[e] | bf16(widen(s[e])·rstd·(widen(w[e]) + 1))          |
+  ## | output    | value                                             |
+  ## | --------- | ------------------------------------------------- |
+  ## | stream    | s[e] = bf16(x[e] + r[e]), the new residual stream |
+  ## | acc       | sum_e widen(s[e])², fp32 serial over the row      |
+  ## | rstd      | 1/sqrt(acc/H + eps), fp32, no round               |
+  ## | normed[e] | bf16(widen(s[e])·rstd·(widen(w[e]) + 1))          |
   ##
   ## Example (H = 2, exact small values)
   ## x = [1.0, 0.0], r = [0.0, 0.0], w = [0.0, 0.0], eps = 0
@@ -86,12 +86,12 @@ proc naiveL2NormRow*(x: seq[uint16]; cols: int; fam: GmmFamily = gmmBf16): seq[u
   ##
   ## Returns:
   ##
-## | part   | value                                                                |
-## | ------ | -------------------------------------------------------------------- |
-## | acc    | sum_c El(widen(x[c])²), each square rounds to the family dtype first |
-## | sumFam | El(acc), the sum's own round at the model's `.sum` output dtype      |
-## | inv    | El(1/sqrt(El(widen(sumFam) + 1e-6)))                                 |
-## | out    | out[c] = El(widen(x[c])·widen(inv))                                  |
+  ## | part   | value                                                                |
+  ## | ------ | -------------------------------------------------------------------- |
+  ## | acc    | sum_c El(widen(x[c])²), each square rounds to the family dtype first |
+  ## | sumFam | El(acc), the sum's own round at the model's `.sum` output dtype      |
+  ## | inv    | El(1/sqrt(El(widen(sumFam) + 1e-6)))                                 |
+  ## | out    | out[c] = El(widen(x[c])·widen(inv))                                  |
   ##
   ## Recorded-chain rounding, none of it belongs to the mathematical l2 norm:
   ## - each square rounds to the family dtype elementwise
@@ -187,13 +187,13 @@ proc naiveSoftmaxTopKRouter*(x: seq[uint16]; routerW: seq[uint16];
   ##
   ## Returns:
   ##
-## | step   | value                                                                 |
-## | ------ | --------------------------------------------------------------------- |
-## | logits | logits[e] = bf16(sum_k widen(x[k])·widen(routerW[e·H + k])), fp32 dot |
-## | p      | softmax over the widened logits, fp32                                 |
-## | top-K  | by score, the lowest index on a tie                                   |
-## | w      | w[slot] = El(p[id]/sum(top-K p)·scale), renormalized over             |
-## |        | the selected set only, the model's routeToExperts contract            |
+  ## | step   | value                                                                 |
+  ## | ------ | --------------------------------------------------------------------- |
+  ## | logits | logits[e] = bf16(sum_k widen(x[k])·widen(routerW[e·H + k])), fp32 dot |
+  ## | p      | softmax over the widened logits, fp32                                 |
+  ## | top-K  | by score, the lowest index on a tie                                   |
+  ## | w      | w[slot] = El(p[id]/sum(top-K p)·scale), renormalized over             |
+  ## |        | the selected set only, the model's routeToExperts contract            |
   ##
   ## Example (E = 4, K = 2, exact small values, all logits distinct):
   ##   logits [3.0, 1.0, 2.0, 0.0] → p ∝ [e³, e¹, e², 1] → ids [0, 2],
@@ -261,12 +261,12 @@ proc naiveRmsNormGated*(y, z, w: seq[uint16]; Dv: int; eps: float32;
   ##
   ## Returns:
   ##
-## | step     | value                                                                 |
-## | -------- | --------------------------------------------------------------------- |
-## | rstd     | 1/sqrt(sum_d widen(y[d])²/Dv + eps), fp32 squares, fp32 sum, no round |
-## | normed   | normed[d] = El(widen(y[d])·rstd)                                      |
-## | weighted | weighted[d] = El(widen(w[d])·widen(normed[d]))                        |
-## | out[d]   | El(widen(weighted[d])·silu32(widen(z[d])))                            |
+  ## | step     | value                                                                 |
+  ## | -------- | --------------------------------------------------------------------- |
+  ## | rstd     | 1/sqrt(sum_d widen(y[d])²/Dv + eps), fp32 squares, fp32 sum, no round |
+  ## | normed   | normed[d] = El(widen(y[d])·rstd)                                      |
+  ## | weighted | weighted[d] = El(widen(w[d])·widen(normed[d]))                        |
+  ## | out[d]   | El(widen(weighted[d])·silu32(widen(z[d])))                            |
   ##
   ## The squares stay fp32 here (unlike the l2-normalized row's family-dtype squares),
   ## matching the o_norm tile core's fp32 square-and-reduce.
