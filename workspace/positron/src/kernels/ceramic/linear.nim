@@ -101,7 +101,7 @@ proc dense_linear_tile_core*[El; TileC: static int](
     a.loadTileRows(gdX, (r0, 0, 0, kk), rem)
     b.loadTile(gdW, (0, 0, tx, kk))
     acc.mma_AB(a, b)
-  roundEl[El](outT, acc)
+  outT.map(acc, roundToNearestEven[El](x))
   gdOut.storeTileRows(outT, (r0, 0, 0, tx), rem)
 
 proc dense_linear_tile_fwd*[El](

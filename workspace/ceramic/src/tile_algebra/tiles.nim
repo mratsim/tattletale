@@ -68,25 +68,8 @@ template rv*(T: typedesc, R, C: static int, A: untyped = getTileConfig(float32, 
          (Int[A.getVpt()], Int[1])]
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The lane→cell decomposition and the single-scalar slots
+#  The single-scalar slots
 # ═════════════════════════════════════════════════════════════════════════
-
-template laneCellOf*(A: untyped): untyped =
-  ## Returns the atom's A-fragment cell index this lane owns.
-  ##
-  ## Contract:
-  ## - the shared lane→cell decomposition, `crd2idx(A.getLayoutA(), (lane, 0))`
-  ## - a template, the atom's layout folds into the call site's device body
-  ## - runs in device context, `thread_index_in_threadgroup` valid
-  crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
-
-template laneRowOf*(A: untyped): untyped =
-  ## Returns the fragment row this lane owns, `laneCellOf(A) mod A.getM()`.
-  laneCellOf(A) mod A.getM()
-
-template laneColOf*(A: untyped): untyped =
-  ## Returns the fragment column this lane owns, `laneCellOf(A) div A.getM()`.
-  laneCellOf(A) div A.getM()
 
 func laneScalar*[T; R, C: static int; A: static MmaAtom](
     tile: RtLeft[T, R, C, A]): T =
@@ -95,12 +78,21 @@ func laneScalar*[T; R, C: static int; A: static MmaAtom](
   ## Contract:
   ## - the tile's one useful element carries the (0, 0) fragment of every lane
   ## - serves the v operand's scalar read and one-element broadcast loads
+  ##
+  ## | provenance | source                                                                                                     |
+  ## | ---------- | ---------------------------------------------------------------------------------------------------------- |
+  ## | rv slots   | ThunderKittens include/types/register/rv.cuh:83-86, the register vector's operator[] into data[idx][0]     |
+  ## | rt slots   | ThunderKittens include/types/register/rt.cuh:104, the register tile's tiles[height][width] subtile storage |
   tile.frags[0][0].frag[0]
 
 func rowScalar*[T; rowTiles, vpt: static int](
     vec: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
   ## Returns the calling lane's row-0 slot of the row-reduction col-vec,
   ## `vec.data[0]`, the scalar its fragment row just reduced.
+  ##
+  ## | provenance | source                                                                                                 |
+  ## | ---------- | ------------------------------------------------------------------------------------------------------ |
+  ## | rv slots   | ThunderKittens include/types/register/rv.cuh:83-86, the register vector's operator[] into data[idx][0] |
   vec.data[0]
 
 # ═════════════════════════════════════════════════════════════════════════

@@ -74,7 +74,6 @@
 import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
-import ./key_head
 from ../math_consts import Log2e
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
@@ -153,7 +152,7 @@ proc swa_attn_fwd*(
   # hands Vᵀ to the P·V mma.
   let gl_v = v.gd(shape = (-1, -1, -1, -1), stride = (1, 1, 1, Nkv * D))
 
-  let kvHead = keyHeadOf(head, H, Nkv)
+  let kvHead = head div (H div Nkv)
   let qAbs = q_offset + qBlock * 8
   let lo = qAbs - window + 1
   let kvStart = (if lo > 0: lo else: 0) div 8

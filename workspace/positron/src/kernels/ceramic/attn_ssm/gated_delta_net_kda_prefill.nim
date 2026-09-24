@@ -30,6 +30,13 @@
 ## | element dtype | one compile-time element type (`kdaPrefillChunkScan`'s `El` generic)                                                                                  |
 ## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                          |
 ## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                            |
+#
+## Register-tile naming convention, shared by the gdn and kda kernels:
+##
+## - `<x>T`, the element-dtype register tile of operand x, loaded from memory
+## - `<x>32`, the fp32 register tile of the same operand, an fp32-storage
+##   operand loads straight into its `32` form, an element-dtype operand
+##   widens its `T` form into the `32` form
 ##
 ## | contract                  | value                                                                                                                             |
 ## | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,7 +93,6 @@
 ## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
 
 from ../math_consts import Log2e
-import ./key_head
 
 template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
   ## Loads the k / cumulogdecay register-tile pair of one past token:
@@ -107,6 +113,8 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
+# tiles-allow kdaPrefillChunkScanAt carries the row-bounded y-store walk, it needs the bounded
+# tile-IO store primitive (row-guarded store over register tiles)
 proc kdaPrefillChunkScanAt*[El](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
     y: ptr UncheckedArray[El],           # (B·Hv, T, Dv) element dtype
@@ -150,7 +158,7 @@ proc kdaPrefillChunkScanAt*[El](
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
     doAssert ChunkC <= 64, "the per-lane u local array is sized by ChunkC"
-  let hk = keyHeadOf(bh mod Hv, Hv, Hk) + (bh div Hv) * Hk
+  let hk = (bh mod Hv) div (Hv div Hk) + (bh div Hv) * Hk
   let headLin = bh * Dv * Dk
   let seqLin = bh * T * Dv
   let kHeadLin = hk * T * Dk
@@ -163,8 +171,9 @@ proc kdaPrefillChunkScanAt*[El](
   var s: rt_l(float32, TileR, Dk)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
 
-  let rowIn = laneRowOf(APPLE_8x8x8_F32)
-  let colIn = laneColOf(APPLE_8x8x8_F32)
+  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let rowIn = cell mod APPLE_8x8x8_F32.getM()
+  let colIn = cell div APPLE_8x8x8_F32.getM()
 
   var uLoc: array[ChunkC, float32]   # this lane's state row's solve vector u_s[rowIn]
 
@@ -252,7 +261,7 @@ proc kdaPrefillChunkScanAt*[El](
         yVal += qkVec.rowScalar() * uLoc[sIdx]
 
       if colIn == 0:
-          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = roundToRne[El](yVal)
+          y[seqLin + gt * Dv + dvBlock * TileR + int32(rowIn)] = roundToNearestEven[El](yVal)
 
     # Carry out of the chunk, per key channel:
     # S = dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) ⊗ u_s

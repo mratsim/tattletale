@@ -296,7 +296,7 @@ proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) 
   let base = lane * RowLaneSpan
   var acc = 0.0'f32
   for e in base ..< base + RowLaneSpan:
-    let s = roundToRne[T](x[e].float32 + y[e].float32)
+    let s = roundToNearestEven[T](x[e].float32 + y[e].float32)
     stream[e] = s
     acc += s.float32 * s.float32
   var total = acc
@@ -309,7 +309,7 @@ proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) 
   let rstd = rsqrt(total / float32(Hidden) + eps)
   for e in base ..< base + RowLaneSpan:
     outp[e] =
-      roundToRne[T](stream[e].float32 * rstd * (normW[e].float32 + 1.0'f32))
+      roundToNearestEven[T](stream[e].float32 * rstd * (normW[e].float32 + 1.0'f32))
 
 proc convRingChannels[T](convW, ring, xCol, outCol: ptr UncheckedArray[T], chanBase: int32) {.device.} =
   ## One threadgroup's ConvDim div 64 channels of the decode conv step
@@ -328,10 +328,10 @@ proc convRingChannels[T](convW, ring, xCol, outCol: ptr UncheckedArray[T], chanB
     for j in 0'i32 ..< RingWidth:
       acc += convW[c * ConvKernel + j].float32 * ring[c * RingWidth + j].float32
     acc += convW[c * ConvKernel + RingWidth].float32 * xCol[c].float32
-    let tapped = roundToRne[T](acc)
+    let tapped = roundToNearestEven[T](acc)
     let sig = tapped.float32 /
       (1.0'f32 + exp2((-tapped.float32) * Log2e))
-    outCol[c] = roundToRne[T](sig)
+    outCol[c] = roundToNearestEven[T](sig)
     ring[c * RingWidth + 0] = ring[c * RingWidth + 1]
     ring[c * RingWidth + 1] = ring[c * RingWidth + 2]
     ring[c * RingWidth + 2] = xCol[c]
@@ -362,13 +362,13 @@ proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
   var acc = 0.0'f32
   for c in 0'i32 ..< cols:
     let xi = x[c].float32
-    acc += roundToRne[T](xi * xi).float32
-  let sumT = roundToRne[T](acc).float32
+    acc += roundToNearestEven[T](xi * xi).float32
+  let sumT = roundToNearestEven[T](acc).float32
   let inv =
-    roundToRne[T](f32InvSqrt(roundToRne[T](sumT + 1.0e-6'f32).float32)).float32
+    roundToNearestEven[T](f32InvSqrt(roundToNearestEven[T](sumT + 1.0e-6'f32).float32)).float32
   var i = int32(thread_index_in_threadgroup)
   while i < cols:
-    outp[i] = roundToRne[T](x[i].float32 * inv)
+    outp[i] = roundToNearestEven[T](x[i].float32 * inv)
     i += 32
 
 proc gateValues[T](aRow, bRow, dtBias: ptr UncheckedArray[T],
@@ -383,7 +383,7 @@ proc gateValues[T](aRow, bRow, dtBias: ptr UncheckedArray[T],
   let h = int32(thread_index_in_threadgroup)
   let x = aRow[h].float32 + dtBias[h].float32
   g[h] = -exp2(aLog[h] * Log2e) * softplusDev(x)
-  beta[h] = roundToRne[T](1.0'f32 / (1.0'f32 +
+  beta[h] = roundToNearestEven[T](1.0'f32 / (1.0'f32 +
       exp2((-bRow[h].float32) * Log2e)))
 
 # ─── The dispatcher ───────────────────────────────────────────────────

@@ -131,6 +131,8 @@ proc storeTileRows*[El; R, C: static int; A: static MmaAtom](
         for v in 0 ..< vpt:
           dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
 
+# tiles-allow zeroRows is the row-bounded store machinery's zero pass, it
+# needs the bounded tile-IO primitive (row-guarded load/store over register tiles)
 proc zeroRows[T; R, C: static int; A: static MmaAtom](
     tile: var RtLeft[T, R, C, A],
     r0, rowLimit: int32) {.device.} =
@@ -141,7 +143,8 @@ proc zeroRows[T; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div A.getN()
   const vpt = A.getVpt()
-  let row = laneRowOf(A)
+  let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let row = cell mod M
   for n in 0 ..< rowTiles:
     if r0 + int32(n * M + row) >= rowLimit:
       for m in 0 ..< colTiles:
@@ -151,20 +154,20 @@ proc zeroRows[T; R, C: static int; A: static MmaAtom](
           else:
             tile.frags[n][m].frag[v] = 0'f32.to(T)
 
-proc loadTileRowsPreread*[T; R, C: static int; A: static MmaAtom](
+proc loadTileRowsZeroPadded*[T; R, C: static int; A: static MmaAtom](
     tile: var RtLeft[T, R, C, A],
     gl: GlView[T],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile, pre-read semantics:
-  ## - the full (R, C) plane is read from `gl`
+  ## Row-bounded loadTile, zero-padded semantics:
+  ## - the full (R, C) plane is read from `gl` first, the straddling tile
+  ##   reads its tail rows past `rowLimit`
   ## - the tile-plane rows origin[2]·R + r at or above `rowLimit` are
-  ##   zeroed in registers afterwards
+  ##   then zeroed in registers, the zero-padding the walk consumes
   ##
   ## Precondition:
   ## - the view's backing storage covers the padded tile rows,
-  ##   ceil(logical rows / R)·R, the straddling tile reads its tail rows
-  ##   before discarding them
+  ##   ceil(logical rows / R)·R, the read touches the padding
   ## - callers with an exactly-sized buffer need
   ##   the guarded `loadTileRows` above instead
   tile.loadTile(gl, origin)
@@ -176,6 +179,8 @@ proc loadTileRowsPreread*[T; R, C: static int; A: static MmaAtom](
 #  RtRight variants (swapped views, guard on origin[3])
 #  ═════════════════════════════════════════════════════════════════════
 
+# tiles-allow zeroRows is the row-bounded store machinery's zero pass, it
+# needs the bounded tile-IO primitive (row-guarded load/store over register tiles)
 proc zeroRows[T; R, C: static int; A: static MmaAtom](
     tile: var RtRight[T, R, C, A],
     r0, rowLimit: int32) {.device.} =

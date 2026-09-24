@@ -74,8 +74,8 @@ proc rmsWeightElem*[El; R, C: static int; A: static MmaAtom](
   var w32: rt_l(float32, R, C, A)
   w32.widen(w)
   var normed: rt_l(float32, R, C, A)
-  normed.map(y32, roundToRne[El](x * rstd).float32)
-  dst.map2(w32, normed, roundToRne[El](x * y))
+  normed.map(y32, roundToNearestEven[El](x * rstd).float32)
+  dst.map2(w32, normed, roundToNearestEven[El](x * y))
 
 proc siluMulElem*[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
@@ -88,7 +88,7 @@ proc siluMulElem*[El; R, C: static int; A: static MmaAtom](
   g32.widen(gate)
   var silu32: rt_l(float32, R, C, A)
   silu32.map(g32, x / (1.0'f32 + exp2((-x) * Log2e)))
-  dst.map2(x32, silu32, roundToRne[El](x * y))
+  dst.map2(x32, silu32, roundToNearestEven[El](x * y))
 
 proc rmsNormGatedElem*[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
@@ -106,12 +106,12 @@ proc rmsNormGatedElem*[El; R, C: static int; A: static MmaAtom](
   var w32: rt_l(float32, R, C, A)
   w32.widen(w)
   var normed: rt_l(float32, R, C, A)
-  normed.map(y32, roundToRne[El](x * rstd).float32)
+  normed.map(y32, roundToNearestEven[El](x * rstd).float32)
   var weighted: rt_l(float32, R, C, A)
-  weighted.map2(w32, normed, roundToRne[El](x * y).float32)
+  weighted.map2(w32, normed, roundToNearestEven[El](x * y).float32)
   var silu32: rt_l(float32, R, C, A)
   silu32.map(g32, x / (1.0'f32 + exp2((-x) * Log2e)))
-  dst.map2(weighted, silu32, roundToRne[El](x * y))
+  dst.map2(weighted, silu32, roundToNearestEven[El](x * y))
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
@@ -148,9 +148,9 @@ proc rmsNormGatedTileCoreAt[El](
   var xT: rt_l(El, TileR, Dv)
   var gT: rt_l(El, TileR, Dv)
   var wT: rt_l(El, TileR, Dv)
-  xT.loadTileRowsPreread(glX, (0, 0, rowBlk, 0), M)
-  gT.loadTileRowsPreread(glG, (0, 0, rowBlk, 0), M)
-  wT.loadTileRowsPreread(glW, (0, 0, rowBlk, 0), M)
+  xT.loadTileRowsZeroPadded(glX, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsZeroPadded(glG, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsZeroPadded(glW, (0, 0, rowBlk, 0), M)
 
   var oT: rt_l(El, TileR, Dv)
   rmsNormGatedElem(oT, xT, gT, wT, eps)
@@ -223,8 +223,8 @@ proc rmsWeightTile*[El](
 
   var xT: rt_l(El, TileR, Dv)
   var wT: rt_l(El, TileR, Dv)
-  xT.loadTileRowsPreread(glX, (0, 0, rowBlk, 0), M)
-  wT.loadTileRowsPreread(glW, (0, 0, rowBlk, 0), M)
+  xT.loadTileRowsZeroPadded(glX, (0, 0, rowBlk, 0), M)
+  wT.loadTileRowsZeroPadded(glW, (0, 0, rowBlk, 0), M)
 
   var mT: rt_l(El, TileR, Dv)
   rmsWeightElem(mT, xT, wT, eps)
@@ -248,8 +248,8 @@ proc siluMulTile*[El](
 
   var mT: rt_l(El, TileR, Dv)
   var gT: rt_l(El, TileR, Dv)
-  mT.loadTileRowsPreread(glM, (0, 0, rowBlk, 0), M)
-  gT.loadTileRowsPreread(glG, (0, 0, rowBlk, 0), M)
+  mT.loadTileRowsZeroPadded(glM, (0, 0, rowBlk, 0), M)
+  gT.loadTileRowsZeroPadded(glG, (0, 0, rowBlk, 0), M)
 
   var oT: rt_l(El, TileR, Dv)
   siluMulElem(oT, mT, gT)

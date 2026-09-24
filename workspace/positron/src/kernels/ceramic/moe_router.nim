@@ -55,7 +55,8 @@ proc gatherScores[A, AL: static MmaAtom; F: static int](
       AL.getVpt() == A.getVpt(),
       "gatherScores: both atoms must share the lane→fragment cell mapping"
   let lane = int(thread_index_in_threadgroup)
-  let r = laneRowOf(AL)       # the destination row = expert div 8
+  let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
+  let r = cell mod AL.getM()  # the destination row = expert div 8
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< 8:
     let g0 = simdShuffle(chunk.frags[0][m].frag[0], uint32(srcLane))
@@ -113,8 +114,9 @@ proc topkScores[A: static MmaAtom; F, K: static int](
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
     sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
   let lane = int(thread_index_in_threadgroup)
-  let r = laneRowOf(A)
-  let c0 = laneColOf(A)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let r = cell mod A.getM()
+  let c0 = cell div A.getM()
   for slot in 0 ..< K:
     var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
     for m in 1 ..< F div 8:
@@ -204,7 +206,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
       b64.loadTile(glRouter, (0, 0, cs, kk))
       dR.mma_AB(a, b64)
     scores.gatherScores(dR, cs)
-  roundEl[El](scores, scores)
+  scores.map(scores, roundToNearestEven[El](x).float32)
   scores.softmaxScores()
   scores.topkScores(ids, w)
   var sumW = 0.0'f32
@@ -217,7 +219,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
       # every weight is zero (the poisoned pass) or the sum underflowed,
       # a 0/0 store would NaN the weight and everything downstream
       w[slot] = 0.0'f32
-    w[slot] = roundToRne[El](w[slot]).float32
+    w[slot] = roundToNearestEven[El](w[slot]).float32
 
 # ─── The router-only entry ───────────────────────────────────────────
 
@@ -236,7 +238,7 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
   moeRoute[El, H, E, K, Scale](x, router_w, t, idsReg, wReg)
   for slot in 0 ..< K:
     ids[t * K + slot] = idsReg[slot]
-    rout_w[t * K + slot] = roundToRne[El](wReg[slot])
+    rout_w[t * K + slot] = roundToNearestEven[El](wReg[slot])
 
 # ─── The shared-expert gate logit ────────────────────────────────────
 
@@ -288,7 +290,7 @@ proc moe_decode_merge_at*[El; H, K: static int](
   var acc = 0.0'f32
   for y in 0'i32 ..< K + 1:
     acc += partial[int(t * (K + 1) + y) * H + int(col)]
-  out_r[t * H + col] = roundToRne[El](acc)
+  out_r[t * H + col] = roundToNearestEven[El](acc)
 
 proc moe_decode_merge*[El; H, K: static int](
     out_r: ptr UncheckedArray[El],         # (num_tokens, H) routed+shared output

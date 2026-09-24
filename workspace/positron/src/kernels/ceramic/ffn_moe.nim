@@ -166,8 +166,9 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
       AL.getVpt() == A.getVpt(),
       "gatherSigmoidScores: both atoms must share the lane→fragment cell mapping"
   let lane = int(thread_index_in_threadgroup)
-  let r = laneRowOf(AL)       # the destination row = expert div 8
-  let c0 = laneColOf(AL)      # the lane's col pair base
+  let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
+  let r = cell mod AL.getM()  # the destination row = expert div 8
+  let c0 = cell div AL.getM() # the lane's col pair base
   let e0 = int32(8 * r + c0)  # the lane's experts inside the chunk
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< ScoreChunk div 8:
@@ -211,8 +212,9 @@ proc topkRouted[A: static MmaAtom](
   for m in 0 ..< ScoreChunks:
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
     sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
-  let r = laneRowOf(A)
-  let c0 = laneColOf(A)
+  let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let r = cell mod A.getM()
+  let c0 = cell div A.getM()
   for slot in 0'i32 ..< topK:
     var lm = max(sel.frags[0][0].frag[0], sel.frags[0][0].frag[1])
     for m in 1 ..< ScoreChunks:

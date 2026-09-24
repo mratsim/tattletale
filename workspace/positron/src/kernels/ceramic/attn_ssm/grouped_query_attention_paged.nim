@@ -104,7 +104,6 @@
 import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
-import ./key_head
 from ../math_consts import Log2e, InvSqrt128
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
@@ -178,7 +177,7 @@ proc paged_attn_fwd*(
   # hands Vᵀ to the P·V mma.
   let gd_v = v_cache.gd(shape = (-1, -1, -1, -1), stride = (1, 1, 1, Nkv * D))
 
-  let kvHead = keyHeadOf(head, H, Nkv)
+  let kvHead = head div (H div Nkv)
   let q0 = cu_seqlens_q[seqId]
   let qLen = cu_seqlens_q[seqId + 1] - q0
   let cachedLen = cache_seqlens[seqId]

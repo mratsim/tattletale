@@ -18,7 +18,7 @@
 ##
 ## The tile API's mma epilogues keep the accumulator f32, an element-dtype
 ## operand tile re-enters the f32 arithmetic only through this widen.
-## The scalar RNE narrowing, `roundToRne`, lives in tile_algebra's tile_ops_unary.
+## The scalar RNE narrowing, `roundToNearestEven`, lives in tile_algebra's tile_ops_unary.
 
 import workspace/crucible
 import workspace/ceramic

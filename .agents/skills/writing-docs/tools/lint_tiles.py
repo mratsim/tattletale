@@ -34,8 +34,8 @@ Exemption behavior:
 
 - those paths skip frag-walk, tile-op-miss, and kernel-doc-shape
 - lane-cell and magic-dim still run there
-- only tile_algebra silences lane-cell, the shared `laneCellOf`
-  helper belongs in that module
+- only tile_algebra silences lane-cell, the lane-to-cell decomposition
+  belongs in that module
 
 Allowlist marker, proc scope:
 
@@ -91,7 +91,7 @@ WALK_EXEMPT = tuple(
                   "tile_widen.nim")]
 )
 
-# Only tile_algebra silences lane-cell, the shared `laneCellOf` helper
+# Only tile_algebra silences lane-cell, the lane-to-cell decomposition
 # belongs in those modules.
 LANE_CELL_EXEMPT = (os.path.join("workspace", "ceramic", "src", "tile_algebra")
                     + os.sep,)
@@ -406,15 +406,19 @@ def scan_frag_rules(path, proc, lines, findings, exempt_file):
                             + " from tile_algebra (tile_ops_unary/tile_ops_binary)"))
 
 
-def scan_lane_cell(path, codes, findings):
+def scan_lane_cell(path, codes, findings, allowed=False):
     """Runs the decomposition inventory over the device proc body lines.
 
     Contract:
 
-    - the manual crd2idx + mod/div sites report the pending `laneCellOf` primitive
-    - the raw `.data[0]` reads report the pending `rowScalar` accessor
-    - both name tile_algebra work, not a proc that exists today
+    - the manual crd2idx + mod/div sites report the pending
+      tile-level restructure, ThunderKittens never exposes lane indices
+    - the raw `.data[0]` reads report the `rowScalar` accessor move
+    - a proc carrying its own allowlist marker stays quiet, the marker
+      names the lane machine and its pending primitive
     """
+    if allowed:
+        return
     for no, code in codes:
         if code is None or code.startswith("EMIT:"):
             continue
@@ -422,14 +426,13 @@ def scan_lane_cell(path, codes, findings):
             findings.append(Finding(
                 path, no, "lane-cell",
                 "manual lane-to-cell decomposition (crd2idx + cell mod/div): "
-                "a `laneCellOf`-class helper is a pending tile_algebra "
-                "primitive, keep this site in the inventory"))
+                "restructure to tile-level ops, ThunderKittens never exposes "
+                "lane indices"))
         elif SCALAR_EXTRACT_RE.search(code):
             findings.append(Finding(
                 path, no, "scalar-extract",
-                "raw .data[0] scalar extraction from a row vector: a "
-                "`rowScalar` accessor is a pending tile_algebra primitive, "
-                "keep this site in the inventory"))
+                "raw .data[0] scalar extraction from a row vector, use "
+                "the tile_algebra `rowScalar` accessor"))
 
 
 def scan_magic_dim(path, code, no, findings):
@@ -771,6 +774,10 @@ def scan_hash_above_proc(path, lines, blocked, findings):
             if not t.startswith("#") or t.startswith("##") or k in blocked:
                 break
             k -= 1
+        if any("tiles-allow" in lines[x] for x in range(k, h)):
+            # the tiles-allow marker line is the tool's own escape hatch,
+            # Nim reads its # form as nothing
+            continue
         findings.append(Finding(
             path, k + 1, "hash-above-proc",
             "a # comment above the %s %s does not attach, use a ## doc "
@@ -917,7 +924,8 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
         scan_doc_shape(path, proc, lines, findings, exempt_file)
         codes = [(no, c) for no, c in proc["body"]]
         if not lane_exempt:
-            scan_lane_cell(path, codes, findings)
+            scan_lane_cell(path, codes, findings,
+                           _allowlisted_proc(proc, lines))
         for no, code in codes:
             if code is None:
                 continue

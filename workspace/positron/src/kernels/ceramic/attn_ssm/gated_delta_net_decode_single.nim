@@ -23,6 +23,13 @@
 ## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
 ## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state                                                       |
 
+#
+## Register-tile naming convention, shared by the gdn and kda kernels:
+##
+## - `<x>T`, the element-dtype register tile of operand x, loaded from memory
+## - `<x>32`, the fp32 register tile of the same operand, an fp32-storage
+##   operand loads straight into its `32` form, an element-dtype operand
+##   widens its `T` form into the `32` form
 ##
 ## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
@@ -43,7 +50,6 @@
 ##   corrupts the recurrence
 
 from ../math_consts import Log2e
-import ./key_head
 import workspace/crucible
 import workspace/ceramic
 import ../tile_widen
@@ -55,6 +61,8 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
+# tiles-allow gdnDecodeStepTileAt carries the row-bounded y-store walk, it needs the bounded
+# tile-IO store primitive (row-guarded store over register tiles)
 proc gdnDecodeStepTileAt*[T](
     state: ptr UncheckedArray[float32],   # (B·Hv, Dv, Dk) f32, in place
     y: ptr UncheckedArray[T],             # (B·Hv, Dv) element dtype core output
@@ -96,7 +104,7 @@ proc gdnDecodeStepTileAt*[T](
     doAssert TileR == 8, "the y store covers one atom row block per column block"
     doAssert Dv mod TileR == 0, "the column grid covers Dv in whole row blocks"
     doAssert TileR mod atom.getM() == 0 and Dk mod atom.getN() == 0
-  let hk = keyHeadOf(bh mod Hv, Hv, Hk) + (bh div Hv) * Hk
+  let hk = (bh mod Hv) div (Hv div Hk) + (bh div Hv) * Hk
   let headLin = bh * Dv * Dk
   let yLin = bh * Dv
   let kLin = hk * Dk
@@ -142,10 +150,11 @@ proc gdnDecodeStepTileAt*[T](
   oVec.row_sum(oProd)
   let oVal = oVec.rowScalar()
 
-  let rowIn = laneRowOf(APPLE_8x8x8_F32)
-  let colIn = laneColOf(APPLE_8x8x8_F32)
+  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let rowIn = cell mod APPLE_8x8x8_F32.getM()
+  let colIn = cell div APPLE_8x8x8_F32.getM()
   if colIn == 0:
-      y[yLin + dvBlock * 8 + int32(rowIn)] = roundToRne[T](oVal)
+      y[yLin + dvBlock * APPLE_8x8x8_F32.getN() + int32(rowIn)] = roundToNearestEven[T](oVal)
   glState.storeTile(s, (headLin, 0, dvBlock, 0))
 
 proc gdnDecodeStepTile*[T](

@@ -57,7 +57,7 @@ proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
   dst.map2(gHalf, uHalf) do:
     let g = x
     let s = g / (1.0'f32 + exp2(-g * Log2e))
-    roundToRne[El](roundToRne[El](s).float32 * y)
+    roundToNearestEven[El](roundToNearestEven[El](s).float32 * y)
 
 # tiles-allow storeRowsScaledF32 is the row-bounded tile io machinery, it needs
 # one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
@@ -89,8 +89,9 @@ proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = int(thread_index_in_threadgroup)
-  let r = laneRowOf(A)
-  let c = laneColOf(A)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let r = cell mod A.getM()
+  let c = cell div A.getM()
   for n in 0 ..< rowTiles:
     if rowIdx[n] >= 0 and r == 0:
       for m in 0 ..< colTiles:
@@ -195,7 +196,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     var gateVal = 1.0'f32
     when SharedGate:
       let l32 = sharedGateLogit[El, H](x, shared_gate_vec_w, t)
-      gateVal = roundToRne[El](1.0'f32 / (1.0'f32 +
+      gateVal = roundToNearestEven[El](1.0'f32 / (1.0'f32 +
         exp2(-l32 * Log2e))).float32
     # ── shared expert activation -> hs_scratch[t] ──
     for nt in 0'i32 ..< I div 32:
