@@ -53,72 +53,77 @@ proc checkBfSectionsDeltaZero(g: LayerGraph) =
       "derived " & BfSectionNames[s] & " offset " & $g.bfOffsets[s] &
       " must equal the baked offset " & $baked[s]
 
-test "qwen36 delta-zero: the derived bf16 section offsets reproduce the baked s* consts":
-  let g = deriveGdnLayerGraph(qwen36Cfg())
-  checkBfSectionsDeltaZero(g)
+proc testQwenBfOffsets =
+  test "qwen36 delta-zero: the derived bf16 section offsets reproduce the baked s* consts":
+    let g = deriveGdnLayerGraph(qwen36Cfg())
+    checkBfSectionsDeltaZero(g)
 
-test "qwen36 delta-zero: the derived arena lengths reproduce the baked extents":
-  let g = deriveGdnLayerGraph(qwen36Cfg())
-  doAssert g.bfArenaLen == BfArenaLen,
-    "derived bf16 extent " & $g.bfArenaLen & " must equal the baked " & $BfArenaLen
-  doAssert g.f32Offsets[f32G] == sG and g.f32Offsets[f32Partial] == sPartial
-  doAssert g.f32ArenaLen == F32ArenaLen,
-    "derived f32 extent " & $g.f32ArenaLen & " must equal the baked " & $F32ArenaLen
+proc testQwenArenaLengths =
+  test "qwen36 delta-zero: the derived arena lengths reproduce the baked extents":
+    let g = deriveGdnLayerGraph(qwen36Cfg())
+    doAssert g.bfArenaLen == BfArenaLen,
+      "derived bf16 extent " & $g.bfArenaLen & " must equal the baked " & $BfArenaLen
+    doAssert g.f32Offsets[f32G] == sG and g.f32Offsets[f32Partial] == sPartial
+    doAssert g.f32ArenaLen == F32ArenaLen,
+      "derived f32 extent " & $g.f32ArenaLen & " must equal the baked " & $F32ArenaLen
 
-test "qwen36 delta-zero: the derived stage table reproduces the baked tables":
-  let g = deriveGdnLayerGraph(qwen36Cfg())
-  for i in 0 ..< 13:
-    doAssert g.stages[i].blocks == StageBlocks[i],
-      "stage " & StageNames[i] & ": derived blocks " & $g.stages[i].blocks &
-      " must equal the baked " & $StageBlocks[i]
-    doAssert g.stages[i].stop == StageEnds[i],
-      "stage " & StageNames[i] & ": derived boundary must equal the baked"
-    doAssert g.stages[i].present
-    doAssert g.stages[i].blocks > 0
-    doAssert stageNames[i] == StageNames[i]
-  doAssert g.stages[0].start == 0'u32
-  doAssert g.waveTotal == 950'u32
+proc testQwenStageTable =
+  test "qwen36 delta-zero: the derived stage table reproduces the baked tables":
+    let g = deriveGdnLayerGraph(qwen36Cfg())
+    for i in 0 ..< 13:
+      doAssert g.stages[i].blocks == StageBlocks[i],
+        "stage " & stageNames[i] & ": derived blocks " & $g.stages[i].blocks &
+        " must equal the baked " & $StageBlocks[i]
+      doAssert g.stages[i].stop == StageEnds[i],
+        "stage " & stageNames[i] & ": derived boundary must equal the baked"
+      doAssert g.stages[i].present
+      doAssert g.stages[i].blocks > 0
+    doAssert g.stages[0].start == 0'u32
+    doAssert g.waveTotal == 950'u32
 
-test "qwen36 delta-zero: the derived section widths reproduce the baked shape expressions":
-  let g = deriveGdnLayerGraph(qwen36Cfg())
-  doAssert g.bfWidths[bfQkvCol] == ConvDim and g.bfWidths[bfConv] == ConvDim
-  doAssert g.bfWidths[bfZ] == NumVHeads * HeadVDim
-  doAssert g.bfWidths[bfH] == TopK * Inter and g.bfWidths[bfHs] == Inter
-  doAssert g.bfWidths[bfQn] == NumKHeads * HeadKDim
-  doAssert g.f32Widths[f32Partial] == (TopK + 1) * Hidden
+proc testQwenSectionWidths =
+  test "qwen36 delta-zero: the derived section widths reproduce the baked shape expressions":
+    let g = deriveGdnLayerGraph(qwen36Cfg())
+    doAssert g.bfWidths[bfQkvCol] == ConvDim and g.bfWidths[bfConv] == ConvDim
+    doAssert g.bfWidths[bfZ] == NumVHeads * HeadVDim
+    doAssert g.bfWidths[bfH] == TopK * Inter and g.bfWidths[bfHs] == Inter
+    doAssert g.bfWidths[bfQn] == NumKHeads * HeadKDim
+    doAssert g.f32Widths[f32Partial] == (TopK + 1) * Hidden
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GLM-4.7-Flash instantiation, the MoE dims with no GDN mixer
 # ═════════════════════════════════════════════════════════════════════════
 
-test "glm47 shape: the graph instantiates with the mixer stages absent":
-  let g = deriveGdnLayerGraph(glm47Cfg())
-  const wantBlocks: array[13, uint32] = [1'u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 5, 64]
-  for i in 0 ..< 13:
-    doAssert g.stages[i].blocks == wantBlocks[i]
-  for i in 0 ..< 13:
-    let want = i in [0, 10, 11, 12]
-    doAssert g.stages[i].present == want,
-      "stage " & stageNames[i] & " presence"
-  doAssert g.waveTotal == 71'u32
+proc testGlm47MixerAbsent =
+  test "glm47 shape: the graph instantiates with the mixer stages absent":
+    let g = deriveGdnLayerGraph(glm47Cfg())
+    const wantBlocks: array[13, uint32] = [1'u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 5, 64]
+    for i in 0 ..< 13:
+      doAssert g.stages[i].blocks == wantBlocks[i]
+    for i in 0 ..< 13:
+      let want = i in [0, 10, 11, 12]
+      doAssert g.stages[i].present == want,
+        "stage " & stageNames[i] & " presence"
+    doAssert g.waveTotal == 71'u32
 
-test "glm47 shape: the derived sections carry only the bookend and MoE shapes":
-  let g = deriveGdnLayerGraph(glm47Cfg())
-  # Hand-derived from the shapes, the nine mixer sections collapsing to 0,
-  # h = topK·inter = 4·1536, hs = 1536, six hidden rows of 2048.
-  for s in [bfQkvCol, bfZ, bfA, bfB, bfQn, bfKn, bfBeta, bfY, bfNormed,
-            bfConv]:
-    doAssert g.bfWidths[s] == 0, BfSectionNames[s] & " must be absent"
-  doAssert g.bfWidths[bfH] == 4 * 1536 and g.bfWidths[bfHs] == 1536
-  for s in [bfMoeOut, bfH1, bfNormed2, bfStream, bfNorm1, bfBlockOut]:
-    doAssert g.bfWidths[s] == 2048, BfSectionNames[s] & " must be a hidden row"
-  let wantOffsets: array[BfSectionKind, int32] = [
-      0'i32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6144'i32, 7680,
-      9728, 11776, 13824, 15872, 17920]
-  doAssert g.bfOffsets == wantOffsets
-  doAssert g.bfArenaLen == 19968
-  doAssert g.f32Widths[f32G] == 0 and g.f32Widths[f32Partial] == 5 * 2048
-  doAssert g.f32ArenaLen == 10240
+proc testGlm47Sections =
+  test "glm47 shape: the derived sections carry only the bookend and MoE shapes":
+    let g = deriveGdnLayerGraph(glm47Cfg())
+    # Hand-derived from the shapes, the nine mixer sections collapsing to 0,
+    # h = topK·inter = 4·1536, hs = 1536, six hidden rows of 2048.
+    for s in [bfQkvCol, bfZ, bfA, bfB, bfQn, bfKn, bfBeta, bfY, bfNormed,
+              bfConv]:
+      doAssert g.bfWidths[s] == 0, BfSectionNames[s] & " must be absent"
+    doAssert g.bfWidths[bfH] == 4 * 1536 and g.bfWidths[bfHs] == 1536
+    for s in [bfMoeOut, bfH1, bfNormed2, bfStream, bfNorm1, bfBlockOut]:
+      doAssert g.bfWidths[s] == 2048, BfSectionNames[s] & " must be a hidden row"
+    let wantOffsets: array[BfSectionKind, int32] = [
+        0'i32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6144'i32, 7680,
+        9728, 11776, 13824, 15872, 17920]
+    doAssert g.bfOffsets == wantOffsets
+    doAssert g.bfArenaLen == 19968
+    doAssert g.f32Widths[f32G] == 0 and g.f32Widths[f32Partial] == 5 * 2048
+    doAssert g.f32ArenaLen == 10240
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Graph invariants, both configs
@@ -150,17 +155,31 @@ proc checkGraphInvariants(g: LayerGraph) =
   doAssert g.stages[0].start == 0'u32
   doAssert sum == g.waveTotal
 
-test "invariants: offsets accumulate, intervals stay contiguous, blocks sum":
-  checkGraphInvariants(deriveGdnLayerGraph(qwen36Cfg()))
-  checkGraphInvariants(deriveGdnLayerGraph(glm47Cfg()))
+proc testInvariants =
+  test "invariants: offsets accumulate, intervals stay contiguous, blocks sum":
+    checkGraphInvariants(deriveGdnLayerGraph(qwen36Cfg()))
+    checkGraphInvariants(deriveGdnLayerGraph(glm47Cfg()))
 
-test "guards: an out-of-maxima config is rejected with a naming message":
-  var overTopk = qwen36Cfg()
-  overTopk.topK = 10
-  try:
-    discard deriveGdnLayerGraph(overTopk)
-    doAssert false, "topK 10 must be rejected"
-  except AssertionDefect as e:
-    doAssert "topK" in e.msg, e.msg
+proc testGuards =
+  test "guards: an out-of-maxima config is rejected with a naming message":
+    var overTopk = qwen36Cfg()
+    overTopk.topK = 10
+    try:
+      discard deriveGdnLayerGraph(overTopk)
+      doAssert false, "topK 10 must be rejected"
+    except AssertionDefect as e:
+      doAssert "topK" in e.msg, e.msg
 
-echo "test_gdn_moe_layer_graph: all checks passed"
+
+proc main =
+  testQwenBfOffsets()
+  testQwenArenaLengths()
+  testQwenStageTable()
+  testQwenSectionWidths()
+  testGlm47MixerAbsent()
+  testGlm47Sections()
+  testInvariants()
+  testGuards()
+  echo "test_gdn_moe_layer_graph: all checks passed"
+
+main()
