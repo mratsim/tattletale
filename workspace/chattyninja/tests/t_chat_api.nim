@@ -77,7 +77,7 @@ func readBlock(n: JsonNode): ContentBlock =
   var fs: seq[tuple[k: string, v: BlockValue]]
   for k, x in pairs(n):
     fs.add (k, readBlockValue(x))
-  blockOf(fs)
+  contentBlock(fs)
 
 func readContent(n: JsonNode): Content =
   case n.kind

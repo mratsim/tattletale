@@ -580,7 +580,7 @@ func cmpVal(a, b: JinjaVal): int =
     return cmp(a.s, b.s)
   raise jinjaErr("`<` and `>` need two numbers or two strings, got " & $a.kind & " and " & $b.kind)
 
-func substringOf(needle, haystack: openArray[char]): bool =
+func substring(needle, haystack: openArray[char]): bool =
   ## Returns whether `needle` occurs in `haystack`, the empty needle always matching.
   ## A needle longer than `haystack` leaves the scan range empty. The first-byte guard
   ## holds every non-matching position to one compare.
@@ -609,7 +609,7 @@ func containsValAt(haystack, needle: JinjaVal, depth: int, offset: int): bool =
   of vkDict, vkNs:
     needle.kind == vkStr and haystack.d.dictGet(needle.s).kind != vkUndefined
   of vkStr:
-    needle.kind == vkStr and substringOf(needle.s, haystack.s)
+    needle.kind == vkStr and substring(needle.s, haystack.s)
   of vkRange: rangeContains(haystack.r, needle)
   else:
     raise jinjaErr("`in` needs a sequence, mapping or string on the right, got " & $haystack.kind)

@@ -114,7 +114,7 @@ func weatherTools(): JinjaVal =
   dictSet(tool, "function", dictVal(fn))
   seqVal(@[dictVal(tool)])
 
-func contextOf(msgs: seq[JinjaVal], tools: JinjaVal): JinjaVal =
+func renderContext(msgs: seq[JinjaVal], tools: JinjaVal): JinjaVal =
   ## Render context holding `messages`, `tools` and `add_generation_prompt`.
   ## Template kwargs stay absent, the templates guard them with an `is defined` test.
   var d = DictVal()
@@ -126,7 +126,7 @@ func contextOf(msgs: seq[JinjaVal], tools: JinjaVal): JinjaVal =
 
 func shortShape(): Shape =
   ## 2-message short conversation, no tools.
-  Shape(name: "short2", ctx: contextOf(@[
+  Shape(name: "short2", ctx: renderContext(@[
       msgVal("user", "Hello!"),
       msgVal("assistant", "Hi there.")], noneVal()))
 
@@ -137,7 +137,7 @@ func typicalShape(): Shape =
   for i in 0 ..< 9:
     msgs.add msgVal(if i mod 2 == 0: "user" else: "assistant",
         "Message " & $i & ": please continue the conversation and stay on topic.")
-  Shape(name: "typical10", ctx: contextOf(msgs, noneVal()))
+  Shape(name: "typical10", ctx: renderContext(msgs, noneVal()))
 
 func longShape(withToolRound: bool, name: string): Shape =
   ## 40-message long conversation.
@@ -157,7 +157,7 @@ func longShape(withToolRound: bool, name: string): Shape =
     dictSet(args, "city", strVal("Tokyo"))
     msgs.add toolCallMsg("get_weather", dictVal(args))
     msgs.add toolRespMsg("call_1", "Sunny, 18 degrees.")
-  Shape(name: name, ctx: contextOf(msgs, weatherTools()))
+  Shape(name: name, ctx: renderContext(msgs, weatherTools()))
 
 func benchShapes(): array[4, Shape] =
   ## short2 and typical10 are the canonical short and typical shapes.
@@ -267,7 +267,7 @@ proc timeShape(tmpl: CompiledTemplate, sym: CompiledSymbols, ctx: JinjaVal, iter
 when defined(benchAlloc):
   privateAccess(AllocStats)
 
-  template allocsOf(body: untyped): int =
+  template allocLines(body: untyped): int =
     ## Counts `alloc` calls made by `body`.
     ## The delta counts every allocator entry, so a warm allocator pool keeps repeated measurements stable.
     let before = getAllocStats()
@@ -291,7 +291,7 @@ when defined(benchAlloc):
     ## Allocates per render for one template x shape.
     ## One warm-up render goes uncounted, then `iters` renders are counted via `getAllocStats()`.
     discard renderOnce(tmpl, sym, ctx)
-    let a = allocsOf:
+    let a = allocLines:
       for _ in 0 ..< iters:
         discard renderOnce(tmpl, sym, ctx)
     fmt"{a.float64 / iters.float64:8.2f} allocs/render"
@@ -299,7 +299,7 @@ when defined(benchAlloc):
   proc parseAllocs(src: string): string =
     ## Parse-time allocations for one template.
     ## One parse is counted after an uncounted warm-up parse of a tiny template.
-    let a = allocsOf:
+    let a = allocLines:
       discard parseJinjaTemplate(src)
     fmt"{a:8d} allocs/parse"
 
@@ -316,7 +316,7 @@ when defined(benchAlloc):
     var perRow = ""
     var total = 0.0
     for r in rs:
-      let a = allocsOf:
+      let a = allocLines:
         for _ in 0 ..< iters:
           discard renderOnce(m, sym, r.ctx, r.clock)
       let per = a.float64 / iters.float64
@@ -343,7 +343,7 @@ when defined(benchAlloc):
                         ("emit-const", tEmitConst), ("if/else", tIf), ("tools|tojson", tJson)]:
       let (m, sym) = parseJinjaTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
-      let a = allocsOf:
+      let a = allocLines:
         for _ in 0 ..< iters:
           discard renderOnce(m, sym, ctx)
       echo &"  micro {name:14} {a.float64 / iters.float64:8.2f} allocs/render"
@@ -355,14 +355,14 @@ when defined(benchAlloc):
                         ("emit-concat", "{% for m in messages %}{{ m.role ~ 'x' }}{% endfor %}")]:
       let (m, sym) = parseJinjaTemplate(src)
       discard renderOnce(m, sym, ctx) # warm-up render, not counted
-      let a = allocsOf:
+      let a = allocLines:
         for _ in 0 ..< iters:
           discard renderOnce(m, sym, ctx)
       echo &"  micro {name:14} {a.float64 / iters.float64:8.2f} allocs/render"
     # Direct stringifier costs over a representative message content.
     let content = strVal(
         "Turn 12: here is more context about the task; keep the details accurate.")
-    let ps = allocsOf:
+    let ps = allocLines:
       for _ in 0 ..< 1000:
         discard pyStr(content)
     echo &"  micro pyStr(msg content) {ps.float64 / 1000.0:5.2f} allocs/call"
@@ -374,19 +374,19 @@ when defined(benchAlloc):
     # strings. The system message's content is a compile-time constant backed
     # by a literal, measuring 0 buffer shares in both copies below.
     let msg1 = msgs.xs.items[1]
-    let dg = allocsOf:
+    let dg = allocLines:
       for _ in 0 ..< 1000:
         discard msg1.d.dictGet("content")
     echo &"  micro dictGet(content)   {dg.float64 / 1000.0:5.2f} allocs/call"
     let (pm, psyms) = parseJinjaTemplate("{{ m.content }}")
     var pcx = startJinjaRender(pm, psyms, ctx, 0.0)
     let cv = msg1.d.dictGet("content")
-    let pc = allocsOf:
+    let pc = allocLines:
       for _ in 0 ..< 1000:
         pcx.state.pend = Piece(pos: 0, kind: pkStr, s: cv.s)
         pcx.state.pend = Piece(kind: pkNone)
     echo &"  micro pend piece copy    {pc.float64 / 1000.0:5.2f} allocs/call"
-    let tj = allocsOf:
+    let tj = allocLines:
       for _ in 0 ..< 100:
         discard toJson(weatherTools())
     echo &"  micro tojson(tools)      {tj.float64 / 100.0:5.2f} allocs/call"

@@ -2,7 +2,7 @@
 ##
 ## gemm_kernel: the test kernels build input views over the raw buffers
 ## and hand them to gemm_kernel.
-## gemm_kernel derives the tma policy (atom_selector + threadLayoutOf + tile_shape),
+## gemm_kernel derives the tma policy (atom_selector + threadTiling + tile_shape),
 ## the CTA position from the ambient blockIdx.x/y,
 ## and the per-thread epilogue shard, then runs the gemm_cta body.
 ## Test kernels never see M/N/K, the tile, the thread layout or the grid coords.
@@ -51,7 +51,7 @@ import workspace/crucible
 # Host derives the reference and launch tile/blockSize
 # from the same policy gemm_kernel computes internally.
 const atom = atom_selector(uint32, uint32, float32)
-const tiled = make_tiled_mma(atom, threadLayoutOf(atom, 32, 32))
+const tiled = make_tiled_mma(atom, threadTiling(atom, 32, 32))
 
 const kernelCode = cuda:
   proc gemmKernelAXPBY(

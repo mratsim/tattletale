@@ -328,7 +328,7 @@ proc gdnPairCase(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv, chunkLen: int;
   let gw = g32.widenF64()
   let s0w = s032.widenF64()
 
-  var sPer = s0w.copyOf()
+  var sPer = s0w.copyTensor()
   var yPer = zerosCube[float64](B * Hv, T, Dv)
   gdnPrefillPerToken(sPer, yPer, qw, kw, vw, betaw, gw, Hv, Hk, hkRatio)
   let chunked = gdnPrefillChunked(s0w, qw, kw, vw, betaw, gw,
@@ -368,9 +368,9 @@ proc main =
       "same-seed fp64 widening produced different values"
     doAssert widenF64(mA).data[7] == float64(mA.data[7]),
       "fp64 widening is not the exact f32 value"
-    var mCopy = mA.copyOf()
+    var mCopy = mA.copyTensor()
     mCopy.data[3] = 99.0'f32
-    doAssert mA.data[3] != 99.0'f32, "copyOf is not independent of the original"
+    doAssert mA.data[3] != 99.0'f32, "copyTensor is not independent of the original"
     doAssert worstDiffF64(@[1.0'f64, 2.0, 4.0], @[1.0'f64, 7.0, 4.0]) == 5.0,
       "worstDiffF64 hand value wrong, expected 5.0"
     doAssert worstDiffF64(@[1.0'f64, 2.0], @[1.0'f64, 2.0]) == 0.0,

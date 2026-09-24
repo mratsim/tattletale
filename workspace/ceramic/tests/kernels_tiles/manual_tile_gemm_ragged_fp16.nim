@@ -115,7 +115,7 @@ func refBias(rows, cols, K: int; reluBias: bool;
 #  Checks
 # ═════════════════════════════════════════════════════════════════════════
 
-proc gridOf(rows, cols: int): tuple[a, b: int] =
+proc gridDims(rows, cols: int): tuple[a, b: int] =
   ## Ceil'd grid, one 32×32 tile per threadgroup.
   ((cols + 31) div 32, (rows + 31) div 32)
 
@@ -138,7 +138,7 @@ proc checkGemmIdentity(engine: var auto; kernel: string;
   let pB = PtrArg[uint16](buf: cast[ptr UncheckedArray[uint16]](addr Bh[0]), len: Bh.len, off: 0)
   var D = newSeq[float32](rows * cols + 64)
   for i in 0 ..< D.len: D[i] = canary
-  engine.run << (grid: gridOf(rows, cols), blk: (32, 1)) >> (kernel, D,
+  engine.run << (grid: gridDims(rows, cols), blk: (32, 1)) >> (kernel, D,
     (pA, pB, int32(rows), int32(K), int32(cols)))
   var expected = refMatmul(rows, cols, K, Ah, Bh)
   if relu:
@@ -155,7 +155,7 @@ proc checkLinear(engine: var auto; kernel: string; rows, cols, K: int; relu: boo
   let pBias = PtrArg[float32](buf: cast[ptr UncheckedArray[float32]](addr Bias[0]), len: cols, off: 0)
   var D = newSeq[float32](rows * cols + 64)
   for i in 0 ..< D.len: D[i] = canary
-  engine.run << (grid: gridOf(rows, cols), blk: (32, 1)) >> (kernel, D,
+  engine.run << (grid: gridDims(rows, cols), blk: (32, 1)) >> (kernel, D,
     (pA, pB, pBias, int32(rows), int32(K), int32(cols)))
   checkD(&"{kernel} {rows}×{cols}×{K}", D,
          refBias(rows, cols, K, relu, Ah, Bh, Bias), rows, cols)
@@ -177,7 +177,7 @@ proc checkAxpby(engine: var auto; rows, cols, K: int; alpha, beta: float32) =
   let pC = PtrArg[float32](buf: cast[ptr UncheckedArray[float32]](addr C[0]), len: C.len, off: 0)
   var D = newSeq[float32](rows * cols + 64)
   for i in 0 ..< D.len: D[i] = canary
-  engine.run << (grid: gridOf(rows, cols), blk: (32, 1)) >> ("fusedGemm", D,
+  engine.run << (grid: gridDims(rows, cols), blk: (32, 1)) >> ("fusedGemm", D,
     (pA, pB, pC, alpha, beta, int32(rows), int32(cols), int32(K),
      int32(K), int32(1), int32(cols), int32(1), int32(cols), int32(1)))
   checkD(&"fusedGemm {rows}×{cols}×{K} (α={alpha}, β={beta})", D,

@@ -233,7 +233,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   ##   index. The `materializeIndexBuiltinParams` pass appends these after the
   ##   declared params, so declared params keep their `[[buffer(n)]]` positions.
   ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
-  ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
+  ## Scalars stay 4 bytes on the host (arg_blobs argBlob), so scalar `bool` is declared `int`.
   ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
   var params: seq[string]
   var bufferIdx = 0

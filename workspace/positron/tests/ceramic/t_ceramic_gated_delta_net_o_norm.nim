@@ -125,7 +125,7 @@ type
     gateBits: seq[uint16]
     wBits: seq[uint16]
 
-proc relRstdOf(xBits: seq[uint16]; eps: float32; m: int): float64 =
+proc relRstdErr(xBits: seq[uint16]; eps: float32; m: int): float64 =
   ## rstd relative-error term of the band, from the widened row's squares.
   var sumSq = 0.0'f64
   var sumSqAbs = 0.0'f64
@@ -211,7 +211,7 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
     let fused = recordOut()
 
     for m in 0 ..< M:
-      let relRstd = relRstdOf(ci.xBits, eps, m)
+      let relRstd = relRstdErr(ci.xBits, eps, m)
       let relOut = relRstd + 4.0 * UBf + 2.0 * U32 + RelSilu
       for c in 0 ..< Dv:
         let idx = m * Dv + c

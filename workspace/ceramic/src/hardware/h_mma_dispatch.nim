@@ -170,7 +170,7 @@ proc leafProduct(n: NimNode): int =
       result *= leafProduct(ch)
   else: result = 1
 
-template vptOf(atom: untyped; layoutKey: untyped): int =
+template atomVpt(atom: untyped; layoutKey: untyped): int =
   ## The operand's values per thread: the layout const's (T, V) shape
   ## type's V component (the second part of the two-part shape tuple).
   ## Mirrors valuesPerThread (atoms_mma_partitioning) from the layout type
@@ -208,9 +208,9 @@ macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
   ##     written back (in-place accumulate)
   ##   aFrag, bFrag: the operand fragments, read-only
   let instr = constStr(atom, "instr")
-  let dV = vptOf(atom, "cLayout")
-  let aV = vptOf(atom, "aLayout")
-  let bV = vptOf(atom, "bLayout")
+  let dV = atomVpt(atom, "cLayout")
+  let aV = atomVpt(atom, "aLayout")
+  let bV = atomVpt(atom, "bLayout")
   case instr
   of "simdgroup_multiply_accumulate":
     if dV != 2 or aV != 2 or bV != 2:

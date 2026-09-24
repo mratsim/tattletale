@@ -6,15 +6,18 @@
 ## buffers. This is the first test that actually RUNS kernels with scalar
 ## (non-pointer) params through `engine.run` instead of only echoing WGSL.
 ##
-## Scalar inputs bind read-only (`WGPUBufferBindingTypeReadOnlyStorage`) to
-## match the WGSL backend, which emits `var<storage, read>` for non-pointer
-## params (codegen/targets/wgsl_lang.nim `genGlobal`); ptr inputs stay
-## read-write (`var<storage, read_write>` → Storage binding).
+## Scalar inputs bind read-only (`WGPUBufferBindingTypeReadOnlyStorage`),
+## matching the WGSL backend's `var<storage, read>` for non-pointer
+## params (codegen/targets/wgsl_lang.nim `genGlobal`).
 ##
-## A Nim `bool` arg marshals as a 4-byte i32 (arg_blobs.nim `blobOf`), the
-## width every shader backend declares: WGSL cannot use bool storage
-## variables and emits i32, OpenCL C has no bool and emits int, while
-## CUDA/GLSL 1-byte `bool` kernels still read the right value from byte 0.
+## Ptr inputs stay read-write (`var<storage, read_write>` → Storage binding).
+##
+## A Nim `bool` arg marshals as a 4-byte i32 (arg_blobs.nim `argBlob`),
+## the width every shader backend declares.
+##
+## - WGSL cannot use bool storage variables and emits i32
+## - OpenCL C has no bool and emits int
+## - CUDA/GLSL 1-byte `bool` kernels still read the right value from byte 0
 ##
 ## Run:
 ##   cd tattletale

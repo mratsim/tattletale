@@ -154,13 +154,13 @@ const WaveCounts*: array[13, uint32] = StageBlocks
   ## Per-stage threadgroup totals, the stage counters' expected counts
   ## summing to the 950-threadgroup grid.
 
-func stageEndsOf(blocks: array[13, uint32]): array[13, uint32] =
+func stageEnds(blocks: array[13, uint32]): array[13, uint32] =
   var acc = 0'u32
   for s in 0 ..< 13:
     acc += blocks[s]
     result[s] = acc
 
-const StageEnds*: array[13, uint32] = stageEndsOf(StageBlocks)
+const StageEnds*: array[13, uint32] = stageEnds(StageBlocks)
   ## Dispatcher stage boundaries:
   ##
   ## - StageEnds[s] is one past stage s's last threadgroup

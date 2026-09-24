@@ -256,7 +256,7 @@ proc kdaPairCase(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv, chunkLen: int;
   let betaw = beta32.widenF64()
   let s0w = s032.widenF64()
 
-  var sPer = s0w.copyOf()
+  var sPer = s0w.copyTensor()
   var yPer = zerosCube[float64](B * Hv, T, Dv)
   kdaPrefillPerToken(sPer, yPer, qw, kw, gw, vw, betaw, Hv, Hk, hkRatio)
   let chunked = kdaPrefillChunked(s0w, qw, kw, gw, vw, betaw,
@@ -318,11 +318,11 @@ proc uniformCrossCheck(seed: uint64; T, Hv, Hk, hkRatio, Dk, Dv: int) =
   let betaw = beta32.widenF64()
   let s0w = s032.widenF64()
 
-  var sKda = s0w.copyOf()
+  var sKda = s0w.copyTensor()
   var yKda = zerosCube[float64](B * Hv, T, Dv)
   kdaPrefillPerToken(sKda, yKda, qw, kw, gKda.widenF64(), vw, betaw,
     Hv, Hk, hkRatio)
-  var sGdn = s0w.copyOf()
+  var sGdn = s0w.copyTensor()
   var yGdn = zerosCube[float64](B * Hv, T, Dv)
   gdnPrefillPerToken(sGdn, yGdn, qw, kw, vw, betaw, gGdn.widenF64(),
     Hv, Hk, hkRatio)

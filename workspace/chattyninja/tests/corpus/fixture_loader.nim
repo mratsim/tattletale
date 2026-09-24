@@ -94,7 +94,7 @@ func spanPairs(n: JsonNode): seq[tuple[start, stop: int]] =
     result[i] = (pair[0].getInt(), pair[1].getInt())
     inc i
 
-proc stemOf(path: string, suffix: string): string =
+proc stemName(path: string, suffix: string): string =
   ## File stem without the trailing suffix, so `default.json.zst` maps to `default`.
   let name = lastPathPart(path)
   doAssert name.endsWith(suffix)
@@ -103,7 +103,7 @@ proc stemOf(path: string, suffix: string): string =
 proc suiteRowNames*(suite: string): seq[string] =
   ## Row stems of one suite, the `*.json.zst` stems of the suite directory, sorted.
   for path in walkPattern(FixturesDir / suite / ("*" & RowSuffix)):
-    result.add stemOf(path, RowSuffix)
+    result.add stemName(path, RowSuffix)
   result.sort()
 
 proc suiteTemplateSource*(suite: string): string =

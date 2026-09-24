@@ -142,7 +142,7 @@ func divCeil(x, share: int32): int32 {.inline.} =
   ## Smallest stage-block count whose shares of `share` elements cover `x`.
   (x + share - 1) div share
 
-func stageBlocksOf(cfg: GdnMoeCfg, s: StageKind): uint32 =
+func stageBlocks(cfg: GdnMoeCfg, s: StageKind): uint32 =
   ## Threadgroup count of one stage at `cfg`, ceil-div over each fixed
   ## share of the module doc's table.
   case s
@@ -159,7 +159,7 @@ func stageBlocksOf(cfg: GdnMoeCfg, s: StageKind): uint32 =
   of stgMoeDecode: uint32 cfg.topK + 1
   of stgMoeMerge: uint32 divCeil(cfg.hidden, 32)
 
-func stagePresentOf(cfg: GdnMoeCfg, s: StageKind): bool =
+func stagePresent(cfg: GdnMoeCfg, s: StageKind): bool =
   ## Whether a stage has work at `cfg`, mixer stages absent on no-mixer layers, bookends and MoE tail always present.
   if s in {stgQkvGemv, stgZGemv, stgAbProj, stgConv, stgQkL2norm,
            stgGateValues, stgGdnState, stgONorm, stgOutProj}:
@@ -171,7 +171,7 @@ func mixerPresent*(cfg: GdnMoeCfg): bool {.inline.} =
   ## Whether the config declares a GDN mixer.
   cfg.numKHeads > 0
 
-func bfSectionWidthOf(cfg: GdnMoeCfg, s: BfSectionKind): int32 =
+func bfSectionWidth(cfg: GdnMoeCfg, s: BfSectionKind): int32 =
   ## One bf16 section's shape at `cfg`:
   ##
   ## | section            | shape        | notes                    |
@@ -194,7 +194,7 @@ func bfSectionWidthOf(cfg: GdnMoeCfg, s: BfSectionKind): int32 =
   of bfHs: cfg.inter
   of bfMoeOut, bfH1, bfNormed2, bfStream, bfNorm1, bfBlockOut: cfg.hidden
 
-func f32SectionWidthOf(cfg: GdnMoeCfg, s: F32SectionKind): int32 =
+func f32SectionWidth(cfg: GdnMoeCfg, s: F32SectionKind): int32 =
   ## One f32 section's shape at `cfg`, `numVHeads` log-decay rows plus
   ## `(topK + 1)·hidden` MoE fp32 partials, the log-decay section collapsing
   ## to 0 on a no-mixer layer.
@@ -241,9 +241,9 @@ proc deriveGdnLayerGraph*(cfg: GdnMoeCfg): LayerGraph =
       "GdnMoeCfg: the qkv width must be a multiple of 64, the qkv GEMV's tile"
 
   for s in BfSectionKind:
-    result.bfWidths[s] = bfSectionWidthOf(cfg, s)
+    result.bfWidths[s] = bfSectionWidth(cfg, s)
   for s in F32SectionKind:
-    result.f32Widths[s] = f32SectionWidthOf(cfg, s)
+    result.f32Widths[s] = f32SectionWidth(cfg, s)
 
   var off = 0'i32
   for s in BfSectionKind:
@@ -261,8 +261,8 @@ proc deriveGdnLayerGraph*(cfg: GdnMoeCfg): LayerGraph =
   var total = 0'u32
   for i in 0 ..< 13:
     let s = stageKinds[i]
-    let present = stagePresentOf(cfg, s)
-    let blocks = if present: stageBlocksOf(cfg, s) else: 0'u32
+    let present = stagePresent(cfg, s)
+    let blocks = if present: stageBlocks(cfg, s) else: 0'u32
     result.stages[i] = StageRow(
       present: present, blocks: blocks, start: start, stop: start + blocks)
     start += blocks

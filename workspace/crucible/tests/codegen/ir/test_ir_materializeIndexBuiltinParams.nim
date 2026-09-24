@@ -67,7 +67,7 @@ proc makeParam(name: string; typ: GpuType; space: AddressSpace): GpuParam =
                                            symKind = gsGlobalKernelParam)),
            typ: typ, addressSpace: space, passByRef: false)
 
-proc blockOf(stmts: varargs[GpuAst]): GpuAst =
+proc blockInfo(stmts: varargs[GpuAst]): GpuAst =
   ## gpuBlock of statements, the shape every pass body walk expects.
   GpuAst(kind: gpuBlock, statements: @stmts)
 
@@ -92,7 +92,7 @@ proc paramKinds(fn: GpuAst): seq[GpuCoordBuiltinKind] =
 # 1. Device fn gains the builtin params: canonical name + coordBuiltin kind + type
 # ═══════════════════════════════════════════════════════════════════════════
 block:
-  let body = blockOf(
+  let body = blockInfo(
     builtinIdent("thread_position_in_threadgroup", gbkThreadPositionInThreadgroup),
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup)
   )
@@ -124,9 +124,9 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var callee = makeProc("callee",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockInfo(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var kernel = makeProc("kern",
-    blockOf(
+    blockInfo(
       builtinIdent("threadgroups_per_grid", gbkThreadgroupsPerGrid),
       makeCall(callee)
     ), isKernel = true)
@@ -166,14 +166,14 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var d1 = makeProc("d1",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockInfo(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var d2 = makeProc("d2",
-    blockOf(
+    blockInfo(
       builtinIdent("thread_position_in_threadgroup", gbkThreadPositionInThreadgroup),
       builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup)
     ))
   var kernel = makeProc("kern2",
-    blockOf(makeCall(d1), makeCall(d2)), isKernel = true)
+    blockInfo(makeCall(d1), makeCall(d2)), isKernel = true)
   var ctx = GpuContext()
   ctx.allFnTab[d1.pName] = d1
   ctx.allFnTab[d2.pName] = d2
@@ -211,7 +211,7 @@ block:
   let shadow = plainIdent("thread_position_in_grid")
   doAssert shadow.symbol.coordBuiltin == gbkNone,
     "a plain local must carry no coordinate kind"
-  var fn = makeProc("shadow", blockOf(shadow))
+  var fn = makeProc("shadow", blockInfo(shadow))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
@@ -226,7 +226,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var fn = makeProc("rec", GpuAst(kind: gpuBlock))
-  fn.pBody = blockOf(
+  fn.pBody = blockInfo(
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup),
     makeCall(fn)
   )
@@ -250,7 +250,7 @@ block:
   # Pulled-in module-level device fns land in `allFnTab` AND `genericInsts`
   # under the same symbol; the rewrite must not double-append.
   var fn = makeProc("both",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockInfo(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
   ctx.genericInsts[fn.pName] = fn
@@ -272,7 +272,7 @@ block:
                            cName: GpuAst(kind: gpuIdent, symbol: barrierSym),
                            cArgs: @[])
   var fn = makeProc("bar",
-    blockOf(barrierCall,
+    blockInfo(barrierCall,
             builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn

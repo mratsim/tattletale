@@ -71,7 +71,7 @@ template paddedCase(probM, probN, expectM, expectN: static int) =
   const
     Mp = paddedTo(probM, atomM)
     Np = paddedTo(probN, atomN)
-    tma = make_tiled_mma(atom, threadLayoutOf(atom, Mp, Np))
+    tma = make_tiled_mma(atom, threadTiling(atom, Mp, Np))
     (tileM, tileN, tileK) = tile_shape(tma, 32)
   static:
     doAssert Mp == expectM and Np == expectN,

@@ -16,7 +16,7 @@
 ## `PtrArg` passes a raw pointer at an arbitrary offset as a device buffer
 ## (a strided or negative-stride view's base, where the buffer extends
 ## behind the base).
-## `bool` is the exception: it marshals as a 4-byte i32 (see `blobOf`).
+## `bool` is the exception, it marshals as a 4-byte i32 (see `argBlob`).
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -39,30 +39,39 @@ type
     len*: int
     off*: int
 
-func blobOf*[T](x: seq[T], storage: var seq[byte]): ArgBlob {.inline.} =
+func argBlob*[T](x: seq[T], storage: var seq[byte]): ArgBlob {.inline.} =
+  ## Arg blob for a seq param, the pointer taken at offset 0.
+  #
   # A seq param is a shallow copy sharing the caller's refcounted buffer,
   # so addr x[0] stays valid for the whole launch (the args tuple holds
   # the caller's seq alive).
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil),
           size: x.len * sizeof(T), off: 0)
 
-func blobOf*[T](x: PtrArg[T], storage: var seq[byte]): ArgBlob {.inline.} =
+func argBlob*[T](x: PtrArg[T], storage: var seq[byte]): ArgBlob {.inline.} =
+  ## Arg blob for a strided pointer view, the offset carried in elements.
+  #
   # The pointer stays valid for the whole launch (the args tuple holds
   # the caller's buffer alive).
   (data: cast[pointer](x.buf), size: x.len * sizeof(T), off: x.off * sizeof(T))
 
-template blobOf*[N, T](x: array[N, T], storage: var seq[byte]): ArgBlob =
+template argBlob*[N, T](x: array[N, T], storage: var seq[byte]): ArgBlob =
+  ## Arg blob for an array arg, kept a template so the pointer stays caller-side.
+  #
   # Must stay a template: a by-value array param copies to the callee
   # stack and the blob would dangle after return, while literal-array
   # args (e.g. `[1'u32]`) are rvalues a `var` param cannot accept.
   static: doAssert(sizeof(x) > 0, "empty array args are not supported (array[0, T])")
   (data: cast[pointer](addr x[0]), size: sizeof(x), off: 0)
 
-func blobOf*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
+func argBlob*(x: string, storage: var seq[byte]): ArgBlob {.inline.} =
+  ## Arg blob for a string param, the pointer taken at offset 0.
+  #
   # Same refcounted-buffer reasoning as the seq overload.
   (data: (if x.len > 0: cast[pointer](addr x[0]) else: nil), size: x.len, off: 0)
 
-func blobOf*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
+func argBlob*[T](x: T, storage: var seq[byte]): ArgBlob {.inline.} =
+  ## Arg blob for a scalar, the value bytes stored in `storage` at `off`.
   let off = storage.len
   when T is bool:
     # Bool marshals as a 4-byte i32, the width every shader backend declares:

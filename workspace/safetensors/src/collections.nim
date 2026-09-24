@@ -94,7 +94,7 @@ proc isDirectChildPath(filename: string): bool =
     return false
   true
 
-func fileOf(view: SafetensorsCollection, tensorName: string): string =
+func assignedFile(view: SafetensorsCollection, tensorName: string): string =
   ## The safetensor filename that the weight map assigns to `tensorName`.
   ## Raises ValueError naming the tensor when the collection holds no entry.
   if not view.weightMap.hasKey(tensorName):
@@ -113,7 +113,7 @@ proc getMmapView*(view: SafetensorsCollection, tensorName: string): MemSlice {.i
   ## the same lifetime contract as `safetensors.getMmapView`.
   ## Raises ValueError naming the tensor when the collection holds no entry.
   privateAccess(SafetensorObj)
-  view.files[view.fileOf(tensorName)].getMmapView(tensorName)
+  view.files[view.assignedFile(tensorName)].getMmapView(tensorName)
 
 proc open*(_: typedesc[SafetensorsCollection], path: string): SafetensorsCollection =
   ## Open one checkpoint as a tensor-keyed collection and validate it.

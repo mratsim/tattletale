@@ -619,7 +619,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
       let bSeq = sliceMat(bw, b * Hv, Hv)
       let chunked = kdaPrefillChunked(s0Seq, qSeq, kSeq, gSeq, vSeq, bSeq,
         Hv, Hk, hkRatio, chunkLen)
-      var sWalk = copyOf(s0Seq)
+      var sWalk = copyTensor(s0Seq)
       var yWalk = NaiveCube[float64](planes: Hv, rows: T, cols: Dv)
       yWalk.data = newSeq[float64](Hv * T * Dv)
       kdaPrefillPerToken[float64](sWalk, yWalk, qSeq, kSeq, gSeq, vSeq, bSeq,

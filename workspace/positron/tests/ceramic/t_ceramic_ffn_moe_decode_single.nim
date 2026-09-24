@@ -218,7 +218,7 @@ proc naiveWalk(x, routerW, gateUpW, downW, sgW, suW, sdW, gvW: seq[uint16];
   for e in 0 ..< H:
     result.partial[K * H + e] = result.gvP * sd.data[e]
 
-proc logitOf(x, routerW: seq[uint16]; id: int): float32 =
+proc naiveLogit(x, routerW: seq[uint16]; id: int): float32 =
   ## One expert's naive bf16-rounded logit, the sequential fp32 dot.
   var acc = 0.0'f32
   for k in 0 ..< H:
@@ -456,7 +456,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
       let id = nw.ids[slot].int
       let logitBar = 2.0 * float64(H) * U32 *
         sumAbsLinks(xw, routerWSeq, id * H, H) +
-        2.0 * UBf * abs(logitOf(xTok, routerWSeq, id).float64) + FloorBf
+        2.0 * UBf * abs(naiveLogit(xTok, routerWSeq, id).float64) + FloorBf
       worst = max(worst, judgeSlotPartials(t, slot, id, nw, xw,
         gateUpWSeq, downWSeq, record.h, record.partial, logitBar))
     # the shared row's gate-weight band, the scalar logit's reduction class

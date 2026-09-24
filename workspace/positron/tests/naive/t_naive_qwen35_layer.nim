@@ -257,7 +257,7 @@ proc hashF32(s: openArray[float32]): uint64 =
 proc walk(inp: LayerInputs): LayerOut =
   ## One fresh layer walk from copied state and ring, the composition pure
   ## over its inputs.
-  var state = copyOf(inp.state)
+  var state = copyTensor(inp.state)
   var ring = inp.ring
   naiveQwen35GdnLayer(state, ring, inp.x, inp.r,
     inp.norm1W, inp.qkvW, inp.zW, inp.aW, inp.bW, inp.convW, inp.onormW,

@@ -166,7 +166,7 @@ proc widenF64*[T: float32|float64](t: NaiveCube[T]): NaiveCube[float64] =
   for i in 0 ..< t.data.len:
     result.data[i] = float64(t.data[i])
 
-proc copyOf*[T](m: NaiveMat[T]): NaiveMat[T] =
+proc copyTensor*[T](m: NaiveMat[T]): NaiveMat[T] =
   ## Returns an independent copy of the matrix.
   result.rows = m.rows
   result.cols = m.cols
@@ -174,7 +174,7 @@ proc copyOf*[T](m: NaiveMat[T]): NaiveMat[T] =
   for i in 0 ..< m.data.len:
     result.data[i] = m.data[i]
 
-proc copyOf*[T](t: NaiveCube[T]): NaiveCube[T] =
+proc copyTensor*[T](t: NaiveCube[T]): NaiveCube[T] =
   ## Returns an independent copy of the cube.
   result.planes = t.planes
   result.rows = t.rows
@@ -190,14 +190,14 @@ proc castCube*[F: float32|float64](t: NaiveCube[float32]): NaiveCube[F] =
   ## F is fp32 and the exact widening when F is fp64, so both dtype runs
   ## of one comparison see identical values.
   when F is float32:
-    result = t.copyOf()
+    result = t.copyTensor()
   else:
     result = t.widenF64()
 
 proc castMat*[F: float32|float64](t: NaiveMat[float32]): NaiveMat[F] =
   ## Returns the matrix at the run's float width, same contract as castCube.
   when F is float32:
-    result = t.copyOf()
+    result = t.copyTensor()
   else:
     result = t.widenF64()
 

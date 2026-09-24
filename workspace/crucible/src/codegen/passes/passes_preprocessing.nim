@@ -61,7 +61,7 @@ proc genMemcpyCall(lhs, rhs: GpuAst; sizeExpr: GpuAst): GpuAst =
   call.cArgs = @[lhs, rhs, sizeExpr]
   result = call
 
-proc genMemcpySizeOf*(ctx: var GpuContext; expr: GpuAst): GpuAst =
+proc genMemcpySize*(ctx: var GpuContext; expr: GpuAst): GpuAst =
   ## Create a `sizeof(T)` gpuCall equivalent for the type of the expression.
   let sizeSym = newSymbol("__builtin_sizeof", iSym = "__builtin_sizeof", symKind = gsProc)
   let sizeIdent = GpuAst(kind: gpuIdent, symbol: sizeSym)
@@ -85,7 +85,7 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
       #   2. memcpy(&vName, &vInit, sizeof(vType))
       let addrOfVar = GpuAst(kind: gpuAddr, aOf: n.vName)
       let addrOfInit = GpuAst(kind: gpuAddr, aOf: n.vInit)
-      let sizeCall = genMemcpySizeOf(ctx, n.vName)
+      let sizeCall = genMemcpySize(ctx, n.vName)
       let memcpyNode = genMemcpyCall(addrOfVar, addrOfInit, sizeCall)
 
       # Replace n with a gpuBlock containing var decl + memcpy call
@@ -101,7 +101,7 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
       # Replace with memcpy(&aLeft, &aRight, sizeof(aLeft))
       let addrOfLeft = GpuAst(kind: gpuAddr, aOf: n.aLeft)
       let addrOfRight = GpuAst(kind: gpuAddr, aOf: n.aRight)
-      let sizeCall = genMemcpySizeOf(ctx, n.aLeft)
+      let sizeCall = genMemcpySize(ctx, n.aLeft)
       n = genMemcpyCall(addrOfLeft, addrOfRight, sizeCall)
     else:
       for ch in mitems(n):

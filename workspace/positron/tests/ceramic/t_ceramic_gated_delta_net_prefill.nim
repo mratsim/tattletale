@@ -515,7 +515,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen: 
       let gSeq = sliceMat(gw, b * Hv, Hv)
       let chunked = gdnPrefillChunked(s0Seq, qSeq, kSeq, vSeq, bSeq, gSeq,
         Hv, Hk, hkRatio, chunkLen)
-      var sWalk = copyOf(s0Seq)
+      var sWalk = copyTensor(s0Seq)
       var yWalk = NaiveCube[float64](planes: Hv, rows: T, cols: Dv)
       yWalk.data = newSeq[float64](Hv * T * Dv)
       gdnPrefillPerToken[float64](sWalk, yWalk, qSeq, kSeq, vSeq, bSeq, gSeq,

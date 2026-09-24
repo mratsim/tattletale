@@ -18,8 +18,7 @@
 ## - read-unchanged sentinels, fresh-relaunch bit-identity
 ## - an informational fp16 naive-vs-mega diff over the shared outputs
 ##
-## The band model lives in the comparison tier, `ceramic_mega_gdn_composition.nim`,
-## the bf16 rows. This suite asserts generous sanity bounds only.
+## This suite asserts generous sanity bounds only, the bf16 row's class.
 ##
 ## The fp16 chain's per-op round keeps its reassociation
 ## and transcendental differences within the bf16 row's class.

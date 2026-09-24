@@ -139,18 +139,18 @@ func silu64(x: float64): float64 =
   ## silu in fp64, the h-link band's magnitude reference.
   x / (1.0 + exp(-x))
 
-func l2AccOf(row: seq[uint16]): float32 =
+func l2Acc(row: seq[uint16]): float32 =
   ## L2 row's fp32 serial sum of bf16-rounded squares, the naive spelling replayed.
   for c in 0 ..< row.len:
     let xi = bf16ToF32(row[c])
     result += bf16ToF32(f32ToBf16(xi * xi))
 
-func l2InvOf(row: seq[uint16]): float64 =
+func l2Inv(row: seq[uint16]): float64 =
   ## L2 row's bf16-rounded reciprocal, the recorded chain's spelling replayed.
   ##
   ##   fp32 sum rounds to bf16 first (the model's `.sum` output dtype)
   ##   → the eps add rounds again
-  let acc = l2AccOf(row)
+  let acc = l2Acc(row)
   result = bf16ToF32(f32ToBf16(1.0'f32 / sqrt(bf16ToF32(
     f32ToBf16(bf16ToF32(f32ToBf16(acc)) + 1.0e-6'f32))))).float64
 
@@ -161,7 +161,7 @@ func zipAdd(a, b: seq[float64]): seq[float64] =
   for i in 0 ..< a.len:
     result[i] = a[i] + b[i]
 
-func sensOf(nPrime, n: seq[uint16]): seq[float64] =
+func sens(nPrime, n: seq[uint16]): seq[float64] =
   ## Exact sensitivity of a naive bf16 output to the deviation of its observed operands,
   ## widened difference of the two naive evaluations.
   doAssert nPrime.len == n.len
@@ -171,7 +171,7 @@ func sensOf(nPrime, n: seq[uint16]): seq[float64] =
   for i in 0 ..< n.len:
     result[i] = abs(a[i] - b[i])
 
-func sensF32Of(nPrime, n: seq[float32]): seq[float64] =
+func sensF32(nPrime, n: seq[float32]): seq[float64] =
   ## Exact sensitivity of an fp32 naive output to its operands' deviation.
   doAssert nPrime.len == n.len
   result = newSeq[float64](n.len)
@@ -196,7 +196,7 @@ func denseLocal(x: seq[uint16]; w: seq[uint16]; nPrime: seq[uint16];
 func gemvBars(xPrime, w, nPrime, n: seq[uint16]; N, K: int): seq[float64] =
   ## One GEMV field's bars, the landed dense band at the mega's operands
   ## plus the exact sensitivity of the naive dot to the observed input deviation.
-  zipAdd(denseLocal(xPrime, w, nPrime, N, K), sensOf(nPrime, n))
+  zipAdd(denseLocal(xPrime, w, nPrime, N, K), sens(nPrime, n))
 
 func toF32Mat(bits: seq[uint16]; rows, cols: int): NaiveMat[float32] =
   ## A widened fp32 matrix over bf16 bits, the naive step's operand form.
@@ -591,7 +591,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   var ringPrime = preM.ring
   let convPrime = naiveCausalConvSiluStep(w.convW, ringPrime, qkvM,
     ConvDim, ConvKernel)
-  let convSens = sensOf(convPrime, lo.conv)
+  let convSens = sens(convPrime, lo.conv)
   result.conv = newSeq[float64](ConvDim)
   let convPrimeW = widen(convPrime)
   let convMW = widen(convM)
@@ -645,10 +645,10 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
       let outPrime = naiveL2NormRow(rowM, HeadKDim)
       doAssert outM == outPrime,
         "the mega's l2norm spelling diverges from the naive replay"
-      let invM = l2InvOf(rowM)
-      let invN = l2InvOf(rowN)
-      let accM = l2AccOf(rowM).float64
-      let accN = l2AccOf(rowN).float64
+      let invM = l2Inv(rowM)
+      let invN = l2Inv(rowN)
+      let accM = l2Acc(rowM).float64
+      let accN = l2Acc(rowN).float64
       let rowMW = widen(rowM)
       let rowNW = widen(rowN)
       var dA = 0.0'f64
@@ -768,7 +768,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
     let zRow = zM[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let wRow = w.onormW[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let normedPrime = naiveRmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
-    let normedSens = sensOf(normedPrime,
+    let normedSens = sens(normedPrime,
       lo.normed[bh * HeadVDim ..< (bh + 1) * HeadVDim])
     let yW = widen(yRow)
     var sumSq = 0.0'f64

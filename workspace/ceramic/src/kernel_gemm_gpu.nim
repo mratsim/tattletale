@@ -139,10 +139,11 @@
 ##   │ └──────────────────────────────────────────────────────────┘ │
 ##   └──────────────────────────────────────────────────────────────┘
 ##
-## The dtype policy (mmaDTypeOf, atom_selector, threadLayoutOf, tile_shape)
-## maps operand types to the atom, thread layout and tile. The host and the
-## device run the same policy, so the config is derived on both sides
-## instead of passed.
+## The dtype policy (mmaDType, atom_selector, threadTiling, tile_shape)
+## maps operand types to the atom, thread layout and tile.
+##
+## The host and the device run the same policy, so the config derives
+## on both sides.
 
 import std/macros
 import ./int_tuples
@@ -528,23 +529,23 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
 #  The host and the device run the same policy: the same atom, thread layout and tile.
 #  TODO: refactor this whole section: the dtype mapping is a naive first cut.
 
-template mmaDTypeOf(T: typedesc): MmaDType =
+template mmaDType(T: typedesc): MmaDType =
   ## The MmaDType for an operand type.
   # TODO: naive mapping: a uint32 operand may pack 4 × fp8 or 2 × fp16,
   # not just TF32. Rework when the packed datatypes land.
   when T is uint32: mdtTF32
   elif T is float32: mdtF32
   else:
-    {.error: "mmaDTypeOf: no MmaDType for the operand type " & $T &
+    {.error: "mmaDType: no MmaDType for the operand type " & $T &
       ". At the moment: uint32 (TF32) and float32".}
 
 template atom_selector*(TA, TB, TC: typedesc): auto =
   ## Derive the MMA atom for the operand types.
   ##
-  ## Matches the raw operand types: mmaDTypeOf errors on any type but
-  ## uint32 and float32, so the selector cannot route through it.
-  ## Unmatched combinations fall back to the 1×1×1 universal atom, which
-  ## compiles wherever plain arithmetic does.
+  ## - the raw operand types route the atom, mmaDType errors on any type
+  ##   but uint32 and float32, so the selector cannot route through it
+  ## - unmatched combinations fall back to the 1×1×1 universal atom,
+  ##   which compiles wherever plain arithmetic does
   # TODO: naive dtype matching: the operand types may pack smaller
   # datatypes (4 × fp8, 2 × fp16). Rework when those land.
   when TA is uint32 and TB is uint32 and TC is float32:
@@ -561,7 +562,7 @@ func make_tiled_mma*[Sh, St](
     thread_layout: Layout[Sh, St]): TiledMma[MmaAtom, Layout[Sh, St]] {.inline.} =
   TiledMma[MmaAtom, Layout[Sh, St]](atom: a, threadLayout: thread_layout)
 
-template threadLayoutOf*(atom: static MmaAtom, M, N: static int): auto =
+template threadTiling*(atom: static MmaAtom, M, N: static int): auto =
   ## Thread tiling for a padded input extent (M, N), derived from the atom's tile dimensions.
   ##
   ## - thrM = M div atom.getM()
@@ -655,7 +656,7 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
     atomN = atom_selector(TA, TB, TC).getN()
     Mp = ((M + atomM - 1) div atomM) * atomM
     Np = ((N + atomN - 1) div atomN) * atomN
-    layout = threadLayoutOf(atom_selector(TA, TB, TC), Mp, Np)
+    layout = threadTiling(atom_selector(TA, TB, TC), Mp, Np)
     # TODO:
     #   temporary SM80 tileK, hardcoded until the dtype policy derives
     # it per architecture and datatype. The smem tile's K size: gemm_cta
