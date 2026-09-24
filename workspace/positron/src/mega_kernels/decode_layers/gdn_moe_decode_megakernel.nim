@@ -507,7 +507,7 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
       (bfA +% sConv +% (2 * NumKHeads * HeadKDim)), (f32A +% sG),
       (bfA +% sBeta), 0'f32, int32(NumVHeads), int32(NumKHeads), int32(HkRatio),
       local mod (HeadVDim div 8), local div (HeadVDim div 8),
-      128, 128, 8)
+      Dk = 128, Dv = 128, TileR = 8)
     waveAdd(counters, 7)
   elif tx < int32(EndStageONorm):
     waveWait(counters, 7, 512)
