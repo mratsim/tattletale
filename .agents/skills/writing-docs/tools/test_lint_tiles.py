@@ -265,6 +265,22 @@ ok &= expect("one-liner alone never blocks",
              [(x.rule, x.warning) for x in res],
              [("one-liner", True)])
 
-cases = 33
+# an explicit scan path runs with the kernel roots missing from the cwd,
+# the support-table collection skips instead of exiting 2
+import os
+with tempfile.TemporaryDirectory() as d:
+    f = Path(d) / "solo.nim"
+    f.write_text("proc solo(x: int): int =\n  x + 1\n", encoding="utf-8")
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        res = lt.lint([str(f)])
+    finally:
+        os.chdir(cwd)
+ok &= expect("explicit path without default roots scans",
+             [(x.rule, x.warning) for x in res],
+             [("one-liner", True)])
+
+cases = 34
 print("ALL PASS" if ok else "FAILURES", "(%d cases)" % cases)
 sys.exit(0 if ok else 1)

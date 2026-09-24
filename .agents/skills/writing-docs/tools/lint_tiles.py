@@ -959,11 +959,14 @@ def lint(paths, base=None):
     # - an unstaged math_consts.nim stays invisible to math-const
     # - an unstaged generic callee stays invisible to explicit-generics
     # The scan set stays the staged files, the base-commit scoping unchanged.
+    # Roots missing from the cwd skip the support tables instead of failing
+    # the scan, the explicit-path run outside the repo layout, the default
+    # scan path still requires the roots present.
     support = [Path(r) for r in KERNEL_ROOTS if Path(r).is_dir()]
     consts = load_math_consts(list(files) + support)
     builtins = load_builtins()
     texts = [(f, f.read_text(encoding="utf-8", errors="replace")) for f in files]
-    support_files = collect_files(KERNEL_ROOTS)
+    support_files = collect_files(support) if support else []
     support_texts = [(f, f.read_text(encoding="utf-8", errors="replace"))
                      for f in support_files if f not in set(files)]
     generic_map = build_generic_map(
