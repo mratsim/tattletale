@@ -39,6 +39,16 @@ type Epilogue* = concept
 
 func biasView*(T: typedesc, R, C: static int,
                buf: ptr UncheckedArray[T]): TensorView[T, (Int[R], Int[C]), (Int[0], Int[1])] =
+  ## A broadcast-ready (R, C) view of a per-column bias row.
+  ##
+  ## Expected input:
+  ##   - buf, an R·C element buffer, the bias values laid out columnwise,
+  ##     C consecutive elements per row, R rows
+  ##
+  ## Output:
+  ##   - a (R, C) row-strided view, strides (0, 1), every row aliasing
+  ##     the same C bias values, the tile epilogue's add reads it like
+  ##     the accumulator's own tile
   make_view(buf, (R, C), (0, 1))
 
 func cView*(T: typedesc, R, C: static int,
