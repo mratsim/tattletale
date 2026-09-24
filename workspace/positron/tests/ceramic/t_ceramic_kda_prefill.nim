@@ -5,18 +5,18 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
-## Run commands, from the repo root (the aggregate runner is nim test_positron_naive):
+## Run commands, from the repo root (the aggregate runner is nim test_positron_properties):
 ## - nim c -r -d:release --warnings:off --outdir:build/tests workspace/positron/tests/ceramic/t_ceramic_kda_prefill.nim
 ##
-## Ceramic KDA prefill suite, chunked scan against the naive tier:
+## Ceramic KDA prefill suite, chunked scan against the reference tier:
 ##
-## | judgment   | naive side                                                                                      |
+## | judgment   | reference side                                                                                  |
 ## | ---------- | ----------------------------------------------------------------------------------------------- |
-## | y, state   | the fp64 chunked WY/UT reference `kdaPrefillChunked` (tests/naive/naive_kda.nim)                |
+## | y, state   | the fp64 chunked WY/UT reference `kdaPrefillChunked` (tests/properties/refs.nim)                |
 ## | continuity | the fp64 per-token walk `kdaPrefillPerToken`, the ceramic chunked scan's final state against it |
 ##
-## - the naive-side continuity pair (chunked vs per-token, y and final state) lives in tests/naive/t_naive_kda.nim
-## - the naive references are per-sequence, B sequences take B naive calls on per-sequence input slices
+## - the reference-side continuity pair (chunked vs per-token, y and final state) is judged inside the suite itself
+## - the reference walks are per-sequence, B sequences take B reference calls on per-sequence input slices
 ## - per-sequence results are assembled on the stacked axes
 ##
 ## Inputs, all seeded xorshift64, fixture-free:
@@ -30,7 +30,7 @@
 ## | cumulogdecay | the per-channel f32 cumulative log decay within each chunk, host-computed from g         |
 ##
 ## - the q, k normalization also keeps the delta-rule recursion bounded over 256 tokens in fp16 y range
-## - the f32 inputs are the shared values, the naive sides widen them exactly, no input rounding divergence
+## - the f32 inputs are the shared values, the reference sides widen them exactly, no input rounding divergence
 ##
 ## Band model, stated before measurement and judged per element, u₃₂ = 2⁻²⁴ the fp32
 ## unit roundoff, a reassociation of the per-token recurrence over the per-channel
@@ -47,7 +47,7 @@
 ##            └──→ S ← dEnd ⊙ carry read + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
 ##
 ## - the per-token walk instead applies exp(g) per token per channel, reading and updating the state each step
-## - both naive spellings run fp64, the ceramic core runs fp32 state math with element-dtype handoffs
+## - both reference spellings run fp64, the ceramic core runs fp32 state math with element-dtype handoffs
 ## - the judged divergence is the ceramic side's rounding against the fp64 chunked reference structure
 ##
 ## | site                    | bound                                                                                        |
@@ -57,7 +57,7 @@
 ## | pair decay              | relative ≤ relT[t] + relT[s] + u₃₂ (dT·invd_s, two exp2 forms plus the product)              |
 ## | k·k / q̃·k dots         | Dk·u₃₂ of the absolute sum (elementwise round plus row-sum tree)                             |
 ## | S·k̃ / S·q̃ reads       | per-channel decay rel terms, Dk·u₃₂ of the absolute sum, the carried state error Σ abs(k)·ΔS |
-## | q̃ scale                | relative ≤ 4·u₃₂ (f32 qScale vs the naive f64 divide, plus the division rounding)            |
+## | q̃ scale                | relative ≤ 4·u₃₂ (f32 qScale vs the reference f64 divide, plus the division rounding)        |
 ## | u solve                 | β·(base error + Σ abs(A)·Δu + ΔA·abs(u) + t·u₃₂·Σ abs(A·u))                                  |
 ## | chunk carry             | decayed old state per channel + Σ abs(pd·k)·Δu + cLen·u₃₂·Σ abs(pd·k·u)                      |
 ## | y store                 | one element-dtype RNE, u_step·abs(y) plus the subnormal grid floor                           |
@@ -118,11 +118,9 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_prefill
-import ../naive/naive_rng
-import ../naive/naive_tensors
-import ../naive/naive_kda
 import ceramic_pagebuf
 import ceramic_dtype
+import ../properties/refs
 
 # ─── Device entries, one per (element dtype, chunk length, Dk) binding ──
 
@@ -176,7 +174,7 @@ const KdaPrefillMsl = metal:
 
 const
   DecExp = 4.0 * U32                 # exp2(c·log2e) form relative bound, mul + exp2
-  QScaleRel = 4.0 * U32              # f32 qScale vs the naive f64 divide, plus the division
+  QScaleRel = 4.0 * U32              # f32 qScale vs the reference f64 divide, plus the division
   UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
   UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
   FloorSub = 2.9802322387695312e-8   # 2⁻²⁵, half the constant fp16 subnormal ulp,
@@ -202,8 +200,8 @@ type TraceBars = object
   barS: seq[float64]
 
 proc kdaChunkTraceBars(
-    s0w: NaiveCube[float64], qw, kw, gw: NaiveCube[float64], vw: NaiveCube[float64],
-    bw: NaiveMat[float64],
+    s0w: Cube[float64], qw, kw, gw: Cube[float64], vw: Cube[float64],
+    bw: Mat[float64],
     Hv, Hk, hkRatio, T, chunkLen, Dv, Dk: int,
     uStep: float64, underflowFloors = false): TraceBars =
   ## `underflowFloors` adds the fp32 exp2 underflow floor to every decay
@@ -399,24 +397,24 @@ proc kdaChunkTraceBars(
       for dk in 0 ..< Dk:
         result.barS[(bh * Dv + r) * Dk + dk] = dS[r * Dk + dk]
 
-# ─── One case, seeded inputs → naive references → launch → judgment ──
+# ─── One case, seeded inputs → the reference walks → launch → judgment ──
 
-proc sliceCube[T](c: NaiveCube[T], plane0, planes: int): NaiveCube[T] =
-  ## Per-sequence slice of a stacked cube, the naive references are per-sequence.
-  result = NaiveCube[T](planes: planes, rows: c.rows, cols: c.cols)
+proc sliceCube[T](c: Cube[T], plane0, planes: int): Cube[T] =
+  ## Per-sequence slice of a stacked cube, the reference walks are per-sequence.
+  result = Cube[T](planes: planes, rows: c.rows, cols: c.cols)
   result.data = newSeq[T](planes * c.rows * c.cols)
   for i in 0 ..< planes * c.rows * c.cols:
     result.data[i] = c.data[plane0 * c.rows * c.cols + i]
 
-proc sliceMat[T](m: NaiveMat[T], row0, rows: int): NaiveMat[T] =
+proc sliceMat[T](m: Mat[T], row0, rows: int): Mat[T] =
   ## Per-sequence slice of a stacked head-axis matrix.
-  result = NaiveMat[T](rows: rows, cols: m.cols)
+  result = Mat[T](rows: rows, cols: m.cols)
   result.data = newSeq[T](rows * m.cols)
   for i in 0 ..< rows * m.cols:
     result.data[i] = m.data[row0 * m.cols + i]
 
 type PrefillInputs = object
-  ## One case's seeded inputs, the f32 values shared by the kernel and the naive
+  ## One case's seeded inputs, the f32 values shared by the kernel and the reference
   ## sides through their exact widenings, the per-channel cumulogdecay host-computed
   ##
   ## | field        | shape              |
@@ -435,7 +433,7 @@ type PrefillInputs = object
   betaVals: seq[float32]
   state0: seq[float32]
 
-proc l2NormalizeRowsF32(dst: var seq[float32], rows, cols: int, rng: var NaiveRng) =
+proc l2NormalizeRowsF32(dst: var seq[float32], rows, cols: int, rng: var PropRng) =
   ## Fills `dst` with l2-normalized f32 rows, the kernel contract's post-l2norm
   ## query/key shape:
   ##
@@ -463,7 +461,7 @@ proc hostCumulogdecay(dst: var seq[float32], g: seq[float32], qkRows, T, Dk, chu
         else:
           dst[gi] = dst[gi - Dk] + g[gi]
 
-proc takeInputs(dt: ScalarKind, rng: var NaiveRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
+proc takeInputs(dt: ScalarKind, rng: var PropRng, bhMax, qkRows, T, Dv, Dk, chunkLen: int, betaZero: bool, overflowG = false): PrefillInputs =
   ## `overflowG` generates the decay-overflow fixture's g, |g| ≈ 3 per token
   ## per channel so the 64-token chunk's |cumulogdecay| crosses the exp2 overflow
   ## bound 88.7 inside the chunk
@@ -580,14 +578,14 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
     ## Naive references, bars, launch, sentinels and the per-element judgment.
     ## `record` false marks the determinism relaunch, bit-compared against the first pass.
     fillInputs(si)
-    # fp64 widened inputs, the naive sides consume exactly the kernel's f32 values
-    var s0w = NaiveCube[float64](planes: bhMax, rows: Dv, cols: Dk)
+    # fp64 widened inputs, the reference sides consume exactly the kernel's f32 values
+    var s0w = Cube[float64](planes: bhMax, rows: Dv, cols: Dk)
     s0w.data = newSeq[float64](stateElems)
     for i in 0 ..< stateElems:
       s0w.data[i] = si.state0[i].float64
-    var qw = NaiveCube[float64](planes: qkRows, rows: T, cols: Dk)
-    var kw = NaiveCube[float64](planes: qkRows, rows: T, cols: Dk)
-    var gw = NaiveCube[float64](planes: qkRows, rows: T, cols: Dk)
+    var qw = Cube[float64](planes: qkRows, rows: T, cols: Dk)
+    var kw = Cube[float64](planes: qkRows, rows: T, cols: Dk)
+    var gw = Cube[float64](planes: qkRows, rows: T, cols: Dk)
     qw.data = newSeq[float64](qkRows * T * Dk)
     kw.data = newSeq[float64](qkRows * T * Dk)
     gw.data = newSeq[float64](qkRows * T * Dk)
@@ -595,16 +593,16 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
       qw.data[i] = si.qVals[i].float64
       kw.data[i] = si.kVals[i].float64
       gw.data[i] = si.gVals[i].float64
-    var vw = NaiveCube[float64](planes: bhMax, rows: T, cols: Dv)
+    var vw = Cube[float64](planes: bhMax, rows: T, cols: Dv)
     vw.data = newSeq[float64](bhMax * T * Dv)
     for i in 0 ..< bhMax * T * Dv:
       vw.data[i] = si.vBits[i].widenTo(dt).float64
-    var bw = NaiveMat[float64](rows: bhMax, cols: T)
+    var bw = Mat[float64](rows: bhMax, cols: T)
     bw.data = newSeq[float64](bhMax * T)
     for i in 0 ..< bhMax * T:
       bw.data[i] = si.betaVals[i].float64
 
-    # the naive references are per-sequence, B sequences take B independent naive
+    # the reference walks are per-sequence, B sequences take B independent reference
     # calls on per-sequence input slices, results assembled on the stacked axes
     var sN = newSeq[float64](stateElems)
     var yN = newSeq[float64](yElems)
@@ -620,7 +618,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
       let chunked = kdaPrefillChunked(s0Seq, qSeq, kSeq, gSeq, vSeq, bSeq,
         Hv, Hk, hkRatio, chunkLen)
       var sWalk = copyTensor(s0Seq)
-      var yWalk = NaiveCube[float64](planes: Hv, rows: T, cols: Dv)
+      var yWalk = Cube[float64](planes: Hv, rows: T, cols: Dv)
       yWalk.data = newSeq[float64](Hv * T * Dv)
       kdaPrefillPerToken[float64](sWalk, yWalk, qSeq, kSeq, gSeq, vSeq, bSeq,
         Hv, Hk, hkRatio)
@@ -638,7 +636,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
     launch(si)
     sentinels(si)
 
-    # the bar trace and the naive tier must agree to fp64 noise on y, a loose
+    # the bar trace and the reference tier must agree to fp64 noise on y, a loose
     # consistency check on the magnitude source, never the judged divergence
     for bh in 0 ..< bhMax:
       for t in 0 ..< T:
@@ -646,7 +644,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
           let i = (bh * T + t) * Dv + r
           doAssert abs(yN[i] - yPerGlobal[i]) <=
             1e-9 * (1.0 + abs(yN[i])),
-            "the bar trace and the naive tier disagree on y"
+            "the bar trace and the reference tier disagree on y"
 
     # continuity bar, the fp64 chunked-vs-walk reassociation term on top of the state bar
     var contBar = newSeq[float64](stateElems)
@@ -705,7 +703,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
     for i in 0 ..< yElems: yy[i] = yB.hostPtr[i]
     (st, yy)
 
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   var case0: tuple[st: seq[float32], y: seq[uint16]]
   const cases = 4
   for caseId in 0 ..< cases:
@@ -715,7 +713,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
     if caseId == 0: case0 = record()
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let si = takeInputs(dt, rng0, bhMax, qkRows, T, Dv, Dk, chunkLen, betaZero,
       overflowG)
     judge(si, record = false)

@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run command, from the repo root:
-## - nim test_positron_naive
+## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_mega_gdn_mixer.nim
 ##
 ## Mixer-internals tier for the `qwen35_moe` fused GDN decoder layer.
@@ -39,13 +39,10 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/mega_kernels/decode_layers/gdn_moe_decode_megakernel
-import ../naive/naive_rng
-import ../naive/naive_tensors
-import ../naive/naive_gdn
-import ../naive/naive_layer_ops
 import ceramic_pagebuf
 import mega_bounded_wait
 import ceramic_dtype
+import ../properties/refs
 import mega_gdn_harness
 
 # ─── Band-model constants (the composition tier's two-term model) ─────
@@ -100,13 +97,13 @@ type Carry = object
   state: seq[float32]
   ring: seq[uint16]
 
-proc randBits(rng: var NaiveRng; n: int; lo, hi: float32): seq[uint16] =
+proc randBits(rng: var PropRng; n: int; lo, hi: float32): seq[uint16] =
   ## `n` bf16 bit patterns of uniform samples in [lo, hi].
   result = newSeq[uint16](n)
   for i in 0 ..< n:
     result[i] = f32ToBf16(rng.nextF32(lo, hi))
 
-proc buildWeights(rng: var NaiveRng): Weights =
+proc buildWeights(rng: var PropRng): Weights =
   ## Seeded weights at the Qwen bf16 class geometry, the composition
   ## tier's generation recipe, modest magnitudes so no stage saturates.
   result.norm1W = randBits(rng, Hidden, -0.05'f32, 0.05'f32)
@@ -199,10 +196,10 @@ func gemvBars(xPrime, w, nPrime, n: seq[uint16]; N, K: int): seq[float64] =
   ## plus the exact sensitivity of the naive dot to the observed input deviation.
   zipAdd(denseLocal(xPrime, w, nPrime, N, K), sens(nPrime, n))
 
-func toF32Mat(bits: seq[uint16]; rows, cols: int): NaiveMat[float32] =
+func toF32Mat(bits: seq[uint16]; rows, cols: int): Mat[float32] =
   ## A widened fp32 matrix over bf16 bits, the naive step's operand form.
   doAssert bits.len == rows * cols
-  result = NaiveMat[float32](rows: rows, cols: cols)
+  result = Mat[float32](rows: rows, cols: cols)
   result.data = newSeq[float32](rows * cols)
   for i in 0 ..< bits.len:
     result.data[i] = bf16ToF32(bits[i])
@@ -227,12 +224,12 @@ type NaiveLo = object
 proc naiveChain(w: Weights; norm1: seq[uint16]; carryIn: Carry): NaiveLo =
   ## Naive stages 2..10 over copies of the carried state and ring,
   ## the walk mutating the copies.
-  result.qkvCol = naiveDenseLinear(norm1, w.qkvW, ConvDim, H)
-  result.z = naiveDenseLinear(norm1, w.zW, NumVHeads * HeadVDim, H)
-  result.a = naiveDenseLinear(norm1, w.aW, NumVHeads, H)
-  result.b = naiveDenseLinear(norm1, w.bW, NumVHeads, H)
+  result.qkvCol = denseLinear(norm1, w.qkvW, ConvDim, H)
+  result.z = denseLinear(norm1, w.zW, NumVHeads * HeadVDim, H)
+  result.a = denseLinear(norm1, w.aW, NumVHeads, H)
+  result.b = denseLinear(norm1, w.bW, NumVHeads, H)
   var ringN = carryIn.ring
-  result.conv = naiveCausalConvSiluStep(w.convW, ringN, result.qkvCol,
+  result.conv = causalConvSiluStep(w.convW, ringN, result.qkvCol,
     ConvDim, ConvKernel)
   result.qn = newSeq[uint16](NumKHeads * HeadKDim)
   result.kn = newSeq[uint16](NumKHeads * HeadKDim)
@@ -241,20 +238,20 @@ proc naiveChain(w: Weights; norm1: seq[uint16]; carryIn: Carry): NaiveLo =
     for h in 0 ..< NumKHeads:
       let row = result.conv[srcBase + h * HeadKDim ..<
         srcBase + (h + 1) * HeadKDim]
-      let outp = naiveL2NormRow(row, HeadKDim)
+      let outp = l2NormRow(row, HeadKDim)
       for c in 0 ..< HeadKDim:
         if half == 0:
           result.qn[h * HeadKDim + c] = outp[c]
         else:
           result.kn[h * HeadKDim + c] = outp[c]
-  let gates = naiveGdnGates(result.a, result.b, w.dtBias, w.aLog, NumVHeads)
+  let gates = gdnGates(result.a, result.b, w.dtBias, w.aLog, NumVHeads)
   result.g = gates.g
   result.beta = gates.beta
   let vBase = 2 * NumKHeads * HeadKDim
-  var stateN = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+  var stateN = Cube[float32](planes: NumVHeads, rows: HeadVDim,
     cols: HeadKDim)
   stateN.data = carryIn.state
-  var yN = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
+  var yN = Mat[float32](rows: NumVHeads, cols: HeadVDim)
   yN.data = newSeq[float32](NumVHeads * HeadVDim)
   gdnDecodeStep(stateN, yN, toF32Mat(result.qn, NumKHeads, HeadKDim),
     toF32Mat(result.kn, NumKHeads, HeadKDim),
@@ -271,10 +268,10 @@ proc naiveChain(w: Weights; norm1: seq[uint16]; carryIn: Carry): NaiveLo =
     let yRow = result.y[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let zRow = result.z[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let wRow = w.onormW[bh * HeadVDim ..< (bh + 1) * HeadVDim]
-    let outp = naiveRmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
+    let outp = rmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
     for c in 0 ..< HeadVDim:
       result.normed[bh * HeadVDim + c] = outp[c]
-  result.blockOut = naiveDenseLinear(result.normed, w.outprojW, H,
+  result.blockOut = denseLinear(result.normed, w.outprojW, H,
     NumVHeads * HeadVDim)
   result.postRing = ringN
 
@@ -464,13 +461,13 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   # Stages 2 to 4:
   #   the projection GEMVs. The preloaded norm1 row is the observed input,
   #   the naive dot replayed at both operand sets
-  let qkvPrime = naiveDenseLinear(norm1M, w.qkvW, ConvDim, H)
+  let qkvPrime = denseLinear(norm1M, w.qkvW, ConvDim, H)
   result.qkv = gemvBars(norm1M, w.qkvW, qkvPrime, lo.qkvCol, ConvDim, H)
-  let zPrime = naiveDenseLinear(norm1M, w.zW, NumVHeads * HeadVDim, H)
+  let zPrime = denseLinear(norm1M, w.zW, NumVHeads * HeadVDim, H)
   result.z = gemvBars(norm1M, w.zW, zPrime, lo.z, NumVHeads * HeadVDim, H)
-  let aPrime = naiveDenseLinear(norm1M, w.aW, NumVHeads, H)
+  let aPrime = denseLinear(norm1M, w.aW, NumVHeads, H)
   result.a = gemvBars(norm1M, w.aW, aPrime, lo.a, NumVHeads, H)
-  let bPrime = naiveDenseLinear(norm1M, w.bW, NumVHeads, H)
+  let bPrime = denseLinear(norm1M, w.bW, NumVHeads, H)
   result.b = gemvBars(norm1M, w.bW, bPrime, lo.b, NumVHeads, H)
 
   # Stage 5:
@@ -478,7 +475,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   #   The tap dot is spelling-identical serial arithmetic over exact bf16 products,
   #   the local band the silu class and the stores
   var ringPrime = preM.ring
-  let convPrime = naiveCausalConvSiluStep(w.convW, ringPrime, qkvM,
+  let convPrime = causalConvSiluStep(w.convW, ringPrime, qkvM,
     ConvDim, ConvKernel)
   let convSens = sens(convPrime, lo.conv)
   result.conv = newSeq[float64](ConvDim)
@@ -531,9 +528,9 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
         h * HeadKDim ..< (h + 1) * HeadKDim]
       let outN = (if half == 0: lo.qn else: lo.kn)[
         h * HeadKDim ..< (h + 1) * HeadKDim]
-      let outPrime = naiveL2NormRow(rowM, HeadKDim)
+      let outPrime = l2NormRow(rowM, HeadKDim)
       doAssert outM == outPrime,
-        "the mega's l2norm spelling diverges from the naive replay"
+        "the mega's l2norm spelling diverges from the reference replay"
       let invM = l2Inv(rowM)
       let invN = l2Inv(rowN)
       let accM = l2Acc(rowM).float64
@@ -562,7 +559,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   # Stage 7:
   #   the recurrence values, g and beta. The naive spellings are replayed
   #   at the mega's a/b rows. G stays fp32 end to end, beta one bf16 round
-  let gatesPrime = naiveGdnGates(aM, bM, w.dtBias, w.aLog, NumVHeads)
+  let gatesPrime = gdnGates(aM, bM, w.dtBias, w.aLog, NumVHeads)
   result.g = newSeq[float64](NumVHeads)
   result.beta = newSeq[float64](NumVHeads)
   let betaPrimeW = widen(gatesPrime.beta)
@@ -583,18 +580,18 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
   let vBase = 2 * NumKHeads * HeadKDim
   let vM = convM[vBase ..< vBase + NumVHeads * HeadVDim]
   let vN = lo.conv[vBase ..< vBase + NumVHeads * HeadVDim]
-  var stM32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+  var stM32 = Cube[float32](planes: NumVHeads, rows: HeadVDim,
     cols: HeadKDim)
   stM32.data = preM.state
-  var yM32 = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
+  var yM32 = Mat[float32](rows: NumVHeads, cols: HeadVDim)
   yM32.data = newSeq[float32](NumVHeads * HeadVDim)
   gdnDecodeStep(stM32, yM32, toF32Mat(qnM, NumKHeads, HeadKDim),
     toF32Mat(knM, NumKHeads, HeadKDim), toF32Mat(vM, NumVHeads, HeadVDim),
     toF32Vec(betaM, NumVHeads), gM, NumVHeads, NumKHeads, HkRatio)
-  var stN32 = NaiveCube[float32](planes: NumVHeads, rows: HeadVDim,
+  var stN32 = Cube[float32](planes: NumVHeads, rows: HeadVDim,
     cols: HeadKDim)
   stN32.data = preN.state
-  var yN32 = NaiveMat[float32](rows: NumVHeads, cols: HeadVDim)
+  var yN32 = Mat[float32](rows: NumVHeads, cols: HeadVDim)
   yN32.data = newSeq[float32](NumVHeads * HeadVDim)
   gdnDecodeStep(stN32, yN32, toF32Mat(lo.qn, NumKHeads, HeadKDim),
     toF32Mat(lo.kn, NumKHeads, HeadKDim),
@@ -656,7 +653,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
     let yRow = yM[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let zRow = zM[bh * HeadVDim ..< (bh + 1) * HeadVDim]
     let wRow = w.onormW[bh * HeadVDim ..< (bh + 1) * HeadVDim]
-    let normedPrime = naiveRmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
+    let normedPrime = rmsNormGated(yRow, zRow, wRow, HeadVDim, Eps)
     let normedSens = sens(normedPrime,
       lo.normed[bh * HeadVDim ..< (bh + 1) * HeadVDim])
     let yW = widen(yRow)
@@ -675,7 +672,7 @@ proc walkBars(w: Weights; norm1M: seq[uint16]; preM, preN: Carry;
 
   # Stage 10:
   #   the out projection GEMV
-  let blockPrime = naiveDenseLinear(normedM, w.outprojW, H,
+  let blockPrime = denseLinear(normedM, w.outprojW, H,
     NumVHeads * HeadVDim)
   result.blockOut = gemvBars(normedM, w.outprojW, blockPrime, lo.blockOut,
     H, NumVHeads * HeadVDim)
@@ -776,7 +773,7 @@ proc runMixer(engine: HwEngine) =
   ## over the restored carry judged bit-identical (default build).
   var usage = Usage()
   for caseId in 0 ..< NumCases:
-    var rng = initNaiveRng(Seed + uint64(caseId) * CaseSeedStep)
+    var rng = initPropRng(Seed + uint64(caseId) * CaseSeedStep)
     let w = buildWeights(rng)
     let carry0 = Carry(
       state: (proc(): seq[float32] =
@@ -786,7 +783,7 @@ proc runMixer(engine: HwEngine) =
       ring: randBits(rng, ConvDim * RingWidth, -1.0'f32, 1.0'f32))
     let x = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
     let r = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
-    let norm1 = naiveRmsNormRes(x, r, w.norm1W, H, Eps).normed
+    let norm1 = rmsNormRes(x, r, w.norm1W, H, Eps).normed
     runMixerWalk(engine, w, carry0, norm1, caseId, usage)
   printUsage(usage, "mixer")
   var worstAll = 0.0'f64

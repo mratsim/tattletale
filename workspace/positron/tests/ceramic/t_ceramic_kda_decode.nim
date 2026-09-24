@@ -5,13 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
-## Run commands, from the repo root (the aggregate runner is nim test_positron_naive):
+## Run commands, from the repo root (the aggregate runner is nim test_positron_properties):
 ## - nim c -r -d:release --warnings:off \
 ##   --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/ceramic/t_ceramic_kda_decode.nim
 ##
 ## Ceramic KDA decode step suite, `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single.nim`
-## compared per element against the naive `kdaDecodeStep`:
-## - the naive reference is per-sequence, B sequences take B independent naive calls
+## compared per element against the reference `kdaDecodeStep`:
+## - the reference walk is per-sequence, B sequences take B independent reference calls
 ## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
 ##
 ## Checks, all model-bar assertions, one step: bars → walk → launch → judgment:
@@ -33,15 +33,15 @@
 ## | baseline | 1  | 1  | 1     | 1       | fp16, bf16 | bf16  |
 ## | gqa      | 2  | 4  | 2     | 2       | fp16, bf16 | fp16  |
 ##
-## | regime   | note                                                                            |
-## | -------- | ------------------------------------------------------------------------------- |
-## | initial  | every case starts from a non-zero random initial state                          |
-## | g span   | -3 <= g < -0.1 single-step, -0.5 <= g < -0.01 chains, -0.001 <= g < 0 near-zero |
-## | stress   | the near-unitary decay stresses the chain recursion hardest                     |
-## | dtype    | q/k/g/beta are f32 per the recorded KDA contract, f32 through the naive side    |
-## | dtype    | v/y carry the element dtype, fp16 the primary, bf16 the range-robust fallback   |
-## | gqa      | both mapping terms live, in-sequence ratio plus sequence offset                 |
-## | sabotage | sequence 1 holds independent key heads, a dropped sequence offset cannot pass   |
+## | regime   | note                                                                             |
+## | -------- | -------------------------------------------------------------------------------- |
+## | initial  | every case starts from a non-zero random initial state                           |
+## | g span   | -3 <= g < -0.1 single-step, -0.5 <= g < -0.01 chains, -0.001 <= g < 0 near-zero  |
+## | stress   | the near-unitary decay stresses the chain recursion hardest                      |
+## | dtype    | q/k/g/beta are f32 per the recorded KDA contract, f32 through the reference side |
+## | dtype    | v/y carry the element dtype, fp16 the primary, bf16 the range-robust fallback    |
+## | gqa      | both mapping terms live, in-sequence ratio plus sequence offset                  |
+## | sabotage | sequence 1 holds independent key heads, a dropped sequence offset cannot pass    |
 ##
 ## Band model, stated before measurement, u₃₂ = 2⁻²⁴ the fp32 unit roundoff, γ_c = exp(g_c):
 ##
@@ -58,10 +58,10 @@
 ## | y (bh, r)          | 2·u_step·abs(y) + (2·Dk·2⁻²⁴ + 4·2⁻²⁴)·yAbs + 2·2⁻²⁴·abs(y) + 2⁻²⁵                                                                               |
 ## | term               | covers                                                                                                                                           |
 ## | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-## | 4·2⁻²⁴·a           | the exp (naive) vs exp2(g·log2e) (kernel) decay form                                                                                             |
+## | 4·2⁻²⁴·a           | the exp (reference) vs exp2(g·log2e) (kernel) decay form                                                                                         |
 ## | 2·u_step·abs(y)    | both sides round the same fp32 value once                                                                                                        |
 ## | (2·Dk·2⁻²⁴)·yAbs   | the two dot orders                                                                                                                               |
-## | 4·2⁻²⁴·yAbs        | the qScale difference, the naive's f32 √Dk vs the host's f64 √Dk cast to f32, at most one extra ulp each side                                    |
+## | 4·2⁻²⁴·yAbs        | the qScale difference, the reference's f32 √Dk vs the host's f64 √Dk cast to f32, at most one extra ulp each side                                |
 ## | 2⁻²⁵               | the fp16 subnormal grid floor, also covering the bf16 grid                                                                                       |
 ##
 ## Chain model, the two sides run the same fp32 arithmetic on state values that differ:
@@ -74,7 +74,7 @@
 ## | ΔS_{t+1}[r, dkc] | γ_dkc·ΔS_t[r, dkc] + barStep[r, dkc] + abs(k_dkc)·β·Σ_c abs(k_c)·γ_c·ΔS_t[r, c] |
 ## | Δy_t[r]          | Σ_c abs(q̃_c)·ΔS_{t+1}[r, c] + barY_t[r]                                        |
 ##
-## - barStep and barY are the single-step bars on the naive-side trajectory of each step
+## - barStep and barY are the single-step bars on the reference-side trajectory of each step
 ## - the measured divergence justifies the model, never sets the bar
 ## - the β = 0 edge combo stays within the band, the delta terms are exact zero, the decay drifts by at most 4·2⁻²⁴ relative
 ##
@@ -100,12 +100,9 @@ import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
-import ../naive/naive_rng
-import ../naive/naive_tensors
-import ../naive/naive_kda
-import ../naive/naive_gdn
 import ceramic_pagebuf
 import ceramic_dtype
+import ../properties/refs
 
 # ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
@@ -150,7 +147,7 @@ const CeramicDecodeMsl = metal:
 
 const
   RelDecay = 4.0 * U32               # exp vs exp2(g·log2e) relative bound
-  RelQScale = 4.0 * U32              # naive's f32 sqrt vs the host's f64 sqrt cast to f32
+  RelQScale = 4.0 * U32              # reference's f32 sqrt vs the host's f64 sqrt cast to f32
   RelQScaleX = 2.0 * 4.76837158203125e-7  # 2·2⁻²¹, rsqrt-multiply vs divide, cross-check
   UBf16 = 3.90625e-3                 # 2⁻⁸, the bf16 unit roundoff
   UF16 = 4.8828125e-4                # 2⁻¹¹, the fp16 unit roundoff
@@ -159,7 +156,7 @@ const
 
 type StepInputs = object
   ## One decode step's seeded inputs, q/k/g/beta f32 shared verbatim by the kernel
-  ## and the naive sides, v as element-dtype bits the naive side sees through its exact
+  ## and the reference sides, v as element-dtype bits the reference sees through its exact
   ## widening:
   ##
   ## | field        | shape          |
@@ -184,7 +181,7 @@ var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
 proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLo, gHi: float32, betaZero = false) =
   ## One (element dtype, shape, edge) combination over `cases` independent seeded runs
-  ## of `steps` decode steps each, judged per element against the naive reference
+  ## of `steps` decode steps each, judged per element against the reference reference
   ## under the band model, case 0 relaunched bit-identical.
   const Dv = 16
   const TileR = 8
@@ -255,12 +252,12 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
     assertReadUnchanged(betaB, si.betaVals)
     assertReadUnchanged(vB, si.vBits)
 
-  # Bars come from the naive-side trajectory, then the naive walk,
+  # Bars come from the reference-side trajectory, then the reference walk,
   # the kernel launch and the per-element judgment.
   # `judge` false marks the determinism relaunch, bit-compared against the first pass instead.
   proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap], judge: bool) =
     setState(state0)
-    var stateN = state0                       # naive-side fp32 state, flat
+    var stateN = state0                       # reference-side fp32 state, flat
     var dS = newSeq[float64](stateElems)      # running accumulated-error bound
     for t in 0 ..< chain.len:
       let si = chain[t]
@@ -278,7 +275,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       for h in 0 ..< bhMax:
         betaF[h] = si.betaVals[h]
 
-      # state bars from the naive pre-step state, per key channel gamma
+      # state bars from the reference pre-step state, per key channel gamma
       var barS = newSeq[float64](stateElems)
       for bh in 0 ..< bhMax:
         let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
@@ -308,27 +305,27 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
               (RelDecay * a + abs(kF[hk * dk + c].float64) * dDelta +
                 4.0 * U32 * (a + bTerm)) + abs(kF[hk * dk + c].float64) * deltaErr
 
-      # the naive walk, per sequence (the naive reference is per-sequence)
+      # the reference walk, per sequence (the reference walk is per-sequence)
       var yN = newSeq[float32](bhMax * Dv)
       for b in 0 ..< B:
-        var stateSeq = NaiveCube[float32](planes: Hv, rows: Dv, cols: dk)
+        var stateSeq = Cube[float32](planes: Hv, rows: Dv, cols: dk)
         stateSeq.data = newSeq[float32](Hv * Dv * dk)
         let base = b * Hv * Dv * dk
         for i in 0 ..< Hv * Dv * dk:
           stateSeq.data[i] = stateN[base + i]
-        var qMat = NaiveMat[float32](rows: Hk, cols: dk)
+        var qMat = Mat[float32](rows: Hk, cols: dk)
         qMat.data = newSeq[float32](Hk * dk)
-        var kMat = NaiveMat[float32](rows: Hk, cols: dk)
+        var kMat = Mat[float32](rows: Hk, cols: dk)
         kMat.data = newSeq[float32](Hk * dk)
-        var gMat = NaiveMat[float32](rows: Hk, cols: dk)
+        var gMat = Mat[float32](rows: Hk, cols: dk)
         gMat.data = newSeq[float32](Hk * dk)
         for i in 0 ..< Hk * dk:
           qMat.data[i] = qF[(b * Hk) * dk + i]
           kMat.data[i] = kF[(b * Hk) * dk + i]
           gMat.data[i] = gF[(b * Hk) * dk + i]
-        var vMat = NaiveMat[float32](rows: Hv, cols: Dv)
+        var vMat = Mat[float32](rows: Hv, cols: Dv)
         vMat.data = newSeq[float32](Hv * Dv)
-        var yMat = NaiveMat[float32](rows: Hv, cols: Dv)
+        var yMat = Mat[float32](rows: Hv, cols: Dv)
         yMat.data = newSeq[float32](Hv * Dv)
         var betaSeq = newSeq[float32](Hv)
         for p in 0 ..< Hv:
@@ -346,7 +343,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       launch()
       sentinels(si)
 
-      # y bars from the naive post-step state, then the y judgment
+      # y bars from the reference post-step state, then the y judgment
       let qScaleN = sqrt(float32(dk))
       for bh in 0 ..< bhMax:
         let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
@@ -393,7 +390,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
         state: readRecord(stateB.hostPtr, stateElems),
         y: readRecord(yB.hostPtr, bhMax * Dv)))
 
-  proc takeInputs(rng: var NaiveRng): seq[StepInputs] =
+  proc takeInputs(rng: var PropRng): seq[StepInputs] =
     ## Seeded inputs for one chain, q/k/g/beta f32 for every step.
     for step in 0 ..< steps:
       var qVals = newSeq[float32](qkRows * dk)
@@ -417,7 +414,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
 
   var case0Snaps: seq[StepSnap]             # the determinism reference
 
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     var state0 = newSeq[float32](stateElems)
     for i in 0 ..< stateElems:
@@ -430,7 +427,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
 
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     var state0 = newSeq[float32](stateElems)
     for i in 0 ..< stateElems:
       state0[i] = rng0.nextF32(-1.0'f32, 1.0'f32)
@@ -465,7 +462,7 @@ type CrossInputs = object
   g0: float32
   state0: seq[float32]
 
-proc takeCrossInputs(rng: var NaiveRng, dt: ScalarKind, qkRows, bhMax, stateElems: int): CrossInputs =
+proc takeCrossInputs(rng: var PropRng, dt: ScalarKind, qkRows, bhMax, stateElems: int): CrossInputs =
   ## Seeded cross-check inputs, the KDA side reads the exact f32 widenings.
   var qBits = newSeq[uint16](qkRows * 32)
   var kBits = newSeq[uint16](qkRows * 32)
@@ -632,7 +629,7 @@ proc runCrossCheck(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, cas
       refState = stateK
       refY = yK
 
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   var refState: seq[float32]
   var refY: seq[uint16]
   for caseId in 0 ..< cases:
@@ -640,7 +637,7 @@ proc runCrossCheck(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, cas
     runCase(ci, caseId, judge = true, refState, refY)
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let ci0 = takeCrossInputs(rng0, dt, qkRows, bhMax, stateElems)
     runCase(ci0, 0, judge = false, refState, refY)
 

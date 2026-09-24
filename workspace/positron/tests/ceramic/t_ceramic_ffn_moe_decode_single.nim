@@ -56,12 +56,10 @@ import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/ffn_moe_decode_single
-import ../naive/naive_rng
-import ../naive/naive_tensors
-from ../naive/naive_layer_ops import naiveSoftmaxTopKRouter, naiveSiluMulEl,
-    naiveSharedGate, bf16Round
-from ../naive/naive_grouped_mm import naiveGroupedMmSums, gmmBf16
 import ceramic_pagebuf
+import ceramic_dtype
+import ../properties/properties
+import ../properties/refs
 
 # ─── Geometry, the production decode shape ───────────────────────────
 
@@ -170,50 +168,50 @@ proc naiveWalk(x, routerW, gateUpW, downW, sgW, suW, sdW, gvW: seq[uint16];
   ##
   ## | part        | contract                                                       |
   ## | ----------- | -------------------------------------------------------------- |
-  ## | router      | `naiveSoftmaxTopKRouter`, bf16-rounded logits, fp32 softmax    |
-  ## | projections | `naiveGroupedMmSums` fp32 accumulations, one-expert cubes      |
-  ## | activation  | h = `naiveSiluMulEl`(g, u) per element                         |
+  ## | router      | `softmaxTopKRouter`, bf16-rounded logits, fp32 softmax         |
+  ## | projections | `groupedMmSums` fp32 accumulations, one-expert cubes           |
+  ## | activation  | h = `siluMulEl`(g, u) per element                              |
   ## | partial     | row slot·H + e = w[slot]·down_e, row K·H + e = gate·sharedDown |
   doAssert x.len == H and routerW.len == E * H
-  let (ids, w) = naiveSoftmaxTopKRouter(x, routerW, E, H, K, scale)
+  let (ids, w) = softmaxTopKRouter(x, routerW, E, H, K, scale)
   result.ids = ids
   result.w = w
   result.partial = newSeq[float32]((K + 1) * H)
-  let xMat = NaiveMat[uint16](rows: 1, cols: H, data: x)
+  let xMat = Mat[uint16](rows: 1, cols: H, data: x)
   for slot in 0 ..< K:
     let id = ids[slot].int
-    let gu = naiveGroupedMmSums(gmmBf16, xMat,
-      NaiveCube[uint16](planes: 1, rows: 2 * I, cols: H,
+    let gu = groupedMmSums(gmmBf16, xMat,
+      Cube[uint16](planes: 1, rows: 2 * I, cols: H,
         data: gateUpW[(id * 2 * I) * H ..< ((id + 1) * 2 * I) * H]),
       @[1'i32])
     var hBits = newSeq[uint16](I)
     for i in 0 ..< I:
-      hBits[i] = naiveSiluMulEl(gu.data[i], gu.data[I + i])
+      hBits[i] = siluMulEl(gu.data[i], gu.data[I + i])
     result.gP[slot] = gu.data[0 ..< I]
     result.uP[slot] = gu.data[I ..< 2 * I]
     result.hP[slot] = hBits
-    let dn = naiveGroupedMmSums(gmmBf16,
-      NaiveMat[uint16](rows: 1, cols: I, data: hBits),
-      NaiveCube[uint16](planes: 1, rows: H, cols: I,
+    let dn = groupedMmSums(gmmBf16,
+      Mat[uint16](rows: 1, cols: I, data: hBits),
+      Cube[uint16](planes: 1, rows: H, cols: I,
         data: downW[id * H * I ..< (id + 1) * H * I]),
       @[1'i32])
     for e in 0 ..< H:
       result.partial[slot * H + e] = w[slot] * dn.data[e]
   # the shared expert, the scalar gate weight only when the walk uses it
-  result.gvP = if useGate: naiveSharedGate(x, gvW, H) else: 1.0'f32
-  let sg = naiveGroupedMmSums(gmmBf16, xMat,
-    NaiveCube[uint16](planes: 1, rows: I, cols: H, data: sgW), @[1'i32])
-  let su = naiveGroupedMmSums(gmmBf16, xMat,
-    NaiveCube[uint16](planes: 1, rows: I, cols: H, data: suW), @[1'i32])
+  result.gvP = if useGate: sharedGate(x, gvW, H) else: 1.0'f32
+  let sg = groupedMmSums(gmmBf16, xMat,
+    Cube[uint16](planes: 1, rows: I, cols: H, data: sgW), @[1'i32])
+  let su = groupedMmSums(gmmBf16, xMat,
+    Cube[uint16](planes: 1, rows: I, cols: H, data: suW), @[1'i32])
   var hsBits = newSeq[uint16](I)
   for i in 0 ..< I:
-    hsBits[i] = naiveSiluMulEl(sg.data[i], su.data[i])
+    hsBits[i] = siluMulEl(sg.data[i], su.data[i])
   result.sgP = sg.data
   result.suP = su.data
   result.hsP = hsBits
-  let sd = naiveGroupedMmSums(gmmBf16,
-    NaiveMat[uint16](rows: 1, cols: I, data: hsBits),
-    NaiveCube[uint16](planes: 1, rows: H, cols: I, data: sdW), @[1'i32])
+  let sd = groupedMmSums(gmmBf16,
+    Mat[uint16](rows: 1, cols: I, data: hsBits),
+    Cube[uint16](planes: 1, rows: H, cols: I, data: sdW), @[1'i32])
   result.sdP = sd.data
   for e in 0 ..< H:
     result.partial[K * H + e] = result.gvP * sd.data[e]
@@ -223,7 +221,7 @@ proc naiveLogit(x, routerW: seq[uint16]; id: int): float32 =
   var acc = 0.0'f32
   for k in 0 ..< H:
     acc += bf16ToF32(x[k]) * bf16ToF32(routerW[id * H + k])
-  result = bf16ToF32(bf16Round(acc))
+  result = bf16ToF32(f32ToBf16(acc))
 
 func sumAbsLinks(xw: seq[float64]; w: seq[uint16]; off, n: int): float64 =
   ## Σ over one weight row's n elements of abs(xw·w), the logit-band summand.
@@ -259,9 +257,9 @@ proc judgeSlotPartials(token, slot: int; id: int;
       2.0 * UBf * (abs(hMrow[i]) + abs(hProw[i])) +
       1.1 * abs(nw.uP[slot][i].float64) * gBar +
       abs(silu64(nw.gP[slot][i].float64)) * uBar + FloorBf
-  let dnP = widenF32(naiveGroupedMmSums(gmmBf16,
-    NaiveMat[uint16](rows: 1, cols: I, data: nw.hP[slot]),
-    NaiveCube[uint16](planes: 1, rows: H, cols: I,
+  let dnP = widenF32(groupedMmSums(gmmBf16,
+    Mat[uint16](rows: 1, cols: I, data: nw.hP[slot]),
+    Cube[uint16](planes: 1, rows: H, cols: I,
       data: downW[dnBase ..< (id + 1) * H * I]), @[1'i32]).data)
   for e in 0 ..< H:
     var downLocal = 0.0'f64
@@ -332,7 +330,7 @@ proc fillFormula(buf: var PageBuf[uint16]; n: int) =
   for i in 0 ..< n:
     buf.hostPtr[i] = f32ToBf16(float32(i mod 501 - 250) * 1.0e-4'f32)
 
-proc fillRngBf(buf: var PageBuf[uint16]; rng: var NaiveRng; n: int;
+proc fillRngBf(buf: var PageBuf[uint16]; rng: var PropRng; n: int;
     lo, hi: float32) =
   ## `n` bf16 bit patterns of uniform samples in [lo, hi].
   doAssert n <= buf.elems
@@ -358,7 +356,7 @@ type Weights = object
 proc buildWeights(seed: uint64): Weights =
   ## Seeded weight set, the router weight plus the gate weight vector,
   ## both from the seed's rng, the expert and shared weights formula-filled.
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   result.routerW = allocPageBuf[uint16](E * H)
   result.gateUpW = allocPageBuf[uint16](E * 2 * I * H)
   result.downW = allocPageBuf[uint16](E * H * I)
@@ -395,7 +393,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
   defer:
     freePageBuf(partial); freePageBuf(xB); freePageBuf(hB); freePageBuf(hsB)
 
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   fillRngBf(xB, rng, tokens * H, -1.0'f32, 1.0'f32)
   var poisonedGV: PageBuf[uint16]
   if poisonGateVec:

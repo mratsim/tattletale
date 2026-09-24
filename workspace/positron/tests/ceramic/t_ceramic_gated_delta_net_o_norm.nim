@@ -1,5 +1,5 @@
 ## Run command, from the repo root:
-## - nim test_positron_naive
+## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_gated_delta_net_o_norm.nim
 ##
 ## Ceramic SiLU-gated RMSNorm suite, `src/kernels/ceramic/attn_ssm/gated_delta_net_o_norm.nim` judged per

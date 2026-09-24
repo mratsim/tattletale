@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run command, from the repo root:
-## - nim test_positron_naive
+## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_moe_router.nim
 ##
 ## Ceramic Qwen softmax router suite, the kernel judged against the host reference

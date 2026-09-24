@@ -1,5 +1,5 @@
 ## Run command, from the repo root:
-## - nim test_positron_naive
+## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_linear.nim
 ##
 ## Ceramic dense linear suite, the kernel judged per element against the host reference

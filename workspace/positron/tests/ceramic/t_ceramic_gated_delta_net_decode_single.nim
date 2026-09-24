@@ -5,16 +5,16 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option, this file may not be copied, modified, or distributed except according to those terms.
 
-## Run commands, from the repo root (the aggregate runner is nim test_positron_naive):
+## Run commands, from the repo root (the aggregate runner is nim test_positron_properties):
 ## - nim c -r -d:release --warnings:off \
 ##   --outdir:build/tests --nimcache:nimcache/cer workspace/positron/tests/ceramic/t_ceramic_gated_delta_net_decode_single.nim
 ##
 ## Ceramic GDN decode step suite:
-## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` compared per element against the naive `gdnDecodeStep`
-## - the naive reference is per-sequence, B sequences take B independent naive calls
+## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` compared per element against the reference `gdnDecodeStep`
+## - the reference walk is per-sequence, B sequences take B independent reference calls
 ## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
 ##
-## One step reads state bars → naive walk → kernel launch → y and state judgment, the bounds carry into the next step
+## One step reads state bars → reference walk → kernel launch → y and state judgment, the bounds carry into the next step
 ##
 ## Checks, all model-bar assertions:
 ## - the single-step closed-form band, 64 seeded random cases per (element dtype, shape)
@@ -70,7 +70,7 @@
 ## | ΔS_{t+1}[r, dkc] | exp(g)·ΔS_t[r, dkc] + barStep[r, dkc] + abs(k_dkc)·β·Σ_c abs(k_c)·exp(g)·ΔS_t[r, c] |
 ## | Δy_t[r]          | Σ_c abs(q̃_c)·ΔS_{t+1}[r, c] + barY_t[r]                                            |
 ##
-## - barStep and barY are the single-step bars above, evaluated on the naive-side trajectory of each step
+## - barStep and barY are the single-step bars above, evaluated on the reference-side trajectory of each step
 ## - the measured divergence justifies the model, never sets the bar
 ## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
 
@@ -78,11 +78,9 @@ import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
-import ../naive/naive_rng
-import ../naive/naive_tensors
-import ../naive/naive_gdn
 import ceramic_pagebuf
 import ceramic_dtype
+import ../properties/refs
 
 # ─── Device entries, one per (element dtype, Dk) binding ──────────────
 
@@ -112,7 +110,7 @@ const
                                      # the rounding floor once |y| falls subnormal
 
 type StepInputs = object
-  ## One decode step's seeded inputs, element-dtype bits shared by the kernel and the naive sides through their exact fp32 widenings:
+  ## One decode step's seeded inputs, element-dtype bits shared by the kernel and the reference sides through their exact fp32 widenings:
   ##
   ## | field        | shape                 |
   ## | ------------ | --------------------- |
@@ -136,7 +134,7 @@ var suiteWorstUse, suiteWorstState, suiteWorstYUlp = 0.0'f64
 
 proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, cases: int, seed: uint64, label: string, gLoOverride = 0.0'f32, gHiOverride = 0.0'f32, betaZero = false) =
   ## One (element dtype, shape) combination over `cases` independent seeded
-  ## runs of `steps` decode steps each, judged per element against the naive
+  ## runs of `steps` decode steps each, judged per element against the reference
   ## reference under the band model, case 0 relaunched bit-identical.
   const Dv = 16
   const TileR = 8
@@ -213,11 +211,11 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
     for i in 0 ..< bhMax:
       doAssert gB.hostPtr[i] == si.gVals[i], "kernel-read buffer modified"
 
-  # Bars come from the naive-side trajectory, then the naive walk, the kernel launch and the per-element judgment.
+  # Bars come from the reference-side trajectory, then the reference walk, the kernel launch and the per-element judgment.
   # `judge` false marks the determinism relaunch, bit-compared against the first pass instead.
   proc runSteps(state0: seq[float32], chain: seq[StepInputs], snaps: var seq[StepSnap], judge: bool) =
     setState(state0)
-    var stateN = state0                       # naive-side fp32 state, flat
+    var stateN = state0                       # reference-side fp32 state, flat
     var dS = newSeq[float64](stateElems)      # running accumulated-error bound
     for t in 0 ..< chain.len:
       let si = chain[t]
@@ -233,7 +231,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       for h in 0 ..< bhMax:
         betaF[h] = si.betaBits[h].widenTo(dt)
 
-      # state bars from the naive pre-step state
+      # state bars from the reference pre-step state
       var barS = newSeq[float64](stateElems)
       for bh in 0 ..< bhMax:
         let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
@@ -262,24 +260,24 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
               (RelDecay * a + abs(kF[hk * dk + c].float64) * dDelta +
                 4.0 * U32 * (a + bTerm)) + abs(kF[hk * dk + c].float64) * deltaErr
 
-      # the naive walk, per sequence (the naive reference is per-sequence)
+      # the reference walk, per sequence (the reference walk is per-sequence)
       var yN = newSeq[float32](bhMax * Dv)
       for b in 0 ..< B:
-        var stateSeq = NaiveCube[float32](planes: Hv, rows: Dv, cols: dk)
+        var stateSeq = Cube[float32](planes: Hv, rows: Dv, cols: dk)
         stateSeq.data = newSeq[float32](Hv * Dv * dk)
         let base = b * Hv * Dv * dk
         for i in 0 ..< Hv * Dv * dk:
           stateSeq.data[i] = stateN[base + i]
-        var qMat = NaiveMat[float32](rows: Hk, cols: dk)
+        var qMat = Mat[float32](rows: Hk, cols: dk)
         qMat.data = newSeq[float32](Hk * dk)
-        var kMat = NaiveMat[float32](rows: Hk, cols: dk)
+        var kMat = Mat[float32](rows: Hk, cols: dk)
         kMat.data = newSeq[float32](Hk * dk)
         for i in 0 ..< Hk * dk:
           qMat.data[i] = qF[(b * Hk) * dk + i]
           kMat.data[i] = kF[(b * Hk) * dk + i]
-        var vMat = NaiveMat[float32](rows: Hv, cols: Dv)
+        var vMat = Mat[float32](rows: Hv, cols: Dv)
         vMat.data = newSeq[float32](Hv * Dv)
-        var yMat = NaiveMat[float32](rows: Hv, cols: Dv)
+        var yMat = Mat[float32](rows: Hv, cols: Dv)
         yMat.data = newSeq[float32](Hv * Dv)
         var betaSeq = newSeq[float32](Hv)
         var gSeq = newSeq[float32](Hv)
@@ -298,7 +296,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       launch(si)
       sentinels(si)
 
-      # y bars from the naive post-step state, then the y judgment
+      # y bars from the reference post-step state, then the y judgment
       for bh in 0 ..< bhMax:
         let hk = (bh mod Hv) div hkRatio + (bh div Hv) * Hk
         for r in 0 ..< Dv:
@@ -343,7 +341,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
         state: readRecord(stateB.hostPtr, stateElems),
         y: readRecord(yB.hostPtr, bhMax * Dv)))
 
-  proc takeInputs(rng: var NaiveRng): seq[StepInputs] =
+  proc takeInputs(rng: var PropRng): seq[StepInputs] =
     ## Seeded inputs for one chain, element-dtype bits for every step.
     for step in 0 ..< steps:
       var qBits = newSeq[uint16](qkRows * dk)
@@ -365,7 +363,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
 
   var case0Snaps: seq[StepSnap]             # the determinism reference
 
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     var state0 = newSeq[float32](stateElems)
     for i in 0 ..< stateElems:
@@ -378,7 +376,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
 
   # determinism relaunch of case 0, bit-identical across launches
   block determinism:
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     var state0 = newSeq[float32](stateElems)
     for i in 0 ..< stateElems:
       state0[i] = rng0.nextF32(-1.0'f32, 1.0'f32)
