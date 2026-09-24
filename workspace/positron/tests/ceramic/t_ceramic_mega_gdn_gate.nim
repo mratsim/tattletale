@@ -71,8 +71,6 @@ import mega_gdn_harness
 
 # ─── Expiry callback, the wedge is a recorded contract outcome ────────
 
-var staleWedge {.global.}: bool
-
 proc recordStaleGateExpiry(msg: string) {.gcsafe.} =
   ## Expiry callback of the stale-counter case, the bounded wait's
   ## diagnostic recorded and the wedge accepted as the outcome it is.
@@ -81,10 +79,11 @@ proc recordStaleGateExpiry(msg: string) {.gcsafe.} =
   ## - under the stale counts, the race between the launch-end reset
   ##   and the in-flight threadgroups ends either corrupt or wedged,
   ##   both recorded in the case's header, neither is a kernel-behavior failure
-  ## - a wedged grid cannot be unwound in-process, the callback returns,
-  ##   the case runs last, the wedged worker holds the engine until exit
+  ## - a wedged grid cannot be unwound in-process, so the callback
+  ##   quits the process after one stuck-stage diagnostic, no case code
+  ##   runs behind the wedged worker (its engine dispatch owns the pages)
   stderr.writeLine "[mega gate] stale-counter relaunch wedged, " & msg
-  staleWedge = true
+  quit(0)
 
 # ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
 
@@ -277,7 +276,9 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   echo &"[mega gate] stale-counter relaunch bf arena mismatches " &
     &"{staleBfMismatches}/{BfArenaLen}, f32 arena mismatches " &
     &"{staleF32Mismatches}/{F32ArenaLen} against the reference"
-  doAssert staleWedge or staleBfMismatches > 0 or staleF32Mismatches > 0,
+  # A wedged run exits the process from the expiry callback, the code
+  # behind this point only ever sees the corrupt outcome.
+  doAssert staleBfMismatches > 0 or staleF32Mismatches > 0,
     "the stale-counter relaunch reproduced the reference bits, the garbage " &
     "in the counters must open the waits early and corrupt the walk or wedge"
   # Under the garbage the launch-end reset races the in-flight threadgroups, their adds land after the re-zero and the m.counters
@@ -288,12 +289,11 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
       msg.add &"{m.counters.hostPtr[i]} "
     echo "[mega gate] ", msg
   echo &"[mega gate] total wall {epochTime() - t0:.2f} s"
-  let staleOutcome = if staleWedge: "wedge" else: "corrupt"
   echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
     &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
-    &"{BfArenaLen + F32ArenaLen}, stale outcome (corrupt or wedge) " &
-    staleOutcome &
-    ", stale bf " & &"{staleBfMismatches}/{BfArenaLen} f32 {staleF32Mismatches}/{F32ArenaLen}"
+    &"{BfArenaLen + F32ArenaLen}, stale outcome corrupt " &
+    "(the wedge branch exits the process at the expiry callback), " &
+    "stale bf " & &"{staleBfMismatches}/{BfArenaLen} f32 {staleF32Mismatches}/{F32ArenaLen}"
 
 proc main =
   echo "device: ", bkMetal.init().deviceName()

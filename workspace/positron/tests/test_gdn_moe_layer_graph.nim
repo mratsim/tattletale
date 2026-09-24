@@ -167,11 +167,16 @@ proc testGuards =
   test "guards: an out-of-maxima config is rejected with a naming message":
     var overTopk = qwen36Cfg()
     overTopk.topK = 10
+    var rejected = false
     try:
       discard deriveGdnLayerGraph(overTopk)
-      doAssert false, "topK 10 must be rejected"
     except AssertionDefect as e:
+      rejected = true
       doAssert "topK" in e.msg, e.msg
+    doAssert rejected, "topK 10 must be rejected"
+    # Rejection checking sits after the handler, since an accepted topK
+    # raise carries the same 'topK' wording the handler searches for, so
+    # the missing-exception check lives outside the try block
 
 
 proc main =
