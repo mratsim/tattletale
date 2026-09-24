@@ -96,8 +96,8 @@ func ownerLaneOfCell(r, n: int32): int32 {.inline.} =
   ##   m + 8·n offset with strides (16, 1, 2, 32, 4)
   ## - the proc inverts the layout's lane → cell mapping, the lane
   ##   bits b0..b4 decoding to row = b1+2b2+4b4 and col = 2b0+4b3 per
-  ##   the layout's documented mapping  (n div 2 mod 2) + 2 * (r mod 2) + 4 * ((r div 2) mod 2) +
-    8 * (n div 4 mod 2) + 16 * ((r div 4) mod 2)
+  ##   the layout's documented mapping  (n div 2 mod 2) + 2 * (r mod 2) +
+  ##   4 * ((r div 2) mod 2) + 8 * (n div 4 mod 2) + 16 * ((r div 4) mod 2)
 
 # tiles-allow topkScores is the masked-copy selection machine, it needs a fragment-indexed
 # top-K primitive (per-fragment expert mapping over the tile)

@@ -398,7 +398,18 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext; n: var GpuAst) =
         fnIdent = n.bOp
       var call = GpuAst(kind: gpuCall)
       call.cName = fnIdent
-      call.cArgs = @[n.bLeft, n.bRight]
+      # Dropped static VALUE params (records and compile-time-only scalars) erase
+      # the matching operand here, the same erasure the nnkCall handler applies
+      # at its position.
+      # Operand i maps to parameter i for the two-operand operator overloads this pass sees.
+      var staticSkip: seq[int]
+      if fnIdent in ctx.processedProcs:
+        staticSkip = ctx.processedProcs[fnIdent].staticParamPositions
+      call.cArgs = @[]
+      for operandIdx in 0 ..< 2:
+        if operandIdx in staticSkip: continue
+        let operand = if operandIdx == 0: n.bLeft else: n.bRight
+        call.cArgs.add operand
       n = call
       # Recurse into children
       for i in 0 ..< call.cArgs.len:
