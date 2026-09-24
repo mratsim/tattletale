@@ -29,12 +29,20 @@ import ./quant_gguf_ops
 import ./quant_exl3_ops
 import ./tile_io_rows
 
+type
+  GGufScheme* = enum
+    ## GGUF block-quantization schemes `gguf_linear_fwd` dequantizes,
+    ## the static scheme axis of the linear forward.
+    gsQ8_0
+    gsQ4_K
+    gsIQ4_XS
+
 proc gguf_linear_fwd*(
     Out: ptr UncheckedArray[float16],    # (M, N) fp16 output
     x: ptr UncheckedArray[float16],      # (M, K) fp16 input
     w: ptr UncheckedArray[uint8],        # the packed GGUF stream, N rows × rowBytes
     M, K, N, rowBytes: int32,
-    scheme: static int) {.device.} =
+    scheme: static GGufScheme) {.device.} =
   ## Runs the GGUF quantized linear forward for one output block: the
   ## 32×16 x-tile loads row-bounded at K-block `kk`, each 32-col n-tile
   ## dequantizes its 16×32 b-tile from the packed stream and
@@ -62,9 +70,9 @@ proc gguf_linear_fwd*(
   for kk in 0'i32 ..< K div 16:
     a_reg.loadTileRows(gdX, (0, 0, tgy, kk), M)
     for nt in 0'i32 ..< 4:
-      when scheme == 0:
+      when scheme == gsQ8_0:
         dequantGGUF_Q8_0(b_reg, w, kk, rowBytes, tgx, nt)
-      elif scheme == 1:
+      elif scheme == gsQ4_K:
         dequantGGUF_Q4_K(b_reg, w, kk, rowBytes, tgx, nt)
       else:
         dequantGGUF_IQ4_XS(b_reg, w, kk, rowBytes, tgx, nt)

@@ -104,27 +104,33 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 ## The suite drives this entry against the libtorch reference chain
 ## at the GLM-4.7-Flash, Qwen3.6-35B-A3B and ragged-gelu config rows.
 
+type
+  MoeAct* = enum
+    ## Expert activation the fused MoE chain applies after the fused
+    ## g/up projection, the model config's activation axis.
+    maSilu      ## silu(g) · u
+    maGeluTanh  ## gelu_pytorch_tanh(g) · u, the gemma-family spelling
+
 const
   ScoreChunk* = 64         # experts per router score chunk, the (32, 64) accumulator's width
   ScoreChunks* = 8         # compiled-in chunk max of the (8, 64) score tile
   MaxTopK* = 8             # compiled-in routing-slot max
-  ActSilu* = 0'i32         # activation = silu(g) · u
-  ActGeluTanh* = 1'i32     # activation = gelu_pytorch_tanh(g) · u
 
-const
-  InvSqrt2Pi = 0.7978845608028654'f32   # 1/sqrt(2·pi), the gelu_pytorch_tanh factor
-  GeluCoef = 0.044715'f32               # the gelu_pytorch_tanh cubic coefficient
+const RouteSumEps* = 1e-20'f32
+  ## Zero guard of the sigmoid routing sum's normalization, the weight
+  ## normalization divides by sum(w) + RouteSumEps, an all-underflow
+  ## weight row still divides.
 
 proc actMul16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     gHalf, uHalf: RtLeft[float32, 32, 32, A],
-    activation: int32) {.device.} =
+    activation: static MoeAct) {.device.} =
   ## `dst[r][c] = fp16(act(gHalf[r][c]) · uHalf[r][c])`, the expert
   ## activation with one fp16 RNE round (the h_scratch contract),
-  ## the activation picked at runtime.
+  ## the activation a static value, one instantiation per member.
   ##
-  ## - ActSilu, g / (1 + exp2(−g·log2e)), the silu form
-  ## - ActGeluTanh, 0.5·g·(1 + tanh(s)), s = InvSqrt2Pi·(g + GeluCoef·g³)
+  ## - maSilu, g / (1 + exp2(−g·log2e)), the silu form
+  ## - maGeluTanh, 0.5·g·(1 + tanh(s)), s = InvSqrt2Pi·(g + GeluCoef·g³)
   ##
   ## The gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
   ## stable at both saturation ends, fp32 end to end like the silu variant.
@@ -133,13 +139,12 @@ proc actMul16[A: static MmaAtom](
   ## Tile-internal, the walk bounds stay static.
   dst.map2(gHalf, uHalf) do:
     let g = x
-    var a: float32
-    if activation == ActSilu:
-      a = g / (1.0'f32 + exp2(-g * Log2e))
+    when activation == maSilu:
+      let a = g / (1.0'f32 + exp2(-g * Log2e))
     else:
       let s = InvSqrt2Pi * (g + GeluCoef * g * g * g)
       let th = 1.0'f32 - 2.0'f32 / (exp2(2.0'f32 * s * Log2e) + 1.0'f32)
-      a = 0.5'f32 * g * (1.0'f32 + th)
+      let a = 0.5'f32 * g * (1.0'f32 + th)
     (a * y).to(float16)
 
 # tiles-allow gatherSigmoidScores is a simdgroup lane machine, it needs a lane-permute gather
@@ -308,7 +313,7 @@ proc moe_fwd*(
     num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
     n_shared_experts: int32,
     routed_scaling: float32,
-    activation: int32) {.device.} =
+    activation: static MoeAct) {.device.} =
   ## Runtime model-config values drive the module doc's chain through this entry.
   ##
   ## Routing, the sigmoid skeleton.
@@ -338,8 +343,8 @@ proc moe_fwd*(
   ##   n_shared_experts, int32, host-derived from the model config,
   ##   unit tokens / elements / experts / slots
   ## - routed_scaling, float32, host-computed, dimensionless
-  ## - activation, ActSilu or ActGeluTanh, host-computed, the activation code,
-  ##   a non-member code reads as silu, the chain falls through to the tanh option
+  ## - activation, maSilu or maGeluTanh, a static binding of the entry,
+  ##   one instantiation per member
   ## A config beyond the compiled-in fixed maxima, n_routed_experts >
   ## ScoreChunk·ScoreChunks (512), top_k > MaxTopK or top_k > n_routed_experts, or a non-positive dim, stops before launch.
   ##
@@ -426,7 +431,7 @@ proc moe_fwd*(
   var sumW = 0.0'f32
   for slot in 0'i32 ..< top_k:
     sumW = sumW + w[slot]
-  sumW = sumW + 1e-20'f32
+  sumW = sumW + RouteSumEps
   for slot in 0'i32 ..< top_k:
     w[slot] = w[slot] / sumW * routed_scaling
 

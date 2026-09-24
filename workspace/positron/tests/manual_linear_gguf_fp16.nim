@@ -20,13 +20,13 @@ import ./gguf_test_utils
 const ggufLinearMsl = metal:
   proc ggufLinearQ8(Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 0)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsQ8_0)
   proc ggufLinearQ4K(Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 1)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsQ4_K)
   proc ggufLinearIQ4XS(Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 2)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsIQ4_XS)
 
 proc ggufLinearKernel(engine: var auto, launcher: string, xBits: seq[uint16],
     packed: seq[uint8], M, K, N, rowBytes: int): F.Tensor =

@@ -160,6 +160,11 @@ proc had8Subgroup(v: var array[4, float32]; lane: uint32) {.device.} =
 #  The defined cbrt: the LMCubic encode's cube root (MSL has no cbrt)
 # ════════════════════════════════════════
 
+const AbsmaxEps* = 1e-10'f32
+  ## Zero guard of the group absmax.
+  ## The group scale divides by absmax + AbsmaxEps so an all-zero
+  ## group still divides.
+
 const
   CbC0 = 1.1374176813308194'f32
   CbC1 = 0.1292479927845696'f32
@@ -310,7 +315,7 @@ proc kvQuantBlock(
   var s = fabs(v[0])
   for r in 1'i32 ..< 4:
     s = fmax(s, fabs(v[r]))
-  s = s + 1e-10'f32
+  s = s + AbsmaxEps
   s = fmax(s, simdShuffle(s, lane xor 1'u32))
   s = fmax(s, simdShuffle(s, lane xor 2'u32))
   s = fmax(s, simdShuffle(s, lane xor 4'u32))

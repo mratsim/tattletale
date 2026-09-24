@@ -25,6 +25,7 @@
 import std/[math, bitops]
 import workspace/crucible
 import ../linear_gguf
+export linear_gguf.GGufScheme
 import ./grouped_query_attention_qk_norm_rope
 import ./grouped_query_attention_paged
 
@@ -40,17 +41,17 @@ const ggufAttnMsl* = metal:
   proc ggufLinearQ8(
       Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 0)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsQ8_0)
 
   proc ggufLinearQ4K(
       Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 1)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsQ4_K)
 
   proc ggufLinearIQ4XS(
       Out: ptr UncheckedArray[float16], x: ptr UncheckedArray[float16],
       w: ptr UncheckedArray[uint8], M, K, N, rowBytes: int32) {.global.} =
-    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, 2)
+    gguf_linear_fwd(Out, x, w, M, K, N, rowBytes, gsIQ4_XS)
 
   proc ggufQkNormRopeD128(
       Out: ptr UncheckedArray[float16], X, G: ptr UncheckedArray[float16],
@@ -74,10 +75,6 @@ const ggufAttnMsl* = metal:
 #  ═════════════════════════════════════════════════════════════════════
 
 type
-  GGufScheme* = enum
-    ## The GGUF block-quantization schemes the four projections accept.
-    gsQ8_0, gsQ4_K, gsIQ4_XS
-
   GGufAttnParams* = object
     ## Geometry, tables and weights of one attention-layer forward.
     ## `x`, the token rows, is passed separately to `ggufAttnForward`.

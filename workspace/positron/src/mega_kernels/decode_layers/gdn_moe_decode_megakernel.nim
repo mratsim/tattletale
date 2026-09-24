@@ -65,6 +65,10 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 
 # ─── Geometry + arena map ────────────────────────────────────────────
 
+const RstdEps* = 1.0e-6'f32
+  ## RMSNorm rstd epsilon (the recorded layer's eps), the rsqrt
+  ## runs on the squared sum plus RstdEps.
+
 const
   # Make generic over the model config and dtype:
   # - the dims, section lists and stage tables derive from the model
@@ -365,7 +369,7 @@ proc l2normRow[T](x, outp: ptr UncheckedArray[T], cols: int32) {.device.} =
     acc += roundToNearestEven[T](xi * xi).float32
   let sumT = roundToNearestEven[T](acc).float32
   let inv =
-    roundToNearestEven[T](f32InvSqrt(roundToNearestEven[T](sumT + 1.0e-6'f32).float32)).float32
+    roundToNearestEven[T](f32InvSqrt(roundToNearestEven[T](sumT + RstdEps).float32)).float32
   var i = int32(thread_index_in_threadgroup)
   while i < cols:
     outp[i] = roundToNearestEven[T](x[i].float32 * inv)

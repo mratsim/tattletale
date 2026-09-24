@@ -16,17 +16,36 @@ from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../src/kernels/ceramic/ffn_moe
 import ./attn_test_utils
 
+# One launcher per MoeAct member, the gguf launchers' shape.
+# The activation is a static binding of the entry, each launcher
+# instantiates its member and engine.run addresses the instantiation
+# by the launcher's name.
 const moeMsl = metal:
-  proc moeRun(out_r, x, router_w, gate_up_w, down_w,
+  proc moeRunSilu(out_r, x, router_w, gate_up_w, down_w,
       shared_gate_up_w, shared_down_w, h_scratch,
       hs_scratch: ptr UncheckedArray[float16],
       num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
-      n_shared_experts: int32, routed_scaling: float32,
-      activation: int32) {.global.} =
+      n_shared_experts: int32, routed_scaling: float32) {.global.} =
     moe_fwd(out_r, x, router_w, gate_up_w, down_w, shared_gate_up_w,
       shared_down_w, h_scratch, hs_scratch, num_tokens, hidden,
       n_routed_experts, moe_intermediate, top_k, n_shared_experts,
-      routed_scaling, activation)
+      routed_scaling, maSilu)
+
+  proc moeRunGeluTanh(out_r, x, router_w, gate_up_w, down_w,
+      shared_gate_up_w, shared_down_w, h_scratch,
+      hs_scratch: ptr UncheckedArray[float16],
+      num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
+      n_shared_experts: int32, routed_scaling: float32) {.global.} =
+    moe_fwd(out_r, x, router_w, gate_up_w, down_w, shared_gate_up_w,
+      shared_down_w, h_scratch, hs_scratch, num_tokens, hidden,
+      n_routed_experts, moe_intermediate, top_k, n_shared_experts,
+      routed_scaling, maGeluTanh)
+
+func moeRunName(act: MoeAct): string =
+  ## Metal launcher name for the activation member.
+  case act
+  of maSilu: "moeRunSilu"
+  of maGeluTanh: "moeRunGeluTanh"
 
 type MoEG = tuple[xf, rwf, guf, dnf, sguf, sdwf: seq[float32]]
 
@@ -34,19 +53,19 @@ type MoeRow = object
   name: string
   tokens, hidden, nExperts, inter, topK, nShared: int
   scale: float32
-  act: int32
+  act: MoeAct
   seed: uint64
 
 const
   glm47Row = MoeRow(name: "glm47-flash", tokens: 8, hidden: 2048, nExperts: 64,
-    inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32, act: ActSilu,
+    inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32, act: maSilu,
     seed: 0x5EED)
   qwen36Row = MoeRow(name: "qwen36-35b-a3b", tokens: 2, hidden: 2048,
     nExperts: 256, inter: 512, topK: 8, nShared: 1, scale: 1.0'f32,
-    act: ActSilu, seed: 0x5EED)
+    act: maSilu, seed: 0x5EED)
   raggedRow = MoeRow(name: "ragged-gelu", tokens: 2, hidden: 2064,
     nExperts: 70, inter: 200, topK: 4, nShared: 2, scale: 1.0'f32,
-    act: ActGeluTanh, seed: 0x5EED)
+    act: maGeluTanh, seed: 0x5EED)
 
 proc genMoERow(r: MoeRow): MoEG =
   let gu = 2 * r.inter
@@ -65,12 +84,12 @@ proc moeKernelBits(g: MoEG, r: MoeRow): seq[uint16] =
   var outO = newSeq[uint16](r.tokens * r.hidden)
   var hScr = newSeq[uint16](r.tokens * r.topK * r.inter)
   var hsScr = newSeq[uint16](r.tokens * r.nShared * r.inter)
-  engine.run << (grid: (r.tokens, 1, 1), blk: (32, 1)) >> ("moeRun",
+  engine.run << (grid: (r.tokens, 1, 1), blk: (32, 1)) >> (moeRunName(r.act),
     outO,
     (fp32sToFp16(g.xf), fp32sToFp16(g.rwf), fp32sToFp16(g.guf),
      fp32sToFp16(g.dnf), fp32sToFp16(g.sguf), fp32sToFp16(g.sdwf),
      hScr, hsScr, int32(r.tokens), int32(r.hidden), int32(r.nExperts),
-     int32(r.inter), int32(r.topK), int32(r.nShared), r.scale, r.act))
+     int32(r.inter), int32(r.topK), int32(r.nShared), r.scale))
   result = outO
 
 proc subseq(s: seq[float32], a, b: int): seq[float32] =
@@ -78,10 +97,10 @@ proc subseq(s: seq[float32], a, b: int): seq[float32] =
   for i in 0 ..< b - a:
     result[i] = s[a + i]
 
-proc actMul(gate, up: F.Tensor, act: int32): F.Tensor =
+proc actMul(gate, up: F.Tensor, act: MoeAct): F.Tensor =
   ## Activation variant the row selects, silu or the tanh-approximate
   ## gelu (the fused op the reference runtimes call).
-  if act == ActGeluTanh:
+  if act == maGeluTanh:
     F.gelu(gate, "tanh") * up
   else:
     F.silu(gate) * up
@@ -130,7 +149,7 @@ proc checkMoe(): bool =
   for tokens in [8, 4]:
     let r = MoeRow(name: "glm47-flash", tokens: tokens, hidden: 2048,
       nExperts: 64, inter: 1536, topK: 4, nShared: 1, scale: 1.8'f32,
-      act: ActSilu, seed: 0x5EED)
+      act: maSilu, seed: 0x5EED)
     let g = genMoERow(r)
     let actual = toTensor(fp16sToF32(moeKernelBits(g, r)))
       .reshape(tokens, r.hidden)
@@ -202,12 +221,12 @@ proc checkConfigGuard(): bool =
   var outO = newSeq[uint16](8 * 2048)
   for i in 0 ..< outO.len:
     outO[i] = 0x7BFF'u16
-  engine.run << (grid: (8, 1, 1), blk: (32, 1)) >> ("moeRun", outO,
+  engine.run << (grid: (8, 1, 1), blk: (32, 1)) >> ("moeRunSilu", outO,
     (newSeq[uint16](8 * 2048), newSeq[uint16](1024 * 2048),
      newSeq[uint16](1024 * 3072), newSeq[uint16](1024 * 2048),
      newSeq[uint16](3072), newSeq[uint16](2048),
      newSeq[uint16](8 * 4 * 1536), newSeq[uint16](8 * 1536),
-     8'i32, 2048'i32, 1024'i32, 1536'i32, 4'i32, 1'i32, 1.8'f32, ActSilu))
+     8'i32, 2048'i32, 1024'i32, 1536'i32, 4'i32, 1'i32, 1.8'f32))
   var untouched = true
   for i in 0 ..< outO.len:
     if outO[i] != 0x7BFF'u16:
