@@ -126,8 +126,11 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
       "thrfrg_copy: the thread grid must tile the chunk grid evenly"
     doAssert tileK mod kRows === 0,
       "thrfrg_copy: the tile K dim must tile the thread-grid rows evenly"
-  let ur = zipped_divide(L, tilerMN(atom))
-  tiled_divide(mode(ur, 1), (chunkCols, kRows))
+  # CuTe tiles with a static Tiler_MN{} (copy_atom.hpp tile2thrfrg, partitioner.hpp thrfrg), the chunk tiler is a hardware fact.
+  # makeIntTuple promotes the compile-time-known leaves so the Int[N] markers propagate statically, runtime leaves stay runtime.
+  # The (chunkCols, kRows) thread grid derives from the tile shape and the thread count, the same static fact.
+  let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
+  tiled_divide(mode(ur, 1), makeIntTuple((chunkCols, kRows)))
 
 func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
                              atom: typedesc[Atom];

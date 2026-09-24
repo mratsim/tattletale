@@ -200,7 +200,7 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     # the expression where available.
     dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
   else:
-    gemm(mma, dFrag, aFrag, bFrag)
+    gemm_mma(mma, dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
