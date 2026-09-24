@@ -190,8 +190,8 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
 proc topkRouted[A: static MmaAtom](
     scores: RtLeft[float32, 8, ScoreChunk * ScoreChunks, A],
     topK, eCount: int32,
-    ids: var array[8, int32],   # MaxTopK slots, literal per the array-length resolver
-    w: var array[8, float32]) {.device.} =
+    ids: var array[MaxTopK, int32],
+    w: var array[MaxTopK, float32]) {.device.} =
   ## Selects the `topK` largest scores of the (8, ScoreChunk·ScoreChunks)
   ## score tile, the lowest-index tiebreak top-K, the weights read back
   ## from the original tile. The selection runs on a masked copy.
@@ -404,8 +404,8 @@ proc moe_fwd*(
   var b16: rt_r(float16, 16, 32, UNIVERSAL_8x8x8_F32F16F16F32)
   var b64: rt_r(float16, 16, ScoreChunk, UNIVERSAL_8x8x8_F32F16F16F32)
   var scores: rt_l(float32, 8, ScoreChunk * ScoreChunks, UNIVERSAL_8x8x8_F32F32F32F32)
-  var ids: array[8, int32]      # MaxTopK slots, literal per the array-length resolver
-  var w: array[8, float32]
+  var ids: array[MaxTopK, int32]
+  var w: array[MaxTopK, float32]
   var gHalf: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
   var uHalf: rt_l(float32, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
   var h16: rt_l(float16, 32, 32, UNIVERSAL_8x8x8_F32F16F16F32)
@@ -466,11 +466,8 @@ proc moe_fwd*(
 
   # ── threadgroup barrier ──
   # the output walk re-reads the whole threadgroup's stored scratch rows
-  # from device memory, the barrier ordering that cross-lane read
-  # after the stores (mem_device, the scratch rows in device memory)
-  {.emit: """
-  threadgroup_barrier(mem_flags::mem_device);
-  """.}
+  # from device memory, the barrier orders that cross-lane read after the stores
+  threadgroup_barrier()
   # ── output: routed = Σ w[slot]·down_w[e] @ h, + shared, fp16 store ──
   for nt in 0'i32 ..< hTiles:
     routed.zero()

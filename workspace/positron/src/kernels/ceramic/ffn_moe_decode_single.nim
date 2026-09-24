@@ -59,45 +59,40 @@ proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
     let s = g / (1.0'f32 + exp2(-g * Log2e))
     roundToNearestEven[El](roundToNearestEven[El](s).float32 * y)
 
-# tiles-allow storeRowsScaledF32 is the row-bounded tile io machinery, it needs
+# tiles-allow storeRowScaledF32 is the row-bounded tile io machinery, it needs
 # one bounded-IO tile-io primitive (row-guarded load/store over register tiles)
-proc storeRowsScaledF32[R, C: static int; RT: static int; A: static MmaAtom](
+proc storeRowScaledF32[R, C: static int; A: static MmaAtom](
     dst: ptr UncheckedArray[float32],
     tile: RtLeft[float32, R, C, A],
-    rowIdx: array[RT, int32],
-    rowStride: int32,
-    rowS: array[RT, float32],
-    colTile: int32) {.device.} =
-  ## Per-row scaled fp32 store, each fp32 partial row at one uniform scale.
+    rowBase, rowStride, colTile: int32, scale: float32) {.device.} =
+  ## Stores the accumulator's value row, scaled, at one fp32 partial row.
+  ## The write is `dst[rowBase·rowStride + colTile·C + c] = scale · accumulator row 0`.
   ##
-  ## Callers load the operand rows with `rowLimit = 1`, so accumulator
-  ## row 0 carries the projection's value and the rows above it are exact zeros.
+  ## The tile's rows above the value row carry the operand rows' zero fill,
+  ## not written, one row per call, no sentinel bookkeeping at the call sites.
+  ##
+  ## Callers load the operand rows with `rowLimit = 1`, so accumulator row 0
+  ## carries the projection's value and the rows above it are exact zeros.
   ##
   ## - the store guard requires `row == 0`, exactly one lane per stored element
   ## - the GDN y store keeps the same single-writer spelling
-  ##
-## | element (c, v) of tile row n                       | written when                    |
-## | -------------------------------------------------- | ------------------------------- |
-## | dst[rowIdx[n]·rowStride + colTile·C + m·N + c + v] | `row == 0` and `rowIdx[n] >= 0` |
-## | stored value                                       | rowS[n]·tile value              |
-## | rows with rowIdx[n] < 0                            | not written                     |
-  static:
-    doAssert RT == R div A.getM()
+## | element (c, v) of tile row 0                     | written when     |
+## | ------------------------------------------------ | ---------------- |
+## | dst[rowBase·rowStride + colTile·C + m·N + c + v] | `row == 0`       |
+## | stored value                                     | scale·tile value |
   const M = A.getM()
   const N = A.getN()
-  const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = int(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let r = cell mod A.getM()
   let c = cell div A.getM()
-  for n in 0 ..< rowTiles:
-    if rowIdx[n] >= 0 and r == 0:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          dst[int(rowIdx[n]) * int(rowStride) + int(colTile) * C +
-              m * N + c + v] = rowS[n] * tile.frags[n][m].frag[v]
+  if r == 0:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        dst[int(rowBase) * int(rowStride) + int(colTile) * C +
+            m * N + c + v] = scale * tile.frags[0][m].frag[v]
 
 # ─── The decode slot-group walk ───────────────────────────────────────
 
@@ -196,11 +191,8 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       glH.storeTileRows(hT, (t * K + y, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
-    # from device memory, the barrier ordering that cross-lane read
-    # after the stores (mem_device, the scratch rows in device memory)
-    {.emit: """
-    threadgroup_barrier(mem_flags::mem_device);
-    """.}
+    # from device memory, the barrier orders that cross-lane read after the stores
+    threadgroup_barrier()
     # ── down walk -> partial[t, y] = w[y]·down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
@@ -208,9 +200,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
         a.loadTileRows(glH, (t * K + y, 0, 0, kk), 1)
         bT.loadTile(glDown, (ids[y], 0, nt, kk))
         d.mma_AB(a, bT)
-      var rowIdx = [int32(t * (K + 1) + y), -1'i32, -1'i32, -1'i32]
-      var rowS = [w[y], 0.0'f32, 0.0'f32, 0.0'f32]
-      storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)
+      storeRowScaledF32(partial, d, int32(t * (K + 1) + y), int32(H), nt, w[y])
   else:
     # ── shared gate scalar (the moe_fwd chain's rounding form) ──
     var gateVal = 1.0'f32
@@ -232,11 +222,8 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
       glHs.storeTileRows(hT, (t, 0, 0, nt), 1)
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
-    # from device memory, the barrier ordering that cross-lane read
-    # after the stores (mem_device, the scratch rows in device memory)
-    {.emit: """
-    threadgroup_barrier(mem_flags::mem_device);
-    """.}
+    # from device memory, the barrier orders that cross-lane read after the stores
+    threadgroup_barrier()
     # ── shared down walk -> partial[t, K] = gateVal·shared_down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
@@ -244,9 +231,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
         a.loadTileRows(glHs, (t, 0, 0, kk), 1)
         bT.loadTile(glSd, (0, 0, nt, kk))
         d.mma_AB(a, bT)
-      var rowIdx = [int32(t * (K + 1) + K), -1'i32, -1'i32, -1'i32]
-      var rowS = [gateVal, 0.0'f32, 0.0'f32, 0.0'f32]
-      storeRowsScaledF32(partial, d, rowIdx, int32(H), rowS, nt)
+      storeRowScaledF32(partial, d, int32(t * (K + 1) + K), int32(H), nt, gateVal)
 
 proc moe_fwd_decode*[El; H, E, K, I: static int; Scale: static float32;
     SharedGate: static bool](
