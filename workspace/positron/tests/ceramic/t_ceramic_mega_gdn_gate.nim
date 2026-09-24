@@ -69,6 +69,7 @@ import ../naive/naive_tensors
 import ceramic_pagebuf
 import mega_bounded_wait
 import ceramic_dtype
+import mega_gdn_harness
 
 # ─── Expiry hook, the wedged outcome recorded instead of terminal ─────
 
@@ -116,67 +117,6 @@ const StaleGateGarbage = 1_000_000'u32
   ## - the instant pass on the stale count stays the discriminating behavior
   ## - a wrap would turn the count back into a blocking zero
 
-type BigHost = object
-  ## Seeded layer pass inputs and weights, the generation recipe of the mega smoke suite.
-  x, r: seq[uint16]
-  norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W: seq[uint16]
-  routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW: seq[uint16]
-  aLog: seq[float32]
-  dtBias: seq[uint16]
-  state: seq[float32]
-  ring: seq[uint16]
-
-proc randBits(rng: var NaiveRng; n: int; lo, hi: float32): seq[uint16] =
-  ## `n` bf16 bit patterns of uniform samples in [lo, hi].
-  result = newSeq[uint16](n)
-  for i in 0 ..< n:
-    result[i] = f32ToBf16(rng.nextF32(lo, hi))
-
-proc buildBigHost(seed: uint64): BigHost =
-  ## Seeded inputs and weights at the Qwen bf16 class geometry, modest
-  ## magnitudes so no stage saturates.
-  var rng = initNaiveRng(seed)
-  result.x = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
-  result.r = randBits(rng, Hidden, -1.0'f32, 1.0'f32)
-  result.norm1W = randBits(rng, Hidden, -0.05'f32, 0.05'f32)
-  result.qkvW = randBits(rng, ConvDim * Hidden, -0.02'f32, 0.02'f32)
-  result.zW = randBits(rng, NumVHeads * HeadVDim * Hidden, -0.02'f32, 0.02'f32)
-  result.aW = randBits(rng, NumVHeads * Hidden, -0.02'f32, 0.02'f32)
-  result.bW = randBits(rng, NumVHeads * Hidden, -0.02'f32, 0.02'f32)
-  result.convW = randBits(rng, ConvDim * ConvKernel, -0.1'f32, 0.1'f32)
-  result.onormW = randBits(rng, NumVHeads * HeadVDim, -0.05'f32, 0.05'f32)
-  result.outprojW = randBits(rng, Hidden * NumVHeads * HeadVDim, -0.02'f32, 0.02'f32)
-  result.norm2W = randBits(rng, Hidden, -0.05'f32, 0.05'f32)
-  result.routerW = randBits(rng, NumExperts * Hidden, -0.02'f32, 0.02'f32)
-  result.gateUpW = randBits(rng, NumExperts * 2 * Inter * Hidden, -0.02'f32, 0.02'f32)
-  result.downW = randBits(rng, NumExperts * Hidden * Inter, -0.02'f32, 0.02'f32)
-  result.sharedGW = randBits(rng, Inter * Hidden, -0.02'f32, 0.02'f32)
-  result.sharedUW = randBits(rng, Inter * Hidden, -0.02'f32, 0.02'f32)
-  result.sharedDW = randBits(rng, Hidden * Inter, -0.02'f32, 0.02'f32)
-  result.sharedGVW = randBits(rng, Hidden, -0.02'f32, 0.02'f32)
-  result.aLog = newSeq[float32](NumVHeads)
-  for h in 0 ..< NumVHeads:
-    result.aLog[h] = rng.nextF32(-2.0'f32, -0.1'f32)
-  result.dtBias = randBits(rng, NumVHeads, -0.1'f32, 0.1'f32)
-  result.state = newSeq[float32](NumVHeads * HeadVDim * HeadKDim)
-  for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
-    result.state[i] = rng.nextF32(-0.5'f32, 0.5'f32)
-  result.ring = randBits(rng, ConvDim * RingWidth, -1.0'f32, 1.0'f32)
-
-proc fillBf(buf: var PageBuf[uint16], src: seq[uint16]) =
-  ## Copies bf16 bit patterns into a page buffer, the extent then the tail.
-  doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
-    "no-copy binding needs a page-multiple byte length"
-  for i in 0 ..< src.len:
-    buf.hostPtr[i] = src[i]
-
-proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
-  ## Copies fp32 values into a page buffer.
-  doAssert buf.elems * sizeof(float32) mod HostPageSize == 0,
-    "no-copy binding needs a page-multiple byte length"
-  for i in 0 ..< src.len:
-    buf.hostPtr[i] = src[i]
-
 proc bitDiffCount[T](mega, refSeq: seq[T]): int =
   ## Count of bitwise mismatches between two same-length reads.
   doAssert mega.len == refSeq.len
@@ -192,102 +132,26 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   ## - deadline case, the launch inside the bounded wait's default deadline
   ## - self-reset case, the relaunch over untouched counters
   ## - stale-counter case, garbage counters before a relaunch
-  var
-    counters = allocPageBuf[uint32](NumCounters)
-    bfA = allocPageBuf[uint16](BfArenaLen)
-    f32A = allocPageBuf[float32](F32ArenaLen)
-    xPrev = allocPageBuf[uint16](Hidden)
-    rPrev = allocPageBuf[uint16](Hidden)
-    state = allocPageBuf[float32](NumVHeads * HeadVDim * HeadKDim)
-    ring = allocPageBuf[uint16](ConvDim * RingWidth)
-    norm1W = allocPageBuf[uint16](Hidden)
-    qkvW = allocPageBuf[uint16](ConvDim * Hidden)
-    zW = allocPageBuf[uint16](NumVHeads * HeadVDim * Hidden)
-    aW = allocPageBuf[uint16](NumVHeads * Hidden)
-    bW = allocPageBuf[uint16](NumVHeads * Hidden)
-    convW = allocPageBuf[uint16](ConvDim * ConvKernel)
-    onormW = allocPageBuf[uint16](NumVHeads * HeadVDim)
-    outprojW = allocPageBuf[uint16](Hidden * NumVHeads * HeadVDim)
-    norm2W = allocPageBuf[uint16](Hidden)
-    routerW = allocPageBuf[uint16](NumExperts * Hidden)
-    gateUpW = allocPageBuf[uint16](NumExperts * 2 * Inter * Hidden)
-    downW = allocPageBuf[uint16](NumExperts * Hidden * Inter)
-    sharedGW = allocPageBuf[uint16](Inter * Hidden)
-    sharedUW = allocPageBuf[uint16](Inter * Hidden)
-    sharedDW = allocPageBuf[uint16](Hidden * Inter)
-    sharedGVW = allocPageBuf[uint16](Hidden)
-    aLog = allocPageBuf[float32](NumVHeads)
-    dtBias = allocPageBuf[uint16](NumVHeads)
-  defer:
-    freePageBuf(counters); freePageBuf(bfA); freePageBuf(f32A)
-    freePageBuf(xPrev); freePageBuf(rPrev); freePageBuf(state); freePageBuf(ring)
-    freePageBuf(norm1W); freePageBuf(qkvW); freePageBuf(zW); freePageBuf(aW)
-    freePageBuf(bW); freePageBuf(convW); freePageBuf(onormW); freePageBuf(outprojW)
-    freePageBuf(norm2W); freePageBuf(routerW); freePageBuf(gateUpW); freePageBuf(downW)
-    freePageBuf(sharedGW); freePageBuf(sharedUW); freePageBuf(sharedDW)
-    freePageBuf(sharedGVW); freePageBuf(aLog); freePageBuf(dtBias)
-
-  fillBf(xPrev, big.x); fillBf(rPrev, big.r)
-  fillBf(norm1W, big.norm1W); fillBf(qkvW, big.qkvW); fillBf(zW, big.zW)
-  fillBf(aW, big.aW); fillBf(bW, big.bW); fillBf(convW, big.convW)
-  fillBf(onormW, big.onormW); fillBf(outprojW, big.outprojW)
-  fillBf(norm2W, big.norm2W); fillBf(routerW, big.routerW)
-  fillBf(gateUpW, big.gateUpW); fillBf(downW, big.downW)
-  fillBf(sharedGW, big.sharedGW); fillBf(sharedUW, big.sharedUW)
-  fillBf(sharedDW, big.sharedDW); fillBf(sharedGVW, big.sharedGVW)
-  fillBf(dtBias, big.dtBias)
-  fillF32(aLog, big.aLog); fillF32(state, big.state)
-  fillBf(ring, big.ring)
-
-  var
-    countersPA = counters.pa()
-    bfAPA = bfA.pa()
-    f32APA = f32A.pa()
-    xPrevPA = xPrev.pa()
-    rPrevPA = rPrev.pa()
-    statePA = state.pa()
-    ringPA = ring.pa()
-    norm1WPA = norm1W.pa()
-    qkvWPA = qkvW.pa()
-    zWPA = zW.pa()
-    aWPA = aW.pa()
-    bWPA = bW.pa()
-    convWPA = convW.pa()
-    onormWPA = onormW.pa()
-    outprojWPA = outprojW.pa()
-    norm2WPA = norm2W.pa()
-    routerWPA = routerW.pa()
-    gateUpWPA = gateUpW.pa()
-    downWPA = downW.pa()
-    sharedGWPA = sharedGW.pa()
-    sharedUWPA = sharedUW.pa()
-    sharedDWPA = sharedDW.pa()
-    sharedGVWPA = sharedGVW.pa()
-    aLogPA = aLog.pa()
-    dtBiasPA = dtBias.pa()
+  var m = allocMegaGdn()
+  defer: freeMegaGdn(m)
+  fillGdnInputs(m, big)
 
   proc launch() {.gcsafe.} =
-    engine.run << (grid: (950, 1, 1), blk: (32, 1, 1)) >>
-      ("qwen35_gdn_layer_bf16", countersPA,
-        (bfAPA, f32APA, xPrevPA, rPrevPA, statePA, ringPA,
-         norm1WPA, qkvWPA, zWPA, aWPA, bWPA, convWPA,
-         onormWPA, outprojWPA, norm2WPA, routerWPA, gateUpWPA,
-         downWPA, sharedGWPA, sharedUWPA, sharedDWPA,
-         sharedGVWPA, aLogPA, dtBiasPA, Eps))
+    runMegaGdn(engine, m, "qwen35_gdn_layer_bf16", 950, Eps)
 
   proc zeroCounters() =
     for i in 0 ..< NumCounters:
-      counters.hostPtr[i] = 0'u32
+      m.counters.hostPtr[i] = 0'u32
 
   proc garbageCounters() =
     for i in 0 ..< NumCounters:
-      counters.hostPtr[i] = StaleGateGarbage
+      m.counters.hostPtr[i] = StaleGateGarbage
 
   proc countersZeroWhere(after = "launch") =
     ## Asserts all 13 stage counters zero after the named launch.
     for i in 0 ..< NumCounters:
-      doAssert counters.hostPtr[i] == 0'u32,
-        &"stage counter {i} is {counters.hostPtr[i]}, want 0 after {after}"
+      doAssert m.counters.hostPtr[i] == 0'u32,
+        &"stage counter {i} is {m.counters.hostPtr[i]}, want 0 after {after}"
 
   proc bfRangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
     ## Widened magnitude maximum over one bf16 arena section.
@@ -296,10 +160,10 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
 
   proc outputRanges() =
     ## Four shared outputs, each written over a non-degenerate range.
-    let moeMax = bfRangeMax(bfA, sMoeOut, Hidden)
-    let h1Max = bfRangeMax(bfA, sH1, Hidden)
-    let blockMax = bfRangeMax(bfA, sBlockOut, Hidden)
-    let yMax = bfRangeMax(bfA, sY, NumVHeads * HeadVDim)
+    let moeMax = bfRangeMax(m.bfA, sMoeOut, Hidden)
+    let h1Max = bfRangeMax(m.bfA, sH1, Hidden)
+    let blockMax = bfRangeMax(m.bfA, sBlockOut, Hidden)
+    let yMax = bfRangeMax(m.bfA, sY, NumVHeads * HeadVDim)
     doAssert moeMax > 0.0'f32, "moeOut degenerate"
     doAssert h1Max > 0.0'f32, "h1 degenerate"
     doAssert blockMax > 0.0'f32, "blockOut degenerate"
@@ -308,47 +172,47 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   proc sentinels() =
     ## Kernel-written buffers stay in extent, the page tails keep
     ## the zero fill, the kernel-read buffers stay bit-identical
-    assertTailZero(bfA, BfArenaLen)
-    assertTailZero(f32A, F32ArenaLen)
-    for i in NumCounters ..< counters.elems:
-      doAssert counters.hostPtr[i] == 0'u32, "counters tail written"
-    assertReadUnchanged(xPrev, big.x)
-    assertReadUnchanged(rPrev, big.r)
-    assertReadUnchanged(norm1W, big.norm1W)
-    assertReadUnchanged(convW, big.convW)
-    assertReadUnchanged(onormW, big.onormW)
-    assertReadUnchanged(routerW, big.routerW)
-    assertReadUnchanged(gateUpW, big.gateUpW)
-    assertReadUnchanged(downW, big.downW)
-    assertReadUnchanged(qkvW, big.qkvW)
-    assertReadUnchanged(zW, big.zW)
-    assertReadUnchanged(aW, big.aW)
-    assertReadUnchanged(bW, big.bW)
-    assertReadUnchanged(outprojW, big.outprojW)
-    assertReadUnchanged(norm2W, big.norm2W)
-    assertReadUnchanged(sharedGW, big.sharedGW)
-    assertReadUnchanged(sharedUW, big.sharedUW)
-    assertReadUnchanged(sharedDW, big.sharedDW)
-    assertReadUnchanged(sharedGVW, big.sharedGVW)
+    assertTailZero(m.bfA, BfArenaLen)
+    assertTailZero(m.f32A, F32ArenaLen)
+    for i in NumCounters ..< m.counters.elems:
+      doAssert m.counters.hostPtr[i] == 0'u32, "counters tail written"
+    assertReadUnchanged(m.xPrev, big.x)
+    assertReadUnchanged(m.rPrev, big.r)
+    assertReadUnchanged(m.norm1W, big.norm1W)
+    assertReadUnchanged(m.convW, big.convW)
+    assertReadUnchanged(m.onormW, big.onormW)
+    assertReadUnchanged(m.routerW, big.routerW)
+    assertReadUnchanged(m.gateUpW, big.gateUpW)
+    assertReadUnchanged(m.downW, big.downW)
+    assertReadUnchanged(m.qkvW, big.qkvW)
+    assertReadUnchanged(m.zW, big.zW)
+    assertReadUnchanged(m.aW, big.aW)
+    assertReadUnchanged(m.bW, big.bW)
+    assertReadUnchanged(m.outprojW, big.outprojW)
+    assertReadUnchanged(m.norm2W, big.norm2W)
+    assertReadUnchanged(m.sharedGW, big.sharedGW)
+    assertReadUnchanged(m.sharedUW, big.sharedUW)
+    assertReadUnchanged(m.sharedDW, big.sharedDW)
+    assertReadUnchanged(m.sharedGVW, big.sharedGVW)
     for h in 0 ..< NumVHeads:
-      doAssert aLog.hostPtr[h] == big.aLog[h], "kernel-read buffer modified"
-      doAssert dtBias.hostPtr[h] == big.dtBias[h], "kernel-read buffer modified"
+      doAssert m.aLog.hostPtr[h] == big.aLog[h], "kernel-read buffer modified"
+      doAssert m.dtBias.hostPtr[h] == big.dtBias[h], "kernel-read buffer modified"
 
   proc restorePreimage(preBf: seq[uint16]; preF32: seq[float32];
       preState: seq[float32]; preRing: seq[uint16]) =
     ## Restores the arena, state and ring to one pre-image, the weights
     ## and the kernel-read rows stay untouched throughout.
-    for i in 0 ..< BfArenaLen: bfA.hostPtr[i] = preBf[i]
-    for i in 0 ..< F32ArenaLen: f32A.hostPtr[i] = preF32[i]
-    for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: state.hostPtr[i] = preState[i]
-    for i in 0 ..< ConvDim * RingWidth: ring.hostPtr[i] = preRing[i]
+    for i in 0 ..< BfArenaLen: m.bfA.hostPtr[i] = preBf[i]
+    for i in 0 ..< F32ArenaLen: m.f32A.hostPtr[i] = preF32[i]
+    for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: m.state.hostPtr[i] = preState[i]
+    for i in 0 ..< ConvDim * RingWidth: m.ring.hostPtr[i] = preRing[i]
 
   # Deadline case:
   #   one launch inside the bounded wait's default deadline, the wall
   #   clock recorded, the launch-end reset's zero state asserted after.
   let t0 = epochTime()
   zeroCounters()
-  runMegaBounded(launch, counters.hostPtr, StageNames)
+  runMegaBounded(launch, m.counters.hostPtr, StageNames)
   let deadlineWall = epochTime() - t0
   echo &"[mega gate] deadline case wall {deadlineWall:.2f} s " &
     &"(the bounded wait's default deadline " &
@@ -360,21 +224,21 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   # Continuation pre-image:
   #   the launch above advanced state and ring, the arenas hold its outputs, the next launches replay one decode step
   #   from this exact pre-image with the same kernel-read rows.
-  let preBf = readRecord(bfA.hostPtr, BfArenaLen)
-  let preF32 = readRecord(f32A.hostPtr, F32ArenaLen)
-  let preState = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let preRing = readRecord(ring.hostPtr, ConvDim * RingWidth)
+  let preBf = readRecord(m.bfA.hostPtr, BfArenaLen)
+  let preF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
+  let preState = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let preRing = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
 
   # Reference continuation launch:
-  #   one bounded launch over the restored pre-image, the counters host-zeroed,
+  #   one bounded launch over the restored pre-image, the m.counters host-zeroed,
   #   the full-buffer reads below are the reference continuation's bits.
   restorePreimage(preBf, preF32, preState, preRing)
   zeroCounters()
-  runMegaBounded(launch, counters.hostPtr, StageNames)
-  let refBf = readRecord(bfA.hostPtr, BfArenaLen)
-  let refF32 = readRecord(f32A.hostPtr, F32ArenaLen)
-  let refState = readRecord(state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
-  let refRing = readRecord(ring.hostPtr, ConvDim * RingWidth)
+  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  let refBf = readRecord(m.bfA.hostPtr, BfArenaLen)
+  let refF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
+  let refState = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
+  let refRing = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
   countersZeroWhere("the reference continuation launch")
 
   # Self-reset case:
@@ -383,39 +247,39 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   must be bit-identical to the reference continuation.
   restorePreimage(preBf, preF32, preState, preRing)
   countersZeroWhere("before the self-reset relaunch")
-  runMegaBounded(launch, counters.hostPtr, StageNames)
-  let selfResetBf = readRecord(bfA.hostPtr, BfArenaLen)
-  let selfResetF32 = readRecord(f32A.hostPtr, F32ArenaLen)
+  runMegaBounded(launch, m.counters.hostPtr, StageNames)
+  let selfResetBf = readRecord(m.bfA.hostPtr, BfArenaLen)
+  let selfResetF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
   doAssert bitDiffCount(selfResetBf, refBf) == 0,
     "the self-reset relaunch's bf arena left the reference continuation"
   doAssert bitDiffCount(selfResetF32, refF32) == 0,
     "the self-reset relaunch's f32 arena left the reference continuation"
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim:
-    doAssert state.hostPtr[i] == refState[i], &"state differs at {i}"
+    doAssert m.state.hostPtr[i] == refState[i], &"state differs at {i}"
   for i in 0 ..< ConvDim * RingWidth:
-    doAssert ring.hostPtr[i] == refRing[i], &"ring differs at {i}"
+    doAssert m.ring.hostPtr[i] == refRing[i], &"ring differs at {i}"
   echo "[mega gate] self-reset relaunch bit-identical to the reference"
   countersZeroWhere("the self-reset relaunch")
 
   # Stale-counter case:
-  #   garbage written into the counters between launches, the contract boundary made loud, the stale counts open the waits before
+  #   garbage written into the m.counters between launches, the contract boundary made loud, the stale counts open the waits before
   #   the producers run and the launch's output leaves the reference bits.
   restorePreimage(preBf, preF32, preState, preRing)
   garbageCounters()
   StaleGateExpired = false
-  runMegaBounded(launch, counters.hostPtr, StageNames,
+  runMegaBounded(launch, m.counters.hostPtr, StageNames,
     deadlineMs = 5000.0, onExpiry = recordStaleGateExpiry)
   if StaleGateExpired:
     # Wedged outcome:
-    #   the launch-end reset landed while threadgroups were still in flight, the re-zeroed counters cannot reach the targets
+    #   the launch-end reset landed while threadgroups were still in flight, the re-zeroed m.counters cannot reach the targets
     #   the late waiters spin on, the bounded wait's diagnostic is recorded and the process exits here, a wedged grid cannot
     #   be unwound in-process.
     echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
       &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
       &"{BfArenaLen + F32ArenaLen}, stale-count garbage wedges the launch"
     quit(0)
-  let staleBf = readRecord(bfA.hostPtr, BfArenaLen)
-  let staleF32 = readRecord(f32A.hostPtr, F32ArenaLen)
+  let staleBf = readRecord(m.bfA.hostPtr, BfArenaLen)
+  let staleF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
   let staleBfMismatches = bitDiffCount(staleBf, refBf)
   let staleF32Mismatches = bitDiffCount(staleF32, refF32)
   echo &"[mega gate] stale-counter relaunch bf arena mismatches " &
@@ -424,12 +288,12 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   doAssert staleBfMismatches > 0 or staleF32Mismatches > 0,
     "the stale-counter relaunch reproduced the reference bits, the garbage " &
     "in the counters must open the waits early and corrupt the walk"
-  # Under the garbage the launch-end reset races the in-flight threadgroups, their adds land after the re-zero and the counters
+  # Under the garbage the launch-end reset races the in-flight threadgroups, their adds land after the re-zero and the m.counters
   # end non-zero, a recorded consequence of the violated entry contract.
   block staleGateCounters:
     var msg = "stale-counter relaunch counters at exit: "
     for i in 0 ..< NumCounters:
-      msg.add &"{counters.hostPtr[i]} "
+      msg.add &"{m.counters.hostPtr[i]} "
     echo "[mega gate] ", msg
   echo &"[mega gate] total wall {epochTime() - t0:.2f} s"
   echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
@@ -441,6 +305,6 @@ proc main =
   echo "device: ", bkMetal.init().deviceName()
   var engine = bkMetal.init()
   engine.ingest(MegaGdnMsl)
-  gateChecks(engine, buildBigHost(Seed))
+  gateChecks(engine, buildBigHost(Seed, f32ToBf16))
 
 main()

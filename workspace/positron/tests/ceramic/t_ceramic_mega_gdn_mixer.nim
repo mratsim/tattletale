@@ -46,6 +46,7 @@ import ../naive/naive_layer_ops
 import ceramic_pagebuf
 import mega_bounded_wait
 import ceramic_dtype
+import mega_gdn_harness
 
 # ─── Band-model constants (the composition tier's two-term model) ─────
 
@@ -279,91 +280,7 @@ proc naiveChain(w: Weights; norm1: seq[uint16]; carryIn: Carry): NaiveLo =
 
 # ─── Case plumbing ────────────────────────────────────────────────────
 
-type MegaBuffers = object
-  ## One case's page buffers and launch pointers, allocated once.
-  counters: PageBuf[uint32]
-  bfA: PageBuf[uint16]
-  f32A: PageBuf[float32]
-  xPrev, rPrev: PageBuf[uint16]
-  state: PageBuf[float32]
-  ring: PageBuf[uint16]
-  norm1W, qkvW, zW, aW, bW, convW, onormW, outprojW, norm2W: PageBuf[uint16]
-  routerW, gateUpW, downW, sharedGW, sharedUW, sharedDW, sharedGVW:
-    PageBuf[uint16]
-  aLog: PageBuf[float32]
-  dtBias: PageBuf[uint16]
-
-proc allocMega(): MegaBuffers =
-  ## Full buffer set, the byte lengths page-multiple asserted in the fills.
-  result.counters = allocPageBuf[uint32](NumCounters)
-  result.bfA = allocPageBuf[uint16](BfArenaLen)
-  result.f32A = allocPageBuf[float32](F32ArenaLen)
-  result.xPrev = allocPageBuf[uint16](Hidden)
-  result.rPrev = allocPageBuf[uint16](Hidden)
-  result.state = allocPageBuf[float32](NumVHeads * HeadVDim * HeadKDim)
-  result.ring = allocPageBuf[uint16](ConvDim * RingWidth)
-  result.norm1W = allocPageBuf[uint16](Hidden)
-  result.qkvW = allocPageBuf[uint16](ConvDim * Hidden)
-  result.zW = allocPageBuf[uint16](NumVHeads * HeadVDim * Hidden)
-  result.aW = allocPageBuf[uint16](NumVHeads * Hidden)
-  result.bW = allocPageBuf[uint16](NumVHeads * Hidden)
-  result.convW = allocPageBuf[uint16](ConvDim * ConvKernel)
-  result.onormW = allocPageBuf[uint16](NumVHeads * HeadVDim)
-  result.outprojW = allocPageBuf[uint16](Hidden * NumVHeads * HeadVDim)
-  result.norm2W = allocPageBuf[uint16](Hidden)
-  result.routerW = allocPageBuf[uint16](NumExperts * Hidden)
-  result.gateUpW = allocPageBuf[uint16](NumExperts * 2 * Inter * Hidden)
-  result.downW = allocPageBuf[uint16](NumExperts * Hidden * Inter)
-  result.sharedGW = allocPageBuf[uint16](Inter * Hidden)
-  result.sharedUW = allocPageBuf[uint16](Inter * Hidden)
-  result.sharedDW = allocPageBuf[uint16](Hidden * Inter)
-  result.sharedGVW = allocPageBuf[uint16](Hidden)
-  result.aLog = allocPageBuf[float32](NumVHeads)
-  result.dtBias = allocPageBuf[uint16](NumVHeads)
-
-proc freeMega(m: var MegaBuffers) =
-  ## Buffer set's release, the defer call.
-  freePageBuf(m.counters)
-  freePageBuf(m.bfA)
-  freePageBuf(m.f32A)
-  freePageBuf(m.xPrev)
-  freePageBuf(m.rPrev)
-  freePageBuf(m.state)
-  freePageBuf(m.ring)
-  freePageBuf(m.norm1W)
-  freePageBuf(m.qkvW)
-  freePageBuf(m.zW)
-  freePageBuf(m.aW)
-  freePageBuf(m.bW)
-  freePageBuf(m.convW)
-  freePageBuf(m.onormW)
-  freePageBuf(m.outprojW)
-  freePageBuf(m.norm2W)
-  freePageBuf(m.routerW)
-  freePageBuf(m.gateUpW)
-  freePageBuf(m.downW)
-  freePageBuf(m.sharedGW)
-  freePageBuf(m.sharedUW)
-  freePageBuf(m.sharedDW)
-  freePageBuf(m.sharedGVW)
-  freePageBuf(m.aLog)
-  freePageBuf(m.dtBias)
-
-proc fillBf(buf: var PageBuf[uint16], src: seq[uint16]) =
-  ## Copies bf16 bit patterns into a page buffer.
-  doAssert buf.elems * sizeof(uint16) mod HostPageSize == 0,
-    "no-copy binding needs a page-multiple byte length"
-  for i in 0 ..< src.len:
-    buf.hostPtr[i] = src[i]
-
-proc fillF32(buf: var PageBuf[float32], src: seq[float32]) =
-  ## Copies fp32 values into a page buffer.
-  doAssert buf.elems * sizeof(float32) mod HostPageSize == 0,
-    "no-copy binding needs a page-multiple byte length"
-  for i in 0 ..< src.len:
-    buf.hostPtr[i] = src[i]
-
-proc fillWeights(m: var MegaBuffers; w: Weights) =
+proc fillWeights(m: var MegaGdnBufs; w: Weights) =
   ## Mixer weights and recurrence constants, written once.
   ##
   ## The norm bookends' and MoE tail's weights stay zero-filled,
@@ -393,7 +310,7 @@ proc poisonF32(buf: var PageBuf[float32]; off, len: int) =
   for i in off ..< off + len:
     buf.hostPtr[i] = 7.0e30'f32
 
-proc poisonUntouched(m: var MegaBuffers) =
+proc poisonUntouched(m: var MegaGdnBufs) =
   ## Poisons every section the `HaveNorm = false` dispatcher never reads
   ## or writes, the residual addends included (stage 0 runs empty).
   poisonBf(m.xPrev, 0, Hidden)
@@ -406,7 +323,7 @@ proc poisonUntouched(m: var MegaBuffers) =
   poisonBf(m.bfA, sHs, Inter)
   poisonF32(m.f32A, sPartial, (TopK + 1) * Hidden)
 
-proc assertUntouched(m: var MegaBuffers) =
+proc assertUntouched(m: var MegaGdnBufs) =
   ## Poison bits survive the launch bit-identical.
   for i in 0 ..< Hidden:
     doAssert m.xPrev.hostPtr[i] == PoisonBf and m.rPrev.hostPtr[i] == PoisonBf,
@@ -435,7 +352,7 @@ type Record = object
   ring: seq[uint16]
   norm1: seq[uint16]
 
-proc recordMega(m: MegaBuffers): Record =
+proc recordMega(m: MegaGdnBufs): Record =
   ## One launch's full record of the judged sections.
   result.norm1 = readRecord(m.bfA.hostPtr +% sNorm1, H)
   result.qkv = readRecord(m.bfA.hostPtr +% sQkvCol, ConvDim)
@@ -453,42 +370,14 @@ proc recordMega(m: MegaBuffers): Record =
   result.state = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   result.ring = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
 
-proc launchMixer(engine: HwEngine; m: var MegaBuffers) =
+proc launchMixer(engine: HwEngine; m: var MegaGdnBufs) =
   ## One launch at the mixer's grid, no host-side counter zeroing.
-  var cPA = m.counters.pa()
-  var bfAPA = m.bfA.pa()
-  var f32APA = m.f32A.pa()
-  var xPA = m.xPrev.pa()
-  var rPA = m.rPrev.pa()
-  var stPA = m.state.pa()
-  var rgPA = m.ring.pa()
-  var n1PA = m.norm1W.pa()
-  var qkvPA = m.qkvW.pa()
-  var zPA = m.zW.pa()
-  var aPA = m.aW.pa()
-  var bPA = m.bW.pa()
-  var cvPA = m.convW.pa()
-  var onPA = m.onormW.pa()
-  var opPA = m.outprojW.pa()
-  var n2PA = m.norm2W.pa()
-  var rtPA = m.routerW.pa()
-  var guPA = m.gateUpW.pa()
-  var dnPA = m.downW.pa()
-  var sgPA = m.sharedGW.pa()
-  var suPA = m.sharedUW.pa()
-  var sdPA = m.sharedDW.pa()
-  var gvPA = m.sharedGVW.pa()
-  var alPA = m.aLog.pa()
-  var dbPA = m.dtBias.pa()
+  var mp = addr m
   proc dispatch() {.gcsafe.} =
-    engine.run << (grid: (int(StageEnds[9]), 1, 1), blk: (32, 1, 1)) >>
-      ("qwen35_gdn_mixer_bf16", cPA,
-        (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
-         bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,
-         sgPA, suPA, sdPA, gvPA, alPA, dbPA, Eps))
+    runMegaGdn(engine, mp[], "qwen35_gdn_mixer_bf16", int(StageEnds[9]), Eps)
   runMegaBounded(dispatch, m.counters.hostPtr, StageNames)
 
-proc assertCounters(m: var MegaBuffers) =
+proc assertCounters(m: var MegaGdnBufs) =
   ## All 13 counters read zero exactly after the launch,
   ## the launch-end reset's zero state.
   for i in 0 ..< NumCounters:
@@ -821,7 +710,7 @@ proc mixerInit*(): HwEngine =
   result = bkMetal.init()
   result.ingest(MixerMsl)
 
-proc fillNorm1(m: var MegaBuffers; norm1: seq[uint16]) =
+proc fillNorm1(m: var MegaGdnBufs; norm1: seq[uint16]) =
   ## Norm1 row preloaded into its arena section, the projection stages'
   ## shared operand. The host-computed row is the shared operand,
   ## the mega entry's stage 1 compiled out, no device op recomputes it.
@@ -829,7 +718,7 @@ proc fillNorm1(m: var MegaBuffers; norm1: seq[uint16]) =
   for i in 0 ..< H:
     m.bfA.hostPtr[sNorm1 + i] = norm1[i]
 
-proc assertNorm1Unchanged(m: MegaBuffers; norm1: seq[uint16]) =
+proc assertNorm1Unchanged(m: MegaGdnBufs; norm1: seq[uint16]) =
   ## Preloaded norm1 row survives the launch bit-identical.
   for i in 0 ..< H:
     doAssert m.bfA.hostPtr[sNorm1 + i] == norm1[i],
@@ -840,8 +729,8 @@ proc runMixerWalk(engine: HwEngine; w: Weights; carry0: Carry;
   ## One case, fill → poison → launch → counters → sentinels → preload
   ## bit-identity → naive chain → per-element judgment, then the fresh
   ## relaunch over the restored carry judged bit-identical.
-  var m = allocMega()
-  defer: freeMega(m)
+  var m = allocMegaGdn()
+  defer: freeMegaGdn(m)
   fillWeights(m, w)
   fillNorm1(m, norm1)
   fillF32(m.state, carry0.state)
