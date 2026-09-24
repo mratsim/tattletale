@@ -273,7 +273,7 @@ proc waveAdd(counters: ptr UncheckedArray[uint32], idx: int32) {.device.} =
   ##
   ## Toolchain constraint, no acquire/release loads or stores are spelled, the fences
   ## carry the ordering and the increment stays relaxed.
-  threadgroup_barrier()
+  threadgroup_barrier_device()
   if thread_index_in_threadgroup != 0:
     return
   {.emit: """

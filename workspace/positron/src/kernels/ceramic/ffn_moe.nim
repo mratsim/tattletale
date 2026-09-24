@@ -467,7 +467,7 @@ proc moe_fwd*(
   # ── threadgroup barrier ──
   # the output walk re-reads the whole threadgroup's stored scratch rows
   # from device memory, the barrier orders that cross-lane read after the stores
-  threadgroup_barrier()
+  threadgroup_barrier_device()
   # ── output: routed = Σ w[slot]·down_w[e] @ h, + shared, fp16 store ──
   for nt in 0'i32 ..< hTiles:
     routed.zero()

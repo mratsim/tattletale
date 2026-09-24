@@ -157,7 +157,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
     scratch[e0] = scores.frags[0][m].frag[0]
     scratch[e0 + 1] = scores.frags[0][m].frag[1]
   # the selection's reads are cross-lane, the barrier orders them after the stores
-  threadgroup_barrier()
+  threadgroup_barrier_device()
   for slot in 0 ..< K:
     var lm = scratch[lane]
     for m in 1'i32 ..< int32(E div Lanes):
@@ -180,7 +180,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
         uint32(own))
       if own == lane:
         scratch[cand] = maskScore
-    threadgroup_barrier()
+    threadgroup_barrier_device()
 
 # ─── The router core ─────────────────────────────────────────────────
 

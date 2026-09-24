@@ -194,7 +194,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier orders that cross-lane read after the stores
-    threadgroup_barrier()
+    threadgroup_barrier_device()
     # ── down walk -> partial[t, y] = w[y]·down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
@@ -225,7 +225,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     # ── threadgroup barrier ──
     # the down walk re-reads the whole threadgroup's stored scratch rows
     # from device memory, the barrier orders that cross-lane read after the stores
-    threadgroup_barrier()
+    threadgroup_barrier_device()
     # ── shared down walk -> partial[t, K] = gateVal·shared_down ──
     for nt in 0'i32 ..< H div 32:
       d.zero()
