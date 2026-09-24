@@ -841,6 +841,14 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       let nameIdent = if impl[0].kind == nnkPragmaExpr: impl[0][0] else: impl[0]
       if node.lineinfo != nameIdent.lineinfo:
         return ctx.toGpuAst(reg, impl[2])
+    # An enum member reference resolves to its ordinal inline, the same
+    # inline fold the const branch applies. A GPU identifier would name
+    # an undeclared global, the generated code needs the integer value.
+    # The field sym carries the ordinal directly, including the explicit
+    # value of an enum member that spells one.
+    if symKind(node) == nskEnumField:
+      return GpuAst(kind: gpuLit, lValue: $node.intVal,
+                    lType: initGpuType(gtUint32))
     if s notin ctx.sigTab:
       result = newGpuIdent()
       result.symbol.name = sanitized
