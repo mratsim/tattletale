@@ -21,7 +21,7 @@
 ## | decode GEMV  | M = 1, grid.y = 1, the weight columns parallelize over grid.x                                                                                        |
 ## | prefill GEMM | grid.y tiles M in 32-row A tiles, the B tiles reload per (M-tile, N-tile) threadgroup                                                                |
 ## | rounding     | fp32 mma accumulation over 16-wide K chunks, one RNE round to the storage element at the output store, that store is the eager matmul's output round |
-## | referee      | torch eager bf16 (fp32 opmath, its own accumulation order), parity inside the 2-bf16-ulp-at-max band, not bit equality                               |
+## | baseline     | torch eager bf16 (fp32 opmath, its own accumulation order), parity inside the 2-bf16-ulp-at-max band, not bit equality                               |
 
 ##
 ##   per threadgroup:  X rows (32) × W cols (TileC) → 16-wide mma chunks → fp32 acc → RNE → El store

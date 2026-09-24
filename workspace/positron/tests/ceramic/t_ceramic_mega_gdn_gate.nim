@@ -71,18 +71,18 @@ import mega_bounded_wait
 import ceramic_dtype
 import mega_gdn_harness
 
-# ─── Expiry hook, the wedged outcome recorded instead of terminal ─────
-
-var StaleGateExpired: bool
-  ## Set by the stale-counter case's expiry hook, the wedged outcome is one
-  ## of the two recorded consequences of the violated entry contract.
+# ─── Expiry callback, the wedged outcome is a failure, never a pass ───
 
 proc recordStaleGateExpiry(msg: string) {.gcsafe.} =
-  ## Expiry hook of the stale-counter case, the bounded wait's diagnostic
-  ## recorded to stderr and never terminal, the wedged worker thread is
-  ## left to the process exit.
-  StaleGateExpired = true
+  ## Expiry callback of the stale-counter case, the bounded wait's
+  ## diagnostic recorded and the run failed.
+  ##
+  ## Contract:
+  ## - a wedged relaunch is the entry contract's failure under the stale counts
+  ## - a wedged grid cannot be unwound in-process, the failure is terminal
   stderr.writeLine "[mega gate] stale-counter relaunch wedged, " & msg
+  writeStackTrace()
+  quit(1)
 
 # ─── Device entry, one launch of the mega's 13-stage dispatcher ───────
 
@@ -266,18 +266,8 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
   #   the producers run and the launch's output leaves the reference bits.
   restorePreimage(preBf, preF32, preState, preRing)
   garbageCounters()
-  StaleGateExpired = false
   runMegaBounded(launch, m.counters.hostPtr, StageNames,
     deadlineMs = 5000.0, onExpiry = recordStaleGateExpiry)
-  if StaleGateExpired:
-    # Wedged outcome:
-    #   the launch-end reset landed while threadgroups were still in flight, the re-zeroed m.counters cannot reach the targets
-    #   the late waiters spin on, the bounded wait's diagnostic is recorded and the process exits here, a wedged grid cannot
-    #   be unwound in-process.
-    echo &"[mega gate] VERDICT: deadline wall {deadlineWall:.2f} s, " &
-      &"self-reset bit-exact {BfArenaLen + F32ArenaLen}/" &
-      &"{BfArenaLen + F32ArenaLen}, stale-count garbage wedges the launch"
-    quit(0)
   let staleBf = readRecord(m.bfA.hostPtr, BfArenaLen)
   let staleF32 = readRecord(m.f32A.hostPtr, F32ArenaLen)
   let staleBfMismatches = bitDiffCount(staleBf, refBf)

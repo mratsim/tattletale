@@ -27,10 +27,11 @@
 ## Fusion contract (the inline-tile property):
 ## - {.device.} tile procs `rowRstd`, `rmsWeightElem`, `siluMulElem`, `rmsNormGatedElem`
 ##   inline into any kernel that keeps the epilogue tiles in threadgroup registers
-## - the mega kernel composes the tile core `rmsNormGatedTileAt` inline, the fused
-##   entry `rmsNormGatedTile` computing the whole chain in one launch
-## - the per-head variant `rmsNormGatedTilePerHeadAt` serves (Hv, Dv) per-head weight
-##   layouts. `rmsWeightElem` + `siluMulElem` splits bit-exactly at the weighted value,
+## - the mega kernel composes the tile core `rmsNormGatedTileCoreAt` inline,
+##   WRowStride = Dv, the per-head (Hv, Dv) weight layout
+## - the fused entry `rmsNormGatedTile` binds WRowStride = 0, one broadcast
+##   weight row, and computes the whole chain in one launch
+## - `rmsWeightElem` + `siluMulElem` splits bit-exactly at the weighted value,
 ##   so the f32 and family-dtype round-trip is exact
 
 import ../math_consts
@@ -142,7 +143,7 @@ proc rmsNormGatedElem*[El; R, C: static int; A: static MmaAtom](
 
 # ─── Core tile procs (inline-tile property) ──────────────────────────
 
-proc rmsNormGatedTileCoreAt[El](
+proc rmsNormGatedTileCoreAt*[El](
     outp: ptr UncheckedArray[El],
     x: ptr UncheckedArray[El],
     gate: ptr UncheckedArray[El],
@@ -156,7 +157,8 @@ proc rmsNormGatedTileCoreAt[El](
   ##   WRowStride = 0  ─────  one (Dv) weight row broadcast over the tile
   ##   WRowStride = Dv ─────  one weight row per tile row
   ##
-  ## Public wrappers below fix the binding. The generic never needs a direct call site.
+  ## The megakernel composes the per-head binding inline, the fused entry
+  ## `rmsNormGatedTile` binds the broadcast form.
   ##
   ## Parameters, pointers naming their dtypes, shapes bound at the call:
   ##
@@ -195,68 +197,6 @@ proc rmsNormGatedTileCoreAt[El](
   rmsNormGatedElem(oT, xT, gT, wT, eps)
   glO.storeTileRows(oT, (0, 0, rowBlk, 0), M)
 
-proc rmsNormGatedTileAt*[El](
-    outp: ptr UncheckedArray[El],  # (M, Dv) family-dtype out
-    x: ptr UncheckedArray[El],     # (M, Dv), the norm input
-    gate: ptr UncheckedArray[El],  # (M, Dv), the silu-gated operand
-    w: ptr UncheckedArray[El],     # (Dv), the norm weight, one row broadcast over the tile
-    M: int32,
-    eps: float32,
-    rowBlk: int32,
-    Dv, TileR: static int) {.device.} =
-  ## Tile core, one (Dv) weight row broadcast over the tile's rows. The megakernel composes this core inline. `rmsNormGatedTile`
-  ## is the grid-driven wrapper.
-  ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
-  ##
-  ## | parameter | shape, dtype, layout                                                                                                                | producer                        | unit     |
-  ## | --------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | -------- |
-  ## | outp      | (M, Dv) El, row-major, the epilogue rows, produced by this proc, the El round of the gated product per element, rows >= M unwritten | this proc                       | El       |
-  ## | x         | (M, Dv) El, row-major, the norm input                                                                                               | host-computed                   | El       |
-  ## | gate      | (M, Dv) El, row-major, the silu-gated operand                                                                                       | host-computed                   | El       |
-  ## | w         | (Dv) El, row-major, the norm weight, one row broadcast over the tile                                                                | host-computed                   | El       |
-  ## | M         | the runtime row count (the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation host-side)                          | host-derived                    | rows     |
-  ## | eps       | f32, the rstd epsilon, host-computed, must be > 0 (the recorded layer's 1e-6)                                                       | host-computed                   | f32      |
-  ## | rowBlk    | the M div TileR row-block index                                                                                                     | device-computed grid coordinate | rows     |
-  ## | Dv, TileR | static tile geometry (norm width, the row block height)                                                                             | compile-time                    | elements |
-  ## Returns the weighted, silu-gated, normalized rows through `outp`.
-  ##
-  ## Example, at TileR = 8: `rmsNormGatedTileAt(outp, x, gate, w, 32, eps, rowBlk, 128, 8)`
-  ## computes rows `rowBlk·8 ..< rowBlk·8 + 8` of a 32-row epilogue, every row
-  ## weighted by the same `w[0 ..< 128]`.
-  rmsNormGatedTileCoreAt[El](outp, x, gate, w, M, eps, rowBlk, Dv, TileR, 0)
-
-proc rmsNormGatedTilePerHeadAt*[El](
-    outp: ptr UncheckedArray[El],  # (M, Dv) family-dtype out
-    x: ptr UncheckedArray[El],     # (M, Dv), the norm input
-    gate: ptr UncheckedArray[El],  # (M, Dv), the silu-gated operand
-    w: ptr UncheckedArray[El],     # (M, Dv), one weight row per output row
-    M: int32,
-    eps: float32,
-    rowBlk: int32,
-    Dv, TileR: static int) {.device.} =
-  ## Tile core, one (Dv) weight row per output row. Serves the (M, Dv) per-head weight layout of a per-head output norm.
-  ## Row `rowBlk·TileR + r` weights with `w[(rowBlk·TileR + r)·Dv ..< (rowBlk·TileR + r + 1)·Dv]`.
-  ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
-  ##
-  ## | parameter | shape, dtype, layout                                                                                                                | producer                        | unit     |
-  ## | --------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | -------- |
-  ## | outp      | (M, Dv) El, row-major, the epilogue rows, produced by this proc, the El round of the gated product per element, rows >= M unwritten | this proc                       | El       |
-  ## | x         | (M, Dv) El, row-major, the norm input                                                                                               | host-computed                   | El       |
-  ## | gate      | (M, Dv) El, row-major, the silu-gated operand                                                                                       | host-computed                   | El       |
-  ## | w         | (M, Dv) El, row-major, the norm weight, one row per output row (row rowBlk·TileR + r weights with its own w row)                    | host-computed                   | El       |
-  ## | M         | the runtime row count (the layer tensors (b, T, Hv, Dv) flatten to rows, the layout permutation host-side)                          | host-derived                    | rows     |
-  ## | eps       | f32, the rstd epsilon, host-computed, must be > 0 (the recorded layer's 1e-6)                                                       | host-computed                   | f32      |
-  ## | rowBlk    | the M div TileR row-block index                                                                                                     | device-computed grid coordinate | rows     |
-  ## | Dv, TileR | static tile geometry (norm width, the row block height)                                                                             | compile-time                    | elements |
-  ## Returns the weighted, silu-gated, normalized rows through `outp`.
-  ##
-  ## Example, at TileR = 8: `rmsNormGatedTilePerHeadAt(outp, x, gate, w, 32, eps, rowBlk, 128, 8)`
-  ## computes rows `rowBlk·8 ..< rowBlk·8 + 8` of a 32-row epilogue, each row
-  ## weighted by its own head's weight row.
-  rmsNormGatedTileCoreAt[El](outp, x, gate, w, M, eps, rowBlk, Dv, TileR, Dv)
-
 proc rmsNormGatedTile*[El](
     outp: ptr UncheckedArray[El],  # (M, Dv) family-dtype out
     x: ptr UncheckedArray[El],     # (M, Dv), the norm input
@@ -265,8 +205,10 @@ proc rmsNormGatedTile*[El](
     M: int32,
     eps: float32,
     Dv, TileR: static int) {.device.} =
-  ## Grid-driven form of `rmsNormGatedTileAt`. Grid (1, ceil(M div TileR)),
-  ## one (TileR-row) tile per threadgroup.
+  ## Grid-driven broadcast-weight form of `rmsNormGatedTileCoreAt`, WRowStride = 0.
+  ## Grid (1, ceil(M div TileR)), one (TileR-row) tile per threadgroup.
+  ##
+  ## Returns the weighted, silu-gated, normalized rows through `outp`.
   ##
   ## | parameter | shape, dtype, layout                                                                                                                | producer      | unit     |
   ## | --------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------- | -------- |
@@ -278,7 +220,7 @@ proc rmsNormGatedTile*[El](
   ## | eps       | f32, the rstd epsilon, host-computed, must be > 0 (the recorded layer's 1e-6)                                                       | host-computed | f32      |
   ## | Dv, TileR | static tile geometry (norm width, the row block height)                                                                             | compile-time  | elements |
   let rowBlk = int32(threadgroup_position_in_grid.y)
-  rmsNormGatedTileAt(outp, x, gate, w, M, eps, rowBlk, Dv, TileR)
+  rmsNormGatedTileCoreAt[El](outp, x, gate, w, M, eps, rowBlk, Dv, TileR, 0)
 
 proc rmsWeightTile*[El](
     midp: ptr UncheckedArray[El],  # (M, Dv) out, El(w·El(y·rstd))
@@ -323,7 +265,14 @@ proc siluMulTile*[El](
   ## Multiplies the weighted RMSNorm by the f32 silu of the second operand.
   ## Rows >= M bound both the load and the store.
   ##
-  ## | parameter | shape, dtype, layout                                                                              | producer      | unit     |  ## | --------- | ------------------------------------------------------------------------------------------------- | ------------- | -------- |  ## | outp      | (M, Dv) El, row-major, the silu-gated weighted rows, produced by this kernel, rows >= M unwritten | this kernel   | El       |  ## | mid       | (M, Dv) El, row-major, the weighted RMSNorm value (rmsWeightTile's output)                        | host-computed | El       |  ## | gate      | (M, Dv) El, row-major, the silu-gated operand                                                     | host-computed | El       |  ## | M         | the runtime row count, host-derived                                                               | host-derived  | rows     |  ## | Dv, TileR | static tile geometry (norm width, the row block height)                                           | compile-time  | elements |  ##
+  ## | parameter | shape, dtype, layout                                                                              | producer      | unit     |
+  ## | --------- | ------------------------------------------------------------------------------------------------- | ------------- | -------- |
+  ## | outp      | (M, Dv) El, row-major, the silu-gated weighted rows, produced by this kernel, rows >= M unwritten | this kernel   | El       |
+  ## | mid       | (M, Dv) El, row-major, the weighted RMSNorm value (rmsWeightTile's output)                        | host-computed | El       |
+  ## | gate      | (M, Dv) El, row-major, the silu-gated operand                                                     | host-computed | El       |
+  ## | M         | the runtime row count, host-derived                                                               | host-derived  | rows     |
+  ## | Dv, TileR | static tile geometry (norm width, the row block height)                                           | compile-time  | elements |
+  ##
   ## Returns the silu-gated weighted rows through `outp`.
   let rowBlk = int32(threadgroup_position_in_grid.y)
   let glM = mid.gd(shape = (-1, -1, -1, -1), stride = (1, 0, Dv, 1))

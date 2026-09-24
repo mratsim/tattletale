@@ -132,11 +132,14 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
   ## | hs_scratch                    | (num_tokens, I) El, row-major, working buffer, the shared group writes there                                                                                            | this proc                            | El                 |
   ## | t, y                          | the token index and the slot group, y < K routed, y = K the shared group                                                                                                | device-computed (the wrapper's grid) | tokens / slots     |
   ## | H, E, K, I, Scale, SharedGate | hidden, expert count, top-K, intermediate width, the routing-weight scale and the shared-gate switch, static compile-time, shape preconditions tabled below             | compile-time                         | elements / experts |
-## | stage        | behavior                                                                                                                                                   |
-## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
-## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
-## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
+  ##
+  ## Slot-group behavior by the y index
+  ##
+  ## | stage        | behavior                                                                                                                                                   |
+  ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  ## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
+  ## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
+  ## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
   ##
   ## Instantiation contract:
   ## - each static binding set of this core needs its own call-site line

@@ -110,7 +110,9 @@ const MoeRouterMsl = metal:
   proc cer_moe_merge_bf16_mega(
       out_r: ptr UncheckedArray[bfloat16],
       partial: ptr UncheckedArray[float32]) {.global.} =
-    moe_decode_merge[bfloat16, 2048, 8](out_r, partial)
+    moe_decode_merge_at[bfloat16, 2048, 8](out_r, partial,
+      int32(threadgroup_position_in_grid.x),
+      int32(threadgroup_position_in_grid.y))
 
   proc cer_moe_fwd_bf16_mega(
       partial: ptr UncheckedArray[float32],
@@ -134,12 +136,16 @@ const MoeRouterMsl = metal:
   proc cer_moe_merge_bf16(
       out_r: ptr UncheckedArray[bfloat16],
       partial: ptr UncheckedArray[float32]) {.global.} =
-    moe_decode_merge[bfloat16, 256, 8](out_r, partial)
+    moe_decode_merge_at[bfloat16, 256, 8](out_r, partial,
+      int32(threadgroup_position_in_grid.x),
+      int32(threadgroup_position_in_grid.y))
 
   proc cer_moe_merge_f16(
       out_r: ptr UncheckedArray[float16],
       partial: ptr UncheckedArray[float32]) {.global.} =
-    moe_decode_merge[float16, 256, 8](out_r, partial)
+    moe_decode_merge_at[float16, 256, 8](out_r, partial,
+      int32(threadgroup_position_in_grid.x),
+      int32(threadgroup_position_in_grid.y))
 
   proc cer_shared_gate_f16(
       outp: ptr UncheckedArray[float32],

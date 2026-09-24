@@ -101,8 +101,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 ##   the guard's two halves, the device entry drops the launch, the host
 ##   companion `moeFwdConfigGuard` raises naming the offending dim
 ##
-## The suite drives this entry against the libtorch reference chain
-## at the GLM-4.7-Flash, Qwen3.6-35B-A3B and ragged-gelu config rows.
 
 type
   MoeAct* = enum
@@ -121,7 +119,7 @@ const RouteSumEps* = 1e-20'f32
   ## normalization divides by sum(w) + RouteSumEps, an all-underflow
   ## weight row still divides.
 
-proc actMul16[A: static MmaAtom](
+proc actMulFp16[A: static MmaAtom](
     dst: var RtLeft[float16, 32, 32, A],
     gHalf, uHalf: RtLeft[float32, 32, 32, A],
     activation: static MoeAct) {.device.} =
@@ -446,7 +444,7 @@ proc moe_fwd*(
         gHalf.mma_AB(a, b16)
         b16.loadTileBounded(glSgu, (s, 1, nt, kk), moe_intermediate, hidden)
         uHalf.mma_AB(a, b16)
-      h16.actMul16(gHalf, uHalf, activation)
+      h16.actMulFp16(gHalf, uHalf, activation)
       glHs.storeTileMasked(h16, (t, s, 0, nt), 1,
         min(moe_intermediate - nt * 32, 32'i32))
 
@@ -462,7 +460,7 @@ proc moe_fwd*(
         gHalf.mma_AB(a, b16)
         b16.loadTileBounded(glGu, (e, 1, nt, kk), moe_intermediate, hidden)
         uHalf.mma_AB(a, b16)
-      h16.actMul16(gHalf, uHalf, activation)
+      h16.actMulFp16(gHalf, uHalf, activation)
       glH.storeTileMasked(h16, (t * top_k + slot, 0, 0, nt), 1,
         min(moe_intermediate - nt * 32, 32'i32))
 

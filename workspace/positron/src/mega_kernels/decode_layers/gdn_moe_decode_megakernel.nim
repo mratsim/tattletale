@@ -437,7 +437,7 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
   ## | zW                                      | (Hv·Dv, Hidden) T, the o_norm z projection                                                                                                                                 | checkpoint, host-computed                                                                         | T elements        |
   ## | aW, bW                                  | (Hv, Hidden) T, the decay and beta projections                                                                                                                             | checkpoint, host-computed                                                                         | T elements        |
   ## | convW                                   | (ConvDim, 1, ConvKernel) T, the depthwise conv weight                                                                                                                      | checkpoint, host-computed                                                                         | T elements        |
-  ## | onormW                                  | (Hv, Dv) T, the per-head output-norm weight (rmsNormGatedTilePerHeadAt's per-row layout)                                                                                   | checkpoint, host-computed                                                                         | T elements        |
+  ## | onormW                                  | (Hv, Dv) T, the per-head output-norm weight (rmsNormGatedTileCoreAt's WRowStride = Dv)                                                                                     | checkpoint, host-computed                                                                         | T elements        |
   ## | outprojW                                | (Hidden, Hv·Dv) T, the out projection                                                                                                                                      | checkpoint, host-computed                                                                         | T elements        |
   ## | routerW                                 | (NumExperts, Hidden) T, the router weight                                                                                                                                  | checkpoint, host-computed                                                                         | T elements        |
   ## | gateUpW, downW                          | (NumExperts, 2·Inter, Hidden) fused gate/up and (NumExperts, Hidden, Inter) down, the routed-expert weights                                                                | checkpoint, host-computed                                                                         | T elements        |
@@ -519,10 +519,10 @@ proc gdnMoeLayerWalk*[T; HaveNorm: static bool](
     # o_norm weight binding
     # - the checkpoint ships the per-head norm weights
     # - head bh's row sits at onormW[bh·Dv ..< (bh + 1)·Dv] over the (Hv, Dv)
-    #   buffer (rmsNormGatedTilePerHeadAt's per-row weight layout)
+    #   buffer (rmsNormGatedTileCoreAt's WRowStride = Dv per-row weight layout)
     # - the composition suites bind the same (Hv, Dv) geometry
-    rmsNormGatedTilePerHeadAt((bfA +% sNormed), (bfA +% sY), (bfA +% sZ),
-      onormW, 32, eps, tx - int32(EndStageGdnState), 128, 8)
+    rmsNormGatedTileCoreAt((bfA +% sNormed), (bfA +% sY), (bfA +% sZ),
+      onormW, 32, eps, tx - int32(EndStageGdnState), 128, 8, 128)
     waveAdd(counters, 8)
   elif tx < int32(EndStageOutProj):
     waveWait(counters, 8, 4)

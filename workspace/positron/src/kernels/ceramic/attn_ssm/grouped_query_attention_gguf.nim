@@ -4,8 +4,6 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-# TODO - manual_grouped_query_attention_gguf_fp16 fails its Metal run (Metal library compile fails)
-#   fix owned by the runtime-dims genericity pass over this kernel
 
 
 # ############################################################
@@ -20,7 +18,8 @@
 ## kernel: q/k/v projections, qk-norm+rope, the host cache write
 ## (write-before staging, decode rows at cache_seqlen - 1, prefill rows
 ## at cache_seqlen + j), paged attention, o_proj. Requires H % 8 == 0,
-## Nkv % 8 == 0 and a power-of-two pageSize (the write's shift/mask).
+## Nkv % 8 == 0 and the paged attention's compiled-in page_size 16,
+## a static binding of the launcher.
 
 import std/[math, bitops]
 import workspace/crucible
@@ -164,8 +163,8 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
   ## Nkv % 8 == 0 and a power-of-two pageSize (asserted).
   doAssert (p.H and 7) == 0 and (p.Nkv and 7) == 0,
     "the composed q/k views require H % 8 == 0 and Nkv % 8 == 0"
-  doAssert p.pageSize >= 1 and (p.pageSize and (p.pageSize - 1)) == 0,
-    "the cache write requires a power-of-two pageSize (shift/mask)"
+  doAssert p.pageSize == 16,
+    "the paged-attention launcher's compiled-in page_size is 16, the composition instantiates that geometry (the kernel's page_size is a static binding)"
   doAssert p.D == 128, "the qk-norm+rope and paged attention kernels run 128-wide"
   doAssert p.hidden mod 128 == 0,
     "the o_proj grid tiles hidden in 128-column blocks"
@@ -244,8 +243,8 @@ proc ggufAttnForward*(engine: var auto, p: GGufAttnParams, x: seq[uint16],
       # both head-dim-contiguous (slabOffset's h·D + d layout)
       let t = q0 + j
       let dstBase = slabOffset(pageId, inPage, 0, 0, p.pageSize, p.Nkv, p.D)
-      copyMem(addr kSlab[dstBase], addr result.kRope[t * nKv], nKv * 2)
-      copyMem(addr vSlab[dstBase], addr result.vBuf[t * nKv], nKv * 2)
+      copyMem(addr kSlab[dstBase], addr result.kRope[t * nKv], nKv * sizeof(uint16))
+      copyMem(addr vSlab[dstBase], addr result.vBuf[t * nKv], nKv * sizeof(uint16))
 
   # the paged attention's x extent: the batch's longest q_len in 8-row
   # q blocks (the kernel zero-fills the blocks beyond a seq's own q_len)

@@ -16,11 +16,14 @@
 # shared `finalStore` (the store) and a `storeMask` (the valid tile
 # range, predicated per element).
 #
+# kernel_gemm_gpu's gemm_cta path consumes this module, the CTA-tiled
+# GEMM kernel drives the epilogue pipeline, today no other consumer exists.
+#
 # Lifecycle:
 #   1. capture: the kernel builds the epilogue value with gmem operand
 #      views (initEpiAddBias(bias_gmem), ...)
 #   2. shard: per captured operand, gmem → per-thread storage
-#      (the legacy `shard`/`preflight`)
+#      (`shard`/`preflight`)
 #   3. apply: the per-thread f(AB) over the accumulator
 #   4. store: `finalStore` writes the tile, masked by `storeMask`
 
@@ -31,6 +34,12 @@ import ./hardware/h_properties
 import ./atoms_mma_partitioning
 
 {.experimental: "callOperator".}
+
+const StoreAll* = -1
+  ## Store-mask sentinel of the full-tile store, every tile coordinate valid.
+  ##
+  ## - a concrete mask sets bit i for the valid coordinate i
+  ## - `finalStore` and `apply` predicate on the bits
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Epilogues for GEneralized Matrix Multiplication
@@ -94,7 +103,7 @@ type EpiAXPBY*[T, Sh, StC] = object
   ## D = α·AB + β·C, element-wise over the tile's per-thread elements.
   alpha*, beta*: T
   C_gmem*: TensorView[T, Sh, StC]
-  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
+  storeMask* = StoreAll # store mask, bit i = coordinate i valid, StoreAll the full tile
 
 func initEpiAXPBY*[T, Sh, StC](
     alpha: T;
@@ -106,14 +115,14 @@ func initEpiAXPBY*[T, Sh, StC](
 func shard*[T, ShC, StC](
     op: EpiAXPBY[T, ShC, StC];
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
-  ## Partition the epilogue `C` operand onto threads (the legacy path
-  ## gemm_cta drives).
+  ## Partitions the epilogue `C` operand onto threads, the gemm_cta
+  ## path's shard step.
   const tileM = tma.thrM * tma.atom.getM()
   const tileN = tma.thrN * tma.atom.getN()
   initEpiAXPBY(op.alpha, op.beta, tma.partition_C(thr, local_tile(op.C_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
-  ## No-op. The legacy gemm_cta path reads C per-thread from gmem in `apply`.
+  ## No-op. gemm_cta reads C per-thread from gmem in `apply`.
   discard
 
 func apply*[T, Sh, StAB, StC, StR](
@@ -168,14 +177,14 @@ func apply*[T, Sh, StAB, StC, StR](
 type EpiIdentity* = object
   ## Identity epilogue:
   ##   D = AB.
-  storeMask* = -1  # Store predication: describes the valid (M, N) range of the tile
+  storeMask* = StoreAll # store mask, bit i = coordinate i valid, StoreAll the full tile
 
 func shard*(op: EpiIdentity; tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): EpiIdentity {.inline.} =
   ## No-op for EpiIdentity, no operands to shard or stage.
   op
 
 template preflight*(op: var EpiIdentity): untyped =
-  ## No-op. The legacy gemm_cta path. EpiIdentity has no operands.
+  ## No-op. EpiIdentity has no operands.
   discard
 
 func apply*[T, Sh, StAB, StR](
@@ -195,7 +204,7 @@ type EpiAddBias*[T, Sh, St] = object
   ## D = AB + bias.
   ## Bias is a column vector broadcasted onto AB.
   bias_gmem*: TensorView[T, Sh, St]
-  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
+  storeMask* = StoreAll # store mask, bit i = coordinate i valid, StoreAll the full tile
 
 func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, St] {.inline.} =
   ## Constructor:
@@ -205,13 +214,14 @@ func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, 
 template shard*[T, Sh, St](
     op: EpiAddBias[T, Sh, St];
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
-  ## Partition the epilogue `bias` operand onto threads (the legacy path gemm_cta drives).
+  ## Partitions the epilogue `bias` operand onto threads, the gemm_cta
+  ## path's shard step.
   const tileM = tma.thrM * tma.atom.getM()
   const tileN = tma.thrN * tma.atom.getN()
   initEpiAddBias(tma.partition_C(thr, local_tile(op.bias_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
-  ## No-op. The legacy gemm_cta path reads bias per-thread from gmem in `apply`.
+  ## No-op. gemm_cta reads bias per-thread from gmem in `apply`.
   discard
 
 func apply*[T, Sh, StAB, StB, StR](
@@ -244,7 +254,7 @@ type EpiLinearBiasReLU*[T, Sh, St] = object
   ## broadcasted onto AB (the same stride-0-row view as EpiAddBias,
   ## with the clamp added).
   bias_gmem*: TensorView[T, Sh, St]
-  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
+  storeMask* = StoreAll # store mask, bit i = coordinate i valid, StoreAll the full tile
 
 func initEpiLinearBiasReLU*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiLinearBiasReLU[T, Sh, St] {.inline.} =
   ## Constructor:
@@ -254,13 +264,14 @@ func initEpiLinearBiasReLU*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiLinearBi
 template shard*[T, Sh, St](
     op: EpiLinearBiasReLU[T, Sh, St];
     tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
-  ## Partition the epilogue `bias` operand onto threads (the legacy path gemm_cta drives).
+  ## Partitions the epilogue `bias` operand onto threads, the gemm_cta
+  ## path's shard step.
   const tileM = tma.thrM * tma.atom.getM()
   const tileN = tma.thrN * tma.atom.getN()
   initEpiLinearBiasReLU(tma.partition_C(thr, local_tile(op.bias_gmem, (tileM, tileN), (mCTA, nCTA))))
 
 template preflight*[T, Sh, St](op: var EpiLinearBiasReLU[T, Sh, St]): untyped =
-  ## No-op. The legacy gemm_cta path reads bias per-thread from gmem in `apply`.
+  ## No-op. gemm_cta reads bias per-thread from gmem in `apply`.
   discard
 
 func apply*[T, Sh, StAB, StB, StR](
@@ -289,7 +300,7 @@ func apply*[T, Sh, StAB, StB, StR](
 type EpiReLU* = object
   ## Rectified linear unit:
   ##   D = max(0, AB)
-  storeMask* = -1 # Store predication: describes the valid (M, N) range of the tile
+  storeMask* = StoreAll # store mask, bit i = coordinate i valid, StoreAll the full tile
 
 
 template shard*(op: EpiReLU; tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: int): auto =
@@ -297,7 +308,7 @@ template shard*(op: EpiReLU; tma: static TiledMma; thr: ThrSlice; mCTA, nCTA: in
   op
 
 template preflight*(op: var EpiReLU): untyped =
-  ## No-op. The legacy gemm_cta path. EpiReLU has no operands to stage.
+  ## No-op. EpiReLU has no operands to stage.
   discard
 
 func apply*[T, Sh, StAB, StR](

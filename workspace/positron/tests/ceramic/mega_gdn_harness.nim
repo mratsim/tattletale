@@ -168,6 +168,31 @@ proc freeMegaGdn*(m: var MegaGdnBufs) =
   freePageBuf(m.aLog)
   freePageBuf(m.dtBias)
 
+proc assertMegaInputsUnchanged*(m: MegaGdnBufs, big: BigHost) =
+  ## Every buffer the megakernel reads stays bit-identical after the launch.
+  ## The kernel structurally never writes its input and weight params.
+  ##
+  ## Contract:
+  ## - one sentinel call covers the whole read set
+  assertReadUnchanged(m.xPrev, big.x)
+  assertReadUnchanged(m.rPrev, big.r)
+  assertReadUnchanged(m.norm1W, big.norm1W)
+  assertReadUnchanged(m.convW, big.convW)
+  assertReadUnchanged(m.onormW, big.onormW)
+  assertReadUnchanged(m.routerW, big.routerW)
+  assertReadUnchanged(m.gateUpW, big.gateUpW)
+  assertReadUnchanged(m.downW, big.downW)
+  assertReadUnchanged(m.qkvW, big.qkvW)
+  assertReadUnchanged(m.zW, big.zW)
+  assertReadUnchanged(m.aW, big.aW)
+  assertReadUnchanged(m.bW, big.bW)
+  assertReadUnchanged(m.outprojW, big.outprojW)
+  assertReadUnchanged(m.norm2W, big.norm2W)
+  assertReadUnchanged(m.sharedGW, big.sharedGW)
+  assertReadUnchanged(m.sharedUW, big.sharedUW)
+  assertReadUnchanged(m.sharedDW, big.sharedDW)
+  assertReadUnchanged(m.sharedGVW, big.sharedGVW)
+
 proc fillGdnInputs*(m: var MegaGdnBufs; big: BigHost) =
   ## One seeded layer pass's inputs and weights, written once.
   fillBf(m.xPrev, big.x)

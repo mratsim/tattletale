@@ -138,24 +138,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   proc sentinels() =
     assertTailZero(m.bfA, BfArenaLen)
     assertTailZero(m.f32A, F32ArenaLen)
-    assertReadUnchanged(m.xPrev, big.x)
-    assertReadUnchanged(m.rPrev, big.r)
-    assertReadUnchanged(m.norm1W, big.norm1W)
-    assertReadUnchanged(m.convW, big.convW)
-    assertReadUnchanged(m.onormW, big.onormW)
-    assertReadUnchanged(m.routerW, big.routerW)
-    assertReadUnchanged(m.gateUpW, big.gateUpW)
-    assertReadUnchanged(m.downW, big.downW)
-    assertReadUnchanged(m.qkvW, big.qkvW)
-    assertReadUnchanged(m.zW, big.zW)
-    assertReadUnchanged(m.aW, big.aW)
-    assertReadUnchanged(m.bW, big.bW)
-    assertReadUnchanged(m.outprojW, big.outprojW)
-    assertReadUnchanged(m.norm2W, big.norm2W)
-    assertReadUnchanged(m.sharedGW, big.sharedGW)
-    assertReadUnchanged(m.sharedUW, big.sharedUW)
-    assertReadUnchanged(m.sharedDW, big.sharedDW)
-    assertReadUnchanged(m.sharedGVW, big.sharedGVW)
+    assertMegaInputsUnchanged(m, big)
     for h in 0 ..< NumVHeads:
       doAssert m.aLog.hostPtr[h] == big.aLog[h], "kernel-read buffer modified"
       doAssert m.dtBias.hostPtr[h] == big.dtBias[h], "kernel-read buffer modified"

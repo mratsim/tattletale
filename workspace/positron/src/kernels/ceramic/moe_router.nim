@@ -16,7 +16,7 @@
 ## | weights     | w = p/(sum p over the K selected)·Scale, one El round per weight at the store                                     |
 ## | tensors     | x (T, H) El, router_w (E, H) El, ids (T, K) int32, rout_w (T, K) El, partial (T, K+1, H) fp32, out_r (T, H) El    |
 ## | shapes      | E a multiple of the 64-expert chunk, H a multiple of the 16-wide K step and of the 32-wide merge lane tile        |
-## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge` grid (T, H div 32, 1)                              |
+## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge_at` grid (T, H div 32, 1)                           |
 ##
 ## Shared internals with `ffn_moe.nim`:
 ##
@@ -334,26 +334,3 @@ proc moe_decode_merge_at*[El; H, K: static int](
     acc += partial[int(t * (K + 1) + y) * H + int(col)]
   out_r[t * H + col] = roundToNearestEven[El](acc)
 
-proc moe_decode_merge*[El; H, K: static int](
-    out_r: ptr UncheckedArray[El],         # (num_tokens, H) routed+shared output
-    partial: ptr UncheckedArray[float32]) {.device.} =
-  ## Grid-driven form of `moe_decode_merge_at`.
-  ## Grid (num_tokens, H div 32, 1) at 32 lanes, one output column per lane.
-  ##
-  ## The partial row t·(K+1)+y holds slot y's fp32 contribution, the decode
-  ## regime's partial-buffer contract.
-  ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call,
-  ## token index and column block arriving from the grid:
-  ##
-  ## | parameter | shape, dtype, layout                                                                                                                             | producer           | unit               |
-  ## | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------------------ |
-  ## | out_r     | (num_tokens, H) El, row-major, the routed+shared expert output, produced by this kernel, one El round per element at the store                   | this kernel        | El                 |
-  ## | partial   | (num_tokens, K+1, H) f32, row-major, the fp32 partials, one row per routing slot plus the shared expert last (slot order is the summation order) | the expert kernels | f32                |
-  ## | H, K      | hidden width and top-K, static compile-time, H a multiple of the 32-wide lane tile                                                               | compile-time       | elements / experts |
-  static:
-    doAssert H mod 32 == 0,
-      "moe_decode_merge: H must be a multiple of the 32-wide lane tile"
-  let t = int32(threadgroup_position_in_grid.x)
-  let nt = int32(threadgroup_position_in_grid.y)
-  moe_decode_merge_at[El, H, K](out_r, partial, t, nt)
