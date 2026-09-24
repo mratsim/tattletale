@@ -45,7 +45,7 @@
 ##
 ## | provenance | source                                                                                                                                                                |
 ## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the naive WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/naive/naive_kda.nim, the same per-channel cumulogdecay, pairdecay, solve and carry formulas |
+## | schedule   | the fp64 WY/UT reference `kdaPrefillChunked` in workspace/positron/tests/properties/refs.nim, the same per-channel cumulogdecay, pairdecay, solve and carry formulas |
 ## | tiles      | the GDN chunk-scan tile schedule of attn_ssm/gated_delta_net_prefill.nim, applied to the KDA per-channel decay chain                                                  |
 
 ##

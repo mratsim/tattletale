@@ -585,23 +585,15 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 
-# The positron naive reference tier, a fixture-free randomized
-# harness over the shared naive references in tests/naive.
-# No recorded blobs, no model checkpoints, the inputs come
-# from the seeded PRNG.
-# tests/ceramic holds the ceramic-vs-naive kernel comparisons
-# against those references.
-# The positron property suites, internal-consistency checks over the
-# production kernels (split invariance, step-count identity, idempotence),
-# with the seeded support surface in tests/properties/properties.nim.
+# The positron suites: the property suites (internal-consistency checks over
+# the production kernels: split invariance, step-count identity, idempotence,
+# with the seeded support surface in tests/properties/properties.nim) and
+# tests/ceramic, the kernel comparisons judged against the reference walks in
+# tests/properties/refs.nim. No recorded blobs, no model checkpoints, the
+# inputs come from the seeded PRNG.
 task test_positron_properties, "Test workspace/positron property suites":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/positron/tests/properties"):
-      runCmd(cmd)
-
-task test_positron_naive, "Test workspace/positron naive reference tier":
-  withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/positron/tests/naive"):
       runCmd(cmd)
     for cmd in getTestCommands("workspace/positron/tests/ceramic"):
       runCmd(cmd)

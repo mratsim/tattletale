@@ -42,7 +42,7 @@
 ##
 ## | provenance | source                                                                                                                                                            |
 ## | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the naive WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/naive/naive_gdn.nim, the same cumulogdecay, pairdecay, solve and carry formulas at fp32 |
+## | schedule   | the fp64 WY/UT reference `gdnPrefillChunked` in workspace/positron/tests/properties/refs.nim, the same cumulogdecay, pairdecay, solve and carry formulas at fp32 |
 
 ##
 ## Implementation shape:

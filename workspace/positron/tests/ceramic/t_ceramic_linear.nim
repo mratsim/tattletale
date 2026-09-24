@@ -85,7 +85,7 @@ proc naiveLinearF32(dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[float6
   ## Independent host reference at fp32 arithmetic over the exact widenings.
   ## This is the exact-dot form.
   ##
-  ## - the bf16-rounded output form lives in `naiveDenseLinear` (naive_layer_ops)
+  ## - the bf16-rounded output form lives in `denseLinear` (tests/properties/refs.nim)
   ## - both forms are judged against the kernel, each under its own band
   result = newSeq[float64](M * N)
   for m in 0 ..< M:
