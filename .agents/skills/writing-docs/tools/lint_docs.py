@@ -172,6 +172,11 @@ CONTRACT_MARKER_RE = re.compile(
 # Exported Nim declarations the missing-doc rule covers (conservative shapes).
 NIM_EXPORTED_CALLABLE_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter)\s+(\w+)\*(?:\s*\[|\s*\()")
+# Proc, func, and template definition lines whose name carries an Of suffix.
+# Call sites and ordinary prose never match, the keyword anchors the shape.
+OF_SUFFIX_DECL_RE = re.compile(
+    r"^\s*(?:proc|func|template)\s+\*?([A-Za-z_]\w*)")
+
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
 
@@ -357,6 +362,12 @@ BANNED = [
      r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
      None, "lawyer and justification prose is banned, state the contract "
            "(what the surface exports, not why the choice is defensible)"),
+    (r"\bfam\b",
+     lambda l: bool(re.search(r"gmmfamily|gmmbf16|gmmf16|gmmwiden", l)),
+     "name the type directly (the GmmFamily value surface keeps its names)"),
+    (r"\bfrag ordering\b|\bplane row\b|\bband[- ]model\b"
+     r"|\bcomposition tier\b|\bband width\b",
+     None, "name the thing directly, the quantity, the element, or the width in code terms"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
@@ -456,6 +467,8 @@ RULES = {
                               "a whole-line # comment built from dashes (a layout-position marker; keep the title line, drop the rule)"),
     "try-block": Rule("try-block", True,
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
+    "decl-of-suffix": Rule("decl-of-suffix", True,
+                           "a proc, func or template name ending in Of, name the thing directly"),
 }
 
 
@@ -1632,8 +1645,15 @@ def nim_structure_checks(path, text, header_nos, findings):
       ## field docs inside the body, a ## block directly above the
       declaration is banned (doc-above-type)"""
     lines = text.splitlines()
+    blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(lines):
         line = raw.rstrip()
+        ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
+        if ofm and ofm.group(1).endswith("Of"):
+            findings.append(Finding(
+                path, i + 1, "decl-of-suffix",
+                "the name %s carries an Of suffix, name the thing directly "
+                "(the suffix annotates a call site the compiler derives)" % ofm.group(1)))
         m = NIM_EXPORTED_CALLABLE_RE.match(line)
         above_banned = i > 0 and lines[i - 1].strip().startswith("##") \
             and i not in header_nos
