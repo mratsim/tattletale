@@ -39,6 +39,16 @@ type Epilogue* = concept
 
 func biasView*(T: typedesc, R, C: static int,
                buf: ptr UncheckedArray[T]): TensorView[T, (Int[R], Int[C]), (Int[0], Int[1])] =
+  ## A broadcast-ready (R, C) view of a per-column bias row.
+  ##
+  ## Expected input:
+  ##   - buf, an R·C element buffer, the bias values laid out columnwise,
+  ##     C consecutive elements per row, R rows
+  ##
+  ## Output:
+  ##   - a (R, C) row-strided view, strides (0, 1), every row aliasing
+  ##     the same C bias values, the tile epilogue's add reads it like
+  ##     the accumulator's own tile
   make_view(buf, (R, C), (0, 1))
 
 func cView*(T: typedesc, R, C: static int,
@@ -57,7 +67,7 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   ## D = AB, per element.
-  const S = toIntVal(size(tmp))
+  const S = size(tmp).toIntVal()
   for i in 0 ..< S:
     tmp(i) = AB(i)
 
@@ -68,7 +78,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ## D = AB, per owned slot.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -86,7 +96,7 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), per element.
-  const S = toIntVal(size(tmp))
+  const S = size(tmp).toIntVal()
   for i in 0 ..< S:
     tmp(i) = max(AB(i), T(0))
 
@@ -97,7 +107,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ## D = max(0, AB), per owned slot.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -125,7 +135,7 @@ func apply*[T, Sh, StAB, StC, StR](
   ## D = α·AB + β·C, per element.
   ## β = 0 skips reading C, saving memory bandwidth
   ## α = 1 skips the multiply.
-  const S = toIntVal(size(tmp))
+  const S = size(tmp).toIntVal()
   if op.beta == T(0):
     if op.alpha == T(1):
       for i in 0 ..< S:
@@ -147,7 +157,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StC](
   ## D = α·AB + β·C, per owned slot, the C view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   if op.beta == T(0):
     if op.alpha == T(1):
       for n in 0 ..< rowTiles:
@@ -190,9 +200,11 @@ type EpiAXPBYStrided*[T] = object
   alpha*, beta*: T
   C*: StridedOperand[T]
 
-func initEpiAXPBY*[T](alpha, beta: T, C: ptr UncheckedArray[T],
-                      rsc, csc: int32): EpiAXPBYStrided[T] =
-  ## The runtime-strided form: C with explicit row/col strides (BLIS).
+func initEpiAXPBYStrided*[T](alpha, beta: T, C: ptr UncheckedArray[T], rsc, csc: int32): EpiAXPBYStrided[T] =
+  ## Returns the runtime-strided form's epilogue:
+  ## - C with explicit row/col strides (BLIS)
+  ## - the name distinguishes it from the layout-typed `initEpiAXPBY`,
+  ##   the two constructors return different epilogue types
   EpiAXPBYStrided[T](alpha: alpha, beta: beta,
                      C: StridedOperand[T](data: C, rsc: rsc, csc: csc, base: 0))
 
@@ -200,16 +212,35 @@ func apply*[T; R, C: static int; A: static MmaAtom](
     op: EpiAXPBYStrided[T],
     tmp: var RtLeft[T, R, C, A],
     AB: RtLeft[T, R, C, A]) {.inline.} =
-  ## D = α·AB + β·C, per owned slot. C is read at (row, col) with the
-  ## runtime strides (rsc, csc); β = 0 skips the read.
+  ## D = α·AB + β·C, per owned slot, the same fast-path ladder as the
+  ## layout-typed apply above:
+  ##
+  ## - β = 0 skips the C read, α = 1 also skips the multiply
+  ## - α = 1 skips the multiply
+  ## - C is read at (row, col) with the runtime strides (rsc, csc)
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   if op.beta == T(0):
+    if op.alpha == T(1):
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = AB.frags[n][m].frag[v]
+    else:
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+  elif op.alpha == T(1):
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:
+        let cOff = op.C.base + int32(n * A.getM()) * op.C.rsc +
+                                int32(m * A.getN()) * op.C.csc
         for v in 0 ..< vpt:
-          tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+          tmp.frags[n][m].frag[v] =
+            AB.frags[n][m].frag[v] +
+            op.beta * op.C.data[int(cOff) + int(v) * int(op.C.csc)]
   else:
     for n in 0 ..< rowTiles:
       for m in 0 ..< colTiles:
@@ -219,6 +250,47 @@ func apply*[T; R, C: static int; A: static MmaAtom](
           tmp.frags[n][m].frag[v] =
             op.alpha * AB.frags[n][m].frag[v] +
             op.beta * op.C.data[int(cOff) + int(v) * int(op.C.csc)]
+
+func apply*[T; R, C: static int; A: static MmaAtom](
+    op: EpiAXPBYStrided[T],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    CReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = α·AB + β·CReg, per owned slot, the C operand a register tile.
+  ##
+  ## Contract:
+  ##   - C arrives bounded-loaded, the boundary loader already applied
+  ##     the runtime strides, so op.C is never dereferenced
+  ##   - out-of-range lanes hold the zero fill
+  ##   - β = 0 skips the C term (the caller may skip the C load entirely),
+  ##     α = 1 skips the multiply
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.valuesPerThread(opC).toIntVal()
+  if op.beta == T(0):
+    if op.alpha == T(1):
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = AB.frags[n][m].frag[v]
+    else:
+      for n in 0 ..< rowTiles:
+        for m in 0 ..< colTiles:
+          for v in 0 ..< vpt:
+            tmp.frags[n][m].frag[v] = op.alpha * AB.frags[n][m].frag[v]
+  elif op.alpha == T(1):
+    for n in 0 ..< rowTiles:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          tmp.frags[n][m].frag[v] =
+            AB.frags[n][m].frag[v] + op.beta * CReg.frags[n][m].frag[v]
+  else:
+    for n in 0 ..< rowTiles:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          tmp.frags[n][m].frag[v] =
+            op.alpha * AB.frags[n][m].frag[v] +
+            op.beta * CReg.frags[n][m].frag[v]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiAddBias
@@ -236,7 +308,7 @@ func apply*[T, Sh, StAB, StB, StR](
     tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, the bias a column vector broadcast over the tile rows.
-  const S = toIntVal(size(tmp))
+  const S = size(tmp).toIntVal()
   for i in 0 ..< S:
     tmp(i) = AB(i) + op.bias_gmem(i)
 
@@ -247,12 +319,32 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ## D = AB + bias, per owned slot, the bias view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         tmp.frags[n][m].frag[v] =
           AB.frags[n][m].frag[v] + op.bias_gmem[n, m, v]
+
+func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
+    op: EpiAddBias[T, Sh, StB],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    BiasReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = AB + BiasReg, per owned slot, the bias a bounded register tile.
+  ##
+  ## Contract:
+  ##   - the bias_gmem view stays unsharded and never dereferenced
+  ##   - out-of-range columns carry the zero fill, so the add is inert
+  ##     on the lanes the masked store drops
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.valuesPerThread(opC).toIntVal()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        tmp.frags[n][m].frag[v] =
+          AB.frags[n][m].frag[v] + BiasReg.frags[n][m].frag[v]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  EpiLinearBiasReLU
@@ -271,7 +363,7 @@ func apply*[T, Sh, StAB, StB, StR](
     tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB + bias), the bias a column vector broadcast over the tile rows.
-  const S = toIntVal(size(tmp))
+  const S = size(tmp).toIntVal()
   for i in 0 ..< S:
     tmp(i) = max(AB(i) + op.bias_gmem(i), T(0))
 
@@ -282,9 +374,24 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ## D = max(0, AB + bias), per owned slot, the bias view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = toIntVal(A.valuesPerThread(opC))
+  const vpt = A.valuesPerThread(opC).toIntVal()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
         tmp.frags[n][m].frag[v] =
           max(AB.frags[n][m].frag[v] + op.bias_gmem[n, m, v], T(0))
+
+func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
+    op: EpiLinearBiasReLU[T, Sh, StB],
+    tmp: var RtLeft[T, R, C, A],
+    AB: RtLeft[T, R, C, A],
+    BiasReg: RtLeft[T, R, C, A]) {.inline.} =
+  ## D = max(0, AB + BiasReg), per owned slot, the bias a bounded register tile with the EpiAddBias register shard contract.
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.valuesPerThread(opC).toIntVal()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        tmp.frags[n][m].frag[v] =
+          max(AB.frags[n][m].frag[v] + BiasReg.frags[n][m].frag[v], T(0))

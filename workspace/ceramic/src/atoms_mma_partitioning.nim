@@ -106,6 +106,11 @@ func threadCount*(tma: static TiledMma): static int {.inline.} =
 #    - split the unit into (atom block, atom positions)
 #    - compose the atom's (T, V) layout into the atom block
 
+#  thrfrg_A/B/C tile with compile-time hardware facts, the atom geometry
+#  and the thread layout. makeIntTuple promotes the tilers' int leaves.
+#  The divide propagates the static shape, matching CuTe's static
+#  Tiler_MN{} (copy_atom.hpp tile2thrfrg, partitioner.hpp thrfrg).
+
 func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (M, K) A tensor:
   ## ((T, V), (ThrM, ThrK), (RepeatM, RepeatK)) → offset in the tile.
@@ -128,8 +133,8 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
       " but the partition's T-mode strides are not)"
   const unitM = thrM * atomM
   const unitK = thrK * atomK
-  let ur = zipped_divide(L, (unitM, unitK))
-  let ap = zipped_divide(ur.mode(0), (atomM, atomK))
+  let ur = zipped_divide(L, makeIntTuple((unitM, unitK)))
+  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomM, atomK)))
   let fragPart = compose(ap.mode(0), aLayout)
   make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
               (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
@@ -153,8 +158,8 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
       " but the partition's T-mode strides are not)"
   const unitN = thrN * atomN
   const unitK = thrK * atomK
-  let ur = zipped_divide(L, (unitN, unitK))
-  let ap = zipped_divide(ur.mode(0), (atomN, atomK))
+  let ur = zipped_divide(L, makeIntTuple((unitN, unitK)))
+  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomN, atomK)))
   let fragPart = compose(ap.mode(0), bLayout)
   make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
               (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
@@ -176,8 +181,8 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
       ") != atom M·N (" & $atomM & "·" & $atomN & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitN = thrN * atomN
-  let ur = zipped_divide(L, (unitM, unitN))
-  let ap = zipped_divide(ur.mode(0), (atomM, atomN))
+  let ur = zipped_divide(L, makeIntTuple((unitM, unitN)))
+  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomM, atomN)))
   let fragPart = compose(ap.mode(0), cLayout)
   make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
               (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))

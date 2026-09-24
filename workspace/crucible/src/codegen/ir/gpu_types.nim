@@ -276,7 +276,8 @@ type
 
   GpuSynchroBuiltinKind* = enum
     gbkNone,              ## Not a synchronization builtin
-    gbkThreadgroupBarrier ## Canonical `threadgroup_barrier()`
+    gbkThreadgroupBarrier ## Canonical `threadgroup_barrier()`, the threadgroup fence
+    gbkThreadgroupBarrierDevice ## Canonical `threadgroup_barrier_device()`, the device fence
 
   GpuReductionBuiltinKind* = enum
     gbkNone,              ## Not a reduction builtin
@@ -434,6 +435,7 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
 ## Canonical synchronization name -> IR kind, with the same catalog cross-check as the coordinate table.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
+  "threadgroup_barrier_device": gbkThreadgroupBarrierDevice,
 }.toTable()
 
 ## Canonical reduction intrinsic name -> IR kind, resolved once at the

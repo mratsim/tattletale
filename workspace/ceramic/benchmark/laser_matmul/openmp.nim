@@ -9,6 +9,7 @@
 # and https://github.com/nim-lang/Nim/issues/9366
 import random
 from strutils import toHex
+import macros
 
 var mangling_rng {.compileTime.} = initRand(0x1337DEADBEEF)
 var current_suffix {.compileTime.} = ""
@@ -382,7 +383,6 @@ template omp_taskloop*(
   for `index`{.inject.} in `||`(0, length-1, omp_annotation):
     block: body
 
-import macros
 macro omp_flush*(variables: varargs[untyped]): untyped =
   var listvars = "("
   for i, variable in variables:

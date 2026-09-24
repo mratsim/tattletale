@@ -105,3 +105,72 @@ func exp2*[T; R, C: static int; A: static MmaAtom](
     for n in 0 ..< rowTiles:
       for vptI in 0 ..< vpt:
         dst.frags[m][n].frag[vptI] = exp2(src.frags[m][n].frag[vptI])
+
+# ═════════════════════════════════════════════════════════════════════════
+#  RNE narrowing (the element-dtype round the maps compose from)
+# ═════════════════════════════════════════════════════════════════════════
+
+proc roundToNearestEven*[T](x: float32): T {.device.} =
+  ## One round-to-nearest-even of an f32 value into the dtype `T`,
+  ## the scalar counterpart of the mma epilogue's single-round contract.
+  ##
+  ## - a dtype at or above fp32's precision passes through unrounded,
+  ##   the value is already its own RNE image
+  ## - a narrower dtype needs its own `when` branch here, the compile-time
+  ##   miss is an error, never a silent identity
+  when T is bfloat16:
+    x.bfloat16
+  elif T is float16:
+    x.to(float16)
+  elif T is float32:
+    x
+  else:
+    {.error: "roundToNearestEven: dtype " & $T & " needs its own RNE variant".}
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Tile element maps
+# ═════════════════════════════════════════════════════════════════════════
+
+template map*[TOut, TIn; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src: RtLeft[TIn, R, C, A],
+    f: untyped): untyped =
+  ## dst[i] = f(src[i]) per element, over the tile's whole fragment walk.
+  ##
+  ## Contract:
+  ## - the body reads the source element as `x`
+  ##
+  ## Example, RNE round-and-widen back to f32 over the score tile:
+  ##
+  ##   scores.map(scores, roundToNearestEven[El](x).float32)  # the softmax input round
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        let x {.inject.} = src.frags[n][m].frag[v]
+        dst.frags[n][m].frag[v] = f
+
+template map2*[TOut, TIn; R, C: static int; A: static MmaAtom](
+    dst: var RtLeft[TOut, R, C, A],
+    src1, src2: RtLeft[TIn, R, C, A],
+    f: untyped): untyped =
+  ## dst[i] = f(src1[i], src2[i]) per element, over the tile's whole fragment walk.
+  ##
+  ## Contract:
+  ## - the body reads the source elements as `x` and `y`
+  ## - both operands share one element type and geometry
+  ##
+  ## Example, KDA chunk-scan pairwise decay per key channel:
+  ##
+  ##   pdT.map2(cumulogdecayT, cumulogdecayS, exp2((x - y) * Log2e))  # the difference form
+  const rowTiles = R div A.getM()
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  for n in 0 ..< rowTiles:
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        let x {.inject.} = src1.frags[n][m].frag[v]
+        let y {.inject.} = src2.frags[n][m].frag[v]
+        dst.frags[n][m].frag[v] = f

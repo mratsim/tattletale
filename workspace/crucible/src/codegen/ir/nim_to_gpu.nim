@@ -23,7 +23,8 @@ proc unwrapSingleStmt(n: NimNode): NimNode =
     n
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[]): GpuAst
+               staticValueMask: seq[int] = @[],
+               deadStaticMask: seq[int] = @[]): GpuAst
 
 proc isTypeDescNode(n: NimNode): bool =
   ## True when the node is a TYPE used as a value: a generic type parameter
@@ -36,10 +37,34 @@ proc isTypeDescNode(n: NimNode): bool =
   ## never has `ntyTypeDesc` type, so it is never erased.
   result = n.getTypeInst().typeKind == ntyTypeDesc
 
+proc bodyReferencesAny(body: NimNode, names: seq[string]): bool =
+  ## True when any of the given parameter names survives as a symbol reference in the body.
+  ##
+  ## On a sem-instantiated body a surviving reference is a genuine value read in the emitted code:
+  ## - sem reduces compile-time uses of `static` params into bound values
+  ## - matching is by name and errs on the side of keeping the parameter, so a shadowing
+  ##   local with the same name counts as a reference
+  if body.kind == nnkSym and body.repr in names:
+    return true
+  for child in body:
+    if bodyReferencesAny(child, names):
+      return true
+
 proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute], staticParamPositions: var seq[int],
-                         staticValueMask: seq[int] = @[]): seq[GpuParam] =
+                         staticValueMask: seq[int] = @[],
+                         deadStaticMask: seq[int] = @[]): seq[GpuParam] =
   ## Returns all parameters of the given procedure from the `params` node
   ## of type `nnkFormalParams`.
+  ## `staticValueMask` lists the indices of `static T` value parameters
+  ## in the ORIGINAL definition (nnkStaticTy)
+  ## - the instantiated type node of a static value param IS the value,
+  ##   so the mask is not re-derivable at the call site
+  ## - threaded from the generic-instantiation scan
+  ## `deadStaticMask` lists the indices of `static T` scalar value parameters whose
+  ## sem-instantiated body has no surviving reference. Sem reduces every use into
+  ## the bound value (when-resolution, static expressions, forwarded call arguments),
+  ## so the parameter is compile-time only and, like the record/tuple case below,
+  ## carries no CUDA value.
   ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
   ## no runtime value in the emitted GPU source and the caller side erases the
   ## matching argument (see the nnkCall handler), keeping call/callee arity
@@ -65,8 +90,13 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
     # instantiated type node IS the value (e.g. `static MiniAtom` ->
     # `MiniAtom(dtype: ..., k: ...)`), which resolveType cannot lower (record
     # fields may hold enums). Scalar statics (`static int` etc.) lower as
-    # literals and are NOT dropped — they may be referenced in the body.
-    if curIdx in staticValueMask and param[typIdx].kind in {nnkObjConstr, nnkTupleConstr, nnkBracket}:
+    # literals and are kept unless the instantiated body has no surviving reference
+    # (`deadStaticMask`). Sem reduces every use into a bound value, so the parameter
+    # is dead in the emitted code. A surviving reference (a value read in emitted code)
+    # keeps the runtime parameter.
+    if curIdx in staticValueMask and
+        (param[typIdx].kind in {nnkObjConstr, nnkTupleConstr, nnkBracket} or
+         curIdx in deadStaticMask):
       # static record/tuple/array VALUE param — compile-time only, no CUDA value.
       # The mask comes from the ORIGINAL proc definition (nnkStaticTy): the
       # instantiated type node of a RUNTIME tuple-typed param is also an
@@ -96,14 +126,16 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
 
 proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
     params: NimNode, attrs: set[GpuAttribute],
-    staticValueMask: seq[int] = @[]): GpuProcSignature =
+    staticValueMask: seq[int] = @[],
+    deadStaticMask: seq[int] = @[]): GpuProcSignature =
   ## Creates a `GpuProcSignature` from the given `params` node of type `nnkFormalParams`
   ##
   ## NOTE: This procedure is only called from generically instantiated procs. Therefore,
   ## we shouldn't need to worry about getting `gtInvalid` return types here.
   var staticParamPositions: seq[int]
   GpuProcSignature(
-    params: ctx.parseProcParameters(reg, params, attrs, staticParamPositions, staticValueMask),
+    params: ctx.parseProcParameters(reg, params, attrs, staticParamPositions, staticValueMask,
+                                    deadStaticMask),
     retType: resolveProcReturnType(reg, params),
     staticParamPositions: staticParamPositions
   )
@@ -215,16 +247,43 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
       let p = inst.params[i]
       let numParams = p.len - 2
       let typIdx = p.len - 2
-      if p[typIdx].kind == nnkCommand and p[typIdx].len > 0 and p[typIdx][0].repr == "static":
+      # instantiation keeps the declaration spelling:
+      #   `static int` as nnkCommand, `static[int]` as nnkBracketExpr, both accepted
+      if p[typIdx].kind in {nnkCommand, nnkBracketExpr} and
+          p[typIdx].len > 0 and p[typIdx][0].repr == "static":
         for j in 0 ..< numParams:
           staticValueMask.add(curIdx + j)
       curIdx += numParams
 
   inst.params = sig.params # copy over the parameters
 
+  # A `static` scalar value param whose instantiated body has no surviving reference
+  # is compile-time only. Sem reduces every use into the bound value, so the runtime
+  # parameter is dead. The walk is per use in the instantiated body, and a param
+  # with a surviving value read keeps its runtime parameter.
+  var deadStaticMask: seq[int]
+  block:
+    var curIdx = 0
+    for i in 1 ..< inst.params.len:
+      let p = inst.params[i]
+      let numParams = p.len - 2
+      let typIdx = p.len - 2
+      if curIdx in staticValueMask and
+          p[typIdx].kind notin {nnkObjConstr, nnkTupleConstr, nnkBracket}:
+        # Multi-name IdentDefs (`a, b: static int`) drop as a whole.
+        # The group is dead only when NO name is referenced.
+        var names: seq[string]
+        for nameIdx in 0 ..< typIdx:
+          names.add p[nameIdx].repr
+        if not bodyReferencesAny(inst.body, names):
+          for j in 0 ..< numParams:
+            deadStaticMask.add(curIdx + j)
+      curIdx += numParams
+
   # turn the signature into a `GpuProcSignature`
   let attrs = collectProcAttributes(inst.pragma)
-  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs, staticValueMask)
+  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs, staticValueMask,
+                                                deadStaticMask)
   if name in ctx.processedProcs:
     return
   else:
@@ -266,7 +325,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
-  let fn = ctx.toGpuAst(reg, inst, staticValueMask)
+  let fn = ctx.toGpuAst(reg, inst, staticValueMask, deadStaticMask)
   if fn.kind == gpuDiscard:
     doAssert inst.isBuiltIn()
     return
@@ -326,8 +385,34 @@ proc buildEmitStmt(ctx: var GpuContext, reg: var TypeRegistry, emitArg: NimNode)
     else:
       result.parts.add GpuEmitPart(kind: peExpr, expr: ctx.toGpuAst(reg, part))
 
+proc toConstDefName(ctx: var GpuContext, identNode: NimNode): GpuAst =
+  ## Constexpr identifier for a `nnkConstDef`'s own name
+  ## - `toGpuAst` inlines a `nskConst` symbol to its value at reference sites
+  ## - a definition's own name must never inline into itself
+  ## - building it here keeps the `nskConst` branch on reference sites
+  if identNode.kind in {nnkIdent, nnkOpenSymChoice}:
+    result = newGpuIdent()
+    result.symbol.name = identNode.repr
+    return
+  let sanitized = identNode.repr.multiReplace(("`", "_"))
+  let s = sanitized & "_" & identNode.signatureHash()
+  if s notin ctx.sigTab:
+    result = newGpuIdent()
+    result.symbol.name = sanitized
+    result.symbol.iSym = s
+    if result.symbol.name == "_":
+      result.symbol.name = "underscore"
+    elif result.symbol.name.startsWith("tmpTuple_"):
+      result.symbol.name = "tmpTuple_" & $ctx.genSymCount
+      result.symbol.iSym = result.symbol.name & "_" & identNode.signatureHash()
+      inc ctx.genSymCount
+    ctx.sigTab[s] = result
+  else:
+    result = ctx.sigTab[s]
+
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[]): GpuAst =
+               staticValueMask: seq[int] = @[],
+               deadStaticMask: seq[int] = @[]): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
@@ -365,7 +450,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ctx.currentScopeSyms = ctx.scopeSymsStack.pop()
     ctx.currentScope = prevScopeBlk
   of nnkBlockExpr:
-    ## XXX: For CUDA just a block?
     let blockLabel = if node[0].kind in {nnkSym, nnkIdent}: node[0].strVal
                      elif node[0].kind == nnkEmpty: ""
                      else: error "Unexpected node in block label field: " & $node.treerepr
@@ -392,7 +476,6 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     if exprs.len == 1:
       result = ctx.toGpuAst(reg, exprs[0])
     else:
-      ## XXX: For CUDA just a block?
       result = GpuAst(kind: gpuBlock, isExpr: true,
                       )
       let prevScopeStmtListExpr = ctx.currentScope
@@ -445,7 +528,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       # Process parameters
       var staticParamPositions: seq[int]
       result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamPositions,
-                                               staticValueMask)
+                                               staticValueMask, deadStaticMask)
       result.pBody = ctx.toGpuAst(reg, node.body)
       # Validation and transform passes run via ctx.runPasses()
       # Add to table of known functions (both old and new)
@@ -801,12 +884,18 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     # symbol `GpuAst` (of kind `gpuIdent`), which is set in the caller of this call.
     # For example in `nnkCall` nodes returning the value from the table automatically means the
     # `symbolKind` is local / function argument etc.
-    # Resolve `const _ = X()` inline: the constant value lives outside the cuda: block
-    # so emitting a GPU identifier would reference an undeclared name.
-    if sanitized == "_" and symKind(node) == nskConst:
-      # getImpl returns nnkConstDef. [2] is the value expression (e.g. X_marker())
-      # Using the whole def would recurse since the name child is also `_`.
-      return ctx.toGpuAst(reg, getImpl(node)[2])
+    # A constant reference resolves to its value inline. A GPU identifier would
+    # name an undeclared global, device kernel globals only carry the device
+    # proc's own const sections lifted from the body. The value expression is
+    # getImpl(node)[2]. Recursing on the whole def would loop, the name child
+    # is also the ident.
+    # Const-def names go through toConstDefName directly, so this branch
+    # sees reference sites only (a definition's own ident is never inlined).
+    if symKind(node) == nskConst:
+      let impl = getImpl(node)
+      let nameIdent = if impl[0].kind == nnkPragmaExpr: impl[0][0] else: impl[0]
+      if node.lineinfo != nameIdent.lineinfo:
+        return ctx.toGpuAst(reg, impl[2])
     if s notin ctx.sigTab:
       result = newGpuIdent()
       result.symbol.name = sanitized
@@ -1048,7 +1137,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkConstDef:
     let identNode = if node[0].kind == nnkPragmaExpr: node[0][0] else: node[0]
     result = GpuAst(kind: gpuConstexpr,
-                    cIdent: ctx.toGpuAst(reg, identNode),
+                    cIdent: ctx.toConstDefName(identNode),
                     cValue: ctx.toGpuAst(reg, node[2]),
                     cType: resolveType(reg, node))
     result.cIdent.symbol.typ = result.cType # also store the type in the symbol, for easier lookup later
@@ -1098,6 +1187,5 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkWhenStmt:
     error "We shouldn't be seeing a `when` statement after sem check of the Nim code."
   else:
-    echo "Unhandled node kind in toGpuAst: ", node.kind
     error "Unhandled node kind in toGpuAst: " & $node.treerepr
     result = GpuAst(kind: gpuBlock)

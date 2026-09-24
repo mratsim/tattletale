@@ -59,6 +59,7 @@ func getReductionTree*(A: static MmaAtom): ReductionTree =
 # ═════════════════════════════════════════════════════════════════════════
 #  The row-reduction family
 # ═════════════════════════════════════════════════════════════════════════
+
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
     dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A]) =
@@ -326,3 +327,33 @@ proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
   laneMax = max(laneMax, simdShuffleDown(laneMax, 1'u32))
   laneMax = simdShuffle(laneMax, 0'u32)
   result = (laneMax + 15'u32) div 16'u32
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The whole-simdgroup reduce
+# ═════════════════════════════════════════════════════════════════════════
+
+template warpReduce*[V](x: var V, reductionOp: untyped): V =
+  ## Whole-32-lane simdgroup reduction of `x`, the reduced value on every lane.
+  ##
+  ## Contract:
+  ## - `x` reduces in place, the caller's value ends up the reduced value,
+  ##   no lane-local copy is taken
+  ## - 5 reductionOp steps over `simdShuffleDown` deltas (16, 8, 4, 2, 1), one broadcast `simdShuffle` from lane 0
+  ## - the reductionOp's operand order fixes the result's bit pattern
+  ##
+  ## Example, a tile-wide score max over the router's softmax:
+  ##
+  ##   warpReduce(lm, max)  # the lane-0-reduced max on every lane
+  ##
+  ## and a cross-lane sum of the exponentials:
+  ##
+  ##   warpReduce(ls, `+`)  # the lane-0-reduced sum on every lane
+  x = reductionOp(x, simdShuffleDown(x, 16'u32))
+  x = reductionOp(x, simdShuffleDown(x, 8'u32))
+  x = reductionOp(x, simdShuffleDown(x, 4'u32))
+  x = reductionOp(x, simdShuffleDown(x, 2'u32))
+  x = reductionOp(x, simdShuffleDown(x, 1'u32))
+  # the lane-0 broadcast lands back in `x`, the contract's "reduced value
+  # on every lane", the template's value the same broadcast
+  x = simdShuffle(x, 0'u32)
+  x

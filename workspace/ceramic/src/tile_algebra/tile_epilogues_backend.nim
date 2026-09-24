@@ -23,7 +23,7 @@ import ./tiles
 template shardShape*[R, C: static int; A: static MmaAtom](): untyped =
   ## Per-lane shape of an epilogue operand view: (rowTiles, colTiles, vpt).
   (Int[R div A.getM()](), Int[C div A.getN()](),
-   Int[toIntVal(A.valuesPerThread(opC))]())
+   Int[A.valuesPerThread(opC).toIntVal()]())
 
 template shardStrides*[R, C: static int; A: static MmaAtom](
     strideRow, strideCol: static int): untyped =
@@ -45,13 +45,14 @@ template shardView*[T; R, C: static int; A: static MmaAtom](
                 uint32(cell div A.getM()) * uint32(strideCol)
   make_view(buf +% baseOff,
             make_layout((Int[R div A.getM()](), Int[C div A.getN()](),
-                         Int[toIntVal(A.valuesPerThread(opC))]()),
+                         Int[A.valuesPerThread(opC).toIntVal()]()),
                         (Int[A.getM() * strideRow](), Int[A.getN() * strideCol](),
                          Int[strideCol]())))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Type introspection helpers
 # ═════════════════════════════════════════════════════════════════════════
+
 func isTensorViewType(n: NimNode): bool =
   n.kind == nnkBracketExpr and n[0].eqIdent("TensorView")
 
@@ -62,7 +63,7 @@ func fieldName(field: NimNode): NimNode =
   ## The plain ident of an IdentDefs name (strips the `*` postfix).
   if field.kind == nnkPostfix: field[1] else: field
 
-func intOf(node: NimNode): int =
+func intWidth(node: NimNode): int =
   if node.kind == nnkBracketExpr and node[0].eqIdent("Int"):
     node[1].intVal
   else:
@@ -131,8 +132,8 @@ macro shard*(epi: typed, buf: untyped, origin: untyped, tile: typed): untyped =
     if isTensorViewType(f[1]):
       let shNode = f[1][2]   # (Int[R], Int[C])
       let stNode = f[1][3]   # (Int[strideRow], Int[strideCol])
-      let strideRow = intOf(stNode[0])
-      let strideCol = intOf(stNode[1])
+      let strideRow = intWidth(stNode[0])
+      let strideCol = intWidth(stNode[1])
       let newSh = newCall(newTree(nnkBracketExpr, bindSym"shardShape", R, C, A))
       let newSt = newCall(newTree(nnkBracketExpr, bindSym"shardStrides", R, C, A),
                           newLit(strideRow), newLit(strideCol))
@@ -146,8 +147,8 @@ macro shard*(epi: typed, buf: untyped, origin: untyped, tile: typed): untyped =
   for f in operands:
     if isTensorViewType(f[1]):
       let stNode = f[1][3]
-      let strideRow = intOf(stNode[0])
-      let strideCol = intOf(stNode[1])
+      let strideRow = intWidth(stNode[0])
+      let strideCol = intWidth(stNode[1])
       let view = newCall(newTree(nnkBracketExpr, bindSym"shardView", T, R, C, A),
                          buf, newLit(strideRow), newLit(strideCol), origin)
       obj.add newTree(nnkExprColonExpr, f[0], view)

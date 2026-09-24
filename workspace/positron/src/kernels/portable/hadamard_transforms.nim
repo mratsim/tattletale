@@ -18,9 +18,11 @@ import
   std/math,
   workspace/libtorch as F
 
+from ../ceramic/math_consts import InvSqrt128
+
 const
   HADAMARD_DIM* = 128
-  INV_SQRT_128* = 0.088388347648'f32  # 1/sqrt(128)
+  INV_SQRT_128* = InvSqrt128  # 1/sqrt(128), the shared math_consts value
 
 # ─── Core butterfly ────────────────────────────────────────────────
 

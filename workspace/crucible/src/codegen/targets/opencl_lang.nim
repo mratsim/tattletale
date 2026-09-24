@@ -419,6 +419,9 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # expands to the canonical call, so only this kind reaches the IR.
       # OpenCL spells it `barrier(CLK_LOCAL_MEM_FENCE)`.
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
+    of gbkThreadgroupBarrierDevice:
+      # Global fence bit orders device-address-space accesses.
+      result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:

@@ -12,6 +12,7 @@ import ../layout_indexing
 import ../tensors
 import ../ptr_arithmetic
 import ./tile_config
+import workspace/crucible
 
 export tile_config
 
@@ -65,6 +66,34 @@ template rv*(T: typedesc, R, C: static int, A: untyped = getTileConfig(float32, 
   Tensor[T,
          (Int[R div A.getM()], Int[A.getVpt()]),
          (Int[A.getVpt()], Int[1])]
+
+# ═════════════════════════════════════════════════════════════════════════
+#  The single-scalar slots
+# ═════════════════════════════════════════════════════════════════════════
+
+func laneScalar*[T; R, C: static int; A: static MmaAtom](
+    tile: RtLeft[T, R, C, A]): T =
+  ## Returns the single-value slot of a tile, `tile.frags[0][0].frag[0]`.
+  ##
+  ## Contract:
+  ## - the tile's one useful element carries the (0, 0) fragment of every lane
+  ## - serves the v operand's scalar read and one-element broadcast loads
+  ##
+  ## | provenance | source                                                                                                     |
+  ## | ---------- | ---------------------------------------------------------------------------------------------------------- |
+  ## | rv slots   | ThunderKittens include/types/register/rv.cuh:83-86, the register vector's operator[] into data[idx][0]     |
+  ## | rt slots   | ThunderKittens include/types/register/rt.cuh:104, the register tile's tiles[height][width] subtile storage |
+  tile.frags[0][0].frag[0]
+
+func rowScalar*[T; rowTiles, vpt: static int](
+    vec: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
+  ## Returns the calling lane's row-0 slot of the row-reduction col-vec,
+  ## `vec.data[0]`, the scalar its fragment row just reduced.
+  ##
+  ## | provenance | source                                                                                                 |
+  ## | ---------- | ------------------------------------------------------------------------------------------------------ |
+  ## | rv slots   | ThunderKittens include/types/register/rv.cuh:83-86, the register vector's operator[] into data[idx][0] |
+  vec.data[0]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  GlView: Global Views / Data Descriptors

@@ -79,7 +79,6 @@ func testerCmd(path: string; extraFlags = ""; compiler = "nim c"): string =
     &" --outdir:build/tests --nimcache:nimcache/tests " &
     path
 
-
 func downloaderCmd(path: string): string =
   let filename = path.extractFilename()
   return
@@ -546,6 +545,14 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 
+task test_positron_properties, "Test workspace/positron property suites":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/positron/tests/properties"):
+      runCmd(cmd)
+    for cmd in getTestCommands("workspace/positron/tests/ceramic"):
+      runCmd(cmd)
+
+
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/nvrtc"):
@@ -699,3 +706,6 @@ for zstdSource in ZstdSources:
 task hooks_setup, "Activate the pre-commit linter hooks for this clone (core.hooksPath = .githooks)":
   exec "git config core.hooksPath .githooks"
   echo "hooks active: git config core.hooksPath .githooks"
+
+task lint_tiles_report, "Tile linter report mode":
+  exec "(python3 .agents/skills/writing-docs/tools/lint_tiles.py --stats workspace/positron/src/kernels workspace/positron/src/mega_kernels workspace/ceramic/src; :)"

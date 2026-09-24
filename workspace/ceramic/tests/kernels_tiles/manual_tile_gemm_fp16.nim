@@ -59,8 +59,11 @@ proc checkGemm(engine: var auto; kernel: string; M, N, K: int) =
   # The K-padding floor is 16: a K = 0 shape still uploads non-empty
   # A and B buffers (the harness rejects empty args).
   let Kp = max(((K + 15) div 16) * 16, 16)
-  # Guard: the kernel's K-loop steps 16-wide k-blocks, so K must stay a multiple
-  # of 16 (a non-divisible dim would silently truncate the accumulation).
+  # The K-loop is ragged-native, it ceil's to tileK (16) and zero-fills
+  # the K tail, so a K that is not a multiple of 16 accumulates fully.
+  # The test still pads Kp to a 16 multiple because the upload harness
+  # takes whole tiles and the K = 0 shape needs a non-empty buffer, see
+  # the K-padding floor above.
   doAssert Kp mod 16 == 0
   var Ah = newSeq[uint16](Mp * Kp)
   var Bh = newSeq[uint16](Kp * Np)

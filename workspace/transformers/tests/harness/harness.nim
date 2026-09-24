@@ -13,7 +13,7 @@
 ## - inputs, the per-stage error-model allowance and the activation
 ##   ulp datatype of the measured side
 ## - no tuned constants, no serialized allowance
-## The KL allowance follows the perturbation bound KL(p||q) <= 0.5 delta^2.
+## The KL allowance is the perturbation bound KL(p||q) <= 0.5 delta^2.
 ## Cross-model equivalence comparisons never route through the allowances,
 ## their epsilon is grounded by measurement.
 
@@ -38,8 +38,8 @@ const
 
   QuantileProbs = [0.01'f64, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
     ## Fixed quantile probabilities, storage and comparison use exact
-    ## order statistics (index = floor(p * (n - 1)) of the ascending sort),
-    ## never interpolation by design.
+    ## order statistics:
+    ## - index = floor(p * (n - 1)) of the ascending sort, no interpolation
 
   QuantileCount = 2 + QuantileProbs.len
     ## Min, the 9 fixed quantiles, max.
@@ -64,8 +64,8 @@ const
     ## Tail threshold placement, the threshold is recorded max / 2^4.
 
   TailEdgeSteps = 4
-    ## Edge-band width of the tail instrument, the threshold-binade
-    ## ulp steps giving the honest drift allowance past the threshold.
+    ## Edge count of the tail instrument, measured in the threshold-binade
+    ## ulp steps that give the honest drift allowance past the threshold.
 
   UniformStatsSchema = "ttt-tf-004-uniform-stats"
     ## Format registry id of the uniform stats record frame, one
@@ -84,11 +84,12 @@ const
 #                                  Types
 # #######################################################################
 type
-  ## Rejection type of the recorded-side checks, every fault
-  ## detection raises exactly this type.
   HarnessCheckError* = object of CatchableError
-    ## A crash (parse error, I/O error, shape mismatch) propagates, it
-    ## fails the run instead of counting as a fault rejection.
+    ## Rejection type of the recorded-side checks, every fault
+    ## detection raises exactly this type:
+    ## - a crash (parse error, I/O error, shape mismatch) propagates,
+    ##   it fails the run
+    ## - a fault rejection is every other raise
 
   RoundingErrorSourceKind* = enum
     ## Error model of one recorded tensor, keyed by the policed fault class.
@@ -129,28 +130,26 @@ type
       ## Error model class of the recorded chain:
       ## - the allowances derive at check, the per-stage class constant
       ##   times the depth, never a serialized constant
-      ## - the allowance inputs, the top-32 logits, the KL and tail allowances
       ## - the path form takes the class as the assert's kind argument
       ## - the value form reads the record's own field
     ulpDatatype: UlpDatatype
       ## Ulp datatype of the recording and its decision allowances:
       ## - one unit = one representable-value step at the check magnitude
-      ## - bf16 over the dense families
-      ## - fp16 over the EXL3 chains
+      ## - bf16 over the dense families, fp16 over the EXL3 chains
       ## - the record's datatype when the key carries no name
 
 type
-  ## Uniform stats frame for one recorded fixture,
-  ## one entry per recorded tensor.
   StatsRecord = object
-    ## Uniform fingerprint of one recorded tensor.
+    ## Uniform stats frame for one recorded fixture, one entry
+    ## per recorded tensor.
     ##
+    ## Uniform fingerprint of one recorded tensor:
     ## - exact order statistics (min, the 9 fixed quantiles, max, f32)
     ## - soft binade histogram, the buckets keyed by the recorded
     ##   ulp datatype's pattern
-    ## - f64 mean absolute value and signed mean
-    ## - tail probability past the threshold (the recorded max / 2^4),
-    ##   with the recorded edge count as its band
+    ## - f64 mean absolute value and signed mean, tail probability past
+    ##   the threshold (the recorded max / 2^4) with the recorded edge
+    ##   count as its band
     ##
     ## Masked rows carry -Inf in the quantiles, -Inf compares -Inf
     ## equal to -Inf in the asserts.
@@ -222,8 +221,8 @@ proc fp16BitsFromF32(f: float32): uint16 =
   ## 13 bits zero, so the recovery rounds nothing at all.
   ##
   ## Contract:
-  ## - normals take the f32 exponent and the mantissa top 10 bits
-  ## - subnormals scale back onto the 2^-24 step ladder
+  ## - normals take the f32 exponent and the mantissa top 10 bits,
+  ##   subnormals scale back onto the 2^-24 step ladder
   ## - |f| past the fp16 overflow bound maps to the inf pattern
   ## - NaN never reaches the record paths, the non-finite scan raises first
   let u = cast[uint32](f)
@@ -277,7 +276,7 @@ proc distanceFp16(a, b: float32): int64 {.inline.} =
             orderedBits16(fp16BitsFromF32(b)).int64
     if d < 0: -d else: d
 
-proc binadeOf(v: float64): int =
+proc binadeIndex(v: float64): int =
   ## Binade index of a normal nonzero magnitude, with |v| in [2^e, 2^(e+1))
   ## reading binade e. Raises ValueError for zero and non-finite input.
   if v == 0.0 or classify(v) in {fcInf, fcNegInf, fcNaN}:
@@ -297,14 +296,15 @@ proc binadeStep(g: UlpDatatype, binade: int): float64 =
   pow(2.0, (binade - bits).float64)
 
 proc ulpStepAt(g: UlpDatatype, v: float64): float64 =
-  ## Width of one ulp at magnitude |v|.
-  ## Precondition, v names a normal nonzero value.
-  ## The binade the allowance derivations reference, holding the recorded
-  ## top logit for decisions and the recorded max magnitude for value records.
+  ## Width of one ulp at magnitude |v|, precondition v names a normal nonzero value.
+  ##
+  ## Reference binade of the allowance derivations:
+  ## - the recorded top logit for decisions
+  ## - the recorded max magnitude for value records
   ##
   ## Example:
   ##   one bf16 ulp at 17.25 is 2^(4 - 7) = 0.125.
-  binadeStep(g, binadeOf(v))
+  binadeStep(g, binadeIndex(v))
 
 proc ulpDatatypeName(g: UlpDatatype): string =
   ## Record-file name of one ulp datatype.
@@ -333,8 +333,7 @@ proc ulpDistance(g: UlpDatatype, a, b: float32): int64 =
 #                          Statistics primitives
 # #######################################################################
 
-proc totalVariation(a, b: tuple[keys: seq[uint16], counts: seq[uint32],
-    total: uint64]): float64 =
+proc totalVariation(a, b: tuple[keys: seq[uint16], counts: seq[uint32], total: uint64]): float64 =
   ## Total variation distance between two soft histograms, the summed
   ## absolute bucket difference over the combined mass.
   var ai, bi = 0
@@ -371,11 +370,10 @@ proc truncatedKl(refLogits, obsLogits: seq[float32]): float64 =
       result += pr * ln(pr / po)
 
 
-# Record fingerprints
+# Record fingerprint builders
 # ----------------------------------------------------------
 
-proc recordMeans(vals: seq[float32]): tuple[n: int, meanAbs: float64,
-    signedMean: float64, maxMagnitude: float64] =
+proc recordMeans(vals: seq[float32]): tuple[n: int, meanAbs: float64, signedMean: float64, maxMagnitude: float64] =
   ## Finite-element means and the largest finite magnitude.
   ## NaN and +Inf raise, -Inf self-declares and stays outside.
   var nFinite = 0
@@ -474,7 +472,7 @@ proc recordTail(vals: seq[float32], ulpDatatype: UlpDatatype):
   if maxMagnitude > 0.0:
     let threshold = maxMagnitude / pow(2.0, TailBinadesBelowMax.float64)
     let edgeBand = TailEdgeSteps.float64 *
-      binadeStep(ulpDatatype, binadeOf(threshold))
+      binadeStep(ulpDatatype, binadeIndex(threshold))
     for v in vals:
       let a = abs(v.float64)
       if v != NegInf and a > threshold:
@@ -564,28 +562,23 @@ type
     ## - klBand, the truncated-KL allowance, 0.5 x delta^2
 
 
-proc deriveBands(ulpAllowance: int, top1: float64, depth = 1,
-    datatype: UlpDatatype = ulpBf16,
-    coarseAmplification = 1.0): BandSet =
+proc deriveBands(ulpAllowance: int, top1: float64, depth = 1, datatype: UlpDatatype = ulpBf16, coarseAmplification = 1.0): BandSet =
   ## Returns the drift allowances for one comparison.
   ##
   ## - the reference magnitude = the recorded top-1 logit for decisions,
   ##   the recorded max magnitude for value records
   ## - the bands scale by the composed chain's depth, one stage = one
   ##   allowance of the error-model class
-  ## - the depth scaling is the root-sum-square (RSS) accumulation model.
-  ##   Each stage contributes an independent zero-mean reordering
-  ##   perturbation of `ulpAllowance` ulps. The net drift over `depth`
-  ##   stages is their sum. The variance of a sum of independent zero-mean
-  ##   terms is the sum of the variances, so the standard deviation scales
-  ##   as sqrt(depth) times the per-stage one. This is the standard
-  ##   probabilistic bound for rounding-accumulation error (Higham).
-  ##   The linear `depth x` bound assumes every drift aligns, so it is
-  ##   pathologically loose on a long chain.
-  ## - worked example, a bf16 recording with recorded top-1 17.25
-  ##   - one bf16 ulp at 17.25 = 0.125
-  ##   - the reduction class (4 ulps per stage) gives delta = 0.5
-  ##     at depth 1 and delta = 2.75 at depth 28
+  ## - the depth scaling, the root-sum-square accumulation of independent
+  ##   zero-mean per-stage reordering perturbations of `ulpAllowance` ulps,
+  ##   the standard deviation scales as sqrt(depth) times the per-stage one
+  ##
+  ##   per-stage allowance x sqrt(depth) --> ulpBand --> delta --> klBand
+  ##
+  ## Worked example, a bf16 recording with recorded top-1 17.25:
+  ## - one bf16 ulp at 17.25 = 0.125
+  ## - the reduction class (4 ulps per stage) gives delta = 0.5
+  ##   at depth 1 and delta = 2.75 at depth 28
   let amp = if coarseAmplification >= 1.0: coarseAmplification
     else:
       raise newException(ValueError,
@@ -600,10 +593,10 @@ proc deriveBands(ulpAllowance: int, top1: float64, depth = 1,
 #                              Check engine
 # #######################################################################
 
-# Error model
+# Error model classes
 # ----------------------------------------------------------
 
-proc allowanceOf(kind: RoundingErrorSourceKind): int =
+proc perStageAllowance(kind: RoundingErrorSourceKind): int =
   ## Returns the per-stage drift allowance of one error model in ulps, 2
   ## for the elementwise class and 4 for the reduction class, both measured
   ## same-kernel drift at the reference magnitude.
@@ -612,24 +605,22 @@ proc allowanceOf(kind: RoundingErrorSourceKind): int =
   of kReduction: 4
 
 proc kindFloors(kind: RoundingErrorSourceKind, n: int): float64 =
-  ## Histogram total-variation floor of one error model. The floor derives
-  ## from the per-stage ulp drift allowance and the element count, not from
-  ## a constant:
+  ## Histogram total-variation floor of one error model, the derivation
+  ## reads the per-stage ulp drift allowance and the element count:
   ##   - a reassociation drift is a random zero-mean per-element perturbation
   ##   - the net TV is a fluctuation, TV ~ K * sqrt(mean|drift_ulps|)
-  ##   - mean|drift_ulps| <= allowanceOf(kind), and K ~ 7/sqrt(n)
-  ## so the floor = 7.0 * sqrt(allowanceOf(kind) / n).
-  ## The 7.0 is the fluctuation-model calibration, measured ~7-9 across
-  ## recorded tensors. It anchors to the allowance and n, not to any measured drift.
-  # TODO(magic-constant) 7.0 is a calibrated constant, not first-principles.
-  # Can we derive it analytically instead of calibrating across tensors?
+  ##   - mean|drift_ulps| <= perStageAllowance(kind), and K ~ 7/sqrt(n)
+  ## so the floor = 7.0 * sqrt(perStageAllowance(kind) / n),
+  ## 7.0 the fluctuation-model calibration measured ~7-9 across recorded tensors.
+  # TODO(magic-constant) 7.0 is calibrated across tensors, derive it
+  # analytically when a first-principles model exists.
   const FluctuationK = 7.0
   if n <= 0: return 0.0
-  FluctuationK * sqrt(allowanceOf(kind).float64 / n.float64)
+  FluctuationK * sqrt(perStageAllowance(kind).float64 / n.float64)
 
 proc flatLogitsRow(logitsRow: Tensor): Tensor =
   ## Flat f32 CPU copy of one logits row, squeezed to [V].
-  ## The copy lands on cpu because the raw pointer reads are host reads.
+  ## The copy lands on cpu, the raw pointer reads are host reads.
   var t = logitsRow.contiguous().to(F.kCPU)
   while t.dim > 1 and t.shape[0] == 1:
     t = t.squeeze(0)
@@ -645,14 +636,15 @@ proc flatLogitsRow(logitsRow: Tensor): Tensor =
 # #######################################################################
 
 proc parseHexF32(s: string): float32 =
-  ## Decodes one stored f32 hex bit pattern.
+  ## Returns the f32 the hex string `s` encodes, "0x" plus 8 hex digits,
+  ## case-insensitive, ValueError on any other form.
   if s.len != 10 or not s.startsWith("0x"):
     raise newException(ValueError, "bad f32 hex pattern: " & s)
   cast[float32](uint32(parseHexInt(s)))
 
 proc parseHexF64(s: string): float64 =
-  ## Decodes one stored f64 hex bit pattern, the parse unsigned end to end
-  ## because negative patterns carry the high bit.
+  ## Returns the f64 the hex string `s` encodes, "0x" plus 16 hex digits,
+  ## case-insensitive, ValueError on any other form.
   if s.len != 18 or not s.startsWith("0x"):
     raise newException(ValueError, "bad f64 hex pattern: " & s)
   var u: uint64
@@ -666,7 +658,7 @@ proc parseHexF64(s: string): float64 =
   cast[float64](u)
 
 
-# Stats frame
+# Stats frame IO
 # ----------------------------------------------------------
 
 proc readUniformStats(path: string): UniformStatsFile =
@@ -746,18 +738,17 @@ proc dtypeGrid(node: JsonNode): UlpDatatype =
       "bad decisions frame dtype key: " & node.getStr())
 
 
-# Decisions frame
+# Decisions frame IO
 # ----------------------------------------------------------
 
 proc loadArgmaxDecisions(path: string): seq[ArgmaxRecord] =
   ## Parses one argmax decision frame in the standardized form
   ##
   ## Args:
-  ## the frame path itself, or the bare stem without the container suffix
+  ## - the frame path itself, or the bare stem without the container suffix
   ## - the standardized schema carries hex margins and hex top-32 bits
-  ##   - the allowances derive at check from the assert's kind argument
-  ##   - no serialized allowance, no serialized flip cap
-  ##   - the cap = the harness MaxTieFlips constant
+  ## - the allowances derive at check from the assert's kind argument, no
+  ##   serialized allowance, the cap = the harness MaxTieFlips constant
   ## Returns:
   ## the records in frame order
   let framePath =
@@ -792,26 +783,21 @@ proc observedTailProbability(row: Tensor, topKIds: seq[int]): float64 =
   1.0 - kept.sum().item(float64)
 
 
-# Instrument cores
+# Instrument check cores
 # ----------------------------------------------------------
 
-proc harnessStats(actual: Tensor, record: StatsRecord,
-    kind: RoundingErrorSourceKind, depth = 1,
-    msg = "") =
-  ## Checks the uniform stats of `actual` against one record
-  ## under the allowances derived from allowanceOf(kind),
-  ## maxMagnitude, depth and the record's ulp datatype.
+proc harnessStats(actual: Tensor, record: StatsRecord, kind: RoundingErrorSourceKind, depth = 1, msg = "") =
+  ## Checks the uniform stats of `actual` against one record,
+  ## under the allowances derived from perStageAllowance(kind), maxMagnitude,
+  ## depth and the record's ulp datatype.
   ##
   ## Contract and comparison plan:
-  ## - order statistics compare against the absolute delta at every depth,
-  ##   the allowance anchored at the recorded max magnitude, never at each
-  ##   value's own binade. A zero-centered tensor's informative precision
-  ##   is set by its scale, not its near-zero tail
+  ## - order statistics and the f64 means compare against the absolute delta
+  ##   at every depth, the allowance anchored at the recorded max magnitude,
+  ##   the informative precision set by the tensor's scale
   ## - depth scales the band through deriveBands (one allowance per stage),
-  ##   it does not switch the unit of measure
-  ## - depth 1, histogram total variation within the kind floor, tail
-  ##   probability within the recorded edge fraction
-  ## - the f64 means compare against delta at every depth
+  ##   it does not switch the unit of measure, at depth 1 the histogram
+  ##   total variation and the tail probability carry their own floors
   ## - a zero-magnitude reference scales no allowance, the quantiles
   ##   must equal the recorded zero pattern
   let ctx = (if msg.len > 0: ": " & msg else: "")
@@ -837,7 +823,7 @@ proc harnessStats(actual: Tensor, record: StatsRecord,
           "equal the recorded zero pattern")
     return
 
-  let bands = deriveBands(allowanceOf(kind), record.maxMagnitude, depth,
+  let bands = deriveBands(perStageAllowance(kind), record.maxMagnitude, depth,
     record.ulpDatatype)
   let histFloor = kindFloors(kind, record.n)
 
@@ -888,55 +874,42 @@ proc harnessStats(actual: Tensor, record: StatsRecord,
         $tailBand)
 
 
-proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
-    flipCount: var int, msg = "", depth = 1) =
+proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord, flipCount: var int, msg = "", depth = 1) =
   ## Checks one logits row against the recorded decision.
   ## The instrument core of assertArgMax.
   ##
   ##   computed row -> argmax, top-32 logits, truncated KL, tail
   ##   recorded record -----------------------------------------> allowances
   ##
-  ## Two-tier instrument, the pick and the top-32 distribution price
-  ## different quantities. Every step runs the top-32 instruments, flips
-  ## included:
+  ## Every step runs the top-32 instruments, flips included:
   ## - the pick is the decoded token, divergence raises unless tie-eligible
   ## - the truncated KL over the 32 recorded ids stays at most
   ##   0.5 x delta^2, the distribution allowance, the individual top-32
-  ##   logits carry no per-id value band, honest mid-table id drift
-  ##   stays inside the KL band
+  ##   logits carry no per-id value band
   ## - the tail probability differs from the recorded value by at most
-  ##   min(0.3, exp(delta) - 1) x max(recorded tail, 1e-3) + 1e-4 a uniform
-  ##   shift of every logit cancels in the softmax, the instruments read
-  ##   the distribution shape, never its level
+  ##   min(0.3, exp(delta) - 1) x max(recorded tail, 1e-3) + 1e-4
   ##
-  ## The allowances derive at check from the error-model class
-  ## (allowanceOf), never a serialized constant:
-  ## delta = ceil(per-stage ulps x sqrt(depth)) x (one ulp of the record's
-  ## datatype at |recorded top-1|), the sqrt depth scaling the root-sum-square
-  ## accumulation of independent per-stage reordering errors.
+  ## Allowance form:
+  ## - derived at check from the error-model class (perStageAllowance),
+  ##   never a serialized constant
+  ## - delta = ceil(per-stage ulps x sqrt(depth)) x the datatype's
+  ##   one-ulp step at |recorded top-1|, the sqrt depth scaling gives
+  ##   the root-sum-square accumulation of per-stage reordering errors
   ##
   ## Worked example, a bf16 recording with recorded top-1 17.25, one
   ## bf16 ulp at 17.25 = 0.125, the reduction class (4 ulps per stage)
   ## gives delta = 0.5 at depth 1 and delta = 2.75 at depth 28.
   ##
   ## Pick divergence:
-  ## - a recorded margin of at most one ulp of the record's datatype,
-  ##   measured at the recorded top-1, makes a flipped pick legal when
-  ##   the pick logit sits within max(delta, 0.05) of the recorded top-1
-  ## - the flip counts against flipCount, the MaxTieFlips constant caps it,
-  ##   an overrun raises
-  ## - anything else, a real divergence, raised
   ##
-  ## The observed row is never re-ranked, the top-32 instruments read
-  ## the observed values at the recorded ids. A rank-32/33 boundary
-  ## swap moves none of them. Membership stays unobserved because
-  ## rank-32/33 gaps run one ulp wide, matching cross-platform kernel
-  ## drift's scale. A membership verdict would measure the platform,
-  ## never the model.
-  ## The boundary stays covered by the set certificate and the KL
-  ## instrument. A rank-32/33 swap the certificate accepts sits within
-  ## one ulp of the record's datatype and the drift band, a wider set
-  ## change or a distribution shift past the KL band raises.
+  ##   margin <= 1 ulp of the record's datatype at the recorded top-1
+  ##     --> pick logit within max(delta, 0.05) of the top-1 --> flip,
+  ##     flipCount increments, the MaxTieFlips constant caps it
+  ##   anything else --> a real divergence, raised
+  ##
+  ## The observed row reads the values at the recorded ids, no re-ranking,
+  ## the rank-32/33 boundary stays covered by the set certificate,
+  ## a rank-32/33 swap the certificate accepts sits within the KL band.
   ## - kind, the error model class the allowances derive from at check
   ## - flipCount, the caller-owned chain-wide counter, the MaxTieFlips
   ##   constant caps it, pick flips increment it
@@ -967,10 +940,10 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
       obsTop2 = v
 
   let top1Rec = record.topKLogits[0].float64
-  let bands = deriveBands(allowanceOf(record.kind), top1Rec, depth,
+  let bands = deriveBands(perStageAllowance(record.kind), top1Rec, depth,
     record.ulpDatatype)
 
-  # The top-32 instruments run on every step, flips included, the 32-wide
+  # Every step runs the top-32 instruments, flips included, the 32-wide
   # (record width) truncated KL check does not skip flips.
   var obs = newSeq[float32](record.topKLogits.len)
   for i, id in record.topK:
@@ -991,7 +964,7 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
       "argmax tail probability " & $tail & " vs recorded " &
       $record.tailProbability & " outside band " & $tailLimit & ctx)
 
-  # Divergence, tie flip or real bug. Tie eligibility follows the ulp
+  # Divergence, tie flip or real bug. Tie eligibility reads the ulp
   # grid of the record's datatype, one bf16 step is 0.125 at logit 16
   # and 0.25 at logit 32.
   if obsArgmax != record.argmaxId:
@@ -1017,12 +990,10 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord,
       $record.margin & ")" & ctx)
 
 
-# Public asserts
+# Public assert surface
 # ----------------------------------------------------------
 
-proc assertStats*(actual: Tensor, statsPath: string,
-    tensorName: string, kind: RoundingErrorSourceKind, depth = 1,
-    msg = "") =
+proc assertStats*(actual: Tensor, statsPath: string, tensorName: string, kind: RoundingErrorSourceKind, depth = 1, msg = "") =
   ## Asserts one computed tensor against one recorded sidecar entry,
   ## the record acquisition inside the call.
   ##
@@ -1035,16 +1006,12 @@ proc assertStats*(actual: Tensor, statsPath: string,
   ## - the fingerprint, the min and max, nine percentiles between,
   ##   a histogram of how many values land in each size bucket,
   ##   two f64 averages, the far-tail probability
-  ## - parallel math adds numbers in a different but equally valid
-  ##   order than the reference, the last bits differ honestly,
-  ##   the allowances say how much honest difference looks like
-  ## - depth composed operations drift up to depth times more,
-  ##   the allowance widens with the depth argument
-  ## - a single drifting element, away from the checkpoint spots,
-  ##   no extremum, stays invisible
-  ## - bit-equality is the codec family's payload contract only
-  ## - the EXL3-00 codec verifies its decoded payload bit for bit
-  ## - the stats assert carries no exact class
+  ## - parallel math adds numbers in a different but equally valid order
+  ##   than the reference, the last bits differ honestly, the allowances
+  ##   say how much honest difference looks like
+  ## - the exact-class cases live elsewhere, the EXL3-00 codec verifies
+  ##   its decoded payload bit for bit, a single drifting element away
+  ##   from the checkpoints stays invisible
   harnessStats(actual, loadUniformStats(statsPath, tensorName),
     kind, depth, msg)
 
@@ -1054,12 +1021,10 @@ proc assertArgMax*(actual: Tensor, decisionsPath: string, step: int,
   ## frame position, the record acquisition inside the call.
   ##
   ## Args:
-  ## - the computed logits row
-  ## - the decisions frame path or stem
-  ## - the zero-based frame position
+  ## - the computed logits row, the decisions frame path or stem,
+  ##   the zero-based frame position
   ## - the error kind
-  ## - the caller-owned chain-wide flip counter
-  ## - the composed depth
+  ## - the caller-owned chain-wide flip counter, the composed depth
   let records = loadArgmaxDecisions(decisionsPath)
   if step < 0 or step >= records.len:
     raise newException(ValueError,

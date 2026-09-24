@@ -1,0 +1,234 @@
+## Run command, from the repo root:
+## - nim test_positron_properties
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_linear.nim
+##
+## Ceramic dense linear suite, the kernel judged per element against the host reference
+##
+## - Out[m][n] = sum_k X[m][k] · W[n][k] over the row-major (N, K) weights
+##
+## | subject     | contract                                                                                                   |
+## | ----------- | ---------------------------------------------------------------------------------------------------------- |
+## | naive side  | host fp32 dot products over the exact widenings, one accumulator form                                      |
+## | accumulator | kernel and naive side both accumulate fp32, one RNE to the storage element at the store                    |
+## | regimes     | the same kernel body at M = 1 (GEMV) and M > 32 (tail M-tile)                                              |
+## | runtime     | the projection shape travels as runtime args, one device entry per dtype plus the TileC = 32 stage-4 entry |
+##
+## | shape    | M  | N    | K    | TileC | dtype      | cases |
+## | -------- | --- | ---- | ---- | ----- | ---------- | ----- |
+## | gemv     | 1  | 128  | 64   | 64    | bf16, fp16 | 32    |
+## | gemm     | 37 | 192  | 160  | 64    | bf16, fp16 | 16    |
+## | out_proj | 1  | 4096 | 2048 | 64    | bf16       | 16    |
+## | tilec32  | 1  | 32   | 2048 | 32    | bf16       | 16    |
+## | multi    | 65 | 192  | 160  | 64    | bf16, fp16 | 8     |
+##
+## | note     | content                                                                                                                                                                     |
+## | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | out_proj | the mega kernel's production binding, the decode composition's out projection, the same runtime-arg body as the other rows, it shares the bf16 device entry                 |
+## | tilec32  | the mega kernel's stage-4 a/b decay and beta GEMV binding, N = 32 below the default tile width, the one narrow `TileC = 32` instantiation, a suite case of its own          |
+## | multi    | the multi-M-tile regime (grid.y = 3, two consecutive full 32-row tiles plus a 1-row tail), the rowLimit composition across consecutive straddling tiles is the fragile path |
+## | N = 1    | the shared expert row GEMV cannot go through this kernel (N mod TileC), the router suite's shared-expert scalar entry covers it                                             |
+##
+## Bars, stated before measurement, U32 = 2⁻²⁴ fp32, uStep = 2⁻⁸ bf16 / 2⁻¹¹ fp16
+##
+## | bar        | bound                                           | covers                                  |
+## | ---------- | ----------------------------------------------- | --------------------------------------- |
+## | out (m, n) | 2·u_step·abs(out) + 2·K·2⁻²⁴·Σk abs(x·w) + 2⁻²⁵ | the accumulator order, one RNE per side |
+##
+## - 2·K·2⁻²⁴·Σk abs(x·w) covers the accumulator order, both sides sit within
+##   K·2⁻²⁴·Σ abs terms of the exact dot, the kernel's 16-wide mma chain vs
+##   the naive sequential fp32 sum, differences within twice that bound
+## - 2·u_step·abs(out) covers the store round, the two sides round slightly different
+##   fp32 accumulators, each RNE within u_step of its operand
+## - the 2⁻²⁵ floor covers the fp16 subnormal output grid, also the bf16 grid
+##
+## - the measured divergence justifies the model, never sets the bar
+## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
+
+import std/[strformat, math, times]
+import workspace/crucible
+import workspace/ceramic
+import ../../src/kernels/ceramic/linear
+import ceramic_pagebuf
+import ceramic_dtype
+
+# ─── Device entries, one per (element dtype, shape) binding ────────────
+
+const DenseLinearMsl = metal:
+  # one device entry per dtype plus the TileC = 32 entry, the projection shape
+  # travels as runtime arguments, the entry name is the only selector
+  proc cer_dense_linear_bf16(
+      outp, x, w: ptr UncheckedArray[bfloat16],
+      N, K, M, tx, ty: int32) {.global.} =
+    dense_linear_tile_fwd(outp, x, w, N, K, M, tx, ty)
+
+  proc cer_dense_linear_f16(
+      outp, x, w: ptr UncheckedArray[float16],
+      N, K, M, tx, ty: int32) {.global.} =
+    dense_linear_tile_fwd(outp, x, w, N, K, M, tx, ty)
+
+  proc cer_dense_linear_bf16_tilec32(
+      outp, x, w: ptr UncheckedArray[bfloat16],
+      N, K, M, tx, ty: int32) {.global.} =
+    # the mega composition's stage-4 a/b decay and beta GEMV binding,
+    # N mod TileC == 0 at the exact TileC = 32 boundary
+    dense_linear_tile32_fwd(outp, x, w, N, K, M, tx, ty)
+
+# ─── Host, the independent reference ─────────────────────────────────
+
+const
+  FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
+                                     # the rounding floor at tiny outputs
+
+proc naiveLinear[T: SomeFloat](dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[T] =
+  ## Independent host reference dot over the exact element-dtype widenings,
+  ## accumulated in the working scalar type `T`
+  ##
+  ## - naiveLinear[float32] is the judged form, `bar := 2·K·u32·Σk abs(x·w)`
+  ##   covers the two sides' fp32 accumulator orders against the exact dot
+  ## - the kernel's stored output stays the bf16/fp16-rounded spelling,
+  ##   `bar := 2·u_step·abs(out)` covers the two store rounds, each RNE within
+  ##   u_step of its fp32 operand
+  ## - one accumulation form, the exact-dot and the rounded-output spellings
+  ##   are carried by the bands separately
+  result = newSeq[T](M * N)
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      var acc = T(0)
+      for k in 0 ..< K:
+        acc += T(x[m * K + k].widenTo(dt)) * T(w[n * K + k].widenTo(dt))
+      result[m * N + n] = acc
+
+var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
+var suiteWorstUse = 0.0'f64
+
+proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
+    seed: uint64; label: string; kernelName: string) =
+  ## One (element dtype, shape) combination over `cases` independent seeded runs,
+  ## judged per element under the band, case 0 relaunched bit-identical,
+  ## `kernelName` selects the device entry
+  let nOut = M * N
+  let nX = M * K
+  let nW = N * K
+  var outB = allocPageBuf[uint16](nOut)
+  var xB = allocPageBuf[uint16](nX)
+  var wB = allocPageBuf[uint16](nW)
+  defer:
+    freePageBuf(outB); freePageBuf(xB); freePageBuf(wB)
+  var outPA = outB.pa()
+  var xPA = xB.pa()
+  var wPA = wB.pa()
+  let ulpG = if dt == kBfloat16: ulpBf16 else: ulpFp16
+  let uStep = binadeStep(ulpG, -1)
+  let gridX = int32(N div TileC)
+  let gridY = int32((M + 31) div 32)
+
+  var worstUse = 0.0'f64
+  var exact = 0
+  var total = 0
+  var launches = 0
+
+  proc takeInputs(rng: var PropRng): tuple[x, w: seq[uint16]] =
+    ## Seeded inputs, element-dtype bits for x and w.
+    var xBits = newSeq[uint16](nX)
+    var wBits = newSeq[uint16](nW)
+    for i in 0 ..< nX:
+      xBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
+    for i in 0 ..< nW:
+      wBits[i] = rng.nextF32(-1.0'f32, 1.0'f32).narrowTo(dt)
+    result = (xBits, wBits)
+
+  proc load(bits: tuple[x, w: seq[uint16]]) =
+    for i in 0 ..< nX:
+      xB.hostPtr[i] = bits.x[i]
+    for i in 0 ..< nW:
+      wB.hostPtr[i] = bits.w[i]
+
+  proc sentinels(bits: tuple[x, w: seq[uint16]]) =
+    assertTailZero(outB, nOut)
+    assertReadUnchanged(xB, bits.x)
+    assertReadUnchanged(wB, bits.w)
+
+  proc launch =
+    for tx in 0 ..< gridX:
+      for ty in 0 ..< gridY:
+        engine.run << (grid: (1, 1, 1), blk: (32, 1, 1)) >>
+          (kernelName, outPA,
+          (xPA, wPA, int32(N), int32(K), int32(M), int32(tx), int32(ty)))
+    inc launches, gridX * gridY
+
+  proc recordOut(): seq[uint16] =
+    result = newSeq[uint16](nOut)
+    for i in 0 ..< nOut:
+      result[i] = outB.hostPtr[i]
+
+  var case0record: seq[uint16]
+  var rng = initPropRng(seed)
+  for caseId in 0 ..< cases:
+    let bits = takeInputs(rng)
+    let want = naiveLinear[float32](dt, bits.x, bits.w, M, N, K)
+    load(bits)
+    launch()
+    sentinels(bits)
+    for m in 0 ..< M:
+      for n in 0 ..< N:
+        let idx = m * N + n
+        var sumAbs = 0.0'f64
+        for k in 0 ..< K:
+          sumAbs += abs(bits.x[m * K + k].widenTo(dt).float64 *
+            bits.w[n * K + k].widenTo(dt).float64)
+        let bar = 2.0 * uStep * abs(want[idx]) +
+          2.0 * K.float64 * U32 * sumAbs + FloorSub
+        let got = outB.hostPtr[idx].widenTo(dt).float64
+        let diff = abs(got - want[idx])
+        doAssert diff <= bar,
+          &"out outside the bar at (m {m}, n {n}, case {caseId}): " &
+          &"{diff:.3e} > {bar:.3e}"
+        worstUse = max(worstUse, diff / bar)
+        if got == want[idx]:
+          inc exact
+        inc total
+    if caseId == 0:
+      case0record = recordOut()
+
+  block determinism:
+    var rng0 = initPropRng(seed)
+    let bits0 = takeInputs(rng0)
+    load(bits0)
+    launch()
+    sentinels(bits0)
+    let again = recordOut()
+    for i in 0 ..< nOut:
+      doAssert again[i] == case0record[i], "out differs run to run"
+
+  echo &"[{label} {ulpDatatypeName(ulpG)}] cases={cases} launches={launches} " &
+    &"worst bar usage {worstUse:.3f}, bit-exact {exact}/{total}"
+  suiteCases += cases
+  suiteLaunches += launches
+  suiteWorstUse = max(suiteWorstUse, worstUse)
+  suiteExact += exact
+  suiteTotal += total
+
+proc main =
+  echo "device: ", bkMetal.init().deviceName()
+  var engine = bkMetal.init()
+  engine.ingest(DenseLinearMsl)
+  runCombo(engine, kBfloat16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
+    "cer_dense_linear_bf16")
+  runCombo(engine, kFloat16, 1, 128, 64, 64, 32, 0xC04D0512'u64, "gemv",
+    "cer_dense_linear_f16")
+  runCombo(engine, kBfloat16, 37, 192, 160, 64, 16, 0xC04D0513'u64, "gemm tail",
+    "cer_dense_linear_bf16")
+  runCombo(engine, kFloat16, 37, 192, 160, 64, 16, 0xC04D0514'u64, "gemm tail",
+    "cer_dense_linear_f16")
+  runCombo(engine, kBfloat16, 1, 4096, 2048, 64, 16, 0xC04D0515'u64, "out_proj",
+    "cer_dense_linear_bf16")
+  runCombo(engine, kBfloat16, 1, 32, 2048, 32, 16, 0xC04D0516'u64, "tilec32",
+    "cer_dense_linear_bf16_tilec32")
+  runCombo(engine, kBfloat16, 65, 192, 160, 64, 8, 0xC04D0517'u64, "gemm multi-tile",
+    "cer_dense_linear_bf16")
+  runCombo(engine, kFloat16, 65, 192, 160, 64, 8, 0xC04D0518'u64, "gemm multi-tile",
+    "cer_dense_linear_f16")
+  echo &"CERAMIC DENSE_LINEAR VERDICT: cases={suiteCases} launches={suiteLaunches} " &
+    &"worst bar usage {suiteWorstUse:.3f}, bit-exact {suiteExact}/{suiteTotal}"
+
+main()

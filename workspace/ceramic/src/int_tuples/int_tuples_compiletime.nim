@@ -222,6 +222,7 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #
 #     See: test_evalonceas_procarg.nim, layouts.nim:make_layout
 #
+
 #
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`

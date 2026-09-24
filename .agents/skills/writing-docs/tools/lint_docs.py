@@ -45,7 +45,6 @@ Rule table (rule | trigger | severity):
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
-| section-separator    | a whole-line `#` comment built from dashes (a layout-position marker)                             | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -172,6 +171,11 @@ CONTRACT_MARKER_RE = re.compile(
 # Exported Nim declarations the missing-doc rule covers (conservative shapes).
 NIM_EXPORTED_CALLABLE_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter)\s+(\w+)\*(?:\s*\[|\s*\()")
+# Proc, func, and template definition lines whose name carries an Of suffix.
+# Call sites and ordinary prose never match, the keyword anchors the shape.
+OF_SUFFIX_DECL_RE = re.compile(
+    r"^\s*(?:proc|func|template)\s+\*?([A-Za-z_]\w*)")
+
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
 
@@ -316,6 +320,8 @@ BANNED = [
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
      "cite the command and its output that prove the claim"),
+    (r"\bfollow(?:s|ing|ed)?\b", None,
+     "name the thing directly, the item, the preceding entries, or restate the mechanism"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -355,6 +361,12 @@ BANNED = [
      r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
      None, "lawyer and justification prose is banned, state the contract "
            "(what the surface exports, not why the choice is defensible)"),
+    (r"\bfam\b",
+     lambda l: bool(re.search(r"gmmfamily|gmmbf16|gmmf16|gmmwiden", l)),
+     "name the type directly (the GmmFamily value surface keeps its names)"),
+    (r"\bfrag ordering\b|\bplane row\b|\bband[- ]model\b"
+     r"|\bcomposition tier\b|\bband width\b",
+     None, "name the thing directly, the quantity, the element, or the width in code terms"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
@@ -450,10 +462,10 @@ RULES = {
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
                              "a doc or maintainer comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
-    "section-separator": Rule("section-separator", True,
-                              "a whole-line # comment built from dashes (a layout-position marker; keep the title line, drop the rule)"),
     "try-block": Rule("try-block", True,
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
+    "decl-of-suffix": Rule("decl-of-suffix", True,
+                           "a proc, func or template name ending in Of, name the thing directly"),
 }
 
 
@@ -657,7 +669,8 @@ def nim_prose_lines(text):
     def banner_rule(s):
         core = s.lstrip("#").strip()
         return bool(core) and set(core) <= {"#", " "} or \
-            bool(core) and set(core) <= {"-", " "}
+            bool(core) and set(core) <= {"-", " "} or \
+            bool(core) and set(core) <= {"═", " "}
 
     for i, raw in enumerate(raws, 1):
         line = raw.rstrip()
@@ -670,9 +683,15 @@ def nim_prose_lines(text):
             in_block_comment = True
             continue
         if s.startswith("##"):
+            if LICENSE_SHAPE.match(s.lstrip("#").strip()):
+                # The license header is fixed legal text, exempt here the
+                # same way the `#`-comment branch exempts it
+                continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
         if s.startswith("///"):
+            if LICENSE_SHAPE.match(s.lstrip("/").strip()):
+                continue
             out.append((i, s[3:].strip(), "doc", comment_indent(s[3:]), False))
             continue
         if s.startswith("#"):
@@ -1531,25 +1550,6 @@ def nim_design_narration_checks(path, text, findings):
                 "caller must know"))
 
 
-HASH_SEPARATOR_RE = re.compile(r"^\s*#\s*-+\s*$")
-
-
-def nim_section_separator_checks(path, text, findings):
-    """Flags whole-line `#` comments built from dashes. A dash rule is a
-    layout-position marker: it says where a section sits on the screen, not
-    anything a reader of the line needs, and it dies when the code moves.
-    The section title line above or below carries the same information."""
-    blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(text.splitlines()):
-        if i + 1 in blocked:
-            continue
-        if HASH_SEPARATOR_RE.match(raw):
-            findings.append(Finding(
-                path, i + 1, "section-separator",
-                "a dash rule is a layout-position marker (keep the section "
-                "title, drop the rule)"))
-
-
 def try_allowed(path):
     norm = str(path).replace("\\", "/")
     if norm.endswith(tuple(TRY_ALLOWLIST)) or norm in TRY_ALLOWLIST:
@@ -1623,8 +1623,15 @@ def nim_structure_checks(path, text, header_nos, findings):
       ## field docs inside the body, a ## block directly above the
       declaration is banned (doc-above-type)"""
     lines = text.splitlines()
+    blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(lines):
         line = raw.rstrip()
+        ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
+        if ofm and ofm.group(1).endswith("Of"):
+            findings.append(Finding(
+                path, i + 1, "decl-of-suffix",
+                "the name %s carries an Of suffix, name the thing directly "
+                "(the suffix annotates a call site the compiler derives)" % ofm.group(1)))
         m = NIM_EXPORTED_CALLABLE_RE.match(line)
         above_banned = i > 0 and lines[i - 1].strip().startswith("##") \
             and i not in header_nos
@@ -1791,7 +1798,6 @@ def scan(path, text, findings):
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
-            nim_section_separator_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
         if is_py and meta is not None:
             tree = None

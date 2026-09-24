@@ -17,23 +17,17 @@
 ## zero-filled on load and not written on store.
 ##
 ## The bodies delegate to the tile_io facilities, keeping the lane-to-cell mapping and the `to` conversion chokepoint.
-## The guard lives in the epilogue position. A straddling tile
-## zeroes its out-of-range rows after the load (`zeroRows`).
-## The store writes only the in-range rows (`storeRows`). Each lane
-## evaluates the guard once per sub-tile row, since the guard is
-## uniform across the lane's columns and values.
 ##
-## Plane-row convention: the tile's first plane row is `origin[2]·R`
-## for the RtLeft variants and `origin[3]·R` for the RtRight
-## variants, the same side convention loadTile uses
-## (`local_tile_dyn(gl, R, C, o)` versus `(gl, C, R, o)`).
+## | variant | load behavior                                                                                                                                                          |
+## | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | RtLeft  | guards each element before the access, rows at or above `rowLimit` are zero-filled, not read, the tile stays inside the caller's allocation on an exactly-sized buffer |
+## | RtRight | reads the whole tile then zeroes the out-of-range rows (`zeroRows`), Metal bounds-checks the extra reads                                                               |
 ##
-## The row-bounded load reads the whole tile, out-of-range rows
-## included, then zeroes those rows. Metal performs bounds checking
-## on buffer accesses: out-of-bounds reads return 0 and writes are discarded,
-## so the extra reads stay invisible.
+## - the stores write only the in-range rows, one guard per sub-tile row,
+##   the guard is uniform across the lane's columns and values
+## - plane-row convention, the first plane row is `origin[2]·R` on RtLeft and `origin[3]·R` on RtRight, matching the tile_io side convention
 ##
-## Local to positron: the shared tile_algebra (tile_io.nim) is owned
+## Local to positron, the shared tile_algebra (tile_io.nim) is owned
 ## elsewhere, so the bounded variants live here.
 
 import workspace/crucible
@@ -43,11 +37,13 @@ import workspace/ceramic
 #  RtLeft variants (unswapped views, guard on origin[2])
 #  ═════════════════════════════════════════════════════════════════════
 
-proc zeroRows[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[float16, R, C, A],
-    r0, rowLimit: int32) {.device.} =
-  ## Zeroes the tile's rows with plane row >= rowLimit. `r0` is the tile's
-  ## first plane row (origin[2]·R).
+proc loadTileRows*[El; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[El, R, C, A],
+    gl: GlView[El],
+    origin: tuple,
+    rowLimit: int32) {.device.} =
+  ## Row-bounded loadTile, tile-plane rows origin[2]·R + r at or above
+  ## `rowLimit` are zero-filled, not read.
   const M = A.getM()
   const N = A.getN()
   const rowTiles = R div M
@@ -56,23 +52,21 @@ proc zeroRows[R, C: static int; A: static MmaAtom](
   let lane = int(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
+  let col = cell div M
+  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
+  let src = local_tile_dyn(gl, R, C, o)
   for n in 0 ..< rowTiles:
-    if r0 + int32(n * M + row) >= rowLimit:
-      for m in 0 ..< colTiles:
-        for v in 0 ..< vpt:
-          tile.frags[n][m].frag[v] = 0'u16.asFp16()
-
-proc loadTileRows*[R, C: static int; A: static MmaAtom](
-    tile: var RtLeft[float16, R, C, A],
-    gl: GlView[float16],
-    origin: tuple,
-    rowLimit: int32) {.device.} =
-  ## Row-bounded loadTile: tile-plane rows origin[2]·R + r at or above
-  ## `rowLimit` are zero-filled instead of read.
-  tile.loadTile(gl, origin)
-  let r0 = int32(origin[2]) * int32(R)
-  if r0 + int32(R) > rowLimit:
-    zeroRows(tile, r0, rowLimit)
+    for m in 0 ..< colTiles:
+      for v in 0 ..< vpt:
+        if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
+          tile.frags[n][m].frag[v] = src[row + n * M, col + m * N + v]
+        else:
+          when El is bfloat16:
+            tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
+          elif El is float16:
+            tile.frags[n][m].frag[v] = 0'u16.asFp16()
+          else:
+            tile.frags[n][m].frag[v] = El(0)
 
 proc storeRows[TIn; R, C: static int; A: static MmaAtom](
     gl: GlView[float16],
@@ -113,22 +107,80 @@ proc storeTileRows*[R, C: static int; A: static MmaAtom](
   else:
     storeRows(gl, tile, origin, r0, rowLimit)
 
-proc storeTileRows*[R, C: static int; A: static MmaAtom](
-    gl: GlView[float16],
-    tile: RtLeft[float16, R, C, A],
+proc storeTileRows*[El; R, C: static int; A: static MmaAtom](
+    gl: GlView[El],
+    tile: RtLeft[El, R, C, A],
     origin: tuple,
     rowLimit: int32) {.device.} =
-  ## Row-bounded storeTile for fp16 tiles. The `to` round trip is the identity.
+  ## Row-bounded storeTile for element-dtype tiles, rows at or above
+  ## `rowLimit` are not written.
+  const M = A.getM()
+  const N = A.getN()
+  const rowTiles = R div M
+  const colTiles = C div N
+  const vpt = A.getVpt()
+  let lane = int(thread_index_in_threadgroup)
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let row = cell mod M
+  let col = cell div M
+  let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
+  var dst = local_tile_dyn(gl, R, C, o)
+  for n in 0 ..< rowTiles:
+    if int32(origin[2]) * int32(R) + int32(n * M + row) < rowLimit:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          dst[row + n * M, col + m * N + v] = tile.frags[n][m].frag[v]
+
+# tiles-allow zeroRows is the row-bounded store machinery's zero pass, it
+# needs the bounded tile-IO primitive (row-guarded load/store over register tiles)
+proc zeroRows[T; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[T, R, C, A],
+    r0, rowLimit: int32) {.device.} =
+  ## Zeroes the tile's rows with plane row at or above `rowLimit`:
+  ## - RtLeft frag ordering, row-tile n outer, col-tile m inner
+  ## - `r0` is the tile's first plane row
+  const M = A.getM()
+  const rowTiles = R div M
+  const colTiles = C div A.getN()
+  const vpt = A.getVpt()
+  let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let row = cell mod M
+  for n in 0 ..< rowTiles:
+    if r0 + int32(n * M + row) >= rowLimit:
+      for m in 0 ..< colTiles:
+        for v in 0 ..< vpt:
+          when T is bfloat16:
+            tile.frags[n][m].frag[v] = (0.0'f32).bfloat16
+          else:
+            tile.frags[n][m].frag[v] = 0'f32.to(T)
+
+proc loadTileRowsZeroPadded*[T; R, C: static int; A: static MmaAtom](
+    tile: var RtLeft[T, R, C, A],
+    gl: GlView[T],
+    origin: tuple,
+    rowLimit: int32) {.device.} =
+  ## Row-bounded loadTile, zero-padded semantics:
+  ## - the full (R, C) plane is read from `gl` first, the straddling tile
+  ##   reads its tail rows past `rowLimit`
+  ## - the tile-plane rows origin[2]·R + r at or above `rowLimit` are
+  ##   then zeroed in registers, the zero-padding the walk consumes
+  ##
+  ## Precondition:
+  ## - the view's backing storage covers the padded tile rows,
+  ##   ceil(logical rows / R)·R, the read touches the padding
+  ## - callers with an exactly-sized buffer need
+  ##   the guarded `loadTileRows` above instead
+  tile.loadTile(gl, origin)
   let r0 = int32(origin[2]) * int32(R)
-  if r0 + int32(R) <= rowLimit:
-    gl.storeTile(tile, origin)
-  else:
-    storeRows(gl, tile, origin, r0, rowLimit)
+  if r0 + int32(R) > rowLimit:
+    zeroRows(tile, r0, rowLimit)
 
 # ═════════════════════════════════════════════════════════════════════
 #  RtRight variants (swapped views, guard on origin[3])
 #  ═════════════════════════════════════════════════════════════════════
 
+# tiles-allow zeroRows is the row-bounded store machinery's zero pass, it
+# needs the bounded tile-IO primitive (row-guarded load/store over register tiles)
 proc zeroRows[T; R, C: static int; A: static MmaAtom](
     tile: var RtRight[T, R, C, A],
     r0, rowLimit: int32) {.device.} =

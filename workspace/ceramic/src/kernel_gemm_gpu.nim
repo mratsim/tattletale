@@ -139,10 +139,11 @@
 ##   │ └──────────────────────────────────────────────────────────┘ │
 ##   └──────────────────────────────────────────────────────────────┘
 ##
-## The dtype policy (mmaDTypeOf, atom_selector, threadLayoutOf, tile_shape)
-## maps operand types to the atom, thread layout and tile. The host and the
-## device run the same policy, so the config is derived on both sides
-## instead of passed.
+## The dtype policy (mmaDType, atom_selector, threadTiling, tile_shape)
+## maps operand types to the atom, thread layout and tile.
+##
+## The host and the device run the same policy, so the config derives
+## on both sides.
 
 import std/macros
 import ./int_tuples
@@ -199,7 +200,7 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     # the expression where available.
     dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
   else:
-    gemm(mma, dFrag, aFrag, bFrag)
+    gemm_mma(mma, dFrag, aFrag, bFrag)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_warp(mma, ...): loop over atoms
@@ -513,9 +514,11 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   # --------------
   var o = epi
   o.preflight()
+  # The store mask is set before the apply. The epilogues read their gmem operands per element, and a lane the store mask
+  # drops must not read an operand (the tile's padded extent can reach past the real M/N region).
+  o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
   var tmp = make_tensor(TD, D.layout.shape)
   o.apply(tmp, dFrag)
-  o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
   o.finalStore(D, tmp)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -526,23 +529,23 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
 #  The host and the device run the same policy: the same atom, thread layout and tile.
 #  TODO: refactor this whole section: the dtype mapping is a naive first cut.
 
-template mmaDTypeOf(T: typedesc): MmaDType =
+template mmaDType(T: typedesc): MmaDType =
   ## The MmaDType for an operand type.
   # TODO: naive mapping: a uint32 operand may pack 4 × fp8 or 2 × fp16,
   # not just TF32. Rework when the packed datatypes land.
   when T is uint32: mdtTF32
   elif T is float32: mdtF32
   else:
-    {.error: "mmaDTypeOf: no MmaDType for the operand type " & $T &
+    {.error: "mmaDType: no MmaDType for the operand type " & $T &
       ". At the moment: uint32 (TF32) and float32".}
 
 template atom_selector*(TA, TB, TC: typedesc): auto =
   ## Derive the MMA atom for the operand types.
   ##
-  ## Matches the raw operand types: mmaDTypeOf errors on any type but
-  ## uint32 and float32, so the selector cannot route through it.
-  ## Unmatched combinations fall back to the 1×1×1 universal atom, which
-  ## compiles wherever plain arithmetic does.
+  ## - the raw operand types route the atom, mmaDType errors on any type
+  ##   but uint32 and float32, so the selector cannot route through it
+  ## - unmatched combinations fall back to the 1×1×1 universal atom,
+  ##   which compiles wherever plain arithmetic does
   # TODO: naive dtype matching: the operand types may pack smaller
   # datatypes (4 × fp8, 2 × fp16). Rework when those land.
   when TA is uint32 and TB is uint32 and TC is float32:
@@ -559,10 +562,14 @@ func make_tiled_mma*[Sh, St](
     thread_layout: Layout[Sh, St]): TiledMma[MmaAtom, Layout[Sh, St]] {.inline.} =
   TiledMma[MmaAtom, Layout[Sh, St]](atom: a, threadLayout: thread_layout)
 
-template threadLayoutOf*(atom: static MmaAtom, M, N: static int): auto =
-  ## Thread tiling for the input M and N, derived from the atom's tile dimensions:
-  ##   thrM = M div atom.getM(), thrN = N div atom.getN()
-  ## The input M and N must be multiples of the atom.
+template threadTiling*(atom: static MmaAtom, M, N: static int): auto =
+  ## Thread tiling for a padded input extent (M, N), derived from the atom's tile dimensions.
+  ##
+  ## - thrM = M div atom.getM()
+  ## - thrN = N div atom.getN()
+  ##
+  ## Contract:
+  ##   callers pass the input padded up to atom multiples (gemm_kernel does), so the extent must be a multiple of the atom
   # TODO: this needs M, N known at compile-time but they are dynamic
   make_layout((M div atom.getM(), N div atom.getN(), 1))
 
@@ -570,7 +577,7 @@ template tile_shape*(tma: static TiledMma; tileK: static int): auto =
   ## The tile one CTA computes: (thrM·atomM, thrN·atomN, tileK),
   ## the thread layout times the atom on M and N,
   ## one tileK-sized slice of K.
-  ## The grid is M/tileM × N/tileN CTAs.
+  ## The grid is ceil(M/tileM) × ceil(N/tileN) CTAs.
   (M: tma.thrM * tma.atom.getM(), N: tma.thrN * tma.atom.getN(), K: tileK)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -611,9 +618,27 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   ##   B: the (N, K) B view
   ##   epi: the epilogue config, e.g. initEpiAXPBY(alpha, beta, pC)
   ##
-  ## The view K must be a multiple of 32 (one tileK-sized slice of K per loop iteration).
-  ## The input M/N must be a multiple of the atom: the thread layout times the atom, thrM·atomM == M.
-  ## At the moment: 32-bit operands (TF32) with float32 accumulation.
+  ## Expected input:
+  ##   - D of shape (M, N), float32, col-major at (1, M) strides
+  ##   - A of shape (M, K) and B of shape (N, K), 32-bit operands, col-major
+  ##   - the A and B views' allocated K must be a multiple of 32, one
+  ##     tileK-sized slice of K per loop iteration, and the problem K is
+  ##     runtime and may be ragged
+  ##
+  ## Output:
+  ##   the (mCTA, nCTA) tile of D = f(A·B), written per thread and masked
+  ##   to the valid (M, N) extent.
+  ##
+  ## Ragged M/N:
+  ##   - M/N not multiples of the tile are legal, the thread layout covers
+  ##     the input padded up to atom multiples (statically derived from the view shapes)
+  ##   - gemm_cta zero-fills the loads, masks the store at the real extent, and launches a grid of (ceil(M/tileM), ceil(N/tileN)) CTAs
+  ##
+  ## Gmem-operand epilogues:
+  ##   - the operands (C, bias) are read per thread over the padded extent, and gemm_cta sets the store mask before the epilogue's apply
+  ##   - the shipped epilogues never read a padded lane's operand (the store drops those lanes), so the reads stay inside the real (M, N) region
+  ##
+  ## At the moment, 32-bit operands (TF32) with float32 accumulation.
   static:
     doAssert sizeof(TA) == 4 and sizeof(TB) == 4,
       "gemm_kernel: at the moment, 32-bit operands only (the SM80 TF32 atom)"
@@ -623,18 +648,23 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
     M = toIntVal(ShA.default[0])
     K = toIntVal(ShA.default[1])
     N = toIntVal(ShB.default[0])
-    layout = threadLayoutOf(atom_selector(TA, TB, TC), M, N)
-    # TODO: temporary SM80 tileK, hardcoded until the dtype policy derives
+    # Ragged M/N:
+    #   the thread layout and the tile cover the input padded up
+    # to atom multiples (static, from the view shapes), the tile overhang
+    # past the real M/N is zero-filled at the loads and dropped at the store.
+    atomM = atom_selector(TA, TB, TC).getM()
+    atomN = atom_selector(TA, TB, TC).getN()
+    Mp = ((M + atomM - 1) div atomM) * atomM
+    Np = ((N + atomN - 1) div atomN) * atomN
+    layout = threadTiling(atom_selector(TA, TB, TC), Mp, Np)
+    # TODO:
+    #   temporary SM80 tileK, hardcoded until the dtype policy derives
     # it per architecture and datatype. The smem tile's K size: gemm_cta
     # prepares one tileK-sized slice of K at a time, whatever the input K.
     defaultTileK = 32
   template tma: untyped = make_tiled_mma(atom_selector(TA, TB, TC), layout)
   const
     (tileM, tileN, tileK) = tile_shape(tma, defaultTileK)
-  static:
-    doAssert M mod tileM == 0 and N mod tileN == 0,
-      "gemm_kernel: the input (" & $M & ", " & $N & ") is not a multiple of the tile (" &
-      $tileM & ", " & $tileN & "). At the moment, ragged tiles are not expressible through gemm_kernel"
   let mCTA = int(blockIdx.x)
   let nCTA = int(blockIdx.y)
   let thr = tma.get_slice(int(threadIdx.x))

@@ -137,11 +137,20 @@ macro repeat(elem: typed, n: static int): untyped =
 #  CuTe: tensor_impl.hpp — zipped_divide + slice_and_offset
 # ═════════════════════════════════════════════════════════════════════════
 
+#  Static tiler contract:
+#  - CuTe tilers are static, the tile shape is a compile-time constant carried through composition
+#  - makeIntTuple promotes compile-time-known tiler int leaves (literals, const symbols) to Int[N]()
+#  - the tile coords stay runtime, the coord is the runtime fact, the shape is the static fact
+
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Keep tile modes, slice rest modes with coord.
   ## CuTe: zipped_divide(tensor, tiler)(repeat<R0>(_), append<R1>(coord, _))
   block:
-    evalOnceAs zd, zipped_divide(tv.layout, tiler)
+    when tiler is tuple:
+      evalOnceAs tilerS, makeIntTuple(tiler)
+    else:
+      evalOnceAs tilerS, tiler
+    evalOnceAs zd, zipped_divide(tv.layout, tilerS)
     when coord is tuple:
       evalOnceAs c, coord
       evalOnceAs keptRest, make_layout(slice(zd.shape[1], c), slice(zd.stride[1], c))
@@ -157,7 +166,11 @@ template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Slice tile modes with coord, keep rest modes.
   ## CuTe: zipped_divide(tensor, tiler)(append<R0>(coord, _), repeat<R1>(_))
   block:
-    evalOnceAs zd, zipped_divide(tv.layout, tiler)
+    when tiler is tuple:
+      evalOnceAs tilerS, makeIntTuple(tiler)
+    else:
+      evalOnceAs tilerS, tiler
+    evalOnceAs zd, zipped_divide(tv.layout, tilerS)
     when coord is tuple:
       evalOnceAs c, coord
       evalOnceAs keptTile, make_layout(slice(zd.shape[0], c), slice(zd.stride[0], c))
