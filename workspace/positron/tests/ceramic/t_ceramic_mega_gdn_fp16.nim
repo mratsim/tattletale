@@ -69,8 +69,9 @@ proc fp16RangeMax(buf: PageBuf[uint16]; off, count: int): float32 =
     result = max(result, abs(fp16ToFp32(buf.hostPtr[i])))
 
 proc fp16Checks(engine: HwEngine, big: BigHost) =
-  ## One seeded fp16 launch, the sync, sentinel and determinism checks
-  ## around it, plus the relaunch over restored arenas, state and ring.
+  ## One seeded fp16 launch with the sync, sentinel and determinism checks
+  ## around it, a second pass over the carried state and ring, relaunching
+  ## over restored arenas, state and ring, every launch bounded.
   var m = allocMegaGdn()
   defer: freeMegaGdn(m)
   fillGdnInputs(m, big)
@@ -81,7 +82,9 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
 
   let stateSnap = readRecord(m.state.hostPtr, NumVHeads * HeadVDim * HeadKDim)
   let ringSnap = readRecord(m.ring.hostPtr, ConvDim * RingWidth)
-  launch()
+  # the second pass over the carried state and ring, the step-two launch
+  # the relaunch below reproduces bit for bit
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
 
   proc waveSyncCheck() =
     ## Post-launch, the kernel's launch-end reset has re-zeroed the counters.
@@ -122,7 +125,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   for i in 0 ..< F32ArenaLen: m.f32A.hostPtr[i] = f32Snap[i]
   for i in 0 ..< NumVHeads * HeadVDim * HeadKDim: m.state.hostPtr[i] = stateSnap[i]
   for i in 0 ..< ConvDim * RingWidth: m.ring.hostPtr[i] = ringSnap[i]
-  launch()
+  runMegaBounded(launch, m.counters.hostPtr, stageNames)
   waveSyncCheck()
   for i in 0 ..< BfArenaLen:
     doAssert m.bfA.hostPtr[i] == fpSnap[i], &"fp16 arena differs at {i}"
@@ -133,7 +136,7 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
   for i in 0 ..< ConvDim * RingWidth:
     doAssert m.ring.hostPtr[i] == ringPost[i], &"ring differs at {i}"
   echo "[mega fp16] relaunch bit-identical, wave sync exact"
-  echo &"CERAMIC MEGA GDN FP16 VERDICT: launches=2 " &
+  echo &"CERAMIC MEGA GDN FP16 VERDICT: launches=3 " &
     &"bit-exact relaunch " &
     &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}/" &
     &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}"

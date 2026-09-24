@@ -17,7 +17,7 @@
 ## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_bits.nim
 
-import std/strutils
+import std/[math, strutils]
 import ../properties/properties
 
 const Patterns = [0x0000'u16, 0x0001, 0x03FF, 0x0400, 0x7BFF, 0x7C00, 0x7E00,
@@ -54,6 +54,17 @@ proc main =
     if p == 0x7E00'u16 or p == 0xFE00'u16: continue  # NaN, no round-trip
     doAssert fp16ToFp32(p).fp32ToFp16 == p,
       "fp16 round-trip fails at 0x" & toHex(p.uint32, 4)
+  proc checkWiden(label: string, h: uint16, want: FloatClass) =
+    ## the widenings keep the Inf/NaN patterns' IEEE-754 meaning, the fp32
+    ## exponent field 255 with the payload shifted through the mantissa
+    let got = classify(fp16ToFp32(h))
+    doAssert got == want,
+      label & ": got " & $got & ", want " & $want
+  checkWiden("fp16 +Inf widens to fp32 +Inf", 0x7C00'u16, fcInf)
+  checkWiden("fp16 -Inf widens to fp32 -Inf", 0xFC00'u16, fcNegInf)
+  checkWiden("fp16 NaN widens to fp32 NaN", 0x7E00'u16, fcNan)
+  checkWiden("fp16 -NaN widens to fp32 NaN", 0xFE00'u16, fcNan)
+
   echo "BIT SURGERY EXAMPLES OK"
 
 main()

@@ -7,7 +7,7 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_properties
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/p_norm.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_norm.nim
 ##
 ## Property suite over the fused fp16 residual RMSNorm, the idempotence invariant,
 ## `rms_norm_res_in_fwd` of `src/kernels/ceramic/norm.nim`:

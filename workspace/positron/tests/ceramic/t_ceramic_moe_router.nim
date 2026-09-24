@@ -7,7 +7,7 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_properties
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_moe_router.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests workspace/positron/tests/ceramic/t_ceramic_moe_router.nim
 ##
 ## Ceramic Qwen softmax router suite, the kernel judged against the host reference
 ##
@@ -309,7 +309,9 @@ proc naiveWeightFor(dt: ScalarKind, logits: seq[float32]; t, E, K: int;
   for slot in 0 ..< K:
     sumSel += p[ids[slot].int].float64
   let w64 = p[target.int].float64 / sumSel * Scale.float64
-  elRound(dt, w64.float32).uint16
+  # the element-dtype BIT pattern the caller widens, `.uint16` on the float
+  # truncates the value, `narrowTo` encodes the bit pattern
+  w64.float32.narrowTo(dt)
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
 var suiteWorstUse = 0.0'f64

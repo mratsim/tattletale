@@ -7,7 +7,7 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_properties
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/p_kda.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_kda.nim
 ##
 ## Property suite over the production KDA kernels of the Kimi delta attention rule,
 ## judging the chunked prefill scan against the single-token decode step:
@@ -340,7 +340,7 @@ type KdaRun* = object
 
 proc runKdaScan(
     engine: HwEngine, c: RecCase,
-    bhMax, qkRows, T, t0, n: int,
+    bhMax, qkRows, T, t0, n, Hv, Hk: int,
     cldSeg: seq[float32],
     stateIn: seq[float32],
     stateB: PageBuf[float32], yB: PageBuf[uint16]): KdaRun =
@@ -378,7 +378,7 @@ proc runKdaScan(
     ("prop_kda_prefill_fp16_c32", stPA,
       (yB.pa(), vSeg.pa(), kSeg.pa(), qSeg.pa(), cldSegB.pa(), betaSeg.pa(),
         float32(sqrt(float64(Dk))),
-        int32(bhMax), int32(qkRows div bhMax), int32(bhMax div qkRows), int32(n)))
+        int32(Hv), int32(Hk), int32(Hv div Hk), int32(n)))
   var st = newSeq[float32](stateElems)
   for i in 0 ..< stateElems: st[i] = stateB.hostPtr[i]
   var yy = newSeq[uint16](n * bhMax * Dv)
@@ -387,7 +387,7 @@ proc runKdaScan(
 
 proc runKdaSteps(
     engine: HwEngine, c: RecCase,
-    bhMax, qkRows, T: int,
+    bhMax, qkRows, T, Hv, Hk: int,
     stateB: PageBuf[float32], yB: PageBuf[uint16]): KdaRun =
   ## Launches T single-token decode steps over the same per-token rows, the state
   ## carried in place across launches, one y row read back per step.
@@ -401,19 +401,20 @@ proc runKdaSteps(
     var gTok = allocPageBuf[float32](qkRows * Dk)
     var vTok = allocPageBuf[uint16](bhMax * Dv)
     var betaTok = allocPageBuf[float32](bhMax)
-    for i in 0 ..< qkRows * Dk:
-      kTok.hostPtr[i] = c.kBits[t * qkRows * Dk + i].widenTo(kFloat16)
-      qTok.hostPtr[i] = c.qBits[t * qkRows * Dk + i].widenTo(kFloat16)
-      gTok.hostPtr[i] = c.gVals[t * qkRows * Dk + i]
-    for i in 0 ..< bhMax * Dv: vTok.hostPtr[i] = c.vBits[t * bhMax * Dv + i]
+    for h in 0 ..< qkRows:
+      for dk in 0 ..< Dk:
+        kTok.hostPtr[h * Dk + dk] = c.kBits[((h * T) + t) * Dk + dk].widenTo(kFloat16)
+        qTok.hostPtr[h * Dk + dk] = c.qBits[((h * T) + t) * Dk + dk].widenTo(kFloat16)
+        gTok.hostPtr[h * Dk + dk] = c.gVals[((h * T) + t) * Dk + dk]
     for h in 0 ..< bhMax:
-      betaTok.hostPtr[h] = c.betaBits[t * bhMax + h].widenTo(kFloat16)
+      for r in 0 ..< Dv: vTok.hostPtr[h * Dv + r] = c.vBits[((h * T) + t) * Dv + r]
+      betaTok.hostPtr[h] = c.betaBits[(h * T) + t].widenTo(kFloat16)
     var stPA = stateB.pa()
     engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       ("prop_kda_step_fp16", stPA,
         (yB.pa(), kTok.pa(), qTok.pa(), vTok.pa(), gTok.pa(), betaTok.pa(),
           float32(sqrt(float64(Dk))),
-          int32(bhMax), int32(qkRows div bhMax), int32(bhMax div qkRows)))
+          int32(Hv), int32(Hk), int32(Hv div Hk)))
     for i in 0 ..< stateElems: state[i] = stateB.hostPtr[i]
     for i in 0 ..< bhMax * Dv: yAll[t * bhMax * Dv + i] = yB.hostPtr[i]
     freePageBuf(kTok); freePageBuf(qTok); freePageBuf(gTok)
@@ -496,14 +497,14 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
   var runB: KdaRun
   var launches = 0
   if decodeSide == 1:
-    runA = runKdaSteps(engine, c, bhMax, qkRows, T, stateB, yB)
+    runA = runKdaSteps(engine, c, bhMax, qkRows, T, Hv, Hk, stateB, yB)
     inc launches, T
-    runB = runKdaScan(engine, c, bhMax, qkRows, T, 0, T, cldB, c.state0, stateB, yB)
+    runB = runKdaScan(engine, c, bhMax, qkRows, T, 0, T, Hv, Hk, cldB, c.state0, stateB, yB)
     inc launches
   elif decodeSide == 2:
-    runA = runKdaScan(engine, c, bhMax, qkRows, T, 0, T, cldA, c.state0, stateB, yB)
+    runA = runKdaScan(engine, c, bhMax, qkRows, T, 0, T, Hv, Hk, cldA, c.state0, stateB, yB)
     inc launches
-    runB = runKdaSteps(engine, c, bhMax, qkRows, T, stateB, yB)
+    runB = runKdaSteps(engine, c, bhMax, qkRows, T, Hv, Hk, stateB, yB)
     inc launches, T
   else:
     var t0 = 0
@@ -511,7 +512,7 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
     var stA = c.state0
     for segLen in splitsA:
       # the side's own cld slice, resets recomputed from the segment start
-      let seg = runKdaScan(engine, c, bhMax, qkRows, T, t0, segLen,
+      let seg = runKdaScan(engine, c, bhMax, qkRows, T, t0, segLen, Hv, Hk,
         segmentCld(c.gVals, qkRows, T, Dk, 32, t0, segLen),
         stA, stateB, yB)
       for bh in 0 ..< bhMax:
@@ -525,7 +526,7 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
     var yBs = newSeq[uint16](T * bhMax * Dv)
     var stBs = c.state0
     for segLen in splitsB:
-      let seg = runKdaScan(engine, c, bhMax, qkRows, T, t0B, segLen,
+      let seg = runKdaScan(engine, c, bhMax, qkRows, T, t0B, segLen, Hv, Hk,
         segmentCld(c.gVals, qkRows, T, Dk, 32, t0B, segLen),
         stBs, stateB, yB)
       for bh in 0 ..< bhMax:

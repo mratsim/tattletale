@@ -130,11 +130,16 @@ proc fp32ToFp16*(x: float32): uint16 =
   return sign or uint16(uint32(bexp) shl 10) or uint16(r)
 
 proc fp16ToFp32*(h: uint16): float32 =
-  ## Returns the exact fp32 widening of an fp16 bit pattern.
+  ## Returns the exact fp32 widening of an fp16 bit pattern, the Inf and NaN
+  ## patterns keeping their IEEE-754 meaning,
+  ## (the fp32 exponent field 15+15+127 = 255, the payload shifted through the mantissa).
   let u = uint32(h)
   let sign = (u and 0x8000'u32) shl 16
   let e = int((u shr 10) and 0x1F'u32)
   var man = u and 0x3FF'u32
+  if e == 31:
+    # Inf (man = 0) or NaN (man > 0), the fp32 exponent field 255
+    return cast[float32](sign or 0x7F800000'u32 or (uint32(man) shl 13))
   if e == 0:
     if man == 0: return cast[float32](sign)
     # subnormal:

@@ -7,7 +7,7 @@
 
 ## Run command, from the repo root:
 ## - nim test_positron_properties
-## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/p_gdn.nim
+## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_gdn.nim
 ##
 ## Property suite over the production GDN kernels of the gated delta rule, judging
 ## the chunked prefill scan against the single-token decode step of one recurrence:
@@ -284,34 +284,40 @@ type GdnRun* = object
 
 proc runGdnScan(
     engine: HwEngine, c: RecCase,
-    bhMax, qkRows, T, t0, n: int,
+    bhMax, qkRows, T, t0, n, Hv, Hk: int,
     stateIn: seq[float32],
     stateB: PageBuf[float32], yB: PageBuf[uint16]): GdnRun =
   ## Launches the prefill chunk scan over the token rows [t0, t0 + n), the state loaded
-  ## from `stateIn` in place, y and the end state read back.
+  ## from `stateIn` in place, y and the end state read back. The token rows scatter
+  ## per head into the kernel's (row, token, ·) layout, `Hv`/`Hk` the per-sequence
+  ## head counts the kernel's head mapping expects.
   let stateElems = bhMax * Dv * Dk
   for i in 0 ..< stateElems: stateB.hostPtr[i] = stateIn[i]
   for i in 0 ..< n * bhMax * Dv: yB.hostPtr[i] = 0
-  var kSeg = allocPageBuf[uint16](n * Dk)
-  var qSeg = allocPageBuf[uint16](n * Dk)
-  var vSeg = allocPageBuf[uint16](n * Dv)
-  var betaSeg = allocPageBuf[uint16](n)
-  var gSeg = allocPageBuf[float32](n)
+  var kSeg = allocPageBuf[uint16](n * qkRows * Dk)
+  var qSeg = allocPageBuf[uint16](n * qkRows * Dk)
+  var vSeg = allocPageBuf[uint16](n * bhMax * Dv)
+  var betaSeg = allocPageBuf[uint16](n * bhMax)
+  var gSeg = allocPageBuf[float32](n * bhMax)
   defer:
     freePageBuf(kSeg); freePageBuf(qSeg); freePageBuf(vSeg)
     freePageBuf(betaSeg); freePageBuf(gSeg)
-  for i in 0 ..< n * Dk:
-    kSeg.hostPtr[i] = c.kBits[t0 * Dk + i]
-    qSeg.hostPtr[i] = c.qBits[t0 * Dk + i]
-  for i in 0 ..< n * Dv: vSeg.hostPtr[i] = c.vBits[t0 * Dv + i]
-  for i in 0 ..< n:
-    betaSeg.hostPtr[i] = c.betaBits[t0 + i]
-    gSeg.hostPtr[i] = c.gVals[t0 + i]
+  for h in 0 ..< qkRows:
+    for j in 0 ..< n:
+      for dk in 0 ..< Dk:
+        kSeg.hostPtr[(h * n + j) * Dk + dk] = c.kBits[((h * T) + t0 + j) * Dk + dk]
+        qSeg.hostPtr[(h * n + j) * Dk + dk] = c.qBits[((h * T) + t0 + j) * Dk + dk]
+  for h in 0 ..< bhMax:
+    for j in 0 ..< n:
+      for r in 0 ..< Dv:
+        vSeg.hostPtr[(h * n + j) * Dv + r] = c.vBits[((h * T) + t0 + j) * Dv + r]
+      betaSeg.hostPtr[h * n + j] = c.betaBits[(h * T) + t0 + j]
+      gSeg.hostPtr[h * n + j] = c.gVals[(h * T) + t0 + j]
   var stPA = stateB.pa()
   engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
     ("prop_gdn_prefill_fp16_c32", stPA,
       (yB.pa(), kSeg.pa(), qSeg.pa(), vSeg.pa(), betaSeg.pa(), gSeg.pa(),
-        int32(bhMax), int32(qkRows div bhMax), int32(bhMax div qkRows), int32(n)))
+        int32(Hv), int32(Hk), int32(Hv div Hk), int32(n)))
   var st = newSeq[float32](stateElems)
   for i in 0 ..< stateElems: st[i] = stateB.hostPtr[i]
   var yy = newSeq[uint16](n * bhMax * Dv)
@@ -320,10 +326,12 @@ proc runGdnScan(
 
 proc runGdnSteps(
     engine: HwEngine, c: RecCase,
-    bhMax, qkRows, T: int,
+    bhMax, qkRows, T, Hv, Hk: int,
     stateB: PageBuf[float32], yB: PageBuf[uint16]): GdnRun =
   ## Launches T single-token decode steps over the same per-token rows, the state
-  ## carried in place across launches, one y row read back per step.
+  ## carried in place across launches, one y row read back per step, every step
+  ## scattering its token row per head into the kernel's (row, token, ·) layout,
+  ## `Hv`/`Hk` the per-sequence head counts the kernel's head mapping expects.
   let stateElems = bhMax * Dv * Dk
   var state = c.state0
   var yAll = newSeq[uint16](T * bhMax * Dv)
@@ -334,18 +342,19 @@ proc runGdnSteps(
     var vTok = allocPageBuf[uint16](bhMax * Dv)
     var betaTok = allocPageBuf[uint16](bhMax)
     var gTok = allocPageBuf[float32](bhMax)
-    for i in 0 ..< qkRows * Dk:
-      kTok.hostPtr[i] = c.kBits[t * qkRows * Dk + i]
-      qTok.hostPtr[i] = c.qBits[t * qkRows * Dk + i]
-    for i in 0 ..< bhMax * Dv: vTok.hostPtr[i] = c.vBits[t * bhMax * Dv + i]
+    for h in 0 ..< qkRows:
+      for dk in 0 ..< Dk:
+        kTok.hostPtr[h * Dk + dk] = c.kBits[((h * T) + t) * Dk + dk]
+        qTok.hostPtr[h * Dk + dk] = c.qBits[((h * T) + t) * Dk + dk]
     for h in 0 ..< bhMax:
-      betaTok.hostPtr[h] = c.betaBits[t * bhMax + h]
-      gTok.hostPtr[h] = c.gVals[t * bhMax + h]
+      for r in 0 ..< Dv: vTok.hostPtr[h * Dv + r] = c.vBits[((h * T) + t) * Dv + r]
+      betaTok.hostPtr[h] = c.betaBits[(h * T) + t]
+      gTok.hostPtr[h] = c.gVals[(h * T) + t]
     var stPA = stateB.pa()
     engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       ("prop_gdn_step_fp16", stPA,
         (yB.pa(), kTok.pa(), qTok.pa(), vTok.pa(), betaTok.pa(), gTok.pa(),
-          int32(bhMax), int32(qkRows div bhMax), int32(bhMax div qkRows)))
+          int32(Hv), int32(Hk), int32(Hv div Hk)))
     for i in 0 ..< stateElems: state[i] = stateB.hostPtr[i]
     for i in 0 ..< bhMax * Dv: yAll[t * bhMax * Dv + i] = yB.hostPtr[i]
     freePageBuf(kTok); freePageBuf(qTok); freePageBuf(vTok)
@@ -362,7 +371,7 @@ proc judgeY(j: var Judge, a, b: GdnWalk, ra, rb: GdnRun, bhMax, T: int, label: s
     let yA = fp16ToFp32(ra.y[i]).float64
     let yB = fp16ToFp32(rb.y[i]).float64
     let allow = a.dY[i] + b.dY[i] +
-      max(abs(a.yVal[i]), abs(b.yVal[i])) * 4.8828125e-4 + FloorSub
+      (abs(a.yVal[i]) + abs(b.yVal[i])) * 4.8828125e-4 + FloorSub
     j.judge(&"{label} y elem {i}", yA, yB, allow, ulpStepAt(ulpFp16, max(abs(yA), abs(yB))))
 
 proc judgeState(j: var Judge, a, b: GdnWalk, ra, rb: GdnRun, bhMax: int, label: string) =
@@ -419,16 +428,21 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
   var runB: GdnRun
   var launches = 0
   if decodeSide == 1:
-    runA = runGdnSteps(engine, c, bhMax, qkRows, T, stateB, yB)
+    runA = runGdnSteps(engine, c, bhMax, qkRows, T, Hv, Hk, stateB, yB)
     inc launches, T
-    runB = runGdnScan(engine, c, bhMax, qkRows, T, 0, T, c.state0, stateB, yB)
+    runB = runGdnScan(engine, c, bhMax, qkRows, T, 0, T, Hv, Hk, c.state0, stateB, yB)
     inc launches
+  elif decodeSide == 2:
+    runA = runGdnScan(engine, c, bhMax, qkRows, T, 0, T, Hv, Hk, c.state0, stateB, yB)
+    inc launches
+    runB = runGdnSteps(engine, c, bhMax, qkRows, T, Hv, Hk, stateB, yB)
+    inc launches, T
   else:
     var t0 = 0
     var yA = newSeq[uint16](T * bhMax * Dv)
     var stA = c.state0
     for segLen in splitsA:
-      let seg = runGdnScan(engine, c, bhMax, qkRows, T, t0, segLen, stA, stateB, yB)
+      let seg = runGdnScan(engine, c, bhMax, qkRows, T, t0, segLen, Hv, Hk, stA, stateB, yB)
       for bh in 0 ..< bhMax:
         for j in 0 ..< segLen:
           for r in 0 ..< Dv:
@@ -440,7 +454,7 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
     var yBs = newSeq[uint16](T * bhMax * Dv)
     var stBs = c.state0
     for segLen in splitsB:
-      let seg = runGdnScan(engine, c, bhMax, qkRows, T, t0B, segLen, stBs, stateB, yB)
+      let seg = runGdnScan(engine, c, bhMax, qkRows, T, t0B, segLen, Hv, Hk, stBs, stateB, yB)
       for bh in 0 ..< bhMax:
         for j in 0 ..< segLen:
           for r in 0 ..< Dv:
@@ -450,9 +464,6 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
       inc launches
     runA = GdnRun(y: yA, state: stA)
     runB = GdnRun(y: yBs, state: stBs)
-  if decodeSide == 2:
-    swap(runA, runB)
-
   var j = Judge()
   judgeY(j, walkA, walkB, runA, runB, bhMax, T, label)
   judgeState(j, walkA, walkB, runA, runB, bhMax, label)
