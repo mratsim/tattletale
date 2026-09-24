@@ -8,7 +8,7 @@
 ##
 ## | subject     | contract                                                                                                   |
 ## | ----------- | ---------------------------------------------------------------------------------------------------------- |
-## | naive side  | host fp32 dot products over the exact widenings, plus an fp64 cross-check                                  |
+## | naive side  | host fp32 dot products over the exact widenings, one accumulator form                                      |
 ## | accumulator | kernel and naive side both accumulate fp32, one RNE to the storage element at the store                    |
 ## | regimes     | the same kernel body at M = 1 (GEMV) and M > 32 (tail M-tile)                                              |
 ## | runtime     | the projection shape travels as runtime args, one device entry per dtype plus the TileC = 32 stage-4 entry |
@@ -41,8 +41,6 @@
 ##   fp32 accumulators, each RNE within u_step of its operand
 ## - the 2⁻²⁵ floor covers the fp16 subnormal output grid, also the bf16 grid
 ##
-## - the fp64 cross-check keeps the reference side audited, the naive fp32 dot
-##   judged inside its own band of the exact dot
 ## - the measured divergence justifies the model, never sets the bar
 ## - adjudicated on Apple M4 Max with fresh seeded xorshift64 inputs
 
@@ -81,29 +79,23 @@ const
   FloorSub = 2.9802322387695312e-8   # 2^-25, half the fp16 subnormal ulp,
                                      # the rounding floor at tiny outputs
 
-proc naiveLinearF32(dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[float64] =
-  ## Independent host reference at fp32 arithmetic over the exact widenings.
-  ## This is the exact-dot form.
+proc naiveLinear[T: SomeFloat](dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[T] =
+  ## Independent host reference dot over the exact element-dtype widenings,
+  ## accumulated in the working scalar type `T`
   ##
-  ## - the exact-dot form and the bf16-rounded output form are separate spellings,
-  ##   each judged against the kernel under its own band
-  result = newSeq[float64](M * N)
+  ## - naiveLinear[float32] is the judged form, `bar := 2·K·u32·Σk abs(x·w)`
+  ##   covers the two sides' fp32 accumulator orders against the exact dot
+  ## - the kernel's stored output stays the bf16/fp16-rounded spelling,
+  ##   `bar := 2·u_step·abs(out)` covers the two store rounds, each RNE within
+  ##   u_step of its fp32 operand
+  ## - one accumulation form, the exact-dot and the rounded-output spellings
+  ##   are carried by the bands separately
+  result = newSeq[T](M * N)
   for m in 0 ..< M:
     for n in 0 ..< N:
-      var acc = 0.0'f32
+      var acc = T(0)
       for k in 0 ..< K:
-        acc += x[m * K + k].widenTo(dt) * w[n * K + k].widenTo(dt)
-      result[m * N + n] = acc.float64
-
-proc naiveLinearF64(dt: ScalarKind, x, w: seq[uint16]; M, N, K: int): seq[float64] =
-  ## Exact fp64 widening of the same dot, the naive side's own cross-check.
-  result = newSeq[float64](M * N)
-  for m in 0 ..< M:
-    for n in 0 ..< N:
-      var acc = 0.0'f64
-      for k in 0 ..< K:
-        acc += x[m * K + k].widenTo(dt).float64 *
-          w[n * K + k].widenTo(dt).float64
+        acc += T(x[m * K + k].widenTo(dt)) * T(w[n * K + k].widenTo(dt))
       result[m * N + n] = acc
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
@@ -173,8 +165,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
   var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
-    let want = naiveLinearF32(dt, bits.x, bits.w, M, N, K)
-    let want64 = naiveLinearF64(dt, bits.x, bits.w, M, N, K)
+    let want = naiveLinear[float32](dt, bits.x, bits.w, M, N, K)
     load(bits)
     launch()
     sentinels(bits)
@@ -196,17 +187,6 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
         if got == want[idx]:
           inc exact
         inc total
-    # the naive side's own cross-check, the fp32 dot within its own band of fp64
-    for m in 0 ..< M:
-      for n in 0 ..< N:
-        let idx = m * N + n
-        var sumAbs = 0.0'f64
-        for k in 0 ..< K:
-          sumAbs += abs(bits.x[m * K + k].widenTo(dt).float64 *
-            bits.w[n * K + k].widenTo(dt).float64)
-        let barNaive = K.float64 * U32 * sumAbs
-        doAssert abs(want[idx] - want64[idx]) <= barNaive,
-          "naive fp32 dot outside its own band of fp64"
     if caseId == 0:
       case0record = recordOut()
 

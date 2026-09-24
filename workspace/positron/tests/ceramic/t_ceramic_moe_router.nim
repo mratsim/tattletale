@@ -213,56 +213,77 @@ proc naiveSharedGateDot(dt: ScalarKind, x, sgw: seq[uint16]; T, H: int): seq[flo
       acc += x[t * H + k].widenTo(dt) * sgw[k].widenTo(dt)
     result[t] = acc
 
+proc elRoundLogits(dt: ScalarKind, raw: seq[float32]): seq[float32] =
+  ## One El round per raw logit, the naive chain's logit spelling.
+  result = newSeq[float32](raw.len)
+  for i in 0 ..< raw.len:
+    result[i] = elRound(dt, raw[i])
+
+proc exp2Probs(logits: seq[float32], E: int): tuple[p: seq[float32], lm: float32] =
+  ## Exp2-form softmax numerators over one token's logits, the row max subtracted, unnormalized
+  ##
+  ## - `p[e] = exp2f((logit[e] - lm) · log2e)`, the 1-ulp-class exp2 form
+  ## - no normalization sum, the callers renormalize over their own sets
+  result.p = newSeq[float32](E)
+  var lm = -3.402823466e38'f32
+  for e in 0 ..< E:
+    lm = max(lm, logits[e])
+  result.lm = lm
+  for e in 0 ..< E:
+    result.p[e] = exp2fHost((logits[e] - lm) * Log2e)
+
+proc topKSelect(p: seq[float32], E, K: int): seq[int32] =
+  ## Top-K expert ids by descending p, the lowest expert id on equal scores
+  ##
+  ## Selection sort over the full id order, the K first slots win, ids
+  ## distinct by construction.
+  var order = newSeq[int32](E)
+  for e in 0 ..< E:
+    order[e] = int32(e)
+  result = newSeq[int32](K)
+  for slot in 0 ..< K:
+    var best = slot
+    for i in (slot + 1) ..< E:
+      if p[order[i]] > p[order[best]] or
+          (p[order[i]] == p[order[best]] and order[i] < order[best]):
+        best = i
+    swap(order[slot], order[best])
+    result[slot] = order[slot]
+
+proc renormScaleRound(dt: ScalarKind, p: seq[float32], sel: seq[int32];
+    K: int, Scale: float32): seq[uint16] =
+  ## Renormalize the selected probs over the selected set, scale, one El round
+  ## per routing weight
+  var sumSel = 0.0'f32
+  for i in 0 ..< K:
+    sumSel += p[sel[i]]
+  result = newSeq[uint16](K)
+  for slot in 0 ..< K:
+    let weight = p[sel[slot]] / sumSel * Scale
+    result[slot] = if dt == kBfloat16: f32ToBf16(weight) else: fp32ToFp16(weight)
+
 proc naiveRouter(dt: ScalarKind, x, w: seq[uint16]; T, H, E, K: int, Scale: float32):
     tuple[ids: seq[int32], routW: seq[uint16], logits: seq[float32]] =
-  ## Independent host reference for the softmax form's rounding chain in fp32
+  ## Independent host reference for the softmax form's rounding chain in fp32,
+  ## the stages composed in order
   ##
-  ## - sequential fp32 dot over the exact widenings, one El round per logit
-  ## - fp32 softmax over the exp2 form
-  ## - top-K with the lowest-index tiebreak, then renorm, scale, one El round per routing weight
+  ## - dotRawLogits under the naive sequential sum through elRoundLogits,
+  ##   one El round per logit
+  ## - exp2Probs, then topKSelect with the lowest expert id on equal scores
+  ## - renormScaleRound over the selected set only, one El round per weight
+  ##
+  ## The kernel exposes none of the intermediate results, so the suite judges
+  ## the whole chain end to end (plus the tie-region pair bounds on the ids).
   result.ids = newSeq[int32](T * K)
   result.routW = newSeq[uint16](T * K)
-  result.logits = newSeq[float32](T * E)
+  result.logits = elRoundLogits(dt, dotRawLogits(dt, x, w, T, H, E, false))
   for t in 0 ..< T:
-    var logits = newSeq[float32](E)
-    for e in 0 ..< E:
-      var acc = 0.0'f32
-      for k in 0 ..< H:
-        acc += x[t * H + k].widenTo(dt) * w[e * H + k].widenTo(dt)
-      logits[e] = elRound(dt, acc)
-      result.logits[t * E + e] = logits[e]
-    var lm = -3.402823466e38'f32
-    for e in 0 ..< E:
-      lm = max(lm, logits[e])
-    var p = newSeq[float32](E)
-    var ls = 0.0'f32
-    # the crucible export table also carries an exp2 device builtin whose
-    # host body is a discard, so exp2fHost is the only host exp2 here
-    for e in 0 ..< E:
-      p[e] = exp2fHost((logits[e] - lm) * Log2e)
-      ls += p[e]
-    var order = newSeq[int32](E)
-    for e in 0 ..< E:
-      order[e] = int32(e)
-    # selection sort by descending p, lowest expert id on equal scores
-    # select the K first, then renormalize over the selected set only
-    var sel = newSeq[int32](K)
+    let (p, _) = exp2Probs(result.logits[t * E ..< (t + 1) * E], E)
+    let sel = topKSelect(p, E, K)
+    let wRow = renormScaleRound(dt, p, sel, K, Scale)
     for slot in 0 ..< K:
-      var best = slot
-      for i in (slot + 1) ..< E:
-        if p[order[i]] > p[order[best]] or
-            (p[order[i]] == p[order[best]] and order[i] < order[best]):
-          best = i
-      swap(order[slot], order[best])
-      sel[slot] = order[slot]
-      result.ids[t * K + slot] = order[slot]
-    var sumSel = 0.0'f32
-    for i in 0 ..< K:
-      sumSel += p[sel[i]]
-    for slot in 0 ..< K:
-      let weight = p[sel[slot]] / sumSel * Scale
-      result.routW[t * K + slot] =
-        if dt == kBfloat16: f32ToBf16(weight) else: fp32ToFp16(weight)
+      result.ids[t * K + slot] = sel[slot]
+      result.routW[t * K + slot] = wRow[slot]
 
 proc elSlack(uStep: float64, l: float32): float64 =
   ## One El grid step's rounding slack at logit l
@@ -283,15 +304,12 @@ proc naiveWeightFor(dt: ScalarKind, logits: seq[float32]; t, E, K: int;
   ## Naive chain's routing weight for expert `target`, renormalized over the set
   ## `ids` in slot order, used when the kernel's top-K set differs from the naive
   ## one inside the tie region
-  var lm = -3.402823466e38'f32
-  for e in 0 ..< E:
-    lm = max(lm, logits[t * E + e])
+  let (p, _) = exp2Probs(logits[t * E ..< (t + 1) * E], E)
   var sumSel = 0.0'f64
   for slot in 0 ..< K:
-    let e = logits[t * E + ids[slot].int]
-    sumSel += exp2fHost((e - lm) * Log2e).float64
-  let p = exp2fHost((logits[t * E + target.int] - lm) * Log2e).float64
-  elRound(dt, (p / sumSel * Scale).float32).uint16
+    sumSel += p[ids[slot].int].float64
+  let w64 = p[target.int].float64 / sumSel * Scale.float64
+  elRound(dt, w64.float32).uint16
 
 var suiteCases, suiteLaunches, suiteExact, suiteTotal = 0
 var suiteWorstUse = 0.0'f64
