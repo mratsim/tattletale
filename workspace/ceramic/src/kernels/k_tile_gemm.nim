@@ -31,33 +31,6 @@ proc gemm_with_epilogue*[TIn, TOut; Epi](
     B: ptr UncheckedArray[TIn], rsb, csb: int32,
     N, K, M: int32; epi: Epi, buf1: ptr UncheckedArray[float32]) {.device.} =
   ## D = f(A·B), A (N, K), B (K, M), D (N, M), explicit row/col strides.
-  ##
-  ## Expected input:
-  ##   - A of shape (N, K) at (rsa, csa) strides and B of shape (K, M)
-  ##     presented as an (M, K) view at (csb, rsb) strides
-  ##   - D of shape (N, M) at (rsd, csd) strides, raw runtime dims,
-  ##     no caller padding
-  ##   - epi, a fused epilogue, buf1 the fp32 buffer its gmem operands
-  ##     shard-read from (the D buffer for an in-place epilogue)
-  ##
-  ## Output:
-  ##   D tile = f(AB tile), written masked at the real (N, M) extent.
-  ##
-  ## Ragged-native:
-  ##   - the k loop runs ceil(K / tileK) slices
-  ##   - the A and B tile loads are bounded by the raw dims, out-of-range
-  ##     lanes hold the zero fill in-register and never touch memory
-  ##   - the final store is masked at the real extent, so D's padding
-  ##     lanes are untouched
-  ##
-  ## Operand contract:
-  ##   - an epilogue's gmem operands are shard-read over the full 32×32 tile extent
-  ##   - on a region-edge tile the out-of-range lanes read past the operand's real region
-  ##   - those lanes' values are dropped by the masked store, but the operand buffer must tolerate reads at the tile extent
-  ##
-  ## Ragged shapes with gmem-operand epilogues go through the bounded procs
-  ## below (gemm, linear, linear_relu), which load their operands into
-  ## bounded register tiles.
   let gd_a = A.gd(shape = (1, 1, N, K), stride = (0, 0, rsa, csa))
   let gd_b = B.gd(shape = (1, 1, M, K), stride = (0, 0, csb, rsb))
   let gd_d = D.gd(shape = (1, 1, N, M), stride = (0, 0, rsd, csd))

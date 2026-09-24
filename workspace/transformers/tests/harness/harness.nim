@@ -636,14 +636,15 @@ proc flatLogitsRow(logitsRow: Tensor): Tensor =
 # #######################################################################
 
 proc parseHexF32(s: string): float32 =
-  ## Decodes one stored f32 hex bit pattern.
+  ## Returns the f32 the hex string `s` encodes, "0x" plus 8 hex digits,
+  ## case-insensitive, ValueError on any other form.
   if s.len != 10 or not s.startsWith("0x"):
     raise newException(ValueError, "bad f32 hex pattern: " & s)
   cast[float32](uint32(parseHexInt(s)))
 
 proc parseHexF64(s: string): float64 =
-  ## Decodes one stored f64 hex bit pattern, the parse unsigned end to end,
-  ## negative patterns carry the high bit.
+  ## Returns the f64 the hex string `s` encodes, "0x" plus 16 hex digits,
+  ## case-insensitive, ValueError on any other form.
   if s.len != 18 or not s.startsWith("0x"):
     raise newException(ValueError, "bad f64 hex pattern: " & s)
   var u: uint64
