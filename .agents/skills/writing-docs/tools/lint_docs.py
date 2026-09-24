@@ -45,7 +45,6 @@ Rule table (rule | trigger | severity):
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
-| section-separator    | a whole-line `#` comment built from dashes (a layout-position marker)                             | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -463,8 +462,6 @@ RULES = {
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
                              "a doc or maintainer comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
-    "section-separator": Rule("section-separator", True,
-                              "a whole-line # comment built from dashes (a layout-position marker; keep the title line, drop the rule)"),
     "try-block": Rule("try-block", True,
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
     "decl-of-suffix": Rule("decl-of-suffix", True,
@@ -1553,25 +1550,6 @@ def nim_design_narration_checks(path, text, findings):
                 "caller must know"))
 
 
-HASH_SEPARATOR_RE = re.compile(r"^\s*#\s*-+\s*$")
-
-
-def nim_section_separator_checks(path, text, findings):
-    """Flags whole-line `#` comments built from dashes. A dash rule is a
-    layout-position marker: it says where a section sits on the screen, not
-    anything a reader of the line needs, and it dies when the code moves.
-    The section title line above or below carries the same information."""
-    blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(text.splitlines()):
-        if i + 1 in blocked:
-            continue
-        if HASH_SEPARATOR_RE.match(raw):
-            findings.append(Finding(
-                path, i + 1, "section-separator",
-                "a dash rule is a layout-position marker (keep the section "
-                "title, drop the rule)"))
-
-
 def try_allowed(path):
     norm = str(path).replace("\\", "/")
     if norm.endswith(tuple(TRY_ALLOWLIST)) or norm in TRY_ALLOWLIST:
@@ -1820,7 +1798,6 @@ def scan(path, text, findings):
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
-            nim_section_separator_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
         if is_py and meta is not None:
             tree = None

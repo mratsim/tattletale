@@ -371,6 +371,7 @@ proc truncatedKl(refLogits, obsLogits: seq[float32]): float64 =
 
 
 # Record fingerprint builders
+# ----------------------------------------------------------
 
 proc recordMeans(vals: seq[float32]): tuple[n: int, meanAbs: float64, signedMean: float64, maxMagnitude: float64] =
   ## Finite-element means and the largest finite magnitude.
@@ -593,6 +594,7 @@ proc deriveBands(ulpAllowance: int, top1: float64, depth = 1, datatype: UlpDatat
 # #######################################################################
 
 # Error model classes
+# ----------------------------------------------------------
 
 proc perStageAllowance(kind: RoundingErrorSourceKind): int =
   ## Returns the per-stage drift allowance of one error model in ulps, 2
@@ -656,6 +658,7 @@ proc parseHexF64(s: string): float64 =
 
 
 # Stats frame IO
+# ----------------------------------------------------------
 
 proc readUniformStats(path: string): UniformStatsFile =
   ## Parses one uniform stats frame in the standardized form.
@@ -735,6 +738,7 @@ proc dtypeGrid(node: JsonNode): UlpDatatype =
 
 
 # Decisions frame IO
+# ----------------------------------------------------------
 
 proc loadArgmaxDecisions(path: string): seq[ArgmaxRecord] =
   ## Parses one argmax decision frame in the standardized form
@@ -779,6 +783,7 @@ proc observedTailProbability(row: Tensor, topKIds: seq[int]): float64 =
 
 
 # Instrument check cores
+# ----------------------------------------------------------
 
 proc harnessStats(actual: Tensor, record: StatsRecord, kind: RoundingErrorSourceKind, depth = 1, msg = "") =
   ## Checks the uniform stats of `actual` against one record,
@@ -985,6 +990,7 @@ proc checkArgmaxRow(actual: Tensor, record: ArgmaxRecord, flipCount: var int, ms
 
 
 # Public assert surface
+# ----------------------------------------------------------
 
 proc assertStats*(actual: Tensor, statsPath: string, tensorName: string, kind: RoundingErrorSourceKind, depth = 1, msg = "") =
   ## Asserts one computed tensor against one recorded sidecar entry,
