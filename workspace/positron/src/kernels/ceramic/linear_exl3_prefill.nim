@@ -15,6 +15,7 @@
 # ############################################################
 
 ## Fused EXL3 prefill-GEMM forward on the ceramic Tile API.
+## bits 1..8 × cb 0..2 entry over the shared core (linear_exl3_core).
 ##
 ## Contract:
 ##
@@ -53,8 +54,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import ./quant_exl3_ops
-import ./tile_io_rows
+import ./linear_exl3_core
 
 # ═════════════════════════════════════════════════════════════════════
 #  The kernel
@@ -70,64 +70,11 @@ proc exl3_gemm_fwd*(
     bits: static int,
     cb: static int,
     D: static int) {.device.} =
-  ## Computes the module doc's contract for one 32-row × 128-column
-  ## output tile. D is the static FWHT block (128).
-  ## `bits` and `cb` are the static instantiation family (bits 1..8 × cb 0..2).
-  ## M is the runtime row count (16 = the prefill tile, 32 = a full tile).
-  static: doAssert D == 128
+  ## Full-family binding over the shared core (linear_exl3_core)
+  ## - bits 1..8 × cb 0..2, the runtime M as the x row limit
+  ## - M is the runtime row count (16 = the prefill tile, 32 = a full tile)
   static: doAssert bits in {1, 2, 3, 4, 5, 6, 7, 8},
     "the dequantTrellis funnel Layout is instantiated for bits 1..8"
   static: doAssert cb in {0, 1, 2},
     "the dequantTrellis codebook is instantiated for cb 0..2"
-  let tgx = int32(threadgroup_position_in_grid.x)
-  let tgy = int32(threadgroup_position_in_grid.y)
-  let tilesN = N div 16
-
-  # x/Out carry the natural row strides. suh/svh are stride-0-row
-  # column-broadcast views (the rmsnorm γ pattern)
-  let gdX = x.gd(shape = (-1, -1, -1, -1), stride = (32 * K, 0, K, 1))
-  let gdSuh = suh.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let gdSvh = svh.gd(shape = (-1, -1, -1, -1), stride = (0, 0, 0, 1))
-  let gdOut = Out.gd(shape = (-1, -1, -1, -1), stride = (32 * N, 0, N, 1))
-
-  # the output accumulators, array-resident and zeroed before the K loop
-  # (declared on the fp16 atom so the mma's three operands share one
-  # fragment layout)
-  var d: array[4, rt_l(float32, 32, 32, getTileConfig(float32, float16))]
-  for i in 0 ..< 4:
-    d[i].zero()
-
-  # the FWHT'd x rows: 8 fp16 k-block tiles (one 128-block's worth)
-  var aStore: array[8, rt_l(float16, 32, 16)]
-  var a_reg: rt_l(float16, 32, 16)
-  var suhReg: rt_l(float16, 32, 16)
-  var b_reg: rt_r(float16, 16, 32)
-
-  # Input pass: per 128-block, predicated load + suh pre-scale,
-  # tile-level FWHT-128 (1/sqrt(128) norm + fp16 round inside the op)
-  for blk in 0'i32 ..< K div 128:
-    for kk in 0'i32 ..< 8:
-      a_reg.loadTileRows(gdX, (0, 0, tgy, blk * 8 + kk), M)
-      suhReg.loadTile(gdSuh, (0, 0, 0, blk * 8 + kk))
-      a_reg.mulF16(a_reg, suhReg)
-      aStore[kk] = a_reg
-    aStore.hadamard128()
-
-    # The GEMM over the block's 8 k-blocks
-    for kk in 0'i32 ..< 8:
-      a_reg = aStore[kk]
-      for nt in 0'i32 ..< 4:
-        b_reg.dequantTrellis(trellis, blk * 8 + kk, tilesN, tgx, nt, bits, cb)
-        d[nt].mma_AB(a_reg, b_reg)
-
-  # Output pass: quantize the accumulator to fp16 first, tile-level
-  # FWHT-128, svh post-scale, predicated store
-  var y: array[4, rt_l(float16, 32, 32)]
-  for nt in 0'i32 ..< 4:
-    y[nt].quantizeF16(d[nt])
-  y.hadamard128()
-  var svhReg: rt_l(float16, 32, 32)
-  for nt in 0'i32 ..< 4:
-    svhReg.loadTile(gdSvh, (0, 0, 0, tgx * 4 + nt))
-    y[nt].mulF16(y[nt], svhReg)
-    gdOut.storeTileRows(y[nt], (0, 0, tgy, tgx * 4 + nt), M)
+  exl3_fwd_core(Out, x, trellis, suh, svh, M, K, N, bits, cb = cb, D = D)
