@@ -320,7 +320,7 @@ proc peekAt(p: Parser, k: int): char {.inline.} =
 
 proc eof(p: Parser): bool {.inline.} = p.pos >= p.pat.len
 
-proc foldClass(p: Parser, c: CpRanges): CpRanges
+proc foldClassOf(p: Parser, c: CpRanges): CpRanges
   # forward, defined after the fold tables section
 
 proc baseClassRanges(p: Parser, name: string): CpRanges =
@@ -423,7 +423,7 @@ proc parseLiteralChar(p: var Parser): uint32 =
   p.pos += width
   cp
 
-proc foldPartners(c: uint32): seq[uint32] =
+proc foldPartnersOf(c: uint32): seq[uint32] =
   ## Simple-fold partners of one codepoint, from the probed contraction
   ## fold tables plus the ASCII case pair for letters outside them.
   result = @[]
@@ -469,7 +469,7 @@ proc literalToClass(p: Parser, c: uint32): CpRanges =
   ## groups (PCRE2 UCP simple folding, the s fold class carries U+017F).
   if p.caselessDepth > 0:
     result.classAdd(c, c)
-    for cp in foldPartners(c).items:
+    for cp in foldPartnersOf(c).items:
       result.classAdd(cp, cp)
     result = result.classFinish()
   else:
@@ -511,7 +511,7 @@ proc parseClassBracket(p: var Parser): CpRanges =
         p.fail("reversed class range")
     acc.classAdd(atomLo, atomHi)
   if p.caselessDepth > 0:
-    acc = p.foldClass(acc)
+    acc = p.foldClassOf(acc)
   if neg:
     result = classComplement(acc)
   else:
@@ -660,14 +660,14 @@ proc parseAltInto(p: var Parser): Node =
   else:
     Node(kind: nAlt, kids: kids)
 
-proc foldClass(p: Parser, c: CpRanges): CpRanges =
+proc foldClassOf(p: Parser, c: CpRanges): CpRanges =
   ## Caseless expansion of a character class, every member replaced
   ## by its simple-fold class (PCRE2 UCP caseless classes).
   ## Members without fold data raise a compile error, never a silent divergence.
   for r in c.rs.items:
     var cp = r.lo
     while true:
-      let partners = foldPartners(cp)
+      let partners = foldPartnersOf(cp)
       if partners.len == 0 and cp >= 0x80:
         p.fail("caseless class member without fold data: U+" &
           toHex(int(cp), 4))

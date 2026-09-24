@@ -211,7 +211,7 @@ proc getTensorOwned*(view: SafetensorsCollection, tensorName: string, device = k
   ## Trace coverage comes from the per-tensor proc above: the
   ## collection-level form routes through it so every call is counted
   ## exactly once.
-  view.files[view.assignedFile(tensorName)].getTensorOwned(tensorName, device)
+  view.files[view.fileOf(tensorName)].getTensorOwned(tensorName, device)
 
 proc getTensorView*(view: SafetensorsCollection, tensorName: string): Tensor =
   ## Zero-copy mmap view of the tensor data of `tensorName`,
@@ -223,4 +223,4 @@ proc getTensorView*(view: SafetensorsCollection, tensorName: string): Tensor =
   ## must outlive every tensor served this way, the model-level loaders
   ## that use this proc keep the collection alive beside the weights.
   ## Raises ValueError naming the tensor when the collection holds no entry.
-  view.files[view.assignedFile(tensorName)].getTensorView(tensorName)
+  view.files[view.fileOf(tensorName)].getTensorView(tensorName)

@@ -135,14 +135,14 @@ proc run*[T, A](engine: HwEngine, kernel: string, output: var T, args: A,
     for f in fields(args):
       when (typeof(f) is seq) or (typeof(f) is array):
         {.warning: "[crucible-perf] seq/array arg copied in full host->device at every launch; a persistent buffer avoids the copy for large tensors".}
-      blobs.add argBlob(f, blobStorage)
+      blobs.add blobOf(f, blobStorage)
   else:
     blobStorage.setLen(0)
     blobStorage.setLen(sizeof(A))
-    blobs.add argBlob(args, blobStorage)
+    blobs.add blobOf(args, blobStorage)
   # Zero-size blobs are rejected here, at the shared layer, so the four
   # engines cannot diverge on empty seq/string args. Empty arrays are
-  # caught at compile time in `argBlob` (static doAssert).
+  # caught at compile time in `blobOf` (static doAssert).
   let outArg = outBlob(output)
   doAssert outArg.size != 0, "run: output must not be empty (size 0)"
   for i, b in blobs:

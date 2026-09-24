@@ -178,7 +178,7 @@ func notIterable(v: JinjaVal, lo, hi: int): void {.noreturn.} =
     raise jinjaErr("cannot iterate an undefined value", lo, hi - lo)
   raise jinjaErr("cannot iterate a " & $v.kind, lo, hi - lo)
 
-func loopState(v: JinjaVal, lo, hi: int): LoopState =
+func loopStateOf(v: JinjaVal, lo, hi: int): LoopState =
   ## Dispatch at the loop's chain entry, one leg per iterable kind the corpus supports
   ## and the shared raise leg for everything else. `stepFor` coerces a pending call first.
   case v.kind
@@ -265,7 +265,7 @@ proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
     # A macro call in the iterable position renders at its call site, its output
     # what the loop walks, matching upstream.
     iterable = forceCondCall(c, iterable, nd.lo, nd.hi)
-  let lp = loopState(iterable, nd.lo.int, nd.hi.int)
+  let lp = loopStateOf(iterable, nd.lo.int, nd.hi.int)
   if lp.loopLen == 0:
     c.state.curNode = nd.succ
     return

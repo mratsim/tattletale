@@ -477,23 +477,23 @@ proc testMacroDepthCap() =
 #   a keyword naming no parameter, a keyword repeating a bound one.
 # Well-formed positional, keyword and default binding keep rendering.
 proc testMacroArgBinding() =
-  proc raisedMsg(src: string): string =
+  proc reportedOf(src: string): string =
     try:
       discard renderStmt(src)
       doAssert false, "a misplaced macro argument did not raise: " & src
     except JinjaError as e:
       result = e.what
   doAssert "positional argument follows a keyword argument" in
-      raisedMsg("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(x=1, 2) }}"),
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(x=1, 2) }}"),
       "positional after keyword"
   doAssert "takes no keyword argument" in
-      raisedMsg("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, y=2) }}"),
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, y=2) }}"),
       "unknown keyword"
   doAssert "got multiple values for argument" in
-      raisedMsg("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, x=2) }}"),
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, x=2) }}"),
       "keyword repeating a positionally bound parameter"
   doAssert "takes at most 1 positional argument" in
-      raisedMsg("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, 2) }}"),
+      reportedOf("{% macro m(x) %}<{{ x }}>{% endmacro %}{{ m(1, 2) }}"),
       "excess positional"
   doAssert renderStmt("{% macro m(x, y = 9) %}<{{ x }}{{ y }}>{% endmacro %}{{ m(1, y=2) }}") == "<12>",
       "positional, keyword and default binding still render"
@@ -503,16 +503,16 @@ proc testMacroArgBinding() =
 # `getArg` binds the pos-th positional by its own count, and the raise keeps a carrier
 # mis-ordered this way from ever reaching one.
 proc testCalleeArgOrder() =
-  proc raisedMsg(src: string): string =
+  proc reportedOf(src: string): string =
     try:
       discard renderStmt(src)
       doAssert false, "a misplaced callee argument did not raise: " & src
     except JinjaError as e:
       result = e.what
   doAssert "positional argument follows a keyword argument" in
-      raisedMsg("{{ [1, 2, 3] | join(sep = ',', '-') }}"), "positional after keyword in a filter call"
+      reportedOf("{{ [1, 2, 3] | join(sep = ',', '-') }}"), "positional after keyword in a filter call"
   doAssert "positional argument follows a keyword argument" in
-      raisedMsg("{{ 'a,b,c'.split(sep = ',', 1) | join('|') }}"), "positional after keyword in a method call"
+      reportedOf("{{ 'a,b,c'.split(sep = ',', 1) | join('|') }}"), "positional after keyword in a method call"
   doAssert renderStmt("{{ [1, 2, 3] | join(',') }}") == "1,2,3",
       "well-ordered filter arguments keep binding"
   doAssert renderStmt("{{ {'a': 1, 'b': 2} | join(', ') }}") == "a, b",

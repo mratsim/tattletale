@@ -183,11 +183,11 @@ func bvList*(blocks: sink seq[ContentBlock]): BlockValue =
   ## `output` list of text blocks.
   BlockValue(kind: bkvBlocks, blocks: blocks)
 
-func contentBlock*(fields: openArray[tuple[k: string, v: BlockValue]]): ContentBlock =
+func blockOf*(fields: openArray[tuple[k: string, v: BlockValue]]): ContentBlock =
   ## Returns one content block from its ordered key/value pairs, the `type` pair
   ## naming the block kind
   ##
-  ##   let b = contentBlock([("type", bvVal("image")), ("url", bvVal("moon.png"))])
+  ##   let b = blockOf([("type", bvVal("image")), ("url", bvVal("moon.png"))])
   ContentBlock(fields: @fields)
 
 func textContent*(s: string): Content =
@@ -226,7 +226,7 @@ func paramValue(p: ParamValue): JinjaVal =
 func blockValue(p: BlockValue): JinjaVal
   ## forward declaration, the two block forms recursing into each other
 
-func jinjaBlock(c: ContentBlock): JinjaVal =
+func blockValueOf(c: ContentBlock): JinjaVal =
   ## One content block into an insertion-ordered dict, absent fields staying absent.
   var d = DictVal()
   for (k, v) in c.fields:
@@ -239,7 +239,7 @@ func blockValue(p: BlockValue): JinjaVal =
   of bkvBlocks:
     var xs: seq[JinjaVal]
     for item in p.blocks:
-      xs.add jinjaBlock(item)
+      xs.add blockValueOf(item)
     seqVal(xs)
 
 func contentValue(c: Content): JinjaVal =
@@ -250,7 +250,7 @@ func contentValue(c: Content): JinjaVal =
   of ckBlocks:
     var xs: seq[JinjaVal]
     for b in c.blocks:
-      xs.add jinjaBlock(b)
+      xs.add blockValueOf(b)
     seqVal(xs)
 
 func toolCallValue(tc: ToolCall): JinjaVal =
@@ -340,7 +340,7 @@ func chatContextValue*(ctx: ChatContext): JinjaVal =
   else:
     var ds: seq[JinjaVal]
     for doc in ctx.documents:
-      ds.add jinjaBlock(doc)
+      ds.add blockValueOf(doc)
     dictSet(d, "documents", seqVal(ds))
   dictSet(d, "add_generation_prompt", boolVal(ctx.add_generation_prompt))
   for (name, kw) in ctx.kwargs:

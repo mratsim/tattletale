@@ -267,7 +267,7 @@ func spanList(v: JinjaVal): seq[tuple[start, stop: int]] =
       raise jsonError("generation_spans entry is not a [start, end] pair")
     result.add (pair.xs.items[0].i.int, pair.xs.items[1].i.int)
 
-func recordedEpoch(payload: JinjaVal): float64 =
+func clockOf(payload: JinjaVal): float64 =
   ## Returns the recorded epoch, 0 when the row carries none.
   let e = field(payload, "epoch")
   case e.kind
@@ -275,7 +275,7 @@ func recordedEpoch(payload: JinjaVal): float64 =
   of vkFloat: e.f
   else: 0.0
 
-func rowContext(payload: JinjaVal): JinjaVal =
+func contextOf(payload: JinjaVal): JinjaVal =
   ## Builds the template context:
   ##   the standard keys in recording order, then the row's kwargs.
   var d = DictVal()
@@ -299,7 +299,7 @@ proc loadRow*(suite, row: string): Row =
   Row(
       suite: suite,
       row: row,
-      context: rowContext(payload),
+      context: contextOf(payload),
       rendered: if err.kind == vkUndefined: pyStr(field(payload, "rendered")) else: "",
       spans: spanList(field(payload, "generation_spans")),
       expectError: err.kind != vkUndefined,
@@ -314,7 +314,7 @@ proc loadRow*(suite, row: string): Row =
           field(err, "span").i.int
         else:
           0,
-      clock: recordedEpoch(payload))
+      clock: clockOf(payload))
 
 proc rows*(suite: string): seq[Row] =
   ## Every recorded row of one suite, in sorted row order, the `*.json.zst` stems
@@ -360,7 +360,7 @@ func report(got, want: string): string =
     "first difference at byte " & $k & " (got " & $got.len & " B, want " & $want.len & " B)\n" &
         "   got  " & surround(got, k) & "\n   want " & surround(want, k)
 
-func windowBytes(buf: openArray[char], n: int): string =
+func bytesOf(buf: openArray[char], n: int): string =
   ## Copies the first `n` bytes of a pull window into a string.
   for i in 0 ..< n:
     result.add buf[i]
@@ -656,7 +656,7 @@ proc testBoundaryShapes() =
   var big = newSeq[char](want.len + 1)
   let n1 = pullInto(dBig, big)
   doAssert n1 == want.len, "an oversized buffer took " & $n1 & " of " & $want.len & " bytes"
-  doAssert windowBytes(big, n1) == want, "the one-pull render differs from the recorded bytes"
+  doAssert bytesOf(big, n1) == want, "the one-pull render differs from the recorded bytes"
   doAssert pullInto(dBig, big) == 0, "a completed render kept returning bytes"
 
   # A buffer exactly the render size also drains in one pull.
@@ -664,7 +664,7 @@ proc testBoundaryShapes() =
   var exact = newSeq[char](want.len)
   let n2 = pullInto(dExact, exact)
   doAssert n2 == want.len, "an exact-size buffer took " & $n2 & " of " & $want.len & " bytes"
-  doAssert windowBytes(exact, n2) == want, "the exact-size render differs from the recorded bytes"
+  doAssert bytesOf(exact, n2) == want, "the exact-size render differs from the recorded bytes"
   doAssert pullInto(dExact, exact) == 0, "a completed render kept returning bytes"
 
   # A 1-byte buffer gives every byte its own pull, which forces mid-piece drains.
@@ -688,7 +688,7 @@ proc testBoundaryShapes() =
       let n = pullInto(dStop, window)
       if n == 0:
         break
-      head.add windowBytes(window, n)
+      head.add bytesOf(window, n)
   doAssert head.len > 0 and head.len < want.len, "the early stop covered the whole render"
   doAssert head == want[0 ..< head.len], "the bytes before the stop diverged from the recording"
   var tail = ""
@@ -720,7 +720,7 @@ proc testZeroCapacityBuffer() =
     let n = pullInto(d, window)
     if n == 0:
       break
-    acc.add windowBytes(window, n)
+    acc.add bytesOf(window, n)
   doAssert acc == row.rendered, "the render after a zero-capacity pull differs from the recorded bytes"
 
 
@@ -790,7 +790,7 @@ proc testLazyWindowDrain() =
     let n = pullInto(d, window)
     if n == 0:
       break
-    acc.add windowBytes(window, n)
+    acc.add bytesOf(window, n)
   doAssert acc == listRepr, "the lazy-piece drain differs from the container repr"
   doAssert lazyPieces >= 3, "the lazy piece drained in fewer than three pulls, " &
       "the mid-piece drain is unobserved"
@@ -816,7 +816,7 @@ proc testConcatWindowDrain() =
     let n = pullInto(d, window)
     if n == 0:
       break
-    acc.add windowBytes(window, n)
+    acc.add bytesOf(window, n)
   doAssert acc == want, "the concat drain differs from the expected operand order"
   doAssert lazyPulls > 2, "the concat drained in fewer than three pulls, the " &
       "mid-value drain is unobserved"
@@ -873,7 +873,7 @@ proc testSpanDrain() =
     let n = pullInto(d, window)
     if n == 0:
       break
-    acc.add windowBytes(window, n)
+    acc.add bytesOf(window, n)
   doAssert acc == want, "the span-drain render differs from the string render"
   doAssert spanPulls > 0, "no pull drained a pending span piece"
 
@@ -912,7 +912,7 @@ proc testFilterRaiseRepull() =
       let n = pullInto(d, win1)
       if n == 0:
         break
-      acc.add windowBytes(win1, n)
+      acc.add bytesOf(win1, n)
   except JinjaError as e:
     raised = true
     message = e.what
@@ -927,7 +927,7 @@ proc testFilterRaiseRepull() =
     let n = pullInto(d, rest)
     if n == 0:
       break
-    acc.add windowBytes(rest, n)
+    acc.add bytesOf(rest, n)
   doAssert acc == want, "the repull after the raise differs from the single-shot render"
 
   # Wide window. The prefix and the failed item's evaluation land in one call, whose
@@ -942,7 +942,7 @@ proc testFilterRaiseRepull() =
       let n = pullInto(dWide, wide)
       if n == 0:
         break
-      wideAcc.add windowBytes(wide, n)
+      wideAcc.add bytesOf(wide, n)
   except CatchableError:
     wideRaised = true
   doAssert wideRaised, "the wide-window filter raise did not raise"
@@ -952,7 +952,7 @@ proc testFilterRaiseRepull() =
     let n = pullInto(dWide, wide)
     if n == 0:
       break
-    wideRest.add windowBytes(wide, n)
+    wideRest.add bytesOf(wide, n)
   doAssert wideRest == "[ab]post",
       "the wide-window repull did not resume after the discarded bytes"
 
@@ -1018,7 +1018,7 @@ proc testEnsureAsciiEscapes() =
 
 privateAccess(AllocStats)
 
-template countAllocs(body: untyped): int =
+template allocsOf(body: untyped): int =
   ## Counts `alloc` calls made by `body`, with allocator state warmed by the caller.
   let before = getAllocStats()
   body
@@ -1065,12 +1065,12 @@ proc testAllocDrainWindow() =
   # pulls into the test's own 7-byte buffer, exercising the smallest-window path.
   var dTotal = startJinjaRender(m, tables, row.context, row.clock)
   var seven: array[7, char]
-  let pullAllocs = countAllocs:
+  let pullAllocs = allocsOf:
     while true:
       let n = pullInto(dTotal, seven)
       if n == 0:
         break
-  let strAllocs = countAllocs:
+  let strAllocs = allocsOf:
     discard renderToString(src, row.context, row.clock)
   doAssert pullAllocs <= strAllocs, "the pullInto render allocated " & $pullAllocs &
       " against the string render's " & $strAllocs
@@ -1113,9 +1113,9 @@ proc testAllocMicro() =
   let msg1 = ctx.d.dictGet("messages").xs.items[1]
   discard msg1.d.dictGet("role")
   discard msg1.d.dictGet("content")
-  let dgRole = countAllocs:
+  let dgRole = allocsOf:
     discard msg1.d.dictGet("role")
-  let dgContent = countAllocs:
+  let dgContent = allocsOf:
     discard msg1.d.dictGet("content")
 
   template countRenders(src: string, n: int): int =
@@ -1124,7 +1124,7 @@ proc testAllocMicro() =
     let want = renderToString(src, ctx, 0.0)
     doAssert renderAllPull(m, tables, ctx, 0.0) == want,
         "the micro pullInto render differs from the string render for " & src
-    countAllocs:
+    allocsOf:
       for _ in 0 ..< n:
         discard renderAllPull(m, tables, ctx, 0.0)
 
@@ -1179,7 +1179,7 @@ proc testAllocSerializer() =
   let tools = toolsVal()
   # warm-up call, excluded from the counted region
   discard toJson(tools)
-  let tjAllocs = countAllocs:
+  let tjAllocs = allocsOf:
     for _ in 0 ..< iters:
       discard toJson(tools)
   doAssert tjAllocs <= 3 * iters, "toJson of the tool schema cost " & $(tjAllocs div iters) &
@@ -1202,14 +1202,14 @@ proc testAllocSerializer() =
     let n = pullInto(dWarm, bufWarm)
     if n == 0:
       break
-    warm.add windowBytes(bufWarm, n)
+    warm.add bytesOf(bufWarm, n)
   doAssert warm == want, "the pullInto render differs from the string render"
 
   var buf = newSeq[char](256)
   var renderAllocs = 0
   for _ in 0 ..< iters:
     var di = startJinjaRender(m, tables, ctx, 0.0)
-    let renderCost = countAllocs:
+    let renderCost = allocsOf:
       while true:
         let n = pullInto(di, buf)
         if n == 0:
@@ -1241,13 +1241,13 @@ proc testAllocSerializer() =
       let got = pullInto(dWarm2, bufWarm2)
       if got == 0:
         break
-      accWarm.add windowBytes(bufWarm2, got)
+      accWarm.add bytesOf(bufWarm2, got)
     doAssert accWarm == wantLocal, "the micro render differs for " & src
     var total = 0
     for _ in 0 ..< n:
       var di = startJinjaRender(mm, ts, loopCtx, 0.0)
       var bi = newSeq[char](256)
-      let renderCost = countAllocs:
+      let renderCost = allocsOf:
         while true:
           let got = pullInto(di, bi)
           if got == 0:
