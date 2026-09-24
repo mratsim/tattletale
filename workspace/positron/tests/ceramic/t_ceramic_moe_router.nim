@@ -70,8 +70,6 @@ import workspace/crucible
 import workspace/ceramic
 import ../../src/kernels/ceramic/moe_router
 import ../../src/kernels/ceramic/ffn_moe_decode_single
-import ../naive/naive_rng
-import ../naive/naive_tensors
 import ceramic_pagebuf
 import ceramic_dtype
 from ../../src/kernels/ceramic/math_consts import Log2e
@@ -168,7 +166,7 @@ const
 
 proc elRound(dt: ScalarKind, v: float32): float32 =
   ## One round-to-nearest-even round into the element dtype and back to fp32.
-  if dt == kBfloat16: naive_tensors.bf16ToF32(naive_tensors.f32ToBf16(v)) else: naive_tensors.fp16ToFp32(naive_tensors.fp32ToFp16(v))
+  if dt == kBfloat16: bf16ToF32(f32ToBf16(v)) else: fp16ToFp32(fp32ToFp16(v))
 
 proc dotRawLogits(dt: ScalarKind, x, w: seq[uint16]; T, H, E: int;
     chunkWalk: bool): seq[float32] =
@@ -264,7 +262,7 @@ proc naiveRouter(dt: ScalarKind, x, w: seq[uint16]; T, H, E, K: int, Scale: floa
     for slot in 0 ..< K:
       let weight = p[sel[slot]] / sumSel * Scale
       result.routW[t * K + slot] =
-        if dt == kBfloat16: naive_tensors.f32ToBf16(weight) else: naive_tensors.fp32ToFp16(weight)
+        if dt == kBfloat16: f32ToBf16(weight) else: fp32ToFp16(weight)
 
 proc elSlack(uStep: float64, l: float32): float64 =
   ## One El grid step's rounding slack at logit l
@@ -336,7 +334,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
   var reassocWorst = 0.0'f64
   var launches = 0
 
-  proc takeInputs(rng: var NaiveRng): tuple[x, w: seq[uint16]] =
+  proc takeInputs(rng: var PropRng): tuple[x, w: seq[uint16]] =
     ## Seeded inputs, element-dtype bits for x and the router weight.
     var xBits = newSeq[uint16](nX)
     var wBits = newSeq[uint16](nW)
@@ -375,7 +373,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
       result.w[i] = wB.hostPtr[i]
 
   var case0record: tuple[ids: seq[int32], w: seq[uint16]]
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
     let want = naiveRouter(dt, bits.x, bits.w, T, H, E, K, scale)
@@ -486,7 +484,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
 
   block determinism:
     # identical inputs give identical top-K sets, bit-identical ids and weights
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let bits0 = takeInputs(rng0)
     load(bits0)
     launch()
@@ -530,7 +528,7 @@ proc runSharedGateCombo(engine: HwEngine; dt: ScalarKind; T, cases: int;
   var exact = 0
   var launches = 0
 
-  proc takeInputs(rng: var NaiveRng): tuple[x, sgw: seq[uint16]] =
+  proc takeInputs(rng: var PropRng): tuple[x, sgw: seq[uint16]] =
     ## Seeded inputs, element-dtype bits for the activations and the (1, H)
     ## shared expert row weight.
     var xBits = newSeq[uint16](nX)
@@ -565,7 +563,7 @@ proc runSharedGateCombo(engine: HwEngine; dt: ScalarKind; T, cases: int;
       result[t] = outB.hostPtr[t]
 
   var case0record: seq[float32]
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     let bits = takeInputs(rng)
     let want = naiveSharedGateDot(dt, bits.x, bits.sgw, T, H)
@@ -594,7 +592,7 @@ proc runSharedGateCombo(engine: HwEngine; dt: ScalarKind; T, cases: int;
 
   block determinism:
     # identical inputs give a bit-identical raw fp32 logit run to run
-    var rng0 = initNaiveRng(seed)
+    var rng0 = initPropRng(seed)
     let bits0 = takeInputs(rng0)
     load(bits0)
     launch()
@@ -631,7 +629,7 @@ proc runMergeCombo(engine: HwEngine; dt: ScalarKind; T, H, K, cases: int;
 
   var launches = 0
   var exact = 0
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   for caseId in 0 ..< cases:
     var want = newSeq[uint16](nOut)
     for i in 0 ..< nPart:
@@ -712,23 +710,23 @@ proc runPoisonedRouter(engine: HwEngine) =
   var gvPA = gvB.pa()
 
   # the poisoned pass, NaN bits across the router weight, the activations finite
-  var rng = initNaiveRng(Seed)
+  var rng = initPropRng(Seed)
   for e in 0 ..< E * H:
     rWB.hostPtr[e] = 0x7FC0'u16
   for i in 0 ..< T * H:
-    xB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
+    xB.hostPtr[i] = f32ToBf16(rng.nextF32(-1.0'f32, 1.0'f32))
   # the expert and shared weights finite, expert E−1's rows live and in bounds
   for i in 0 ..< E * 2 * I * H:
-    guB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    guB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< E * H * I:
-    dWB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    dWB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< I * H:
-    sgB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
-    suB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    sgB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    suB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< H * I:
-    sdB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    sdB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
   for i in 0 ..< H:
-    gvB.hostPtr[i] = naive_tensors.f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
+    gvB.hostPtr[i] = f32ToBf16(rng.nextF32(-0.02'f32, 0.02'f32))
 
   proc loadSentinels() =
     for i in 0 ..< nIds:
@@ -771,7 +769,7 @@ proc runPoisonedRouter(engine: HwEngine) =
         &"poisoned pass slot {slot} not on the unmatched branch's expert E−1: {id}"
       doAssert got.w[t * K + slot] == 0x0000'u16,
         &"poisoned pass weight not the zero pattern at slot {slot}: " &
-        &"0x{got.w[t * K + slot]:04x} = {naive_tensors.bf16ToF32(got.w[t * K + slot])}"
+        &"0x{got.w[t * K + slot]:04x} = {bf16ToF32(got.w[t * K + slot])}"
     # the routed partial rows, zero weight times a finite projection, exactly +0.0
     for slot in 0 ..< K:
       for e in 0 ..< H:
@@ -782,7 +780,7 @@ proc runPoisonedRouter(engine: HwEngine) =
     for e in 0 ..< H:
       doAssert classify(got.part[(t * (K + 1) + K) * H + e]) notin {fcNan, fcInf},
         &"poisoned pass shared partial not finite at col {e}"
-      let ob = naive_tensors.bf16ToF32(got.outRow[t * H + e])
+      let ob = bf16ToF32(got.outRow[t * H + e])
       doAssert classify(ob) notin {fcNan, fcInf},
         &"poisoned pass merged output not finite at col {e}"
   # the relaunch, bit-identical ids, weights, partials and merged row
@@ -806,7 +804,7 @@ proc checkReassociation(dt: ScalarKind; T, H, E: int; seed: uint64) =
   ## - the 16-wide-chunk walk, the kernel's mma accumulation structure, must sit
   ##   inside its stated fp32 reassociation bound against the naive sequential sum
   ## - judged per logit, worst usage printed
-  var rng = initNaiveRng(seed)
+  var rng = initPropRng(seed)
   let nX = T * H
   var x = newSeq[uint16](nX)
   var w = newSeq[uint16](E * H)

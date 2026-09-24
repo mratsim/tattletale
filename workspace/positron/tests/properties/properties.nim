@@ -73,8 +73,15 @@ type ScalarKind* = enum
   kBfloat16
 
 proc f32ToBf16*(x: float32): uint16 =
-  ## Returns the bf16 round-to-nearest-even bit pattern of one finite fp32 value.
+  ## Returns the bf16 round-to-nearest-even bit pattern of one fp32 value,
+  ## zero and Inf passing through and NaN short-circuiting to the canonical
+  ## quiet pattern, sign kept.
+  ##
+  ## NaN never goes through the round-to-even increment, whose carry can
+  ## move a small odd payload across an Inf/NaN boundary.
   let u = cast[uint32](x)
+  if (u and 0x7F800000'u32) == 0x7F800000'u32 and (u and 0x007FFFFF'u32) != 0:
+    return if (u shr 31) == 1: 0xFFC0'u16 else: 0x7FC0'u16
   let lsb = (u shr 16) and 1'u32
   uint16((u + 0x7FFF'u32 + lsb) shr 16)
 
@@ -83,33 +90,44 @@ proc bf16ToF32*(h: uint16): float32 =
   cast[float32](uint32(h) shl 16)
 
 proc fp32ToFp16*(x: float32): uint16 =
-  ## Returns the fp16 round-to-nearest-even bit pattern of one finite fp32 value,
-  ## subnormals rounding on the 2⁻²⁴ grid and overflow saturating to inf.
+  ## Returns the fp16 round-to-nearest-even bit pattern of one fp32 value,
+  ## subnormals on the 2⁻²⁴ grid, underflow below the halfway point to zero,
+  ## overflow saturating to inf and NaN quieted to the canonical pattern.
   let u = cast[uint32](x)
   let sign = uint16((u shr 16) and 0x8000'u32)
-  let rawExp = int((u shr 23) and 0xFF'u32)
-  var man = u and 0x7FFFFF'u32
-  if rawExp == 255:
-    return sign or 0x7C00'u16 or uint16(man shr 13)
-  let exp = rawExp - 127 + 15          # the fp32 biased exponent re-centered on the fp16 bias
-  if exp >= 31:
+  let aexp = int32((u shr 23) and 0xFF'u32)
+  let mant = u and 0x7FFFFF'u32
+  if aexp == 0xFF:                           # Inf / NaN
+    if mant == 0: return sign or 0x7C00'u16
+    return sign or 0x7C00'u16 or 0x0200'u16
+  var bexp = aexp - 127 + 15
+  if bexp >= 31:                             # overflow -> Inf
     return sign or 0x7C00'u16
-  var half: uint32
-  if exp >= 1:
-    half = (uint32(exp) shl 10) or (man shr 13)
-    let roundBits = man and 0x1FFF'u32
-    if roundBits > 0x1000'u32 or
-        (roundBits == 0x1000'u32 and (half and 1'u32) == 1'u32):
-      inc half
-  elif exp >= -24:
-    var m = man or 0x800000'u32
-    let shift = uint32(14 - exp)
-    let roundBits = m and ((1'u32 shl shift) - 1'u32)
-    half = m shr shift
-    let halfPt = 1'u32 shl (shift - 1)
-    if roundBits > halfPt or (roundBits == halfPt and (half and 1'u32) == 1'u32):
-      inc half
-  result = sign or uint16(half)
+  if bexp <= 0:                              # subnormal or zero
+    if bexp < -10:                           # underflow -> zero
+      return sign
+    # the f16 subnormal significand is the RNE of m2·2^(aexp-126), a right
+    # shift by 126 - aexp with round-to-nearest-even on the remainder
+    let m2 = mant or 0x800000'u32
+    let shift = uint32(126 - aexp)
+    let half = 1'u32 shl (shift - 1)
+    var r = m2 shr shift
+    let rem = m2 and ((1'u32 shl shift) - 1'u32)
+    if rem > half or (rem == half and (r and 1'u32) == 1'u32):
+      r += 1
+    return sign or uint16(r)
+  # the normal path, dropping the 13 low mantissa bits with round-to-nearest-even
+  let half = 0x1000'u32
+  var r = mant shr 13
+  let rem = mant and 0x1FFF'u32
+  if rem > half or (rem == half and (r and 1'u32) == 1'u32):
+    r += 1
+    if r == 0x400:                           # mantissa overflow -> bump exponent
+      inc bexp
+      r = 0
+      if bexp >= 31:                         # a value just below the overflow boundary
+        return sign or 0x7C00'u16
+  return sign or uint16(uint32(bexp) shl 10) or uint16(r)
 
 proc fp16ToFp32*(h: uint16): float32 =
   ## Returns the exact fp32 widening of an fp16 bit pattern.
