@@ -192,8 +192,8 @@ task test_chattyninja, "Test workspace/chattyninja template engine suites":
 
 # Granular transformer suite tasks
 # ===================================================
-# Per-suite and per-family tasks so an agent picks exactly the suites
-# a change touched. The device-flip convention (harness/device.nim)
+# Per-suite, per-model and per-suite-group tasks so an agent picks exactly
+# the suites a change touched. The device-flip convention (harness/device.nim)
 # rides the TTT_TEST_ON environment variable: its value becomes
 # the compile-time define of every transformer suite command.
 # Therefore `TTT_TEST_ON=cpu nim test_tf_bf16_qwen3_02_first_8_layers_plus_final`
@@ -223,11 +223,11 @@ proc runTransformerSuite(folder, filename: string) =
   withDir(ProjectRoot):
     runCmd(transformerSuiteCmd(folder, filename))
 
-proc familyName(): string =
-  ## Family selector argument: `nim test_tf_family name=chain`
-  ## on the command line, with TTT_TEST_FAMILY in the environment
+proc modelName(): string =
+  ## Model selector argument: `nim test_tf_model name=gemma3`
+  ## on the command line, with TTT_TEST_MODEL in the environment
   ## as the fallback.
-  result = getEnv("TTT_TEST_FAMILY")
+  result = getEnv("TTT_TEST_MODEL")
   for i in 2 .. paramCount():
     let p = paramStr(i)
     if p.startsWith("name="):
@@ -235,7 +235,7 @@ proc familyName(): string =
 
 # Aggregate skip list
 # --------------------------------------------------
-# Suites the aggregate tasks (test_transformers, test_tf_family) do not run.
+# Suites the aggregate tasks (test_transformers, test_tf_model) do not run.
 # Each entry names the task that runs the suite on its own, so the list is an
 # aggregate convenience and every entry stays reachable by name.
 # A skip always echoes the suite and the reason. A silently skipped failing
@@ -397,32 +397,23 @@ task test_tf_sampler, "Suite: samplers":
 task test_tf_block_sparse_batch_property, "Suite: block-sparse batch invariance":
   runTransformerSuite("layer_invariance", "t_blocksparse_batch_invariance.nim")
 
-task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sampler|moonlight|glm47flash|gemma3|kimilinear|ling3|mistral|north|laguna|gemma4e2b|gemma412b|gemma426b|mla|router|kda|kvcache)":
-  case familyName()
-  of "chain":
+task test_tf_model, "Run one model's suites (name=qwen3|qwen35|qwen36moe|moonlight|glm47flash|gemma3|kimilinear|mistral|north|laguna|gemma4e2b|gemma412b|gemma426b|ling3)":
+  case modelName()
+  of "qwen3":
     runFamily(@[
       ("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim")])
-  of "ids":
-    runFamily(@[
       ("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim")])
-  of "greedy":
+      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim")])
+  of "qwen35":
     runFamily(@[
-      ("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim"),
-      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim"),
-      ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
-  of "moe":
+      ("q_bf16", "t_bf16_qwen35dense_02_first_8_layers_plus_final.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_03_full_forward_to_logits.nim"),
+      ("q_bf16", "t_bf16_qwen35dense_04_greedy_text_generation.nim")])
+  of "qwen36moe":
     runFamily(@[
       ("q_bf16", "t_bf16_qwen36moe_01_layer_internals.nim"),
       ("q_bf16", "t_bf16_qwen36moe_03_full_forward_to_logits.nim"),
       ("q_bf16", "t_bf16_qwen36moe_04_greedy_text_generation.nim")])
-  of "harness":
-    runFamily(@[
-      ("harness", "t_harness_selftest.nim")])
-  of "sampler":
-    runFamily(@[("samplers", "t_sampler.nim")])
   of "moonlight":
     runFamily(@[
       ("q_bf16", "t_bf16_moonlight_01_layer_internals.nim"),
@@ -477,28 +468,26 @@ task test_tf_family, "Run one suite family (name=chain|ids|greedy|moe|harness|sa
   of "ling3":
     runFamily(@[
       ("q_bf16", "t_bf16_ling3_05_coherence.nim")])
-  of "mla":
-    runFamily(@[
-      ("q_bf16", "t_bf16_glm47flash_01_layer_internals.nim"),
-      ("q_bf16", "t_bf16_moonlight_01_layer_internals.nim")])
-  of "router":
-    runFamily(@[
-      ("q_bf16", "t_bf16_moonlight_01_layer_internals.nim")])
-  of "kda":
-    runFamily(@[
-      ("q_bf16", "t_bf16_kimilinear_01_layer_internals.nim")])
-  of "kvcache":
-    runFamily(@[
-      ("kvcache", "test_kvcache.nim"),
-      ("kvcache", "test_page_pool.nim"),
-      ("kvcache", "test_orchestrator.nim"),
-      ("kvcache", "test_radix_invariants.nim"),
-      ("kvcache", "test_fork_stability.nim"),
-      ("kvcache", "test_kvcache_lpm.nim"),
-      ("kvcache", "test_codera020_batch_guard.nim")])
   else:
-    echo "unknown family: name the family chain, ids, greedy, moe, kvcache, harness, sampler, moonlight, glm47flash, kimilinear, ling3, mistral, north, laguna, gemma4e2b, gemma412b, gemma426b, mla, router or kda"
+    echo "unknown model: name the model qwen3, qwen35, qwen36moe, moonlight, glm47flash, gemma3, kimilinear, mistral, north, laguna, gemma4e2b, gemma412b, gemma426b or ling3"
     quit(1)
+
+task test_tf_kvcache, "Run the kvcache suites (cpu-only, model-free)":
+  runFamily(@[
+    ("kvcache", "test_kvcache.nim"),
+    ("kvcache", "test_page_pool.nim"),
+    ("kvcache", "test_orchestrator.nim"),
+    ("kvcache", "test_radix_invariants.nim"),
+    ("kvcache", "test_fork_stability.nim"),
+    ("kvcache", "test_kvcache_lpm.nim"),
+    ("kvcache", "test_codera020_batch_guard.nim")])
+
+task test_tf_harness, "Run the harness selftest":
+  runFamily(@[
+    ("harness", "t_harness_selftest.nim")])
+
+task test_tf_samplers, "Run the sampler suite":
+  runFamily(@[("samplers", "t_sampler.nim")])
 
 task test_transformers, "Test workspace/transformers (the full set, final verification)":
   withDir(ProjectRoot):
