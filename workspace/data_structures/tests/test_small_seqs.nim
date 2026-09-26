@@ -9,7 +9,7 @@
 ##   nim c --path:. --nimcache:/tmp/x --outdir:/tmp/x -r workspace/data_structures/tests/test_small_seqs.nim
 ##
 ## Pass `-d:nimAllocStats` to enable the allocation-count assertions.
-## Pass `--checks:off` or `-d:danger` to compile the negative bounds posture.
+## Pass `--checks:off` or `-d:danger` to compile without the negative bounds checks.
 
 import std/importutils
 import workspace/data_structures/small_seqs
@@ -31,7 +31,7 @@ type
     overflow: ptr UncheckedArray[int32]
 
   NarrowWideSeq = object
-    # The same pair of widths at the smaller inline capacity.
+    # Same pair of widths at the smaller inline capacity.
     len: int
     cap: int
     arr: array[3, int32]
@@ -46,11 +46,11 @@ proc layoutChecks =
   doAssert sizeof(SmallSeq[5, int32]) == 40
   doAssert sizeof(SmallSeq[3, int32]) == 32
   doAssert offsetOf(SmallSeq[5, int32], len) == 0
-  doAssert offsetOf(SmallSeq[5, int32], cap) == 4
+  doAssert offsetOf(SmallSeq[5, int32], heapCap) == 4
   doAssert offsetOf(SmallSeq[5, int32], arr) == 8
   doAssert offsetOf(SmallSeq[5, int32], overflow) == 32
   doAssert offsetOf(SmallSeq[3, int32], len) == 0
-  doAssert offsetOf(SmallSeq[3, int32], cap) == 4
+  doAssert offsetOf(SmallSeq[3, int32], heapCap) == 4
   doAssert offsetOf(SmallSeq[3, int32], arr) == 8
   doAssert offsetOf(SmallSeq[3, int32], overflow) == 24
   doAssert sizeof(ptr UncheckedArray[int32]) == 8
@@ -68,7 +68,7 @@ proc layoutChecks =
 # ─── The index split ─────────────────────────────────────────────────────────
 
 proc prefixNeverMoves =
-  # The first `N` elements stay in `arr` however far the sequence grows.
+  # First `N` elements stay in `arr` no matter how far the sequence grows.
   var s = SmallSeq[5, int32].init
   for i in 0 ..< 5:
     s.add int32(i)
@@ -116,7 +116,7 @@ proc boundaryChecks =
 # ─── Bounds checks ───────────────────────────────────────────────────────────
 
 proc boundsCheckTests =
-  # Indexed access follows the compile-time `boundChecks` switch.
+  # Indexed access tracks the compile-time `boundChecks` switch.
   var s = SmallSeq[3, int32].init
   for i in 0 ..< 5:
     s.add int32(i)
@@ -137,7 +137,7 @@ proc boundsCheckTests =
     s[2] = 22'i32
     doAssert s[2] == 22'i32
   when not compileOption("boundChecks"):
-    # The tail comes from realloc0, so a slot past `len` reads back as 0.
+    # A slot past `len` reads back as 0, the tail coming from `realloc0`.
     var raised = false
     try:
       doAssert s[5] == 0'i32
@@ -157,28 +157,28 @@ proc inlineChecks =
   for i in 0 ..< 5:
     s.add int32(i * i)
   doAssert s.len == 5
-  doAssert s.cap == 5
+  doAssert s.heapCap == 0
   doAssert s.overflow == nil
   doAssert s == [0'i32, 1, 4, 9, 16]
 
 proc zeroValueChecks =
-  # A default-constructed value has `cap` 0, the first spill must still size the tail.
+  # A default-constructed value has `heapCap` 0, the first spill must still size the tail.
   var s: SmallSeq[3, int32]
   doAssert s.len == 0
-  doAssert s.cap == 0
+  doAssert s.heapCap == 0
   doAssert s.overflow == nil
   doAssert s == EmptyInt32
   var expected = 0'i32
   for i in 0 ..< 20:
     s.add int32(i * 3)
     expected += int32(i * 3)
-  doAssert s.cap == 24
+  doAssert s.heapCap == 21  # total slots 24, inline 3
   doAssert s.overflow != nil
   var fromInit = SmallSeq[3, int32].init
   for i in 0 ..< 20:
     fromInit.add int32(i * 3)
-  # The zero value and `init` reach the same capacity, the tail grows identically.
-  doAssert s.cap == fromInit.cap
+  # Zero value and `init` reach the same capacity, the tail grows identically.
+  doAssert s.heapCap == fromInit.heapCap
   doAssert addr(s[0]) == addr(s.arr[0])
   doAssert addr(s[3]) == addr(s.overflow[0])
   for i in 0 ..< 20:
@@ -202,10 +202,10 @@ proc zeroValueChecks =
   doAssert s.overflow[2] == 55'i32
   doAssert s[1] == 11'i32
   doAssert s[5] == 55'i32
-  # The copy owns a tail of its own, writing it cannot reach the source.
+  # A copy owns its own tail, writes cannot reach the source.
   var dup = s
   doAssert dup.len == 20
-  doAssert dup.cap == s.cap
+  doAssert dup.heapCap == s.heapCap
   doAssert dup.overflow != s.overflow
   dup[0] = 7'i32
   dup[19] = 77'i32
@@ -214,11 +214,11 @@ proc zeroValueChecks =
   doAssert dup[0] == 7'i32
   doAssert dup[19] == 77'i32
   block:
-    # The destructor runs on a value whose tail came from a zero value.
+    # A value whose tail came from a zero value, the destructor must release it.
     var dropped: SmallSeq[5, int32]
     for i in 0 ..< 12:
       dropped.add int32(i)
-    doAssert dropped.cap == 20
+    doAssert dropped.heapCap == 15  # total slots 20, inline 5
     doAssert dropped.overflow != nil
   block:
     # A value that never appended has nothing to release.
@@ -231,13 +231,13 @@ proc growthChecks =
   var s = SmallSeq[5, int32].init
   for i in 0 ..< 10:
     s.add int32(i)
-  doAssert s.cap == 10
+  doAssert s.heapCap == 5
   for i in 10 ..< 20:
     s.add int32(i)
-  doAssert s.cap == 20
+  doAssert s.heapCap == 15
   for i in 20 ..< 40:
     s.add int32(i)
-  doAssert s.cap == 40
+  doAssert s.heapCap == 35
   doAssert s.len == 40
   for i in 0 ..< 40:
     doAssert s[i] == int32(i)
@@ -316,7 +316,7 @@ proc clearChecks =
   s.clear()
   doAssert s.len == 0
   doAssert s.overflow == tail
-  doAssert s.cap == 20
+  doAssert s.heapCap == 15
   doAssert s == EmptyInt32
   for i in 0 ..< 3:
     s.add int32(i)
@@ -326,7 +326,7 @@ proc clearChecks =
   for i in 3 ..< 30:
     s.add int32(i)
   let grown = s.overflow
-  doAssert s.cap == 40
+  doAssert s.heapCap == 35
   s.clear()
   doAssert s.len == 0
   doAssert s.overflow == grown
@@ -375,7 +375,7 @@ when defined(nimAllocStats):
         var s = SmallSeq[5, int32].init
         for i in 0 ..< 40:
           s.add int32(i)
-        doAssert s.cap == 40
+        doAssert s.heapCap == 35
       let measured = counts(getAllocStats() - before)
       echo "row of 40 dropped: ", measured
       doAssert measured == (0, 1), $measured
@@ -468,7 +468,7 @@ when defined(nimAllocStats):
         var s: SmallSeq[5, int32]
         for i in 0 ..< 40:
           s.add int32(i)
-        doAssert s.cap == 40
+        doAssert s.heapCap == 35
       let measured = counts(getAllocStats() - before)
       echo "zero value row of 40 dropped: ", measured
       doAssert measured == (0, 1), $measured
@@ -749,12 +749,12 @@ proc copyReusesTailChecks =
   # capacity keeps the block, no free, no allocation, identity kept.
   var d = SmallSeq[3, int32].init
   for i in 0 ..< 12:
-    d.add int32(i)          # cap 12, spilled
+    d.add int32(i)          # heap 7, spilled
   let dTail = d.overflow
   doAssert dTail != nil
   var s = SmallSeq[3, int32].init
   for i in 0 ..< 8:
-    s.add int32(100 + i)    # cap 8, spilled, smaller
+    s.add int32(100 + i)    # heap 3, spilled, smaller
   s = s                       # self-copy stays a no-op
   doAssert s.len == 8
   d = s
@@ -812,8 +812,28 @@ proc sinkContractChecks =
   doAssert b.len == 6
   doAssert b[5] == "n5"
 
+proc initFromValuesChecks =
+  # `initFrom` fills the inline buffer, len set, no tail block.
+  let s = SmallSeq[5, int32].initFrom([10'i32, 20, 30])
+  doAssert s.len == 3
+  doAssert s.heapCap == 0
+  doAssert s.overflow == nil
+  doAssert s == [10'i32, 20, 30]
+  # `initFrom` presizes when the seed exceeds the inline capacity.
+  let sp = SmallSeq[5, int32].initFrom([1'i32, 2, 3, 4, 5, 6, 7])
+  doAssert sp.len == 7
+  doAssert sp.heapCap == 2  # presized exactly, no growth doubling
+  doAssert sp.overflow != nil
+  doAssert sp == [1'i32, 2, 3, 4, 5, 6, 7]
+
+proc stringChecks =
+  # `$` renders the elements, padding slots excluded.
+  doAssert $SmallSeq[5, int32].initFrom([10'i32, 20]) == "[10, 20]"
+
 proc main =
   layoutChecks()
+  initFromValuesChecks()
+  stringChecks()
   selfCopyGuardChecks()
   copyReusesTailChecks()
   sinkContractChecks()
