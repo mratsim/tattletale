@@ -113,7 +113,7 @@ proc ropeTile32[A: static MmaAtom](
   ## half (pairs 0..15) and 16 for the high half (pairs 16..31).
   const M = A.getM()
   const colTiles = 32 div A.getN()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let pairInFrag = cell div 16

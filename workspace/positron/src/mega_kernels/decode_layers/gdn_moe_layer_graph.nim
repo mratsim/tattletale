@@ -126,17 +126,17 @@ type LayerGraph* = object
     ## Bf16 section start offsets, accumulating over the preceding widths.
     ## A width-0 section shares the previous offset.
   bfArenaLen*: int32
-    ## Bf16 scratch extent in elements.
+    ## Bf16 scratch size in elements.
   f32Widths*: array[F32SectionKind, int32]
     ## F32 section shapes in elements.
   f32Offsets*: array[F32SectionKind, int32]
     ## F32 section start offsets, accumulating over the preceding widths.
   f32ArenaLen*: int32
-    ## F32 scratch extent in elements.
+    ## F32 scratch size in elements.
   stages*: array[13, StageRow]
     ## One row per stage by counter index.
   waveTotal*: uint32
-    ## Threadgroup grid extent, the sum of the stage block counts.
+    ## Threadgroup grid size, the sum of the stage block counts.
 
 func divCeil(x, share: int32): int32 {.inline.} =
   ## Smallest stage-block count whose shares of `share` elements cover `x`.

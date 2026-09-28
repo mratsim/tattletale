@@ -12,7 +12,7 @@
 ##   let artifact = engine.getArtifact()                 # PTX / OpenCL src / SPIR-V / WGSL / MSL
 ##   engine.run("kernel", output, (alpha, A, beta, B))   # plain: defaults — grid=blk=1 (Vulkan/WebGPU blk = shader-baked)
 ##   engine.run<<(2, 128)>>("kernel", output, args)              # 1D unchanged: (grid, blk)
-##   engine.run<<((2,3), (128,2))>>(...)                         # 2D: tuple extents, padded to 3D
+##   engine.run<<((2,3), (128,2))>>(...)                         # 2D: tuple dims, padded to 3D
 ##   engine.run<<(grid: (cta_m, cta_n), blk: 256)>>(...)         # named, mixed tuple/int
 ##   engine.run<<(blk: 128)>>(...)                               # named subset (grid=1, sharedMem=0, stream=0 defaults)
 ##   engine.ingest(otherSource)                          # reuse: invalidate + recompile

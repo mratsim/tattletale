@@ -8,8 +8,8 @@
 ## Bounded tile I/O:
 ##   the ragged edge of a register tile against the real region.
 ##
-## A register tile straddles the region edge when its plane origin plus extent
-## crosses the raw runtime (row, col) extents. The per-lane contract:
+## A register tile straddles the region edge when its plane origin plus size
+## crosses the raw runtime (row, col) bounds. The per-lane contract:
 ##
 ## | lane          | loadTileBounded | tileStoreMask | storeTileMasked           |
 ## | ------------- | --------------- | ------------- | ------------------------- |
@@ -58,7 +58,7 @@ proc loadTileBounded*[TIn; TOut; R, C: static int; A: static MmaAtom](
   ##   - tile, an unowned (R, C) register tile, loaded lane by lane
   ##   - gl, the (rows, cols) global-memory view, the tile's plane at plane
   ##     origin `origin[2]·R` (rows) and `origin[3]·C` (cols)
-  ##   - limitRows and limitCols, the raw extents along the view's dims
+  ##   - limitRows and limitCols, the raw bounds along the view's dims
   ##
   ## Output:
   ##   tile.frags holds the loaded values for the in-range lanes and `T(0)`

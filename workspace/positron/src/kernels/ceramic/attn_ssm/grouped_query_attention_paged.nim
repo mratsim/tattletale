@@ -29,7 +29,7 @@
 ## The softmax is online: each kv block rescales the running O
 ## and row sum by exp2(m_prev − m_cur).
 ##
-## Modes:
+## Variants:
 ##   - decode (q_len == 1): causal off, each query attends the cached
 ##     rows [0, cache_seqlen)
 ##   - prefill (q_len ≥ 2): causal on over [0, cache_seqlen + q_len),
@@ -130,7 +130,7 @@ proc maskCausal[A: static MmaAtom](
   const rowTiles = 8 div M
   const colTiles = 8 div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M

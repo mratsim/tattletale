@@ -776,7 +776,7 @@ type                          ##
                                         ##
     CU_JIT_MIN_CTA_PER_SM = 31, ##
                              ##  Maximum number threads in a thread block, computed as the product of
-                             ##  the maximum extent specifed for each dimension of the block. This limit
+                             ##  the maximum value specified for each dimension of the block. This limit
                              ##  is guaranteed not to be exeeded in any invocation of the kernel. Exceeding
                              ##  the the maximum number of threads results in runtime error or kernel launch
                              ##  failure. For kernels already using PTX directive .maxntid, this option will

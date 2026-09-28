@@ -13,7 +13,7 @@
 # ############################################################
 
 ## Fused EXL3 decode-GEMV forward on the ceramic Tile API.
-## MMODE entry over the shared core (linear_exl3_core).
+## MVARIANT entry over the shared core (linear_exl3_core).
 ##
 ## Contract:
 ##
@@ -29,16 +29,16 @@
 ## The weight matrix is not stored. Each 16×32 fp16 weight tile
 ## is reconstructed on the fly by `dequantTrellis` (quant_exl3_ops).
 ## D is the static FWHT block (128).
-## `bits`, `cb` and `mmode` are the static instantiation family
-## (bits 1..8 × cb 0..2, MMODE 0/1). cb0 is the production default codebook.
+## `bits`, `cb` and `mvariant` are the static instantiation family
+## (bits 1..8 × cb 0..2, MVARIANT 0/1). cb0 is the production default codebook.
 ##
-## MMODE:
-##   - MMODE 0: the m = 1 fast path. The x row limit is the compile-time 1.
+## MVARIANT:
+##   - MVARIANT 0: the m = 1 fast path. The x row limit is the compile-time 1.
 ##     Rows 1..31 fold to statically-zero fragments.
-##   - MMODE 1: m ≤ 8 with the runtime M guard.
-## The store guard is M in both modes.
+##   - MVARIANT 1: m ≤ 8 with the runtime M guard.
+## The store guard is M in both variants.
 ##
-## Shapes: K and N must be 128-multiples. Rows ≥ the mode's x row
+## Shapes: K and N must be 128-multiples. Rows ≥ the variant's x row
 ## limit are zero-filled on load. Rows ≥ M are skipped on store.
 ##
 ## Dataflow per 128-column K-block:
@@ -73,17 +73,17 @@ proc exl3_gemv_fwd*(
     M, K, N: int32,
     bits: static int,
     cb: static int,
-    mmode: static int,
+    mvariant: static int,
     D: static int) {.device.} =
-  ## MMODE binding over the shared core (linear_exl3_core), bits 1..8 × cb 0..2
-  ##   - MMODE 0 runs the m=1 fast path with the compile-time x row limit 1
-  ##   - MMODE 1 takes m ≤ 8 with the runtime M x row limit
+  ## MVARIANT binding over the shared core (linear_exl3_core), bits 1..8 × cb 0..2
+  ##   - MVARIANT 0 runs the m=1 fast path with the compile-time x row limit 1
+  ##   - MVARIANT 1 takes m ≤ 8 with the runtime M x row limit
   ## M is the runtime row count.
   static: doAssert bits in {1, 2, 3, 4, 5, 6, 7, 8},
     "the dequantTrellis funnel Layout is instantiated for bits 1..8"
   static: doAssert cb in {0, 1, 2},
     "the dequantTrellis codebook is instantiated for cb 0..2"
-  static: doAssert mmode in {0, 1},
-    "MMODE 0 = the m=1 fast path, MMODE 1 = m <= 8"
+  static: doAssert mvariant in {0, 1},
+    "MVARIANT 0 = the m=1 fast path, MVARIANT 1 = m <= 8"
   exl3_fwd_core(Out, x, trellis, suh, svh, M, K, N, bits,
-    cb = cb, m1FastPath = mmode == 0, D = D)
+    cb = cb, m1FastPath = mvariant == 0, D = D)

@@ -100,7 +100,7 @@ proc maskBand[A: static MmaAtom](
   const rowTiles = 8 div M
   const colTiles = 8 div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M

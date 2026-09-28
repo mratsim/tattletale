@@ -224,7 +224,7 @@ when defined(macosx):
       objc.release(stale.buffer)
       engine.cache.bufs.del(key)
       when defined(debug):
-        echo "[INFO]: metal no-copy cache: extent not mapped, re-wrapping"
+        echo "[INFO]: metal no-copy cache: address range not mapped, re-wrapping"
     result = wrapBufferNoCopy(engine.ctx.ctx.device, data, size)
     engine.cache.bufs[key] = result.buffer
 

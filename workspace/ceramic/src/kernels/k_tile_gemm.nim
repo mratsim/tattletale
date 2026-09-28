@@ -161,7 +161,7 @@ proc gemm*[TIn, TOut](D: ptr UncheckedArray[TOut],
   ##   - the A, B and C tile loads are bounded by the raw dims,
   ##     out-of-range lanes hold zeros in-register and never touch memory
   ##   - the k loop runs ceil(K / tileK) slices and the final D store is
-  ##     masked at the real M×N extent, β = 0 skips the C load
+  ##     masked at the real M×N region, β = 0 skips the C load
   const TileDim = 32
   const tileK = 16
   let gd_a = A.gd(shape = (1, 1, M, K), stride = (0, 0, rsa, csa))

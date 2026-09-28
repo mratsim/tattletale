@@ -392,13 +392,13 @@ template divisibilityCheck(remainingShape, clampedShape: untyped) =
       discard  # shape 1 is trivially divisor
     elif remainingShape is Int: # Compile time assert
       static: doAssert typeof(remainingShape).V mod typeof(clampedShape).V == 0,
-        "compose: shape " & $typeof(remainingShape).V & " and consumed extent " & $typeof(clampedShape).V & " are not divisible"
+        "compose: shape " & $typeof(remainingShape).V & " and consumed shape " & $typeof(clampedShape).V & " are not divisible"
     else:
       doAssert remainingShape mod clampedShape == 0,
-        "compose: shape " & $remainingShape & " and consumed extent " & $clampedShape & " are not divisible"
+        "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
   else:
     doAssert remainingShape mod clampedShape == 0,
-      "compose: shape " & $remainingShape & " and consumed extent " & $clampedShape & " are not divisible"
+      "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
 
 func composeImpl(
     dimIdx:             static int;

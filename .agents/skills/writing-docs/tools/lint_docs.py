@@ -367,6 +367,12 @@ BANNED = [
     (r"\bfrag ordering\b|\bplane row\b|\bband[- ]model\b"
      r"|\bcomposition tier\b|\bband width\b",
      None, "name the thing directly, the quantity, the element, or the width in code terms"),
+    (r"\bextents?\b",
+     None,
+     "use size, dims, or bounds (Vulkan/CUDA ABI type names exempt)"),
+    (r"\bmodes?\b",
+     lambda l: bool(re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
+     "tuples and tensors have dimensions, use dimension (compiler, POSIX, and ABI senses exempt)"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),

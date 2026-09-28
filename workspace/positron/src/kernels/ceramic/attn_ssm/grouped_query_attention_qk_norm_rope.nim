@@ -119,7 +119,7 @@ proc qk_norm_rope_fwd*(
     Sin: ptr UncheckedArray[float32],    # (tokens·cosTokenStride, 64) fp32: the sin table
     xTokenStride: int32,                 # the X row width per token (nQkv, or 8·128 flat)
     cosTokenStride: int32,               # the cos/sin rows per token (slotCount, or 8 flat)
-    headBlocks: int32,                   # the 8-head blocks per token (grid.z extent)
+    headBlocks: int32,                   # the 8-head blocks per token (grid.z size)
     xColBase: int32,                     # the head-column offset (0 for q, H·D for k)
     eps: float32) {.device.} =
   ## Computes the module doc's contract for one 8×128 tile:

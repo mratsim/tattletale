@@ -25,7 +25,7 @@ const ggufDequantMsl = metal:
         dequantGGUF_Q4_K(bReg, w, kk, rowBytes, tile div 4, tile mod 4)
       else:
         dequantGGUF_IQ4_XS(bReg, w, kk, rowBytes, tile div 4, tile mod 4)
-    let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+    let cell = crd2idx(A.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
     for n in 0'i32 ..< 2:
       for m in 0'i32 ..< 4:
         for v in 0'i32 ..< 2:

@@ -84,7 +84,7 @@ proc storeRowScaledF32[R, C: static int; A: static MmaAtom](
   const N = A.getN()
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let r = cell mod A.getM()
   let c = cell div A.getM()

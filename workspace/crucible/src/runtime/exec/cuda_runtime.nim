@@ -9,7 +9,7 @@
 ##
 ## The legacy macro layer (execCuda/execCudaImpl/maybeWrap/CudaDim3/dim3 and
 ## the argument-marshalling helpers they used) is deleted: the HwEngine's
-## chevron LaunchConfig carries the full 3D launch extents and `runImpl`
+## chevron LaunchConfig carries the full 3D launch dims and `runImpl`
 ## marshals ArgBlobs directly. This module is now a thin shim importing the
 ## low-level driver API (cuModuleLoadData, cuModuleGetFunction, cuMemAlloc,
 ## cuMemcpyHtoD, cuMemcpyDtoH, cuMemFree, cuLaunchKernel, cuCtxSynchronize,

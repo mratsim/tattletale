@@ -34,7 +34,7 @@
 ##                  --> hs = act(gs)·us --> fp16 round --> hs_scratch[t, s]
 ##            out_r[t] = fp16(routed + Σ_s shared_down_w[s] @ hs_scratch[t, s])
 ##
-## Buffers, all fp16, every extent a runtime dim:
+## Buffers, all fp16, every size a runtime dim:
 ##
 ##   | buffer     | shape                                            |
 ##   | ---------- | ------------------------------------------------ |
@@ -168,15 +168,15 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
     doAssert AL.getM() == A.getM() and AL.getN() == A.getN() and
       AL.getVpt() == A.getVpt(),
       "gatherSigmoidScores: both atoms must share the lane→fragment cell mapping"
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
   let r = cell mod AL.getM()  # the destination row = expert div 8
   let c0 = cell div AL.getM() # the lane's col pair base
   let e0 = int32(8 * r + c0)  # the lane's experts inside the chunk
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< ScoreChunk div 8:
-    let g0 = simdShuffle(chunk.frags[0][m].frag[0], uint32(srcLane))
-    let g1 = simdShuffle(chunk.frags[0][m].frag[1], uint32(srcLane))
+    let g0 = simdShuffle(chunk.frags[0][m].frag[0], srcLane)
+    let g1 = simdShuffle(chunk.frags[0][m].frag[1], srcLane)
     if m == r:
       scores.frags[0][chunkIndex].frag[0] =
         if ScoreChunk * chunkIndex + e0 < eCount: 1.0'f32 / (1.0'f32 + exp2(-g0 * Log2e))
@@ -215,7 +215,7 @@ proc topkRouted[A: static MmaAtom](
   for m in 0 ..< ScoreChunks:
     sel.frags[0][m].frag[0] = scores.frags[0][m].frag[0]
     sel.frags[0][m].frag[1] = scores.frags[0][m].frag[1]
-  let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
   let r = cell mod A.getM()
   let c0 = cell div A.getM()
   for slot in 0'i32 ..< topK:
@@ -223,12 +223,12 @@ proc topkRouted[A: static MmaAtom](
     for m in 1 ..< ScoreChunks:
       lm = max(lm, sel.frags[0][m].frag[0])
       lm = max(lm, sel.frags[0][m].frag[1])
-    lm = max(lm, simdShuffleDown(lm, 16'u32))
-    lm = max(lm, simdShuffleDown(lm, 8'u32))
-    lm = max(lm, simdShuffleDown(lm, 4'u32))
-    lm = max(lm, simdShuffleDown(lm, 2'u32))
-    lm = max(lm, simdShuffleDown(lm, 1'u32))
-    lm = simdShuffle(lm, 0'u32)
+    lm = max(lm, simdShuffleDown(lm, 16))
+    lm = max(lm, simdShuffleDown(lm, 8))
+    lm = max(lm, simdShuffleDown(lm, 4))
+    lm = max(lm, simdShuffleDown(lm, 2))
+    lm = max(lm, simdShuffleDown(lm, 1))
+    lm = simdShuffle(lm, 0)
     # A candidate index above every real expert index. The min reduction
     # over indices leaves the sentinel standing only when no score matched
     # the max, so the `cand >= ScoreChunk * ScoreChunks` test below fires.
@@ -242,12 +242,12 @@ proc topkRouted[A: static MmaAtom](
         localCand = min(localCand, e0)
       if sel.frags[0][m].frag[1] == lm:
         localCand = min(localCand, e0 + 1)
-    var cand = min(localCand, simdShuffleDown(localCand, 16'u32))
-    cand = min(cand, simdShuffleDown(cand, 8'u32))
-    cand = min(cand, simdShuffleDown(cand, 4'u32))
-    cand = min(cand, simdShuffleDown(cand, 2'u32))
-    cand = min(cand, simdShuffleDown(cand, 1'u32))
-    cand = simdShuffle(cand, 0'u32)
+    var cand = min(localCand, simdShuffleDown(localCand, 16))
+    cand = min(cand, simdShuffleDown(cand, 8))
+    cand = min(cand, simdShuffleDown(cand, 4))
+    cand = min(cand, simdShuffleDown(cand, 2))
+    cand = min(cand, simdShuffleDown(cand, 1))
+    cand = simdShuffle(cand, 0)
     if cand >= ScoreChunk * ScoreChunks:
       ids[slot] = eCount - 1
       w[slot] = 0.0'f32
@@ -260,8 +260,8 @@ proc topkRouted[A: static MmaAtom](
     let own = (cw div 2 mod 2) + 2 * (rw mod 2) + 4 * ((rw div 2) mod 2) +
               8 * (cw div 4 mod 2) + 16 * ((rw div 4) mod 2)
     if cand < ScoreChunk * ScoreChunks:
-      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], uint32(own))
-      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], uint32(own))
+      let w0 = simdShuffle(scores.frags[0][mSel].frag[0], own)
+      let w1 = simdShuffle(scores.frags[0][mSel].frag[1], own)
       w[slot] = if (cw mod 2) == 0: w0 else: w1
       for m in 0 ..< ScoreChunks:
         let e0 = int32(ScoreChunk * m + 8 * r + c0)
@@ -320,7 +320,7 @@ proc moe_fwd*(
   ##          → w = s/(sum(w)+1e-20)·routed_scaling
   ##
   ## Expected input, per model config row, all tensors fp16, row-major,
-  ## every extent a runtime dim. Weights and x come from the checkpoint,
+  ## every size a runtime dim. Weights and x come from the checkpoint,
   ## the two scratch buffers and out_r are written by this kernel.
   ##
   ## - x, shape (num_tokens, hidden), one token per threadgroup
@@ -363,7 +363,7 @@ proc moe_fwd*(
   ##     to the raw dim, out-of-range lanes hold the zero fill, a zero
   ##     operand leaves the mma accumulator untouched
   ##   - the N walks over moe_intermediate and hidden run ceil(dim / 32) tiles,
-  ##     the stores masked at the real extent
+  ##     the stores masked at the real size
   ##   - the router score chunks run ceil(n_routed_experts / ScoreChunk) passes,
   ##     the last chunk's tail experts masked to −float32 max
   ##

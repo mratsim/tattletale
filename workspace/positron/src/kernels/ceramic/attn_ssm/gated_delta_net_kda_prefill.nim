@@ -213,7 +213,7 @@ proc kdaPrefillChunkScanAt*[El](
   var s: rt_l(float32, TileR, Dk)
   s.loadTile(glState, (headLin, 0, dvBlock, 0))
 
-  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
   let rowIn = cell mod APPLE_8x8x8_F32.getM()
   let colIn = cell div APPLE_8x8x8_F32.getM()
 

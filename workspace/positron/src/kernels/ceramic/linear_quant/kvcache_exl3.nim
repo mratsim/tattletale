@@ -148,13 +148,13 @@ proc had8Subgroup(v: var array[4, float32]; lane: uint32) {.device.} =
   ## before any lane's write).
   let sgn1 = 1.0'f32 - 2.0'f32 * float32(lane and 1'u32)
   for s in 0'i32 ..< 4:
-    v[s] = v[s] * sgn1 + simdShuffle(v[s], lane xor 1'u32)
+    v[s] = v[s] * sgn1 + simdShuffle(v[s], lane xor 1)
   let sgn2 = 1.0'f32 - 2.0'f32 * float32((lane and 2'u32) shr 1)
   for s in 0'i32 ..< 4:
-    v[s] = v[s] * sgn2 + simdShuffle(v[s], lane xor 2'u32)
+    v[s] = v[s] * sgn2 + simdShuffle(v[s], lane xor 2)
   let sgn4 = 1.0'f32 - 2.0'f32 * float32((lane and 4'u32) shr 2)
   for s in 0'i32 ..< 4:
-    v[s] = v[s] * sgn4 + simdShuffle(v[s], lane xor 4'u32)
+    v[s] = v[s] * sgn4 + simdShuffle(v[s], lane xor 4)
 
 # ════════════════════════════════════════
 #  The defined cbrt: the LMCubic encode's cube root (MSL has no cbrt)
@@ -316,9 +316,9 @@ proc kvQuantBlock(
   for r in 1'i32 ..< 4:
     s = fmax(s, fabs(v[r]))
   s = s + AbsmaxEps
-  s = fmax(s, simdShuffle(s, lane xor 1'u32))
-  s = fmax(s, simdShuffle(s, lane xor 2'u32))
-  s = fmax(s, simdShuffle(s, lane xor 4'u32))
+  s = fmax(s, simdShuffle(s, lane xor 1))
+  s = fmax(s, simdShuffle(s, lane xor 2))
+  s = fmax(s, simdShuffle(s, lane xor 4))
   let invS = 1.0'f32 / s
   var q: array[4, uint32]
   when compander == 0:
@@ -337,17 +337,17 @@ proc kvQuantBlock(
   elif bits == 4:
     let field = q[0] or (q[1] shl 4) or (q[2] shl 8) or (q[3] shl 12)
     var f = field
-    let pv = simdShuffle(f, lane xor 1'u32)
+    let pv = simdShuffle(f, lane xor 1)
     if (sl and 1) == 0:
       f = f or (pv shl 16)
       outBuf[wordBase + sg * 4 + (sl shr 1)] = f
   else:
     let field = q[0] or (q[1] shl 2) or (q[2] shl 4) or (q[3] shl 6)
     var f = field
-    let pv1 = simdShuffle(f, lane xor 1'u32)
+    let pv1 = simdShuffle(f, lane xor 1)
     if (sl and 1) == 0:
       f = f or (pv1 shl 8)
-    let pv2 = simdShuffle(f, lane xor 2'u32)
+    let pv2 = simdShuffle(f, lane xor 2)
     if (sl and 2) == 0:
       f = f or (pv2 shl 16)
     if (sl and 3) == 0:

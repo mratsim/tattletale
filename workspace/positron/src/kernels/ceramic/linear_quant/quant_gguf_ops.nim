@@ -45,7 +45,7 @@ proc dequantGGUF_Q8_0*[A: static MmaAtom](
   ## file row.
   const M = A.getM()
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -91,7 +91,7 @@ proc dequantGGUF_Q4_K*[A: static MmaAtom](
   ## t2 = t1·nibble, t3 = t2 − fp32(dmin)·m, one fp16 RNE at the store.
   const M = A.getM()
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -171,7 +171,7 @@ proc dequantGGUF_IQ4_XS*[A: static MmaAtom](
   ## at the store.
   const M = A.getM()
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M

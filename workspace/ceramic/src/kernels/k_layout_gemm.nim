@@ -512,7 +512,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   var o = epi
   o.preflight()
   # The store mask is set before the apply. The epilogues read their gmem operands per element, and a lane the store mask
-  # drops must not read an operand (the tile's padded extent can reach past the real M/N region).
+  # drops must not read an operand (the tile's padded size can reach past the real M/N region).
   o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
   var tmp = make_tensor(TD, D.layout.shape)
   o.apply(tmp, dFrag)
@@ -560,13 +560,13 @@ func make_tiled_mma*[Sh, St](
   TiledMma[MmaAtom, Layout[Sh, St]](atom: a, threadLayout: thread_layout)
 
 template threadTiling*(atom: static MmaAtom, M, N: static int): auto =
-  ## Thread tiling for a padded input extent (M, N), derived from the atom's tile dimensions.
+  ## Thread tiling for a padded input size (M, N), derived from the atom's tile dimensions.
   ##
   ## - thrM = M div atom.getM()
   ## - thrN = N div atom.getN()
   ##
   ## Contract:
-  ##   callers pass the input padded up to atom multiples (gemm_kernel does), so the extent must be a multiple of the atom
+  ##   callers pass the input padded up to atom multiples (gemm_kernel does), so the size must be a multiple of the atom
   # TODO: this needs M, N known at compile-time but they are dynamic
   make_layout((M div atom.getM(), N div atom.getN(), 1))
 
@@ -624,15 +624,15 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   ##
   ## Output:
   ##   the (mCTA, nCTA) tile of D = f(A·B), written per thread and masked
-  ##   to the valid (M, N) extent.
+  ##   to the valid (M, N) region.
   ##
   ## Ragged M/N:
   ##   - M/N not multiples of the tile are legal, the thread layout covers
   ##     the input padded up to atom multiples (statically derived from the view shapes)
-  ##   - gemm_cta zero-fills the loads, masks the store at the real extent, and launches a grid of (ceil(M/tileM), ceil(N/tileN)) CTAs
+  ##   - gemm_cta zero-fills the loads, masks the store at the real region, and launches a grid of (ceil(M/tileM), ceil(N/tileN)) CTAs
   ##
   ## Gmem-operand epilogues:
-  ##   - the operands (C, bias) are read per thread over the padded extent, and gemm_cta sets the store mask before the epilogue's apply
+  ##   - the operands (C, bias) are read per thread over the padded size, and gemm_cta sets the store mask before the epilogue's apply
   ##   - the shipped epilogues never read a padded lane's operand (the store drops those lanes), so the reads stay inside the real (M, N) region
   ##
   ## At the moment, 32-bit operands (TF32) with float32 accumulation.

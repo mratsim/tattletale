@@ -205,7 +205,7 @@ proc gatedDeltaDecodeStepTileAt*[T; U; B](
   oVec.row_sum(oProd)
   let oVal = oVec.rowScalar()
 
-  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
   let rowIn = cell mod APPLE_8x8x8_F32.getM()
   let colIn = cell div APPLE_8x8x8_F32.getM()
   if colIn == 0:

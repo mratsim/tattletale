@@ -61,13 +61,13 @@ proc gatherScores[A, AL: static MmaAtom; F: static int](
     doAssert AL.getM() == A.getM() and AL.getN() == A.getN() and
       AL.getVpt() == A.getVpt(),
       "gatherScores: both atoms must share the lane→fragment cell mapping"
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(AL.getLayoutA(), (lane, 0)).toIntVal()
   let r = cell mod AL.getM()  # the destination row = expert div 8
   let srcLane = lane and 9    # the row-0 owner of the lane's col pair
   for m in 0 ..< 8:
-    let g0 = simdShuffle(chunk.frags[0][m].frag[0], uint32(srcLane))
-    let g1 = simdShuffle(chunk.frags[0][m].frag[1], uint32(srcLane))
+    let g0 = simdShuffle(chunk.frags[0][m].frag[0], srcLane)
+    let g1 = simdShuffle(chunk.frags[0][m].frag[1], srcLane)
     if m == r:
       scores.frags[0][destFrag].frag[0] = g0
       scores.frags[0][destFrag].frag[1] = g1
@@ -177,7 +177,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
       let own = cand mod Lanes
       # the weight reads before the mask store, the owning lane preloads the unmasked staged score and the shuffle broadcasts it
       w[slot] = simdShuffle(if own == lane: scratch[cand] else: 0.0'f32,
-        uint32(own))
+        own)
       if own == lane:
         scratch[cand] = maskScore
     threadgroup_barrier_device()
@@ -322,7 +322,7 @@ proc sharedGateLogit*[El; H: static int](
     a.loadTileRows(glX, (t, 0, 0, kk), 1)
     b.loadTile(glSgw, (0, 0, 0, kk))
     sg.mma_AB(a, b)
-  result = simdShuffle(sg.laneScalar(), 0'u32)
+  result = simdShuffle(sg.laneScalar(), 0)
 
 # ─── The fp32-partial merge (decode regime) ──────────────────────────
 

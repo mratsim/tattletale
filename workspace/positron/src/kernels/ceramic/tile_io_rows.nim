@@ -49,7 +49,7 @@ proc loadTileRows*[El; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -81,7 +81,7 @@ proc storeRows[TIn; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -119,7 +119,7 @@ proc storeTileRows*[El; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -143,7 +143,7 @@ proc zeroRows[T; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div A.getN()
   const vpt = A.getVpt()
-  let cell = crd2idx(A.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
   let row = cell mod M
   for n in 0 ..< rowTiles:
     if r0 + int32(n * M + row) >= rowLimit:
@@ -191,7 +191,7 @@ proc zeroRows[T; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   for n in 0 ..< rowTiles:
@@ -226,7 +226,7 @@ proc storeRows[TIn; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M

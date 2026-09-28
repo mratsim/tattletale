@@ -12,7 +12,7 @@
 ## Ragged GEMM over raw runtime dims, M/N/K off the 32/32/16 tile grid.
 ##
 ## All fused kernels are ragged-native, a ceil'd grid, a ceil'd K loop
-## whose tail loads zero-fill, a store masked at the real M×N extent,
+## whose tail loads zero-fill, a store masked at the real M×N region,
 ## and bounded epilogue operand loads.
 ##
 ## Every shape runs against the fp32-exact host reference at tolerance 0.0,

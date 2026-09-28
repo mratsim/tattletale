@@ -78,11 +78,11 @@ proc butterflyCore(rv: var array[32, float32]; lane: uint32) {.device.} =
     rv[2 * s + 1] = a - b
   let sgn1 = 1.0'f32 - 2.0'f32 * float32(lane and 1'u32)
   for s in 0'i32 ..< 32:
-    let p = simdShuffle(rv[s], lane xor 1'u32)
+    let p = simdShuffle(rv[s], lane xor 1)
     rv[s] = rv[s] * sgn1 + p
   let sgn8 = 1.0'f32 - 2.0'f32 * float32((lane and 8'u32) shr 3)
   for s in 0'i32 ..< 32:
-    let p = simdShuffle(rv[s], lane xor 8'u32)
+    let p = simdShuffle(rv[s], lane xor 8)
     rv[s] = rv[s] * sgn8 + p
   for p in 0'i32 ..< 16:
     let s = 4 * (p shr 1) + (p and 1)
@@ -211,7 +211,7 @@ proc dequantTrellis*[A: static MmaAtom](
   const funnel = funnelTable(bits)
   const M = A.getM()
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
