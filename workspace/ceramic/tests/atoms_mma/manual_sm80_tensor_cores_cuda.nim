@@ -90,11 +90,11 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
 const kernelCode = cuda:
   proc mmaMicrotileKernel(C: ptr UncheckedArray[float32],
                           A, B: ptr UncheckedArray[uint32]) {.global.} =
-    mmaMicrotile(tiled, int(threadIdx.x), C, A, B)
+    mmaMicrotile(tiled, threadIdx.x, C, A, B)
 
   proc mmaMicrotileExplicitKernel(C: ptr UncheckedArray[float32],
                                   A, B: ptr UncheckedArray[uint32]) {.global.} =
-    mmaMicrotileExplicit(tiled, int(threadIdx.x), C, A, B)
+    mmaMicrotileExplicit(tiled, threadIdx.x, C, A, B)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

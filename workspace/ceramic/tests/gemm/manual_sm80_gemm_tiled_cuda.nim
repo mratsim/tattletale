@@ -151,14 +151,14 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+    gemmTiledMicrotile(tiled, threadIdx.x, alpha, C, A, B, beta)
 
 const kernelCodeK32 = cuda:
   proc gemmTiledKernelK32(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    gemmTiledMicrotileK32(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+    gemmTiledMicrotileK32(tiled, threadIdx.x, alpha, C, A, B, beta)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

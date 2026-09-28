@@ -44,17 +44,17 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 64), (1, 64))
     let pB = make_view(B, (32, 64), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 64, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 64, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

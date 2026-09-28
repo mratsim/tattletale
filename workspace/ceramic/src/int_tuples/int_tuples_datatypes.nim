@@ -17,8 +17,7 @@ type Int*[V: static int] = object
   ## Compile-time integer literal, analogous to CuTe's `Int<N>`.
   ##   Int<4>  ⇔  Int[4]
 
-## SomeInteger leaves: non-int machine integers (GPU builtin coords) count as leaves.
-type IntOrIntTuple* = SomeInteger | Int | tuple
+type IntOrIntTuple* = int | Int | tuple
 
   ## Shape/stride element type alias for convenience.
 

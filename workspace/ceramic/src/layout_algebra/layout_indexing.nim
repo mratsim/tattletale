@@ -44,7 +44,7 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## which is module-private to layouts.nim.
   crd2idx(makeIntTuple(coord), layout.shape, layout.stride)
 
-macro idx2crd*(layout: Layout; idx: SomeInteger or Int): untyped =
+macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
   ## STRIDE-BASED: `(idx div stride) mod shape` per dimension — only valid for
@@ -120,7 +120,7 @@ proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
   else:
     idxExpr  # scalar leaf: the mod was applied by the parent
 
-macro idx2crd*(shape: IntOrIntTuple; idx: SomeInteger or Int): untyped =
+macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ## Decompose a flat index into a coordinate over SHAPE — colexicographic
   ## over the shape's leaf sizes (first dimension fastest):
   ##   c0 = (idx div 1)        mod s0
@@ -153,15 +153,15 @@ template slice*(target: tuple; selector: typed): auto =
   ## Slice a tuple: keep elements where selector entry is X; drop where it's Y, int, or Int.
   filterZipWith(selector, target):
     (when it_a is X: (it_b,)
-     elif it_a is Y or it_a is SomeInteger or it_a is Int: ()
-     else: {.error: "slice: selector items must be X, Y, or integers".})
+     elif it_a is Y or it_a is int or it_a is Int: ()
+     else: {.error: "slice: selector items must be X, Y, or ints".})
 
 template dice*(target: tuple; selector: typed): auto =
   ## Dice a tuple: keep elements where selector entry is Y, int, or Int; drop where it's X.
   filterZipWith(selector, target):
-    (when it_a is Y or it_a is SomeInteger or it_a is Int: (it_b,)
+    (when it_a is Y or it_a is int or it_a is Int: (it_b,)
      elif it_a is X: ()
-     else: {.error: "dice: selector items must be X, Y, or integers".})
+     else: {.error: "dice: selector items must be X, Y, or ints".})
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with X / _ are kept; Y, int, Int are dropped.

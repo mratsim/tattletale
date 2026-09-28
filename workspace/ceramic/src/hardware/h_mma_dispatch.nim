@@ -131,7 +131,7 @@ proc universalMma8x8x8*[TD; TA; TB](
   ##   A(m, n), A(m, n+1)
   ##   B(m, n), B(m, n+1)
 
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let row = 4 * ((lane shr 4) and 1) + 2 * ((lane shr 2) and 1) + ((lane shr 1) and 1)
   let col = 4 * ((lane shr 3) and 1) + 2 * (lane and 1)
   let colBase = uint32((lane and 1) + 8 * ((lane shr 3) and 1))

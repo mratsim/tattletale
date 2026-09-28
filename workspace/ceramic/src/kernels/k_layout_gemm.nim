@@ -662,10 +662,10 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
   template tma: untyped = make_tiled_mma(atom_selector(TA, TB, TC), layout)
   const
     (tileM, tileN, tileK) = tile_shape(tma, defaultTileK)
-  let mCTA = int(blockIdx.x)
-  let nCTA = int(blockIdx.y)
-  let thr = tma.get_slice(int(threadIdx.x))
+  let mCTA = blockIdx.x
+  let nCTA = blockIdx.y
+  let thr = tma.get_slice(threadIdx.x)
   var tD = local_tile(D, (tileM, tileN), (mCTA, nCTA))
   var tDv = tma.partition_C(thr, tD)
   gemm_cta(tma, tDv, A, B, M, N, K, epi.shard(tma, thr, mCTA, nCTA),
-           (M: tileM, N: tileN, K: tileK), mCTA, nCTA, int(threadIdx.x))
+           (M: tileM, N: tileN, K: tileK), mCTA, nCTA, threadIdx.x)

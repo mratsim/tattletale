@@ -77,7 +77,7 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
 const kernelCode = cuda:
   proc gemmWarpKernel(C: ptr UncheckedArray[float32],
                          A, B: ptr UncheckedArray[uint32]) {.global.} =
-    gemmWarpMicrotile(tiled, int(threadIdx.x), C, A, B)
+    gemmWarpMicrotile(tiled, threadIdx.x, C, A, B)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

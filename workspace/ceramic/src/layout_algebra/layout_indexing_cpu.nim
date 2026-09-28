@@ -98,7 +98,7 @@ func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} 
   ## For tuple coords this is identical to GPU path (no divmod).
   crd2idx(coord, layout.shape, layout.stride)
 
-macro idx2crd_cpu*(layout: Layout; idx: SomeInteger or Int): untyped =
+macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
   ## CPU-suffixed idx2crd: uses same divmod approach.
   ## No wheel-winding alternative for random access.
   ##

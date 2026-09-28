@@ -47,7 +47,7 @@ const kernelPartition = cuda:
     let a = make_view(Buf, make_layout((8, 8), (Int[1](), 8)))
     let tl = make_layout((Int[8](), Int[8]()))
     # local_partition -> complement -> max(1, Int1) at emission.
-    let t = local_partition(a, tl, int(threadIdx.x))
+    let t = local_partition(a, tl, threadIdx.x)
     Buf[0] = 1.0'f32   # written only if the kernel compiles and runs
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return

@@ -52,61 +52,61 @@ const kernelCode = cuda:
       alpha, beta: float32) {.global.} =
     # 1D grid (engine LaunchConfig.grid is a single int):
     # blk = blockIdx.x, 2x2 CTA grid → mCTA = blk mod 2, nCTA = blk div 2.
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 32), (1, 64))
     let pB = make_view(B, (32, 32), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
   proc gemmCtaIdentityKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 32), (1, 64))
     let pB = make_view(B, (32, 32), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiIdentity()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
 const kernelCodeBias = cuda:
   proc gemmCtaReLUKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32]) {.global.} =
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 32), (1, 64))
     let pB = make_view(B, (32, 32), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     let epi = EpiReLU()
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
   proc gemmCtaBiasKernel(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       bias: ptr UncheckedArray[float32]) {.global.} =
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 32), (1, 64))
     let pB = make_view(B, (32, 32), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     # Bias is a (N,) column vector: the input view has stride-0 rows, so
     # every row of a column reads the same bias element. The view is
@@ -116,7 +116,7 @@ const kernelCodeBias = cuda:
     let pBias = make_view(bias, (64, 32), (0, 1))
     var biasView = tiled.partition_C(thr, local_tile(pBias, (32, 16), (mCTA, nCTA)))
     var epi = initEpiAddBias(biasView)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 32, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
 const kernelCodeSingle = cuda:
   proc gemmCtaKernelSingle(
@@ -128,10 +128,10 @@ const kernelCodeSingle = cuda:
     let pB = make_view(B, (16, 32), (1, 16))
     let pC = make_view(C, (32, 16), (1, 32))
     let tC = local_tile(pC, (32, 16), (0, 0))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 32, 16, 32, epi, (32, 16, 32), 0, 0, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 32, 16, 32, epi, (32, 16, 32), 0, 0, threadIdx.x)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

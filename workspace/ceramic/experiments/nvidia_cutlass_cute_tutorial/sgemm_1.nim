@@ -40,10 +40,9 @@ proc sgemm_1_kernel(
 
   # ── CTA coordinate ──
   # CuTe: make_coord(blockIdx.x, blockIdx.y, _)
-  # blockIdx/threadIdx surface as uint32 from the crucible stubs; widened to
-  # int at the read boundary so all kernel math is int (crucible lowers int
-  # to int32 in codegen).
-  let cta_coord = (int blockIdx.x, int blockIdx.y, X())
+  # blockIdx/threadIdx are int in the crucible canonical domain.
+  # Crucible lowers int to the target width in codegen.
+  let cta_coord = (blockIdx.x, blockIdx.y, X())
 
   # ── CTA tile extraction (with Step) ──
   #   mA: (M,K)  cta_tiler: (BLK_M, BLK_N, BLK_K)
@@ -64,22 +63,22 @@ proc sgemm_1_kernel(
   let sB = make_view(addr smemB[0], make_layout((128, 8)))  # (BLK_N, BLK_K)
 
   # ── A/B thread partitioning (3-arg) ──
-  # CuTe: local_partition(gA, tA, int(threadIdx.x))
-  let tAgA = local_partition(gA, tA, int(threadIdx.x))  # (THR_M, THR_K, k)
-  var tAsA = local_partition(sA, tA, int(threadIdx.x))  # (THR_M, THR_K)
-  let tBgB = local_partition(gB, tB, int(threadIdx.x))  # (THR_N, THR_K, k)
-  var tBsB = local_partition(sB, tB, int(threadIdx.x))  # (THR_N, THR_K)
+  # CuTe: local_partition(gA, tA, threadIdx.x)
+  let tAgA = local_partition(gA, tA, threadIdx.x)  # (THR_M, THR_K, k)
+  var tAsA = local_partition(sA, tA, threadIdx.x)  # (THR_M, THR_K)
+  let tBgB = local_partition(gB, tB, threadIdx.x)  # (THR_N, THR_K, k)
+  var tBsB = local_partition(sB, tB, threadIdx.x)  # (THR_N, THR_K)
 
   # ── C thread partitioning (4-arg with Step) ──
   #   sA: (BLK_M, BLK_K), tC: (THR_M, THR_N)
   #   Step (_1, X): partition M by tC dimension 0, keep K whole
-  let tCsA = local_partition(sA, tC, int(threadIdx.x), (Y, X))  # (THR_M, BLK_K)
+  let tCsA = local_partition(sA, tC, threadIdx.x, (Y, X))  # (THR_M, BLK_K)
   #   sB: (BLK_N, BLK_K)
   #   Step (X, _1): keep N whole, partition K by tC dimension 1
-  let tCsB = local_partition(sB, tC, int(threadIdx.x), (X, Y))  # (THR_N, BLK_K)
+  let tCsB = local_partition(sB, tC, threadIdx.x, (X, Y))  # (THR_N, BLK_K)
   #   gC: (BLK_M, BLK_N)
   #   Step (_1, _1): partition both dimensions
-  var tCgC = local_partition(gC, tC, int(threadIdx.x), (Y, Y))  # (THR_M, THR_N)
+  var tCgC = local_partition(gC, tC, threadIdx.x, (Y, Y))  # (THR_M, THR_N)
 
   # ── Accumulators ──
   var tCrC = make_tensor_like(tCgC)  # (THR_M, THR_N)
