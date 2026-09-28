@@ -66,7 +66,7 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
     result.add ", " & operandClause(cName, constraintLetter(cElem), vc)
 
 func buildAppleSimdgroupAsm(dElem, aElem, bElem: string; dV, aV, bV: int): string =
-  ## Metal builtin Matrix codegen
+  ## Metal codegen for builtin Matrix-Multiply-Accumulate
   ##
   ##   - one braced block per payload, mma_AB unrolls several payloads
   ##     into the same function scope, the `simdgroup_*8x8` declarations

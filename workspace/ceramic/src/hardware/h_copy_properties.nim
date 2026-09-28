@@ -6,61 +6,13 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 
-## Copy-atom catalog accessors and the atom × value-type chunk views.
+## The cp.async atom × value-type chunk views.
 ## The entries are declared in h_copy_registry.nim.
 
 import std/macros
 import ./h_copy_registry
 
 {.experimental: "dynamicBindSym".}
-
-# ═════════════════════════════════════════════════════════════════════════
-#  Catalog accessors, one getter per registry property
-# ═════════════════════════════════════════════════════════════════════════
-
-macro kindOf*(atom: static CopyAtom): untyped =
-  ## The atom's slot kind (ckCopy / ckCommit / ckWait).
-  result = bindSym($atom & "_kind")
-
-macro srcSpaceOf*(atom: static CopyAtom): untyped =
-  ## The memory space the atom copies from, spAny when unconstrained.
-  result = bindSym($atom & "_srcSpace")
-
-macro dstSpaceOf*(atom: static CopyAtom): untyped =
-  ## The memory space the atom copies into, spAny when unconstrained.
-  result = bindSym($atom & "_dstSpace")
-
-macro vecBytesOf*(atom: static CopyAtom): untyped =
-  ## Bytes the atom moves per instruction, the chunk is 4, 8 or 16 wide.
-  result = bindSym($atom & "_vecBytes")
-
-macro minAlignOf*(atom: static CopyAtom): untyped =
-  ## Pointer byte alignment the atom's instruction requires.
-  result = bindSym($atom & "_minAlign")
-
-macro zeroFillOf*(atom: static CopyAtom): untyped =
-  ## Whether the atom supports a chunk zero-fill (the cp.async src-size-0 form).
-  result = bindSym($atom & "_zeroFill")
-
-macro cacheOf*(atom: static CopyAtom): untyped =
-  ## The atom's cache behavior (cache_default / cache_always / cache_global_bypass_L1).
-  result = bindSym($atom & "_cache")
-
-macro transposeOf*(atom: static CopyAtom): untyped =
-  ## Whether the atom copies with a transpose.
-  result = bindSym($atom & "_transpose")
-
-macro minCudaArchOf*(atom: static CopyAtom): untyped =
-  ## Minimum CUDA architecture the atom requires, 0 = universal.
-  result = bindSym($atom & "_minCudaArch")
-
-macro instrOf*(atom: static CopyAtom): untyped =
-  ## The atom's instruction spelling, "" for plain loads/stores.
-  result = bindSym($atom & "_instr")
-
-macro waitDepthOf*(atom: static CopyAtom): untyped =
-  ## The wait atom's supported group depth, 0 for everything else.
-  result = bindSym($atom & "_waitDepth")
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The cp.async atom
