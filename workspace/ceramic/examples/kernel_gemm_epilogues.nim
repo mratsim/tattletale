@@ -27,11 +27,11 @@
 #   3. apply: the per-thread f(AB) over the accumulator
 #   4. store: `finalStore` writes the tile, masked by `storeMask`
 
-import ./int_tuples
-import ./layouts
-import ./tensors
-import ./hardware/h_properties
-import ./atoms_mma_partitioning
+import ../src/int_tuples
+import ../src/layouts
+import ../src/tensors
+import ../src/hardware/h_properties
+import ../src/atoms_mma_partitioning
 
 {.experimental: "callOperator".}
 

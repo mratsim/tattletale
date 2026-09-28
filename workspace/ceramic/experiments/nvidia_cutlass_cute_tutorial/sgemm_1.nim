@@ -9,11 +9,11 @@ import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_copy_gpu
-import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/examples/kernel_fillwith_gpu
+import workspace/ceramic/examples/kernel_copy_gpu
+import workspace/ceramic/examples/kernel_gemm_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
-import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/ceramic/examples/kernel_gemm_epilogues
 import workspace/ceramic/experiments/experiment_testutils
 import workspace/crucible
 

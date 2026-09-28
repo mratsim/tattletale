@@ -38,9 +38,9 @@
 ##              (fused suffix)   (fused suffix)
 ##
 import std/[macros, algorithm]
-import ./int_tuples
-import ./layouts
-import ./tensors
+import ../src/int_tuples
+import ../src/layouts
+import ../src/tensors
 import system/memory
 
 

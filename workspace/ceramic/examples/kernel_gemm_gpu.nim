@@ -146,22 +146,22 @@
 ## on both sides.
 
 import std/macros
-import ./int_tuples
-import ./layouts
-import ./layout_constructors
-import ./tensors
-import ./ptr_arithmetic
-import ./hardware/h_configgen
-import ./hardware/h_registry
-import ./hardware/h_properties
-import ./hardware/h_mma_dispatch
-import ./atoms_mma_partitioning
-import ./layout_algebra
+import ../src/int_tuples
+import ../src/layouts
+import ../src/layout_constructors
+import ../src/tensors
+import ../src/ptr_arithmetic
+import ../src/hardware/h_configgen
+import ../src/hardware/h_registry
+import ../src/hardware/h_properties
+import ../src/hardware/h_mma_dispatch
+import ../src/atoms_mma_partitioning
+import ../src/layout_algebra
 import ./kernel_copy_gpu
-import ./atoms_copy
+import ../src/atoms_copy
 import ./kernel_fillwith_gpu
 import ./kernel_gemm_epilogues
-import ./macros/static_for
+import ../src/macros/static_for
 import workspace/crucible
 
 {.experimental: "callOperator".}

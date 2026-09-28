@@ -21,10 +21,10 @@ import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_copy_gpu
-import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_gemm_epilogues
-import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/examples/kernel_copy_gpu
+import workspace/ceramic/examples/kernel_fillwith_gpu
+import workspace/ceramic/examples/kernel_gemm_epilogues
+import workspace/ceramic/examples/kernel_gemm_gpu
 import workspace/crucible
 
 {.experimental: "callOperator".}

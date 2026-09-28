@@ -13,9 +13,9 @@
 ## On CPU, use `kernel_fillwith_cpu` which uses contiguity-fused
 ## nimSetMem for zero-fill and nested stride-based loops otherwise.
 
-import ./int_tuples
-import ./layouts
-import ./tensors
+import ../src/int_tuples
+import ../src/layouts
+import ../src/tensors
 import workspace/crucible
 
 {.experimental: "callOperator".}

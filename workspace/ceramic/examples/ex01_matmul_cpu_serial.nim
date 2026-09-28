@@ -35,8 +35,8 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/kernel_copy_cpu
-import workspace/ceramic/src/kernel_fillwith_cpu
+import workspace/ceramic/examples/kernel_copy_cpu
+import workspace/ceramic/examples/kernel_fillwith_cpu
 
 {.experimental: "callOperator".}
 
