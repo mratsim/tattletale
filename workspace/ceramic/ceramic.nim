@@ -17,12 +17,20 @@ import ./src/tile_algebra/tile_epilogues
 import ./src/kernels/k_tile_gemm
 import ./src/kernels/k_tile_rmsnorm
 import ./src/kernels/k_tile_attn
+import ./src/kernels/k_layout_gemm_epilogues
+import ./src/kernels/k_layout_gemm
+import ./src/kernels/k_layout_copy_cpu
+import ./src/kernels/k_layout_copy_gpu
+import ./src/kernels/k_layout_fillwith_cpu
+import ./src/kernels/k_layout_fillwith_gpu
 import ./src/layout_algebra/layout_indexing_cpu
 import ./src/layout_algebra/layout_indexing_gpu
 import ./src/layout_algebra/layout_indexing
 
 export int_tuples, layouts, layout_algebra, tensors, tile_algebra,
-       tile_epilogues,
+       tile_epilogues, k_layout_gemm_epilogues,
        k_tile_gemm, k_tile_rmsnorm, k_tile_attn
-export layout_indexing_cpu, layout_indexing_gpu,
+export k_layout_gemm, k_layout_copy_cpu, k_layout_copy_gpu,
+       k_layout_fillwith_cpu, k_layout_fillwith_gpu,
+       layout_indexing_cpu, layout_indexing_gpu,
        layout_indexing

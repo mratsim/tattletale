@@ -12,17 +12,17 @@
 ## however on GPU there is branch-free alternative.
 ## Any branch would potentially lead to warp divergence per dimension of the tensors involved.
 ##
-## On CPU, use `kernel_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
+## On CPU, use `k_layout_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
 ## which avoids divmod entirely via if/else branching and can fuse contiguous accesses.
 
 import std/macros
 
-import ../src/int_tuples
-import ../src/layout_algebra/layouts
-import ../src/layout_algebra/layout_constructors
-import ../src/layout_algebra/layout_algebra
-import ../src/tensors
-import ../src/atoms_copy
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
+import ../layout_algebra/layout_algebra
+import ../tensors
+import ../atoms_copy
 import workspace/crucible
 
 {.experimental: "callOperator".}

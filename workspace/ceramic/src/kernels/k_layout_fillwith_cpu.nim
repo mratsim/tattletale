@@ -38,13 +38,13 @@
 ##              (fused suffix)   (fused suffix)
 ##
 import std/[macros, algorithm]
-import ../src/int_tuples
-import ../src/layout_algebra/layouts
-import ../src/tensors
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../tensors
 import system/memory
 
 
-# ── Compile-time helpers (shared pattern with kernel_copy_cpu) ──
+# ── Compile-time helpers (shared pattern with k_layout_copy_cpu) ──
 
 
 proc flattenElem(lay, field: NimNode; idx: NimNode; totalRank: int): NimNode {.compileTime.} =

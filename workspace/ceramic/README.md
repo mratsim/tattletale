@@ -46,15 +46,15 @@ described by a layout can be run on either path:
 
 | Op | CPU | GPU |
 |----|-----|-----|
-| fill | `src/kernel_fillwith_cpu.nim` | `src/kernel_fillwith_gpu.nim` |
-| copy | `src/kernel_copy_cpu.nim` | `src/kernel_copy_gpu.nim` |
-| GEMM | (see microkernels below) | `src/kernel_gemm_gpu.nim` |
+| fill | `src/k_layout_fillwith_cpu.nim` | `src/k_layout_fillwith_gpu.nim` |
+| copy | `src/k_layout_copy_cpu.nim` | `src/k_layout_copy_gpu.nim` |
+| GEMM | (see microkernels below) | `src/k_layout_gemm.nim` |
 | epilogue (D = α·AB + β·C) | fused into the GEMM | `src/tile_algebra/epilogues.nim` |
 
 CPU kernels fuse contiguous suffixes into `copyMem`/`zeroMem` and use
 stride-sorted nested loops otherwise; GPU kernels use flat-index `crd2idx`
 iteration, which is acceptable on GPU where divmod is cheap. See the codegen
-flow comments in `src/kernel_fillwith_cpu.nim` and `src/kernel_copy_cpu.nim`.
+flow comments in `src/k_layout_fillwith_cpu.nim` and `src/k_layout_copy_cpu.nim`.
 
 ### CPU GEMM within ~3% of OpenBLAS
 
@@ -78,9 +78,7 @@ tested. GPU code generation is done by Crucible.
 **WIP — GPU batch GEMM:** the faithful CuTe `sgemm_1` port
 (`experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim`) is not fully
 working. Individual NVRTC kernel tests pass, but the full `sgemm_1` kernel
-does not. See `experiments/nvidia_cutlass_cute_tutorial/sgemm_1.nim` and
-`tests/gemm/test_kernel_gemm.nim`. Do not treat the GPU batch-GEMM path as
-production-ready.
+does not, so the GPU batch-GEMM path is not production-ready.
 
 ## Source layout
 

@@ -10,12 +10,12 @@
 ## Uses flat-index iteration (`tv(i) = val`) which calls `crd2idx`
 ## per element. Acceptable on GPU, slow on CPU.
 ##
-## On CPU, use `kernel_fillwith_cpu` which uses contiguity-fused
+## On CPU, use `k_layout_fillwith_cpu` which uses contiguity-fused
 ## nimSetMem for zero-fill and nested stride-based loops otherwise.
 
-import ../src/int_tuples
-import ../src/layout_algebra/layouts
-import ../src/tensors
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../tensors
 import workspace/crucible
 
 {.experimental: "callOperator".}

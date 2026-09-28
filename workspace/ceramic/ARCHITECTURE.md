@@ -35,8 +35,8 @@ flowchart TB
   end
 
   subgraph Kernels
-    CPU["CPU kernels<br/>kernel_fillwith_cpu.nim<br/>kernel_copy_cpu.nim"]
-    GPU["GPU kernels<br/>kernel_fillwith_gpu.nim<br/>kernel_copy_gpu.nim<br/>kernel_gemm_gpu.nim"]
+    CPU["CPU kernels<br/>k_layout_fillwith_cpu.nim<br/>k_layout_copy_cpu.nim"]
+    GPU["GPU kernels<br/>k_layout_fillwith_gpu.nim<br/>k_layout_copy_gpu.nim<br/>k_layout_gemm.nim"]
   end
 
   TV --> CPU
@@ -74,11 +74,11 @@ workspace/ceramic/
 │   ├── tensor_datatypes.nim     # Tensor (owning) / TensorView (non-owning)
 │   ├── tensors.nim              # []/() access, slice, inner/outer_partition,
 │   │                            #   local_tile, local_partition, displace
-│   ├── kernel_fillwith_cpu.nim  # fill: contiguity-fused zeroMem / loops
-│   ├── kernel_copy_cpu.nim      # copy: copyMem-fused + permuted variants
-│   ├── kernel_fillwith_gpu.nim  # fill: flat-index iteration
-│   ├── kernel_copy_gpu.nim      # copy: flat-index iteration
-│   └── kernel_gemm_gpu.nim      # gemm: outer product, flat-index (epilogue fused, src/tile_algebra/epilogues.nim)
+│   ├── k_layout_fillwith_cpu.nim  # fill: contiguity-fused zeroMem / loops
+│   ├── k_layout_copy_cpu.nim      # copy: copyMem-fused + permuted variants
+│   ├── k_layout_fillwith_gpu.nim  # fill: flat-index iteration
+│   ├── k_layout_copy_gpu.nim      # copy: flat-index iteration
+│   └── k_layout_gemm.nim      # gemm: outer product, flat-index (epilogue fused, src/tile_algebra/epilogues.nim)
 ├── benchmark/
 │   ├── bench_ex02_matmul_cpu_simd.nim  # CPU GEMM vs OpenBLAS/Laser
 │   └── laser_matmul/                   # Laser strided-GEMM reimplementation
@@ -130,7 +130,7 @@ main loop of `copyFrom` + `gemm`, epilogue `axpby` (CuTe tutorial naming; the ce
 ## GEMM thread organization — who owns what (worked example)
 
 The tensor-core GEMM levels differ in *who owns which state* as much as in what they compute.
-The levels are `gemm_atom`, `gemm_warp`, `gemm_tiled`, `gemm_cta` and `gemm_kernel`, defined in `src/kernel_gemm_gpu.nim`.
+The levels are `gemm_atom`, `gemm_warp`, `gemm_tiled`, `gemm_cta` and `gemm_kernel`, defined in `src/k_layout_gemm.nim`.
 The canonical worked example lives in that module's header.
 This section mirrors it so the partitioning is visible away from the kernel code.
 

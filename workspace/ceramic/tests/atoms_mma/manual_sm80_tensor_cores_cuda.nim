@@ -19,10 +19,10 @@ import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/atoms_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra/ptr_arithmetic
-import workspace/ceramic/examples/kernel_copy_gpu
-import workspace/ceramic/examples/kernel_fillwith_gpu
-import workspace/ceramic/examples/kernel_gemm_epilogues
-import workspace/ceramic/examples/kernel_gemm_gpu
+import workspace/ceramic/src/kernels/k_layout_copy_gpu
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 

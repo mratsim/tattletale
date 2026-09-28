@@ -6,7 +6,7 @@ import std/[monotimes, times, math, random, strutils, stats, algorithm]
 import ../src/int_tuples, ../src/layout_algebra/layouts, ../src/layout_algebra/layout_algebra, ../src/tensors
 
 import ./bench_copy_cpu/laser01_global, ./bench_copy_cpu/laser02_pertensor, ./bench_copy_cpu/laser03_nested_forloops, ./bench_copy_cpu/laser05_fusedpertensor, ./bench_copy_cpu/gemm_packing_loop_explicit
-import ../src/kernel_copy_cpu
+import ../src/kernels/k_layout_copy_cpu
 import ./bench_copy_cpu/transpose2d
 import ./bench_utils
 

@@ -13,7 +13,7 @@ import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/atoms_mma_partitioning
-import workspace/ceramic/examples/kernel_gemm_gpu
+import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

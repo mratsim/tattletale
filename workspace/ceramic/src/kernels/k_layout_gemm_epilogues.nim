@@ -16,7 +16,7 @@
 # shared `finalStore` (the store) and a `storeMask` (the valid tile
 # range, predicated per element).
 #
-# kernel_gemm_gpu's gemm_cta path consumes this module, the CTA-tiled
+# k_layout_gemm's gemm_cta path consumes this module, the CTA-tiled
 # GEMM kernel drives the epilogue pipeline, today no other consumer exists.
 #
 # Lifecycle:
@@ -27,11 +27,11 @@
 #   3. apply: the per-thread f(AB) over the accumulator
 #   4. store: `finalStore` writes the tile, masked by `storeMask`
 
-import ../src/int_tuples
-import ../src/layout_algebra/layouts
-import ../src/tensors
-import ../src/hardware/h_properties
-import ../src/atoms_mma_partitioning
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../tensors
+import ../hardware/h_properties
+import ../atoms_mma_partitioning
 
 {.experimental: "callOperator".}
 
