@@ -35,8 +35,8 @@
 ## ─────────────────────────
 
 import std/[macros, typetraits]
-import ../int_tuples
-import ../macros/static_for
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
 #  Scalar overloads
@@ -98,11 +98,36 @@ template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
     evalOnceAs(D, makeIntTuple(stride))
     crd2idxRecur(P(), S(), D(), 0)
 
-template foldDim*(co, sh, st: typed; i: static int): auto =
-  when i == rank(sh) - 1:
-    co * st[i]
-  else:
-    (co mod sh[i]) * st[i] + foldDim(co div sh[i], sh, st, i + 1)
+macro foldDim*(co, sh, st: typed; i: static int): auto =
+  block:
+    ## Args
+    ## - `co` coord expression
+    ## - `sh`, `st` flat shape and stride tuples
+    ## - `i` first component to accumulate from
+    ## Returns one nested expression summing per-component contributions
+    ## `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
+    ## Typed templates cannot self-recurse at instantiation, so the
+    ## macro unrolls the fold directly.
+  proc tupleLen(n: NimNode): int =
+    case n.kind
+    of nnkPar, nnkTupleConstr, nnkBracket:
+      n.len
+    else:
+      let t = n.getTypeImpl
+      if t.kind in {nnkTupleTy, nnkPar, nnkTupleConstr}:
+        t.len
+      else:
+        1
+  let r = tupleLen(sh)
+  let shN = sh
+  let stN = st
+  proc foldFrom(c: NimNode, k: int): NimNode =
+    if k == r - 1:
+      result = quote do: `c` * `stN`[`k`]
+    else:
+      let rest = foldFrom(quote do: `c` div `shN`[`k`], k + 1)
+      result = quote do: (`c` mod `shN`[`k`]) * `stN`[`k`] + `rest`
+  result = foldFrom(co, i)
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape modes with strides.

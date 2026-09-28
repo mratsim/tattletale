@@ -5,12 +5,12 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
-import ./tiles
-import ./tile_config
-import ./tile_ops_unary
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra/tiles
+import workspace/ceramic/src/tile_algebra/tile_config
+import workspace/ceramic/src/tile_algebra/tile_ops_unary
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

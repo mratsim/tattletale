@@ -13,9 +13,9 @@
 ## On CPU, use `k_layout_fillwith_cpu` which uses contiguity-fused
 ## nimSetMem for zero-fill and nested stride-based loops otherwise.
 
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 import workspace/crucible
 
 {.experimental: "callOperator".}

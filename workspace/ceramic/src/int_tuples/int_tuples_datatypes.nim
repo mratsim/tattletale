@@ -7,7 +7,7 @@
 
 
 import std/macros, std/typetraits
-import ../macros/static_for
+import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] — compile-time integer type

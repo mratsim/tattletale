@@ -17,10 +17,10 @@
 
 import std/macros
 
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
-import ../hardware/hw_copy_nvidia
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/hw_copy_nvidia
 import workspace/crucible
 
 {.experimental: "callOperator".}

@@ -7,7 +7,7 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import ./h_registry
+import workspace/ceramic/src/hardware/h_registry
 
 {.experimental: "dynamicBindSym".}
 # bindSym with a computed name (`$atom & "_suffix"`) from a static macro

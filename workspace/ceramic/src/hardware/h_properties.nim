@@ -25,9 +25,9 @@
 ## compile time.
 
 import std/macros
-import ../int_tuples
-import ./h_configgen
-import ./h_registry
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
 
 {.experimental: "dynamicBindSym".}
 

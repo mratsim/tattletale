@@ -27,7 +27,7 @@
 ## StmtList(value)) …))`), the same two-step parse-then-generate.
 
 import std/[macros, strutils]
-import ../int_tuples
+import workspace/ceramic/src/int_tuples
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Datatypes and SIMD ISAs

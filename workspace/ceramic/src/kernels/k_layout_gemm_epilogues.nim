@@ -27,11 +27,11 @@
 #   3. apply: the per-thread f(AB) over the accumulator
 #   4. store: `finalStore` writes the tile, masked by `storeMask`
 
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
-import ../hardware/h_properties
-import ../tensors/tensors_mma_partitioning
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/tensors/tensors_mma_partitioning
 
 {.experimental: "callOperator".}
 

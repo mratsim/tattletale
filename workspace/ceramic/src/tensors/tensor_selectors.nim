@@ -7,12 +7,12 @@
 
 import std/macros
 
-import ../macros/varargs_to_par
-import ../layout_algebra/ptr_arithmetic
-import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_indexing
-import ../tensors/tensor_datatypes
+import workspace/ceramic/src/macros/varargs_to_par
+import workspace/ceramic/src/layout_algebra/ptr_arithmetic
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/tensors/tensor_datatypes
 
 
 proc pop(tree: var NimNode): NimNode {.compileTime.} =

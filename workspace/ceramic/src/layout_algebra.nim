@@ -33,13 +33,13 @@
 ## | `divisibilityCheck`, `LayoutCT`    | macro helpers                           |
 
 import
-  int_tuples,
-  layout_algebra / layouts_datatypes,
-  layout_algebra / layout_constructors,
-  layout_algebra / layouts,
-  layout_algebra / layout_indexing,
-  layout_algebra / layout_algebra,
-  layout_algebra / ptr_arithmetic
+  workspace/ceramic/src/int_tuples,
+  workspace/ceramic/src/layout_algebra/layouts_datatypes,
+  workspace/ceramic/src/layout_algebra/layout_constructors,
+  workspace/ceramic/src/layout_algebra/layouts,
+  workspace/ceramic/src/layout_algebra/layout_indexing,
+  workspace/ceramic/src/layout_algebra/layout_algebra,
+  workspace/ceramic/src/layout_algebra/ptr_arithmetic
 
 # ═══════════════════════════════════════════════════════════════
 #  Datatypes

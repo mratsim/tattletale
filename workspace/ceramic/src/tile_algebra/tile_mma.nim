@@ -5,9 +5,9 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ../hardware/h_mma_dispatch
-import ./tiles
-import ./tile_config
+import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/tile_algebra/tiles
+import workspace/ceramic/src/tile_algebra/tile_config
 
 # ═════════════════════════════════════════════════════════════════════════
 #  In-place mma

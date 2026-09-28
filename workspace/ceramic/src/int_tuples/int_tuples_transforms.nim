@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
-import ./int_tuples_datatypes
+import workspace/ceramic/src/int_tuples/int_tuples_datatypes
 
 # ═══════════════════════════════════════════════════════════════
 #  flatten — recursively collect leaf elements of a tuple

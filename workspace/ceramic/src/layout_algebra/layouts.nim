@@ -15,10 +15,10 @@
 ##   - CuTe C++: layout.hpp
 
 import std/macros
-import ../int_tuples
-import ../macros/static_for
-import ./layouts_datatypes
-import ./layout_constructors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/static_for
+import workspace/ceramic/src/layout_algebra/layouts_datatypes
+import workspace/ceramic/src/layout_algebra/layout_constructors
 
 export layouts_datatypes
 export layout_constructors

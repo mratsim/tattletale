@@ -15,8 +15,8 @@
 
 import std/macros
 import std/typetraits
-import ../macros/static_for
-import ../int_tuples
+import workspace/ceramic/src/macros/static_for
+import workspace/ceramic/src/int_tuples
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St] — typed shape + stride pair

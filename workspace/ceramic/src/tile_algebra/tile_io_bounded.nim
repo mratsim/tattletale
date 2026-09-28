@@ -21,12 +21,12 @@
 ## grid-aligned shapes keep the aligned path bit-for-bit.
 
 import workspace/crucible
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
-import ./tiles
-import ./tile_config
-import ./tile_io
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra/tiles
+import workspace/ceramic/src/tile_algebra/tile_config
+import workspace/ceramic/src/tile_algebra/tile_io
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The zero fill value (fp16-safe)

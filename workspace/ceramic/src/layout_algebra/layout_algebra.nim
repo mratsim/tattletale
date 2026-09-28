@@ -11,8 +11,8 @@ import std/macros
 import std/sequtils
 import std/algorithm
 import std/typetraits
-import ../int_tuples
-import ./layouts
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts
 
 # ═══════════════════════════════════════════════════════════════
 #  getIndicesSortedByStride — sort permutation by stride

@@ -12,15 +12,15 @@
 # ############################################################
 
 import workspace/crucible
-import ../int_tuples
-import ../layout_algebra
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
-import ../layout_algebra/layout_indexing
-import ../tensors
-import ../tile_algebra
-import ../tile_algebra/tile_epilogues_backend
-import ../tile_algebra/tile_io_bounded
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_constructors
+import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra
+import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
+import workspace/ceramic/src/tile_algebra/tile_io_bounded
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra, tile_epilogues_backend, tile_io_bounded

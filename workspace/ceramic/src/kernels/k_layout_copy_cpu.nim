@@ -41,9 +41,9 @@
 ##   [for d in 0..<outerR:          [for all dims:
 ##      copyMem(copyCount)]           elem-by-elem copy]
 import std/[macros, algorithm]
-import ../int_tuples
-import ../layout_algebra
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 
 
 # ── compile-time helpers ────────────────────────────────────────

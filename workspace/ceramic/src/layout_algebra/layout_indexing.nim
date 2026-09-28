@@ -11,13 +11,14 @@
 ## overloads live in `layout_indexing_gpu.nim`.
 {.experimental: "callOperator".}
 
+
 import std/macros
 import std/typetraits
 
-import ../int_tuples
-import ./layout_indexing_gpu
-import ./layouts
-import ../macros/varargs_to_par
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layout_indexing_gpu
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/macros/varargs_to_par
 
 export layout_indexing_gpu
 
@@ -46,6 +47,7 @@ template mapLeavesWith*(singleton: X, body: untyped): X =
   singleton
 
 # ═══════════════════════════════════════════════════════════════
+
 #  crd2idx / idx2crd — via layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #

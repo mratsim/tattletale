@@ -9,10 +9,10 @@
 ## A hardware-layer specialization, the copy engine's fragments,
 ## predicates and shared/global addressing live in the kernel tier.
 
-import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_constructors
+import workspace/ceramic/src/tensors
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

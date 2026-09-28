@@ -27,15 +27,15 @@
 ## It is built by thrfrg_A/B/C and cut per thread by get_slice + partition_A/B/C.
 ## make_fragment_A/B/C allocate the register buffers, and cStoreMask predicates the C store.
 
-import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
-import ../layout_algebra/layout_indexing
-import ../layout_algebra/layout_algebra
-import ../tensors
-import ../hardware/h_configgen
-import ../hardware/h_registry
-import ../hardware/h_properties
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_constructors
+import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/layout_algebra/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/h_configgen
+import workspace/ceramic/src/hardware/h_registry
+import workspace/ceramic/src/hardware/h_properties
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

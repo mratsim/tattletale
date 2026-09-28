@@ -28,8 +28,8 @@
 ## | consumed by the tensor tier, not re-exported   |
 
 import
-  tensors / tensor_datatypes,
-  tensors / tensor_selectors
+  workspace/ceramic/src/tensors/tensor_datatypes,
+  workspace/ceramic/src/tensors/tensor_selectors
 
 # ═══════════════════════════════════════════════════════════════
 #  Datatypes, construction, accessors

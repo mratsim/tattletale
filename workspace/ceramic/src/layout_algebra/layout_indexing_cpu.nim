@@ -24,8 +24,8 @@
 ##     ... use off ...
 ##     wheel.incr(shape)
 
-import ../int_tuples
-import ./layouts
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts
 
 # ═══════════════════════════════════════════════════════════════
 #  CoordWheel — iterate logical positions without divmod
@@ -45,7 +45,7 @@ func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]; shape: aut
 func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
   CoordWheel[Rank](coord: default(array[Rank, int]))
 
-import ../macros/static_for
+import workspace/ceramic/src/macros/static_for
 func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
   ## Advance coordinate by one logical position (carry-chain).
   ## Innermost dim (dim-0) is fastest-changing, so carry chain starts from dim-0.
@@ -65,7 +65,7 @@ func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
       else:
         wheel.coord[k] = 0
 
-import ../macros/static_for
+import workspace/ceramic/src/macros/static_for
 func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int =
   ## Compute linear offset = sum(coord[i] * stride[i]).
   ## Pure multiply-add, no divmod.
@@ -90,7 +90,7 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 #  dispatch with `useGpuIndexing` parameter. The `_cpu` suffix
 #  here is for code that explicitly wants CPU-optimized semantics.
 
-import ./layout_indexing_gpu
+import workspace/ceramic/src/layout_algebra/layout_indexing_gpu
 import std/macros
 
 func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =

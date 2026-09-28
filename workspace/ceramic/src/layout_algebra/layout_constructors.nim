@@ -11,8 +11,8 @@
 ## The `Layout` type itself lives in `layouts_datatypes.nim`.
 
 import std/macros
-import ../int_tuples
-import ./layouts_datatypes
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/layouts_datatypes
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides — canonical column-major strides
