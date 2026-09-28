@@ -230,7 +230,7 @@ func get_slice*(tma: static TiledMma; threadIdx: int): ThrSlice {.inline.} =
 
 func partition_A*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
-    A: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
+    A: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto {.inline.} =
   ## The thread's A-fragment view of a tensor, method-call syntax: `tma.partition_A(thr, A)`.
   ## It cuts the thrfrg_A layout at the thread's coordinates, keeping every V value.
   ## The flat order is the register order the gather copies into the mma fragment.
@@ -248,7 +248,7 @@ func partition_A*[T, Sh, St](
 
 func partition_B*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
-    B: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
+    B: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto {.inline.} =
   ## The thread's B-fragment view of a tensor, method-call syntax: `tma.partition_B(thr, B)`.
   ## See partition_A. The (ThrN, ThrK) block is cut at (tn, tk).
   const
@@ -265,7 +265,7 @@ func partition_B*[T, Sh, St](
 
 func partition_C*[T, Sh, St](
     tma: static TiledMma; thr: ThrSlice;
-    C: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto {.inline.} =
+    C: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto {.inline.} =
   ## The thread's C view of a tensor, method-call syntax: `tma.partition_C(thr, C)`. See partition_A.
   ## The (ThrM, ThrN) block is cut at (tm, tn). C has no col-major requirement (thrfrg_C), so a stride-0 rows view
   ## (the epilogue's broadcast bias) partitions to the same per-column offsets.
@@ -345,7 +345,7 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
 #  The result has the same shape as the view, so copying between the two moves the thread's elements in flat register order.
 
 template make_fragment_A*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
+    mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
   ## The thread's A fragment: a register buffer with the V values in hardware order (stride-1).
   ## The remaining positions keep the view's order. V is the atom's register count (getLayoutA().shape[1] values per thread).
   ## On the Apple simdgroup atoms the buffer is a `SimdgroupMatrix` (emitted as
@@ -358,7 +358,7 @@ template make_fragment_A*[T, Sh, St](
     make_tensor(T, make_fragment_like(t.layout, mma.getLayoutA().shape[1]))
 
 template make_fragment_B*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
+    mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
   ## The thread's B fragment (see make_fragment_A).
   ## On the Apple simdgroup atoms the gather orientation is the B operand's
   ## (isLayoutLeft=true: the B fragment's row axis is K, the memory row of the
@@ -369,7 +369,7 @@ template make_fragment_B*[T, Sh, St](
     make_tensor(T, make_fragment_like(t.layout, mma.getLayoutB().shape[1]))
 
 template make_fragment_C*[T, Sh, St](
-    mma: static MmaAtom; t: TensorView[T, Sh, St] or Tensor[T, Sh, St]): auto =
+    mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
   ## The thread's C fragment: a register buffer with the V values in hardware order (stride-1).
   ## The remaining positions keep the view's order. V is the atom's register count (cLayout.shape[1] values per thread).
   ## On the Apple simdgroup atoms the gather orientation is the C operand's

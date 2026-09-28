@@ -63,12 +63,12 @@ type Epilogue* = concept
   ## the contract's `finalStore` (the store). Each epilogue also carries
   ## a `storeMask` field controlling what is zeroed in D or copied into D.
   ##
-  ## `shard` partitions the captured gmem operands onto threads via `partition_C`.
-  ## `preflight` stages gmem → smem, a no-op here: the operands are read per-thread from gmem in `apply`.
-  ##
-  ## Concepts v2 match procs, not templates: `apply` is a `func {.inline.}` proc on every epilogue.
-  proc apply(op: Self, tmp: var (TensorView or Tensor), AB: TensorView or Tensor)
-  proc finalStore(op: Self, D: var (TensorView or Tensor), tmp: (TensorView or Tensor))
+  # `shard` partitions the captured gmem operands onto threads via `partition_C`.
+  # `preflight` stages gmem → smem, a no-op here (the operands are read per-thread from gmem in `apply`).
+  #
+  # Concepts v2 match procs, not templates (`apply` is a `func {.inline.}` proc on every epilogue).
+  proc apply(op: Self, tmp: var (TensorView or TensorOwned), AB: TensorView or TensorOwned)
+  proc finalStore(op: Self, D: var (TensorView or TensorOwned), tmp: (TensorView or TensorOwned))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  finalStore, shared by every op
@@ -76,8 +76,8 @@ type Epilogue* = concept
 
 func finalStore*[T, Sh, StR, StD](
     op: Epilogue;
-    D: var (TensorView[T, Sh, StD] or Tensor[T, Sh, StD]);
-    tmp: (TensorView[T, Sh, StR] or Tensor[T, Sh, StR])) {.inline.} =
+    D: var (TensorView[T, Sh, StD] or TensorOwned[T, Sh, StD]);
+    tmp: (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR])) {.inline.} =
   ## Copy f(AB) to the global memory destination tensor D. Shared: one implementation for every epilogue.
   ## storeMask describes the valid (M, N) range of the tile:
   ## full tile when all bits are set, predicated per element otherwise.
@@ -127,8 +127,8 @@ template preflight*[T, Sh, StC](op: var EpiAXPBY[T, Sh, StC]): untyped =
 
 func apply*[T, Sh, StAB, StC, StR](
     op: EpiAXPBY[T, Sh, StC];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = α·AB + β·C, element-wise over the tile's (M, N) shape.
   ##
   ## Reads:
@@ -189,8 +189,8 @@ template preflight*(op: var EpiIdentity): untyped =
 
 func apply*[T, Sh, StAB, StR](
     op: EpiIdentity;
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB, element-wise copy over the tile's (M, N) shape.
   for i in 0 ..< size(tmp.layout):
     tmp(i) = AB(i)
@@ -226,8 +226,8 @@ template preflight*[T, Sh, St](op: var EpiAddBias[T, Sh, St]): untyped =
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiAddBias[T, Sh, StB];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, with bias a column vector broadcasted onto AB.
   ##
   ## Contract:
@@ -276,8 +276,8 @@ template preflight*[T, Sh, St](op: var EpiLinearBiasReLU[T, Sh, St]): untyped =
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiLinearBiasReLU[T, Sh, StB];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB + bias), with bias a column vector broadcasted onto AB.
   ## The bias element is read only where the store mask's bit is set, see
   ## EpiAddBias's apply for the ragged-tile reasoning.
@@ -313,8 +313,8 @@ template preflight*(op: var EpiReLU): untyped =
 
 func apply*[T, Sh, StAB, StR](
     op: EpiReLU;
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), element-wise over the tile's (M, N) shape.
   for i in 0 ..< size(tmp.layout):
     tmp(i) = max(AB(i), T(0))

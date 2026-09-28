@@ -30,7 +30,7 @@ export tiles, tile_ops_unary, tile_ops_binary,
 type Epilogue* = concept
   ## A tile epilogue computes the output tile D = f(AB)
   ## from the accumulated GEMM result.
-  proc apply(op: Self, tmp: var (TensorView or Tensor), AB: TensorView or Tensor)
+  proc apply(op: Self, tmp: var (TensorView or TensorOwned), AB: TensorView or TensorOwned)
   proc apply(op: Self, tmp: var RtLeft, AB: RtLeft)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -64,8 +64,8 @@ type EpiIdentity* = object
 
 func apply*[T, Sh, StAB, StR](
     op: EpiIdentity,
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB, per element.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -93,8 +93,8 @@ type EpiReLU* = object
 
 func apply*[T, Sh, StAB, StR](
     op: EpiReLU,
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), per element.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -130,8 +130,8 @@ func initEpiAXPBY*[T, Sh, StC](alpha: T, beta: T,
 
 func apply*[T, Sh, StAB, StC, StR](
     op: EpiAXPBY[T, Sh, StC],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = α·AB + β·C, per element.
   ## β = 0 skips reading C, saving memory bandwidth
   ## α = 1 skips the multiply.
@@ -305,8 +305,8 @@ func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, 
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiAddBias[T, Sh, StB],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, the bias a column vector broadcast over the tile rows.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -360,8 +360,8 @@ func initEpiLinearBiasReLU*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiLinearBi
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiLinearBiasReLU[T, Sh, StB],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB + bias), the bias a column vector broadcast over the tile rows.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:

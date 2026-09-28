@@ -61,7 +61,7 @@ func getReductionTree*(A: static MmaAtom): ReductionTree =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
@@ -98,7 +98,7 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       dst.data[n * vpt + vptI] = acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
@@ -135,9 +135,9 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       dst.data[n * vpt + vptI] = acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src, the online-softmax running-sum update.
   static:
     doAssert rowTiles == R div A.getM(),
@@ -173,9 +173,9 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src.
   static:
     doAssert rowTiles == R div A.getM(),
@@ -211,9 +211,9 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
 proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
     doAssert rowTiles == R div A.getM(),
@@ -249,9 +249,9 @@ proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       dst.data[n * vpt + vptI] = max(srcAccum.data[n * vpt + vptI], acc)
 
 proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
     doAssert rowTiles == R div A.getM(),

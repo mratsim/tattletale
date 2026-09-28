@@ -63,7 +63,7 @@ template rv*(T: typedesc, R, C: static int, A: untyped = getTileConfig(float32, 
   ## Column vector of shape (rows, values per thread).
   ## This stores the result of
   ## a row-reduction operation f a tile like max or sum
-  Tensor[T,
+  TensorOwned[T,
          (Int[R div A.getM()], Int[A.getVpt()]),
          (Int[A.getVpt()], Int[1])]
 
@@ -86,7 +86,7 @@ func laneScalar*[T; R, C: static int; A: static MmaAtom](
   tile.frags[0][0].frag[0]
 
 func rowScalar*[T; rowTiles, vpt: static int](
-    vec: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
+    vec: TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
   ## Returns the calling lane's row-0 slot of the row-reduction col-vec,
   ## `vec.data[0]`, the scalar its fragment row just reduced.
   ##

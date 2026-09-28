@@ -26,7 +26,7 @@ proc fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   for i in 0 ..< size(tv.layout):
     tv(i) = val
 
-proc fillWith*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
+proc fillWith*[T, Sh, St](t: var TensorOwned[T, Sh, St]; val: T) =
   ## Set every logical element of `t` to `val`.
   for i in 0 ..< size(t.layout):
     t(i) = val

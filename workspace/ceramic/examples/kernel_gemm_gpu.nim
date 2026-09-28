@@ -172,9 +172,9 @@ import workspace/crucible
 
 func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     mma: static MmaAtom,
-    dFrag: var Tensor[TD, ShD, StD],
-    aFrag: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA],
-    bFrag: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB]) {.inline.} =
+    dFrag: var TensorOwned[TD, ShD, StD],
+    aFrag: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
+    bFrag: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB]) {.inline.} =
   ## Register-level MMA, in-place accumulate: dFrag += aFrag·bFrag.
   ##
   ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
@@ -208,9 +208,9 @@ func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
 
 func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
     mma: static MmaAtom,
-    dFrag: var Tensor[TD, ShD, StD],
-    aFrag: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA],
-    bFrag: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB]) {.inline.} =
+    dFrag: var TensorOwned[TD, ShD, StD],
+    aFrag: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
+    bFrag: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB]) {.inline.} =
   ## Loop over atoms, one gemm_atom per k slice, with dFrag += aFrag·bFrag accumulated in place.
   ##
   ## Warp-scoped loop: the 32 lanes that cooperate on one gemm_atom run it
@@ -260,9 +260,9 @@ func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
 
 func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
     tma: static TiledMma,
-    dFrag: var Tensor[TD, ShD, StD],
-    sA: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA],
-    sB: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB],
+    dFrag: var TensorOwned[TD, ShD, StD],
+    sA: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
+    sB: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
     TileShape: static tuple[M: int, N: int, K: int],
     threadIdx: int) {.inline.} =
   ## Returns the thread's fragment of the tile-level matmul
@@ -348,9 +348,9 @@ func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
 
 func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tma: static TiledMma,
-    D: var (TensorView[TD, ShD, StD] or Tensor[TD, ShD, StD]),
-    A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA],
-    B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB],
+    D: var (TensorView[TD, ShD, StD] or TensorOwned[TD, ShD, StD]),
+    A: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
+    B: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
     M, N, K: int,
     epi: Epi,
     TileShape: static tuple[M: int, N: int, K: int],
@@ -585,9 +585,9 @@ template tile_shape*(tma: static TiledMma; tileK: static int): auto =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
-    D: var (TensorView[TC, ShC, StC] or Tensor[TC, ShC, StC]),
-    A: TensorView[TA, ShA, StA] or Tensor[TA, ShA, StA],
-    B: TensorView[TB, ShB, StB] or Tensor[TB, ShB, StB],
+    D: var (TensorView[TC, ShC, StC] or TensorOwned[TC, ShC, StC]),
+    A: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
+    B: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
     epi: Epi) =
   ## Computes D = f(A·B), with f an epilogue.
   ##

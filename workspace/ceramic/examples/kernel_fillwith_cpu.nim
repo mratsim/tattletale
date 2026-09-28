@@ -297,12 +297,12 @@ func fillWith_cpu*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   ## Uses zeroMem for zero-fill of contiguous suffix.
   fillWithCpuImpl(tv, val)
 
-func fillWith_cpu*[T, Sh, St](t: var Tensor[T, Sh, St]; val: T) =
+func fillWith_cpu*[T, Sh, St](t: var TensorOwned[T, Sh, St]; val: T) =
   ## Fill every logical element of `t` with `val`.
   ##
   ## Routes through `view()` rather than calling `fillWithCpuImpl(t, val)`
-  ## directly because `fillWithCpuImpl` operates on the underlying `data` seq
-  ## at index 0, but `Tensor` may have a non-zero `offset`. By converting to
-  ## a `TensorView` first, the offset is baked into the data pointer and
-  ## the layout iteration writes to the correct logical region.
+  ## directly. `fillWithCpuImpl` operates on the underlying `data` seq
+  ## starting at index 0, while `TensorOwned` may carry a non-zero `offset`.
+  ## Converting to a `TensorView` first bakes the offset into the data
+  ## pointer. The layout iteration then writes to the correct logical region.
   fillWith_cpu(t.view(), val)

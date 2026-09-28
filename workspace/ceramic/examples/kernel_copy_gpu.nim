@@ -28,7 +28,7 @@ import workspace/crucible
 {.experimental: "callOperator".}
 
 template copyFrom*[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or Tensor[T, ShD, StD]);
+    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
     src: AnyTensor[T, ShS, StS]) =
   ## Copy every logical element from src to dst.
   ## Uses flat-index iteration (`dst(i) = src(i)`)

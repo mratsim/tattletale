@@ -47,9 +47,9 @@ proc allClose(testC, refC: openArray[float32];
 # ═════════════════════════════════════════════════════════════════════════
 
 proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
-    C: var (TensorView[T, ShC, StC] or Tensor[T, ShC, StC]),
-    A: TensorView[T, ShA, StA] or Tensor[T, ShA, StA],
-    B: TensorView[T, ShB, StB] or Tensor[T, ShB, StB]) =
+    C: var (TensorView[T, ShC, StC] or TensorOwned[T, ShC, StC]),
+    A: TensorView[T, ShA, StA] or TensorOwned[T, ShA, StA],
+    B: TensorView[T, ShB, StB] or TensorOwned[T, ShB, StB]) =
   ## Reference fragment gemm: C[m,n] += A[m,k] * B[n,k] (outer product).
   ## Reference GEMM for the GPU kernels, not a performance kernel.
   const

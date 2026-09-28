@@ -28,8 +28,8 @@ type EpiScale[T] = object
 
 func apply[T, Sh, StAB, StR](
     op: EpiScale[T];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## Per-thread epilogue math: tmp = s·AB.
   const S = toIntVal(size(tmp))
   for i in 0 ..< S:

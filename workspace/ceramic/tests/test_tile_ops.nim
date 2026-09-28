@@ -120,7 +120,7 @@ proc checkFmaMaps() =
   # The row maps and the col-vec ops resolve the same way. The col-vec
   # of an 8-row FMA tile holds rowTiles = 1 value per fragment column
   # slot (vpt = 2).
-  var rv: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var rv: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   rv.data[0] = 10.0'f32
   rv.data[1] = 20.0'f32
   fd.mul_row(fa, rv)
@@ -174,7 +174,7 @@ proc checkMulTile() =
   echo "  OK: mul (tile × tile): method-call + in-place, both maps"
 
 proc checkVecOps() =
-  var v: Tensor[float32, (Int[1], Int[1]), (Int[1], Int[1])]
+  var v: TensorOwned[float32, (Int[1], Int[1]), (Int[1], Int[1])]
   v.data[0] = 1.0'f32
   # in-place scalar ops: v = (v·2) + 1
   v.mul(v, 2.0'f32)
@@ -182,7 +182,7 @@ proc checkVecOps() =
   doAssert v.data[0] == 3.0'f32,
     "vec scalar op slot mismatch"
   # the Apple-width (vpt = 2) col-vec runs the same generic ops
-  var v2: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var v2: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   v2.data[0] = 1.0'f32
   v2.data[1] = 2.0'f32
   v2.mul(v2, 2.0'f32)
@@ -193,7 +193,7 @@ proc checkVecOps() =
 
 proc checkMulRow() =
   var a: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
-  var rv: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var rv: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   var d: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:
@@ -209,9 +209,9 @@ proc checkMulRow() =
   echo "  OK: mul_row (tile × col-vec row map)"
 
 proc checkColVecPairOps() =
-  var a: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
-  var b: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
-  var d: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var a: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var b: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var d: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   for i in 0 ..< a.data.len:
     a.data[i] = float32(i + 1)
     b.data[i] = float32(20 + i)
@@ -239,7 +239,7 @@ proc checkColVecPairOps() =
 
 proc checkRowMaps() =
   var a: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
-  var rv: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]
+  var rv: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]
   var d: rt_l(float32, 8, 16, UNIVERSAL_8x8x8_F32F32F32F32)
   for m in 0 ..< 2:
     for v in 0 ..< 2:

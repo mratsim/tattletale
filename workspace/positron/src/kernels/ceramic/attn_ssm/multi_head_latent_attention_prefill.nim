@@ -82,7 +82,7 @@ proc normRound16[A: static MmaAtom](
     dst: var RtLeft[float16, 8, 32, A],
     src: RtLeft[float32, 8, 32, A],
     gamma: RtLeft[float16, 8, 32, A],
-    rowVals: Tensor[float32, (Int[1], Int[2]), (Int[2], Int[1])]) {.device.} =
+    rowVals: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]) {.device.} =
   ## `dst[r][c] = fp16(src[r][c] · rowVals[r] · gamma[r][c])`: the MLA
   ## RMSNorm epilogue with one fp16 RNE round at the end (the model's
   ## `weight * x.to(dtype)` rounding). `rowVals` is the row-rsqrt'ed

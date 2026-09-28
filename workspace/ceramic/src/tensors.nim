@@ -31,7 +31,7 @@ proc pop(tree: var NimNode): NimNode {.compileTime.} =
 #  `()` — dual dispatch: all-int → element, has _ → sub-View
 # ═════════════════════════════════════════════════════════════════════════
 
-template `()`*(t: Tensor; args: varargs[untyped]): untyped =
+template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
     block:
       evalOnceAs(coord, varargs_to_par(args))
@@ -69,7 +69,7 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 #  `[]` — element access only (underscore rejected)
 # ═════════════════════════════════════════════════════════════════════════
 
-template `[]`*(t: Tensor; args: varargs[untyped]): untyped =
+template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
   let pos = block:
     evalOnceAs(coord, varargs_to_par(args))
     when hasUnderscoreImpl(coord):
@@ -85,7 +85,7 @@ template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
     toIntVal crd2idx(tv.layout, coord)
   tv.data[pos]
 
-macro `[]=`*(t: Tensor; args: varargs[untyped]): untyped =
+macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   var a = args
   let val = pop(a)
   let coord = getAST(varargs_to_par(a))
@@ -109,7 +109,9 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
 #  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
 
-template slice*(t: Tensor; coords: varargs[untyped]): untyped =
+template slice*(t: TensorOwned; coords: varargs[untyped]): untyped =
+  ## Slices the owning tensor's layout by the given coordinates, returns
+  ## a view over the tensor's data.
   block:
     evalOnceAs(crd, varargs_to_par(coords))
     evalOnceAs(sub, slice(t.layout, crd))
@@ -229,7 +231,7 @@ func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto 
     it_a - it_b
   make_view(t.data +% off, make_layout(ns, t.layout.stride))
 
-func displace*[T, Sh, St](t: Tensor[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
-  ## Offset Tensor by `coord` (logical coords). Returns a sub-view whose shape is
+func displace*[T, Sh, St](t: TensorOwned[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
+  ## Offset TensorOwned by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise).
   displace(t.view(), coord)

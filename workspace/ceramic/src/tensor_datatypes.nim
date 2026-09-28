@@ -10,11 +10,11 @@ import ./layout_algebra/layouts
 import ./layout_algebra/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════
-#  Tensor / TensorView
+#  TensorOwned / TensorView
 # ═════════════════════════════════════════════════════════════════════════
 
 type
-  Tensor*[T, Sh, St] = object
+  TensorOwned*[T, Sh, St] = object
     ## Owning tensor — stack-allocated array. No heap, no seq.
     ## Requires static shape/stride (compile-time cosize).
     data*: array[cosize(Layout[Sh, St]), T]
@@ -25,11 +25,15 @@ type
     data*: ptr UncheckedArray[T]
     layout*: Layout[Sh, St]
 
-type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or Tensor[T, Sh, St]
-  ## Any tensor — owning `Tensor` or non-owning `TensorView` with matching
-  ## element type and shape/stride tuple types. Shorthand for the
-  ## `TensorView[...] or Tensor[...]` union used throughout the kernel
-  ## signatures (fragments and gmem operands arrive as either).
+type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or TensorOwned[T, Sh, St]
+  ## Any tensor, either the owning `TensorOwned` or the non-owning
+  ## `TensorView`, with matching element type and matching shape/stride
+  ## tuple types. Shorthand for the union used in kernel signatures:
+  ##
+  ## - `TensorView[...]`, non-owning
+  ## - `TensorOwned[...]`, owning
+  ##
+  ## Fragments and gmem operands arrive as either.
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Constructors
@@ -37,9 +41,9 @@ type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or Tensor[T, Sh, St]
 
 # ── Owning: make_tensor(T, Layout) ─────────────────────────────────────
 
-func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]): Tensor[T, Sh, St] {.inline.} =
+func make_tensor*[Sh, St, T](_: typedesc[T]; L: Layout[Sh, St]): TensorOwned[T, Sh, St] {.inline.} =
   ## Owning tensor — stack array, no heap. Requires static cosize.
-  Tensor[T, Sh, St](layout: L)
+  TensorOwned[T, Sh, St](layout: L)
 
 template make_tensor*[T](_: typedesc[T]; shape: IntOrIntTuple;
                          order: static StrideOrder = LayoutLeft): untyped =
@@ -53,13 +57,17 @@ template make_tensor*[T](_: typedesc[T]; shape, stride: IntOrIntTuple): untyped 
 func make_tensor_like*[T, Sh, St](t: TensorView[T, Sh, St]): auto {.inline.} =
   make_tensor(T, make_layout_like(t.layout))
 
-func make_tensor_like*[T, Sh, St](t: Tensor[T, Sh, St]): auto {.inline.} =
+func make_tensor_like*[T, Sh, St](t: TensorOwned[T, Sh, St]): auto {.inline.} =
+  ## Creates a compact-stride owning tensor matching the input's shape
+  ## and element type.
   make_tensor(T, make_layout_like(t.layout))
 
 func make_tensor_like*[T, Sh, St, NewT](t: TensorView[T, Sh, St]; _: typedesc[NewT]): auto {.inline.} =
   make_tensor(NewT, make_layout_like(t.layout))
 
-func make_tensor_like*[T, Sh, St, NewT](t: Tensor[T, Sh, St]; _: typedesc[NewT]): auto {.inline.} =
+func make_tensor_like*[T, Sh, St, NewT](t: TensorOwned[T, Sh, St]; _: typedesc[NewT]): auto {.inline.} =
+  ## Creates a compact-stride owning tensor matching the input's shape,
+  ## with element type NewT.
   make_tensor(NewT, make_layout_like(t.layout))
 
 
@@ -112,10 +120,11 @@ template make_view*(tv: TensorView;
   make_view(tv, make_layout(shape, stride))
 
 # ═════════════════════════════════════════════════════════════════════════
-#  view() — Tensor → TensorView
+#  view() — TensorOwned → TensorView
 # ═════════════════════════════════════════════════════════════════════════
 
-func view*[T, Sh, St](t: Tensor[T, Sh, St]): TensorView[T, Sh, St] {.inline.} =
+func view*[T, Sh, St](t: TensorOwned[T, Sh, St]): TensorView[T, Sh, St] {.inline.} =
+  ## Non-owning view sharing the owning tensor's memory and layout.
   TensorView[T, Sh, St](
     data: cast[ptr UncheckedArray[T]](addr t.data[0]),
     layout: t.layout)
@@ -124,30 +133,42 @@ func view*[T, Sh, St](t: Tensor[T, Sh, St]): TensorView[T, Sh, St] {.inline.} =
 #  Layout accessors
 # ═════════════════════════════════════════════════════════════════════════
 
-template layout*(t: Tensor): untyped = t.layout
+template layout*(t: TensorOwned): untyped =
+  ## Reads the layout of the owning tensor's layout.
+  t.layout
 template layout*(tv: TensorView): untyped = tv.layout
 
-template shape*(t: Tensor): untyped = t.layout.shape
+template shape*(t: TensorOwned): untyped =
+  ## Reads the shape of the owning tensor's layout.
+  t.layout.shape
 template shape*(tv: TensorView): untyped = tv.layout.shape
 
-template stride*(t: Tensor): untyped = t.layout.stride
+template stride*(t: TensorOwned): untyped =
+  ## Reads the stride of the owning tensor's layout.
+  t.layout.stride
 template stride*(tv: TensorView): untyped = tv.layout.stride
 
 template rank*(tv: TensorView): untyped = tv.layout.rank()
-template rank*(t: Tensor): untyped = t.layout.rank()
+template rank*(t: TensorOwned): untyped =
+  ## Reads the rank of the owning tensor's layout.
+  t.layout.rank()
 
 template size*(tv: TensorView): untyped = tv.layout.size()
-template size*(t: Tensor): untyped = t.layout.size()
+template size*(t: TensorOwned): untyped =
+  ## Reads the size of the owning tensor's layout.
+  t.layout.size()
 
 template cosize*(tv: TensorView): untyped = tv.layout.cosize()
-template cosize*(t: Tensor): untyped = t.layout.cosize()
+template cosize*(t: TensorOwned): untyped =
+  ## Reads the cosize of the owning tensor's layout.
+  t.layout.cosize()
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display
 # ═════════════════════════════════════════════════════════════════════════
 
-proc `$`*[T, Sh, St](t: Tensor[T, Sh, St]): string =
-  "Tensor o (" & $t.layout.shape & "):(" & $t.layout.stride & ")"
+proc `$`*[T, Sh, St](t: TensorOwned[T, Sh, St]): string =
+  "TensorOwned o (" & $t.layout.shape & "):(" & $t.layout.stride & ")"
 
 proc `$`*[T, Sh, St](tv: TensorView[T, Sh, St]): string =
   "TensorView o (" & $tv.layout.shape & "):(" & $tv.layout.stride & ")"
