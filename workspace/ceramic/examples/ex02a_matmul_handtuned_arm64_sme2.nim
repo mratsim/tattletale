@@ -136,6 +136,23 @@ proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__built
 ## target, so the off-arm64 fallback compiles.
 proc builtin_assume_aligned*(p: pointer, alignment: csize_t): pointer {.importc: "__builtin_assume_aligned", nodecl.}
 
+proc gemm_reference(M, N, K: int; alpha: float32;
+    A: openArray[float32]; rsA, csA: int;
+    B: openArray[float32]; rsB, csB: int;
+    beta: float32; C: var openArray[float32]; rsC, csC: int) =
+  ## Naive triple-loop reference GEMM (i-k-j with register blocking skipped).
+  for j in 0 ..< N:
+    for i in 0 ..< M:
+      let ci = i * rsC + j * csC
+      if beta == 0.0'f32: C[ci] = 0.0'f32
+      elif beta != 1.0'f32: C[ci] *= beta
+  for j in 0 ..< N:
+    for k in 0 ..< K:
+      let bVal = B[k * rsB + j * csB]
+      if bVal != 0.0'f32:
+        for i in 0 ..< M:
+          C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bVal
+
 const simdArch {.strdefine.} = "auto"
 
 when simdArch == "auto":

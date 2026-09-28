@@ -25,6 +25,23 @@ import std/[algorithm, monotimes, random, strutils, strformat]
 import workspace/ceramic/examples/ex02a_matmul_handtuned_arm64_sme2 as v_a
 import workspace/ceramic/benchmark/bench_utils
 
+proc gemm_reference(M, N, K: int; alpha: float32;
+    A: openArray[float32]; rsA, csA: int;
+    B: openArray[float32]; rsB, csB: int;
+    beta: float32; C: var openArray[float32]; rsC, csC: int) =
+  ## Naive triple-loop reference GEMM (i-k-j with register blocking skipped).
+  for j in 0 ..< N:
+    for i in 0 ..< M:
+      let ci = i * rsC + j * csC
+      if beta == 0.0'f32: C[ci] = 0.0'f32
+      elif beta != 1.0'f32: C[ci] *= beta
+  for j in 0 ..< N:
+    for k in 0 ..< K:
+      let bVal = B[k * rsB + j * csB]
+      if bVal != 0.0'f32:
+        for i in 0 ..< M:
+          C[i * rsC + j * csC] += alpha * A[i * rsA + k * csA] * bVal
+
 const
   ProblemSizes = [128, 256, 512]
   NbSamples = 3
