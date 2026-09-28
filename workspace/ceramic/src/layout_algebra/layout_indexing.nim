@@ -23,7 +23,6 @@ import workspace/ceramic/src/macros/varargs_to_par
 export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
 
 #  crd2idx / idx2crd — via layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════

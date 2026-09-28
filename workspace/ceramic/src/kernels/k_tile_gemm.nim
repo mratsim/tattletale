@@ -14,16 +14,12 @@
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_constructors
-import workspace/ceramic/src/layout_algebra/layout_indexing
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
 import workspace/ceramic/src/tile_algebra/tile_io_bounded
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra, tile_epilogues_backend, tile_io_bounded
+export layout_algebra, tensors, tile_algebra, tile_epilogues_backend, tile_io_bounded
 
 proc gemm_with_epilogue*[TIn, TOut; Epi](
     D: ptr UncheckedArray[TOut], rsd, csd: int32,

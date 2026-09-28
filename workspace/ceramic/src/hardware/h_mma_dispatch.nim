@@ -13,18 +13,8 @@ import workspace/ceramic/src/hardware/h_registry
 # bindSym with a computed name (`$atom & "_suffix"`) from a static macro
 # parameter needs this experimental dimension (same as h_properties.nim).
 
-## Register-level MMA dispatch (compile-time string builder / AST emitter).
-##
-## Public entries:
-##   - `gemm_mma`: the atom-first register-level MMA macro — the atom's registry
-##     consts (h_configgen) drive everything instruction-level: NVIDIA
-##     `mma.sync` asm, the Apple simdgroup intrinsic on Metal, or the
-##     universal software cross-lane shuffle reduction.
-##   - `universalMma8x8x8`: the software 8×8×8 cross-lane shuffle reduction,
-##     the universal FMA atoms' device path (the `gemm_mma` "universal" case
-##     delegates here).
-##   - `buildNvidiaMmaAsm`: the asm string for one NVIDIA register-level MMA.
-##
+## Register-level MMA dispatch.
+
 # TODO: gemm_mma handles Nvidia asm + Apple simdgroup + the universal
 # software reduction; AMD and Intel tensor cores are not implemented yet.
 

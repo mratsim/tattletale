@@ -40,6 +40,7 @@
 ##        ▼                              ▼
 ##   [for d in 0..<outerR:          [for all dims:
 ##      copyMem(copyCount)]           elem-by-elem copy]
+
 import std/[macros, algorithm]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra

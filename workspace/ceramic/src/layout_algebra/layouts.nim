@@ -85,14 +85,6 @@ template filter_zeros*(layout: Layout): auto =
 # ═══════════════════════════════════════════════════════════════
 
 func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
-  ## Shape/stride TYPE nodes of a Layout-typed expression, nnkSym-safe.
-  ## A module-scope `type A = typeof(make_layout(...))` alias (atoms_nvidia
-  ## declares SM80_* exactly this way) makes getTypeInst return the alias
-  ## symbol (nnkSym — no children), so `typ[1]` crashes. Recover the args
-  ## from the alias's definition instead; kind-structure equivalent
-  ## (tuple/scalar, nesting, .len) to the non-aliased case. Design:
-  ## layoutTypeArgs recovers the Layout type arguments from an alias's
-  ## typedef (nnkSym-safe), so compose sees the actual shape/stride types.
   let typ = layout.getTypeInst()
   if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
     return (typ[1], typ[2])
@@ -108,18 +100,12 @@ func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compi
   error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
 
 # ═══════════════════════════════════════════════════════════════
-#  padRight — extend layout rank by padding with identity dimensions
+#  Padding
 # ═══════════════════════════════════════════════════════════════
 
-#  CuTe: append<R>(layout) pads to rank R with (1, 0) dimensions.
-#  Used by blocked_product / raked_product to equalize ranks.
-#  Pads on the RIGHT (appends identity dimensions at the end).
 
 macro padRight*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by padding with identity dimensions (1, 0).
-  ## Identity dimensions are appended on the right.
-  ## Zero-cost if layout is at least the target rank. The input AST is passed as-is
-  ## No intermediate value is materialized.
   let shTyp = layoutTypeArgs(layout).shapeTy
   let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
 
@@ -140,16 +126,10 @@ macro padRight*(layout: Layout; rank: static int): untyped =
     ct.stride.add IntCT(0)
   result = ct.emit()
 
-#  padLeft — extend layout rank by prepending identity dimensions
 
-#  CuTe: prepend<R>(layout) pads to rank R with (1, 0) dimensions.
-#  Used by gemm.hpp to lift 2D operands to 3D.
-#  Pads on the LEFT (prepends identity dimensions at the front).
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity dimensions (1, 0).
-  ## Identity dimensions are prepended on the left.
-  ## Zero-cost if layout is at least the target rank.
   let shTyp = layoutTypeArgs(layout).shapeTy
   let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
 

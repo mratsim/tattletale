@@ -5,25 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MMA atom property getters and derived atom geometry — method-call syntax on
-## the enum. This module holds what is forced by the hardware.
-##
-## Each getter resolves the per-atom const the registry generated
-## (`NAME_m`, `NAME_aLayout`, …) via `bindSym($Name & "_suffix")`, the Constantine
-## `getCoefA`/`baseFieldModulus` pattern. The resolved const
-## keeps its declared type: scalars fold as ints, the layout getters
-## return the real Layout consts (heterogeneous per atom — no typed
-## layout table exists, and none is possible: the SM80 16×8×8 and the 1×1×1
-## atoms have structurally distinct Layout types).
-##
-## Usage: `A.getM()`, `A.getLayoutA()` with `A: static MmaAtom`, in type
-## bodies (`array[A.getVpt(), T]`), in `const` blocks and in `when`
-## branches.
-##
-## `{.experimental: "dynamicBindSym".}` is required: without it the computed-name
-## `bindSym($A & "_suffix")` fails to evaluate `A` at
-## compile time.
-
+## MMA atom property getters and derived atom geometry.
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/hardware/h_configgen

@@ -6,26 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## MMA atom registry generator + the atom datatypes.
-##
-## The atom is an enum member, not a data-carrying object: an enum static
-## unifies across generic positions where a tuple-carrying object static
-## does not (a tuple in the static value poisons unification). All atom
-## properties are per-atom named consts resolved through getter macros
-## (`h_properties.nim`).
-##
-## Lifecycle: `declareAtoms:` (invoked in `h_registry.nim`) parses the declarative atom block and generates
-##   - `type MmaAtom = enum` with one member per atom,
-##   - one exported const per atom per property: `NAME_m`, `NAME_n`,
-##     `NAME_k`, `NAME_vpt`, `NAME_threadCount`, `NAME_aLayout`,
-##     `NAME_bLayout`, `NAME_cLayout`, `NAME_instr`, plus `NAME_elem`
-##     (the MSL operand element name) for the Apple simdgroup atoms.
-##     Optional keys absent from an atom's declaration default to "".
-##
-## Mirrors Constantine's `declareCurves` machinery
-## (`constantine/named/deriv/parser_fields.nim`): the same AST shape
-## (`Command(Ident"atom", Ident"NAME", StmtList(Call(Ident"key",
-## StmtList(value)) …))`), the same two-step parse-then-generate.
-
+## MMA atom registry generator + the atom datatypes.
 import std/[macros, strutils]
 import workspace/ceramic/src/int_tuples
 
