@@ -453,7 +453,7 @@ proc gemm_strided*[T: SomeNumber](
             if eff_mr == mr and eff_nr == nr and
                vC.layout.stride[1] == 1 and vC.layout.stride[0] >= nr:
               # Full 32×32 tile with contiguous C rows: kernel extracts ZA straight to C,
-              # fusing alpha/beta/ReLU in streaming mode (no AB scratch, no separate epilogue).
+              # fusing alpha/beta/ReLU in streaming dimension (no AB scratch, no separate epilogue).
               smeGemmUkernel32x32EpiDv(
                 cast[ptr float32](cast[int](packA_ptr) +% aOffset *% sizeof(T).int),
                 cast[ptr float32](cast[int](bTilePtr) +% bOffset *% sizeof(T).int),

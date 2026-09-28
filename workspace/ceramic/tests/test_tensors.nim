@@ -477,7 +477,7 @@ proc testNonUnitStrides =
   for i in 0..<24: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  # (2,12) → col-major order → compact (1,4): mode 0 stride 1, mode 1 stride 4
+  # (2,12) → col-major order → compact (1,4): dimension 0 stride 1, dimension 1 stride 4
   let expected = make_layout((4, 6), (1, 4))
   doAssert like.layout.shape === layout.shape, "shape match"
   doAssert like.layout.stride === expected.stride, "compact stride (1,4) vs orig (2,12)"

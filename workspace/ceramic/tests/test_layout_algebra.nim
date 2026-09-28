@@ -31,12 +31,12 @@ import workspace/ceramic/src/layout_algebra/layout_algebra
 proc runCoalesceTests: void
 proc runComplementStaticRank1Tests: void
 proc runComplementExactValueTests: void
-proc runComplementMultiModeStaticTests: void
+proc runComplementMultiDimensionStaticTests: void
 proc runComplementDynamicTests: void
 proc runComplementDisjointnessTests: void
 proc runComposeExactValueTests: void
 proc runComposeSimpleTests: void
-proc runComposeMultiModeTests: void
+proc runComposeMultiDimensionTests: void
 proc runComposeDynamicTests: void
 proc runComposeRemainderTests: void
 proc runComposeNestedTests: void
@@ -71,7 +71,7 @@ proc runTests =
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
   runComplementStaticRank1Tests()
   runComplementExactValueTests()
-  runComplementMultiModeStaticTests()
+  runComplementMultiDimensionStaticTests()
   runComplementDynamicTests()
   runComplementDisjointnessTests()
   echo "\n--- Anti-regression: crd2idx + tile_unzip ---"
@@ -79,7 +79,7 @@ proc runTests =
   echo "\n── Composition [CUTE-CM] ──"
   runComposeExactValueTests()
   runComposeSimpleTests()
-  runComposeMultiModeTests()
+  runComposeMultiDimensionTests()
   runComposeDynamicTests()
   runComposeRemainderTests()
   runComposeNestedTests()
@@ -437,7 +437,7 @@ proc runComplementExactValueTests =
   echo "  Exact-value: 10 Python assertions OK"
 
 # ─── Multi-dimension static [CUTE-CP] ───────────────────────────────
-proc runComplementMultiModeStaticTests =
+proc runComplementMultiDimensionStaticTests =
   # Shape(_2,_4):(1,2)
   block:
     let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
@@ -641,7 +641,7 @@ proc runComposeSimpleTests =
   doAssert chkCompose(make_layout(4,2), make_layout(2,2))
   echo "    Simple: 15/15"
 
-proc runComposeMultiModeTests =
+proc runComposeMultiDimensionTests =
   doAssert chkCompose(make_layout((4,3),(1,1)), make_layout(12,1))
   doAssert chkCompose(make_layout(12,1), make_layout((4,3),(1,1)))
   doAssert chkCompose(make_layout(12,2), make_layout((4,3),(1,1)))
@@ -998,12 +998,12 @@ proc chkLogicalProduct[A, B: Layout](blk: A; tiler: B) =
   let R = logical_product(blk, tiler)
   doAssert rank(R) === 2,
     "logical_product: rank=" & $rank(R) & " != 2"
-  let mode0 = dimension(R, 0)
-  let mode1 = dimension(R, 1)
-  doAssert blk === (mode0.shape, mode0.stride),
-    "logical_product: block mismatch, expected " & $blk & " got " & $mode0
-  doAssert compatible(tiler.shape, mode1.shape),
-    "logical_product: compatible(tiler, mode1) failed, tiler=" & $tiler & " mode1=" & $mode1
+  let dim0 = dimension(R, 0)
+  let dim1 = dimension(R, 1)
+  doAssert blk === (dim0.shape, dim0.stride),
+    "logical_product: block mismatch, expected " & $blk & " got " & $dim0
+  doAssert compatible(tiler.shape, dim1.shape),
+    "logical_product: compatible(tiler, dim1) failed, tiler=" & $tiler & " dim1=" & $dim1
 
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse [CUTE-IR] + [PY-E Table 5]
@@ -1089,12 +1089,12 @@ proc runRightInvDynamicTests =
   ## Note: shapes must be static for compile-time preprod. Only strides may be dynamic.
   ## Use `let` indirection so ints stay as runtime `int` (not Int[N]).
   block:
-    # Static shapes (4,2), mixed strides: mode0=Int[1], mode1=dynamic 4
+    # Static shapes (4,2), mixed strides: dim0=Int[1], dim1=dynamic 4
     let d4 = 4
     let layout = make_layout((4, 2), (Int[1](), d4))
     chkRightInv(layout)
   block:
-    # Static shapes (2,4), mixed strides: mode0=dynamic 4, mode1=Int[1]
+    # Static shapes (2,4), mixed strides: dim0=dynamic 4, dim1=Int[1]
     let d4 = 4
     let layout = make_layout((2, 4), (d4, Int[1]()))
     chkRightInv(layout)
@@ -1228,8 +1228,8 @@ proc runLogicalProductExactValueTests =
     let R = logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
     doAssert rank(R) === 2
     let m0 = dimension(R, 0); let m1 = dimension(R, 1)
-    doAssert m0 === ((2, 2), (1, 2)), "mode0: " & $m0
-    doAssert m1 === ((3, 4), (16, 4)), "mode1: " & $m1
+    doAssert m0 === ((2, 2), (1, 2)), "dim0: " & $m0
+    doAssert m1 === ((3, 4), (16, 4)), "dim1: " & $m1
   block:
     # 1:0 × (2,2) — trivial
     let R = logical_product(make_layout(1, 0), make_layout((2, 2)))
@@ -1263,16 +1263,16 @@ proc runBlockedProductTests =
     let R = blocked_product(tile, mat)
     doAssert rank(R) === 2
     let m0 = dimension(R, 0); let m1 = dimension(R, 1)
-    doAssert m0 === ((2, 3), (1, 16)), "blocked mode0: " & $m0
-    doAssert m1 === ((2, 4), (2, 4)), "blocked mode1: " & $m1
+    doAssert m0 === ((2, 3), (1, 16)), "blocked dim0: " & $m0
+    doAssert m1 === ((2, 4), (2, 4)), "blocked dim1: " & $m1
   block:
     # Scalar rank-1 block * rank-1 tiler
 
     let R = blocked_product(make_layout(4, 1), make_layout(3, 1))
     doAssert rank(R) === 2
     let m0 = dimension(R, 0); let m1 = dimension(R, 1)
-    doAssert m0 === (4, 1), "blocked 1d mode0: " & $m0
-    doAssert m1 === (3, 4), "blocked 1d mode1: " & $m1
+    doAssert m0 === (4, 1), "blocked 1d dim0: " & $m0
+    doAssert m1 === (3, 4), "blocked 1d dim1: " & $m1
   block:
     # [PY-L] blocked vs raked: same offset set
     let blk = make_layout((2, 2), (1, 2))
@@ -1309,8 +1309,8 @@ proc runRakedProductTests =
     let R = raked_product(tile, mat)
     doAssert rank(R) === 2
     let m0 = dimension(R, 0); let m1 = dimension(R, 1)
-    doAssert m0 === ((3, 2), (16, 1)), "raked mode0: " & $m0
-    doAssert m1 === ((4, 2), (4, 2)), "raked mode1: " & $m1
+    doAssert m0 === ((3, 2), (16, 1)), "raked dim0: " & $m0
+    doAssert m1 === ((4, 2), (4, 2)), "raked dim1: " & $m1
   block:
     # [PY-L] raked 1d: block=4, tiler=3 — same offsets as blocked
     let blk = make_layout(4, 1)

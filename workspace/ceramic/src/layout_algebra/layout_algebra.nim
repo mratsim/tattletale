@@ -448,10 +448,10 @@ func composeImpl(
                   lhsShapes, lhsStrides)
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
-  ## Layer RHS dimensions one by one over the FULL coalesced LHS via mapModesWith.
+  ## Layer RHS dimensions one by one over the FULL coalesced LHS via mapDimensionsWith.
   ## Nested RHS dimensions are handled by recursive composeDistribute calls;
   ## scalar dimensions go directly to composeImpl.
-  mapModesWith(make_layout(rhsShapes, rhsStrides)):
+  mapDimensionsWith(make_layout(rhsShapes, rhsStrides)):
     when it.shape is tuple:
       composeDistribute(lhsShapes, lhsStrides, it.shape, it.stride)
     else:
@@ -545,7 +545,7 @@ func logical_divide_builder*[LayoutT, TilerT](
 func logical_divide*(layout: Layout; tiler: tuple): auto {.inline.} =
   ## Tuple tiler → per-dimension divide (transform_layout).
   ## Each tiler element applies to the corresponding layout dimension.
-  ## Modes beyond len(tiler) pass through unchanged.
+  ## Dimensions beyond len(tiler) pass through unchanged.
   const R = static(rank(layout))
   static: doAssert rank(tiler) <= R,
     "logical_divide: tiler has more dimensions (" & $rank(tiler) &
@@ -713,7 +713,7 @@ func right_inverse*(layout: Layout): auto =
 #  left_inverse — left inverse (injective layouts only)
 # ═══════════════════════════════════════════════════════════════
 
-proc leftInverseModes*(
+proc leftInverseDimensions*(
     strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
   ## Return left-inverse dimensions as a LayoutCT.
   ## Builds from stride ratios:
@@ -763,7 +763,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
   let prefixProd = prefixProduct(shapes)
-  let acc = leftInverseModes(strides, shapes, prefixProd, sh)
+  let acc = leftInverseDimensions(strides, shapes, prefixProd, sh)
   if acc.shape.len == 0:
     result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
   else:

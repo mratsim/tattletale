@@ -8,9 +8,9 @@
 ## Tile-slice stores use the `st1w {zaNv.s[w13, 0]}, p1, [x4]` form.
 ## Assembler rejects the bare `[w13]` index and needs explicit `, 0`.
 ##
-## Streaming-mode rules:
+## Streaming-dimension rules:
 ##   - `smstart`/`smstop` bracket every kernel call
-##   - NEON instructions fault inside streaming mode, and M4 has no non-streaming SVE
+##   - NEON instructions fault inside streaming dimension, and M4 has no non-streaming SVE
 ##   - `.inst 0xd503477f` is a full `smstart` on M4 (streaming + ZA, zeroing the Z/V register file)
 ##
 ## Two fmopa conventions live in this file:
@@ -20,7 +20,7 @@
 
 {.localpassC: "-march=armv9-a+sme2 -fno-vectorize -fno-slp-vectorize".}
 # SME2 is for the multi-vector `mova` extract. SVE auto-vectorization is
-# disabled because emitted SVE instructions fault outside streaming mode.
+# disabled because emitted SVE instructions fault outside streaming dimension.
 import workspace/cpuplatforms/arm/macro_assembler_arm64
 
 proc buildSme16x16(

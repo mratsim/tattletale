@@ -55,7 +55,7 @@ template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int
 #  Tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
-template crd2idxMode*(coord, shape, stride: typed): auto =
+template crd2idxDimension*(coord, shape, stride: typed): auto =
   ## Per-dimension crd2idx anchored on the shape dimension structure.
   ##
   ## PERF: Must stay template (not func). See crd2idx tuple overload.
@@ -79,9 +79,9 @@ template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
   ##
   ## PERF: Must stay template (not func). See crd2idx tuple overload.
   when i == rank(shape) - 1:
-    crd2idxMode(coord[i], shape[i], stride[i])
+    crd2idxDimension(coord[i], shape[i], stride[i])
   else:
-    crd2idxMode(coord[i], shape[i], stride[i]) +
+    crd2idxDimension(coord[i], shape[i], stride[i]) +
       crd2idxRecur(coord, shape, stride, i + 1)
 
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =

@@ -481,19 +481,19 @@ proc runZip2ByTests =
   echo "  zip2_by: 10 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  mapModesWith / zipDimensionsWith
+#  mapDimensionsWith / zipDimensionsWith
 # ═══════════════════════════════════════════════════════════════
 
 proc runMapZipWithTests =
   block:
-    let r = mapModesWith((2, 4, 6)): it * 2
+    let r = mapDimensionsWith((2, 4, 6)): it * 2
     doAssert r === (4, 8, 12)
   block:
-    let r = mapModesWith((Int[2](), Int[4]())): it * 3
+    let r = mapDimensionsWith((Int[2](), Int[4]())): it * 3
     doAssert r === (6, 12)
   block:
     # product_each: product of each top-level element
-    let r = mapModesWith(((2,2), (2,8))): product(it)
+    let r = mapDimensionsWith(((2,2), (2,8))): product(it)
     doAssert r === (4, 16)
   block:
     # product_each: product of each top-level element
@@ -519,7 +519,7 @@ proc runMapZipWithTests =
   block:
     let r = zipDimensionsWith((7, 10, 15), (3, 4, 6)): ceil_div(it_a, it_b)
     doAssert r === (3, 3, 3)
-  echo "  mapModesWith/zipDimensionsWith: 7 checks OK"
+  echo "  mapDimensionsWith/zipDimensionsWith: 7 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith — plain int

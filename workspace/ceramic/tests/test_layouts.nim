@@ -751,8 +751,8 @@ proc runZipTests =
     let R = zipDimensions(a, b)
     doAssert rank(R) === 2
     let m0 = dimension(R, 0); let m1 = dimension(R, 1)
-    doAssert m0 === ((2, 3), (1, 4)), "zip mode0: " & $m0
-    doAssert m1 === ((2, 4), (2, 1)), "zip mode1: " & $m1
+    doAssert m0 === ((2, 3), (1, 4)), "zip dim0: " & $m0
+    doAssert m1 === ((2, 4), (2, 1)), "zip dim1: " & $m1
   block:
     # Single-element interleave (rank-1 with rank-1)
     let a = make_layout(4, 1)
@@ -1037,14 +1037,14 @@ proc runCompactOrderTests =
     doAssert make_layout_like(make_layout((2,3,4), (3,6,1)))  === ((2,3,4), (4,8,1))
     echo "    6. make_layout_like 3D: 4 cases OK"
 
-  # Mode-reordering rejection
+  # Dimension-reordering rejection
   block:
     # compact_order: dimension i keeps position i; only stride values change
     let cm = compact_order((2,3,4), (1,2,0))
     doAssert cm[0] == 4
     doAssert cm[1] == 8
     doAssert cm[2] == 1
-    echo "    7. Modes NOT reordered: 3 checks OK"
+    echo "    7. Dimensions NOT reordered: 3 checks OK"
 
   block:
     let l = make_layout_like(make_layout((2,3,4), (3,6,1)))
@@ -1082,23 +1082,23 @@ proc runTests =
   echo "--- NCHW ---"
   runNCHWTests()
   echo "--- zipDimensions ---"
-  echo "--- mapModesWith/zipDimensionsWith ---"
+  echo "--- mapDimensionsWith/zipDimensionsWith ---"
   block:
     # map: double each dimension's stride
     let a = make_layout((2, 4), (1, 2))
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride * 2)
     doAssert r.shape === (2, 4) and r.stride === (2, 4)
   block:
     # map over single-dimension layout
     let a = make_layout(3, 5)
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride * 10)
     doAssert r.shape === 3 and r.stride === 50
   block:
     # map over hierarchical layout: scale each dimension's stride
     let a = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride.scaleBy(2))
     doAssert r.shape === ((2,2),(2,8))
     doAssert r.stride === ((2,8),(4,16))
@@ -1187,44 +1187,44 @@ proc runTests =
     doAssert b.shape === (1, 1, 5)
     doAssert b.stride === (0, 0, 1)
   echo "    padRight/padLeft: 6 cases OK"
-  echo "--- takeModes/selectModes ---"
+  echo "--- takeDimensions/selectDimensions ---"
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(1, 3)
+    let b = a.takeDimensions(1, 3)
     doAssert b.shape === (3, 5)
     doAssert b.stride === (2, 6)
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(0, 3)
+    let b = a.selectDimensions(0, 3)
     doAssert b.shape === (2, 7)
     doAssert b.stride === (1, 30)
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(0, 1)
+    let b = a.takeDimensions(0, 1)
     doAssert b.shape === 2
     doAssert b.stride === 1
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(2)
+    let b = a.selectDimensions(2)
     doAssert b.shape === 5
     doAssert b.stride === 6
   block:
-    ## const indirection for takeModes
+    ## const indirection for takeDimensions
     const B = 1
     const E = 3
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(B, E)
+    let b = a.takeDimensions(B, E)
     doAssert b.shape === (3, 5)
     doAssert b.stride === (2, 6)
   block:
-    ## const indirection for selectModes
+    ## const indirection for selectDimensions
     const I0 = 0
     const I3 = 3
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(I0, I3)
+    let b = a.selectDimensions(I0, I3)
     doAssert b.shape === (2, 7)
     doAssert b.stride === (1, 30)
-  echo "    takeModes/selectModes: 6 cases OK"
+  echo "    takeDimensions/selectDimensions: 6 cases OK"
 
   echo "--- mapLeavesWith ---"
   runMapLeavesWithTests()

@@ -51,15 +51,15 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
   result = body.replaceNodes(ident"it", t)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  mapModesWith — Top-level only tuple map
+#  mapDimensionsWith — Top-level only tuple map
 # ═══════════════════════════════════════════════════════════════════════
 
-macro mapModesWith*(t: tuple; body: untyped): untyped =
+macro mapDimensionsWith*(t: tuple; body: untyped): untyped =
   ## Apply `body` to each top-level element of tuple `t` (does NOT recurse into nested tuples).
   ## `it` binds to the current element.
   ##
   ## Example:
-  ##   mapModesWith((2, 4, 6)): it * 2  →  (4, 8, 12)
+  ##   mapDimensionsWith((2, 4, 6)): it * 2  →  (4, 8, 12)
   let tt = getTypeInst(t)
   let n = tt.len
 

@@ -75,9 +75,9 @@ export layouts.mapLeavesWith
 export layouts.upcast
 export layouts.downcast
 export layouts.groupDimensions
-export layouts.takeModes
-export layouts.selectModes
-export layouts.replaceMode
+export layouts.takeDimensions
+export layouts.selectDimensions
+export layouts.replaceDimension
 export layouts.zipDimensions
 export layouts.zipDimensionsWith
 

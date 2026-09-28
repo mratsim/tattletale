@@ -44,8 +44,8 @@ import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
 # ═══════════════════════════════════════════════════════════════════════════
 #
 #  zipped_divide groups a panel layout into (tile, rest):
-#    mode 0 = tile       — e.g. (mr, 1) for A, (1, nr) for B
-#    mode 1 = rest       — e.g. (num_ir, kc) for A, (kc, num_jr) for B
+#    dimension 0 = tile       — e.g. (mr, 1) for A, (1, nr) for B
+#    dimension 1 = rest       — e.g. (num_ir, kc) for A, (kc, num_jr) for B
 #
 #  The pack layout nests them:
 #    - tile      → LayoutLeft  (tile-contiguous: rows for A, cols for B)
@@ -242,8 +242,8 @@ proc gemm_strided*[T: SomeNumber](
   # ── Grouped (tile, rest) layouts via zipped_divide ──
   #
   #  zipped_divide splits a panel into two groups:
-  #    mode 0 = micro-tile       (mr × 1 for A, 1 × nr for B)
-  #    mode 1 = how tiles tile   (num_ir × kc for A, kc × num_jr for B)
+  #    dimension 0 = micro-tile       (mr × 1 for A, 1 × nr for B)
+  #    dimension 1 = how tiles tile   (num_ir × kc for A, kc × num_jr for B)
   #
   #  pack_layout derives the compact pack-buffer layout from this
   #  grouping (see layout_algebra / layout_algebra).

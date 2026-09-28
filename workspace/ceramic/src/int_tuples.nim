@@ -121,4 +121,4 @@ func product_each*(t: IntOrIntTuple): auto =
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
 
   ##
-  mapModesWith(t): product(it)
+  mapDimensionsWith(t): product(it)

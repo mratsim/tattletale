@@ -2,9 +2,9 @@
 ##
 ## Packs transpose or copy row-major A/B panels into the `(ir, kc, 32)` layout
 ## consumed by the SME2 ukernels in `gemm_ukernel_arm64_sme2.nim`.
-## `sme_` packs run inside an smstart/smstop bracket (streaming mode, SVE/SME2 only).
+## `sme_` packs run inside an smstart/smstop bracket (streaming dimension, SVE/SME2 only).
 ## NEON packs run outside the bracket, since NEON faults
-## inside streaming mode. Requires ARMv9.2 with FEAT_SME2 and assumes
+## inside streaming dimension. Requires ARMv9.2 with FEAT_SME2 and assumes
 ## SVL = 64 B (16 f32 lanes per vector).
 ##
 ## Every pack emits its instruction text through the compile-time macro
@@ -258,7 +258,7 @@ proc smePackATranspose16rows*(
   ##   r3: m n o p                           c3: d h l p      dst[96..111]
   ##   (4×4 excerpt of each 16×16 block, whose columns land 32 f32 apart in dst)
   ##
-  ## Runs inside an smstart/smstop bracket (streaming mode, SVE/SME2 only).
+  ## Runs inside an smstart/smstop bracket (streaming dimension, SVE/SME2 only).
   genSmePackATranspose16rows(dst, src, srcRowStride, nColBlocks,
                              validRows)
 
@@ -343,7 +343,7 @@ proc smePackBCopy32f32x4*(
   ##
   ## Contract: all four panels have 32 valid lanes per row and the panel
   ## count is a multiple of 4.
-  ## Runs inside an smstart/smstop bracket (streaming mode, SVE/SME2 only).
+  ## Runs inside an smstart/smstop bracket (streaming dimension, SVE/SME2 only).
   genSmePackBCopy32f32X4(dst0, dst1, dst2, dst3, src, srcRowStride,
                          nRows)
 

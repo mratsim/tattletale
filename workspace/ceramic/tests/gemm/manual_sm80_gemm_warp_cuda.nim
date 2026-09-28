@@ -59,7 +59,7 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
   # fragments as owning tensors shaped like the partitions:
   # V flattened to atom register order, the k slices in the partition's
-  # RepeatK mode, so one copyFrom gathers all slices in the flat order
+  # RepeatK dimension, so one copyFrom gathers all slices in the flat order
   # gemm_warp indexes per k slice
   var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)

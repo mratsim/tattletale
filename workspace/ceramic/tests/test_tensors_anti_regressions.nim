@@ -6,14 +6,14 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Anti-regression: the tensor `()` one-liner with a mixed
-## scalar/underscore coordinate on a nested-mode layout.
+## scalar/underscore coordinate on a nested-dimension layout.
 ##
 ## The view `v` sits on the copy-partition layout with the rank-3
 ## shape ((4, 1), 1, 8). The partition_S one-liner `v(thrIdx, _, _)`
 ## must return the thread's slice. The `()` template builds the
 ## coord (thrIdx, _, _), slices the layout, and computes the data
 ## offset through crd2idx. The tuple-coord crd2idx must decompose a
-## scalar thread index into the nested (4, 1) thread mode, with
+## scalar thread index into the nested (4, 1) thread dimension, with
 ## recursion anchored on the shape (CuTe semantics).
 ##
 ## The expected thread-3 slice is shape (1, 8), strides (0, 16),
@@ -34,7 +34,7 @@ proc runTests =
   echo "\n── tensor () mixed coord on nested layout (anti-regression) ──"
   block:
     # The copy-partition layout: the rank-3 shape ((4, 1), 1, 8) with
-    # the nested (4, 1) thread mode and the chunk stride 16.
+    # the nested (4, 1) thread dimension and the chunk stride 16.
     const pL = make_layout(((4, 1), 1, 8), ((4, 16), 0, 16))
     var buf: array[128, int32]
     for i in 0 ..< 128: buf[i] = i.int32

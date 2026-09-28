@@ -1,6 +1,6 @@
 ## Ceramic × Crucible anti-regression: `Int[N]` stride + `local_partition` on GPU
 ##
-## Failure mode this test prevents:
+## Failure dimension this test prevents:
 ##   Ceramic's complement path (via `local_partition`) emits `max(1, flatten(stride))`
 ##   where the flattened scalar stride is a static `Int[1]`. Crucible treats `max`
 ##   as an "ambiguous builtin" and FORWARDS it to CUDA verbatim WITHOUT lowering the
@@ -43,7 +43,7 @@ import workspace/ceramic/src/tensors
 
 const kernelPartition = cuda:
   proc partKernel(Buf: ptr UncheckedArray[float32]) {.global.} =
-    # View over Buf with a static Int[1] stride on the leading mode.
+    # View over Buf with a static Int[1] stride on the leading dimension.
     let a = make_view(Buf, make_layout((8, 8), (Int[1](), 8)))
     let tl = make_layout((Int[8](), Int[8]()))
     # local_partition -> complement -> max(1, Int1) at emission.

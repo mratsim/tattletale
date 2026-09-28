@@ -384,15 +384,15 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
 
-#  takeModes — extract dimensions [B, E) into a new Layout
+#  takeDimensions — extract dimensions [B, E) into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
-macro takeModes*(layout: Layout; B, E: static int): untyped =
+macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ## Extract dimensions in range `[B, E)` into a new Layout.
   ## Returns a scalar Layout if only one dimension is extracted.
   ##
   ## Examples:
-  ##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
+  ##   takeDimensions(make_layout((2, 3, 5, 7)), 1, 3)
   ##   # → (3, 5):(2, 6)
   var ct = LayoutCT()
   let shTyp = layoutTypeArgs(layout).shapeTy
@@ -403,10 +403,10 @@ macro takeModes*(layout: Layout; B, E: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  selectModes — extract specific dimension indices into a new Layout
+#  selectDimensions — extract specific dimension indices into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
-macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
+macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   ## Extract specific dimension indices into a new Layout.
   var ct = LayoutCT()
   for i in 0 ..< Is.len:
@@ -416,10 +416,10 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  replaceMode — replace a dimension with a sub-Layout
+#  replaceDimension — replace a dimension with a sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
-macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
+macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
   ## CuTe: replace<N>(layout, x) — layout.hpp:1001
   let shTyp = layoutTypeArgs(layout).shapeTy
@@ -439,12 +439,12 @@ macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
 #  zipWith — pairwise fn over dimensions of two Layouts
 # ═══════════════════════════════════════════════════════════════
 
-macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
+macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
   ## Apply `body` to each dimension of Layout `arg`. Within body, `it` is the current dimension.
   ## `body` must evaluate to a Layout.
   ##
   ## Example:
-  ##   mapModesWith(make_layout((2, 4), (1, 2))):
+  ##   mapDimensionsWith(make_layout((2, 4), (1, 2))):
   ##     make_layout(it.shape, it.stride * 2)
   ##   # → (2, 4):(2, 4)
   let shTy = layoutTypeArgs(arg).shapeTy

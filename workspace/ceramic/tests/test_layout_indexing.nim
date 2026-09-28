@@ -93,12 +93,12 @@ echo "  [OK] idx2crd: 24 elements roundtrip"
 # ═══════════════════════════════════════════════════════════════
 
 block:
-  # flat index → coord over the SHAPE (first mode fastest), no stride use
+  # flat index → coord over the SHAPE (first dimension fastest), no stride use
   doAssert idx2crd((4, 8), 31) === (3, 7)
   doAssert idx2crd((4, 8), 5) === (1, 1)
   doAssert idx2crd((2, 2), 3) === (1, 1)
   doAssert idx2crd(2, 1) === 1
-  # nested shape: recursive per-mode split
+  # nested shape: recursive per-dimension split
   doAssert idx2crd(((4, 8), (2, 2)), 31) === ((3, 7), (0, 0))
   # roundtrip with crd2idx over the shape (compact basis)
   let sh = (3, 4)
@@ -115,7 +115,7 @@ echo "  [OK] idx2crd(shape, idx): shape-based decomposition"
 # ═══════════════════════════════════════════════════════════════
 
 block:
-  let n = make_layout((4, 8), (16, 1))   # atom T-mode structure, gaps
+  let n = make_layout((4, 8), (16, 1))   # atom T-dimension structure, gaps
   # flat 31 over the shape is (3, 7); the stride-based decomposition
   # gives (1, 7) and does not roundtrip — the documented compact-only case
   doAssert idx2crd(n, 31) === (1, 7)
@@ -157,7 +157,7 @@ block:
 ##     doAssert crd[0] === 0
 ##     doAssert crd[1] === 1
 ##   block:
-##     ## Single mode layout
+##     ## Single dimension layout
 ##     let L = make_layout(8, 1)
 ##     let crd = idx2crd(L, 5)
 ##     doAssert crd === 5

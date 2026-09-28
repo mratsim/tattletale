@@ -57,11 +57,11 @@ proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
     N = ShC.default[1]
     K = ShA.default[1]
   when typeof(ShA.default[0]) isnot typeof(M):
-    {.error: "gemm_ref: A mode 0 (M) != C mode 0".}
+    {.error: "gemm_ref: A dimension 0 (M) != C dimension 0".}
   when typeof(ShB.default[0]) isnot typeof(N):
-    {.error: "gemm_ref: B mode 0 (N) != C mode 1".}
+    {.error: "gemm_ref: B dimension 0 (N) != C dimension 1".}
   when typeof(ShA.default[1]) isnot typeof(K):
-    {.error: "gemm_ref: A mode 1 (K) != B mode 1".}
+    {.error: "gemm_ref: A dimension 1 (K) != B dimension 1".}
   for k in 0 ..< K:
     for m in 0 ..< M:
       for n in 0 ..< N:
