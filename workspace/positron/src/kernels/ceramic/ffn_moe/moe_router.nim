@@ -8,8 +8,8 @@
 # ──────────────────  moe_router (the Qwen softmax routing op)  ──────────────────
 
 ## Qwen3.5/3.6 MoE router on the ceramic Tile API, the softmax routing
-## form of the qwen35_moe mega decode kernel. The GLM sigmoid form stays
-## in `ffn_moe.nim`, out of contract here.
+## form of the qwen35_moe mega decode kernel. The GLM sigmoid form lives
+## in `ffn_moe.nim`.
 ##
 ## Per token t, one threadgroup for the router, one (token, 32-col block)
 ## for the merge, El storage, fp32 score math, E = experts, K = top-K:
@@ -19,21 +19,6 @@
 ##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
 ##           ──► w = p / Σp · Scale ──► El round
 ##
-##   partial[t, 0..K] (H, fp32 rows) ──► [ Σ slot order, shared last ] ──► El ──► out_r[t] (H)
-##
-## Contract:
-##   - logits accumulate fp32 over 16-wide mma chunks, one El round,
-##     the softmax and top-K run fp32, one El round per weight at the store
-##   - tensors: x (T, H) El, router_w (E, H) El, ids (T, K) int32,
-##     rout_w (T, K) El, partial (T, K+1, H) fp32, out_r (T, H) El
-##   - shapes: E a multiple of the 64-expert chunk, H a multiple of the
-##     16-wide K step and of the 32-wide merge lane tile
-##   - grid: `moe_route_fwd` (T, 1, 1) at 32 lanes, `moe_decode_merge_at`
-##     (T, H div 32, 1)
-##   - shared internals with `ffn_moe.nim`: the row-0 logit gather, the
-##     5-step `simdShuffleDown` reduction trees. The score chains and atom
-##     layouts differ, the reduction trees and the scratch-staged top-K
-##     stay module-local
 import ../math_consts
 import workspace/crucible
 import workspace/ceramic
@@ -114,7 +99,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
   ##
   ##   scores (8, F) fragment tile ──► staged scratch row (E, fp32) ──► K passes ──► ids (K), w (K)
   ##
-  ## the tile stages first, each lane writes its fragment cells to `scratch`
+  ## The tile stages first, each lane writes its fragment cells to `scratch`
   ## at the element's expert index, every one of the 8·F experts exactly one
   ## writer (the AC layout's lane → cell mapping below). Each selection pass
   ## scans the linear expert vector with lane==expert-slice ownership
@@ -200,7 +185,7 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ##     the router GEMV input
   ##   - router_w: (E, H) El, row-major, the router weight matrix,
   ##     the checkpoint's routed-expert weights
-  ##   - t: the token index, the caller's grid coordinate
+  ##   - t: the token index, the caller's launch coordinate
   ##   - scores_scratch: E fp32 elements, the selection's staged score
   ##     row, the content may be uninitialized
   ##   - ids: K-element int32 register array, filled with the top-K
@@ -216,11 +201,11 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
   ##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
   ##           ──► w = p / Σp · Scale ──► El round
   ##
-  ## the (8, E div 8) score tile assembles chunk by chunk, chunk cs's 64
+  ## The (8, E div 8) score tile assembles chunk by chunk, chunk cs's 64
   ## row-0 logits land in col-frag cs. Composed in-group per slot group by
   ## the mega kernel.
   ##
-  ## Contract:
+  ## 
   ## - the logits round to El once, the fp32 softmax runs over the widened
   ##   values, the normalized weights round to El (the eager routing cast)
   ## - a poisoned score pass (NaN/Inf logits) leaves no candidate matching
@@ -308,7 +293,7 @@ proc sharedGateLogit*[El; H: static int](
   ##   - x: (num_tokens, H) El, row-major, token `t`'s activation row
   ##   - sgw: (1, H) El, row-major, the shared-gate weight row,
   ##     the checkpoint's shared-expert weights
-  ##   - t: the token index, the caller's grid coordinate
+  ##   - t: the token index, the caller's launch coordinate
   ##   - H: the hidden width, static compile-time, a multiple of the
   ##     16-wide K step
   ##
@@ -316,7 +301,7 @@ proc sharedGateLogit*[El; H: static int](
   ##
   ##   x[t] (H) ──► [ shared_gate_vec_w[0] @ x[t], 16-wide K steps ] ──► logit (fp32)
   ##
-  ## the (1, H) row weight as a one-output GEMV, element (0, 0) of the
+  ## The (1, H) row weight as a one-output GEMV, element (0, 0) of the
   ## (32, 8) accumulator carried on lane 0, the caller broadcasting with
   ## simdShuffle from lane 0. An El round, if any, happens after this load.
   static:
@@ -354,7 +339,7 @@ proc moe_decode_merge_at*[El; H, K: static int](
   ##
   ##   partial[t, 0..K] (H, fp32 rows) ──► [ Σ slot order, shared last ] ──► El RNE ──► out_r[t] (H)
   ##
-  ## the mega kernel composes this core inline. Instantiation contract:
+  ## The mega kernel composes this core inline, one instantiation contract:
   ## each static binding set of this core needs a distinct call-site line,
   ## calls sharing one call-site line collapse into a single body under the
   ## engine's monomorphization key.

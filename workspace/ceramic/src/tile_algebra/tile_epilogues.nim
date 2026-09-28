@@ -256,7 +256,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
     CReg: RtLeft[T, R, C, A]) {.inline.} =
   ## D = α·AB + β·CReg, per owned slot, the C operand a register tile.
   ##
-  ## Contract:
+  ## 
   ##   - C arrives bounded-loaded, the boundary loader already applied
   ##     the runtime strides, so op.C is never dereferenced
   ##   - out-of-range lanes hold the zero fill
@@ -331,7 +331,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
     BiasReg: RtLeft[T, R, C, A]) {.inline.} =
   ## D = AB + BiasReg, per owned slot, the bias a bounded register tile.
   ##
-  ## Contract:
+  ## 
   ##   - the bias_gmem view stays unsharded and never dereferenced
   ##   - out-of-range columns carry the zero fill, so the add is inert
   ##     on the lanes the masked store drops

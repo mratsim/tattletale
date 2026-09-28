@@ -209,7 +209,7 @@ func addScaled*[T, S; R, C: static int; A: static MmaAtom](
   ## dst[i] = dst[i] + src[i] · s per element, the scaled carry the recurrence
   ## updates and the outer-product accumulation write through.
   ##
-  ## Contract:
+  ## 
   ## - computed in the tile element type T
   ## - dst and src may be the same tile, the in-place carry form
   const rowTiles = R div A.getM()

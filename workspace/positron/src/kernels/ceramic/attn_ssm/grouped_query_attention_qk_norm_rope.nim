@@ -26,9 +26,9 @@
 ##   x16 ──► (x1, x2) halves ──► [ t1 = x1·cos − x2·sin ] ──► Out cols [0, 64)
 ##   cos, sin (8, 64) ────────► [ t2 = x2·cos + x1·sin ] ──► Out cols [64, 128)
 ##
-## All norm state is fp32. The rotation runs in fp32 with explicit
-## fused multiply-adds. The results quantize to fp16 at the store.
-## The cos/sin come from host-precomputed fp32 tables.
+## Norm state fp32, rotation fp32 with explicit fused multiply-adds,
+## the results quantize to fp16 at the store. The cos/sin come from
+## host-precomputed fp32 tables.
 ##
 ## Buffers:
 ##   - Out: (tokens·headBlocks·8, 128) fp16 row-major output
@@ -123,17 +123,10 @@ proc qk_norm_rope_fwd*(
     headBlocks: int32,                   # the 8-head blocks per token (grid.z size)
     xColBase: int32,                     # the head-column offset (0 for q, H·D for k)
     eps: float32) {.device.} =
-  ## One 8×128 tile per grid point (tensors on edges, ops in boxes):
-  ##
-  ##   X (8, 128) ──► [ x², rowsum, ·1/128, +ε, rsqrt ] ─► rmf (8, 1)
-  ##        │                                                 │
-  ##        └────────► [ x·rmf ] ─► [ fp16 RNE ] ─► [ ·γ16 ] ─┴─► x16 (8, 128)
-  ##
-  ##   x16 ──► (x1, x2) halves ──► [ t1 = x1·cos − x2·sin ] ──► Out cols [0, 64)
-  ##   cos, sin (8, 64) ────────► [ t2 = x2·cos + x1·sin ] ──► Out cols [64, 128)
-  ##
-  ## Norm state fp32, two RNE roundings (fp16 convert, fp16 γ).
-  ## Rotation fp32 with the final fp16 rounding at the store.
+  ## One 8×128 tile per grid point, the module doc's dataflow:
+  ## grid (1, tokens, headBlocks), y = the token, z = the head block.
+  ## Norm state fp32, two RNE roundings (fp16 convert, fp16 γ),
+  ## rotation fp32 with the final fp16 rounding at the store.
   ## xColBase must be a 1024-multiple (0 or H·D, D = 128, H an
   ## 8-multiple), the flat path passes 0.
   let gidY = int32(threadgroup_position_in_grid.y)

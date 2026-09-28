@@ -35,15 +35,6 @@
 ## boxes over the shared x tiles (the routed gate_up_w is one fused (E, 2I, H)
 ## tensor, the g half at 0:I).
 ##
-## Contract:
-##   - partial rows: t·(K+1)+y holds w[y]·down(t, y) for y < K,
-##     t·(K+1)+K holds gateVal·shared_down, the merge launch applies the
-##     single El round to the shared contribution
-##   - routing is the `moeRoute` softmax form only, logits round to El,
-##     softmax + top-K in fp32, weights round to El
-##   - buffers no-copy page-aligned host memory, page-multiple byte lengths
-##   - static asserts below: H mod 16 == 0, H mod 32 == 0, I mod 32 == 0,
-##     E mod 64 == 0 (see their messages for the violated-shape failure)
 
 import ../math_consts
 import workspace/crucible
@@ -127,7 +118,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     t, y: int32) {.device.} =
   ## One (token, slot) pair's decode walk, `t` the token, `y` the slot
   ## group, routed y < K, the shared group y = K. `moe_fwd_decode` is the
-  ## grid-driven form, the megakernel composes this core inline.
+  ## launch-driven form, the megakernel composes this core inline.
   ## Shapes and dtypes on the pointer comments, H/E/K/I/Scale/SharedGate
   ## static compile-time (H hidden, E experts, K top-K, I intermediate).
   ##
@@ -151,7 +142,7 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
   ##
   ##   hs_scratch[t] ──► [ shared_down_w @ · ] ──► gateVal·(down) ──► partial[t, K] (H, fp32)
   ##
-  ## Contract:
+  ## 
   ## - the silu result rounds to El before the multiply, the product rounds
   ##   once more at the h_scratch/hs_scratch store (`siluMulElemEager`)
   ## - the partial rows stay fp32 unrounded, the merge launch applies the
@@ -265,7 +256,7 @@ proc moe_fwd_decode*[El; H, E, K, I: static int; Scale: static float32;
     hs_scratch: ptr UncheckedArray[El],    # (num_tokens, I) working buffer
     scores_scratch: ptr UncheckedArray[float32]) {.device.} =
       # scores_scratch holds the (num_tokens, K+1, E) router selection scratch
-  ## Grid (num_tokens, K+1, 1), 32 lanes, one (token, slot) pair per
+  ## Launch dims (num_tokens, K+1, 1), 32 lanes, one (token, slot) pair per
   ## threadgroup, `t` and `y` from the grid. Shapes and dtypes on the
   ## pointer comments, H/E/K/I/Scale/SharedGate static compile-time.
   ##

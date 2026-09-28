@@ -36,13 +36,13 @@
 ##   - D: static int, 64 or 128 (tile geometry). No generic brackets,
 ##     no stride or scratch parameters.
 ##
-## Padding contract: the q, k and v buffers hold an 8-row multiple.
-## The tile loads fetch full 8-row blocks, so a partial trailing block
-## would read past the buffer end. Callers zero-fill the padding rows.
-## The padding rows are inert: the band mask excludes them from the
-## softmax (the upper band edge is min(num_kv − 1, p) and the GQA
-## contract num_kv >= q_offset + num_qo keeps every real query row
-## below num_kv), and the zero v rows add nothing to the P·V mma.
+## Padding contract: the q, k and v buffers hold an 8-row multiple,
+## the tile loads fetch full 8-row blocks, a partial trailing block
+## would read past the buffer end, callers zero-fill the padding rows:
+## - the band mask excludes the padding rows (the upper band edge is
+##   min(num_kv − 1, p) and num_kv >= q_offset + num_qo keeps every
+##   real query row below num_kv)
+## - the zero v rows add nothing to the P·V mma
 ##
 ## Window band (query row i, absolute position p = q_offset + i):
 ##
@@ -129,7 +129,7 @@ proc swa_attn_fwd*(
     v: ptr UncheckedArray[float16],     # (num_kv, Nkv, D) fp16 values, already projected
     num_qo, num_kv, q_offset, H, Nkv, window: int32,
     D: static int) {.device.} =
-  ## Grid (ceil(num_qo/8), H, 1), 32 lanes, x = the 8-row q block.
+  ## Launch dims (ceil(num_qo/8), H, 1), 32 lanes, x = the 8-row q block.
   ## One grid point computes 8 q rows against the window-band KV
   ## columns, causal-banded per row:
   ##
@@ -147,7 +147,7 @@ proc swa_attn_fwd*(
   ## The last block may extend up to 7 rows past num_kv − 1, the
   ## caller's zero padding, excluded by the band mask.
   ##
-  ## Dataflow, one grid point (tensors on edges, ops in boxes,
+  ## Dataflow, one threadgroup (tensors on edges, ops in boxes,
   ## per KV block of the online softmax):
   ##
   ##   q (8, D) ──┐

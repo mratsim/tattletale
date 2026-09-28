@@ -10,7 +10,7 @@
 ## Exact widening of a 16-bit register tile to f32, shared by the ceramic
 ## tile kernels over the 16-bit element dtypes.
 ##
-## Contract:
+## 
 ## - widening is exact, every lane reads only its own fragments
 ## - the f32 tile's values are the exact widenings of the source tile's values
 ## - the walk follows the dst atom's lane→element mapping, both atoms must
@@ -31,7 +31,7 @@ proc widen*[A, B: static MmaAtom; T; R, C: static int](
   ## Exact 16-bit-dtype → f32 widening, walking each tile's own atom
   ## lane→element mapping, the source element type a compile-time parameter.
   ##
-  ## Contract:
+  ## 
   ## - every dst fragment holds the float32 widening of the matching src fragment
   ## - `T` is unconstrained, the float32 widening exact for the 16-bit
   ##   element dtypes today's callers instantiate

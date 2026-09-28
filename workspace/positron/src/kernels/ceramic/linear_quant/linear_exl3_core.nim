@@ -14,7 +14,7 @@
 ## Fused EXL3 linear forward on the ceramic Tile API, the one kernel body
 ## behind the three entry procs of the linear_exl3 module family.
 ##
-## Contract:
+## 
 ##
 ##     out = FWHT-128( svh ⊙ ( FWHT-128( suh ⊙ x ) @ W_dequant ) )
 ##

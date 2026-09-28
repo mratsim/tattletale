@@ -412,8 +412,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
         # gated by GL_KHR_shader_subgroup_shuffle_relative (the umbrella
         # GL_KHR_shader_subgroup is not a GLSL extension name).
-        # The delta/lane operand is uint in GLSL; int-literal args get the U
-        # suffix (the canonical Nim arg is int, the shader operand is uint).
+        # The delta/lane operand is uint in GLSL, int-literal
+        # args get the U suffix, the canonical Nim arg is int,
+        # the printer casts.
         var delta = ctx.genVulkan(ast.cArgs[1])
         if delta.allCharsInSet(Digits):
           delta.add 'U'

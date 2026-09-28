@@ -389,7 +389,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ##        EpiAddBias or user-defined)
   ##   TileShape: static (tileM, tileN, tileK) derived from hardware tensor cores
   ##   mCTA, nCTA:
-  ##        the CTA grid coordinates, blockIdx.x/y.
+  ##        the CTA launch coordinates, blockIdx.x/y.
   ##        The tile origin is m0 = mCTA·tileM, n0 = nCTA·tileN
   ##   threadIdx: the flat linear thread id in 0 ..< blockSize
   ##
@@ -565,7 +565,7 @@ template threadTiling*(atom: static MmaAtom, M, N: static int): auto =
   ## - thrM = M div atom.getM()
   ## - thrN = N div atom.getN()
   ##
-  ## Contract:
+  ## 
   ##   callers pass the input padded up to atom multiples (gemm_kernel does), so the size must be a multiple of the atom
   # TODO: this needs M, N known at compile-time but they are dynamic
   make_layout((M div atom.getM(), N div atom.getN(), 1))

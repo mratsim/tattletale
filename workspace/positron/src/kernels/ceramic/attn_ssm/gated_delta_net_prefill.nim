@@ -7,65 +7,56 @@
 
 # ───────────────  GDN prefill (chunked scan over T tokens, one launch)  ───────────────
 
-## Prefill (T > 1) of the gated delta-rule recurrence (arXiv:2412.06464), one
-## launch walking the tokens in chunks of ChunkC over the in-block cumulative
-## log decay cumulogdecay:
+## Prefill (T > 1) of the gated delta-rule recurrence (arXiv:2412.06464), one launch
+## walking the tokens in chunks of ChunkC over the in-block cumulative log decay cumulogdecay:
 ##
-##   pairdecay(t, s) = exp2((cumulogdecay[t] − cumulogdecay[s])·log2e)
-##   u_t = β_t·(v_t − exp(cumulogdecay[t])·(S_carry·k_t)) − β_t·Σ_{s<t} pairdecay(t, s)·(k_t·k_s)·u_s
-##   y_t = exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s
-##   carry: S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s
+## | term            | formula                                                                                    |
+## | --------------- | ------------------------------------------------------------------------------------------ |
+## | pairdecay(t, s) | exp2((cumulogdecay[t] − cumulogdecay[s])·log2e)                                            |
+## | u_t             | β_t·(v_t − exp(cumulogdecay[t])·(S_carry·k_t)) − β_t·Σ_{s<t} pairdecay(t, s)·(k_t·k_s)·u_s |
+## | y_t             | exp(cumulogdecay[t])·(S_carry·q̃_t) + Σ_{s≤t} pairdecay(t, s)·(q̃_t·k_s)·u_s               |
+## | carry           | S = exp(cumulogdecay[end])·S_carry + Σ_s pairdecay(end, s)·k_s ⊗ u_s                       |
 ##
-## Contract:
-## - all state arithmetic fp32 and never rounds, one 8-row state tile per
-##   threadgroup, register-resident across the chunk walk
-## - q, k (B·Hk, T, Dk) element dtype post-l2norm (host-side), v
-##   (B·Hv, T, Dv) and beta (B·Hv, T) element dtype, g (B·Hv, T) f32 log
-##   decay, one decay per VALUE head, not a per-key-channel matrix
-## - cumulogdecay computed in-kernel per chunk as the running prefix of g
-##   over the chunk, one scalar per token
-## - y (B·Hv, T, Dv) element dtype, one round-to-nearest-even per element
-## - head mapping, value head bh reads key head
-##   (bh mod Hv) div hkRatio + (bh div Hv)·Hk, hkRatio = Hv div Hk
-## - the u solve sequential in t inside a chunk, chunks sequential on the
-##   register state, sums over s ascending
-## - decay exp2(g·log2e), log2e is the shared `math_consts.Log2e` (Metal has
-##   no exp device builtin), q̃ folds Dk^-0.5 into q in f32, the
-##   rsqrt-multiply form
-## - g finite and ≤ 0 by construction (−exp(A_log)·softplus ≤ 0), the kernel
-##   applies no clamp, a violating g explodes the persistent f32 state
-## - schedule, the fp64 chunked WY/UT reassociation: per-chunk cumulogdecay,
-##   the A-matrix u solve in token order, one decayed carry read plus the u
-##   outer products
+## | contract      | value                                                                                                                                       |
+## | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                    |
+## | q, k          | (B·Hk, T, Dk) element dtype, already l2-normalized (l2norm stays host-side)                                                                 |
+## | v, beta       | (B·Hv, T, Dv) and (B·Hv, T) element dtype, g is (B·Hv, T) f32 log-decay                                                                     |
+## | y             | (B·Hv, T, Dv) element dtype, one round-to-nearest-even per element                                                                          |
+## | element dtype | one compile-time element type (`gdnPrefillChunkScan`'s `El` generic)                                                                        |
+## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                |
+## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                  |
+## | decay / q̃    | exp2(g·log2e), log2e is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
+##
+## | contract       | value                                                                                                                                                                   |
+## | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | g precondition | finite and ≤ 0 (−exp(A_log)·softplus ≤ 0 by construction), cumulogdecay inherits the sign, the kernel applies no clamp, a violating g explodes the persistent f32 state |
+
 #
-## Register-tile naming, shared by the gdn and kda kernels:
-## - `<x>T`, the element-dtype register tile of operand x, loaded from memory
-## - `<x>32`, the fp32 register tile of the same operand, an fp32-storage
-##   operand loads straight into its `32` form, an element-dtype operand
-##   widens its `T` form into the `32` form
-#
+## Register-tile naming and the state ABI contract:
+## gated_delta_net_decode_single.nim's header, shared by the gdn and kda kernels.
+##
+## | provenance | source                                                                                                                                                            |
+## | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+## | schedule   | the fp64 chunked WY/UT reassociation: per-chunk cumulogdecay, the A-matrix u solve in token order, one decayed carry read plus the u outer products |
+
+##
 ## Implementation shape:
-## - each lane computes its own state row's scalars (the solve, y, the u
-##   contributions), the u vectors live in a per-lane local array, no
-##   inter-threadgroup data movement needed
-## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s)
-##   pair, every lane reads the same row-identical row sum, lanes agree
-##   bit-exactly, the pair passes recompute the key tiles per pair, chunks
-##   of 64 stay inside the register budget (per-lane state, cumulogdecay and
-##   u arrays are the only residents, no (ChunkC, Dk) working tile)
-#
-## Consumer-side bindings, a `metal:` block wraps the grid-driven proc with
-## concrete static (Dk, Dv, ChunkC), one call-site line per static binding
-## set, calls sharing a call-site line collapse into one body.
-#
-## State ABI, (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence,
-## value head), one unrounded fp32 tile per (bh, Dv-row block). Hosts binding
-## through the Metal engine's no-copy path get in-place state updates and
-## visible y writes from one run, any other binding copies and the y writes
-## are lost. `state` is the engine's output buffer, `y` is written by the
-## kernel, the f32 state buffer persists across steps and launches with no
-## in-kernel reset, the host owns layout and lifetime. Rebinding the state to
-## a 16-bit dtype or a strided view silently corrupts the recurrence.
+##   per chunk:  t 0 → t 1 → … → t ChunkC-1   u solve, then the carry update
+##   chunks:     0 → 1 → … → N-1              each carry feeds the next chunk
+## - each lane computes its own state row's scalars (the solve, y, the u contributions),
+##   so the u vectors live in a per-lane local array, no inter-threadgroup data movement needed
+## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s) pair,
+##   every lane reads the same row-identical row sum, lanes agree bit-exactly
+## - the pair (t, s) passes recompute the key tiles per pair, chunks of 64 stay inside
+##   the register budget (per-lane state and u arrays are the only residents, no (ChunkC, Dk) working tile)
+##
+## Entries are consumer-side:
+## - a `metal` block wraps the launch-driven proc with concrete static (Dk, Dv, ChunkC),
+##   one call-site line per static binding set
+## - the engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
+##
+
 from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
@@ -106,7 +97,7 @@ proc gdnPrefillChunkScanAt*[El](
   ## - g finite and ≤ 0 by construction, no kernel clamp, a violating g
   ##   explodes the f32 state
   ##
-## Grid (Dv div TileR, B·Hv) when grid-driven, 32 lanes, x = the Dv/TileR
+## Launch dims (Dv div TileR, B·Hv) when launch-driven, 32 lanes, x = the Dv/TileR
 ## row block, y = the (sequence, value head) flat head index bh, TileR = 8.
 ##
 ## Dataflow, one (bh, dvBlock) tile per chunk (t walks the chunk in token
@@ -132,7 +123,7 @@ proc gdnPrefillChunkScanAt*[El](
 ##   chunk end: dEnd = exp2(cumulogdecay[end]·log2e)
 ##        [ S ← dEnd·S_carry + Σ_s pd(end, s)·k_s·u_s ], one addScaled per s
 ##
-  ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
+  ## - launch-driven wrapper, receiving the threadgroup coordinates from the grid
   ## - generic only over the element dtype and the static shape, every
   ##   (Dk, Dv, ChunkC) binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
@@ -259,13 +250,13 @@ proc gdnPrefillChunkScan*[El](
     beta: ptr UncheckedArray[El],        # (B·Hv, T) element dtype
     Hv, Hk, hkRatio, T: int32,
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
-  ## Grid-driven form of `gdnPrefillChunkScanAt`, the caller's `metal:` entry
+  ## Launch-driven form of `gdnPrefillChunkScanAt`, the caller's `metal:` entry
   ## wraps this proc.
   ##
-## Grid (Dv div TileR, B·Hv), 32 lanes, x = the Dv/TileR row block,
+## Launch dims (Dv div TileR, B·Hv), 32 lanes, x = the Dv/TileR row block,
 ## y = the (sequence, value head) flat head index bh, TileR = 8.
 ##
-## Dataflow, one grid point (one threadgroup walks the whole T-token
+## Dataflow, one threadgroup (one threadgroup walks the whole T-token
 ## sequence, chunks of ChunkC sequential on the register state):
 ##
 ##   k, q (hk row, T·Dk) El post-l2norm ──┐

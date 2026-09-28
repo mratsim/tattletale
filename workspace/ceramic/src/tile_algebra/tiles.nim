@@ -72,7 +72,7 @@ func laneScalar*[T; R, C: static int; A: static MmaAtom](
     tile: RtLeft[T, R, C, A]): T =
   ## Returns the single-value slot of a tile, `tile.frags[0][0].frag[0]`.
   ##
-  ## Contract:
+  ## 
   ## - the tile's one useful element carries the (0, 0) fragment of every lane
   ## - serves the v operand's scalar read and one-element broadcast loads
   ##

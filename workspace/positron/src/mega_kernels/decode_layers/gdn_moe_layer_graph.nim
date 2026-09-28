@@ -207,7 +207,7 @@ func f32SectionWidth(cfg: GdnMoeCfg, s: F32SectionKind): int32 =
 proc deriveGdnLayerGraph*(cfg: GdnMoeCfg): LayerGraph =
   ## Derives the layer graph at `cfg`.
   ##
-  ## Contract:
+  ## 
   ##
   ## - section widths with the offsets accumulated over them
   ## - one threadgroup interval per stage, contiguous, summing to `waveTotal`

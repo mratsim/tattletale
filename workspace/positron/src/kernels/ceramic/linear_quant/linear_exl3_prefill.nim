@@ -15,7 +15,7 @@
 ## Fused EXL3 prefill-GEMM forward on the ceramic Tile API.
 ## bits 1..8 × cb 0..2 entry over the shared core (linear_exl3_core).
 ##
-## Contract:
+## 
 ##
 ##     out = FWHT-128( svh ⊙ ( FWHT-128( suh ⊙ x ) @ W_dequant ) )
 ##

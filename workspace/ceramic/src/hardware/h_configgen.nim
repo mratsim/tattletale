@@ -6,7 +6,6 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## MMA atom registry generator + the atom datatypes.
-## MMA atom registry generator + the atom datatypes.
 import std/[macros, strutils]
 import workspace/ceramic/src/int_tuples
 

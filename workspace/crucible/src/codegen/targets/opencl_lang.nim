@@ -437,7 +437,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         result = indentStr & "sub_group_shuffle_down(" &
                  ctx.genOpenCL(ast.cArgs[0]) & ", " & delta & ')'
       of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index; uint operand.
+        # SIMD-group gather from an absolute lane index, uint operand.
         var lane = ctx.genOpenCL(ast.cArgs[1])
         if lane.allCharsInSet(Digits):
           lane.add 'U'

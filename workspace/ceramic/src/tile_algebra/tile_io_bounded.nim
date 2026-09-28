@@ -141,7 +141,7 @@ proc tileStoreMask*[T; R, C: static int; A: static MmaAtom](
   ## Per-lane store predication for a LayoutLeft tile's valid (M, N) range,
   ## measured from the tile's plane origin.
   ##
-  ## Contract:
+  ## 
   ##   - bit ((n·colTiles + m)·vpt + v) is set when the lane's cell
   ##     (row + n·M, col + m·N + v) is inside the valid range
   ##   - the bit order matches `storeTile`/`storeTileMasked`'s iteration order
@@ -170,7 +170,7 @@ proc storeTileMasked*[TIn; TOut; R, C: static int; A: static MmaAtom](
   ## Masked store for a LayoutLeft tile, writes only the tile's cells inside
   ## (validM, validN), the valid counts measured from the tile's plane origin.
   ##
-  ## Contract:
+  ## 
   ##   - out-of-range cells leave the destination untouched, the destination buffer may be larger than the real region and keep the padding
   ##   - lane→cell mapping and iteration order match `storeTile`
   ##   - a tile fully inside both limits stores through `storeTile` (no guard)

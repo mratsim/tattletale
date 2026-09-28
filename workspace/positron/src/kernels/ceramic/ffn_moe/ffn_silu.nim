@@ -99,7 +99,7 @@ proc silu_and_mul_fwd*(
     M, N: int32,
     actLimit: float32,
     TileC: static int) {.device.} =
-  ## Grid (N div TileC, ceil(M/8)), 32 lanes, tx = the TileC-col
+  ## Launch dims (N div TileC, ceil(M/8)), 32 lanes, tx = the TileC-col
   ## block, ty = the 8-row block.
   ##
   ##              X columns (2N)

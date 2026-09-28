@@ -137,7 +137,7 @@ template map*[TOut, TIn; R, C: static int; A: static MmaAtom](
     f: untyped): untyped =
   ## dst[i] = f(src[i]) per element, over the tile's whole fragment walk.
   ##
-  ## Contract:
+  ## 
   ## - the body reads the source element as `x`
   ##
   ## Example, RNE round-and-widen back to f32 over the score tile:
@@ -158,7 +158,7 @@ template map2*[TOut, TIn; R, C: static int; A: static MmaAtom](
     f: untyped): untyped =
   ## dst[i] = f(src1[i], src2[i]) per element, over the tile's whole fragment walk.
   ##
-  ## Contract:
+  ## 
   ## - the body reads the source elements as `x` and `y`
   ## - both operands share one element type and geometry
   ##

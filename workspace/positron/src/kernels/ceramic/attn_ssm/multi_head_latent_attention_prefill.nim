@@ -138,7 +138,7 @@ proc mla_latent_fwd*(
     kvb_w: ptr UncheckedArray[float16],# (num_heads·448, 512) fp16
     cos_t, sin_t: ptr UncheckedArray[float32],  # (num_tokens, 64) fp32
     num_tokens, num_heads: int32) {.device.} =
-  ## Grid (ceil(num_tokens/8), num_heads div 2, 1), 32 lanes.
+  ## Launch dims (ceil(num_tokens/8), num_heads div 2, 1), 32 lanes.
   ## One 8-token × 2-head block per threadgroup, HBLK = 2 keeps the
   ## kv_b accumulator at 224 fp32 registers per lane, the shared
   ## projections (qa, qn, kv, k_rot, kp) compute once per block.

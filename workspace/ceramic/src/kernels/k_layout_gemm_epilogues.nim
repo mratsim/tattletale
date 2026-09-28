@@ -230,7 +230,7 @@ func apply*[T, Sh, StAB, StB, StR](
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, with bias a column vector broadcasted onto AB.
   ##
-  ## Contract:
+  ## 
   ##   - the bias element is read only where the store mask's bit is set
   ##   - on a ragged tile a padded lane's bias address falls outside
   ##     the real region and the store drops that lane anyway

@@ -510,7 +510,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
          gbkThreadgroupsPerGrid:
         # Canonical vector coordinates map to the injected `@builtin` param
-        # names (global_id, workgroup_id, num_workgroups), u32 in WGSL;
+        # names (global_id, workgroup_id, num_workgroups), u32 in WGSL,
         # whole-value use constructs the int vector.
         let n = wgslBuiltinParamName(ast.ident())
         result = "vec3<i32>(i32(" & n & ".x), i32(" & n & ".y), i32(" & n & ".z))"

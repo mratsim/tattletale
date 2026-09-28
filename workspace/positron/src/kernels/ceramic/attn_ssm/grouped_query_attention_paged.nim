@@ -29,7 +29,7 @@
 ## The softmax is online: each kv block rescales the running O
 ## and row sum by exp2(m_prev − m_cur).
 ##
-## Modes:
+## Regimes:
 ##   - decode (q_len == 1): causal off, each query attends the cached
 ##     rows [0, cache_seqlen)
 ##   - prefill (q_len ≥ 2): causal on over [0, cache_seqlen + q_len),
@@ -66,20 +66,16 @@
 ##     Vᵀ from the natural slab view
 ##
 ## Partial last page:
-##   - K/V rows are bounded by cache_seqlens[seq] (decode)
-##     or cache_seqlen + q_len (prefill), never by page multiples.
-##     The tail page may hold garbage beyond the covered length
-##     (bound, don't filter)
+##   - K/V rows bounded by cache_seqlens[seq] (decode) or
+##     cache_seqlen + q_len (prefill), never by page multiples, the
+##     tail page may hold garbage beyond the covered length
+##   - garbage rows load as valid slab memory, excluded by the banded
+##     mask (the masking numerics sit on `maskCausal`'s doc)
 ##   - the KV loop stays inside the seq's table pages
-##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8))
-##     and inside the last block's attended range
-##     (lastKey = min(cachedLen + q0Local + 7, totalK − 1)). A block
-##     beyond the last table page would read a -1 padding slot
-##   - garbage rows load as valid slab memory and are excluded
-##     by the banded mask. Masked S columns become the most-negative
-##     finite fp32 (−3.402823466e38), so the running row max ignores
-##     them and exp2(S − m) underflows to exact +0.0. The P, l
-##     and O accumulations never see them
+##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8)) and the
+##     last block's attended range (lastKey = min(cachedLen +
+##     q0Local + 7, totalK − 1)), a block beyond the last table page
+##     would read a -1 padding slot
 ##
 ## Numerics:
 ##   - online softmax in the exp2 shape, q_mul = scale·log2(e) folded
@@ -157,7 +153,7 @@ proc paged_attn_fwd*(
     cu_seqlens_q: ptr UncheckedArray[int32],   # (num_seqs+1) prefill q ranges
     num_seqs, H, Nkv, max_pages, num_layers, layer: int32,
     page_size: static int, D: static int) {.device.} =
-  ## Grid: (q token blocks, H, num_seqs), 32 lanes.
+  ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
   ##
   ##   x = the seq's 8-row q block
   ##   y = head
@@ -177,7 +173,7 @@ proc paged_attn_fwd*(
   ## The q tile loads row-bounded and the fp16 store writes
   ## only the seq's q rows.
   ##
-  ## Dataflow, one grid point (tensors on edges, ops in boxes,
+  ## Dataflow, one threadgroup (tensors on edges, ops in boxes,
   ## per KV block of the online softmax):
   ##
   ##   q (8, D) ──► scale·log2e pre-scale ──┐

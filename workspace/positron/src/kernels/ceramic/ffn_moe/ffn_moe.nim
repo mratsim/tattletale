@@ -111,7 +111,7 @@ proc actMulFp16[A: static MmaAtom](
   ## - maSilu, g / (1 + exp2(−g·log2e)), the silu form
   ## - maGeluTanh, 0.5·g·(1 + tanh(s)), s = InvSqrt2Pi·(g + GeluCoef·g³)
   ##
-  ## the gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
+  ## The gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
   ## stable at both saturation ends, fp32 end to end like the silu variant.
   ##
   ## the frag walk uses the loadTile lane→element mapping, the operands agree elementwise.
@@ -140,7 +140,7 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
   ## - expert indices at or beyond `eCount`, the last chunk's tail, are
   ##   set to −float32 max so they can never win the top-K
   ##
-  ## the row-0 logits live in the accumulator's lanes {0, 1, 8, 9},
+  ## The row-0 logits live in the accumulator's lanes {0, 1, 8, 9},
   ## 2 per col-frag, the destination lane pulls its pair from source lane
   ##
   ## `d and 9`, the row-0 owner of the same col pair under the universal
@@ -293,9 +293,8 @@ proc moe_fwd*(
     n_shared_experts: int32,
     routed_scaling: float32,
     activation: static MoeAct) {.device.} =
-  ## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup, the
-  ## module header's dataflow one full pass per token. All tensors fp16,
-  ## row-major, every size a runtime dim, shapes on the pointer comments.
+  ## Launch dims (num_tokens, 1, 1), 32 lanes, one token per threadgroup,
+  ## the module header's dataflow one full pass per token.
   ##
   ##   x (H) ──► [ router_w @ x, ceil(E/64) chunks ] ──► sigmoid ──► scores (E)
   ##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
@@ -311,11 +310,8 @@ proc moe_fwd*(
   ##   hs_scratch[t, s]   ──► [ shared_down_w[s] @ · ] ──┘          ──► fp16 ──► out_r[t] (H)
   ##                                ──► Σ_s (down)
   ##
-  ## the gate/up mma chains feed from one shared x tile pass per (32, 32)
-  ## accumulator, g rows at gate_up_w row block 0, u rows at block 1.
-  ##
-  ## Contract:
-  ## - activation, maSilu or maGeluTanh, one instantiation per member
+  ## - the gate/up mma chains feed from one shared x tile pass per (32, 32)
+  ##   accumulator, g rows at gate_up_w row block 0, u rows at block 1
   ## - the h_scratch/hs_scratch rounds are one fp16 RNE per element
   ##   (`actMulFp16`), the out_r round one fp16 RNE at the final add
   ## - ragged-native over the runtime dims: the K walks bound loads to
@@ -327,6 +323,34 @@ proc moe_fwd*(
   ##   run it before each `engine.run`
   ## - register budget near 2 live 32×32 fp32 accumulators (the gHalf/uHalf
   ##   pair) plus transients, sized once for the largest accepted config
+  ##
+  ## Expected input, per model config row, all tensors fp16, row-major,
+  ## every size a runtime dim. Weights and x come from the checkpoint,
+  ## the two scratch buffers and out_r are written by this kernel.
+  ##
+  ## - x, shape (num_tokens, hidden), one token per threadgroup
+  ## - router_w, shape (n_routed_experts, hidden)
+  ## - gate_up_w, shape (n_routed_experts, 2·moe_intermediate, hidden),
+  ##   fused g/up, the g half at 0:moe_intermediate
+  ##
+  ## - down_w, shape (n_routed_experts, hidden, moe_intermediate)
+  ## - shared_gate_up_w, shape (n_shared_experts, 2·moe_intermediate, hidden), fused g/up
+  ## - shared_down_w, shape (n_shared_experts, hidden, moe_intermediate)
+  ##
+  ## - h_scratch, shape (num_tokens, top_k, moe_intermediate), working buffer
+  ## - hs_scratch, shape (num_tokens, n_shared_experts, moe_intermediate), working buffer
+  ##
+  ## Scalar arguments:
+  ##
+  ## - num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
+  ##   n_shared_experts, int32, host-derived from the model config,
+  ##   unit tokens / elements / experts / slots
+  ## - routed_scaling, float32, host-computed, dimensionless
+  ## - activation, maSilu or maGeluTanh, a static binding of the entry,
+  ##   one instantiation per member
+  ## A config beyond the compiled-in fixed maxima, n_routed_experts >
+  ## ScoreChunk·ScoreChunks (512), top_k > MaxTopK or top_k > n_routed_experts,
+  ## or a non-positive dim, stops before launch.
   if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
       n_shared_experts < 0 or
       n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or

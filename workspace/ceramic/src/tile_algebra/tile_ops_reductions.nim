@@ -335,7 +335,7 @@ proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
 template warpReduce*[V](x: var V, reductionOp: untyped): V =
   ## Whole-32-lane simdgroup reduction of `x`, the reduced value on every lane.
   ##
-  ## Contract:
+  ## 
   ## - `x` reduces in place, the caller's value ends up the reduced value,
   ##   no lane-local copy is taken
   ## - 5 reductionOp steps over `simdShuffleDown` deltas (16, 8, 4, 2, 1), one broadcast `simdShuffle` from lane 0

@@ -12,7 +12,7 @@ Rule table (rule | trigger | severity):
 | rule-id              | trigger                                                                                           | severity |
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
-| the-opener           | a doc comment, maintainer comment or heading opens with the article "The"                         | counted  |
+| the-opener           | a title line or heading opens with the article "The" (prose may open with The)                         | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
 | line-length          | a prose line over 140 characters                                                                  | counted  |
@@ -411,7 +411,7 @@ RULES = {
     "banned-vocab": Rule("banned-vocab", True,
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
-                       "a doc comment, maintainer comment or heading opens with the article \"The\""),
+                       "a title line or heading opens with the article \"The\" (prose may open with The)"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
     "line-length": Rule("line-length", True, "a prose line over 140 characters"),
@@ -1828,11 +1828,6 @@ def scan(path, text, findings):
         check_missing_diagram(path, block, findings)
         first = next(((e[0], e[1], e[2]) for e in block if e[1] and e[2] != "heading"),
                      None)
-        if first and (block_is_doc or first[2] == "hash") \
-                and strip_backticks(first[1]).split()[:1] == ["The"]:
-            findings.append(Finding(
-                path, first[0], "the-opener",
-                "comment opens with The (open with a noun phrase or Returns ...)"))
         run = []
         air_run = []
         prev_bullet = False

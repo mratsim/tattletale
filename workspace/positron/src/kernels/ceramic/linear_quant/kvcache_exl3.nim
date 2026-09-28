@@ -434,7 +434,7 @@ proc kv_quant_fwd*(
   ## `layer` scalar to the physical layer-major position. The
   ## group-block's 128-value span is quantized by `kvQuantBlock` into
   ## the binding-0 regions (see the module doc).
-  ## Grid: (groups_per_token div 4, tokens, num_seqs), 32 lanes.
+  ## Launch dims: (groups_per_token div 4, tokens, num_seqs), 32 lanes.
   ## x = group-block, y = token, z = seq.
   static: doAssert bits in {2, 4, 8}
   static: doAssert compander in {0, 1}
@@ -481,7 +481,7 @@ proc kv_dequant_fwd*(
   ## position. `kvDequantBlock` writes the K row stream to [0,
   ## out_total) and the V stream to [out_total, 2·out_total) of the
   ## binding-0 buffer.
-  ## Grid: (groups_per_token div 4, tokens, num_seqs), 32 lanes.
+  ## Launch dims: (groups_per_token div 4, tokens, num_seqs), 32 lanes.
   ## x = group-block, y = token, z = seq.
   static: doAssert bits in {2, 4, 8}
   static: doAssert compander in {0, 1}
