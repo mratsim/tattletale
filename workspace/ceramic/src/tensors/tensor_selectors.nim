@@ -202,7 +202,7 @@ template local_tile*(tv: AnyTensor; tiler, coord, proj: typed): untyped =
     evalOnceAs pc, dice(c, proj)
     local_tile(tv, pt, pc)
 
-template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int): untyped =
+template local_partition*(tv: AnyTensor; tile: Layout; idx: SomeInteger or Int): untyped =
   ## 3-arg local_partition, selects the tile by index within a thread layout
   ## CuTe local_partition = outer_partition with product_each(tile.shape)
   block:
@@ -211,7 +211,7 @@ template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int): untyped
     evalOnceAs coord, idx2crd(thrLayout, idx)
     outer_partition(tv, tiler, coord)
 
-template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int; proj: typed): untyped =
+template local_partition*(tv: AnyTensor; tile: Layout; idx: SomeInteger or Int; proj: typed): untyped =
   ## 4-arg local_partition with projection, strips unwanted dimensions before partitioning
   ## Returns the thread's partition at (tile, index) with unwanted dimensions stripped
   ##

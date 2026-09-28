@@ -23,29 +23,6 @@ import workspace/ceramic/src/macros/varargs_to_par
 export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
-#  Markers for slice and dice
-# ═══════════════════════════════════════════════════════════════
-
-type
-  X* = object  ## slice: keep this dimension, dice: drop this dimension
-  Y* = object  ## dice: keep this dimension, slice: drop this dimension
-
-const _* = X()  ## value-level marker for free/slice dimensions
-
-# X marker arithmetic: X contributes 0 in inner products
-# X*Int[V] returns Int[0] (not plain int) so compile-time constant folding
-# preserves the Int type system. X*int is plain int for runtime values.
-template `*`*(c: X; s: int): Int[0] = Int[0]()
-template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
-template `*`*(s: int; c: X): Int[0] = Int[0]()
-template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
-
-template makeIntTupleLeaf*(leaf: X): X =
-  leaf
-
-template mapLeavesWith*(singleton: X, body: untyped): X =
-  singleton
-
 # ═══════════════════════════════════════════════════════════════
 
 #  crd2idx / idx2crd — via layout_indexing_gpu
@@ -67,7 +44,7 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## which is module-private to layouts.nim.
   crd2idx(makeIntTuple(coord), layout.shape, layout.stride)
 
-macro idx2crd*(layout: Layout; idx: int or Int): untyped =
+macro idx2crd*(layout: Layout; idx: SomeInteger or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
   ## STRIDE-BASED: `(idx div stride) mod shape` per dimension — only valid for
@@ -143,7 +120,7 @@ proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
   else:
     idxExpr  # scalar leaf: the mod was applied by the parent
 
-macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
+macro idx2crd*(shape: IntOrIntTuple; idx: SomeInteger or Int): untyped =
   ## Decompose a flat index into a coordinate over SHAPE — colexicographic
   ## over the shape's leaf sizes (first dimension fastest):
   ##   c0 = (idx div 1)        mod s0
@@ -176,15 +153,15 @@ template slice*(target: tuple; selector: typed): auto =
   ## Slice a tuple: keep elements where selector entry is X; drop where it's Y, int, or Int.
   filterZipWith(selector, target):
     (when it_a is X: (it_b,)
-     elif it_a is Y or it_a is int or it_a is Int: ()
-     else: {.error: "slice: selector items must be X, Y, or ints".})
+     elif it_a is Y or it_a is SomeInteger or it_a is Int: ()
+     else: {.error: "slice: selector items must be X, Y, or integers".})
 
 template dice*(target: tuple; selector: typed): auto =
   ## Dice a tuple: keep elements where selector entry is Y, int, or Int; drop where it's X.
   filterZipWith(selector, target):
-    (when it_a is Y or it_a is int or it_a is Int: (it_b,)
+    (when it_a is Y or it_a is SomeInteger or it_a is Int: (it_b,)
      elif it_a is X: ()
-     else: {.error: "dice: selector items must be X, Y, or ints".})
+     else: {.error: "dice: selector items must be X, Y, or integers".})
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout: dimensions marked with X / _ are kept; Y, int, Int are dropped.

@@ -37,6 +37,10 @@ template makeIntTupleLeaf*(leaf: static int): auto =
 template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
   x
 
+template makeIntTupleLeaf*(leaf: SomeInteger): int =
+  ## Non-int machine integers (GPU builtin coords, uint32) widen to int.
+  int(leaf)
+
 template makeIntTuple*(t: IntOrIntTuple): auto =
   ## Convert all `int` leaves in `t` (at any nesting depth) to `Int[N]()`.
   runnableExamples:
