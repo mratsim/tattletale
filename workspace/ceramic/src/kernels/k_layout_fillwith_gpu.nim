@@ -14,7 +14,7 @@
 ## nimSetMem for zero-fill and nested stride-based loops otherwise.
 
 import ../int_tuples
-import ../layout_algebra/layouts
+import ../layout_algebra
 import ../tensors
 import workspace/crucible
 

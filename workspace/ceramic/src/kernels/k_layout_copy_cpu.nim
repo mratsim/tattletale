@@ -42,7 +42,7 @@
 ##      copyMem(copyCount)]           elem-by-elem copy]
 import std/[macros, algorithm]
 import ../int_tuples
-import ../layout_algebra/layouts
+import ../layout_algebra
 import ../tensors
 
 

@@ -21,10 +21,9 @@ export gemm_ukernel_arm64_sme2  # epilogue templates instantiate in the caller's
 
 import std/math
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_algebra
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-export int_tuples, layouts, layout_algebra, tensors
+export int_tuples, layout_algebra, tensors
 
 {.experimental: "callOperator".}
 

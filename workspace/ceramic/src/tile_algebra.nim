@@ -9,7 +9,7 @@
 ## Import this one module to get the tile types, ops, io, mma and
 ## epilogues.
 
-import ./layout_algebra/layout_algebra
+import ./layout_algebra
 import ./tile_algebra/tiles
 import ./tile_algebra/tile_config
 import ./tile_algebra/tile_io

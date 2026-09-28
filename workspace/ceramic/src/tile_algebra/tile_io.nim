@@ -6,8 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ../int_tuples
-import ../layout_algebra/layout_indexing
-import ../layout_algebra/layout_algebra
+import ../layout_algebra
 import ../tensors
 import ./tiles
 import ./tile_config

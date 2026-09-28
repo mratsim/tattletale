@@ -5,10 +5,8 @@
 
 import std/[strformat, random]
 import workspace/ceramic/src/int_tuples {.all.}
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_algebra
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/layout_algebra/ptr_arithmetic
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 import workspace/ceramic/src/kernels/k_layout_copy_gpu
 import workspace/ceramic/src/kernels/k_layout_gemm

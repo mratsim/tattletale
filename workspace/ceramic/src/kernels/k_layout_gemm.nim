@@ -147,16 +147,13 @@
 
 import std/macros
 import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
+import ../layout_algebra
 import ../tensors
-import ../layout_algebra/ptr_arithmetic
 import ../hardware/h_configgen
 import ../hardware/h_registry
 import ../hardware/h_properties
 import ../hardware/h_mma_dispatch
 import ../atoms_mma_partitioning
-import ../layout_algebra/layout_algebra
 import ./k_layout_copy_gpu
 import ../atoms_copy
 import ./k_layout_fillwith_gpu

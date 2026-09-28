@@ -39,7 +39,7 @@
 ##
 import std/[macros, algorithm]
 import ../int_tuples
-import ../layout_algebra/layouts
+import ../layout_algebra
 import ../tensors
 import system/memory
 

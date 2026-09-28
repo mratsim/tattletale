@@ -13,11 +13,8 @@
 
 import workspace/crucible
 import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
-import ../layout_algebra/layout_indexing
+import ../layout_algebra
 import ../tensors
-import ../layout_algebra/ptr_arithmetic
 import ../tile_algebra
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,

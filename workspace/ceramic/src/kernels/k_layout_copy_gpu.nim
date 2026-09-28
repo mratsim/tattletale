@@ -18,9 +18,7 @@
 import std/macros
 
 import ../int_tuples
-import ../layout_algebra/layouts
-import ../layout_algebra/layout_constructors
-import ../layout_algebra/layout_algebra
+import ../layout_algebra
 import ../tensors
 import ../atoms_copy
 import workspace/crucible

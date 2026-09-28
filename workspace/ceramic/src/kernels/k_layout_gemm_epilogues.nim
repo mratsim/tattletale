@@ -28,7 +28,7 @@
 #   4. store: `finalStore` writes the tile, masked by `storeMask`
 
 import ../int_tuples
-import ../layout_algebra/layouts
+import ../layout_algebra
 import ../tensors
 import ../hardware/h_properties
 import ../atoms_mma_partitioning

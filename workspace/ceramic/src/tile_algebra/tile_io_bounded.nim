@@ -22,7 +22,7 @@
 
 import workspace/crucible
 import ../int_tuples
-import ../layout_algebra/layout_indexing
+import ../layout_algebra
 import ../tensors
 import ./tiles
 import ./tile_config
