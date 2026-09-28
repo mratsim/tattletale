@@ -27,15 +27,15 @@
 ## It is built by thrfrg_A/B/C and cut per thread by get_slice + partition_A/B/C.
 ## make_fragment_A/B/C allocate the register buffers, and cStoreMask predicates the C store.
 
-import ./int_tuples
-import ./layout_algebra/layouts
-import ./layout_algebra/layout_constructors
-import ./layout_algebra/layout_indexing
-import ./layout_algebra/layout_algebra
-import ./tensors
-import ./hardware/h_configgen
-import ./hardware/h_registry
-import ./hardware/h_properties
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
+import ../layout_algebra/layout_indexing
+import ../layout_algebra/layout_algebra
+import ../tensors
+import ../hardware/h_configgen
+import ../hardware/h_registry
+import ../hardware/h_properties
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -58,21 +58,6 @@ type TiledMma*[A: MmaAtom, TL: Layout] = object
   ## - the kernel's K-loop.
   atom*: MmaAtom
   threadLayout*: TL                      ## (ThrM, ThrN, ThrK)
-
-template threadCount*(atom: static MmaAtom; operand: static MmaOperand): untyped =
-  ## The number of threads cooperating on the atom for operand matrix A, B or C
-  ## in the `C <- A*B + C` microkernel. Every declared GPU atom uses the same
-  ## thread count for all three operands.
-  Int[atom.getThreadCount()]()
-
-template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): untyped =
-  ## The operand's values per thread: the operand layout's cosize over the
-  ## atom's thread count. A, B and C may each differ. The declared atoms'
-  ## V_A/V_B/V_C: tf32 4/2/4, f16+bf16 k16 8/4/4, int8+e4m3 k32 16/8/4,
-  ## universal 8×8×8 and Apple 2/2/2, 1×1×1 1/1/1.
-  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount(opA)
-  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount(opB)
-  else:                cosize(atom.getLayoutC()) div atom.threadCount(opC)
 
 func thrM*(tma: static TiledMma): static int {.inline.} =
   toIntVal(tma.threadLayout.shape[0])

@@ -5,12 +5,14 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Copy atom: Low-level memory copy primitive.
+## Copy atom, the NVIDIA SM80+ cp.async memory-copy primitive
+## A hardware-layer specialization, the copy engine's fragments,
+## predicates and shared/global addressing live in the kernel tier.
 
-import ./int_tuples
-import ./layout_algebra/layouts
-import ./layout_algebra/layout_constructors
-import ./tensors
+import ../int_tuples
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
+import ../tensors
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

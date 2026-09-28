@@ -10,7 +10,7 @@ import workspace/crucible
 import ../int_tuples
 import ../layout_algebra
 import ../tensors
-import ../atoms_mma_partitioning
+import ../hardware/h_properties
 import ./tiles
 
 # ═════════════════════════════════════════════════════════════════════════

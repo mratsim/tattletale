@@ -153,9 +153,9 @@ import ../hardware/h_configgen
 import ../hardware/h_registry
 import ../hardware/h_properties
 import ../hardware/h_mma_dispatch
-import ../atoms_mma_partitioning
+import ../tensors/tensors_mma_partitioning
 import ./k_layout_copy_gpu
-import ../atoms_copy
+import ../hardware/hw_copy_nvidia
 import ./k_layout_fillwith_gpu
 import ./k_layout_gemm_epilogues
 import ../macros/static_for

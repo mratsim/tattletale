@@ -27,7 +27,7 @@ import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors/tensors_mma_partitioning
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra/ptr_arithmetic
 import workspace/ceramic/src/kernels/k_layout_gemm

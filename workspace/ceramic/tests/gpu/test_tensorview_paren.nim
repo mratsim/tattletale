@@ -10,7 +10,8 @@ import std/[unittest]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/tensor_datatypes
+import workspace/ceramic/src/tensors/tensors_datatypes
+import workspace/ceramic/src/layout_algebra/layout_indexing
 import workspace/ceramic/src/tensors
 
 const kernel = cuda:

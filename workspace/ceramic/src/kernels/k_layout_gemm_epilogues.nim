@@ -31,7 +31,7 @@ import ../int_tuples
 import ../layout_algebra
 import ../tensors
 import ../hardware/h_properties
-import ../atoms_mma_partitioning
+import ../tensors/tensors_mma_partitioning
 
 {.experimental: "callOperator".}
 

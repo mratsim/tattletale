@@ -20,7 +20,7 @@ import std/macros
 import ../int_tuples
 import ../layout_algebra
 import ../tensors
-import ../atoms_copy
+import ../hardware/hw_copy_nvidia
 import workspace/crucible
 
 {.experimental: "callOperator".}
@@ -68,7 +68,7 @@ template copyFromIfAsync*[T, Sh, StA, StB, StP](
 #  - the tile splits into 16-byte aligned chunks, shared between the threads
 #  - the MMA reads per-thread register fragments with fixed shapes and register order per operand
 #
-#  partition_A/B/C (atoms_mma_partitioning) slice the smem tile into per-thread register fragments for the MMA atom.
+#  partition_A/B/C (tensors/tensors_mma_partitioning) slice the smem tile into per-thread register fragments for the MMA atom.
 #  partition_S / partition_D slice the gmem source and the smem destination into per-thread 16-byte chunks.
 #  The two sides are separate because the partition derives from each tensor's own strides.
 #  The padded gmem source and the compact smem destination produce different offsets despite the same shape structure.

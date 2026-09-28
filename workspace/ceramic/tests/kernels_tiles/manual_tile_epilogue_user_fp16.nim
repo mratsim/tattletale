@@ -13,7 +13,7 @@
 
 import workspace/crucible
 import ../libtest_epilogues
-import ../../src/atoms_mma_partitioning
+import ../../src/hardware/h_properties
 import ../../src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
