@@ -20,9 +20,54 @@ import ../src/kernels/ceramic/attn_ssm/grouped_query_attention_gguf
 import ./gguf_test_utils
 
 type
+  AttnCase = object
+    ## Geometry, tables and weights of the checked attention-layer
+    ## forward. The host orchestration lives in this test, so every
+    ## buffer the reference sees is staged here.
+    hidden, H, Nkv, D: int
+    pageSize, maxPages: int
+    eps, theta: float32
+    cacheSeqlens, cuSeqlensQ, blockTable, positions: seq[int32]
+    qw, kw, vw, ow: seq[byte]
+    qRowBytes, kRowBytes, vRowBytes, oRowBytes: int32
+    qScheme, kScheme, vScheme, oScheme: GGufScheme
+    normGammaQ, normGammaK: seq[uint16]
+
   AttnTensors = object
     ## Per-stage fp16 outputs widened to fp32 tensors.
     qBuf, kBuf, vBuf, qRope, kRope, attnOut, outBuf: F.Tensor
+
+proc buildRopeCosSin(nTokens, rowsPerToken, D: int; positions: seq[int32];
+                     theta: float32): tuple[cosT, sinT: seq[float32]] =
+  ## Test-side NEOX fp32 cos/sin tables, one (rows, half) row-major
+  ## table per signal, rows = nTokens·rowsPerToken, half = D div 2:
+  ## - row r of token m (r = m·rowsPerToken + h) carries the cos/sin
+  ##   of inv_freq[t]·pos with inv_freq[t] = theta^(−2t/D)
+  ## - the pow runs in float64, rounded to fp32, the sin/cos in fp32
+  ## - the dims pair t and t + half share the value, the table stores
+  ##   the half once, the kernel's two half-tiles both read it
+  let half = D shr 1
+  var invFreq = newSeq[float32](half)
+  for t in 0 ..< half:
+    invFreq[t] = float32(pow(float64(theta), -float64(2 * t) / float64(D)))
+  let rows = nTokens * rowsPerToken
+  result.cosT = newSeq[float32](rows * half)
+  result.sinT = newSeq[float32](rows * half)
+  for m in 0 ..< nTokens:
+    let pos = float32(positions[m])
+    for h in 0 ..< rowsPerToken:
+      let row = m * rowsPerToken + h
+      for t in 0 ..< half:
+        let ang = invFreq[t] * pos
+        result.cosT[row * half + t] = cos(ang)
+        result.sinT[row * half + t] = sin(ang)
+
+proc launcher(scheme: GGufScheme): string =
+  ## Metal launcher name for the packed-stream scheme.
+  case scheme
+  of gsQ8_0: "ggufLinearQ8"
+  of gsQ4_K: "ggufLinearQ4K"
+  of gsIQ4_XS: "ggufLinearIQ4XS"
 
 proc gammaVal(c, seed: int): float32 =
   ## Deterministic fp16-exact norm weight in [0.5, 1.5).
@@ -68,21 +113,111 @@ proc tensorFromFp16(hs: seq[uint16], rows, cols: int): F.Tensor =
   var f = newSeq[float32](hs.len)
   for i in 0 ..< hs.len: f[i] = fp16ToFp32(hs[i])
   toTensor(f).reshape(rows, cols)
-
-proc kernelUnderTest(p: GGufAttnParams, x: seq[uint16],
-                     kSlab, vSlab: var seq[uint16]): AttnTensors =
-  ## Runs `ggufAttnForward` and widens each fp16 stage to fp32 tensors.
+proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16]): AttnTensors =
+  ## Host orchestration, one `engine.run` per launcher from ggufAttnMsl:
+  ## - the q/k/v projections
+  ## - the fused qk-norm+rope
+  ## - the host cache write, write-before staging, decode row
+  ##   cache_seqlen - 1, prefill rows cache_seqlen + j
+  ##
+  ## Paged attention and the o_proj run after the cache write, each
+  ## fp16 stage widened to fp32 tensors.
+  doAssert (p.H and 7) == 0 and (p.Nkv and 7) == 0,
+    "the composed q/k views require H % 8 == 0 and Nkv % 8 == 0"
   var engine = bkMetal.init()
   engine.ingest(ggufAttnMsl)
-  let r = ggufAttnForward(engine, p, x, kSlab, vSlab)
+  let numSeqs = p.cuSeqlensQ.len - 1
   let nTokens = p.cuSeqlensQ[^1].int
-  result.qBuf = tensorFromFp16(r.qBuf, nTokens, p.H * p.D)
-  result.kBuf = tensorFromFp16(r.kBuf, nTokens, p.Nkv * p.D)
-  result.vBuf = tensorFromFp16(r.vBuf, nTokens, p.Nkv * p.D)
-  result.qRope = tensorFromFp16(r.qRope, nTokens, p.H * p.D)
-  result.kRope = tensorFromFp16(r.kRope, nTokens, p.Nkv * p.D)
-  result.attnOut = tensorFromFp16(r.attnOut, nTokens, p.H * p.D)
-  result.outBuf = tensorFromFp16(r.outBuf, nTokens, p.hidden)
+  let nQ = p.H * p.D
+  let nKv = p.Nkv * p.D
+  # the q/k/v projections (K = hidden, N = H·D / Nkv·D)
+  var qBufS = newSeq[uint16](nTokens * nQ)
+  engine.run << (grid: (nQ div 128, (nTokens + 31) div 32, 1),
+                 blk: (32, 1)) >> (
+    launcher(p.qScheme), qBufS,
+    (x, p.qw, int32(nTokens), int32(p.hidden), int32(nQ), p.qRowBytes))
+  var kBufS = newSeq[uint16](nTokens * nKv)
+  engine.run << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
+                 blk: (32, 1)) >> (
+    launcher(p.kScheme), kBufS,
+    (x, p.kw, int32(nTokens), int32(p.hidden), int32(nKv), p.kRowBytes))
+  var vBufS = newSeq[uint16](nTokens * nKv)
+  engine.run << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
+                 blk: (32, 1)) >> (
+    launcher(p.vScheme), vBufS,
+    (x, p.vw, int32(nTokens), int32(p.hidden), int32(nKv), p.vRowBytes))
+  # the fused qk-norm+rope over the separate q/k buffers, the composed
+  # (token, head-block) view. q's head-blocks = H div 8, k's = Nkv div 8
+  let headBlocksQ = p.H div 8
+  let headBlocksK = p.Nkv div 8
+  let (cosQ, sinQ) = buildRopeCosSin(nTokens, p.H, p.D, p.positions, p.theta)
+  let (cosK, sinK) = buildRopeCosSin(nTokens, p.Nkv, p.D, p.positions, p.theta)
+  var qRopeS = newSeq[uint16](nTokens * nQ)
+  engine.run << (grid: (1, nTokens, headBlocksQ), blk: (32, 1)) >> (
+    "ggufQkNormRopeD128", qRopeS,
+    (qBufS, p.normGammaQ, cosQ, sinQ,
+     int32(nQ), int32(p.H), int32(headBlocksQ), int32(0), p.eps))
+  var kRopeS = newSeq[uint16](nTokens * nKv)
+  engine.run << (grid: (1, nTokens, headBlocksK), blk: (32, 1)) >> (
+    "ggufQkNormRopeD128", kRopeS,
+    (kBufS, p.normGammaK, cosK, sinK,
+     int32(nKv), int32(p.Nkv), int32(headBlocksK), int32(0), p.eps))
+  # the cache write. Each seq's roped k and plain v land at the rows
+  # the staging contract fixes. The page decomposition is shift/mask
+  # (pageSize is a power of two). A wrong table entry faults instead
+  # of writing past the slab.
+  let lgPageSize = countTrailingZeroBits(p.pageSize)
+  let pageMask = p.pageSize - 1
+  let slabPageElems = p.pageSize * p.Nkv * p.D
+  let slabPageCount = kSlab.len div slabPageElems
+  doAssert kSlab.len == vSlab.len, "the k and v slabs must hold an equal number of elements"
+  doAssert kSlab.len mod slabPageElems == 0, "the k slab length must be a whole number of pages"
+  for s in 0 ..< numSeqs:
+    let qLen = (p.cuSeqlensQ[s + 1] - p.cuSeqlensQ[s]).int
+    let q0 = p.cuSeqlensQ[s].int
+    let writeStart = p.cacheSeqlens[s].int - (if qLen == 1: 1 else: 0)
+    for j in 0 ..< qLen:
+      let row = writeStart + j
+      let pageIdx = row shr lgPageSize
+      doAssert pageIdx < p.maxPages, "the cache write row exceeds the block-table budget"
+      let inPage = row and pageMask
+      let pageId = p.blockTable[s * p.maxPages + pageIdx].int
+      doAssert pageId >= 0 and pageId < slabPageCount,
+        "cache write hit an unused or out-of-slab block_table slot"
+      # each token's Nkv·D span is one contiguous move on both sides:
+      # the slab row (pageId, inPage) and the kRope/vBuf token row are
+      # both head-dim-contiguous, slab layout (page, in_page, h, d)
+      let t = q0 + j
+      let dstBase = (pageId * p.pageSize + inPage) * (p.Nkv * p.D)
+      copyMem(addr kSlab[dstBase], addr kRopeS[t * nKv], nKv * sizeof(uint16))
+      copyMem(addr vSlab[dstBase], addr vBufS[t * nKv], nKv * sizeof(uint16))
+  # the paged attention's x extent, the batch's longest q_len
+  # in 8-row q blocks, the kernel zero-filling blocks beyond a seq's own q_len
+  var xBlocks = 1
+  for s in 0 ..< numSeqs:
+    let qLen = p.cuSeqlensQ[s + 1] - p.cuSeqlensQ[s]
+    xBlocks = max(xBlocks, (qLen.int + 7) div 8)
+  var attnOutS = newSeq[uint16](nTokens * nQ)
+  engine.run << (grid: (xBlocks, p.H, numSeqs), blk: (32, 1)) >> (
+    "ggufPagedD128", attnOutS,
+    (qRopeS, kSlab, vSlab, p.blockTable, p.cacheSeqlens, p.cuSeqlensQ,
+     int32(numSeqs), int32(p.H), int32(p.Nkv),
+     int32(p.maxPages), int32(p.pageSize)))
+  # the o_proj over the attention output (num_qo_tokens, H·D) → hidden
+  var outBufS = newSeq[uint16](nTokens * p.hidden)
+  engine.run << (grid: (p.hidden div 128, (nTokens + 31) div 32, 1),
+                 blk: (32, 1)) >> (
+    launcher(p.oScheme), outBufS,
+    (attnOutS, p.ow, int32(nTokens), int32(nQ),
+     int32(p.hidden), p.oRowBytes))
+
+  result.qBuf = tensorFromFp16(qBufS, nTokens, nQ)
+  result.kBuf = tensorFromFp16(kBufS, nTokens, nKv)
+  result.vBuf = tensorFromFp16(vBufS, nTokens, nKv)
+  result.qRope = tensorFromFp16(qRopeS, nTokens, nQ)
+  result.kRope = tensorFromFp16(kRopeS, nTokens, nKv)
+  result.attnOut = tensorFromFp16(attnOutS, nTokens, nQ)
+  result.outBuf = tensorFromFp16(outBufS, nTokens, p.hidden)
 
 proc qkNormRopeRef(qT: F.Tensor, gamma: seq[uint16], cosT, sinT: seq[float32],
                    rowsPerToken, D: int, eps: float32): F.Tensor =
@@ -103,10 +238,9 @@ proc qkNormRopeRef(qT: F.Tensor, gamma: seq[uint16], cosT, sinT: seq[float32],
             xg.narrow(1, 0, D div 2) * sinTns).to(kFloat16)
   F.cat([t1, t2], 1).reshape(qT.size(0), rowsPerToken, D).to(kFloat32)
 
-proc writeRefSlab(dst: var seq[float32], src: F.Tensor, p: GGufAttnParams,
-                  rowsPerToken: int) =
+proc writeRefSlab(dst: var seq[float32], src: F.Tensor, p: AttnCase, rowsPerToken: int) =
   ## Fills the flat (num_pages·page_size·Nkv·D) fp32 slab from the
-  ## reference's own kRope/v with the driver's write-band addressing
+  ## reference's own kRope/v with the kernel-side write-band addressing
   ## (rows outside the bands keep the seeded history).
   let lgPageSize = countTrailingZeroBits(p.pageSize)
   let pageMask = p.pageSize - 1
@@ -156,10 +290,9 @@ proc sdpaPrefill(qt, kt, vt: F.Tensor, cacheSeqlen, qLen, H, Nkv: int): F.Tensor
   let mt = toTensor(maskF).reshape(1, qLen, covered)
   scaled_dot_product_attention(qt, k2, v2, attn_mask = some(mt), enable_gqa = H > Nkv)
 
-proc reference(p: GGufAttnParams, x: seq[uint16], numPages: int,
-               kSeed, vSeed: int): AttnTensors =
+proc reference(p: AttnCase, x: seq[uint16], numPages: int, kSeed, vSeed: int): AttnTensors =
   ## Torch composition: F.linear projections, rms_norm + rope with
-  ## the driver's cos/sin tables, the reference's own slab writes,
+  ## the test's cos/sin tables, the reference's own slab writes,
   ## per-seq SDPA with GQA, then the o_proj. Every fp16 round mirrors
   ## the kernel's fp16 buffers. The slabs never come from the kernel.
   ## The k/v history starts from the same fp16 buildX seeds as the
@@ -239,7 +372,7 @@ proc checkGGUFAttn(): bool =
   for c in 0 ..< D:
     gammaQ[c] = fp32ToFp16(gammaVal(c, 5))
     gammaK[c] = fp32ToFp16(gammaVal(c, 7))
-  var p = GGufAttnParams(
+  var p = AttnCase(
     hidden: hidden, H: H, Nkv: Nkv, D: D,
     pageSize: pageSize, maxPages: maxPages,
     eps: 1e-6'f32, theta: 1e6'f32,
@@ -285,4 +418,4 @@ proc checkGGUFAttn(): bool =
   result = true
 
 when isMainModule:
-  runCppTest("GGUF attention composition vs the torch SDPA reference", checkGGUFAttn)
+  runCppTest("GGUF attention launchers vs the torch SDPA reference", checkGGUFAttn)

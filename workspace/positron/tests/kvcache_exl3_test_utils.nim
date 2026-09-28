@@ -13,7 +13,7 @@
 import std/[strformat, strutils, math, random, sequtils]
 import workspace/crucible
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/kvcache_exl3
+import ../src/kernels/ceramic/linear_quant/kvcache_exl3
 
 # ════════════════════════════════════════
 #  The metal block. One launcher per kernel dispatches over runtime

@@ -25,10 +25,10 @@
 ## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees                                                  |
 ## | extraction | the routers' score chains and atom layouts differ, the reduction trees and the scratch-staged top-K stay module-local |
 ##
-import math_consts
+import ../math_consts
 import workspace/crucible
 import workspace/ceramic
-import ./tile_io_rows
+import ../tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra

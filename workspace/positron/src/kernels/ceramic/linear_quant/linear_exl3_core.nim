@@ -51,7 +51,7 @@
 import workspace/crucible
 import workspace/ceramic
 import ./quant_exl3_ops
-import ./tile_io_rows
+import ../tile_io_rows
 
 const
   fwhtBlock = 128       # the static D, the FWHT block width

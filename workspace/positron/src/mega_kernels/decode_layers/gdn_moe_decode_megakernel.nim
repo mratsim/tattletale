@@ -55,10 +55,10 @@ export gdn_moe_layer_graph.stageNames
 from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
-import ../../kernels/ceramic/linear
+import ../../kernels/ceramic/linear_quant/linear
 import ../../kernels/ceramic/tile_widen
-import ../../kernels/ceramic/ffn_moe_decode_single
-import ../../kernels/ceramic/moe_router
+import ../../kernels/ceramic/ffn_moe/ffn_moe_decode_single
+import ../../kernels/ceramic/ffn_moe/moe_router
 import ../../kernels/ceramic/attn_ssm/gated_delta_net_o_norm
 import ../../kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 

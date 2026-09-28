@@ -41,7 +41,7 @@
 ##
 import workspace/crucible
 import workspace/ceramic
-import ./tile_io_rows
+import ../tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra

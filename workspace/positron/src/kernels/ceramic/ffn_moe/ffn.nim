@@ -55,7 +55,7 @@
 import workspace/crucible
 import workspace/ceramic
 import ./ffn_silu
-import ./tile_io_rows
+import ../tile_io_rows
 
 proc gated_mlp_silu_fwd*(
     Out: ptr UncheckedArray[float16],          # (M, NOut): the MLP output

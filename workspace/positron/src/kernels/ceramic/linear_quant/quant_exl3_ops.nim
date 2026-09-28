@@ -54,8 +54,8 @@
 
 import workspace/crucible
 import workspace/ceramic
-import ./tile_io_rows
-from ./math_consts import InvSqrt128
+import ../tile_io_rows
+from ../math_consts import InvSqrt128
 
 # ═════════════════════════════════════════════════════════════════════
 #  The fragment-layout FWHT-128

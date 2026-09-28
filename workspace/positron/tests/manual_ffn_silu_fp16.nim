@@ -16,7 +16,7 @@ import workspace/libtorch as F
 import workspace/libtorch_testutils
 from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/ffn_silu
+import ../src/kernels/ceramic/ffn_moe/ffn_silu
 
 const siluMsl = metal:
   proc siluAndMulKernel(

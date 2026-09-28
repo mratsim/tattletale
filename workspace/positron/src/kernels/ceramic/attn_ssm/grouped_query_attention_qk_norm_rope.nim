@@ -50,7 +50,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import ../quant_exl3_ops
+import ../linear_quant/quant_exl3_ops
 
 # The kernel is non-generic (the contract has no static params), so its tile types
 # cannot take the `rt_l`/`rv` default atoms: those defaults

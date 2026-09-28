@@ -47,7 +47,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/linear
+import ../../src/kernels/ceramic/linear_quant/linear
 import ceramic_pagebuf
 import ceramic_dtype
 

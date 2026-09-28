@@ -24,12 +24,12 @@
 ## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
 ## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
 
-import math_consts
+import ../math_consts
 import workspace/crucible
 import workspace/ceramic
 import ./moe_router
-import ./tile_widen
-import ./tile_io_rows
+import ../tile_widen
+import ../tile_io_rows
 
 export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
        ptr_arithmetic, tile_algebra

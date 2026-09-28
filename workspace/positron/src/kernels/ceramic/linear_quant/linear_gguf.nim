@@ -25,7 +25,7 @@ import workspace/crucible
 import workspace/ceramic
 import ./quant_gguf_ops
 import ./quant_exl3_ops
-import ./tile_io_rows
+import ../tile_io_rows
 
 type
   GGufScheme* = enum

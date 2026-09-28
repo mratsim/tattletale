@@ -129,6 +129,27 @@ proc dequantGGUF_Q4_K*[A: static MmaAtom](
 #  dequantGGUF_IQ4_XS
 #  ═════════════════════════════════════════════════════════════════════
 
+func kvalIQ4NL(nib: int32): int32 =
+  ## Returns the kvaluesIQ4NL codebook entry for one nibble.
+  ## `nib` is masked to 0..15, no other value occurs.
+  ## Written as an if/elif chain, the form the MSL codegen accepts for a compile-time codebook lookup.
+  if nib == 0: -127'i32
+  elif nib == 1: -104'i32
+  elif nib == 2: -83'i32
+  elif nib == 3: -65'i32
+  elif nib == 4: -49'i32
+  elif nib == 5: -35'i32
+  elif nib == 6: -22'i32
+  elif nib == 7: -10'i32
+  elif nib == 8: 1'i32
+  elif nib == 9: 13'i32
+  elif nib == 10: 25'i32
+  elif nib == 11: 38'i32
+  elif nib == 12: 53'i32
+  elif nib == 13: 69'i32
+  elif nib == 14: 89'i32
+  else: 113'i32
+
 proc dequantGGUF_IQ4_XS*[A: static MmaAtom](
     bReg: var RtRight[float16, 16, 32, A],
     w: ptr UncheckedArray[uint8],
@@ -146,12 +167,10 @@ proc dequantGGUF_IQ4_XS*[A: static MmaAtom](
   ## (((sc_h shr (2·j)) and 0x3) shl 4) − 32. Nibble at within-sub-block
   ## col p: (qs[16·j + (p mod 16)] shr (4·(p div 16))) and 0xF, with
   ## the 16-entry kvaluesIQ4NL codebook. Decode chain per element:
-  ## t1 = fp32(d)·scale6', t2 = t1·kvaluesIQ4NL[nibble], one fp16 RNE
+  ## t1 = fp32(d)·scale6', t2 = t1·kvalIQ4NL(nibble), one fp16 RNE
   ## at the store.
   const M = A.getM()
   const vpt = A.getVpt()
-  const kvaluesIQ4NL = [int32(-127), -104, -83, -65, -49, -35, -22, -10,
-                         1, 13, 25, 38, 53, 69, 89, 113]
   let lane = int(thread_index_in_threadgroup)
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
@@ -174,5 +193,5 @@ proc dequantGGUF_IQ4_XS*[A: static MmaAtom](
         let p = withinCol + row + 8 * n
         let nib = (int32(w[rowByte + 8 + 16 * j + (p mod 16)]) shr
                    (4 * (p div 16))) and 0xF
-        let prod = dl * float32(kvaluesIQ4NL[nib])
+        let prod = dl * float32(kvalIQ4NL(nib))
         bReg.frags[m][n].frag[v] = prod.to(float16)

@@ -11,7 +11,7 @@
 ##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_gguf_dequant_fp16.nim
 
 import std/strformat, workspace/crucible, workspace/ceramic, workspace/libtorch_testutils
-import ../../ceramic/tests/tile_test_utils, ../src/kernels/ceramic/quant_gguf_ops, ./gguf_test_utils
+import ../../ceramic/tests/tile_test_utils, ../src/kernels/ceramic/linear_quant/quant_gguf_ops, ./gguf_test_utils
 
 const ggufDequantMsl = metal:
   proc dequantTile[A: static MmaAtom](bReg: var RtRight[float16, 16, 32, A],

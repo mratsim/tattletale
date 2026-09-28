@@ -17,7 +17,7 @@ import workspace/libtorch
 import workspace/libtorch as F
 import workspace/libtorch_testutils
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/linear_exl3_prefill
+import ../src/kernels/ceramic/linear_quant/linear_exl3_prefill
 import ./exl3_test_utils
 
 const exl3GemmMsl = metal:
