@@ -22,7 +22,7 @@ const kernelCode = opencl:
   proc crossVocabBarrierKernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     var scratch {.smem.}: array[8, uint32]
     let tid = thread_index_in_threadgroup
-    scratch[tid] = tid * 3'u32
+    scratch[tid] = uint32(tid) * 3'u32
     barrier()   # Vulkan-idiom zero-arg barrier in an OpenCL kernel
     # Read a slot written by a different work-item of the same group.
     C[tid] = scratch[(tid + 1) mod 8]

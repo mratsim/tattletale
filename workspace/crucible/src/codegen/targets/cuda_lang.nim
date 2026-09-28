@@ -199,14 +199,15 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## CUDA spelling of a canonical coordinate builtin referenced whole.
   ## `gbkThreadPositionInGrid` has no whole-value spelling: the `gpuDot` field-access site emits the component expression.
   case kind
-  of gbkThreadgroupPositionInGrid: "blockIdx"
-  of gbkThreadPositionInThreadgroup: "threadIdx"
-  of gbkThreadsPerThreadgroup: "blockDim"
-  of gbkThreadgroupsPerGrid: "gridDim"
+  of gbkThreadgroupPositionInGrid: "make_int3(blockIdx.x, blockIdx.y, blockIdx.z)"
+  of gbkThreadPositionInThreadgroup: "make_int3(threadIdx.x, threadIdx.y, threadIdx.z)"
+  of gbkThreadsPerThreadgroup: "make_int3(blockDim.x, blockDim.y, blockDim.z)"
+  of gbkThreadgroupsPerGrid: "make_int3(gridDim.x, gridDim.y, gridDim.z)"
   of gbkThreadIndexInThreadgroup:
     # x-major flat thread index, parenthesized so a trailing `* k` cannot
-    # mis-associate into `+ threadIdx.x * k`.
-    "(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
+    # mis-associate into `+ threadIdx.x * k`. The CUDA builtins are unsigned;
+    # the canonical Nim type is int, so the spelling casts.
+    "(int)(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
   of gbkThreadPositionInGrid:
     # whole-value use: no CUDA spelling, emit the canonical name verbatim
     # (zero in-tree uses, non-goal)
@@ -329,7 +330,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # `blockIdx.d*blockDim.d + threadIdx.d`. Without the parentheses,
       # a trailing `* k` would bind to `threadIdx.d` only.
       let d = ast.dField.ident()
-      result = "(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
+      result = "(int)(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
+    elif ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
+         ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
+      # Component read of an unsigned CUDA builtin, into the int canonical domain.
+      result = "(int)(" & cudaCoordIdent(ast.dParent.symbol.coordBuiltin, ast.dParent.ident()) & '.' & ast.dField.ident() & ')'
     else:
       result = ctx.genCuda(ast.dParent) & '.' & ctx.genCuda(ast.dField)
 

@@ -440,8 +440,13 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result &= indentStr & '}'
 
   of gpuDot:
-    result = ctx.genMetalImpl(ast.dParent, 0) & '.' &
-             ctx.genMetalImpl(ast.dField, 0)
+    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
+       ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
+      # Component read of an unsigned MSL builtin, into the int canonical domain.
+      result = "(int)(" & ctx.genMetalImpl(ast.dParent, 0) & '.' & ctx.genMetalImpl(ast.dField, 0) & ')'
+    else:
+      result = ctx.genMetalImpl(ast.dParent, 0) & '.' &
+               ctx.genMetalImpl(ast.dField, 0)
 
   of gpuIndex:
     result = ctx.genMetalImpl(ast.iArr, 0) & '[' &
@@ -497,7 +502,18 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # function receives for the same builtin.
     # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
     checkReservedIdent(ast.ident(), "identifier")
-    result = ast.ident()
+    case ast.symbol.coordBuiltin
+    of gbkThreadIndexInThreadgroup:
+      # Scalar MSL attribute param is uint; the canonical Nim type is int.
+      result = "(int)" & ast.ident()
+    of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
+       gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup, gbkThreadgroupsPerGrid:
+      # Whole-value use: MSL attr params are uint3 and the canonical Nim type is
+      # int3 (distinct C++ struct types, no implicit conversion) — construct.
+      let n = ast.ident()
+      result = "int3((int)" & n & ".x, (int)" & n & ".y, (int)" & n & ".z)"
+    of gbkNone:
+      result = ast.ident()
 
   of gpuLit:
       result = genLit(ast)

@@ -20,7 +20,7 @@ import ./builtins_pragmas
 ## Nim's sem expands each alias to the canonical name before the typed GPU macro sees the body.
 ## The IR therefore only ever contains canonical names.
 ##
-## The canonical coordinate type is the `uvec3` tuple, which supports `.x` and `[idx]` access and free destructuring.
+## The canonical coordinate type is the `ivec3` tuple, which supports `.x` and `[idx]` access and free destructuring.
 ## The `let {.builtin, compileTime.}` dummies exist so typed macro bodies typecheck.
 ## Their values are never evaluated or emitted.
 ## `thread_index_in_threadgroup` is the one plain builtin among them,
@@ -31,8 +31,11 @@ import ./builtins_pragmas
 ## and forwarded to the backend spelling by each printer.
 
 type
-  uvec3* = tuple[x, y, z: uint32]
-    ## Canonical GPU coordinate vector. Tuple so `.x` and `[idx]` access both work.
+  ivec3* = tuple[x, y, z: int]
+    ## Canonical GPU coordinate vector, int domain (crucible lowers int to the
+    ## target's int width, e.g. int32 in CUDA C). Positions and extents are
+    ## structural grid coordinates, never wraparound arithmetic inputs.
+    ## Tuple so `.x` and `[idx]` access both work.
     ## `nim_to_gpu` normalizes tuple `[idx]` to a field access.
 
 # ═══════════════════════════════════════════════════════════
@@ -41,21 +44,21 @@ type
 # `let {.builtin, compileTime.}` not `const`. The typed macro would fold a const value
 # before codegen can work with the symbol.
 
-let thread_position_in_grid* {.builtin, compileTime.}: uvec3 = default(uvec3)
+let thread_position_in_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
   ## Global thread index: `threadgroup_position_in_grid × threads_per_threadgroup + thread_position_in_threadgroup` (per axis).
-let threadgroup_position_in_grid* {.builtin, compileTime.}: uvec3 = default(uvec3)
+let threadgroup_position_in_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
   ## Threadgroup index within the grid.
-let thread_position_in_threadgroup* {.builtin, compileTime.}: uvec3 = default(uvec3)
+let thread_position_in_threadgroup* {.builtin, compileTime.}: ivec3 = default(ivec3)
   ## Thread index within its threadgroup.
-let threads_per_threadgroup* {.builtin, compileTime.}: uvec3 = default(uvec3)
+let threads_per_threadgroup* {.builtin, compileTime.}: ivec3 = default(ivec3)
   ## Threadgroup size, per axis.
-let threadgroups_per_grid* {.builtin, compileTime.}: uvec3 = default(uvec3)
+let threadgroups_per_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
   ## Grid size, in threadgroups, per axis.
 
 # Not compileTime: host-side tile-op proc bodies call it at runtime,
 # and a compileTime dummy would fold before the host link. The
 # builtin marking and the device path are unchanged.
-let thread_index_in_threadgroup* {.builtin.}: uint32 = 0'u32
+let thread_index_in_threadgroup* {.builtin.}: int = 0
   ## Flat thread index within the threadgroup.
   ##
   ## - `thread_position_in_threadgroup` linearized in x-major order
@@ -93,35 +96,35 @@ template gridDim*(): untyped = threadgroups_per_grid
 template threadIdx*(): untyped = thread_position_in_threadgroup
 
 # OpenCL idiom
-template get_global_id*(d: static uint32): uint32 =
+template get_global_id*(d: static int): int =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_grid`.
   when d == 0: thread_position_in_grid.x
   elif d == 1: thread_position_in_grid.y
   elif d == 2: thread_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_global_id".}
-template get_group_id*(d: static uint32): uint32 =
+template get_group_id*(d: static int): int =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroup_position_in_grid`.
   when d == 0: threadgroup_position_in_grid.x
   elif d == 1: threadgroup_position_in_grid.y
   elif d == 2: threadgroup_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_group_id".}
-template get_local_id*(d: static uint32): uint32 =
+template get_local_id*(d: static int): int =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_threadgroup`.
   when d == 0: thread_position_in_threadgroup.x
   elif d == 1: thread_position_in_threadgroup.y
   elif d == 2: thread_position_in_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_id".}
-template get_local_size*(d: static uint32): uint32 =
+template get_local_size*(d: static int): int =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threads_per_threadgroup`.
   when d == 0: threads_per_threadgroup.x
   elif d == 1: threads_per_threadgroup.y
   elif d == 2: threads_per_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_size".}
-template get_num_groups*(d: static uint32): uint32 =
+template get_num_groups*(d: static int): int =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroups_per_grid`.
   when d == 0: threadgroups_per_grid.x
   elif d == 1: threadgroups_per_grid.y
@@ -155,12 +158,12 @@ template local_invocation_index*(): untyped = thread_index_in_threadgroup
 # subgroupShuffleDown/subgroupShuffle. The IR kinds live in
 # GpuReductionBuiltinKind and the printers case on the kind alone.
 
-proc simdShuffleDown*[T](v: T; delta: uint32): T {.builtin.} = discard
+proc simdShuffleDown*[T](v: T; delta: int): T {.builtin.} = discard
   ## Returns, on each lane, the value of `v` held by the lane at
   ## `lane + delta` (`simd_shuffle_down`). Out-of-range sources
   ## return the calling lane's own value.
 
-proc simdShuffle*[T](v: T; lane: uint32): T {.builtin.} = discard
+proc simdShuffle*[T](v: T; lane: int): T {.builtin.} = discard
   ## Returns, on each lane, the value of `v` held by the lane at
   ## absolute index `lane` (`simd_shuffle`). Only the active lanes
   ## must read `v`.
