@@ -7,10 +7,10 @@
 
 import workspace/crucible
 import ../int_tuples
-import ../layouts
-import ../layout_constructors
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
 import ../tensors
-import ../ptr_arithmetic
+import ../layout_algebra/ptr_arithmetic
 import ../atoms_mma_partitioning
 import ./tiles
 import ./tile_config

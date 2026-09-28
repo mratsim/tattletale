@@ -79,8 +79,8 @@
 # TODO: pending the CPU-atom registry at CPU-merge time.
 
 import ../int_tuples
-import ../layouts
-import ../layout_constructors
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
 import ./h_configgen
 
 # ═════════════════════════════════════════════════════════════════════════

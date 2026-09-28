@@ -11,7 +11,7 @@ import std/macros
 import std/sequtils
 import std/algorithm
 import std/typetraits
-import ./int_tuples
+import ../int_tuples
 import ./layouts
 
 # ═══════════════════════════════════════════════════════════════

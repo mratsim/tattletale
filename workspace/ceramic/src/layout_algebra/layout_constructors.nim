@@ -11,7 +11,7 @@
 ## The `Layout` type itself lives in `layouts_datatypes.nim`.
 
 import std/macros
-import ./int_tuples
+import ../int_tuples
 import ./layouts_datatypes
 
 # ═══════════════════════════════════════════════════════════════

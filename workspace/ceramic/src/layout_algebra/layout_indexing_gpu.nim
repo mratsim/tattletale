@@ -35,8 +35,8 @@
 ## ─────────────────────────
 
 import std/[macros, typetraits]
-import ./int_tuples
-import ./macros/static_for
+import ../int_tuples
+import ../macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
 #  Scalar overloads

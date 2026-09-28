@@ -8,8 +8,8 @@
 ## Copy atom: Low-level memory copy primitive.
 
 import ./int_tuples
-import ./layouts
-import ./layout_constructors
+import ./layout_algebra/layouts
+import ./layout_algebra/layout_constructors
 import ./tensors
 import workspace/crucible
 

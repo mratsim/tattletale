@@ -4,8 +4,8 @@
 ## that are reused across all experiment files.
 
 import std/[math, strformat, strutils, random]
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/crucible
 

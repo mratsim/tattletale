@@ -24,7 +24,7 @@
 ##     ... use off ...
 ##     wheel.incr(shape)
 
-import ./int_tuples
+import ../int_tuples
 import ./layouts
 
 # ═══════════════════════════════════════════════════════════════
@@ -45,7 +45,7 @@ func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]; shape: aut
 func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
   CoordWheel[Rank](coord: default(array[Rank, int]))
 
-import ./macros/static_for
+import ../macros/static_for
 func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
   ## Advance coordinate by one logical position (carry-chain).
   ## Innermost dim (dim-0) is fastest-changing, so carry chain starts from dim-0.
@@ -65,7 +65,7 @@ func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
       else:
         wheel.coord[k] = 0
 
-import ./macros/static_for
+import ../macros/static_for
 func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int =
   ## Compute linear offset = sum(coord[i] * stride[i]).
   ## Pure multiply-add, no divmod.

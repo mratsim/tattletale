@@ -6,8 +6,8 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./int_tuples
-import ./layouts
-import ./ptr_arithmetic
+import ./layout_algebra/layouts
+import ./layout_algebra/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Tensor / TensorView

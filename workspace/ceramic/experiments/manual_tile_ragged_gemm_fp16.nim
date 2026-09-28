@@ -14,11 +14,11 @@ import std/[strformat, strutils]
 import workspace/crucible
 import ../tests/tile_test_utils
 import ../src/int_tuples
-import ../src/layouts
-import ../src/layout_constructors
-import ../src/layout_indexing
+import ../src/layout_algebra/layouts
+import ../src/layout_algebra/layout_constructors
+import ../src/layout_algebra/layout_indexing
 import ../src/tensors
-import ../src/ptr_arithmetic
+import ../src/layout_algebra/ptr_arithmetic
 import ../src/tile_algebra
 
 const raggedZfMsl = metal:

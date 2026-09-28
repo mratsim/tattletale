@@ -14,10 +14,10 @@
 import std/macros
 import std/typetraits
 
-import ./int_tuples
+import ../int_tuples
 import ./layout_indexing_gpu
 import ./layouts
-import ./macros/varargs_to_par
+import ../macros/varargs_to_par
 
 export layout_indexing_gpu
 

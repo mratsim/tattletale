@@ -21,9 +21,9 @@
 
 import std/algorithm
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_indexing
-import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/layout_algebra/layout_algebra
 
 
 

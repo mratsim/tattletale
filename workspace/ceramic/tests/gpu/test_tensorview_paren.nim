@@ -9,7 +9,7 @@
 import std/[unittest]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/tensor_datatypes
 import workspace/ceramic/src/tensors
 

@@ -13,11 +13,11 @@
 
 import workspace/crucible
 import ../int_tuples
-import ../layouts
-import ../layout_constructors
-import ../layout_indexing
+import ../layout_algebra/layouts
+import ../layout_algebra/layout_constructors
+import ../layout_algebra/layout_indexing
 import ../tensors
-import ../ptr_arithmetic
+import ../layout_algebra/ptr_arithmetic
 import ../tile_algebra
 import ../tile_algebra/tile_epilogues_backend
 import ../tile_algebra/tile_io_bounded

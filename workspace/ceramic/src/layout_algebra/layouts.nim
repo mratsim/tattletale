@@ -15,8 +15,8 @@
 ##   - CuTe C++: layout.hpp
 
 import std/macros
-import ./int_tuples
-import ./macros/static_for
+import ../int_tuples
+import ../macros/static_for
 import ./layouts_datatypes
 import ./layout_constructors
 

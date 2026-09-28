@@ -8,11 +8,11 @@
 import std/macros
 
 import ./macros/varargs_to_par
-import ./ptr_arithmetic
+import ./layout_algebra/ptr_arithmetic
 import ./int_tuples
-import ./layouts
-import ./layout_indexing_gpu
-import ./layout_indexing
+import ./layout_algebra/layouts
+import ./layout_algebra/layout_indexing_gpu
+import ./layout_algebra/layout_indexing
 import ./tensor_datatypes
 
 export layout_indexing_gpu

@@ -7,7 +7,7 @@
 
 import std/[random, strformat, math, typetraits]
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry

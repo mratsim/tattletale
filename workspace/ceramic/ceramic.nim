@@ -9,17 +9,17 @@
 ##   - Python: tensor-layouts
 
 import ./src/int_tuples
-import ./src/layouts
-import ./src/layout_algebra
+import ./src/layout_algebra/layouts
+import ./src/layout_algebra/layout_algebra
 import ./src/tensors
 import ./src/tile_algebra
 import ./src/tile_algebra/tile_epilogues
 import ./src/kernels/k_tile_gemm
 import ./src/kernels/k_tile_rmsnorm
 import ./src/kernels/k_tile_attn
-import ./src/layout_indexing_cpu
-import ./src/layout_indexing_gpu
-import ./src/layout_indexing
+import ./src/layout_algebra/layout_indexing_cpu
+import ./src/layout_algebra/layout_indexing_gpu
+import ./src/layout_algebra/layout_indexing
 
 export int_tuples, layouts, layout_algebra, tensors, tile_algebra,
        tile_epilogues,
