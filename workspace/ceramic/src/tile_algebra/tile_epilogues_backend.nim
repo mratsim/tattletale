@@ -10,7 +10,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_properties
 import ./tiles
 
 # ═════════════════════════════════════════════════════════════════════════

@@ -19,13 +19,13 @@ type
     mdtF32, mdtF64,
     mdtTF32,          ## specialized tensor float32, 32-bit with 10-bit mantissa in a 32-bit "opaque" blob
     mdtF16, mdtBF16,  ## 16-bit, packed 2-per-u32 in registers
-    mdtFP8E4M3,       ## 8-bit: 1 sign + 4 exponent + 3 mantissa bits
-    mdtFP8E5M2,       ## 8-bit: 1 sign + 5 exponent + 2 mantissa bits
+    mdtFP8E4M3,       ## 8-bit, 1 sign + 4 exponent + 3 mantissa bits
+    mdtFP8E5M2,       ## 8-bit, 1 sign + 5 exponent + 2 mantissa bits
     mdtInt8, mdtUint8, mdtInt16, mdtInt32
 
   SimdIsa* = enum
     ## CPU SIMD ISAs for the CPU atom ukernels.
-    ## TODO: pending the CPU-atom registry at CPU-merge time.
+    ## TODO, pending the CPU-atom registry at CPU-merge time.
     siAVX2, siAVX512, siNEON, siSVE, siI8MM, siVNNI, siSDOT
 
   MmaOperand* = enum
@@ -33,8 +33,8 @@ type
     opA, opB, opC
 
   NoLayout* = Int[-1]
-    ## Sentinel layout.
-    ## TODO: pending the CPU-atom registry at CPU-merge time.
+    ## Sentinel layout, an Int[-1] placeholder.
+    ## TODO, pending the CPU-atom registry at CPU-merge time.
 
 # ═════════════════════════════════════════════════════════════════════════
 #  declareAtoms — parser + generator
@@ -47,8 +47,8 @@ const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount",
 
 const OptionalAtomPropKeys = ["elem"]
   ## Optional property keys, declared only by the atoms that need them
-  ## (the Apple simdgroup atoms' MSL operand element name). Absent keys
-  ## generate a default const ("" for string keys).
+  ## (the Apple simdgroup atoms' MSL operand element name).
+  ## Absent keys generate a default const ("" for string keys).
 
 const IntPropKeys = ["m", "n", "k", "vpt", "threadCount"]
   ## The scalar keys whose values must be positive int literals.
@@ -62,6 +62,12 @@ var atomDefs {.compileTime.}: seq[AtomParams]
 
 proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
   ## Collects the atom declarations into `defs`, validating the keys.
+  ##
+  ## Args:
+  ##
+  ##   - defs, appended in declaration order
+  ##   - body, the declareAtoms statement list
+  ##
   ## Expected AST per atom:
   ##   Command(Ident"atom", Ident"NAME", StmtList(Call(Ident"key", StmtList(value)) …))
   body.expectKind(nnkStmtList)
@@ -115,11 +121,11 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
     defs.add params
 
 proc genAtomDecls(defs: seq[AtomParams]): NimNode =
-  ## Generates:
+  ## Generated declarations, one exported const per atom per property.
+  ##
   ##   type MmaAtom* = enum NAME1, NAME2, …
-  ##   const NAME1_m* = 8            (one exported const per atom per property)
-  ##         NAME1_n* = 8
-  ##         …
+  ##   const NAME1_m* = 8, NAME1_n* = 8, …
+  ##
   ## Optional keys an atom does not declare emit a default const
   ## ("" for the string key `elem`).
   result = newStmtList()
@@ -146,6 +152,6 @@ macro declareAtoms*(body: untyped): untyped =
   ## Parses the YAML-like atom registry block and expands to the enum
   ## plus the per-atom named consts.
   body.expectKind(nnkStmtList)
-  atomDefs.setLen(0)  # a second declareAtoms: expansion must not re-emit the first one's atoms
+  atomDefs.setLen(0)  # a second declareAtoms expansion must not re-emit the first one's atoms
   atomDefs.parseAtomDecls(body)
   result = atomDefs.genAtomDecls()

@@ -7,16 +7,14 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import ./h_registry
+import ./h_mma_registry
 
 {.experimental: "dynamicBindSym".}
-# bindSym with a computed name (`$atom & "_suffix"`) from a static macro
-# parameter needs this experimental dimension (same as h_properties.nim).
 
 ## Register-level MMA dispatch.
 
-# TODO: gemm_mma handles Nvidia asm + Apple simdgroup + the universal
-# software reduction; AMD and Intel tensor cores are not implemented yet.
+# TODO, pending AMD and Intel tensor cores, gemm_mma handles Nvidia asm,
+# Apple simdgroup, and the universal software reduction.
 
 func constraintLetter(elemTypeName: string): string =
   ## Nim DSL register element type → GCC asm constraint letter.
@@ -48,27 +46,11 @@ func operandClause(name, letter: string, count: int): string =
 func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
                         dName, aName, bName, cName: string;
                         dElem, aElem, bElem, cElem: string): string =
-  ## GCC extended-asm builder for Nvidia Matrix-Multiply-Accumulate (MMA) instructions
-  ##
-  ## %N numbering follows the hardware operand order (V-order explode):
-  ##   D = {%0..%vc-1}  A = {%vc..%vc+va-1}  B = {%vc+va..%vc+va+vb-1}
-  ##   C = aliased ? {%0..%vc-1} (D, in-place accumulate: the mma.sync
-  ##       output registers are the C operand) : {next %vc..}
-  ##
-  ## Args:
-  ##   instr: atom mnemonic, e.g. "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"
-  ##   va, vb, vc: fragment register counts (V per thread per operand)
-  ##   dName/aName/bName/cName: scalar register name stems. The asm
-  ##     operands are `name0`, `name1`, ... (backtick identifiers)
-  ##   dElem/aElem/bElem/cElem: fragment element type names, mapped to
-  ##     constraint letters ("r" for integer regs, "f" for float acc)
-  ##
-  ## When dName == cName the caller aliases D and C (in-place accumulate):
-  ## the output registers are the C operand, so the C list reuses %0..%vc-1.
+  ## GCC extended-asm builder for Nvidia MMA instructions.
   let aliased = dName == cName
   let cFirst = if aliased: 0 else: va + vb + vc
 
-  # the template part: "<instr> {D}, {A}, {B}, {C};"
+  # the template part, "<instr> {D}, {A}, {B}, {C}"
   let tpl =
     "\"" & instr &
     " " & regList(0, vc) &
@@ -84,12 +66,12 @@ func buildNvidiaMmaAsm*(instr: string; va, vb, vc: int;
     result.add ", " & operandClause(cName, constraintLetter(cElem), vc)
 
 func buildAppleSimdgroupAsm(dElem, aElem, bElem: string; dV, aV, bV: int): string =
-  ## The MSL staging block for one Apple simdgroup MMA:
-  ##   - one braced block per payload — mma_AB unrolls several payloads
-  ##     into the same function scope, so the `simdgroup_*8x8`
-  ##     declarations must not collide
-  ##   - fragments are `make_filled` (uninitialized simdgroup vars trip
-  ##     "used without initialization" diagnostics)
+  ## Metal builtin Matrix codegen
+  ##
+  ##   - one braced block per payload, mma_AB unrolls several payloads
+  ##     into the same function scope, the `simdgroup_*8x8` declarations
+  ##     must not collide
+  ##   - fragments are `make_filled` (uninitialized simdgroup vars trip "used without initialization" diagnostics)
   ##   - `d0`, `a0`… backticked names are Nim asm symbols → plain MSL locals
   result = "{\n"
   result.add "  simdgroup_" & dElem & "8x8 sd = make_filled_simdgroup_matrix<" & dElem &
@@ -115,9 +97,9 @@ func buildAppleSimdgroupAsm(dElem, aElem, bElem: string; dV, aV, bV: int): strin
 
 proc universalMma8x8x8*[TD; TA; TB](
     d: var array[2, TD]; a: array[2, TA]; b: array[2, TB]) =
-  ## One 8×8×8 FMA atom's cross-lane reduction: D = A·B + D.
+  ## One 8×8×8 FMA atom's cross-lane reduction, D = A·B + D.
   ##
-  ## Each lane holds
+  ## Expected input, each lane holds
   ##   A(m, n), A(m, n+1)
   ##   B(m, n), B(m, n+1)
 
@@ -177,25 +159,28 @@ template valuesPerThread(atom: untyped; layoutKey: untyped): int =
 # ═════════════════════════════════════════════════════════════════════════
 
 macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
-  ## One register-level MMA call — `atom.gemm_mma(dFrag, aFrag, bFrag)`.
+  ## One register-level MMA call, `atom.gemm_mma(dFrag, aFrag, bFrag)`.
   ##
   ## Everything instruction-level is derived from the atom's registry
-  ## consts (h_configgen): the mnemonic (`instr`), the per-operand
+  ## consts (h_configgen), the mnemonic (`instr`), the per-operand
   ## fragment counts (the layouts' V), and the MSL element names (`elem`).
   ##
   ## Dispatch by mnemonic:
-  ##   - "simdgroup_multiply_accumulate" (Apple atoms): an `nnkAsmStmt`
-  ##     staging block (buildAppleSimdgroupAsm), rendered by the Metal
-  ##     printer as raw MSL. The accumulator is always fp32; the operand
-  ##     element names come from the atom's `elem` registry const.
-  ##   - "" (universal FMA atoms): a plain call to `universalMma8x8x8`.
-  ##   - "mma.sync.aligned.*" (NVIDIA atoms): the extended-asm path below.
+  ##   - "simdgroup_multiply_accumulate" (Apple atoms), `nnkAsmStmt` staging
+  ##     block (buildAppleSimdgroupAsm) rendered as raw MSL
+  ##     by the Metal printer
+  ##   - "" (universal FMA atoms), a plain call to `universalMma8x8x8`
+  ##   - "mma.sync.aligned.*" (NVIDIA atoms), the extended-asm path below
+  ##
+  ## Apple atoms always accumulate in fp32, and the operand element names
+  ## come from the atom's `elem` registry const.
   ##
   ## Args:
-  ##   atom: the MmaAtom enum member
-  ##   dFrag: the accumulator fragment, seeded to the asm output and
+  ##
+  ##   - atom, the MmaAtom enum member
+  ##   - dFrag, the accumulator fragment, seeded to the asm output,
   ##     written back (in-place accumulate)
-  ##   aFrag, bFrag: the operand fragments, read-only
+  ##   - aFrag/bFrag, the operand fragments, read-only
   let instr = constStr(atom, "instr")
   let dV = atom.valuesPerThread("cLayout")
   let aV = atom.valuesPerThread("aLayout")
@@ -208,9 +193,9 @@ macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
     if aElem.len == 0:
       error("gemm_mma: atom `" & $atom & "` is missing the `elem` registry " &
             "property (\"float\"/\"half\"/\"bfloat\") for the Apple staging payload")
-    # Scalar locals: asm operand names must be plain MSL identifiers, so
-    # the fragment scalars are staged into Nim locals (bracket access: the
-    # tile layer's fragments are plain arrays; legacy Tensors support `[]`).
+    # Scalar locals, asm operand names must be plain MSL identifiers.
+    # The fragment scalars are staged into Nim locals
+    # (bracket access, the tile layer's fragments are plain arrays).
     result = newStmtList()
     for i in 0 ..< dV:
       result.add newVarStmt(ident("d" & $i),
@@ -242,9 +227,9 @@ macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
   let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d",
                                  dElem, aElem, bElem, dElem)
 
-  # scalar register locals, one per fragment element:
-  #   d0..d(dV-1): var float32, seeded from the accumulator, written back after
-  #   a0..a(aV-1), b0..b(bV-1): let uint32, read from the operand tensors
+  # scalar register locals, one per fragment element
+  #   d0..d(dV-1), var float32, seeded from the accumulator, written back after
+  #   a0..a(aV-1), b0..b(bV-1), let uint32, read from the operand tensors
   result = newStmtList()
   for i in 0 ..< dV:
     result.add newVarStmt(ident("d" & $i), newCall(dFrag, newLit(i)))

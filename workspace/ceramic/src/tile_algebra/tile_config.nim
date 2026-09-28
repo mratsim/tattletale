@@ -5,12 +5,12 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/ceramic/src/hardware/h_configgen
-import workspace/ceramic/src/hardware/h_registry
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/crucible
 
-export h_configgen, h_registry, h_properties
+export h_mma_configgen, h_mma_registry, h_mma_properties
 # Re-exported so tile consumers keep one import surface (see tiles.nim).
 
 # ═════════════════════════════════════════════════════════════════════════
