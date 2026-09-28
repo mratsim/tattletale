@@ -193,8 +193,23 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
     w: var array[K, float32]) {.device.} =
   ## One token's top-K expert ids and routing weights, the chunked router
   ## GEMV, the softmax form's score pass, the scratch-staged top-K selection
-  ## by lowest index. Shapes and dtypes on the pointer comments,
-  ## H/E/K/Scale static compile-time (H hidden, E experts, K top-K).
+  ## by lowest index.
+  ##
+  ## Expected input:
+  ##   - x: (num_tokens, H) El, row-major, token `t`'s activation row,
+  ##     the router GEMV input
+  ##   - router_w: (E, H) El, row-major, the router weight matrix,
+  ##     the checkpoint's routed-expert weights
+  ##   - t: the token index, the caller's grid coordinate
+  ##   - scores_scratch: E fp32 elements, the selection's staged score
+  ##     row, the content may be uninitialized
+  ##   - ids: K-element int32 register array, filled with the top-K
+  ##     expert ids in score order, lowest index on ties, each in [0, E)
+  ##   - w: K-element fp32 register array, filled with the normalized
+  ##     weights w[slot] = p[ids[slot]] / sum·Scale, fp32 carriers
+  ##     holding El-rounded values
+  ##   - H a multiple of the 16-wide K step, E a multiple of the
+  ##     64-expert chunk, K/Scale static compile-time
   ##
   ##   x (H) ──► [ router_w @ x, E div 64 chunks ] ──► logits (E, fp32)
   ##           ──► El round ──► [ softmax (fp32) ] ──► p (E)
@@ -258,8 +273,20 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
     num_tokens: int32) {.device.} =
   ## Router-only pass, grid (num_tokens, 1, 1) at 32 lanes, one token per
   ## threadgroup, `t` from the grid. Stores the top-K expert ids and the
-  ## El-rounded routing weights under the `moeRoute` contract, shapes and
-  ## dtypes on the pointer comments, H/E/K/Scale static compile-time:
+  ## El-rounded routing weights under the `moeRoute` contract:
+  ##
+  ## Expected input:
+  ##   - x, router_w: the same contract as `moeRoute`
+  ##   - scores_scratch: (num_tokens, E) fp32, row-major, one E-slice
+  ##     per threadgroup, the content may be uninitialized
+  ##   - ids: (num_tokens, K) int32, row-major, filled with the top-K
+  ##     expert ids, each in [0, E)
+  ##   - rout_w: (num_tokens, K) El, row-major, filled with the
+  ##     El-rounded routing weights
+  ##   - num_tokens: the token count, grid.x bound
+  ##   - H/E/K/Scale static compile-time, the `moeRoute` constraints
+  ##
+  ## Dataflow:
   ##
   ##   x (H) ──► [ moeRoute ] ──► ids[t] (K), rout_w[t] (K)
   let t = int32(threadgroup_position_in_grid.x)
@@ -275,9 +302,17 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
 
 proc sharedGateLogit*[El; H: static int](
     x, sgw: ptr UncheckedArray[El], t: int32): float32 {.device.} =
-  ## Returns the raw fp32 shared-expert scalar logit of token t. Shapes
-  ## and dtypes on the pointer comments, H static compile-time, a multiple
-  ## of the 16-wide K step:
+  ## Returns the raw fp32 shared-expert scalar logit of token t.
+  ##
+  ## Expected input:
+  ##   - x: (num_tokens, H) El, row-major, token `t`'s activation row
+  ##   - sgw: (1, H) El, row-major, the shared-gate weight row,
+  ##     the checkpoint's shared-expert weights
+  ##   - t: the token index, the caller's grid coordinate
+  ##   - H: the hidden width, static compile-time, a multiple of the
+  ##     16-wide K step
+  ##
+  ## Dataflow:
   ##
   ##   x[t] (H) ──► [ shared_gate_vec_w[0] @ x[t], 16-wide K steps ] ──► logit (fp32)
   ##
@@ -305,9 +340,17 @@ proc moe_decode_merge_at*[El; H, K: static int](
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
     t, nt: int32) {.device.} =
   ## Merge walk for one (token, column block) pair at caller coordinates,
-  ## `t` the token, `nt` the H div 32 column block. Shapes and dtypes on
-  ## the pointer comments, H/K static compile-time, H a multiple of the
-  ## 32-wide lane tile:
+  ## `t` the token, `nt` the H div 32 column block.
+  ##
+  ## Expected input:
+  ##   - out_r: (num_tokens, H) El, row-major, the 32-wide column block
+  ##     [nt·32, nt·32 + 32) written per call, El RNE rounded
+  ##   - partial: (num_tokens, K+1, H) fp32, row-major, the routed
+  ##     experts' partial sums plus the shared expert's row last
+  ##   - t: the token, nt: the column block, caller coordinates
+  ##   - H a multiple of the 32-wide lane tile, K static compile-time
+  ##
+  ## Dataflow:
   ##
   ##   partial[t, 0..K] (H, fp32 rows) ──► [ Σ slot order, shared last ] ──► El RNE ──► out_r[t] (H)
   ##
