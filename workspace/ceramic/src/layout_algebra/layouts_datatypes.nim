@@ -45,11 +45,11 @@ func `$`*(layout: Layout): string =
   $layout.shape & ":" & $layout.stride
 
 template rank*(layout: Layout): static int =
-  ## Number of modes in layout (compile-time constant).
+  ## Number of dimensions in layout (compile-time constant).
   rank(layout.shape)
 
 template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
-  ## Number of modes in a layout type (compile-time constant).
+  ## Number of dimensions in a layout type (compile-time constant).
   rank(Sh)
 
 func size*(layout: Layout): auto =
@@ -150,11 +150,11 @@ func cosize*[A, B](_: typedesc[Layout[A, B]]): static int =
 
 type StrideOrder* = enum
   LayoutLeft
-    ## Leftmost mode is contiguous (stride 1).
+    ## Leftmost dimension is contiguous (stride 1).
     ##
-    ## `LayoutLeft` means the **first** (index 0) mode of the shape tuple
+    ## `LayoutLeft` means the **first** (index 0) dimension of the shape tuple
     ## has stride 1. This is CuTe's **column-major** convention when
-    ## the first mode represents rows and the second columns.
+    ## the first dimension represents rows and the second columns.
     ##
     ## The name refers to which end of the shape tuple gets stride 1:
     ## the "left" (first / index 0) element. Equivalent to `prefix_product`.
@@ -164,11 +164,11 @@ type StrideOrder* = enum
     ##   make_layout((3, 4, 5), LayoutLeft) -> (3, 4, 5) : (1, 3, 12)
 
   LayoutRight
-    ## Rightmost mode is contiguous (stride 1).
+    ## Rightmost dimension is contiguous (stride 1).
     ##
-    ## `LayoutRight` means the **last** (highest-index) mode of the shape
+    ## `LayoutRight` means the **last** (highest-index) dimension of the shape
     ## tuple has stride 1. This is CuTe's **row-major** convention when
-    ## the first mode represents rows and the second columns.
+    ## the first dimension represents rows and the second columns.
     ##
     ## The name refers to which end of the shape tuple gets stride 1:
     ## the "right" (last / highest-index) element. Equivalent to `suffix_product`.
@@ -230,7 +230,7 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
         ok
 
 func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
-  ## Find consecutive modes in `a` from `aStartIdx` whose product equals `b`.
+  ## Find consecutive dimensions in `a` from `aStartIdx` whose product equals `b`.
   static: doAssert a isnot int, "scalar a should be handled by caller"
   let bVal = fold(b, 1, acc * it)
   var acc = 1

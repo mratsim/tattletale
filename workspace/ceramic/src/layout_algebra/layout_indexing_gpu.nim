@@ -56,7 +56,7 @@ template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idxMode*(coord, shape, stride: typed): auto =
-  ## Per-mode crd2idx anchored on the shape mode structure.
+  ## Per-dimension crd2idx anchored on the shape dimension structure.
   ##
   ## PERF: Must stay template (not func). See crd2idx tuple overload.
   when coord is X:
@@ -64,18 +64,18 @@ template crd2idxMode*(coord, shape, stride: typed): auto =
     Int[0]()
   elif shape is tuple:
     when coord is tuple:
-      # Nested coord into a nested mode: recurse over the sub-modes
+      # Nested coord into a nested dimension: recurse over the sub-dimensions
       crd2idxRecur(coord, shape, stride, 0)
     else:
-      # Scalar coord into a nested mode: delegate to the scalar
-      # decomposition path (foldDim over the flattened mode)
+      # Scalar coord into a nested dimension: delegate to the scalar
+      # decomposition path (foldDim over the flattened dimension)
       crd2idx(coord, shape, stride)
   else:
-    # Flat mode: inner product of the coord element with the stride
+    # Flat dimension: inner product of the coord element with the stride
     coord * stride
 
 template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
-  ## Sum the per-mode contributions of a tuple coord over the shape.
+  ## Sum the per-dimension contributions of a tuple coord over the shape.
   ##
   ## PERF: Must stay template (not func). See crd2idx tuple overload.
   when i == rank(shape) - 1:
@@ -85,10 +85,10 @@ template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
       crd2idxRecur(coord, shape, stride, i + 1)
 
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Recursive over shape: each top-level mode is dispatched on
-  ## its own (coord element, shape mode, stride mode).
+  ## Recursive over shape: each top-level dimension is dispatched on
+  ## its own (coord element, shape dimension, stride dimension).
   ##
-  ## PERF: Must stay template (not func). The per-mode arithmetic
+  ## PERF: Must stay template (not func). The per-dimension arithmetic
   ## delegates to the Int[V] times int operator overloads, which
   ## are ALSO templates (see genBinOp in int_tuples_datatypes.nim).
   ## A func chain here would prevent C++ inlining.
@@ -130,7 +130,7 @@ macro foldDim*(co, sh, st: typed; i: static int): auto =
   result = foldFrom(co, i)
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
-  ## Decompose coord across shape modes with strides.
+  ## Decompose coord across shape dimensions with strides.
   ##
   ## PERF: Must stay template. Uses `int rank(S)` instead of `toIntVal rank(S)`
   ## to avoid a toIntVal call (even at compile time — it's a func).
@@ -142,5 +142,5 @@ template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St)
     when S is tuple and R > 1:
       foldDim(P, S, D, 0)
     else:
-      # Single mode after flatten — no decomposition needed
+      # Single dimension after flatten — no decomposition needed
       P * D

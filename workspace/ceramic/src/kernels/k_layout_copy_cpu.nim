@@ -66,7 +66,7 @@ proc toBracket(vals: seq[int]): NimNode {.compileTime.} =
 # ── Helper: flatten + index into a layout field ─────────────────
 
 proc flattenElem(lay, field: NimNode; idx: NimNode; totalRank: int): NimNode {.compileTime.} =
-  ## Generates `int(flatten(lay.field)[idx])` (multi-mode) or `int(flatten(lay.field))` (rank-1).
+  ## Generates `int(flatten(lay.field)[idx])` (multi-dimension) or `int(flatten(lay.field))` (rank-1).
   if totalRank <= 1:
     result = quote do:
       int(flatten(`lay`.`field`))

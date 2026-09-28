@@ -29,7 +29,7 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
       if strides[result[i]] > strides[result[j]]:
         swap result[i], result[j]
 
-#  coalesce — merge contiguous modes where stride matches
+#  coalesce — merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
 macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool = false): untyped =
@@ -37,9 +37,9 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
   let stype = csShape.getTypeInst()
   let stype2 = csStride.getTypeInst()
 
-  # Scalar guard: single-mode Layout
+  # Scalar guard: single-dimension Layout
   if stype.kind != nnkTupleConstr and stype2.kind != nnkTupleConstr:
-    # Check if scalar shape is size-1 (inactive mode)
+    # Check if scalar shape is size-1 (inactive dimension)
     if (stype.kind == nnkBracketExpr and $stype[0] == "Int" and stype[1].intVal == 1) or
        (stype.kind == nnkIntLit and stype.intVal == 1):
       result = newCall(bindSym"make_layout", newLit(1), newLit(0))
@@ -54,15 +54,15 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
   var resSTypes: seq[NimNode] = @[]
   var resSTypes2: seq[NimNode] = @[]
 
-  # Seed: add last mode
+  # Seed: add last dimension
   resShapes.add csShape.at(N - 1)
   resStrides.add csStride.at(N - 1)
   resSTypes.add stype[N - 1]
   resSTypes2.add stype2[N - 1]
 
   if preserveTrailing:
-    # When preserving trailing size-1 modes, seed with `low(int)` (non-1 sentinel)
-    # to prevent the post-loop discard from removing the last mode.
+    # When preserving trailing size-1 dimensions, seed with `low(int)` (non-1 sentinel)
+    # to prevent the post-loop discard from removing the last dimension.
     # Mirrors CuTe's coalesce_x which seeds bw_coalesce with Int<2>{} sentinel.
     let lastST = stype[N - 1]
     if (lastST.kind == nnkBracketExpr and $lastST[0] == "Int" and lastST[1].intVal == 1) or
@@ -102,7 +102,7 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
     resSTypes.insert(curST, 0)
     resSTypes2.insert(curST2, 0)
 
-  # Post-loop: discard trailing size-1 modes (the seed might be size-1)
+  # Post-loop: discard trailing size-1 dimensions (the seed might be size-1)
   if not preserveTrailing:
     while resShapes.len > 0 and isStaticOne(resSTypes[^1]):
       discard resShapes.pop()
@@ -126,17 +126,17 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
   result = newCall(bindSym"make_layout", rShape, rStride)
 
 func coalesce*(layout: Layout): auto {.inline, noInit.} =
-  ## Merge contiguous modes. Flatten preserves Int[N] types with getTypeInst.
+  ## Merge contiguous dimensions. Flatten preserves Int[N] types with getTypeInst.
   coalesceBackward(
     flatten(layout.shape),
     flatten(layout.stride)
   )
 
 func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
-  ## Like `coalesce` but preserves trailing size-1 modes (e.g. stride-0 broadcasts).
+  ## Like `coalesce` but preserves trailing size-1 dimensions (e.g. stride-0 broadcasts).
   ## Mirrors CuTe's `coalesce_x`: seeds backward coalescence with `low(int)`
   ## sentinel instead of `Int[1]`, preventing the post-loop discard from
-  ## removing the last mode.
+  ## removing the last dimension.
   coalesceBackward(
     flatten(layout.shape),
     flatten(layout.stride),
@@ -144,11 +144,11 @@ func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  filter_inactive — remove stride-0 and size-1 modes
+#  filter_inactive — remove stride-0 and size-1 dimensions
 # ═══════════════════════════════════════════════════════════════
 
 func filter_inactive*(layout: Layout): auto {.inline.} =
-  ## Remove stride-0 and size-1 modes
+  ## Remove stride-0 and size-1 dimensions
   coalesce(filter_zeros(layout))
 
 # ═══════════════════════════════════════════════════════════════
@@ -168,7 +168,7 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 #  ##        │       rem = ceil_div(bound, prd)                    │
 #  ##        │       result = Layout((gap, rem), (1, st))          │
 #  ##        │                                                     │
-#  ##        └─ multi-mode                                         │
+#  ##        └─ multi-dimension                                         │
 #  ##             │                                                │
 #  ##             ├─ allStridesStatic? ── must be (doAssert)       │
 #  ##             │                                                │
@@ -195,7 +195,7 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 #  ##   - Rank-1 dynamic: runtime via func instantiation
 #  ##
 #  ## cosizeBound type:
-#  ##   In the multi-mode path, bound may be Int[N] (static) or int (dynamic).
+#  ##   In the multi-dimension path, bound may be Int[N] (static) or int (dynamic).
 #  ##   For Int[N] bounds, ceil_div is computed at compile time.
 #  ##   For int bounds, a runtime ceil_div expression is emitted.
 #  ##   Shape-tuple bounds (e.g. (32,4,4)) are converted to size(product).
@@ -207,7 +207,7 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   ##   result = coalesce(Layout((gap, rem), (1, prd)))
   let stTyp = st.getTypeInst()
 
-  # Broadcast (stride-0): complement is a single mode with shape=bound, stride=1
+  # Broadcast (stride-0): complement is a single dimension with shape=bound, stride=1
   if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
     return newCall(bindSym"make_layout", boundExpr, newLit(1))
 
@@ -227,11 +227,11 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
 
 proc complementGaps(
     strides, shapes: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
-  ## Build full complement LayoutCT (gap modes + remainder), folding over
-  ## modes in ascending-stride order: each mode contributes a gap mode
+  ## Build full complement LayoutCT (gap dimensions + remainder), folding over
+  ## dimensions in ascending-stride order: each dimension contributes a gap dimension
   ## (stride div cur, cur) and advances cur = stride * shape. Runtime
   ## shapes advance cur with a runtime expression — the fold continues
-  ## past them. Statically-1 modes are skipped; runtime modes are
+  ## past them. Statically-1 dimensions are skipped; runtime dimensions are
   ## appended unconditionally.
   var cur = 1
   var curNode: NimNode = IntCT(1)
@@ -260,7 +260,7 @@ proc complementGaps(
   result.append(rem, curNode)
 
 proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
-  ## Multi-mode complement: sort by stride, fold to fill gaps.
+  ## Multi-dimension complement: sort by stride, fold to fill gaps.
   ## All strides must be static Int[N] (compile-time check).
   let stTyp = st.getTypeInst()
   let shTyp = sh.getTypeInst()
@@ -270,7 +270,7 @@ proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   for i in 0 ..< stTyp.len:
     let stNode = stTyp[i]
     doAssert stNode.kind == nnkBracketExpr and $stNode[0] == "Int",
-      "complement: multi-mode with dynamic strides not supported at index " & $i
+      "complement: multi-dimension with dynamic strides not supported at index " & $i
 
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
@@ -278,7 +278,7 @@ proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   newCall(bindSym"coalesce", acc.emit())
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
-  ## Dispatch to scalar or multi-mode complement.
+  ## Dispatch to scalar or multi-dimension complement.
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
       newCall(bindSym"product", cosizeBound)
@@ -291,7 +291,7 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Compute complement: fills stride gaps up to cosizeBound.
-  ## Filters inactive modes first (matches CuTe's filter-before-complement).
+  ## Filters inactive dimensions first (matches CuTe's filter-before-complement).
   let f = filter_inactive(layout)
   complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
 
@@ -329,7 +329,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##               scalar LHS             tuple LHS
 ##                    │                       │
 ##                    ▼                       ▼
-##         make_layout(              fold over modes
+##         make_layout(              fold over dimensions
 ##         B.shape,                   0..R-2 of A:
 ##         B.stride ×                 ┌──────────────┐
 ##         A.stride)                  │ currShape    │
@@ -345,7 +345,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##                                   └──────┬───────┘
 ##                                          │
 ##                                   ┌──────┴───────┐
-##                                   │ Last mode    │
+##                                   │ Last dimension    │
 ##                                   │ (R-1):       │
 ##                                   │ append       │
 ##                                   │ remShape     │
@@ -361,10 +361,10 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 
 func unwrap(t: tuple): auto {.inline.} =
   ## CuTe's `unwrap`: collapse a single-element tuple to its scalar so a
-  ## composed single-mode result stays scalar (CuTe's composition_impl
+  ## composed single-dimension result stays scalar (CuTe's composition_impl
   ## does `Layout{unwrap(result_shape), unwrap(result_stride)}`);
   ## multi-element tuples pass through unchanged. Without this, every
-  ## composed leaf comes out as a rank-1 1-tuple `(4,)` and mode
+  ## composed leaf comes out as a rank-1 1-tuple `(4,)` and dimension
   ## collection nests them as `((4,), (8,))` instead of CuTe's flat
   ## `(4, 8)`.
   when rank(t) == 1:
@@ -401,19 +401,19 @@ template divisibilityCheck(remainingShape, clampedShape: untyped) =
       "compose: shape " & $remainingShape & " and consumed extent " & $clampedShape & " are not divisible"
 
 func composeImpl(
-    modeIdx:             static int;
+    dimIdx:             static int;
     accShapes,
     accStrides,
     remainingShape,
     remainingStride:     auto;
     lhsShapes,
     lhsStrides:          tuple): auto {.inline.} =
-  ## Fold over LHS modes with a 4-state accumulator
+  ## Fold over LHS dimensions with a 4-state accumulator
   ## (accShapes, accStrides, remainingShape, remainingStride).
   ## Uses recursion because the accumulator types change each iteration
   ## (shape/stride tuples grow via concat).
-  when modeIdx >= rank(lhsShapes) - 1:
-    ## Last mode (R-1): append remaining RHS as final mode,
+  when dimIdx >= rank(lhsShapes) - 1:
+    ## Last dimension (R-1): append remaining RHS as final dimension,
     ## but skip when RHS was fully consumed (remaining is an Int[1] artifact).
     const skipLast =
       when remainingShape is Int and typeof(remainingShape) is Int[1] and rank(accShapes) != 0: true
@@ -422,11 +422,11 @@ func composeImpl(
       make_layout(unwrap(accShapes), unwrap(accStrides))
     else:
       make_layout(unwrap(concat(accShapes, remainingShape)),
-                  unwrap(concat(accStrides, remainingStride * lhsStrides[modeIdx])))
+                  unwrap(concat(accStrides, remainingStride * lhsStrides[dimIdx])))
   else:
-    ## Fold step for mode `modeIdx` (0 ≤ modeIdx < R-1).
-    let currShape  = lhsShapes[modeIdx]
-    let currStride = lhsStrides[modeIdx]
+    ## Fold step for dimension `dimIdx` (0 ≤ dimIdx < R-1).
+    let currShape  = lhsShapes[dimIdx]
+    let currStride = lhsStrides[dimIdx]
     let absRemainingStride = abs(remainingStride)
     let nextShape          = ceil_div(currShape, absRemainingStride)
     const doSkip =
@@ -435,12 +435,12 @@ func composeImpl(
       else: false
     when doSkip:
       let nextStride = ceil_div(absRemainingStride, currShape) * sign(remainingStride)
-      composeImpl(modeIdx+1, accShapes, accStrides, remainingShape, nextStride,
+      composeImpl(dimIdx+1, accShapes, accStrides, remainingShape, nextStride,
                   lhsShapes, lhsStrides)
     else:
       let clampedShape = min(nextShape, remainingShape)
       divisibilityCheck(remainingShape, clampedShape)
-      composeImpl(modeIdx+1,
+      composeImpl(dimIdx+1,
                   concat(accShapes, clampedShape),
                   concat(accStrides, remainingStride * currStride),
                   remainingShape div clampedShape,
@@ -448,9 +448,9 @@ func composeImpl(
                   lhsShapes, lhsStrides)
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
-  ## Layer RHS modes one by one over the FULL coalesced LHS via mapModesWith.
-  ## Nested RHS modes are handled by recursive composeDistribute calls;
-  ## scalar modes go directly to composeImpl.
+  ## Layer RHS dimensions one by one over the FULL coalesced LHS via mapModesWith.
+  ## Nested RHS dimensions are handled by recursive composeDistribute calls;
+  ## scalar dimensions go directly to composeImpl.
   mapModesWith(make_layout(rhsShapes, rhsStrides)):
     when it.shape is tuple:
       composeDistribute(lhsShapes, lhsStrides, it.shape, it.stride)
@@ -474,7 +474,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
     else:
       make_layout(b.shape.flatten(), b.stride.flatten() * a.stride)
   elif b.shape isnot tuple:
-    # CuTe: coalesce LHS first (preserving trailing stride-0 modes), then compose with scalar RHS
+    # CuTe: coalesce LHS first (preserving trailing stride-0 dimensions), then compose with scalar RHS
     # Uses coalesce_preserve_trailing to match CuTe's coalesce_x in composition.
     let flatA = coalesce_preserve_trailing(a)
     when flatA.shape isnot tuple:
@@ -485,7 +485,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       let aFlatStride = flatA.stride.flatten()
       composeImpl(0, (), (), b.shape, b.stride, aFlatShape, aFlatStride)
   else:
-    # CuTe: coalesce LHS first (preserving trailing stride-0 modes), then compose with tuple RHS
+    # CuTe: coalesce LHS first (preserving trailing stride-0 dimensions), then compose with tuple RHS
     let flatA = coalesce_preserve_trailing(a)
     when flatA.shape isnot tuple:
       # flatA is rank-1 scalar: preserve B's nesting, scale strides by flatA.stride
@@ -499,7 +499,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
 # ═══════════════════════════════════════════════════════════════
 #
 #  CuTe formula:  logical_divide(A, B) = compose(A, Layout(B, complement(B, shape(coalesce(A)))))
-#  Tuple tiler:    transform_layout(logical_divide, layout, tiler)  — per-mode divide
+#  Tuple tiler:    transform_layout(logical_divide, layout, tiler)  — per-dimension divide
 #  int / Int:      make_layout(tiler) then CuTe formula
 #
 
@@ -536,19 +536,19 @@ func logical_divide_builder*[LayoutT, TilerT](
     make_layout(accSh, accSt)
   else:
     when idx < rank(tiler):
-      let d = logical_divide(mode(layout, idx), tiler[idx])
+      let d = logical_divide(dimension(layout, idx), tiler[idx])
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (d.shape,)), concat(accSt, (d.stride,)))
     else:
-      let m = mode(layout, idx)
+      let m = dimension(layout, idx)
       logical_divide_builder(layout, tiler, LayoutRank, idx + 1, concat(accSh, (m.shape,)), concat(accSt, (m.stride,)))
 
 func logical_divide*(layout: Layout; tiler: tuple): auto {.inline.} =
-  ## Tuple tiler → per-mode divide (transform_layout).
-  ## Each tiler element applies to the corresponding layout mode.
+  ## Tuple tiler → per-dimension divide (transform_layout).
+  ## Each tiler element applies to the corresponding layout dimension.
   ## Modes beyond len(tiler) pass through unchanged.
   const R = static(rank(layout))
   static: doAssert rank(tiler) <= R,
-    "logical_divide: tiler has more modes (" & $rank(tiler) &
+    "logical_divide: tiler has more dimensions (" & $rank(tiler) &
     ") than layout (" & $R & ")"
   logical_divide_builder(layout, tiler, R, 0, (), ())
 
@@ -590,21 +590,21 @@ func zipped_divide_builder*[LayoutT, TilerT](
     )
   else:
     when idx < rank(tiler):
-      let d = logical_divide(mode(layout, idx), tiler[idx])
+      let d = logical_divide(dimension(layout, idx), tiler[idx])
       zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
-        concat(tileSh, (mode(d, 0).shape,)),
-        concat(tileSt, (mode(d, 0).stride,)),
-        concat(restSh, (mode(d, 1).shape,)),
-        concat(restSt, (mode(d, 1).stride,)))
+        concat(tileSh, (dimension(d, 0).shape,)),
+        concat(tileSt, (dimension(d, 0).stride,)),
+        concat(restSh, (dimension(d, 1).shape,)),
+        concat(restSt, (dimension(d, 1).stride,)))
     else:
-      let m = mode(layout, idx)
+      let m = dimension(layout, idx)
       zipped_divide_builder(layout, tiler, LayoutRank, idx + 1,
         tileSh, tileSt,
         concat(restSh, (m.shape,)),
         concat(restSt, (m.stride,)))
 
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
-  ## Divide layout by tiler and zip tile/rest modes into rank-2 result.
+  ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   ##
   ## CuTe: zipped_divide =
   ##   - Layout tiler: logical_divide(layout, tiler)
@@ -621,42 +621,42 @@ func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): au
     const R = static(rank(layout))
     const Tr = static(rank(tiler))
     static: doAssert Tr <= R,
-      "zipped_divide: tiler has more modes (" & $Tr & ") than layout (" & $R & ")"
+      "zipped_divide: tiler has more dimensions (" & $Tr & ") than layout (" & $R & ")"
     zipped_divide_builder(layout, tiler, R, 0, (), (), (), ())
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
-  ## Like zipped_divide but unpack the second mode into individual modes.
-  ## Keeps mode-0 grouped (the tile).
+  ## Like zipped_divide but unpack the second dimension into individual dimensions.
+  ## Keeps dimension-0 grouped (the tile).
   block:
     evalOnceAs(lyt, layout)
     evalOnceAs(tlr, tiler)
     evalOnceAs(zd, zipped_divide(lyt, tlr))
     make_layout(
       concat(
-        (flatten(mode(zd, 0).shape),),
-        flatten(mode(zd, 1).shape)
+        (flatten(dimension(zd, 0).shape),),
+        flatten(dimension(zd, 1).shape)
       ),
       concat(
-        (flatten(mode(zd, 0).stride),),
-        flatten(mode(zd, 1).stride)
+        (flatten(dimension(zd, 0).stride),),
+        flatten(dimension(zd, 1).stride)
       )
     )
 
 template flat_divide*(layout: Layout; tiler: auto): auto =
-  ## Like zipped_divide but unpack BOTH modes into a flat layout.
-  ## Difference from tiled_divide: tile modes are also unpacked.
+  ## Like zipped_divide but unpack BOTH dimensions into a flat layout.
+  ## Difference from tiled_divide: tile dimensions are also unpacked.
   block:
     evalOnceAs(lyt, layout)
     evalOnceAs(tlr, tiler)
     evalOnceAs(zd, zipped_divide(lyt, tlr))
     make_layout(
       concat(
-        flatten(mode(zd, 0).shape),
-        flatten(mode(zd, 1).shape),
+        flatten(dimension(zd, 0).shape),
+        flatten(dimension(zd, 1).shape),
       ),
       concat(
-        flatten(mode(zd, 0).stride),
-        flatten(mode(zd, 1).stride),
+        flatten(dimension(zd, 0).stride),
+        flatten(dimension(zd, 1).stride),
       ),
     )
 
@@ -666,7 +666,7 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 
 proc rightInverseChain*(
     strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
-  ## Return right-inverse modes as LayoutCT (empty if no chain found).
+  ## Return right-inverse dimensions as LayoutCT (empty if no chain found).
   result = LayoutCT()
   var curr = 1
   for idx in getIndicesSortedByStride(strides):
@@ -693,7 +693,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
       result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
     return
 
-  # Multi-mode: extract values, fill LayoutCT via helper
+  # Multi-dimension: extract values, fill LayoutCT via helper
   let strides = toSeqStaticInts(stTyp)
   let shapes  = toSeqStaticInts(shTyp)
   let prefixProd = prefixProduct(shapes)
@@ -705,7 +705,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
 
 func right_inverse*(layout: Layout): auto =
   ## Quasi-inverse: L(R(i)) == i for all i < size(R).
-  ## Sorts modes by stride, finds max contiguous chain.
+  ## Sorts dimensions by stride, finds max contiguous chain.
   let c = coalesce(layout)
   rightInverseImpl(flatten(c.shape), flatten(c.stride))
 
@@ -715,7 +715,7 @@ func right_inverse*(layout: Layout): auto =
 
 proc leftInverseModes*(
     strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
-  ## Return left-inverse modes as a LayoutCT.
+  ## Return left-inverse dimensions as a LayoutCT.
   ## Builds from stride ratios:
   ##   result_shape[i] = stride / size_so_far
   ##   result_prefix[i] = prefixProd[prev_idx]
@@ -729,15 +729,15 @@ proc leftInverseModes*(
     doAssert strides[idx] mod sizeSoFar == 0,
       "left_inverse: stride " & $strides[idx] & " not divisible by " & $sizeSoFar
     if prevIdx == -1:
-      # First mode: computed shape, zero stride
+      # First dimension: computed shape, zero stride
       result.append(IntCT(strides[idx] div sizeSoFar), IntCT(0))
     else:
-      # Intermediate mode: computed shape, previous prefix as stride
+      # Intermediate dimension: computed shape, previous prefix as stride
       result.append(IntCT(strides[idx] div sizeSoFar), IntCT(prevPrefix))
     sizeSoFar = strides[idx]
     prevIdx = idx
     prevPrefix = prefixProd[idx]
-  # Last mode from original layout
+  # Last dimension from original layout
   result.append(newTree(nnkBracketExpr, shNode, newLit(prevIdx)), IntCT(prevPrefix))
 
 macro leftInverseImpl(sh, st: typed): untyped =
@@ -836,7 +836,7 @@ func logical_product*[A, B: Layout](a: A; tiler: B): auto =
 
 
 func nested_product*[A, B: Layout](a: A; b: B): auto =
-  ## Categorical product of two layouts, preserving each argument's mode grouping.
+  ## Categorical product of two layouts, preserving each argument's dimension grouping.
   ##
   ## Given:
   ##   A: (a0, a1, ...):(sa0, sa1, ...)
@@ -861,38 +861,38 @@ template zipped_product*(blk: Layout; tiler: auto): auto =
       tile_unzip(logical_product(bk, tlr), tlr)
 
 template tiled_product*(blk: Layout; tiler: auto): auto =
-  ## Like zipped_product but unpack the second mode.
-  ## Keeps mode-0 grouped (the block).
+  ## Like zipped_product but unpack the second dimension.
+  ## Keeps dimension-0 grouped (the block).
   block:
     evalOnceAs(bk, blk)
     evalOnceAs(tlr, tiler)
     evalOnceAs(zp, zipped_product(bk, tlr))
     make_layout(
       concat(
-        (flatten(mode(zp, 0).shape),),
-        flatten(mode(zp, 1).shape),
+        (flatten(dimension(zp, 0).shape),),
+        flatten(dimension(zp, 1).shape),
       ),
       concat(
-        (flatten(mode(zp, 0).stride),),
-        flatten(mode(zp, 1).stride),
+        (flatten(dimension(zp, 0).stride),),
+        flatten(dimension(zp, 1).stride),
       ),
     )
 
 template flat_product*(blk: Layout; tiler: auto): auto =
-  ## Like zipped_product but unpack BOTH modes into a flat layout.
-  ## Difference from tiled_product: block modes are also unpacked.
+  ## Like zipped_product but unpack BOTH dimensions into a flat layout.
+  ## Difference from tiled_product: block dimensions are also unpacked.
   block:
     evalOnceAs(bk, blk)
     evalOnceAs(tlr, tiler)
     evalOnceAs(zp, zipped_product(bk, tlr))
     make_layout(
       concat(
-        flatten(mode(zp, 0).shape),
-        flatten(mode(zp, 1).shape),
+        flatten(dimension(zp, 0).shape),
+        flatten(dimension(zp, 1).shape),
       ),
       concat(
-        flatten(mode(zp, 0).stride),
-        flatten(mode(zp, 1).stride),
+        flatten(dimension(zp, 0).stride),
+        flatten(dimension(zp, 1).stride),
       ),
     )
 
@@ -903,31 +903,31 @@ template flat_product*(blk: Layout; tiler: auto): auto =
 #  blocked_product(block, tiler):
 #    1. Append both to rank R = max(rank(block), rank(tiler))
 #    2. result = logical_product(padded_block, padded_layout)
-#    3. return zipModes(result[0], result[1])
+#    3. return zipDimensions(result[0], result[1])
 
 func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, each block contiguous.
   ## Results in ((BLK_A, TILER_A), (BLK_B, TILER_B), ...).
   const mxR = max(rank(type(blk)), rank(type(tiler)))
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = mode(lp, 0)
-  let m1 = mode(lp, 1)
-  zipModes(m0, m1)
+  let m0 = dimension(lp, 0)
+  let m1 = dimension(lp, 1)
+  zipDimensions(m0, m1)
 
 # ═══════════════════════════════════════════════════════════════
 #
 #  raked_product(block, tiler):
 #    1. Same logical_product as blocked_product
-#    2. return zipModes(result[1], result[0])  (swapped order)
+#    2. return zipDimensions(result[1], result[0])  (swapped order)
 
 func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, blocks interleaved.
   ## Results in ((TILER_A, BLK_A), (TILER_B, BLK_B), ...).
   const mxR = max(rank(type(blk)), rank(type(tiler)))
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = mode(lp, 0)
-  let m1 = mode(lp, 1)
-  zipModes(m1, m0)
+  let m0 = dimension(lp, 0)
+  let m1 = dimension(lp, 1)
+  zipDimensions(m1, m0)
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape — repeat block layout to fill target shape
@@ -936,9 +936,9 @@ func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
 template tile_to_shape*(blk: Layout; target_shape: typed; ord_shape: static StrideOrder = LayoutLeft): auto =
   ## Recipe:
   ##   1. Pad block to rank R
-  ##   2. Compute block_shape = product_each(block.shape)   — per-mode products
-  ##   3. Compute target_shape_flat = product_each(target_shape)    — per-mode products
-  ##   4. product_shape = ceil_div(target_shape, block_shape) — repeats per mode
+  ##   2. Compute block_shape = product_each(block.shape)   — per-dimension products
+  ##   3. Compute target_shape_flat = product_each(target_shape)    — per-dimension products
+  ##   4. product_shape = ceil_div(target_shape, block_shape) — repeats per dimension
   ##   5. tiler = make_layout(product_shape, ord_shape)
   ##   6. result = blocked_product(padded_block, tiler)
   ##
@@ -953,6 +953,6 @@ template tile_to_shape*(blk: Layout; target_shape: typed; ord_shape: static Stri
     let padded_blk = padRight(bk, R)
     let blk_shape = product_each(padded_blk.shape)
     let trg_flat = product_each(ts)
-    let product_shape = zipModesWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
+    let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
     let tiler = make_layout(product_shape, ord_shape)
     blocked_product(padded_blk, tiler)

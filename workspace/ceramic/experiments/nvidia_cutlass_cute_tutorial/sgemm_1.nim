@@ -71,13 +71,13 @@ proc sgemm_1_kernel(
 
   # ── C thread partitioning (4-arg with Step) ──
   #   sA: (BLK_M, BLK_K), tC: (THR_M, THR_N)
-  #   Step (_1, X): partition M by tC mode 0, keep K whole
+  #   Step (_1, X): partition M by tC dimension 0, keep K whole
   let tCsA = local_partition(sA, tC, threadIdx.x, (Y, X))  # (THR_M, BLK_K)
   #   sB: (BLK_N, BLK_K)
-  #   Step (X, _1): keep N whole, partition K by tC mode 1
+  #   Step (X, _1): keep N whole, partition K by tC dimension 1
   let tCsB = local_partition(sB, tC, threadIdx.x, (X, Y))  # (THR_N, BLK_K)
   #   gC: (BLK_M, BLK_N)
-  #   Step (_1, _1): partition both modes
+  #   Step (_1, _1): partition both dimensions
   var tCgC = local_partition(gC, tC, threadIdx.x, (Y, Y))  # (THR_M, THR_N)
 
   # ── Accumulators ──
@@ -85,7 +85,7 @@ proc sgemm_1_kernel(
   fillWith(tCrC, float32(0))
 
   # ── Main loop ──
-  let kTileMax = size(tAgA.layout.mode(2))
+  let kTileMax = size(tAgA.layout.dimension(2))
   for kTile in 0 ..< kTileMax:
     # Copy gmem → smem (via thread-partitioned tiles)
     copyFrom(tAsA, tAgA(_, _, kTile))  # A (THR_M, THR_K) -> (THR_M, THR_K)

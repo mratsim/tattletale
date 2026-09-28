@@ -128,7 +128,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   # makeIntTuple promotes the compile-time-known leaves so the Int[N] markers propagate statically, runtime leaves stay runtime.
   # The (chunkCols, kRows) thread grid derives from the tile shape and the thread count, the same static fact.
   let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
-  tiled_divide(mode(ur, 1), makeIntTuple((chunkCols, kRows)))
+  tiled_divide(dimension(ur, 1), makeIntTuple((chunkCols, kRows)))
 
 func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
                              atom: typedesc[Atom];

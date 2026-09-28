@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout transforms and selectors: mode, filter_zeros, padRight/Left,
-## mapLeavesWith, zipModes, groupModes, upcast/downcast, etc.
+## Layout transforms and selectors: dimension, filter_zeros, padRight/Left,
+## mapLeavesWith, zipDimensions, groupDimensions, upcast/downcast, etc.
 ##
 ## Re-exports `layouts_datatypes` (Layout type, predicates) and
 ## `layout_constructors` (make_layout, col_major_strides, LayoutCT).
@@ -24,11 +24,11 @@ export layouts_datatypes
 export layout_constructors
 
 # ═══════════════════════════════════════════════════════════════
-#  mode — extract mode as rank-1 Layout
+#  dimension — extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
-template mode*(layout: Layout; idx: static int): auto =
-  ## Extract mode `idx` as a standalone rank-1 Layout.
+template dimension*(layout: Layout; idx: static int): auto =
+  ## Extract dimension `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
   when layout.shape is tuple:
     make_layout(layout.shape[idx], layout.stride[idx])
@@ -42,12 +42,12 @@ template mode*(layout: Layout; idx: static int): auto =
 
 func isCompact*(layout: Layout): bool =
   ## True when strides match canonical column-major ordering.
-  ## Note: does NOT coalesce first — size-1 modes may cause false negatives.
+  ## Note: does NOT coalesce first — size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
 
 func isCompact*(layout: static Layout): static bool =
   ## True when strides match canonical column-major ordering.
-  ## Note: does NOT coalesce first — size-1 modes may cause false negatives.
+  ## Note: does NOT coalesce first — size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
 
 # ═══════════════════════════════════════════════════════════════
@@ -55,17 +55,17 @@ func isCompact*(layout: static Layout): static bool =
 # ═══════════════════════════════════════════════════════════════
 
 macro filterZerosFlat(sh, st: typed): untyped =
-  ## Stride-0 mode shapes → Int[1](), everything else as-is.
+  ## Stride-0 dimension shapes → Int[1](), everything else as-is.
   let stT = st.getTypeInst()
   let shT = sh.getTypeInst()
-  # ── scalar path: single mode ──
+  # ── scalar path: single dimension ──
   if shT.kind != nnkTupleConstr:
     if stT.kind == nnkBracketExpr and $stT[0] == "Int" and stT[1].intVal == 0:
       result = IntCT(1)
     else:
       result = sh
     return
-  # ── tuple path: iterate over modes ──
+  # ── tuple path: iterate over dimensions ──
   result = newNimNode(nnkTupleConstr)
   for i in 0 ..< shT.len:
     let stN = stT[i]
@@ -108,16 +108,16 @@ func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compi
   error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
 
 # ═══════════════════════════════════════════════════════════════
-#  padRight — extend layout rank by padding with identity modes
+#  padRight — extend layout rank by padding with identity dimensions
 # ═══════════════════════════════════════════════════════════════
 
-#  CuTe: append<R>(layout) pads to rank R with (1, 0) modes.
+#  CuTe: append<R>(layout) pads to rank R with (1, 0) dimensions.
 #  Used by blocked_product / raked_product to equalize ranks.
-#  Pads on the RIGHT (appends identity modes at the end).
+#  Pads on the RIGHT (appends identity dimensions at the end).
 
 macro padRight*(layout: Layout; rank: static int): untyped =
-  ## Extend layout to target rank by padding with identity modes (1, 0).
-  ## Identity modes are appended on the right.
+  ## Extend layout to target rank by padding with identity dimensions (1, 0).
+  ## Identity dimensions are appended on the right.
   ## Zero-cost if layout is at least the target rank. The input AST is passed as-is
   ## No intermediate value is materialized.
   let shTyp = layoutTypeArgs(layout).shapeTy
@@ -140,15 +140,15 @@ macro padRight*(layout: Layout; rank: static int): untyped =
     ct.stride.add IntCT(0)
   result = ct.emit()
 
-#  padLeft — extend layout rank by prepending identity modes
+#  padLeft — extend layout rank by prepending identity dimensions
 
-#  CuTe: prepend<R>(layout) pads to rank R with (1, 0) modes.
+#  CuTe: prepend<R>(layout) pads to rank R with (1, 0) dimensions.
 #  Used by gemm.hpp to lift 2D operands to 3D.
-#  Pads on the LEFT (prepends identity modes at the front).
+#  Pads on the LEFT (prepends identity dimensions at the front).
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
-  ## Extend layout to target rank by prepending identity modes (1, 0).
-  ## Identity modes are prepended on the left.
+  ## Extend layout to target rank by prepending identity dimensions (1, 0).
+  ## Identity dimensions are prepended on the left.
   ## Zero-cost if layout is at least the target rank.
   let shTyp = layoutTypeArgs(layout).shapeTy
   let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
@@ -311,15 +311,15 @@ template downcast*(layout: Layout; N: static int): auto =
         (new_sh, new_st)
 
 # ═══════════════════════════════════════════════════════════════
-#  zipModes — interleave corresponding modes of two layouts
+#  zipDimensions — interleave corresponding dimensions of two layouts
 # ═══════════════════════════════════════════════════════════════
 
-macro zipModes*[A, B: Layout](a: A, b: B): untyped =
-  ## Zip modes of two layouts: interleave corresponding modes pairwise.
+macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
+  ## Zip dimensions of two layouts: interleave corresponding dimensions pairwise.
   ##
-  ##   Given layouts A with modes (a0, a1, ..., aN) and
-  ##   B with modes (b0, b1, ..., bN), zipModes produces a layout
-  ##   with modes ((a0,b0), (a1,b1), ..., (aN,bN)).
+  ##   Given layouts A with dimensions (a0, a1, ..., aN) and
+  ##   B with dimensions (b0, b1, ..., bN), zipDimensions produces a layout
+  ##   with dimensions ((a0,b0), (a1,b1), ..., (aN,bN)).
   ##
   ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
 
@@ -344,25 +344,25 @@ macro zipModes*[A, B: Layout](a: A, b: B): untyped =
         let subB = typB[i].getTypeInst()
         result.add zipElems(ai, bi, subA, subB)
     else:
-      error "zipModes: mismatched rank"
+      error "zipDimensions: mismatched rank"
 
   let zShape = zipElems(aShape, bShape, aShT, bShT)
   let zStride = zipElems(aStride, bStride, aStT, bStT)
   result = newCall(bindSym"make_layout", zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
-#  groupModes — wrap modes [B, E) into a nested sub-Layout
+#  groupDimensions — wrap dimensions [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
-macro groupModes*(layout: Layout; B, E: static int): untyped =
-  ## Wraps modes at indices `[B, E)` into a nested sub-tuple in both
+macro groupDimensions*(layout: Layout; B, E: static int): untyped =
+  ## Wraps dimensions at indices `[B, E)` into a nested sub-tuple in both
   ## shape and stride, producing a higher-rank Layout.
   ##
   ## CuTe: group<B,E>(layout) — layout.hpp:1011
   ## Python: group(layout, B, E) — algebra.py:319
   ##
   ## Examples:
-  ##   groupModes(make_layout((2, 3, 5, 7)), 0, 2)
+  ##   groupDimensions(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
   var ct = LayoutCT()
   let shTyp = layoutTypeArgs(layout).shapeTy
@@ -384,12 +384,12 @@ macro groupModes*(layout: Layout; B, E: static int): untyped =
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
 
-#  takeModes — extract modes [B, E) into a new Layout
+#  takeModes — extract dimensions [B, E) into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro takeModes*(layout: Layout; B, E: static int): untyped =
-  ## Extract modes in range `[B, E)` into a new Layout.
-  ## Returns a scalar Layout if only one mode is extracted.
+  ## Extract dimensions in range `[B, E)` into a new Layout.
+  ## Returns a scalar Layout if only one dimension is extracted.
   ##
   ## Examples:
   ##   takeModes(make_layout((2, 3, 5, 7)), 1, 3)
@@ -403,11 +403,11 @@ macro takeModes*(layout: Layout; B, E: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  selectModes — extract specific mode indices into a new Layout
+#  selectModes — extract specific dimension indices into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
-  ## Extract specific mode indices into a new Layout.
+  ## Extract specific dimension indices into a new Layout.
   var ct = LayoutCT()
   for i in 0 ..< Is.len:
     let idx = Is[i].intVal
@@ -416,11 +416,11 @@ macro selectModes*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  replaceMode — replace a mode with a sub-Layout
+#  replaceMode — replace a dimension with a sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
-  ## Replace mode N of layout with Layout x.
+  ## Replace dimension N of layout with Layout x.
   ## CuTe: replace<N>(layout, x) — layout.hpp:1001
   let shTyp = layoutTypeArgs(layout).shapeTy
   let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
@@ -435,12 +435,12 @@ macro replaceMode*(layout: Layout; x: typed; N: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  map — apply fn to each mode independently
-#  zipWith — pairwise fn over modes of two Layouts
+#  map — apply fn to each dimension independently
+#  zipWith — pairwise fn over dimensions of two Layouts
 # ═══════════════════════════════════════════════════════════════
 
 macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
-  ## Apply `body` to each mode of Layout `arg`. Within body, `it` is the current mode.
+  ## Apply `body` to each dimension of Layout `arg`. Within body, `it` is the current dimension.
   ## `body` must evaluate to a Layout.
   ##
   ## Example:
@@ -453,7 +453,7 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
   result = newStmtList()
   proc subst(n: NimNode; i: int; la: NimNode): NimNode =
     if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it"):
-      result = newCall(bindSym"mode", la, newLit(i))
+      result = newCall(bindSym"dimension", la, newLit(i))
     else:
       result = n.copyNimTree()
       for j in 0 ..< n.len:
@@ -468,28 +468,28 @@ macro mapModesWith*[L: Layout](arg: L; body: untyped): untyped =
                newTree(nnkDotExpr, resName, ident"stride"))
   result.add ct.emit()
 
-macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
-  ## Zip modes of two layouts pairwise via body, appending leftovers from the longer one.
+macro zipDimensionsWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
+  ## Zip dimensions of two layouts pairwise via body, appending leftovers from the longer one.
   ##
-  ## Within body, `it_a` is the current mode of `a` and `it_b` the current mode of `b`.
+  ## Within body, `it_a` is the current dimension of `a` and `it_b` the current dimension of `b`.
   ## Body must return a Layout.
   ##
-  ## For the first `min(rank(a), rank(b))` modes, both `it_a` and `it_b` are
-  ## available — the body combines them. Any remaining modes from the longer
+  ## For the first `min(rank(a), rank(b))` dimensions, both `it_a` and `it_b` are
+  ## available — the body combines them. Any remaining dimensions from the longer
   ## layout are appended unchanged.
   ##
   ## Example (a shorter, b longer):
   ##   let a = make_layout((2,), (1,))           # rank-1
   ##   let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))  # rank-2
-  ##   let r = zipModesWith(a, b):
-  ##     make_layout(it_a.shape, it_b.stride)   # shape from a, stride from b's 1st mode
-  ##   # mode 0 = zip result:  (2):(1, 4)       — shape from a (2), stride from b's 1st (1, 4)
-  ##   # mode 1 = b's 2nd mode leftover:  (2, 8):(2, 8)
+  ##   let r = zipDimensionsWith(a, b):
+  ##     make_layout(it_a.shape, it_b.stride)   # shape from a, stride from b's 1st dimension
+  ##   # dimension 0 = zip result:  (2):(1, 4)       — shape from a (2), stride from b's 1st (1, 4)
+  ##   # dimension 1 = b's 2nd dimension leftover:  (2, 8):(2, 8)
   ##
   ## Example (same rank):
   ##   let a = make_layout((2, 4), (1, 2))
   ##   let b = make_layout((3, 5), (10, 20))
-  ##   let r = zipModesWith(a, b):
+  ##   let r = zipDimensionsWith(a, b):
   ##     make_layout(it_a.shape, it_b.stride)   # take shape from a, stride from b
   ##   # r == (2, 4):(10, 20)
   let (shA, _) = layoutTypeArgs(a)
@@ -501,9 +501,9 @@ macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
 
   proc subst(n: NimNode; i: int; la, lb: NimNode): NimNode =
     if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_a"):
-      result = newCall(bindSym"mode", la, newLit(i))
+      result = newCall(bindSym"dimension", la, newLit(i))
     elif n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_b"):
-      result = newCall(bindSym"mode", lb, newLit(i))
+      result = newCall(bindSym"dimension", lb, newLit(i))
     else:
       result = n.copyNimTree()
       for j in 0 ..< n.len:
@@ -520,12 +520,12 @@ macro zipModesWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
                  newTree(nnkDotExpr, resName, ident"stride"))
     elif i < RA:
       let mName = ident("m" & $i)
-      result.add newLetStmt(mName, newCall(bindSym"mode", a, newLit(i)))
+      result.add newLetStmt(mName, newCall(bindSym"dimension", a, newLit(i)))
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
     else:
       let mName = ident("m" & $i)
-      result.add newLetStmt(mName, newCall(bindSym"mode", b, newLit(i)))
+      result.add newLetStmt(mName, newCall(bindSym"dimension", b, newLit(i)))
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()

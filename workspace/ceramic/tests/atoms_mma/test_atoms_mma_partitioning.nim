@@ -74,26 +74,26 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
     for flatThread in 0 ..< T * thrM * thrN * thrK:
       let tv = flatThread mod T
       let (tm, tn, tk) = idx2crd(mma.threadLayout.shape, flatThread div T)
-      let tc = idx2crd(mode(atomLayout, 0).shape, tv)
+      let tc = idx2crd(dimension(atomLayout, 0).shape, tv)
       when operand == opA:
         for rk in 0 ..< restK:
           for rm in 0 ..< restM:
             for v in 0 ..< vCount:
-              let vc = idx2crd(mode(atomLayout, 1).shape, v)
+              let vc = idx2crd(dimension(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toIntVal()
               counts[off].inc
       elif operand == opB:
         for rk in 0 ..< restK:
           for rn in 0 ..< restN:
             for v in 0 ..< vCount:
-              let vc = idx2crd(mode(atomLayout, 1).shape, v)
+              let vc = idx2crd(dimension(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toIntVal()
               counts[off].inc
       else:
         for rn in 0 ..< restN:
           for rm in 0 ..< restM:
             for v in 0 ..< vCount:
-              let vc = idx2crd(mode(atomLayout, 1).shape, v)
+              let vc = idx2crd(dimension(atomLayout, 1).shape, v)
               let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toIntVal()
               counts[off].inc
     checkMultiplicity(counts, expected, $operand)
@@ -124,27 +124,27 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
             else: mma.thrfrg_C(compactView(tileM, tileK).layout)
     let tv = t mod T
     let (tm, tn, tk) = idx2crd(mma.threadLayout.shape, t div T)
-    let tc = idx2crd(mode(atomLayout, 0).shape, tv)
+    let tc = idx2crd(dimension(atomLayout, 0).shape, tv)
     var r: seq[(int, int)]
     when operand == opA:
       for rk in 0 ..< restK:
         for rm in 0 ..< restM:
           for v in 0 ..< vCount:
-            let vc = idx2crd(mode(atomLayout, 1).shape, v)
+            let vc = idx2crd(dimension(atomLayout, 1).shape, v)
             let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toIntVal()
             r.add (off mod tileRows, off div tileRows)
     elif operand == opB:
       for rk in 0 ..< restK:
         for rn in 0 ..< restN:
           for v in 0 ..< vCount:
-            let vc = idx2crd(mode(atomLayout, 1).shape, v)
+            let vc = idx2crd(dimension(atomLayout, 1).shape, v)
             let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toIntVal()
             r.add (off mod tileRows, off div tileRows)
     else:
       for rn in 0 ..< restN:
         for rm in 0 ..< restM:
           for v in 0 ..< vCount:
-            let vc = idx2crd(mode(atomLayout, 1).shape, v)
+            let vc = idx2crd(dimension(atomLayout, 1).shape, v)
             let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toIntVal()
             r.add (off mod tileRows, off div tileRows)
     r
@@ -305,7 +305,7 @@ proc runRejectionAndInvariantTests =
     except AssertionDefect:
       discard
 
-  block:  # coverage with rest modes: every element at the expected multiplicity (A ×ThrN, B ×ThrM, C ×ThrK), including rest
+  block:  # coverage with rest dimensions: every element at the expected multiplicity (A ×ThrN, B ×ThrM, C ×ThrK), including rest
     const mma = tiled(3, 5, 1)
     mma.verifyFragments(336, 8, opA)
     mma.verifyFragments(360, 8, opB)

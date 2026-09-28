@@ -11,7 +11,7 @@ import workspace/ceramic/src/hardware/h_registry
 
 {.experimental: "dynamicBindSym".}
 # bindSym with a computed name (`$atom & "_suffix"`) from a static macro
-# parameter needs this experimental mode (same as h_properties.nim).
+# parameter needs this experimental dimension (same as h_properties.nim).
 
 ## Register-level MMA dispatch (compile-time string builder / AST emitter).
 ##

@@ -13,7 +13,7 @@
 ## | --------------------- | ------------------------------------------------------------------------------ |
 ## | Datatypes             | `Layout`, `Int`, `size`, `cosize`, `rank`                                      |
 ## | Construction          | `make_layout` and friends                                                      |
-## | Views and selectors   | `mode`, `groupModes`, `zipModes`                                               |
+## | Views and selectors   | `dimension`, `groupDimensions`, `zipDimensions`                                               |
 ## | Indexing              | `crd2idx`, `idx2crd`, `slice`, `dice`, `X`/`Y`/`_`                             |
 ## | Algebra               | `coalesce`, `filter_zeros`, `filter_inactive`, `complement`, `compose`         |
 ## | Partitioning          | `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `tile_unzip` |
@@ -66,7 +66,7 @@ export layout_constructors.make_fragment_like
 #  Views, selectors, indexing
 # ═══════════════════════════════════════════════════════════════
 
-export layouts.mode
+export layouts.dimension
 export layouts.isCompact
 export layouts.filter_zeros
 export layouts.padRight
@@ -74,12 +74,12 @@ export layouts.padLeft
 export layouts.mapLeavesWith
 export layouts.upcast
 export layouts.downcast
-export layouts.groupModes
+export layouts.groupDimensions
 export layouts.takeModes
 export layouts.selectModes
 export layouts.replaceMode
-export layouts.zipModes
-export layouts.zipModesWith
+export layouts.zipDimensions
+export layouts.zipDimensionsWith
 
 # crd2idx, idx2crd, slice, dice, X/Y markers, call operator.
 # `hasUnderscoreImpl` is a private helper of layout_indexing.nim
@@ -90,20 +90,20 @@ export layout_indexing except hasUnderscoreImpl
 #  Algebra: coalesce, filter, complement, compose
 # ═══════════════════════════════════════════════════════════════
 
-## Merge contiguous modes whose strides form a compact run.
+## Merge contiguous dimensions whose strides form a compact run.
 export layout_algebra.coalesce
 
-## Zero-out stride-0 modes, their shapes become Int[1].
+## Zero-out stride-0 dimensions, their shapes become Int[1].
 export layouts.filter_zeros
 
-## Drop inactive modes, size-1 shapes with stride 0.
+## Drop inactive dimensions, size-1 shapes with stride 0.
 export layout_algebra.filter_inactive
 
 ## Complement of a layout, the stride-space layout covering
 ## every offset `layout` leaves unused.
 export layout_algebra.complement
 
-## Compose two layouts, function composition threaded mode by mode.
+## Compose two layouts, function composition threaded dimension by dimension.
 export layout_algebra.compose
 
 # ═══════════════════════════════════════════════════════════════
@@ -114,14 +114,14 @@ export layout_algebra.compose
 ## with result `(rest, tile) = layout ⋅ tiler`.
 export layout_algebra.logical_divide
 
-## logical_divide with tile and rest modes zipped, mode-interleaved
+## logical_divide with tile and rest dimensions zipped, dimension-interleaved
 ## for hierarchical traversal.
 export layout_algebra.zipped_divide
 
-## logical_divide with the tile modes grouped.
+## logical_divide with the tile dimensions grouped.
 export layout_algebra.tiled_divide
 
-## logical_divide with the rest modes flattened per mode.
+## logical_divide with the rest dimensions flattened per dimension.
 export layout_algebra.flat_divide
 
 ## logical_divide with tile and rest unzipped afterwards.
@@ -137,7 +137,7 @@ export layout_algebra.right_inverse
 ## Left inverse `b` such that `b ∘ layout` is compact.
 export layout_algebra.left_inverse
 
-## Largest mode-wise common sub-layout of two layouts.
+## Largest dimension-wise common sub-layout of two layouts.
 export layout_algebra.max_common_layout
 
 ## Largest vector width common to two layouts, their contiguous size.
@@ -148,25 +148,25 @@ export layout_algebra.max_common_vector
 # ═══════════════════════════════════════════════════════════════
 
 ## Logical product, the CuTe ⊗ operator.
-## Appends the tiler modes after the block modes.
+## Appends the tiler dimensions after the block dimensions.
 export layout_algebra.logical_product
 
-## Logical product with the tiler nested inside each block mode.
+## Logical product with the tiler nested inside each block dimension.
 export layout_algebra.nested_product
 
-## Logical product with block and tiler modes zipped.
+## Logical product with block and tiler dimensions zipped.
 export layout_algebra.zipped_product
 
-## zipped_product with the tile modes then grouped.
+## zipped_product with the tile dimensions then grouped.
 export layout_algebra.tiled_product
 
-## zipped_product with the tiler modes then flattened per mode.
+## zipped_product with the tiler dimensions then flattened per dimension.
 export layout_algebra.flat_product
 
-## Product with tiler modes interleaved as blocked sub-blocks.
+## Product with tiler dimensions interleaved as blocked sub-blocks.
 export layout_algebra.blocked_product
 
-## Product with tiler modes interleaved as raked sub-blocks.
+## Product with tiler dimensions interleaved as raked sub-blocks.
 export layout_algebra.raked_product
 
 ## Rebuild a block layout to tile a target shape, LayoutLeft-ordered

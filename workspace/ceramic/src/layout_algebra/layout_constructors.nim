@@ -66,7 +66,7 @@ proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
   ct.stride.add st
 
 func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated modes (no coalesce).
+  ## Build make_layout from accumulated dimensions (no coalesce).
   ## This auto-constant-folds expressions that can be computed at compile-time.
   # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
   # Multi-item: construct a tuple like nnkTupleConstr.
@@ -81,9 +81,9 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
 
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Compute stride for each mode m as product of shapes of modes
+  ## Compute stride for each dimension m as product of shapes of dimensions
   ## whose order value is smaller than order[m].
-  ## For each mode m: stride_start[m] = product of shapes of modes
+  ## For each dimension m: stride_start[m] = product of shapes of dimensions
   ## whose order value < order[m].
   let n = shVals.len
   result = newSeq[int](n)
@@ -159,22 +159,22 @@ proc typeIntVal(t: NimNode): int {.compileTime.} =
     DynamicSentinel
 
 macro compact_order*(shape, order): untyped =
-  ## Produce compact strides for a given mode permutation.
+  ## Produce compact strides for a given dimension permutation.
   ##
-  ## `order[i]` specifies the position of mode `i` in the stride ordering:
+  ## `order[i]` specifies the position of dimension `i` in the stride ordering:
   ## smaller value = faster-varying (smaller stride).
-  ## Returns a tuple of strides where the mode with `order[i] = 0` gets
+  ## Returns a tuple of strides where the dimension with `order[i] = 0` gets
   ## stride 1, the next gets stride = shape[fastest], and so on.
   ##
   ## Example — 2D permutations:
-  ##   compact_order((2,3), (0,1))  → (1, 2)   # col-major (mode 0 fastest)
-  ##   compact_order((2,3), (1,0))  → (3, 1)   # row-major (mode 1 fastest)
+  ##   compact_order((2,3), (0,1))  → (1, 2)   # col-major (dimension 0 fastest)
+  ##   compact_order((2,3), (1,0))  → (3, 1)   # row-major (dimension 1 fastest)
   ##
   ## Example — 3D custom permutation:
   ##   compact_order((2,3,4), (0,2,1))
-  ##   # mode 0 fastest → stride 1
-  ##   # mode 2 next    → stride 1*2   = 2
-  ##   # mode 1 slowest → stride 1*2*4 = 8
+  ##   # dimension 0 fastest → stride 1
+  ##   # dimension 2 next    → stride 1*2   = 2
+  ##   # dimension 1 slowest → stride 1*2*4 = 8
   ##   # result: (1, 8, 2)
 
   let shLeaves = flattenAst(shape)
@@ -212,23 +212,23 @@ macro make_layout_like*(layout: Layout): untyped =
   ## Given a layout (possibly with non-compact strides), produces a new
   ## layout with compact strides that accesses elements in the same
   ## logical order. The input's stride values signal the desired ordering
-  ## — the mode with the smallest stride gets stride 1 in the output,
-  ## the next gets stride = product of faster modes' shapes, etc.
-  ## Broadcast modes (statically Int[0]) keep stride 0.
+  ## — the dimension with the smallest stride gets stride 1 in the output,
+  ## the next gets stride = product of faster dimensions' shapes, etc.
+  ## Broadcast dimensions (statically Int[0]) keep stride 0.
   ##
   ## Example — non-compact (2,1) gives compact row-major (3,1):
   ##   make_layout_like(make_layout((2,3), (2,1)))  → (2,3):(3,1)
-  ##   # mode 1 has the smaller stride (1), so it becomes fastest
-  ##   # mode 0 stride becomes shape[1] = 3
+  ##   # dimension 1 has the smaller stride (1), so it becomes fastest
+  ##   # dimension 0 stride becomes shape[1] = 3
   ##
-  ## Example — broadcast mode preserved:
+  ## Example — broadcast dimension preserved:
   ##   make_layout_like(make_layout((2,3), (0,1)))  → (2,3):(0,1)
   ##
   ## Example — 3D reordering:
   ##   make_layout_like(make_layout((2,3,4), (3,6,1)))  → (2,3,4):(4,8,1)
-  ##   # mode 2 (stride 1) fastest  → stride 1
-  ##   # mode 0 (stride 3) middle   → stride 1*4   = 4
-  ##   # mode 1 (stride 6) slowest  → stride 1*4*2 = 8
+  ##   # dimension 2 (stride 1) fastest  → stride 1
+  ##   # dimension 0 (stride 3) middle   → stride 1*4   = 4
+  ##   # dimension 1 (stride 6) slowest  → stride 1*4*2 = 8
 
   # Shape/stride TYPE extraction with aliased-type support.
   # layoutTypeArgs alone is not enough here: its aliased branch returns
@@ -301,25 +301,25 @@ macro make_layout_like*(layout: Layout): untyped =
 
 macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## Build a fragment layout from a partition view: the V leaves (the
-  ## register-enumeration modes, the first `flattenType(typeof(vShape))`
-  ## leaves of the shape) flatten to a single `(VA,):(1|0,)` mode — stride-1
+  ## register-enumeration dimensions, the first `flattenType(typeof(vShape))`
+  ## leaves of the shape) flatten to a single `(VA,):(1|0,)` dimension — stride-1
   ## (hardware register order), stride-0 kept for broadcast V — regardless
   ## of the operand's strides. The remaining leaves keep the view's order,
   ## compacted by stride value (CuTe make_ordered_layout) and scaled after
   ## the V registers so the rest block does not collide with them.
   ##
   ## This is CuTe's make_fragment_like (layout.hpp). The point of the
-  ## function: make_layout_like compacts by stride value across all modes,
-  ## so a row-major operand view would reorder the V modes away from the
+  ## function: make_layout_like compacts by stride value across all dimensions,
+  ## so a row-major operand view would reorder the V dimensions away from the
   ## mma hardware register order (a1/a2 swap). make_fragment_like pins the
-  ## V modes to the hardware V enumeration regardless of the operand
-  ## strides, and only the remaining modes follow the view's order.
+  ## V dimensions to the hardware V enumeration regardless of the operand
+  ## strides, and only the remaining dimensions follow the view's order.
   ##
   ## vShape: the atom's V shape value (getLayoutA().shape[1]). Its flat
   ## leaf count tells the macro how many leading leaves are V — tattletale
-  ## partitions flatten the atom's (T,V) V part into consecutive modes, so
+  ## partitions flatten the atom's (T,V) V part into consecutive dimensions, so
   ## the boundary must be stated (CuTe's make_fragment_like needs no such
-  ## argument because its V mode is a single nested mode-0).
+  ## argument because its V dimension is a single nested dimension-0).
   ##
   ## The output keeps the input's leaf structure, so the fragment is
   ## coordinate-compatible with the partition view (same shape, copyFrom
@@ -332,7 +332,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## Examples:
   ##   (V0,V1,RepeatM,RepeatK) view  →  V flattened stride-1, remainder compact
   ##   row-major operand          →  same V order (make_layout_like would
-  ##     reorder V after a fast rest mode and scramble the registers)
+  ##     reorder V after a fast rest dimension and scramble the registers)
   ##   broadcast V (stride-0)     →  (VA,):(0,)
   # Shape/stride type extraction with aliased-type support — same
   # getTypeInst → nnkObjectTy path as make_layout_like (layoutTypeArgs'
@@ -456,7 +456,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
     else:
       restStrides[i] *= vCosize
 
-  # ── emit: (VA, rest…) : (1|0, restStrides…) — V flattened to one mode ──
+  # ── emit: (VA, rest…) : (1|0, restStrides…) — V flattened to one dimension ──
   var outSh = nnkTupleConstr.newTree()
   outSh.add newLit(va)
   for i in vLeafCount ..< n:

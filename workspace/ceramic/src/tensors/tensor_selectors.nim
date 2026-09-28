@@ -143,7 +143,7 @@ macro repeat(elem: typed, n: static int): untyped =
 #  - the tile coords stay runtime, the coord is the runtime fact, the shape is the static fact
 
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
-  ## Keep tile modes, slice rest modes with coord.
+  ## Keep tile dimensions, slice rest dimensions with coord.
   ## CuTe zipped_divide(tensor, tiler)(repeat<R0>(_), append<R1>(coord, _))
   ##
   block:
@@ -164,7 +164,7 @@ template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
       make_view(tv.data +% toIntVal(offset), subLayout)
 
 template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
-  ## Slice tile modes with coord, keep rest modes.
+  ## Slice tile dimensions with coord, keep rest dimensions.
   ## CuTe zipped_divide(tensor, tiler)(append<R0>(coord, _), repeat<R1>(_))
   ##
   block:
@@ -190,8 +190,8 @@ template local_tile*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   inner_partition(tv, tiler, coord)
 
 template local_tile*(tv: AnyTensor; tiler, coord, proj: typed): untyped =
-  ## 4-arg local_tile with projection, strips unwanted modes before partitioning
-  ## Returns the tile at (tiler, coord) with unwanted modes stripped
+  ## 4-arg local_tile with projection, strips unwanted dimensions before partitioning
+  ## Returns the tile at (tiler, coord) with unwanted dimensions stripped
   ##
   ## CuTe local_tile(tensor, tiler, coord, proj) =
   ##   local_tile(tensor, dice(proj, tiler), dice(proj, coord))
@@ -212,8 +212,8 @@ template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int): untyped
     outer_partition(tv, tiler, coord)
 
 template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int; proj: typed): untyped =
-  ## 4-arg local_partition with projection, strips unwanted modes before partitioning
-  ## Returns the thread's partition at (tile, index) with unwanted modes stripped
+  ## 4-arg local_partition with projection, strips unwanted dimensions before partitioning
+  ## Returns the thread's partition at (tile, index) with unwanted dimensions stripped
   ##
   ## CuTe local_partition(tensor, tile, index, proj) =
   ##   local_partition(tensor, dice(proj, tile), index)

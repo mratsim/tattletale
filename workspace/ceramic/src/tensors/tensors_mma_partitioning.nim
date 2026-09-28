@@ -115,14 +115,14 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
     doAssert St.default[0] === 1,
       "thrfrg_A: operand must be col-major (stride (1, k-stride)), row-major thread" &
       " offsets in the partition are not layout-correct yet (fragment construction is," &
-      " but the partition's T-mode strides are not)"
+      " but the partition's T-dimension strides are not)"
   const unitM = thrM * atomM
   const unitK = thrK * atomK
   let ur = zipped_divide(L, makeIntTuple((unitM, unitK)))
-  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomM, atomK)))
-  let fragPart = compose(ap.mode(0), aLayout)
-  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
-              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
+  let ap = zipped_divide(ur.dimension(0), makeIntTuple((atomM, atomK)))
+  let fragPart = compose(ap.dimension(0), aLayout)
+  make_layout((fragPart.shape, ap.dimension(1).shape, ur.dimension(1).shape),
+              (fragPart.stride, ap.dimension(1).stride, ur.dimension(1).stride))
 
 func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (N, K) B tensor:
@@ -140,14 +140,14 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
     doAssert St.default[0] === 1,
       "thrfrg_B: operand must be col-major (stride (1, k-stride)), row-major thread" &
       " offsets in the partition are not layout-correct yet (fragment construction is," &
-      " but the partition's T-mode strides are not)"
+      " but the partition's T-dimension strides are not)"
   const unitN = thrN * atomN
   const unitK = thrK * atomK
   let ur = zipped_divide(L, makeIntTuple((unitN, unitK)))
-  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomN, atomK)))
-  let fragPart = compose(ap.mode(0), bLayout)
-  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
-              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
+  let ap = zipped_divide(ur.dimension(0), makeIntTuple((atomN, atomK)))
+  let fragPart = compose(ap.dimension(0), bLayout)
+  make_layout((fragPart.shape, ap.dimension(1).shape, ur.dimension(1).shape),
+              (fragPart.stride, ap.dimension(1).stride, ur.dimension(1).stride))
 
 func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.} =
   ## The fragment layout of the (M, N) C tensor:
@@ -167,10 +167,10 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
   const unitM = thrM * atomM
   const unitN = thrN * atomN
   let ur = zipped_divide(L, makeIntTuple((unitM, unitN)))
-  let ap = zipped_divide(ur.mode(0), makeIntTuple((atomM, atomN)))
-  let fragPart = compose(ap.mode(0), cLayout)
-  make_layout((fragPart.shape, ap.mode(1).shape, ur.mode(1).shape),
-              (fragPart.stride, ap.mode(1).stride, ur.mode(1).stride))
+  let ap = zipped_divide(ur.dimension(0), makeIntTuple((atomM, atomN)))
+  let fragPart = compose(ap.dimension(0), cLayout)
+  make_layout((fragPart.shape, ap.dimension(1).shape, ur.dimension(1).shape),
+              (fragPart.stride, ap.dimension(1).stride, ur.dimension(1).stride))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  get_slice: one thread's coordinates in the fragment layout
@@ -289,7 +289,7 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
       " elements per thread) exceeds the 63-bit store mask"
     doAssert tileM === tma.thrM * atomM and tileN === tma.thrN * atomN,
       "cStoreMask: the tile dims must be the thread layout's exact coverage" &
-      " (the partition contract gives the fragment no rest modes)"
+      " (the partition contract gives the fragment no rest dimensions)"
   if validM <= 0 or validN <= 0:
     return 0
 

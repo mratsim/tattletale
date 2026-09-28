@@ -58,8 +58,8 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:
-  ##   • an `int`   — decomposed column-major across all modes
-  ##   • a `tuple`  — inner product `coord·stride` per mode
+  ##   • an `int`   — decomposed column-major across all dimensions
+  ##   • a `tuple`  — inner product `coord·stride` per dimension
   ##   • a static `Int[V]` — same, compile-time constant
   ##
   ## External code must use this (or `layout(coord)`) rather than
@@ -70,11 +70,11 @@ template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
-  ## STRIDE-BASED: `(idx div stride) mod shape` per mode — only valid for
+  ## STRIDE-BASED: `(idx div stride) mod shape` per dimension — only valid for
   ## COMPACT (contiguous) layouts, matching CuTe's 3-arg
   ## `idx2crd(i, shape, stride)` which documents the same restriction
   ## ("This only works for compact shape+stride layouts"). For
-  ## non-compact shapes (e.g. the atom fragment (T, V) modes) use the
+  ## non-compact shapes (e.g. the atom fragment (T, V) dimensions) use the
   ## shape-based overload `idx2crd(shape, idx)`.
   ##
   ##   Cases for `(idx, shape, stride)`:
@@ -84,7 +84,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ##     shape != 1, stride != 0   →   (idx div stride) mod shape
   ##
   ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
-  ## check and handles both broadcast modes and trivial dimensions,
+  ## check and handles both broadcast dimensions and trivial dimensions,
   ## avoiding potential division-by-zero on stride-0.
   let shT = layoutTypeArgs(layout).shapeTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
@@ -102,7 +102,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
       else:
         `idx` div `st`
   else:
-    # Tuple shape: each mode gets its own guard
+    # Tuple shape: each dimension gets its own guard
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
@@ -126,7 +126,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
 proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
                      prefix: NimNode): NimNode =
   ## Decompose `idxExpr` over the shape type `shTy`; `prefix` is the
-  ## product of the preceding sibling modes' sizes. `value` is the shape
+  ## product of the preceding sibling dimensions' sizes. `value` is the shape
   ## value expression at the current nesting depth (shape[i0][i1]…).
   ## Module-level (not nested in the macro): a nested proc breaks
   ## macro-time emission.
@@ -145,13 +145,13 @@ proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
 
 macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ## Decompose a flat index into a coordinate over SHAPE — colexicographic
-  ## over the shape's leaf sizes (first mode fastest):
+  ## over the shape's leaf sizes (first dimension fastest):
   ##   c0 = (idx div 1)        mod s0
   ##   c1 = (idx div s0)       mod s1
   ##   c2 = (idx div (s0·s1))  mod s2
   ## ...
-  ## Nested shapes decompose recursively: each mode's flat index is split
-  ## by that mode's own sub-shape.
+  ## Nested shapes decompose recursively: each dimension's flat index is split
+  ## by that dimension's own sub-shape.
   ##
   ## Valid for ANY shape (compact or not) — unlike `idx2crd(layout, idx)`,
   ## which is stride-based and compact-only. Matches CuTe's 2-arg
