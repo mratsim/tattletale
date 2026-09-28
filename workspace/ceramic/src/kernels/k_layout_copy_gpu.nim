@@ -20,7 +20,9 @@ import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/hw_copy_nvidia
+import workspace/ceramic/src/hardware/h_copy_registry
+import workspace/ceramic/src/hardware/h_copy_properties
+import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/crucible
 
 {.experimental: "callOperator".}
@@ -44,14 +46,15 @@ template copyFromIfAsync*[T, Sh, StA, StB, StP](
     predicate: AnyTensor[bool, Sh, StP]) =
   ## Predicated **async** copy
   ##
-  ## This requires cp.async.commit_group to actually enqueue the copy
-  ## and cp.async.wait_group to wait for its completion
+  ## This requires commit_group to actually enqueue the copy
+  ## and wait_group to wait for its completion
 
+  const atom = getCopyAsyncAtom(T)
   when Sh.rank == 1:
-    cp.async.cg_shared_global_16B(dst, src, if predicate.data[0]: 16 else: 0)
+    copyIf(atom, dst, src, predicate.data[0])
   else:
     for i in 0 ..< size(predicate):
-      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), if predicate(_, i).data[0]: 16 else: 0)
+      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0])
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The copy partition
@@ -139,7 +142,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   ## S = Source, the gmem side of the copy.
   ##
   ## In use, each thread slices its source and destination chunks,
-  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ## then copyFromIfAsync issues one atom chunk per chunk position:
   ##
   ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
   ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)
@@ -158,7 +161,7 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ## D = Destination, the smem side of the copy.
   ##
   ## In use, each thread slices its source and destination chunks,
-  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ## then copyFromIfAsync issues one atom chunk per chunk position:
   ##
   ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
   ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)

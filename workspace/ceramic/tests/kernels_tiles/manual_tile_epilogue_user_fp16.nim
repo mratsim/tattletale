@@ -13,7 +13,7 @@
 
 import workspace/crucible
 import workspace/ceramic/tests/libtest_epilogues
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}

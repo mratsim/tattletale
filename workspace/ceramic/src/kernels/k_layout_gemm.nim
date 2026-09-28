@@ -149,13 +149,16 @@ import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/h_configgen
-import workspace/ceramic/src/hardware/h_registry
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/hardware/h_copy_registry
+import workspace/ceramic/src/hardware/h_copy_properties
+import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/ceramic/src/tensors/tensors_mma_partitioning
 import ./k_layout_copy_gpu
-import workspace/ceramic/src/hardware/hw_copy_nvidia
+
 import ./k_layout_fillwith_gpu
 import ./k_layout_gemm_epilogues
 import workspace/ceramic/src/macros/static_for
@@ -403,7 +406,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tileK = TileShape[2]
     blockSize = tma.threadCount()
     unitsA = (tileM * tileK) div (numPacked(CpAsyncAtom[TA]) * blockSize)
-    unitsB = (tileN * tileK) div (numPacked(CpAsyncAtom[TB]) * blockSize)
+    unitsB = (tileN * tileK) div (4 * blockSize)
   static:
     doAssert ShA.default[1] === ShB.default[1],
       "gemm_cta: the A and B input views must agree on the allocated K (" & $kView & " vs " &
@@ -501,8 +504,9 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     copyFromIfAsync(tBsB, tBgB, tBpBv)
 
     # one commit group for both loads
-    cp.async.commit_group()
-    cp.async.wait_group(0)
+    # one commit group for both loads
+    commit_group(getCopyAsyncAtom(TA))
+    wait_group(getCopyAsyncAtom(TB), 0)
     syncthreads() # Wait until all threads have copied their tiles
     tma.gemm_tiled(dFrag, sA, sB, TileShape, threadIdx)
     syncthreads() # Wait until all threads have processed gemm_tiled
