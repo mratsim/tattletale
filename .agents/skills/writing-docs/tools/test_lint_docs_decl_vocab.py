@@ -63,7 +63,8 @@ def main():
                   if r[1] == "banned-vocab"],
                  [(1, "banned-vocab")])
     ok &= expect("mode fires",
-                 [r for r in rules_at("## per-mode contribution of the coord\n")
+                 [r for r in rules_at("## per-mode contribution of the coord\n",
+                          name="workspace/ceramic/src/probe.nim")
                   if r[1] == "banned-vocab"],
                  [(1, "banned-vocab")])
     ok &= expect("posix mode quiet",

@@ -370,8 +370,11 @@ BANNED = [
     (r"\bextents?\b",
      None,
      "use size, dims, or bounds (Vulkan/CUDA ABI type names exempt)"),
+    # path-scoped: the mode ban is ceramic-only (tuples have dimensions there);
+    # crucible and positron keep their own vocabulary
     (r"\bmodes?\b",
-     lambda l: bool(re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
+     lambda l, path="": "ceramic" not in str(path) or bool(
+         re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
      "tuples and tensors have dimensions, use dimension (compiler, POSIX, and ABI senses exempt)"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
@@ -995,7 +998,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             m = re.search(pattern, hay)
             if not m:
                 continue
-            if exempt and exempt(low):
+            if exempt and (exempt(low, path) if exempt.__code__.co_argcount == 2 else exempt(low)):
                 continue
             findings.append(Finding(
                 path, n, "banned-vocab",
@@ -1031,7 +1034,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
         m = re.search(pattern, hay)
         if not m:
             continue
-        if exempt and exempt(low):
+        if exempt and (exempt(low, path) if exempt.__code__.co_argcount == 2 else exempt(low)):
             continue
         findings.append(Finding(
             path, n, "banned-vocab",

@@ -39,7 +39,7 @@ term of art), harness, smoke.
 | `lineage` | "from X", "descends from X", "the X-era form of the technique" ("ATM lineage" → "from ATM networks") |
 | `substrate` | "base", "foundation", or name the component ("continuation substrate" → "continuation base") |
 | `extent` (shape/launch sense) | "size", "dims", or "bounds" ("padded extent" → "padded size", "launch extents" → "launch dims"). Vulkan `VkExtent3D` and CUDA API doc quotes keep the ABI's own name |
-| `mode` (tuple/layout sense) | "dimension" — tuples and tensors have dimensions ("per-mode contribution" → "per-dimension contribution"). CuTe vocabulary leak |
+| `mode` (tuple/layout sense, ceramic only) | "dimension" — tuples and tensors have dimensions ("per-mode contribution" → "per-dimension contribution"). CuTe vocabulary leak; crucible and positron keep their own vocabulary |
 
 ## Line-end hazards from the reflow scanner
 

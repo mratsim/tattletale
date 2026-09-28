@@ -29,7 +29,7 @@
 ## The softmax is online: each kv block rescales the running O
 ## and row sum by exp2(m_prev − m_cur).
 ##
-## Variants:
+## Modes:
 ##   - decode (q_len == 1): causal off, each query attends the cached
 ##     rows [0, cache_seqlen)
 ##   - prefill (q_len ≥ 2): causal on over [0, cache_seqlen + q_len),
