@@ -9,20 +9,41 @@
 # ─── MoE decode slot-group walk (moe_fwd_decode_at) ──────────────────
 # ─────────────────────────────────────────────────────────────────────
 
-## Decode-regime routed expert-body walk on the ceramic Tile API,
-## one (token, slot) threadgroup recomputing the router in-group,
-## the expert's gate_up rows into `h_scratch`, the down projection into the fp32 partial row.
+## Decode-regime routed expert-body walk on the ceramic Tile API, one
+## (token, slot) threadgroup per call of `moe_fwd_decode_at`. Slot groups
+## plus the merge launch (in `moe_router`) compose the full MoE decode
+## pass, the megakernel composes this core inline.
 ##
-## Slot groups plus the merge launch (in `moe_router`) compose
-## the full MoE decode pass, the megakernel composes this core inline.
+## Per (token t, slot group y), El storage, fp32 mma over El operands,
+## H = hidden, E = experts, K = top-K, I = intermediate:
 ##
-## | contract   | value                                                                                              |
-## | ---------- | -------------------------------------------------------------------------------------------------- |
-## | router     | the `moeRoute` softmax form only, logits round to El, softmax + top-K in fp32, weights round to El |
-## | storage    | the element dtype, the decode composition's storage element                                        |
-## | partials   | row t·(K+1)+slot holds w[slot]·down(t, slot), slot < K, row t·(K+1)+K holds gateVal·shared_down    |
-## | partials 2 | the merge launch applies the single El round to the shared contribution                            |
-## | buffers    | no-copy page-aligned host memory with page-multiple byte lengths                                   |
+##   routed y < K, e = ids[y]:
+##   x (H) ──► [ router_w @ x, sigmoid softmax, top-K ] ──► ids (K), w (K)
+##   x (H) ──► [ (W_g | W_u)[e] @ x ] ──► (g, u) (I) ──► [ silu(g)·u ]
+##             one pass over shared x tiles            ──► El ──► h_scratch[t, y]
+##   h_scratch[t, y] ──► [ down_w[e] @ · ] ──► w[y]·(down) ──► partial[t, y] (H, fp32)
+##
+##   shared y = K:
+##   x (H) ──► [ shared_gate_vec_w @ x ] ──► sigmoid ──► gateVal (El round), SharedGate only
+##
+##   x (H) ──┬─► [ shared_gate_w @ x ] ──► g (I) ──┐
+##           └─► [ shared_up_w @ x ]   ──► u (I) ──┴─► [ silu(g)·u ]
+##                                                    ──► El ──► hs_scratch[t]
+##   hs_scratch[t] ──► [ shared_down_w @ · ] ──► gateVal·(down) ──► partial[t, K] (H, fp32)
+##
+## the shared expert keeps gate and up in separate weight tensors, two
+## boxes over the shared x tiles (the routed gate_up_w is one fused (E, 2I, H)
+## tensor, the g half at 0:I).
+##
+## Contract:
+##   - partial rows: t·(K+1)+y holds w[y]·down(t, y) for y < K,
+##     t·(K+1)+K holds gateVal·shared_down, the merge launch applies the
+##     single El round to the shared contribution
+##   - routing is the `moeRoute` softmax form only, logits round to El,
+##     softmax + top-K in fp32, weights round to El
+##   - buffers no-copy page-aligned host memory, page-multiple byte lengths
+##   - static asserts below: H mod 16 == 0, H mod 32 == 0, I mod 32 == 0,
+##     E mod 64 == 0 (see their messages for the violated-shape failure)
 
 import ../math_consts
 import workspace/crucible
@@ -31,29 +52,28 @@ import ./moe_router
 import ../tile_widen
 import ../tile_io_rows
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # ─── Local device extensions: the activation and partial arithmetic ──
 
 proc siluMulElemEager[El; R, C: static int; A: static MmaAtom](
     dst: var RtLeft[El, R, C, A],
     gHalf, uHalf: RtLeft[float32, R, C, A]) {.device.} =
-  ## Expert activation, `dst[r][c] = bf16(silu(gHalf[r][c]) · uHalf[r][c])` over
-  ## the fp32 g/u accumulator operands. The frag walk follows the loadTile
-  ## lane→element mapping, the operands agreeing elementwise.
+  ## `dst[r][c] = El(silu(gHalf[r][c]) · uHalf[r][c])` over the fp32 g/u
+  ## accumulator operands, the frag walk following the loadTile lane→element
+  ## mapping so the operands agree elementwise.
   ##
-  ## Eager name separates the two `siluMulElem` contracts.
+  ## Distinct from `attn_ssm/gated_delta_net_o_norm.nim`'s `siluMulElem`,
+  ## which multiplies the unrounded f32 silu:
   ##
-## | proc                                                  | silu operand at the multiply |
-## | ----------------------------------------------------- | ---------------------------- |
-## | `siluMulElemEager` (this module)                      | the bf16-rounded silu        |
-## | `attn_ssm/gated_delta_net_o_norm.nim`'s `siluMulElem` | the unrounded f32 silu       |
+  ##   | proc                      | silu operand at the multiply |
+  ##   | ------------------------- | ---------------------------- |
+  ##   | `siluMulElemEager` (here) | the El-rounded silu          |
+  ##   | gated_delta_net_o_norm    | the unrounded f32 silu       |
   ##
   ## Rounding, per storage element:
-  ## - the silu result rounds to bf16 (RNE)
-  ## - the bf16-rounded silu times the fp32 up operand rounds once at the store
-  ##   (the eager chain)
+  ## - the silu result rounds to El (RNE)
+  ## - the El-rounded silu times the fp32 up operand rounds once at the store
   dst.map2(gHalf, uHalf) do:
     let g = x
     let s = g / (1.0'f32 + exp2(-g * Log2e))
@@ -65,21 +85,18 @@ proc storeRowScaledF32[R, C: static int; A: static MmaAtom](
     dst: ptr UncheckedArray[float32],
     tile: RtLeft[float32, R, C, A],
     rowBase, rowStride, colTile: int32, scale: float32) {.device.} =
-  ## Stores the accumulator's value row, scaled, at one fp32 partial row.
-  ## The write is `dst[rowBase·rowStride + colTile·C + c] = scale · accumulator row 0`.
+  ## Stores accumulator row 0, scaled, at one fp32 partial row:
+  ## `dst[rowBase·rowStride + colTile·C + c] = scale · accumulator row 0`.
   ##
-  ## The tile's rows above the value row carry the operand rows' zero fill,
-  ## not written, one row per call, no sentinel bookkeeping at the call sites.
+  ##   | element (c, v) of tile row 0                     | written when |
+  ##   | ------------------------------------------------ | ------------ |
+  ##   | dst[rowBase·rowStride + colTile·C + m·N + c + v] | `row == 0`   |
+  ##   | stored value                                     | scale·tile   |
   ##
-  ## Callers load the operand rows with `rowLimit = 1`, so accumulator row 0
-  ## carries the projection's value and the rows above it are exact zeros.
-  ##
-  ## - the store guard requires `row == 0`, exactly one lane per stored element
-  ## - the GDN y store keeps the same single-writer spelling
-## | element (c, v) of tile row 0                     | written when     |
-## | ------------------------------------------------ | ---------------- |
-## | dst[rowBase·rowStride + colTile·C + m·N + c + v] | `row == 0`       |
-## | stored value                                     | scale·tile value |
+  ## One row per call, the rows above row 0 carry the operands' zero fill
+  ## and are not written (callers load with rowLimit = 1). The store guard
+  ## `row == 0` keeps exactly one lane per stored element, the same
+  ## single-writer spelling as the GDN y store.
   const M = A.getM()
   const N = A.getN()
   const colTiles = C div N
@@ -108,46 +125,47 @@ proc moe_fwd_decode_at*[El; H, E, K, I: static int; Scale: static float32;
     hs_scratch: ptr UncheckedArray[El],    # (num_tokens, I) working buffer
     scores_scratch: ptr UncheckedArray[float32], # (num_tokens, K+1, E) router selection scratch
     t, y: int32) {.device.} =
-  ## One (token, slot) pair's decode walk, `t` the token, `y` the slot group, routed y < K, the shared group y = K.
-  ## `moe_fwd_decode` is the grid-driven wrapper, the megakernel composes this core inline.
+  ## One (token, slot) pair's decode walk, `t` the token, `y` the slot
+  ## group, routed y < K, the shared group y = K. `moe_fwd_decode` is the
+  ## grid-driven form, the megakernel composes this core inline.
+  ## Shapes and dtypes on the pointer comments, H/E/K/I/Scale/SharedGate
+  ## static compile-time (H hidden, E experts, K top-K, I intermediate).
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ## Routed group y < K, e = ids[y]:
   ##
-  ## | parameter                     | shape, dtype, layout                                                                                                                                                    | producer                             | unit               |
-  ## | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
-  ## | partial                       | (num_tokens, K+1, H) f32, row-major, the fp32 partials, the row t·(K+1)+y written by this proc's slot group, the merge launch in moe_router applies the single El round | this proc, the merge launch reads it | f32                |
-  ## | x                             | (num_tokens, H) El, row-major, token `t`'s activation row                                                                                                               | host-computed                        | El                 |
-  ## | router_w                      | (E, H) El, row-major, the router weight                                                                                                                                 | host-computed                        | El                 |
-  ## | gate_up_w                     | (E, 2I, H) El, row-major, fused g/up, the g half at 0:I                                                                                                                 | host-computed                        | El                 |
-  ## | down_w                        | (E, H, I) El, row-major, the down projection                                                                                                                            | host-computed                        | El                 |
-  ## | shared_gate_w                 | (I, H) El, row-major, the shared gate projection                                                                                                                        | host-computed                        | El                 |
-  ## | shared_up_w                   | (I, H) El, row-major, the shared up projection                                                                                                                          | host-computed                        | El                 |
-  ## | shared_down_w                 | (H, I) El, row-major, the shared down projection                                                                                                                        | host-computed                        | El                 |
-  ## | shared_gate_vec_w             | (1, H) El, row-major, read only when the SharedGate static is true, non-null then is the caller's obligation                                                            | host-computed                        | El                 |
-  ## | h_scratch                     | (num_tokens, K, I) El, row-major, working buffer, the routed slot's fp16(act(g)·u) written at h_scratch[t, y]                                                           | this proc                            | El                 |
-  ## | hs_scratch                    | (num_tokens, I) El, row-major, working buffer, the shared group writes there                                                                                            | this proc                            | El                 |
-  ## | t, y                          | the token index and the slot group, y < K routed, y = K the shared group                                                                                                | device-computed (the wrapper's grid) | tokens / slots     |
-  ## | H, E, K, I, Scale, SharedGate | hidden, expert count, top-K, intermediate width, the routing-weight scale and the shared-gate switch, static compile-time, shape preconditions tabled below             | compile-time                         | elements / experts |
+  ##   x (H) ──► [ router_w @ x, sigmoid softmax, top-K ] ──► ids (K), w (K)
   ##
-  ## Slot-group behavior by the y index
+  ##   x (H) ──► [ (W_g | W_u)[e] @ x ] ──► (g, u) (I) ──► [ silu(g)·u ]
+  ##             one pass over shared x tiles            ──► El ──► h_scratch[t, y]
   ##
-  ## | stage        | behavior                                                                                                                                                   |
-  ## | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  ## | routed y < K | recompute the `moeRoute` router in-group, walk expert ids[y]'s gate_up rows into h_scratch[t, y] and the down projection, store the fp32 partial w[y]·down |
-  ## | shared y = K | recompute the shared-expert sigmoid scalar, walk the shared expert into hs_scratch[t], store gateVal·shared_down                                           |
-  ## | partials     | the module header's partial-buffer contract, the merge launch applies the single El round                                                                  |
+  ##   h_scratch[t, y] ──► [ down_w[e] @ · ] ──► w[y]·(down) ──► partial[t, y] (H, fp32)
   ##
-  ## Instantiation contract:
+  ## Shared group y = K:
+  ##
+  ##   x (H) ──► [ shared_gate_vec_w @ x ] ──► sigmoid ──► gateVal (El round)
+  ##              read only when SharedGate, non-null then is the caller's obligation
+  ##
+  ##   x (H) ──┬─► [ shared_gate_w @ x ] ──► g (I) ──┐
+  ##           └─► [ shared_up_w @ x ]   ──► u (I) ──┴─► [ silu(g)·u ]
+  ##                                                    ──► El ──► hs_scratch[t]
+  ##
+  ##   hs_scratch[t] ──► [ shared_down_w @ · ] ──► gateVal·(down) ──► partial[t, K] (H, fp32)
+  ##
+  ## Contract:
+  ## - the silu result rounds to El before the multiply, the product rounds
+  ##   once more at the h_scratch/hs_scratch store (`siluMulElemEager`)
+  ## - the partial rows stay fp32 unrounded, the merge launch applies the
+  ##   single El round (the module header's partial-row contract)
   ## - each static binding set of this core needs its own call-site line
   ##
-  ## shape preconditions, each one a static assert below:
+  ## Static asserts (see their messages for the violated-shape failure):
   ##
-## | precondition  | a violated shape's failure                                             |
-## | ------------- | ---------------------------------------------------------------------- |
-## | H mod 16 == 0 | columns silently dropped from every mma dot                            |
-## | H mod 32 == 0 | the down walk's 32-wide column tiles silently truncate H               |
-## | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
-## | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
+  ##   | precondition  | a violated shape's failure                                             |
+  ##   | ------------- | ---------------------------------------------------------------------- |
+  ##   | H mod 16 == 0 | columns silently dropped from every mma dot                            |
+  ##   | H mod 32 == 0 | the down walk's 32-wide column tiles silently truncate H               |
+  ##   | I mod 32 == 0 | h_scratch rows left unwritten, stale values re-read on the next launch |
+  ##   | E mod 64 == 0 | the 64-expert router chunk mis-tiles                                   |
   static:
     doAssert H mod 16 == 0,
       "moe_fwd_decode_at: H must be a multiple of the 16-wide K step"
@@ -247,27 +265,19 @@ proc moe_fwd_decode*[El; H, E, K, I: static int; Scale: static float32;
     hs_scratch: ptr UncheckedArray[El],    # (num_tokens, I) working buffer
     scores_scratch: ptr UncheckedArray[float32]) {.device.} =
       # scores_scratch holds the (num_tokens, K+1, E) router selection scratch
-  ## Grid-driven form of `moe_fwd_decode_at`.
-  ## Grid (num_tokens, K+1, 1) at 32 lanes, one (token, slot) pair per threadgroup.
+  ## Grid (num_tokens, K+1, 1), 32 lanes, one (token, slot) pair per
+  ## threadgroup, `t` and `y` from the grid. Shapes and dtypes on the
+  ## pointer comments, H/E/K/I/Scale/SharedGate static compile-time.
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call,
-  ## token index and slot group arriving from the grid:
+  ## `moe_fwd_decode_at`'s diagram applies per grid point, the score rows
+  ## staged at scores_scratch[t, y] (one (K+1)·E fp32 slice per slot-group
+  ## threadgroup, content may be uninitialized):
   ##
-  ## | parameter                     | shape, dtype, layout                                                                                                                                    | producer      | unit               |
-  ## | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
-  ## | partial                       | (num_tokens, K+1, H) f32, row-major, the fp32 partials, produced by this kernel's slot groups, the merge launch applies the single El round             | this kernel   | f32                |
-  ## | x                             | (num_tokens, H) El, row-major, the layer's activations                                                                                                  | host-computed | El                 |
-  ## | router_w                      | (E, H) El, row-major, the router weight                                                                                                                 | host-computed | El                 |
-  ## | gate_up_w                     | (E, 2I, H) El, row-major, fused g/up, the g half at 0:I                                                                                                 | host-computed | El                 |
-  ## | down_w                        | (E, H, I) El, row-major, the down projection                                                                                                            | host-computed | El                 |
-  ## | shared_gate_w                 | (I, H) El, row-major, the shared gate projection                                                                                                        | host-computed | El                 |
-  ## | shared_up_w                   | (I, H) El, row-major, the shared up projection                                                                                                          | host-computed | El                 |
-  ## | shared_down_w                 | (H, I) El, row-major, the shared down projection                                                                                                        | host-computed | El                 |
-  ## | shared_gate_vec_w             | (1, H) El, row-major, read only when the SharedGate static is true, non-null then is the caller's obligation                                            | host-computed | El                 |
-  ## | h_scratch                     | (num_tokens, K, I) El, row-major, working buffer, this kernel writes the routed slot activations there                                                  | this kernel   | El                 |
-  ## | hs_scratch                    | (num_tokens, I) El, row-major, working buffer, the shared group writes there                                                                            | this kernel   | El                 |
-  ## | scores_scratch                | (num_tokens, K+1, E) f32, row-major, the router selection's staged score rows, one E-slice per slot-group threadgroup, the content may be uninitialized | this kernel   | f32                |
-  ## | H, E, K, I, Scale, SharedGate | hidden, expert count, top-K, intermediate width, the routing-weight scale and the shared-gate switch, static compile-time                               | compile-time  | elements / experts |
+  ##   x (H) ──► [ moeRoute per slot group ] ──► ids, w ──► partial[t, y] (H, fp32)
+  ##
+  ## Produced: partial (K+1 rows per token), h_scratch (K rows),
+  ## hs_scratch (1 row), scores_scratch. The merge launch in `moe_router`
+  ## applies the single El round.
   let t = int32(threadgroup_position_in_grid.x)
   let y = int32(threadgroup_position_in_grid.y)
   moe_fwd_decode_at[El, H, E, K, I, Scale, SharedGate](

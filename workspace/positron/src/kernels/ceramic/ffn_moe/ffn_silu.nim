@@ -55,8 +55,7 @@ import workspace/ceramic
 import ../math_consts
 import ../tile_io_rows
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════
 #  Local device extensions: the tile API gaps the fusion needs
@@ -100,13 +99,17 @@ proc silu_and_mul_fwd*(
     M, N: int32,
     actLimit: float32,
     TileC: static int) {.device.} =
-  ## Computes one 8×TileC silu-mul tile per threadgroup: grid
-  ## (N div TileC, ceil(M/8)), `tx` the TileC-col block, `ty` the
-  ## 8-row block. The gate tile loads at X col origin tx, the up tile
-  ## at col origin tx + N div TileC, the store writes the out tile at
-  ## col origin tx (see the module doc). Rows ≥ M are zero-filled on
-  ## load and skipped on store, so partial-M batches need no host
-  ## padding. `TileC` must divide N.
+  ## Grid (N div TileC, ceil(M/8)), 32 lanes, tx = the TileC-col
+  ## block, ty = the 8-row block.
+  ##
+  ##              X columns (2N)
+  ##              ┌──────────────┬─────────────────┐
+  ##   8-row  ─►  │ gate tx·TileC │ up N + tx·TileC │   silu(gate)·up ─► Out tx
+  ##   block      └──────────────┴─────────────────┘
+  ##
+  ## Out tile = (8, TileC) at Out col block tx, fp16.
+  ## Rows >= M load zero-filled and skip the store, partial-M
+  ## batches need no host padding. TileC must divide N.
   let tx = int32(threadgroup_position_in_grid.x)
   let ty = int32(threadgroup_position_in_grid.y)
   let gdX = X.gd(shape = (-1, -1, -1, -1), stride = (8 * 2 * N, 0, 2 * N, 1))

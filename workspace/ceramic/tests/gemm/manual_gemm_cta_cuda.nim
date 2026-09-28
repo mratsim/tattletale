@@ -22,17 +22,14 @@
 ##     workspace/ceramic/tests/gemm/manual_gemm_cta_cuda.nim
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_constructors
-import workspace/ceramic/src/layout_algebra/layout_indexing
-import workspace/ceramic/src/layout_algebra/layout_algebra
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/tensors/tensors_mma_partitioning
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/layout_algebra/ptr_arithmetic
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib

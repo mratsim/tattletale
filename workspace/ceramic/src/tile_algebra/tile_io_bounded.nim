@@ -24,9 +24,9 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tile_io
+import ./tiles
+import ./tile_config
+import ./tile_io
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The zero fill value (fp16-safe)

@@ -8,23 +8,31 @@
 
 # ############################################################
 #
-#     GGUF attention launchers (grouped_query_attention_gguf)
+#     GGUF attention (grouped_query_attention_gguf)
 #
 # ############################################################
 
-## GGUF attention launcher set, one Metal block `ggufAttnMsl` hosting
-## these launchers, all at D = 128:
-## - the quantized-linear launchers, one per GGufScheme
-## - the fused qk-norm+rope launcher
-## - the paged-attention launcher
-## plus the device kernels they call. Each launcher's first parameter
-## is the output buffer. engine.run binds the separate outBuf
-## argument to it and the args tuple to the rest.
+## GGUF attention kernels, all at D = 128, in the Metal block
+## `ggufAttnMsl`:
+## - quantized linear projection, one per GGufScheme
+## - fused qk-norm + rope
+## - paged attention
 ##
-## Orchestration across kernels (projection → qk-norm+rope → cache
-## write → paged attention → o_proj) is the caller's job.
+## Pipeline (tensors on edges, ops in boxes):
+##
+##   x (T, 2048) ──► [ gguf-linear, per GGufScheme ] ──► q, k, v
+##   q, k ──► [ qk-norm + NEOX rope ] ──► q', k'
+##   q', k', v + the paged cache ──► [ paged attention ] ──► o (T, H, 128)
+##
+
+## Every kernel takes the output buffer as first parameter;
+## engine.run binds the separate outBuf argument to it and the
+## args tuple to the rest.
+##
+## Orchestration (projection, qk-norm+rope, cache write, paged
+## attention, o_proj) is the caller's job.
 ## Requires H % 8 == 0, Nkv % 8 == 0 and the paged attention's
-## compiled-in page_size 16, a static binding of the launcher.
+## compiled-in page_size 16.
 
 import workspace/crucible
 import ../linear_quant/linear_gguf

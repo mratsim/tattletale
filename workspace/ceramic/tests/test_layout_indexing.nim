@@ -2,11 +2,7 @@
 ##
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
-import ../src/int_tuples
-import ../src/layout_algebra/layouts
-import ../src/layout_algebra/layout_indexing_cpu
-import ../src/layout_algebra/layout_indexing_gpu
-import ../src/layout_algebra/layout_indexing
+import ../src/layout_algebra
 import std/typetraits
 import ./layouts_testutils
 

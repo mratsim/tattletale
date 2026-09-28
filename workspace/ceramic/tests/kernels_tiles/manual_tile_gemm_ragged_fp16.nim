@@ -21,9 +21,9 @@
 
 import std/[strformat, math]
 import workspace/crucible
-import ../tile_test_utils
-import ../libtest_epilogues
-import ../../src/kernels/k_tile_gemm
+import workspace/ceramic/tests/tile_test_utils
+import workspace/ceramic/tests/libtest_epilogues
+import workspace/ceramic/src/kernels/k_tile_gemm
 
 const raggedMsl = metal:
   proc fusedMatmul(D: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16], N, K, M: int32) {.global.} =

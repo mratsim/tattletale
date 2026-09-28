@@ -258,9 +258,10 @@ proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
   case kind
   of gbkThreadIndexInThreadgroup:
-    # x-major flat thread index, parenthesized so a trailing `* k` cannot
-    # mis-associate into `+ get_local_id(0) * k`.
-    # OpenCL index builtins are size_t; the canonical Nim type is int, so the spelling casts.
+    # x-major flat thread index, parenthesized so a trailing `* k`
+    # cannot mis-associate into `+ get_local_id(0) * k`.
+    # OpenCL index builtins are
+    # size_t, the canonical Nim type is int, the printer casts.
     "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
   of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
      gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup,
@@ -428,8 +429,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkSimdShuffleDown:
         # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
         # function. Apple's 1.2 runtime rejects it, so this spelling is
-        # pinned as emitted text only. The delta operand is uint; int-literal
-        # args get the U suffix (the canonical Nim arg is int).
+        # pinned as emitted text only. The delta operand is uint,
+        # int-literal args get the U suffix (the canonical Nim arg is int).
         var delta = ctx.genOpenCL(ast.cArgs[1])
         if delta.allCharsInSet(Digits):
           delta.add 'U'

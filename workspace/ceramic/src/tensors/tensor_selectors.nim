@@ -10,7 +10,7 @@ import std/macros
 
 import workspace/ceramic/src/macros/varargs_to_par
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/tensors/tensor_datatypes
+import ./tensor_datatypes
 
 
 proc pop(tree: var NimNode): NimNode {.compileTime.} =

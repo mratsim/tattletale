@@ -16,10 +16,12 @@ import std/macros
 import std/typetraits
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layout_indexing_gpu
-import workspace/ceramic/src/layout_algebra/layouts
+import ./layout_indexing_cpu
+import ./layout_indexing_gpu
+import ./layouts
 import workspace/ceramic/src/macros/varargs_to_par
 
+export layout_indexing_cpu
 export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════

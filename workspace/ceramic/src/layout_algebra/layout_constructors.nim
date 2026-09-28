@@ -12,7 +12,7 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts_datatypes
+import ./layouts_datatypes
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides — canonical column-major strides

@@ -12,27 +12,28 @@
 #
 # ############################################################
 
-## Mixture-of-experts forward on the ceramic Tile API, the runtime-config
-## entry `moe_fwd`, the fused routed-plus-shared expert body whose section
-## dims derive from `gdn_moe_layer_graph`'s MoE section.
+## Fused routed-plus-shared MoE forward on the ceramic Tile API, the
+## runtime-config entry `moe_fwd`, the dims from the caller's config.
 ##
-## - experimental, not a production kernel, known gaps below
-## - the dims come from the caller's config, the shape contract named out below
+## Per token t, one threadgroup, fp32 mma over fp16 operands:
 ##
-## Per-token dataflow, fp32 arithmetic over fp16-rounded inputs:
+##   x (H) ──► [ router_w @ x, 64-expert chunks ] ──► logits (E)
+##           ──► sigmoid ──► scores (E)
+##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
+##           ──► w = s / (Σs + 1e-20) · routed_scaling
 ##
-##   router   x --> router_w @ --> logits (n_routed_experts)
-##            --> sigmoid --> s
-##            top-K of s (lowest-index tiebreak)
-##            --> w = s/(sum(w)+1e-20)·routed_scaling
-##   experts  per slot e = ids[slot]
-##            x --> gate_up_w[e] @ --> (gHalf, uHalf)
-##                  --> h = act(gHalf)·uHalf (moe_intermediate)
-##                  --> fp16 round --> h_scratch[t, slot]
-##            routed = Σ_slot w[slot]·(down_w[e] @ h_scratch[t, slot])
-##   shared   x --> shared_gate_up_w[s] @ --> (gs, us)
-##                  --> hs = act(gs)·us --> fp16 round --> hs_scratch[t, s]
-##            out_r[t] = fp16(routed + Σ_s shared_down_w[s] @ hs_scratch[t, s])
+##   x (H) ──► [ (W_g | W_u)[e] @ x ] ──► (g, u) (I) ──► [ act(g)·u ]
+##             e = ids[slot], one pass over shared x tiles
+##                                                     ──► fp16 ──► h_scratch[t, slot] (I)
+##
+##   x (H) ──► [ (W_g | W_u)[s] @ x ] ──► (g, u) (I) ──► [ act(g)·u ]
+##             shared expert s
+##                                                     ──► fp16 ──► hs_scratch[t, s] (I)
+##
+##   h_scratch[t, slot] ──► [ down_w[ids[slot]] @ · ] ──┐
+##                                ──► Σ_slot w[slot]·(down) ──► [ + ]
+##   hs_scratch[t, s]   ──► [ shared_down_w[s] @ · ] ──┘          ──► fp16 ──► out_r[t] (H)
+##                                ──► Σ_s (down)
 ##
 ## Buffers, all fp16, every size a runtime dim:
 ##
@@ -46,21 +47,16 @@
 ##   | h_scratch  | (num_tokens, top_k, moe_intermediate), scratch   |
 ##   | hs_scratch | (num_tokens, n_shared_experts, moe_intermediate) |
 ##
-## The gate_up shapes fuse the g and up halves, g at 0:moe_intermediate.
-##
+## gate_up shapes fuse the g and up halves, g at 0:moe_intermediate.
 ## Ragged tails run through `loadTileBounded`/`storeTileMasked`.
 ##
-## The compiled-in fixed maxima, `n_routed_experts <= ScoreChunk·ScoreChunks`
-## and `top_k <= MaxTopK`, are misconfig guards, not shape forks.
-##
-## - the register tiles size once for the largest accepted config
-## - a config beyond one stops before launch, the device half drops it
-##   and the host companion `moeFwdConfigGuard` raises naming the dim
+## Compiled-in fixed maxima, a config beyond one stops before launch,
+## the device half drops it and the host companion `moeFwdConfigGuard`
+## raises naming the dim:
+##   - n_routed_experts <= ScoreChunk·ScoreChunks (512), top_k <= MaxTopK
 ##
 ## Known production gaps (documented, not fixed):
-##   - one token per threadgroup:
-##     no expert-batched B tiles, no x
-##     reuse across the per-slot projections (x re-read from global per N-tile)
+##   - one token per threadgroup, no x reuse across per-slot projections
 ##   - the router weight is fp16 (the reference router is fp32)
 ##   - the top-K is a fixed-pass register selection, no score sorting output
 
@@ -69,8 +65,7 @@ import workspace/ceramic
 import ../math_consts
 import ../tile_io_rows
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # Tile atoms are spelled explicitly, no defaults:
 # - the explicit atom locks the tile's codegen across call sites
@@ -87,20 +82,6 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 # ═════════════════════════════════════════════════════════════════════
 #  The kernel, the runtime-config entry
 #  ═════════════════════════════════════════════════════════════════════
-
-## | aspect         | contract                                                 |
-## | ---------------- |
-## | shape regime   | runtime tile counts over fixed tile shapes, masked tails |
-## | kernel config  | the model config's values as runtime arguments           |
-## | register tiles | the compiled-in fixed max, ragged tails bounded/masked   |
-## | tile-internal  | frag walks over the fixed register tiles, static bounds  |
-##
-## Compiled-in fixed maxima, a config beyond one stops and reports:
-##   - 64 experts per score chunk, at most 8 chunks, n_routed_experts <= 512
-##   - at most MaxTopK routing slots
-##   the guard's two halves, the device entry drops the launch, the host
-##   companion `moeFwdConfigGuard` raises naming the offending dim
-##
 
 type
   MoeAct* = enum
@@ -130,10 +111,10 @@ proc actMulFp16[A: static MmaAtom](
   ## - maSilu, g / (1 + exp2(−g·log2e)), the silu form
   ## - maGeluTanh, 0.5·g·(1 + tanh(s)), s = InvSqrt2Pi·(g + GeluCoef·g³)
   ##
-  ## The gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
+  ## the gelu tanh evaluates through exp2, tanh(s) = 1 − 2/(e²ˢ+1),
   ## stable at both saturation ends, fp32 end to end like the silu variant.
   ##
-  ## The frag walk uses the loadTile lane→element mapping, so the operands agree elementwise.
+  ## the frag walk uses the loadTile lane→element mapping, the operands agree elementwise.
   ## Tile-internal, the walk bounds stay static.
   dst.map2(gHalf, uHalf) do:
     let g = x
@@ -159,7 +140,7 @@ proc gatherSigmoidScores[A, AL: static MmaAtom](
   ## - expert indices at or beyond `eCount`, the last chunk's tail, are
   ##   set to −float32 max so they can never win the top-K
   ##
-  ## The row-0 logits live in the accumulator's lanes {0, 1, 8, 9},
+  ## the row-0 logits live in the accumulator's lanes {0, 1, 8, 9},
   ## 2 per col-frag, the destination lane pulls its pair from source lane
   ##
   ## `d and 9`, the row-0 owner of the same col pair under the universal
@@ -312,68 +293,40 @@ proc moe_fwd*(
     n_shared_experts: int32,
     routed_scaling: float32,
     activation: static MoeAct) {.device.} =
-  ## Runtime model-config values drive the module doc's chain through this entry.
+  ## Grid (num_tokens, 1, 1), 32 lanes, one token per threadgroup, the
+  ## module header's dataflow one full pass per token. All tensors fp16,
+  ## row-major, every size a runtime dim, shapes on the pointer comments.
   ##
-  ## Routing, the sigmoid skeleton.
+  ##   x (H) ──► [ router_w @ x, ceil(E/64) chunks ] ──► sigmoid ──► scores (E)
+  ##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
+  ##           ──► w = s / (Σs + 1e-20) · routed_scaling
   ##
-  ##   logits → sigmoid → top-K (lowest-index tiebreak)
-  ##          → w = s/(sum(w)+1e-20)·routed_scaling
+  ##   x (H) ──► [ (W_g | W_u)[e] @ x ] ──► (g, u) (I) ──► [ act(g)·u ]
+  ##             e = ids[slot]                          ──► fp16 ──► h_scratch[t, slot]
+  ##   x (H) ──► [ (W_g | W_u)[s] @ x ] ──► (g, u) (I) ──► [ act(g)·u ]
+  ##             shared s                               ──► fp16 ──► hs_scratch[t, s]
   ##
-  ## Expected input, per model config row, all tensors fp16, row-major,
-  ## every size a runtime dim. Weights and x come from the checkpoint,
-  ## the two scratch buffers and out_r are written by this kernel.
+  ##   h_scratch[t, slot] ──► [ down_w[ids[slot]] @ · ] ──┐
+  ##                                ──► Σ_slot w[slot]·(down) ──► [ + ]
+  ##   hs_scratch[t, s]   ──► [ shared_down_w[s] @ · ] ──┘          ──► fp16 ──► out_r[t] (H)
+  ##                                ──► Σ_s (down)
   ##
-  ## - x, shape (num_tokens, hidden), one token per threadgroup
-  ## - router_w, shape (n_routed_experts, hidden)
-  ## - gate_up_w, shape (n_routed_experts, 2·moe_intermediate, hidden),
-  ##   fused g/up, the g half at 0:moe_intermediate
+  ## the gate/up mma chains feed from one shared x tile pass per (32, 32)
+  ## accumulator, g rows at gate_up_w row block 0, u rows at block 1.
   ##
-  ## - down_w, shape (n_routed_experts, hidden, moe_intermediate)
-  ## - shared_gate_up_w, shape (n_shared_experts, 2·moe_intermediate, hidden), fused g/up
-  ## - shared_down_w, shape (n_shared_experts, hidden, moe_intermediate)
-  ##
-  ## - h_scratch, shape (num_tokens, top_k, moe_intermediate), working buffer
-  ## - hs_scratch, shape (num_tokens, n_shared_experts, moe_intermediate), working buffer
-  ##
-  ## Scalar arguments:
-  ##
-  ## - num_tokens, hidden, n_routed_experts, moe_intermediate, top_k,
-  ##   n_shared_experts, int32, host-derived from the model config,
-  ##   unit tokens / elements / experts / slots
-  ## - routed_scaling, float32, host-computed, dimensionless
-  ## - activation, maSilu or maGeluTanh, a static binding of the entry,
-  ##   one instantiation per member
-  ## A config beyond the compiled-in fixed maxima, n_routed_experts >
-  ## ScoreChunk·ScoreChunks (512), top_k > MaxTopK or top_k > n_routed_experts, or a non-positive dim, stops before launch.
-  ##
-  ## The entry drops the launch, `moeFwdConfigGuard`
-  ## reports naming the offending dimension, the caller
-  ## runs the companion before each `engine.run` launch.
-  ##
-  ## Output:
-  ##
-  ## - h_scratch and hs_scratch hold fp16(act(g)·u) per routed slot,
-  ##   the shared activations at hs_scratch[t, s]
-  ## - out_r, per token t the fp16 of the weighted sum
-  ##   Σ_slot w[slot]·(down_w[ids[slot]] @ h_scratch[t, slot]) +
-  ##   Σ_s shared_down_w[s] @ hs_scratch[t, s]
-  ##
-  ## Ragged-native over the runtime dims:
-  ##   - the K walks run ceil(dim / tileK) steps, each load bounded
-  ##     to the raw dim, out-of-range lanes hold the zero fill, a zero
-  ##     operand leaves the mma accumulator untouched
-  ##   - the N walks over moe_intermediate and hidden run ceil(dim / 32) tiles,
-  ##     the stores masked at the real size
-  ##   - the router score chunks run ceil(n_routed_experts / ScoreChunk) passes,
-  ##     the last chunk's tail experts masked to −float32 max
-  ##
-  ## Grid (num_tokens, 1, 1) at 32 lanes, one token per threadgroup,
-  ## register budget near 2 live 32×32 fp32 accumulators
-  ## (the gHalf/uHalf pair) plus transients.
-  # - the register tiles are compiled-in maxima, a config beyond one
-  #   would write past them
-  # - the entry drops the launch, the host companion `moeFwdConfigGuard`
-  #   reports and the caller runs it before each launch
+  ## Contract:
+  ## - activation, maSilu or maGeluTanh, one instantiation per member
+  ## - the h_scratch/hs_scratch rounds are one fp16 RNE per element
+  ##   (`actMulFp16`), the out_r round one fp16 RNE at the final add
+  ## - ragged-native over the runtime dims: the K walks bound loads to
+  ##   the raw dim, zero-filled lanes leave the mma accumulator untouched,
+  ##   the stores masked at the real size
+  ## - a config beyond the compiled-in maxima (n_routed_experts > 512,
+  ##   top_k > MaxTopK, top_k > n_routed_experts, non-positive dim) drops
+  ##   the launch, `moeFwdConfigGuard` raises naming the offending dim,
+  ##   run it before each `engine.run`
+  ## - register budget near 2 live 32×32 fp32 accumulators (the gHalf/uHalf
+  ##   pair) plus transients, sized once for the largest accepted config
   if num_tokens < 1 or hidden < 1 or moe_intermediate < 1 or
       n_shared_experts < 0 or
       n_routed_experts < 1 or n_routed_experts > ScoreChunk * ScoreChunks or

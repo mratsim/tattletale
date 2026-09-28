@@ -7,7 +7,7 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import workspace/ceramic/src/hardware/h_registry
+import ./h_registry
 
 {.experimental: "dynamicBindSym".}
 # bindSym with a computed name (`$atom & "_suffix"`) from a static macro
@@ -124,12 +124,12 @@ proc universalMma8x8x8*[TD; TA; TB](
   let lane = thread_index_in_threadgroup
   let row = 4 * ((lane shr 4) and 1) + 2 * ((lane shr 2) and 1) + ((lane shr 1) and 1)
   let col = 4 * ((lane shr 3) and 1) + 2 * (lane and 1)
-  let colBase = uint32((lane and 1) + 8 * ((lane shr 3) and 1))
-  let srcABase = uint32(2 * row + 8 * (row div 4))
+  let colBase = (lane and 1) + 8 * ((lane shr 3) and 1)
+  let srcABase = 2 * row + 8 * (row div 4)
   for j in 0 ..< 4:
-    let srcA = srcABase + uint32((j and 1) + (j shr 1) * 8)
-    let srcB0 = colBase + uint32(4 * j + 8 * (j div 2))
-    let srcB1 = colBase + uint32(4 * j + 2 + 8 * ((2 * j + 1) div 4))
+    let srcA = srcABase + (j and 1) + (j shr 1) * 8
+    let srcB0 = colBase + 4 * j + 8 * (j div 2)
+    let srcB1 = colBase + 4 * j + 2 + 8 * ((2 * j + 1) div 4)
     let a0 = simdShuffle(a[0], srcA)
     let a1 = simdShuffle(a[1], srcA)
     let b00 = simdShuffle(b[0], srcB0)

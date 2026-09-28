@@ -204,9 +204,10 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   of gbkThreadsPerThreadgroup: "make_int3(blockDim.x, blockDim.y, blockDim.z)"
   of gbkThreadgroupsPerGrid: "make_int3(gridDim.x, gridDim.y, gridDim.z)"
   of gbkThreadIndexInThreadgroup:
-    # x-major flat thread index, parenthesized so a trailing `* k` cannot
-    # mis-associate into `+ threadIdx.x * k`. The CUDA builtins are unsigned;
-    # the canonical Nim type is int, so the spelling casts.
+    # x-major flat thread index, parenthesized so a trailing `* k`
+    # cannot mis-associate into `+ threadIdx.x * k`.
+    # The CUDA builtins are unsigned, the canonical Nim type is int,
+    # the printer casts.
     "(int)(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
   of gbkThreadPositionInGrid:
     # whole-value use: no CUDA spelling, emit the canonical name verbatim
@@ -333,7 +334,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = "(int)(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
     elif ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
          ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component read of an unsigned CUDA builtin, into the int canonical domain.
+      # Component of an unsigned CUDA builtin, cast to standard Nim `int` from default uint.
       result = "(int)(" & cudaCoordIdent(ast.dParent.symbol.coordBuiltin, ast.dParent.ident()) & '.' & ast.dField.ident() & ')'
     else:
       result = ctx.genCuda(ast.dParent) & '.' & ctx.genCuda(ast.dField)

@@ -17,8 +17,8 @@
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/static_for
-import workspace/ceramic/src/layout_algebra/layouts_datatypes
-import workspace/ceramic/src/layout_algebra/layout_constructors
+import ./layouts_datatypes
+import ./layout_constructors
 
 export layouts_datatypes
 export layout_constructors

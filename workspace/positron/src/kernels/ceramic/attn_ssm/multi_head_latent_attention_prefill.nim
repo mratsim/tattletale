@@ -53,8 +53,7 @@ import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # The real GLM-4.7-Flash dims, baked as module constants.
 # The kernel is non-generic: its tile types cannot take the rt_l/rv
@@ -83,12 +82,9 @@ proc normRound16[A: static MmaAtom](
     src: RtLeft[float32, 8, 32, A],
     gamma: RtLeft[float16, 8, 32, A],
     rowVals: TensorOwned[float32, (Int[1], Int[2]), (Int[2], Int[1])]) {.device.} =
-  ## `dst[r][c] = fp16(src[r][c] · rowVals[r] · gamma[r][c])`: the MLA
-  ## RMSNorm epilogue with one fp16 RNE round at the end (the model's
-  ## `weight * x.to(dtype)` rounding). `rowVals` is the row-rsqrt'ed
-  ## variance col-vec (fp32 variance mean(x²) + eps). The frag walk
-  ## follows the loadTile lane→element mapping, so src, gamma and dst
-  ## agree elementwise.
+  ## dst[r][c] = fp16(src[r][c] · rowVals[r] · gamma[r][c])
+  ## rowVals = rsqrt(mean(x²) + eps) per row, fp32.
+  ## One RNE fp16 round, the model's `weight * x.to(dtype)` order.
   const rowTiles = 8 div A.getM()
   const colTiles = 32 div A.getN()
   const vpt = A.getVpt()
@@ -104,13 +100,12 @@ proc ropeTile32[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 32, A],
     cosT, sinT: ptr UncheckedArray[float32],
     t0, pairOff: int32) {.device.} =
-  ## In-place interleaved rope over one (8, 32) fp32 rot half-tile:
-  ## each lane owns one adjacent pair (the AC layout col pairs).
-  ## The rotation needs no cross-lane data. The cos/sin for the pair
-  ## index `pairOff + 4m + (cell div 16)` come from the tables' col i
-  ## (entry c = freq (c mod 32)).
-  ## `t0` is the tile's first token row. `pairOff` is 0 for the low
-  ## half (pairs 0..15) and 16 for the high half (pairs 16..31).
+  ## In-place interleaved rope over one (8, 32) fp32 rot half-tile,
+  ## each lane owns one adjacent pair, no cross-lane data.
+  ## The pair index is pairOff + 4m + (cell div 16), the cos/sin
+  ## come from the tables' col i (entry c = freq (c mod 32)).
+  ## t0 = the tile's first token row, pairOff = 0 for the low half
+  ## (pairs 0..15), 16 for the high half (pairs 16..31).
   const M = A.getM()
   const colTiles = 32 div A.getN()
   let lane = thread_index_in_threadgroup
@@ -143,29 +138,31 @@ proc mla_latent_fwd*(
     kvb_w: ptr UncheckedArray[float16],# (num_heads·448, 512) fp16
     cos_t, sin_t: ptr UncheckedArray[float32],  # (num_tokens, 64) fp32
     num_tokens, num_heads: int32) {.device.} =
-  ## Computes the module doc's contract for one 8-token × 2-head
-  ## block: the qa/qn/q and kv/krot/kp/kb chains, the interleaved rope
-  ## on the in-register rot tiles, and the q/k/v stores.
-  ##
   ## Grid (ceil(num_tokens/8), num_heads div 2, 1), 32 lanes.
-  ## One 8-token × 2-head block per threadgroup. HBLK = 2 keeps the kv_b
-  ## accumulator at 224 fp32 registers per lane, the largest single accumulator.
-  ## Raising HBLK requires re-checking the register budget.
-  ## The full breakdown is inline at the accumulator declarations.
-  ## The shared projections (qa, qn, kv, k_rot, kp) compute once per threadgroup.
-  ## The per-head parts follow for the block's 2 heads.
+  ## One 8-token × 2-head block per threadgroup, HBLK = 2 keeps the
+  ## kv_b accumulator at 224 fp32 registers per lane, the shared
+  ## projections (qa, qn, kv, k_rot, kp) compute once per block.
   ##
-  ## GEMM structure: the qa/kv chains step 16-wide x tiles over 2048
-  ## (128 steps) against 16×32 weight tiles. The q/kv_b chains step
-  ## the 8×32 activation tiles over 768/512 (24/16 steps) against
-  ## 32×32 weight tiles. Every output width is an exact 32-multiple
-  ## (768 = 24×32, 576 = 18×32, 448 = 14×32), so no tail tiles.
+  ##   x (8×2048) ─┬─► qa_w @ ─► RMSNorm·qa_g ─► qb_w @ ─► q
+  ##               │                              = (q_nope 192, q_rot 64) per head
+  ##               └─► kva_w @ ─► kv = (kp 512, k_rot 64)
+  ##                     kp ─► RMSNorm·kva_g ─► kvb_w @ ─► kb
+  ##                           = (k_nope 192, v 256) per head
+  ##   rope: interleaved pairs (2i, 2i+1) of the rot halves rotate by
+  ##   pos·theta^(−2i/64), theta = 1e6, k_rot computed once, shared by
+  ##   both heads. RNE fp16 round at every state store.
   ##
-  ## Views: the q/k/v output views carry the (token, head, dim)
-  ## strides. The qb_w/kvb_w views carry the head block in the batch
-  ## component (head0 · 256 or head0 · 448 rows), the other weights
-  ## are transposed B-operand views of the row-major (out, in)
-  ## buffers.
+  ##   ┌ 8 tokens ─┐  per head (of 2 per threadgroup):
+  ##   │ x rows    │  q:  256 = 192 nope + 64 rot (rope in place on the
+  ##   │ chain to  │       rot accumulator tiles, cols [192, 256))
+  ##   │ q/k/v     │  k:  256 = 192 nope + 64 rot (the shared k_rot
+  ##   │ states    │       lands in both heads' rot cols)
+  ##   └───────────┘  v:  256 (from kb's last 256 cols)
+  ##
+  ## GEMM structure: qa/kv chains step 16-wide x tiles over 2048
+  ## against 16×32 weight tiles, the q/kv_b chains step the 8×32
+  ## activation tiles over 768/512 against 32×32 weight tiles,
+  ## every output width an exact 32-multiple, no tail tiles.
   let tBlock = int32(threadgroup_position_in_grid.x)
   let hBlock = int32(threadgroup_position_in_grid.y)
   let head0 = hBlock * 2

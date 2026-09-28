@@ -16,17 +16,13 @@
 import std/strformat
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tile_io
 import workspace/ceramic/src/tile_algebra
-import workspace/ceramic/src/tile_algebra/tile_mma
-import workspace/ceramic/src/tile_algebra/tile_epilogues
-import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
+import workspace/ceramic/src/tile_algebra
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The fp32 load/store dataflow, end to end on the host (lane 0)

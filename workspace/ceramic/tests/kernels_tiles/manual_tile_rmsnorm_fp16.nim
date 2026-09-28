@@ -14,8 +14,8 @@
 import std/[strformat, strutils]
 import workspace/crucible
 import workspace/libtorch
-import ../tile_test_utils
-import ../../src/kernels/k_tile_rmsnorm
+import workspace/ceramic/tests/tile_test_utils
+import workspace/ceramic/src/kernels/k_tile_rmsnorm
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The thin {.global.} launcher. First param = the output buffer Out.

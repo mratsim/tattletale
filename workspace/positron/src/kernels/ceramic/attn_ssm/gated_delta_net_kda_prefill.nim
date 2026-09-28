@@ -7,97 +7,81 @@
 
 # ───────────────  KDA prefill (chunked scan over T tokens, one launch)  ───────────────
 
-## Prefill (T > 1) of the Kimi Delta Attention recurrence (arXiv:2510.26692), one launch
-## on the ceramic Tile API walking the tokens in chunks of ChunkC over the per-channel
-## cumulative log decay cumulogdecay (one decay per KEY channel):
+## Prefill (T > 1) of the Kimi Delta Attention recurrence (arXiv:2510.26692),
+## one launch on the ceramic Tile API walking the tokens in chunks of ChunkC
+## over the per-channel cumulative log decay cumulogdecay (one decay per KEY
+## channel):
 ##
-## | term      | formula                                                                                                |
-## | --------- | ------------------------------------------------------------------------------------------------------ |
-## | pairdecay | exp2((cumulogdecay[t, dk] − cumulogdecay[s, dk])·log2e), per key channel dk (the difference form)      |
-## | u_t       | β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s, A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]          |
-## | G_t       | Σ_dk exp(cumulogdecay[t, dk])·k_t[dk]·S_carry[r, dk], the decayed carry read BEFORE the kv contraction |
-## | y_t       | H_t + Σ_{s≤t} B[t, s]·u_s[r], B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]                      |
-## | H_t       | Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]                                                  |
-## | carry     | S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]        |
+##   pairdecay(t, s)[dk] = exp2((cumulogdecay[t, dk] − cumulogdecay[s, dk])·log2e)
+##   u_t = β_t·(v_t − G_t) − β_t·Σ_{s<t} A[t, s]·u_s, A[t, s] = Σ_dk pairdecay(t, s)[dk]·k_t[dk]·k_s[dk]
+##   G_t = Σ_dk exp(cumulogdecay[t, dk])·k_t[dk]·S_carry[r, dk], the decayed carry read BEFORE the kv contraction
+##   y_t = H_t + Σ_{s≤t} B[t, s]·u_s[r], B[t, s] = Σ_dk pairdecay(t, s)[dk]·q̃_t[dk]·k_s[dk]
+##   H_t = Σ_dk exp(cumulogdecay[t, dk])·q̃_t[dk]·S_carry[r, dk]
+##   carry: S[r, dk] = exp(cumulogdecay[end, dk])·S_carry[r, dk] + Σ_s pairdecay(end, s)[dk]·k_s[dk]·u_s[r]
 ##
-## | contract      | value                                                                                                                                                 |
-## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | state math    | all fp32 and never rounds, one 8-row state tile per threadgroup, register-resident across the chunk walk                                              |
-## | q, k, g, β    | (B·Hk, T, Dk) f32 q/k/g post-l2norm and (B·Hv, T) f32 beta, never rounded to the element dtype (the recorded per-channel contract)                    |
-## | cumulogdecay  | (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of g                                                                              |
-## | chunk reset   | the cumulogdecay host prefix resets at every t with t mod ChunkC == 0, ChunkC the kernel's static chunk length (the GateForm formula stays host-side) |
-## | v, y          | (B·Hv, T, Dv) element dtype each, y gets one round-to-nearest-even per element                                                                        |
-## | element dtype | one compile-time element type (`kdaPrefillChunkScan`'s `El` generic)                                                                                  |
-## | head mapping  | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                          |
-## | chunk axis    | tokens are walked in chunks of ChunkC, the u solve sequential in t inside a chunk, chunks sequential on the register state                            |
+## Contract:
+## - all state arithmetic fp32 and never rounds, one 8-row state tile per
+##   threadgroup, register-resident across the chunk walk
+## - q, k, g (B·Hk, T, Dk) f32 post-l2norm, beta (B·Hv, T) f32, cumulogdecay
+##   (B·Hk, T, Dk) f32 per-channel cumulative log decay, the host prefix of
+##   g, never rounded to the element dtype
+## - chunk reset, the cumulogdecay host prefix resets at every t with
+##   t mod ChunkC == 0, ChunkC the kernel's static chunk length (the GateForm
+##   formula stays host-side)
+## - v, y (B·Hv, T, Dv) element dtype each, y gets one round-to-nearest-even
+##   per element
+## - head mapping, value head bh reads key head
+##   (bh mod Hv) div hkRatio + (bh div Hv)·Hk, hkRatio = Hv div Hk
+## - the u solve sequential in t inside a chunk, chunks sequential on the
+##   register state, sums over s ascending
+## - cumulogdecay precondition, finite and monotone non-increasing per key
+##   per chunk (host prefix of g, terms ≤ 0), a rising cumulogdecay overflows
+##   the f32 state
+## - the pair decay's difference form keeps the exp2 argument ≤ 0, no
+##   intermediate exceeds 1, the factorized spelling
+##   dT·exp2(−cumulogdecay_s·log2e) overflows exp2 once |cumulogdecay_s|
+##   passes exp2's range, the resulting Inf × dT → 0 product NaNs the carry
+##   and the persistent state
+## - schedule, the fp64 chunked WY/UT reassociation: per-channel
+##   cumulogdecay, the A-matrix u solve in token order, one per-channel
+##   decayed carry read plus the u outer products, the tile schedule is the
+##   GDN chunk scan of attn_ssm/gated_delta_net_prefill.nim applied to the
+##   KDA per-channel decay chain
 #
-## Register-tile naming convention, shared by the gdn and kda kernels:
-##
+## Register-tile naming, shared by the gdn and kda kernels:
 ## - `<x>T`, the element-dtype register tile of operand x, loaded from memory
 ## - `<x>32`, the fp32 register tile of the same operand, an fp32-storage
 ##   operand loads straight into its `32` form, an element-dtype operand
 ##   widens its `T` form into the `32` form
-##
-## | contract                  | value                                                                                                                             |
-## | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-## | cumulogdecay precondition | finite and monotone non-increasing per key per chunk (host prefix of g, terms ≤ 0), a rising cumulogdecay overflows the f32 state |
-
-##
-## | provenance | source                                                                                                                                                                |
-## | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-## | schedule   | the fp64 chunked WY/UT reassociation: per-channel cumulogdecay, the A-matrix u solve in token order, one per-channel decayed carry read plus the u outer products |
-## | tiles      | the GDN chunk-scan tile schedule of attn_ssm/gated_delta_net_prefill.nim, applied to the KDA per-channel decay chain                                                  |
-
-##
+#
 ## Implementation shape:
-## - each lane computes its own state row's scalars (the solve, y, the u contributions),
-##   so the u vectors live in a per-lane local array, no inter-threadgroup data movement needed
-## - the per-token decay dT = exp2(cumulogdecay_t·log2e) folds into the carry reads once
-##   per token, over the same broadcast Tile ops as the per-channel factors
-## - the pair decay exp2((cumulogdecay_t − cumulogdecay_s)·log2e) folds into the A/B dots per
-##   (t, s) pair, the chunk-end decay into the carry
-##
-## Pair decay's difference form removes the dT·invd_s overflow:
-##
-## - exp2(x)·exp2(y) = exp2(x + y)
-## - cumulogdecay decreases along t, so the argument is ≤ 0 and no intermediate exceeds 1
-## - the factorized spelling dT·invd_s overflows exp2 once |cumulogdecay_s| ≳ 88.7,
-##   the resulting Inf × dT → 0 product NaNs the carry and the persistent state
-##
-## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s) pair,
-##   every lane reads the same row-identical row sum, lanes agree bit-exactly
-## - the pair (t, s) passes reload the key and cumulogdecay tiles per pair, chunks of 64 stay inside
-##   the register budget (per-lane state and u arrays are the only residents, no (ChunkC, Dk) working tile)
-##
-##   per chunk:   cumulogdecay tiles ─→ per token t: dT, G_t read ─→ u_t solve ─→ y_t store
-##                (t in token order)                           └─────────┐
-##            └──→ S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
-##
-##
-## Entries are consumer-side:
-## - a `metal:` block wraps the grid-driven proc with concrete static (Dk, Dv, ChunkC),
-##   one call-site line per static binding set
-## - the engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
-##
-## Binding and state ABI:
-## - hosts binding through the Metal engine's no-copy path get in-place state
-##   updates and visible y writes from one run
-##
-## - any other binding copies and the y writes are lost
-## - `state` is the engine's output buffer, `y` is written by the kernel
-##
-## - the state's ABI is (B·Hv, Dv, Dk) f32, dense row-major, head-major over
-##   (sequence, value head), one unrounded fp32 tile per (bh, Dv-row-block)
-## - the f32 state buffer persists across steps and launches with no in-kernel reset,
-##   the host owns the layout and the lifetime
-## - rebinding the state to a 16-bit dtype or a strided view silently corrupts the recurrence
+## - each lane computes its own state row's scalars (the solve, y, the u
+##   contributions), the u vectors live in a per-lane local array, no
+##   inter-threadgroup data movement needed
+## - the k·k and q̃·k dot products run as one broadcast-tile pass per (t, s)
+##   pair, every lane reads the same row-identical row sum, lanes agree
+##   bit-exactly, the pair passes reload the key and cumulogdecay tiles per
+##   pair, chunks of 64 stay inside the register budget (per-lane state and
+##   u arrays are the only residents, no (ChunkC, Dk) working tile)
+#
+## Consumer-side bindings, a `metal:` block wraps the grid-driven proc with
+## concrete static (Dk, Dv, ChunkC), one call-site line per static binding
+## set, calls sharing a call-site line collapse into one body.
+#
+## State ABI, (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence,
+## value head), one unrounded fp32 tile per (bh, Dv-row block). Hosts binding
+## through the Metal engine's no-copy path get in-place state updates and
+## visible y writes from one run, any other binding copies and the y writes
+## are lost. `state` is the engine's output buffer, `y` is written by the
+## kernel, the f32 state buffer persists across steps and launches with no
+## in-kernel reset, the host owns layout and lifetime. Rebinding the state to
+## a 16-bit dtype or a strided view silently corrupts the recurrence.
 
 from ../math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 template pairDecayInto(k32, cumulogdecayS, glK, glCumulogdecay, base) =
   ## Loads the k / cumulogdecay register-tile pair of one past token:
@@ -152,48 +136,57 @@ proc kdaPrefillChunkScanAt*[El](
   ## token sequence walked over the register state at the caller's coordinates
   ## (the element dtype an unconstrained compile-time generic)
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
-  ##
-  ## | parameter             | shape, dtype, layout                                                                                                                                                                         | producer                                                                                                             | unit                |
-  ## | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- |
-  ## | state                 | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state written back in place (S_carry entering the chunk, the carry update leaving it) | the previous chunk's launch writes it, this kernel reads and rewrites it in place, the host owns layout and lifetime | f32, never rounds   |
-  ## | y                     | (B·Hv, T, Dv) El, row-major, the whole token sequence's output, one round-to-nearest-even per element, stored row-bounded (out-of-range rows drop)                                           | this kernel                                                                                                          | El                  |
-  ## | k                     | (B·Hk, T, Dk) f32, row-major, the keys, post-l2norm (the l2norm stays host-side)                                                                                                             | host-computed                                                                                                        | f32                 |
-  ## | q                     | (B·Hk, T, Dk) f32, row-major, the query vector of the same key head, post-l2norm, host-computed, q̃ divides by the device-side runtime qScale, never rounded to the element dtype            | host-computed (the divide device-side)                                                                               | f32                 |
-  ## | cumulogdecay          | (B·Hk, T, Dk) f32 per-channel cumulative log decay, one decay per KEY channel, the host's inclusive prefix of g                                                                              | host-computed                                                                                                        | natural-log decay exponent |
-  ## | v                     | (B·Hv, T, Dv) El, row-major, the values                                                                                                                                                      | host-computed                                                                                                        | El                  |
-  ## | beta                  | (B·Hv, T) f32, one per value head and token, the delta weighting                                                                                                                             | host-computed                                                                                                        | dimensionless       |
-  ## | qScale                | √Dk, the host's f64 sqrt cast to f32                                                                                                                                                         | host-computed (the divide device-side)                                                                               | dimensionless       |
-  ## | Hv, Hk                | value and key head counts, host-derived from the model config                                                                                                                                | host-computed                                                                                                        | heads               |
-  ## | hkRatio               | Hv div Hk, the GQA head ratio                                                                                                                                                                | host-computed                                                                                                        | dimensionless       |
-  ## | T                     | the token count, host-derived from the sequence length                                                                                                                                       | host-computed                                                                                                        | tokens              |
-  ## | Dk, Dv, TileR, ChunkC | static tile geometry (head dim, value dim, the row block height, the chunk length), the per-lane u local array is sized by ChunkC (≤ 64)                                                     | compile-time                                                                                                         | elements            |
-  ## | dvBlock, bh           | the Dv div TileR row-block index and the (sequence, value head) flat head index                                                                                                              | device-computed grid coordinates                                                                                     | elements            |
-  ##
-  ## Contract:
-  ## - all state arithmetic is fp32, the state never rounds before the final in-place store
-  ## - the state entering a chunk is S_carry, untouched until the chunk-end carry update
-  ## - the per-channel decay applies BEFORE the kv reads, one decay per KEY channel,
-  ##   the carry reads contracting the decayed state, the pair decays from the chunk's
-  ##   per-channel cumulative log decay
-  ## - the cumulogdecay precondition, finite and monotone non-increasing per key
-  ##   per chunk, a rising cumulogdecay overflows the f32 state
+  ## - all state arithmetic fp32, the state never rounds before the final
+  ##   in-place store, the state entering a chunk is S_carry, untouched until
+  ##   the chunk-end carry update
+  ## - the per-channel decay applies BEFORE the kv reads, one decay per KEY
+  ##   channel, the carry reads contracting the decayed state, the pair
+  ##   decays from the chunk's per-channel cumulative log decay
+  ## - the cumulogdecay precondition, finite and monotone non-increasing per
+  ##   key per chunk, a rising cumulogdecay overflows the f32 state
   ## - the host prefix resets at every t with t mod ChunkC == 0
   ##   (the GateForm formula stays host-side)
-  ##
   ## - the u solve is sequential in t, the sums over s walk s ascending
+  ## - each lane computes its own state row's scalars, the u vectors live in
+  ##   a per-lane local array sized by ChunkC (<= 64), no (ChunkC, Dk)
+  ##   working tile, no inter-threadgroup data movement
+  ## - the k·k and q̃·k dot products run as one broadcast-tile pass per
+  ##   (t, s) pair, every lane reads the same row-identical row sum, lanes
+  ##   agree bit-exactly, the pair passes reload the key and cumulogdecay
+  ##   tiles per pair
+  ## - the element-dtype y round per element is the only dtype-dependent
+  ##   step, the tile walk is dtype-mechanical
+  ## - y stored row-bounded, out-of-range rows drop
+  ## - Hk > 0, Hv an exact multiple of Hk, hkRatio = Hv div Hk
   ##
-  ## - the element-dtype y round per element is the only dtype-dependent step,
-  ##   the tile walk is dtype-mechanical
-  ##
-  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ##
-  ##   per token:   dT ─→ G_t, H_t reads ─→ u_t solve ─→ y_t store
-  ##   chunk end   S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) [x] u_s
-  ##
+## Grid (Dv div TileR, B·Hv) when grid-driven, 32 lanes, x = the Dv/TileR
+## row block, y = the (sequence, value head) flat head index bh, TileR = 8.
+##
+## Dataflow, one (bh, dvBlock) tile per chunk (t walks the chunk in token
+## order, s ascends, all state math fp32):
+##
+##   k_t (Dk) f32 post-l2norm ─────────┐
+##   cumulogdecay_t (Dk) f32 ──► [ dT = exp2(cumulogdecay_t·log2e) ]
+##                                     ▼   one factor per key channel
+##   S (TileR, Dk) f32 ──► [ G_t = rowsum(S ⊙ dT ⊙ k_t) ]   decayed carry read,
+##                                     │                    before the kv contraction
+##   β_t (f32), v_t (El) ──► [ uacc ← Σ_{s<t} pd(t,s)·(k_t·k_s)·u_s ]
+##        u_t = β_t·(v_t − G_t) − β_t·uacc ──► uLoc[t]
+##        pd(t,s) (Dk) = exp2((cumulogdecay_t − cumulogdecay_s)·log2e), per pair
+##                                     │
+##   q_t (Dk) f32 ──► [ q̃ = q_t/qScale ] ──► [ H_t = rowsum(S ⊙ dT ⊙ q̃) ]
+##                                     │
+##        y_t = H_t + Σ_{s≤t} pd(t,s)·(q̃_t·k_s)·u_s ──► roundToNearestEven[El]
+##        ──► y (bh, gt, dvBlock row), lanes whose fragment column is 0
+##
+##   chunk end: dEnd = exp2(cumulogdecay_end·log2e)
+##        [ S ← dEnd ⊙ S_carry + Σ_s (dEnd·invd_s ⊙ k_s) ⊗ u_s ]
+##        dEnd·invd_s folded into pdEnd = exp2((cumulogdecay_end −
+##        cumulogdecay_s)·log2e), one addScaled per s
+##
   ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
-  ## - generic only over the element dtype and the static shape, every (Dk, Dv, ChunkC)
-  ##   binding needs its own call-site line
+  ## - generic only over the element dtype and the static shape, every
+  ##   (Dk, Dv, ChunkC) binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
   static:
     doAssert TileR == 8, "the y store covers one atom row block per column block"
@@ -332,26 +325,21 @@ proc kdaPrefillChunkScan*[El](
     qScale: float32,                      # √Dk, host-computed f64→f32 cast
     Hv, Hk, hkRatio, T: int32,
     Dk, Dv, TileR, ChunkC: static int) {.device.} =
-  ## Grid-driven form of `kdaPrefillChunkScanAt`, the caller's `metal:` entry wraps this proc.
-  ## Grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8.
+  ## Grid-driven form of `kdaPrefillChunkScanAt`, the caller's `metal:` entry
+  ## wraps this proc.
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call, grid coordinates arriving from the grid:
-  ##
-  ## | parameter             | shape, dtype, layout                                                                                                                                                                         | producer                                                                                                             | unit                |
-  ## | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------- |
-  ## | state                 | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state written back in place (S_carry entering the chunk, the carry update leaving it) | the previous chunk's launch writes it, this kernel reads and rewrites it in place, the host owns layout and lifetime | f32, never rounds   |
-  ## | y                     | (B·Hv, T, Dv) El, row-major, the whole token sequence's output, one round-to-nearest-even per element, stored row-bounded (out-of-range rows drop)                                           | this kernel                                                                                                          | El                  |
-  ## | k                     | (B·Hk, T, Dk) f32, row-major, the keys, post-l2norm (the l2norm stays host-side)                                                                                                             | host-computed                                                                                                        | f32                 |
-  ## | q                     | (B·Hk, T, Dk) f32, row-major, the query vector of the same key head, post-l2norm, host-computed, q̃ divides by the device-side runtime qScale, never rounded to the element dtype            | host-computed (the divide device-side)                                                                               | f32                 |
-  ## | cumulogdecay          | (B·Hk, T, Dk) f32 per-channel cumulative log decay, one decay per KEY channel, the host's inclusive prefix of g                                                                              | host-computed                                                                                                        | natural-log decay exponent |
-  ## | v                     | (B·Hv, T, Dv) El, row-major, the values                                                                                                                                                      | host-computed                                                                                                        | El                  |
-  ## | beta                  | (B·Hv, T) f32, one per value head and token, the delta weighting                                                                                                                             | host-computed                                                                                                        | dimensionless       |
-  ## | qScale                | √Dk, the host's f64 sqrt cast to f32                                                                                                                                                         | host-computed (the divide device-side)                                                                               | dimensionless       |
-  ## | Hv, Hk                | value and key head counts, host-derived from the model config                                                                                                                                | host-computed                                                                                                        | heads               |
-  ## | hkRatio               | Hv div Hk, the GQA head ratio                                                                                                                                                                | host-computed                                                                                                        | dimensionless       |
-  ## | T                     | the token count, host-derived from the sequence length                                                                                                                                       | host-computed                                                                                                        | tokens              |
-  ## | Dk, Dv, TileR, ChunkC | static tile geometry (head dim, value dim, the row block height, the chunk length), the per-lane u local array is sized by ChunkC (≤ 64)                                                     | compile-time                                                                                                         | elements            |
-  ## | dvBlock, bh           | the Dv div TileR row-block index and the (sequence, value head) flat head index                                                                                                              | device-computed grid coordinates                                                                                     | elements            |
+## Grid (Dv div TileR, B·Hv), 32 lanes, x = the Dv/TileR row block,
+## y = the (sequence, value head) flat head index bh, TileR = 8.
+##
+## Dataflow, one grid point (one threadgroup walks the whole T-token
+## sequence, chunks of ChunkC sequential on the register state):
+##
+##   k, q, cumulogdecay (hk row, T·Dk) f32 post-l2norm ──┐
+##   v (bh row, T·Dv) El, beta (bh, T) f32 ──────────────┼─► [ kdaPrefillChunkScanAt ]
+##   qScale (f32 √Dk) ───────────────────────────────────┤        │
+##   state (bh, dvBlock) f32 ────────────────────────────┘        ▼
+##        y (bh, all T, dvBlock) El ◄── one round-to-nearest-even per element
+##        state (bh, dvBlock) f32 ◄── carry of the last chunk, in place, never rounds
   let dvBlock = int32(threadgroup_position_in_grid.x)
   let bh = int32(threadgroup_position_in_grid.y)
   kdaPrefillChunkScanAt(state, y, k, q, cumulogdecay, v, beta, qScale, Hv, Hk, hkRatio, T,

@@ -20,6 +20,6 @@ import workspace/ceramic/src/tile_algebra/tile_ops_reductions
 import workspace/ceramic/src/tile_algebra/tile_epilogues
 import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
 
-export layout_algebra, tiles, tile_config, tile_io,
+export tiles, tile_config, tile_io,
        tile_mma, tile_ops_unary, tile_ops_binary,
        tile_ops_reductions, tile_epilogues, tile_epilogues_backend

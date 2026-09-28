@@ -6,8 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
-import workspace/ceramic/src/int_tuples/int_tuples_datatypes
-import workspace/ceramic/src/int_tuples/int_tuples_transforms
+import ./int_tuples_datatypes
+import ./int_tuples_transforms
 
 # ═══════════════════════════════════════════════════════════════
 #  zipDimensionsWith — zip tuple top-level with `op`

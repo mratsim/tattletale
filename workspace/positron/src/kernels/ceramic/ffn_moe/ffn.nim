@@ -11,45 +11,34 @@
 #
 # ############################################################
 
-## Fused GatedMLP inference on the ceramic Tile API: the gate and up
-## gemms, the silu·mul activation and the down gemm in one kernel,
-## matching the GatedDenseFFN.forward contract (`workspace/transformers/src/layers/ffn.nim`):
+## Fused GatedMLP forward on the ceramic Tile API, the GatedDenseFFN.forward
+## contract (`workspace/transformers/src/layers/ffn.nim`):
 ## `out = down_proj(silu(gate_proj(x)) · up_proj(x))`.
-## Experimental: not a production kernel, known gaps below, not fixed.
 ##
-## Per-element semantics:
-##   - gate/up = the fp16 weight gemms with fp32 accumulation. The result
-##     rounds to fp16 (RNE) at the convert, matching the materialized fp16
-##     gate_out/up_out of the reference linear layers
-##   - act = silu(gate16)·up16 with the silu_and_mul semantics (fp32
-##     silu from the fp16 gate, fp16-rounded silu, one fp16-rounded
-##     product), no actLimit clamp
-##   - out = the fp16 act gemm with fp32 accumulation, rounded to fp16
-##     at the store through the `to` chokepoint
+## One TileC×TileC Out tile per threadgroup (TileC = 32 at the entry),
+## each threadgroup walks the NIntm div TileC intermediate tiles and per
+## tile re-derives the gate/up tiles through the 16-wide hidden K-loop:
 ##
-## Tile geometry:
-##   - one TileC×TileC output tile per threadgroup (the launcher
-##     instantiates TileC = 32), grid (NOut div TileC, ceil(M/TileC)),
-##     the atom's 32 lanes
-##   - each threadgroup loops the NIntm div TileC intermediate tiles
-##     and per tile re-derives the TileC×TileC gate/up tiles through
-##     the hidden K-loop (16-col chunks), converts them to fp16, fuses
-##     the silu·mul into a TileC×TileC act tile, then accumulates
-##     the act·WDown product into the output tile
-##   - the weights load through the transposed B-operand views of the row-major
-##     (K, NIntm) / (NIntm, NOut) buffers
-##   - partial M batches need no host padding: the X tile loads
-##     row-bounded (rows ≥ M zero-filled, tile_io_rows) and the Out
-##     store skips them
+##   x (TileC, 16) ──┬─► [ gate = x·W_g (TileC, TileC) ] ─┐  fp32 mma,
+##                   └─► [ up   = x·W_u (TileC, TileC) ] ─┴─► fp16 RNE convert
+##                                                              │
+##                              [ act = silu(gate16)·up16 ] ◄──┘  silu_and_mul
+##                                     │                           semantics, no clamp
+##   W_d (TileC, TileC) ─► [ O += act·W_d (fp32) ] ◄────────┘
+##
+## O = the Out tile, fp16 RNE at the store. The weights load through the
+## transposed B-operand views of the row-major (K, NIntm) / (NIntm, NOut)
+## buffers. Partial-M batches need no host padding: the X tile loads
+## row-bounded (rows >= M zero-filled, tile_io_rows) and the Out store
+## skips them.
 ##
 ## Contract (not enforced, a violated shape under-covers the grid):
-##   - K multiple of 16 (the gate/up K-chunk), NIntm and NOut
+##   - K a multiple of 16 (the gate/up K-chunk), NIntm and NOut
 ##     multiples of TileC (the tile width, 32)
 ##
 ## Known production gaps (documented, not fixed):
-##   - each threadgroup re-derives its gate/up tiles once per NOut
-##     tile (the fusion stages no intermediate to gmem). Production
-##     would stage the act tile once per (batch, intermediate) block
+##   - each threadgroup re-derives its gate/up tiles once per NOut tile,
+##     the fusion stages no intermediate to gmem
 ##   - no actLimit clamp (the reference GatedMLP has none)
 
 import workspace/crucible
@@ -64,12 +53,20 @@ proc gated_mlp_silu_fwd*(
     WDown: ptr UncheckedArray[float16],        # (NIntm, NOut): the down weight
     M, K, NIntm, NOut: int32,
     TileC: static int) {.device.} =
-  ## One TileC×TileC output tile per threadgroup (grid x = the NOut tile, y = the M tile),
-  ## the module doc's contract applied per intermediate tile:
-  ##   - the gate/up gemms
-  ##   - the fused silu·mul act tile
-  ##   - the down gemm accumulation
-  ##   - the row-bounded X load and Out store
+  ## One TileC×TileC Out tile per threadgroup, grid (NOut div TileC,
+  ## ceil(M div TileC)), x = the Out col tile, y = the M row tile.
+  ## Per intermediate block ic, the shared x tiles feed both GEMMs:
+  ##
+  ##   x (TileC, 16) ──┬─► [ gate = x·W_g (TileC, TileC) ] ─┐
+  ##                   └─► [ up   = x·W_u (TileC, TileC) ] ─┴─► [ fp16 RNE ]
+  ##                                                              │
+  ##                              [ act = silu(gate16)·up16 ] ◄──┘
+  ##                                     │
+  ##   W_d (TileC, TileC) ─► [ O += act·W_d (fp32) ] ◄────────┘
+  ##
+  ## O = the Out tile, fp16 at the store. Rows >= M load
+  ## zero-filled, the store skips them. TileC must divide NIntm
+  ## and NOut.
   let tx = int32(threadgroup_position_in_grid.x)
   let ty = int32(threadgroup_position_in_grid.y)
   let gdX = X.gd(shape = (-1, -1, -1, -1), stride = (K, 0, K, 1))

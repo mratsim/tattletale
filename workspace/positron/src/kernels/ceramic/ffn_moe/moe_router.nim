@@ -7,31 +7,39 @@
 
 # ──────────────────  moe_router (the Qwen softmax routing op)  ──────────────────
 
-## Qwen3.5/3.6 MoE router on the ceramic Tile API, the qwen35_moe mega decode kernel's softmax routing form.
-## GLM sigmoid form stays in `ffn_moe.nim`, out of contract here.
+## Qwen3.5/3.6 MoE router on the ceramic Tile API, the softmax routing
+## form of the qwen35_moe mega decode kernel. The GLM sigmoid form stays
+## in `ffn_moe.nim`, out of contract here.
 ##
-## | contract    | value                                                                                                             |
-## | ----------- | ----------------------------------------------------------------------------------------------------------------- |
-## | score chain | logits accumulate fp32 over 16-wide mma chunks, one round to El, widen, fp32 softmax, top-K lowest-index tiebreak |
-## | weights     | w = p/(sum p over the K selected)·Scale, one El round per weight at the store                                     |
-## | tensors     | x (T, H) El, router_w (E, H) El, ids (T, K) int32, rout_w (T, K) El, partial (T, K+1, H) fp32, out_r (T, H) El    |
-## | shapes      | E a multiple of the 64-expert chunk, H a multiple of the 16-wide K step and of the 32-wide merge lane tile        |
-## | geometry    | `moe_route_fwd` grid (T, 1, 1) at 32 lanes, `moe_decode_merge_at` grid (T, H div 32, 1)                           |
+## Per token t, one threadgroup for the router, one (token, 32-col block)
+## for the merge, El storage, fp32 score math, E = experts, K = top-K:
 ##
-## Shared internals with `ffn_moe.nim`:
+##   x (H) ──► [ router_w @ x, 64-expert chunks ] ──► logits (E, fp32)
+##           ──► El round ──► [ softmax (fp32) ] ──► p (E)
+##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
+##           ──► w = p / Σp · Scale ──► El round
 ##
-## | aspect     | value                                                                                                                 |
-## | ---------- | --------------------------------------------------------------------------------------------------------------------- |
-## | shared     | the row-0 logit gather, the 5-step `simdShuffleDown` reduction trees                                                  |
-## | extraction | the routers' score chains and atom layouts differ, the reduction trees and the scratch-staged top-K stay module-local |
+##   partial[t, 0..K] (H, fp32 rows) ──► [ Σ slot order, shared last ] ──► El ──► out_r[t] (H)
 ##
+## Contract:
+##   - logits accumulate fp32 over 16-wide mma chunks, one El round,
+##     the softmax and top-K run fp32, one El round per weight at the store
+##   - tensors: x (T, H) El, router_w (E, H) El, ids (T, K) int32,
+##     rout_w (T, K) El, partial (T, K+1, H) fp32, out_r (T, H) El
+##   - shapes: E a multiple of the 64-expert chunk, H a multiple of the
+##     16-wide K step and of the 32-wide merge lane tile
+##   - grid: `moe_route_fwd` (T, 1, 1) at 32 lanes, `moe_decode_merge_at`
+##     (T, H div 32, 1)
+##   - shared internals with `ffn_moe.nim`: the row-0 logit gather, the
+##     5-step `simdShuffleDown` reduction trees. The score chains and atom
+##     layouts differ, the reduction trees and the scratch-staged top-K
+##     stay module-local
 import ../math_consts
 import workspace/crucible
 import workspace/ceramic
 import ../tile_io_rows
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # The router writes ids and weights elementwise, so it needs no bounded store
 
@@ -104,19 +112,13 @@ proc topkScores[A: static MmaAtom; F, K: static int](
   ## Selects the K largest scores of the (8, F) score tile, the lowest-index
   ## tiebreak top-K, the weights read back from the staged scores.
   ##
-  ## Dataflow: fragment (8, F) tile → staged `scratch` row → K selection
-  ## passes → `ids`, `w`
+  ##   scores (8, F) fragment tile ──► staged scratch row (E, fp32) ──► K passes ──► ids (K), w (K)
   ##
-  ## The tile stages first, each lane writes its fragment cells to `scratch`
+  ## the tile stages first, each lane writes its fragment cells to `scratch`
   ## at the element's expert index, every one of the 8·F experts exactly one
-  ## writer (the AC layout's lane → cell mapping below).
-  ##
-  ## Each selection pass scans the linear expert vector, lane==expert-slice
-  ## ownership (`e = lane + m·32`), the reference-router shape shown below.
-  ## - vLLM's grouped_topk and topk_softmax, flashinfer's fused routing,
-  ##   sglang's moe_fused_gate all scan expert slices over plain memory
-  ## - the reductions are `simdShuffle` trees, no implementation reads a mma
-  ##   fragment at top-K time or inverts a fragment layout
+  ## writer (the AC layout's lane → cell mapping below). Each selection pass
+  ## scans the linear expert vector with lane==expert-slice ownership
+  ## (`e = lane + m·32`), the reductions are `simdShuffle` trees.
   ##
   ## Per-slot walk:
   ## - the slice's max reduced by the 5-step `simdShuffleDown` tree,
@@ -134,14 +136,13 @@ proc topkScores[A: static MmaAtom; F, K: static int](
   ##   b0..b4 (row = b1+2b2+4b4, col = 2b0+4b3), the mapping
   ##   the `Apple8x8_AC_Layout` doc in `hardware/h_registry.nim` documents
   ##
-  ## Poisoned pass:
-  ## - a NaN/Inf-poisoned score pass compares false against NaN everywhere,
-  ##   the group max is NaN and `==` never matches NaN, so no score equals
-  ##   the group max and the reduction keeps the sentinel
-  ## - the slot routes to the last expert (8·F − 1) with zero weight
-  ## - the ids stay inside [0, 8·F), the downstream expert-row reads stay
-  ##   inside bounds, and a fully poisoned score set routes every K slot
-  ##   down the unmatched branch, the normalized weights then sum to zero
+  ## Poisoned pass (NaN/Inf-poisoned scores):
+  ## - the group max is NaN, `==` never matches NaN, no score equals the max,
+  ##   the reduction keeps the sentinel
+  ## - the slot routes to the last expert (8·F − 1) with zero weight, ids
+  ##   stay inside [0, 8·F), the downstream expert-row reads stay in bounds,
+  ##   a fully poisoned score set routes every K slot down the unmatched
+  ##   branch, the normalized weights then sum to zero
   const E = 8 * F
   const colFrags = F div 8
   const maskScore = fp32Lowest
@@ -192,36 +193,25 @@ proc moeRoute*[El; H, E, K: static int; Scale: static float32](
     w: var array[K, float32]) {.device.} =
   ## One token's top-K expert ids and routing weights, the chunked router
   ## GEMV, the softmax form's score pass, the scratch-staged top-K selection
-  ## by lowest index.
+  ## by lowest index. Shapes and dtypes on the pointer comments,
+  ## H/E/K/Scale static compile-time (H hidden, E experts, K top-K).
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##   x (H) ──► [ router_w @ x, E div 64 chunks ] ──► logits (E, fp32)
+  ##           ──► El round ──► [ softmax (fp32) ] ──► p (E)
+  ##           ──► top-K, lowest-index tiebreak ──► ids (K), w (K)
+  ##           ──► w = p / Σp · Scale ──► El round
   ##
-  ## | parameter      | shape, dtype, layout                                                                                                                         | producer        | unit               |
-  ## | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------ |
-  ## | x              | (num_tokens, H) El, row-major, token `t`'s activation row, the router GEMV input                                                             | host-computed   | El                 |
-  ## | router_w       | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                                                       | host-computed   | El                 |
-  ## | t              | the token index, the caller's grid coordinate in the router-only entry                                                                       | device-computed | tokens             |
-  ## | ids            | K-element int32 register array, the top-K expert ids in score order, lowest index on ties, each in [0, E)                                    | this proc       | experts            |
-  ## | w              | K-element f32 register array, the normalized routing weights w[slot] = El(p[ids[slot]] / sum·Scale), fp32 carriers holding El-rounded values | this proc       | dimensionless      |
-  ## | H, E, K        | hidden, expert count and top-K, static compile-time; H a multiple of the 16-wide K step, E a multiple of the 64-expert chunk                 | compile-time    | elements / experts |
-  ## | Scale          | the routing-weight scale, static compile-time                                                                                                | compile-time    | dimensionless      |
-  ## | scores_scratch | E fp32 elements, threadgroup-private working scratch for the selection's staged score row, the content may be uninitialized                  | this proc       | f32                |
-
-  ## Composed in-group per slot group by the mega kernel.
+  ## the (8, E div 8) score tile assembles chunk by chunk, chunk cs's 64
+  ## row-0 logits land in col-frag cs. Composed in-group per slot group by
+  ## the mega kernel.
   ##
   ## Contract:
-  ##
-  ## - the (8, E div 8) score tile assembles chunk by chunk, chunk cs's 64
-  ##   row-0 logits land in col-frag cs
-  ## - the logits round to El once, the fp32 softmax runs over the widened values,
-  ##   the normalized weights round to El (the eager routing-weights cast)
+  ## - the logits round to El once, the fp32 softmax runs over the widened
+  ##   values, the normalized weights round to El (the eager routing cast)
   ## - a poisoned score pass (NaN/Inf logits) leaves no candidate matching
-  ##   the group max, the slot routes to expert E−1 with zero weight
-  ##
-  ## | poisoned pass | value                                                               |
-  ## | ------------- | ------------------------------------------------------------------- |
-  ## | ids           | expert E−1, in [0, E), the expert-row reads stay in bounds          |
-  ## | weights       | zero and kept zero by the renorm guard, the 0/0 sum never NaNs them |
+  ##   the group max, the slot routes to expert E−1 with zero weight, ids
+  ##   in [0, E), the downstream expert-row reads stay in bounds, and the
+  ##   renorm guard keeps the 0/0 weight sum from NaNing
   const F = E div 8
   static:
     doAssert E mod 64 == 0, "moeRoute: E must be a multiple of the 64-expert chunk"
@@ -266,22 +256,12 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
     router_w: ptr UncheckedArray[El],      # (E, H) router weight
     scores_scratch: ptr UncheckedArray[float32], # (num_tokens, E) selection scratch
     num_tokens: int32) {.device.} =
-  ## Router-only pass, one grid point per token, the launch host's entry.
-  ## Stores the top-K expert ids and the El-rounded routing weights under
-  ## the `moeRoute` contract, grid (num_tokens, 1, 1) at 32 lanes.
+  ## Router-only pass, grid (num_tokens, 1, 1) at 32 lanes, one token per
+  ## threadgroup, `t` from the grid. Stores the top-K expert ids and the
+  ## El-rounded routing weights under the `moeRoute` contract, shapes and
+  ## dtypes on the pointer comments, H/E/K/Scale static compile-time:
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call,
-  ## token index arriving from the grid:
-  ##
-  ## | parameter      | shape, dtype, layout                                                                                          | producer      | unit               |
-  ## | -------------- | ------------------------------------------------------------------------------------------------------------- | ------------- | ------------------ |
-  ## | ids            | (num_tokens, K) int32, row-major, the top-K expert ids, each in [0, E)                                        | this kernel   | experts            |
-  ## | rout_w         | (num_tokens, K) El, row-major, the El-rounded routing weights                                                 | this kernel   | dimensionless      |
-  ## | x              | (num_tokens, H) El, row-major, the router GEMV inputs                                                         | host-computed | El                 |
-  ## | router_w       | (E, H) El, row-major, the router weight matrix, the checkpoint's routed-expert weights                        | host-computed | El                 |
-  ## | scores_scratch | (num_tokens, E) f32, row-major, the selection's per-token staged score row, one E-slice per threadgroup, the content may be uninitialized | this kernel   | f32                |
-  ## | num_tokens     | the token count                                                                                               | host-derived  | tokens             |
-  ## | H, E, K, Scale | hidden, expert count, top-K and the routing-weight scale, static compile-time, same constraints as `moeRoute` | compile-time  | elements / experts |
+  ##   x (H) ──► [ moeRoute ] ──► ids[t] (K), rout_w[t] (K)
   let t = int32(threadgroup_position_in_grid.x)
   var idsReg: array[K, int32]
   var wReg: array[K, float32]
@@ -295,21 +275,15 @@ proc moe_route_fwd*[El; H, E, K: static int; Scale: static float32](
 
 proc sharedGateLogit*[El; H: static int](
     x, sgw: ptr UncheckedArray[El], t: int32): float32 {.device.} =
-  ## Returns the raw fp32 shared-expert scalar logit of token t.
+  ## Returns the raw fp32 shared-expert scalar logit of token t. Shapes
+  ## and dtypes on the pointer comments, H static compile-time, a multiple
+  ## of the 16-wide K step:
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##   x[t] (H) ──► [ shared_gate_vec_w[0] @ x[t], 16-wide K steps ] ──► logit (fp32)
   ##
-  ## | parameter | shape, dtype, layout                                                                     | producer        | unit     |
-  ## | --------- | ---------------------------------------------------------------------------------------- | --------------- | -------- |
-  ## | x         | (num_tokens, H) El, row-major, token `t`'s activation row                                | host-computed   | El       |
-  ## | sgw       | (1, H) El, row-major, the shared-gate weight row, the checkpoint's shared-expert weights | host-computed   | El       |
-  ## | t         | the token index, the caller's grid coordinate                                            | device-computed | tokens   |
-  ## | H         | the hidden width, static compile-time, a multiple of the 16-wide K step                  | compile-time    | elements |
-  ## - x[t] · shared_gate_vec_w[0], the (1, H) row weight as a one-output GEMV
-  ##   over the same 16-wide K steps as the router
-  ## - element (0, 0) of the (32, 8) accumulator carries the value on lane 0,
-  ##   the caller broadcasting it with simdShuffle from lane 0
-  ## - the form's El round, if any, happening after this load
+  ## the (1, H) row weight as a one-output GEMV, element (0, 0) of the
+  ## (32, 8) accumulator carried on lane 0, the caller broadcasting with
+  ## simdShuffle from lane 0. An El round, if any, happens after this load.
   static:
     doAssert H mod 16 == 0, "sharedGateLogit: H must be a multiple of 16"
   let glX = x.gd(shape = (-1, -1, -1, -1), stride = (H, 0, H, 1))
@@ -331,26 +305,16 @@ proc moe_decode_merge_at*[El; H, K: static int](
     partial: ptr UncheckedArray[float32],  # (num_tokens, K+1, H) fp32 partials
     t, nt: int32) {.device.} =
   ## Merge walk for one (token, column block) pair at caller coordinates,
-  ## `t` the token and `nt` the H div 32 column block.
+  ## `t` the token, `nt` the H div 32 column block. Shapes and dtypes on
+  ## the pointer comments, H/K static compile-time, H a multiple of the
+  ## 32-wide lane tile:
   ##
-  ## Parameters, pointers naming their dtypes, shapes bound at the call:
+  ##   partial[t, 0..K] (H, fp32 rows) ──► [ Σ slot order, shared last ] ──► El RNE ──► out_r[t] (H)
   ##
-  ## | parameter | shape, dtype, layout                                                                                                                             | producer                         | unit               |
-  ## | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------ |
-  ## | out_r     | (num_tokens, H) El, row-major, the routed+shared expert output, produced by this proc, one El round per element at the store                     | this proc                        | El                 |
-  ## | partial   | (num_tokens, K+1, H) f32, row-major, the fp32 partials, one row per routing slot plus the shared expert last (slot order is the summation order) | the expert kernels               | f32                |
-  ## | t, nt     | the token index and the H div 32 column block                                                                                                    | device-computed grid coordinates | tokens / columns   |
-  ## | H, K      | hidden width and top-K, static compile-time, H a multiple of the 32-wide lane tile                                                               | compile-time                     | elements / experts |
-  ## - sums the token's K+1 fp32 partial rows in slot order, the shared
-  ##   contribution last, one El round at the store
-  ## - the mega kernel composes this core inline
-  ##
-  ## producers → (K+1, H) fp32 partials → slot-order sum → El store
-  ##
-  ## Instantiation contract:
-  ## - each static binding set of this core needs a distinct call-site line
-  ## - the engine's monomorphization key erases generic static bindings,
-  ##   calls that share one call-site line all collapse into a single body
+  ## the mega kernel composes this core inline. Instantiation contract:
+  ## each static binding set of this core needs a distinct call-site line,
+  ## calls sharing one call-site line collapse into a single body under the
+  ## engine's monomorphization key.
   static:
     doAssert H mod 32 == 0,
       "moe_decode_merge_at: H must be a multiple of the 32-wide lane tile"

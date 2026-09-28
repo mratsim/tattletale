@@ -8,8 +8,8 @@
 ## MMA atom property getters and derived atom geometry.
 import std/macros
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/hardware/h_configgen
-import workspace/ceramic/src/hardware/h_registry
+import ./h_configgen
+import ./h_registry
 
 {.experimental: "dynamicBindSym".}
 

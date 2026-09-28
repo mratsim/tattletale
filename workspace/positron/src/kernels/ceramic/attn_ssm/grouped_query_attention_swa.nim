@@ -76,8 +76,7 @@ import workspace/ceramic
 import ../tile_io_rows
 from ../math_consts import Log2e
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════
 #  Local device extension: the banded window mask
@@ -86,15 +85,22 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 proc maskBand[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 8, A],
     limit, window: int32) {.device.} =
-  ## Banded sliding-window mask on an 8×8 S tile.
-  ## Element (r, c) is attended iff c <= limit + r and c >= limit + r − window + 1.
-  ## Masked elements become the most-negative finite fp32
-  ## (−3.402823466e38). The online softmax excludes them: the row max
-  ## ignores them and exp2(S − m) underflows to exact +0.0. `limit`
-  ## is the block's band offset (qAbs − kv_idx·8), signed. A negative limit
-  ## masks every column of the row. An unsigned wrap leaves them attended.
-  ## The frag walk follows the loadTile lane→element mapping, so the mask
-  ## hits exactly the elements that the Q·Kᵀ mma produced.
+  ## Element (r, c) is attended iff
+  ##   limit + r − window + 1 <= c <= limit + r.
+  ## `limit` is the block's band offset, signed, a negative limit
+  ## masks whole rows. Masked elements become −3.402823466e38 (the
+  ## most-negative finite fp32), excluded by the online softmax.
+  ## For limit = 8, window = 4, X marks masked elements:
+  ##
+  ##      c:  0 1 2 3 4 5 6 7
+  ##  r = 0:  X X X X X . . .
+  ##  r = 1:  X X X X X X . .
+  ##  r = 2:  X X X X X X X .
+  ##  r = 3:  X X X X X X X X
+  ##  r = 4:  X X X X X X X X
+  ##  r = 5:  X X X X X X X X
+  ##  r = 6:  X X X X X X X X
+  ##  r = 7:  X X X X X X X X
   const M = A.getM()
   const N = A.getN()
   const rowTiles = 8 div M
@@ -123,20 +129,39 @@ proc swa_attn_fwd*(
     v: ptr UncheckedArray[float16],     # (num_kv, Nkv, D) fp16 values, already projected
     num_qo, num_kv, q_offset, H, Nkv, window: int32,
     D: static int) {.device.} =
-  ## One grid point = one (head, 8-row q block), following the module
-  ## doc's contract: the q tile loads row-bounded by num_qo. The KV
-  ## loop covers the window band blocks [kvStart, kvEnd). The fp16
-  ## store writes only the q rows below num_qo.
+  ## Grid (ceil(num_qo/8), H, 1), 32 lanes, x = the 8-row q block.
+  ## One grid point computes 8 q rows against the window-band KV
+  ## columns, causal-banded per row:
   ##
-  ## Grid (ceil(num_qo/8), H, 1), 32 lanes. The KV loop covers the blocks
-  ## [kvStart, kvEnd):
-  ##   - qAbs = q_offset + qBlock·8
-  ##   - kvStart = max(0, qAbs − window + 1) div 8
-  ##   - kvEnd = (min(num_kv − 1, qAbs + 7)) div 8 + 1
-  ## The last block may extend up to 7 rows past num_kv − 1.
-  ## Those rows are the caller's zero padding (the module doc's padding
-  ## contract). The band mask excludes them from the softmax, and the
-  ## zero v rows add nothing to the P·V mma.
+  ##            KV columns (blocks [kvStart, kvEnd))
+  ##            kvStart   kvStart+1  …   kvEnd−1
+  ##   q row 0   ███████   X                X
+  ##   q row 1   ███████   ███████          X
+  ##   …         ███████   ███████          ██
+  ##   q row 7   ███████   ███████          ██
+  ##
+  ##   █ = attended (limit − window + 1 <= c <= limit + r),
+  ##   X = masked, limit = qAbs − kvBlock·8, qAbs = q_offset + qBlock·8.
+  ## kvStart = max(0, qAbs − window + 1) div 8,
+  ## kvEnd = min(num_kv − 1, qAbs + 7) div 8 + 1.
+  ## The last block may extend up to 7 rows past num_kv − 1, the
+  ## caller's zero padding, excluded by the band mask.
+  ##
+  ## Dataflow, one grid point (tensors on edges, ops in boxes,
+  ## per KV block of the online softmax):
+  ##
+  ##   q (8, D) ──┐
+  ##              ▼
+  ##   K (D, 8) ─► [ S = q·Kᵀ ] ─► [ ·log2e ] ─► [ window mask ] ─► [ m ← max(m, S) ]
+  ##                                                                │
+  ##   P̃ = exp2(S − m) ◄────────────────────────────────────────────┘
+  ##        │                                         rescale = exp2(m_prev − m)
+  ##        │              ┌────────────────────────────────────┐
+  ##        │              │  l ← l·rescale + rowsum(P̃)        │
+  ##   V (8, D) ──► [ O ← O·rescale + P̃·V (fp32) ]            │
+  ##                └───────────────┬────────────────────────┘
+  ##                                 ▼
+  ##                 o (8, D) = O / l, fp16 store
   static: doAssert D == 64 or D == 128
 
   let qBlock = int32(threadgroup_position_in_grid.x)

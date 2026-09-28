@@ -120,5 +120,4 @@ func product_each*(t: IntOrIntTuple): auto =
   ## Examples:
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
 
-  ##
   mapDimensionsWith(t): product(it)

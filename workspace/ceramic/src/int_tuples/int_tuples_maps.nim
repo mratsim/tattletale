@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
-import workspace/ceramic/src/int_tuples/int_tuples_datatypes
+import ./int_tuples_datatypes
 
 # ═══════════════════════════════════════════════════════════════════════
 #  mapLeavesWith — recursive leaf‑wise tuple map

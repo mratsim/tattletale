@@ -32,9 +32,10 @@ import ./builtins_pragmas
 
 type
   ivec3* = tuple[x, y, z: int]
-    ## Canonical GPU coordinate vector, int domain (crucible lowers int to the
-    ## target's int width, e.g. int32 in CUDA C). Positions and dimensions are
-    ## structural grid coordinates, never wraparound arithmetic inputs.
+    ## Canonical GPU coordinate vector, int domain.
+    ## Crucible lowers int to the target's int width, int32 in CUDA C.
+    ## Positions and dimensions are structural grid coordinates,
+    ## never wraparound arithmetic inputs.
     ## Tuple so `.x` and `[idx]` access both work.
     ## `nim_to_gpu` normalizes tuple `[idx]` to a field access.
 

@@ -1,23 +1,14 @@
 ## Tests for the ceramic tensor tier.
 ##
-## Covers the owning, seq-backed `TensorOwned` plus the non-owning, ptr-backed `TensorView`.
-##
 ## Run command, from the repo root:
 ## - nim test_ceramic
-##
-## Reference:
-##   - CuTe C++: tensor_impl.hpp — operator[] uses layout()(i) for flat indexing
-##   - CuTe C++: layout_operator.cu — layout({m, n}) == layout(m, n) flat-tuple ⇔ multi-index
-##   - Python: tensor-layouts/tests/tensor.py — test_flat_eval_*, test_*_indexing
 {.experimental: "callOperator".}
 
 import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_indexing
-import workspace/ceramic/src/layout_algebra/layout_algebra
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/layout_algebra/ptr_arithmetic
+import workspace/ceramic/src/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TensorOwned construction

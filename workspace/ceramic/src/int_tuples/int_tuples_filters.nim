@@ -6,8 +6,8 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
-import workspace/ceramic/src/int_tuples/int_tuples_datatypes
-import workspace/ceramic/src/int_tuples/int_tuples_transforms
+import ./int_tuples_datatypes
+import ./int_tuples_transforms
 
 proc substIt(ast, aElem, bElem: NimNode): NimNode =
   ## Replace `it_a` with `aElem`, `it_b` with `bElem` in `ast`.

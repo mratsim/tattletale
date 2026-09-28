@@ -12,7 +12,7 @@ import std/sequtils
 import std/algorithm
 import std/typetraits
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts
+import ./layouts
 
 # ═══════════════════════════════════════════════════════════════
 #  getIndicesSortedByStride — sort permutation by stride

@@ -6,8 +6,8 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_config
+import ./tiles
+import ./tile_config
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════

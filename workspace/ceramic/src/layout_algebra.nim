@@ -38,8 +38,7 @@ import
   workspace/ceramic/src/layout_algebra/layout_constructors,
   workspace/ceramic/src/layout_algebra/layouts,
   workspace/ceramic/src/layout_algebra/layout_indexing,
-  workspace/ceramic/src/layout_algebra/layout_algebra,
-  workspace/ceramic/src/layout_algebra/ptr_arithmetic
+  workspace/ceramic/src/layout_algebra/layout_algebra
 
 # ═══════════════════════════════════════════════════════════════
 #  Datatypes
@@ -173,9 +172,3 @@ export layout_algebra.raked_product
 ## unless `ord_shape` says otherwise.
 export layout_algebra.tile_to_shape
 
-# ═══════════════════════════════════════════════════════════════
-#  Pointer arithmetic
-# ═══════════════════════════════════════════════════════════════
-
-## Element-count pointer increment (openArray variant slices), the `+%` operator.
-export ptr_arithmetic

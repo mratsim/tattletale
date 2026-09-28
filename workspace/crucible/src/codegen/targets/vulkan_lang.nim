@@ -386,7 +386,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
        ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component read of an unsigned GLSL builtin, into the int canonical domain.
+      # Component of an unsigned GLSL builtin, cast to standard Nim `int` from default uint.
       result = "int(" & ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField) & ")"
     else:
       result = ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField)

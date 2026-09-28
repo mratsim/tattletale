@@ -29,8 +29,7 @@
 
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layout_algebra
-import workspace/ceramic/src/tensors
+import ./tensor_datatypes
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties

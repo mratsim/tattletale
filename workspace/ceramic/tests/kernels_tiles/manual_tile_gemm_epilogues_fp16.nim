@@ -12,9 +12,9 @@
 ##   workspace/ceramic/tests/kernels_tiles/manual_tile_gemm_epilogues_fp16.nim
 
 import workspace/crucible
-import ../libtest_epilogues
-import ../tile_test_utils
-import ../../src/kernels/k_tile_gemm
+import workspace/ceramic/tests/libtest_epilogues
+import workspace/ceramic/tests/tile_test_utils
+import workspace/ceramic/src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 

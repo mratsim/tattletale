@@ -17,13 +17,14 @@
 ## and the NEOX half-tile rotation. The qk-norm rounds twice:
 ## `RNE(x·rmf)` then the fp16×fp16 γ multiply.
 ##
-## Dataflow:
+## Dataflow (tensors on edges, ops in boxes):
 ##
-##     x --> x² --> row_sum --> ·1/128 --> +ε --> rsqrt --> x·rmf
-##     x·rmf --> fp16 round --> γ16 multiply --> x16
-##     x16 --> halves (x1, x2)
-##     x1 --> Out[0, 64)   = x1·cos - x2·sin
-##     x2 --> Out[64, 128) = x2·cos + x1·sin
+##   x (8, 128) ──► [ x², rowsum ] ─► [ ·1/128, +ε, rsqrt ] ─► rmf (8, 1)
+##        │                                                 │
+##        └────────► [ x·rmf ] ─► [ fp16 RNE ] ─► [ ·γ16 ] ─┴─► x16 (8, 128)
+##
+##   x16 ──► (x1, x2) halves ──► [ t1 = x1·cos − x2·sin ] ──► Out cols [0, 64)
+##   cos, sin (8, 64) ────────► [ t2 = x2·cos + x1·sin ] ──► Out cols [64, 128)
 ##
 ## All norm state is fp32. The rotation runs in fp32 with explicit
 ## fused multiply-adds. The results quantize to fp16 at the store.
@@ -122,15 +123,19 @@ proc qk_norm_rope_fwd*(
     headBlocks: int32,                   # the 8-head blocks per token (grid.z size)
     xColBase: int32,                     # the head-column offset (0 for q, H·D for k)
     eps: float32) {.device.} =
-  ## Computes the module doc's contract for one 8×128 tile:
-  ##   - the `rms_norm` arithmetic (x², row_sum, rsqrt, mul_row)
-  ##   - the fp16 two-rounding γ multiply
-  ##   - the rotary half-tile rotation
-  ## The two fp16 8×64 stores write to column origins 0 and 1.
-  ## All norm state is fp32.
-  ## The rotation state is fp32 with the final fp16 rounding at the store.
-  ## `xColBase` must be a 1024-multiple (0 or H·D with D = 128 and H an 8-multiple).
-  ## The flat path passes 0.
+  ## One 8×128 tile per grid point (tensors on edges, ops in boxes):
+  ##
+  ##   X (8, 128) ──► [ x², rowsum, ·1/128, +ε, rsqrt ] ─► rmf (8, 1)
+  ##        │                                                 │
+  ##        └────────► [ x·rmf ] ─► [ fp16 RNE ] ─► [ ·γ16 ] ─┴─► x16 (8, 128)
+  ##
+  ##   x16 ──► (x1, x2) halves ──► [ t1 = x1·cos − x2·sin ] ──► Out cols [0, 64)
+  ##   cos, sin (8, 64) ────────► [ t2 = x2·cos + x1·sin ] ──► Out cols [64, 128)
+  ##
+  ## Norm state fp32, two RNE roundings (fp16 convert, fp16 γ).
+  ## Rotation fp32 with the final fp16 rounding at the store.
+  ## xColBase must be a 1024-multiple (0 or H·D, D = 128, H an
+  ## 8-multiple), the flat path passes 0.
   let gidY = int32(threadgroup_position_in_grid.y)
   let gidZ = int32(threadgroup_position_in_grid.z)
   let tile = gidY * headBlocks + gidZ

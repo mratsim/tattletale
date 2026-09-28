@@ -25,7 +25,7 @@
 ##     wheel.incr(shape)
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts
+import ./layouts
 
 # ═══════════════════════════════════════════════════════════════
 #  CoordWheel — iterate logical positions without divmod
@@ -90,7 +90,7 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 #  dispatch with `useGpuIndexing` parameter. The `_cpu` suffix
 #  here is for code that explicitly wants CPU-optimized semantics.
 
-import workspace/ceramic/src/layout_algebra/layout_indexing_gpu
+import ./layout_indexing_gpu
 import std/macros
 
 func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =

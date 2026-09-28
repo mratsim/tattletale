@@ -10,12 +10,12 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_properties
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_config
-import workspace/ceramic/src/tile_algebra/tile_ops_unary
-import workspace/ceramic/src/tile_algebra/tile_ops_binary
-import workspace/ceramic/src/tile_algebra/tile_ops_reductions
-import workspace/ceramic/src/tile_algebra/tile_mma
+import ./tiles
+import ./tile_config
+import ./tile_ops_unary
+import ./tile_ops_binary
+import ./tile_ops_reductions
+import ./tile_mma
 
 export tiles, tile_ops_unary, tile_ops_binary,
        tile_ops_reductions, tile_mma

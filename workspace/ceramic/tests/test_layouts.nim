@@ -18,9 +18,7 @@
 
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra/layouts {.all.}
-import workspace/ceramic/src/layout_algebra/layout_algebra
-import workspace/ceramic/src/layout_algebra/layout_indexing {.all.}
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════

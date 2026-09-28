@@ -154,10 +154,10 @@ import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/tensors/tensors_mma_partitioning
-import workspace/ceramic/src/kernels/k_layout_copy_gpu
+import ./k_layout_copy_gpu
 import workspace/ceramic/src/hardware/hw_copy_nvidia
-import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
-import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
+import ./k_layout_fillwith_gpu
+import ./k_layout_gemm_epilogues
 import workspace/ceramic/src/macros/static_for
 import workspace/crucible
 

@@ -61,7 +61,7 @@ from ../math_consts import InvSqrt128
 #  The fragment-layout FWHT-128
 #  ═════════════════════════════════════════════════════════════════════
 
-proc butterflyCore(rv: var array[32, float32]; lane: uint32) {.device.} =
+proc butterflyCore(rv: var array[32, float32]; lane: int) {.device.} =
   ## The 7 FWHT-128 stages over one lane's 32 register slots of a tile
   ## row, in place. Stage 1 pairs the (2s, 2s+1) slots (the lane's two
   ## vpt values, adjacent columns). Stages 2/4 exchange every slot
@@ -76,11 +76,11 @@ proc butterflyCore(rv: var array[32, float32]; lane: uint32) {.device.} =
     let b = rv[2 * s + 1]
     rv[2 * s] = a + b
     rv[2 * s + 1] = a - b
-  let sgn1 = 1.0'f32 - 2.0'f32 * float32(lane and 1'u32)
+  let sgn1 = 1.0'f32 - 2.0'f32 * float32(lane and 1)
   for s in 0'i32 ..< 32:
     let p = simdShuffle(rv[s], lane xor 1)
     rv[s] = rv[s] * sgn1 + p
-  let sgn8 = 1.0'f32 - 2.0'f32 * float32((lane and 8'u32) shr 3)
+  let sgn8 = 1.0'f32 - 2.0'f32 * float32((lane and 8) shr 3)
   for s in 0'i32 ..< 32:
     let p = simdShuffle(rv[s], lane xor 8)
     rv[s] = rv[s] * sgn8 + p
@@ -118,7 +118,7 @@ proc hadamard128*[A: static MmaAtom](
   ## The fp16 values are promoted to fp32 (exact), transformed, scaled by 1/sqrt(128), rounded back to fp16.
   const M = A.getM()
   const rowTiles = 32 div M
-  let lane = uint32(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   for n in 0'i32 ..< rowTiles:
     var rv: array[32, float32]
     for s in 0'i32 ..< 32:
@@ -138,7 +138,7 @@ proc hadamard128*[A: static MmaAtom](
   ## to fp16 first, so the fp32 working registers hold the exact fp16 images.
   const M = A.getM()
   const rowTiles = 32 div M
-  let lane = uint32(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   for n in 0'i32 ..< rowTiles:
     var rv: array[32, float32]
     for s in 0'i32 ..< 32:

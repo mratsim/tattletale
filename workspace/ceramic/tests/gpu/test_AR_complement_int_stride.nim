@@ -36,9 +36,7 @@
 import std/[unittest]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples {.all.}
-import workspace/ceramic/src/layout_algebra/layouts
-import workspace/ceramic/src/layout_algebra/layout_algebra
-import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 
 const kernelPartition = cuda:
