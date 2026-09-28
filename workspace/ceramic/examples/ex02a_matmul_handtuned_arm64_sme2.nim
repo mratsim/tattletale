@@ -17,13 +17,11 @@
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_arm64_sme2
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_packing_arm64_sme2
-export gemm_ukernel_arm64_sme2  # epilogue templates instantiate in the caller's scope
 
 import std/math
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-export int_tuples, layout_algebra, tensors
 
 {.experimental: "callOperator".}
 

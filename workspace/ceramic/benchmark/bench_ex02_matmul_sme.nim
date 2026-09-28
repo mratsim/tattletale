@@ -24,6 +24,9 @@ import std/[algorithm, monotimes, random, strutils, strformat]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned_arm64_sme2 as v_a
 import workspace/ceramic/benchmark/bench_utils
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 
 proc gemm_reference(M, N, K: int; alpha: float32;
     A: openArray[float32]; rsA, csA: int;

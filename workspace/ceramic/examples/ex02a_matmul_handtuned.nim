@@ -22,7 +22,6 @@ import workspace/cpuplatforms/x86/simd_x86
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-export int_tuples, layout_algebra, tensors
 
 proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__builtin_prefetch", nodecl.}
 

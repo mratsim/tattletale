@@ -20,7 +20,6 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/kernels/k_layout_copy_cpu
 import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
-export int_tuples, layout_algebra, tensors
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Activation enum + epilogue_body template
