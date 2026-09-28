@@ -247,20 +247,22 @@ proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
     of "z": "2"
     else: return ""
   case kind
-  of gbkThreadPositionInGrid: "get_global_id(" & d & ")"
-  of gbkThreadgroupPositionInGrid: "get_group_id(" & d & ")"
-  of gbkThreadPositionInThreadgroup: "get_local_id(" & d & ")"
-  of gbkThreadsPerThreadgroup: "get_local_size(" & d & ")"
-  of gbkThreadgroupsPerGrid: "get_num_groups(" & d & ")"
+  of gbkThreadPositionInGrid: "(int)get_global_id(" & d & ")"
+  of gbkThreadgroupPositionInGrid: "(int)get_group_id(" & d & ")"
+  of gbkThreadPositionInThreadgroup: "(int)get_local_id(" & d & ")"
+  of gbkThreadsPerThreadgroup: "(int)get_local_size(" & d & ")"
+  of gbkThreadgroupsPerGrid: "(int)get_num_groups(" & d & ")"
   of gbkThreadIndexInThreadgroup, gbkNone: ""
 
 proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## OpenCL spelling of a canonical scalar coordinate builtin referenced whole.
   case kind
   of gbkThreadIndexInThreadgroup:
-    # x-major flat thread index, parenthesized so a trailing `* k` cannot
-    # mis-associate into `+ get_local_id(0) * k`.
-    "(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
+    # x-major flat thread index, parenthesized so a trailing `* k`
+    # cannot mis-associate into `+ get_local_id(0) * k`.
+    # OpenCL index builtins are
+    # size_t, the canonical Nim type is int, the printer casts.
+    "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
   of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
      gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup,
      gbkThreadgroupsPerGrid:
@@ -427,15 +429,20 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkSimdShuffleDown:
         # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
         # function. Apple's 1.2 runtime rejects it, so this spelling is
-        # pinned as emitted text only.
+        # pinned as emitted text only. The delta operand is uint,
+        # int-literal args get the U suffix (the canonical Nim arg is int).
+        var delta = ctx.genOpenCL(ast.cArgs[1])
+        if delta.allCharsInSet(Digits):
+          delta.add 'U'
         result = indentStr & "sub_group_shuffle_down(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
-                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " & delta & ')'
       of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index.
+        # SIMD-group gather from an absolute lane index, uint operand.
+        var lane = ctx.genOpenCL(ast.cArgs[1])
+        if lane.allCharsInSet(Digits):
+          lane.add 'U'
         result = indentStr & "sub_group_shuffle(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " &
-                 ctx.genOpenCL(ast.cArgs[1]) & ')'
+                 ctx.genOpenCL(ast.cArgs[0]) & ", " & lane & ')'
       of gbkNone:
         var clArgs: seq[string]
         for arg in ast.cArgs:

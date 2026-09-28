@@ -21,8 +21,6 @@
 
 import std/algorithm
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 
 
@@ -31,12 +29,12 @@ import workspace/ceramic/src/layout_algebra
 proc runCoalesceTests: void
 proc runComplementStaticRank1Tests: void
 proc runComplementExactValueTests: void
-proc runComplementMultiModeStaticTests: void
+proc runComplementMultiDimensionStaticTests: void
 proc runComplementDynamicTests: void
 proc runComplementDisjointnessTests: void
 proc runComposeExactValueTests: void
 proc runComposeSimpleTests: void
-proc runComposeMultiModeTests: void
+proc runComposeMultiDimensionTests: void
 proc runComposeDynamicTests: void
 proc runComposeRemainderTests: void
 proc runComposeNestedTests: void
@@ -71,7 +69,7 @@ proc runTests =
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
   runComplementStaticRank1Tests()
   runComplementExactValueTests()
-  runComplementMultiModeStaticTests()
+  runComplementMultiDimensionStaticTests()
   runComplementDynamicTests()
   runComplementDisjointnessTests()
   echo "\n--- Anti-regression: crd2idx + tile_unzip ---"
@@ -79,7 +77,7 @@ proc runTests =
   echo "\n── Composition [CUTE-CM] ──"
   runComposeExactValueTests()
   runComposeSimpleTests()
-  runComposeMultiModeTests()
+  runComposeMultiDimensionTests()
   runComposeDynamicTests()
   runComposeRemainderTests()
   runComposeNestedTests()
@@ -184,7 +182,7 @@ proc runCoalesceSize1Tests =
     let c = coalesce(l)
     chkCoalesce(l)
     doAssert c === (8, 1)
-  echo "  Size-1 modes: 3 cases OK"
+  echo "  Size-1 dimensions: 3 cases OK"
 
 proc runCoalesceStride0Tests =
   block:
@@ -202,7 +200,7 @@ proc runCoalesceStride0Tests =
     let c = coalesce(l)
     chkCoalesce(l)
     doAssert c === (2, 3)
-  echo "  Stride-0 modes: 3 cases OK"
+  echo "  Stride-0 dimensions: 3 cases OK"
 
 proc runCoalesceNonContigTests =
   block:
@@ -436,8 +434,8 @@ proc runComplementExactValueTests =
     doAssert r.stride === (1, 16)
   echo "  Exact-value: 10 Python assertions OK"
 
-# ─── Multi-mode static [CUTE-CP] ───────────────────────────────
-proc runComplementMultiModeStaticTests =
+# ─── Multi-dimension static [CUTE-CP] ───────────────────────────────
+proc runComplementMultiDimensionStaticTests =
   # Shape(_2,_4):(1,2)
   block:
     let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
@@ -487,7 +485,7 @@ proc runComplementMultiModeStaticTests =
   block:
     let l = make_layout((Int[4](), Int[2]()), (Int[1](), Int[16]()))
     chkComplement(l)
-  echo "  Multi-mode static: 12 complement calls OK"
+  echo "  Multi-dimension static: 12 complement calls OK"
 
 # ─── Dynamic shapes/strides [CUTE-CP] ──────────────────────────
 proc runComplementDynamicTests =
@@ -641,7 +639,7 @@ proc runComposeSimpleTests =
   doAssert chkCompose(make_layout(4,2), make_layout(2,2))
   echo "    Simple: 15/15"
 
-proc runComposeMultiModeTests =
+proc runComposeMultiDimensionTests =
   doAssert chkCompose(make_layout((4,3),(1,1)), make_layout(12,1))
   doAssert chkCompose(make_layout(12,1), make_layout((4,3),(1,1)))
   doAssert chkCompose(make_layout(12,2), make_layout((4,3),(1,1)))
@@ -650,12 +648,12 @@ proc runComposeMultiModeTests =
   doAssert chkCompose(make_layout(12,1), make_layout((2,3),(2,4)))
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(12,1))
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(6,2))
-  # CuTe multi-mode RHS: LHS col-major (1,4) × multi-mode RHS
+  # CuTe multi-dimension RHS: LHS col-major (1,4) × multi-dimension RHS
   doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((4,3),(1,4)))
   doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((6,2),(2,1)))
   doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((4,3),(3,1)))
   doAssert chkCompose(make_layout((4,3),(3,1)), make_layout((4,3),(1,4)))
-  echo "    Multi-mode: 12/12"
+  echo "    Multi-dimension: 12/12"
 
 proc runComposeDynamicTests =
   doAssert chkCompose(make_layout(12, 1), make_layout(4,1))
@@ -917,7 +915,7 @@ proc runDivideTests: void =
   checkDiv(make_layout(int(32), int(1)), make_layout(48, 1))
   echo "    4/4"
 
-  echo "  'Dangerous' stride-0 LHS modes:"
+  echo "  'Dangerous' stride-0 LHS dimensions:"
   checkDiv(make_layout((128,4,3), (1,512,0)), make_layout(32, 1))
   checkDiv(make_layout((128,4,3), (1,512,0)), make_layout(32, 2))
   checkDiv(make_layout((16,4,3), (1,512,0)), make_layout(32, 1))
@@ -963,7 +961,7 @@ proc runDivideTests: void =
 
   ## logical_divide with Layout tiler — triggered compose flattening bug
   ## A=(8,8):(1,8), T=(2,2):(1,4)
-  ## logical_divide must preserve nested tile structure, not flatten to 4 modes
+  ## logical_divide must preserve nested tile structure, not flatten to 4 dimensions
   block:
     let A = make_layout((8, 8), (1, 8))
     let T = make_layout((2, 2), (1, 4))
@@ -993,17 +991,17 @@ proc chkLeftInv(layout: Layout) =
 proc chkLogicalProduct[A, B: Layout](blk: A; tiler: B) =
   ## Check logical_product invariants:
   ##   rank(result) == 2
-  ##   block == result.mode(0)
-  ##   compatible(tiler, result.mode(1))
+  ##   block == result.dimension(0)
+  ##   compatible(tiler, result.dimension(1))
   let R = logical_product(blk, tiler)
   doAssert rank(R) === 2,
     "logical_product: rank=" & $rank(R) & " != 2"
-  let mode0 = mode(R, 0)
-  let mode1 = mode(R, 1)
-  doAssert blk === (mode0.shape, mode0.stride),
-    "logical_product: block mismatch, expected " & $blk & " got " & $mode0
-  doAssert compatible(tiler.shape, mode1.shape),
-    "logical_product: compatible(tiler, mode1) failed, tiler=" & $tiler & " mode1=" & $mode1
+  let dim0 = dimension(R, 0)
+  let dim1 = dimension(R, 1)
+  doAssert blk === (dim0.shape, dim0.stride),
+    "logical_product: block mismatch, expected " & $blk & " got " & $dim0
+  doAssert compatible(tiler.shape, dim1.shape),
+    "logical_product: compatible(tiler, dim1) failed, tiler=" & $tiler & " dim1=" & $dim1
 
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse [CUTE-IR] + [PY-E Table 5]
@@ -1089,12 +1087,12 @@ proc runRightInvDynamicTests =
   ## Note: shapes must be static for compile-time preprod. Only strides may be dynamic.
   ## Use `let` indirection so ints stay as runtime `int` (not Int[N]).
   block:
-    # Static shapes (4,2), mixed strides: mode0=Int[1], mode1=dynamic 4
+    # Static shapes (4,2), mixed strides: dim0=Int[1], dim1=dynamic 4
     let d4 = 4
     let layout = make_layout((4, 2), (Int[1](), d4))
     chkRightInv(layout)
   block:
-    # Static shapes (2,4), mixed strides: mode0=dynamic 4, mode1=Int[1]
+    # Static shapes (2,4), mixed strides: dim0=dynamic 4, dim1=Int[1]
     let d4 = 4
     let layout = make_layout((2, 4), (d4, Int[1]()))
     chkRightInv(layout)
@@ -1204,7 +1202,7 @@ proc runLogicalProductTrivialTests =
   echo "  Trivial: 8 cases OK"
 
 proc runLogicalProductMultiTests =
-  ## [CUTE-LP] Multi-mode layouts
+  ## [CUTE-LP] Multi-dimension layouts
   chkLogicalProduct(make_layout((3,)), make_layout((2, 4)))
   chkLogicalProduct(make_layout((8, (2, 2)), (1, (2, 4))), make_layout(4, 2))
   chkLogicalProduct(make_layout((2, 2)), make_layout((3, 3), (3, 1)))
@@ -1219,7 +1217,7 @@ proc runLogicalProductMultiTests =
     make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32))),
     make_layout((2, 2), (2, 1)))
   chkLogicalProduct(make_layout(((4, 6),), ((1, 6),)), make_layout(3, 1))
-  echo "  Multi-mode: 10 cases OK"
+  echo "  Multi-dimension: 10 cases OK"
 
 proc runLogicalProductExactValueTests =
   ## [MOYE] Expected exact values
@@ -1227,9 +1225,9 @@ proc runLogicalProductExactValueTests =
     # tile=(2,2):(1,2), matrix=(3,4):(4,1)
     let R = logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
-    doAssert m0 === ((2, 2), (1, 2)), "mode0: " & $m0
-    doAssert m1 === ((3, 4), (16, 4)), "mode1: " & $m1
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === ((2, 2), (1, 2)), "dim0: " & $m0
+    doAssert m1 === ((3, 4), (16, 4)), "dim1: " & $m1
   block:
     # 1:0 × (2,2) — trivial
     let R = logical_product(make_layout(1, 0), make_layout((2, 2)))
@@ -1239,7 +1237,7 @@ proc runLogicalProductExactValueTests =
 proc runLogicalProductTests =
   echo "    Trivial:"
   runLogicalProductTrivialTests()
-  echo "    Multi-mode:"
+  echo "    Multi-dimension:"
   runLogicalProductMultiTests()
   echo "    Exact-value:"
   runLogicalProductExactValueTests()
@@ -1262,17 +1260,17 @@ proc runBlockedProductTests =
     let mat  = make_layout((C3, C4), (4, 1))
     let R = blocked_product(tile, mat)
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
-    doAssert m0 === ((2, 3), (1, 16)), "blocked mode0: " & $m0
-    doAssert m1 === ((2, 4), (2, 4)), "blocked mode1: " & $m1
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === ((2, 3), (1, 16)), "blocked dim0: " & $m0
+    doAssert m1 === ((2, 4), (2, 4)), "blocked dim1: " & $m1
   block:
     # Scalar rank-1 block * rank-1 tiler
 
     let R = blocked_product(make_layout(4, 1), make_layout(3, 1))
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
-    doAssert m0 === (4, 1), "blocked 1d mode0: " & $m0
-    doAssert m1 === (3, 4), "blocked 1d mode1: " & $m1
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === (4, 1), "blocked 1d dim0: " & $m0
+    doAssert m1 === (3, 4), "blocked 1d dim1: " & $m1
   block:
     # [PY-L] blocked vs raked: same offset set
     let blk = make_layout((2, 2), (1, 2))
@@ -1308,9 +1306,9 @@ proc runRakedProductTests =
     let mat  = make_layout((C3, C4), (4, 1))
     let R = raked_product(tile, mat)
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
-    doAssert m0 === ((3, 2), (16, 1)), "raked mode0: " & $m0
-    doAssert m1 === ((4, 2), (4, 2)), "raked mode1: " & $m1
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === ((3, 2), (16, 1)), "raked dim0: " & $m0
+    doAssert m1 === ((4, 2), (4, 2)), "raked dim1: " & $m1
   block:
     # [PY-L] raked 1d: block=4, tiler=3 — same offsets as blocked
     let blk = make_layout(4, 1)
@@ -1329,7 +1327,7 @@ proc runRakedProductTests =
 
     let R = raked_product(make_layout(4, 1), make_layout(2, 1))
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
     doAssert m0 === (2, 4), "raked 1d m0: " & $m0
     doAssert m1 === (4, 1), "raked 1d m1: " & $m1
     # Exact offset enumeration: tiler varies fastest
@@ -1347,7 +1345,7 @@ proc runRakedProductTests =
     for o in offsets:
       doAssert o in 0 ..< 16, "raked diff-rank offset out of range: " & $o
     # Verify exact structure from Python reference
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
     doAssert m0 === ((4, 2), (4, 1)), "raked diff-rank m0: " & $m0
     doAssert m1 === ((1, 2), (0, 2)), "raked diff-rank m1: " & $m1
   echo "    raked_product: 5 cases OK"
@@ -1358,7 +1356,7 @@ proc runZippedProductTests =
   #   let L = make_layout((4, 8), (1, 4))
   #   let zd = zipped_divide(L, (2, 4))
   #   doAssert rank(zd) === 2
-  #   let m0 = mode(zd, 0); let m1 = mode(zd, 1)
+  #   let m0 = dimension(zd, 0); let m1 = dimension(zd, 1)
   #   doAssert m0 === ((2, 4), (1, 4)), "zd m0: " & $m0
   #   doAssert m1 === ((2, 2), (2, 16)), "zd m1: " & $m1
   block:
@@ -1373,8 +1371,8 @@ proc runZippedProductTests =
     ## zipped_divide: int tiler (rank-1)
     let zd = zipped_divide(make_layout(6, 1), 2)
     doAssert rank(zd) === 2
-    doAssert size(mode(zd, 0)) === 2
-    doAssert size(mode(zd, 1)) === 3
+    doAssert size(dimension(zd, 0)) === 2
+    doAssert size(dimension(zd, 1)) === 3
 
   block:
     ## [MOYE] zipped_product(tile=(2,2):(1,2), matrix=(3,4):(4,1))
@@ -1383,7 +1381,7 @@ proc runZippedProductTests =
     let mat = make_layout((3, 4), (4, 1))
     let zp = zipped_product(blk, mat)
     doAssert rank(zp) === 2
-    let m0 = mode(zp, 0); let m1 = mode(zp, 1)
+    let m0 = dimension(zp, 0); let m1 = dimension(zp, 1)
     doAssert m0 === ((2, 2), (1, 2)), "zp m0: " & $m0
     doAssert m1 === ((3, 4), (16, 4)), "zp m1: " & $m1
 
@@ -1391,19 +1389,19 @@ proc runZippedProductTests =
 
 proc runTiledProductTests =
   block:
-    ## tiled_divide: rank-1, second mode unpacked
+    ## tiled_divide: rank-1, second dimension unpacked
     let td = tiled_divide(make_layout(12, 1), 3)
     doAssert rank(td) === 2, "rank-1 tiled rank: " & $rank(td)
-    doAssert size(mode(td, 0)) === 3
-    doAssert size(mode(td, 1)) === 4
+    doAssert size(dimension(td, 0)) === 3
+    doAssert size(dimension(td, 1)) === 4
   # block:
-  #   ## tiled_divide: rank-2, exact mode structure
+  #   ## tiled_divide: rank-2, exact dimension structure
   #   let L = make_layout((4, 8), (1, 4))
   #   let td = tiled_divide(L, (2, 4))
   #   doAssert rank(td) === 3, "tiled rank: " & $rank(td)
-  #   doAssert size(mode(td, 0)) === 8
-  #   doAssert size(mode(td, 1)) === 2
-  #   doAssert size(mode(td, 2)) === 2
+  #   doAssert size(dimension(td, 0)) === 8
+  #   doAssert size(dimension(td, 1)) === 2
+  #   doAssert size(dimension(td, 2)) === 2
   # block:
   #   ## [PY-L] CuTe C++: tiled_divide with Layout tiler
   #   ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1423,11 +1421,11 @@ proc runTiledProductTests =
 
 proc runFlatProductTests =
   block:
-    ## flat_divide: rank-1, both modes unpacked
+    ## flat_divide: rank-1, both dimensions unpacked
     let fd = flat_divide(make_layout(12, 1), 3)
     doAssert rank(fd) === 2, "rank-1 flat rank: " & $rank(fd)
-    doAssert size(mode(fd, 0)) === 3
-    doAssert size(mode(fd, 1)) === 4
+    doAssert size(dimension(fd, 0)) === 3
+    doAssert size(dimension(fd, 1)) === 4
   block:
     ## [PY-L] CuTe C++: flat_divide with Layout tiler
     ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1435,19 +1433,19 @@ proc runFlatProductTests =
     let fd = flat_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
     doAssert fd === ((2, 2, 2, 8), (1, 4, 2, 8)), "fd: " & $fd
   # block:
-  #   ## flat_divide: rank-2, exact mode structure
+  #   ## flat_divide: rank-2, exact dimension structure
   #   let L = make_layout((4, 8), (1, 4))
   #   let fd = flat_divide(L, (2, 4))
   #   doAssert rank(fd) === 4, "flat rank: " & $rank(fd)
-  #   let m0 = mode(fd, 0); let m1 = mode(fd, 1)
-  #   let m2 = mode(fd, 2); let m3 = mode(fd, 3)
+  #   let m0 = dimension(fd, 0); let m1 = dimension(fd, 1)
+  #   let m2 = dimension(fd, 2); let m3 = dimension(fd, 3)
   #   doAssert m0 === (2, 1), "flat m0: " & $m0
   #   doAssert m1 === (4, 4), "flat m1: " & $m1
   #   doAssert m2 === (2, 2), "flat m2: " & $m2
   #   doAssert m3 === (2, 16), "flat m3: " & $m3
 
   block:
-    ## flat_product: both modes unpacked
+    ## flat_product: both dimensions unpacked
     let fp = flat_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
     doAssert rank(fp) === 4, "flat product rank: " & $rank(fp)
     doAssert size(fp) === 4 * 12
@@ -1472,8 +1470,8 @@ proc runTileUnzipTests =
   #   let tiler = (2, 4)
   #   let divided = logical_divide(L, tiler)
   #   let unzipped = tile_unzip(divided, tiler)
-  #   let m0 = mode(unzipped, 0)
-  #   let m1 = mode(unzipped, 1)
+  #   let m0 = dimension(unzipped, 0)
+  #   let m1 = dimension(unzipped, 1)
   #   doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
   #   doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
   #   doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
@@ -1484,8 +1482,8 @@ proc runTileUnzipTests =
   #   let divided = logical_divide(L, tiler)
   #   let unzipped = tile_unzip(divided, tiler)
   #   doAssert rank(unzipped) === 2
-  #   doAssert size(mode(unzipped, 0)) === 8
-  #   doAssert size(mode(unzipped, 1)) === 4
+  #   doAssert size(dimension(unzipped, 0)) === 8
+  #   doAssert size(dimension(unzipped, 1)) === 4
   # block:
   #   ## Rank-2 layout / rank-1 tiler (partial tiler)
   #   let L = make_layout((4, 8), (1, 4))

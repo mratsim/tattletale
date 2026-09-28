@@ -55,10 +55,10 @@ export gdn_moe_layer_graph.stageNames
 from ../../kernels/ceramic/math_consts import Log2e
 import workspace/crucible
 import workspace/ceramic
-import ../../kernels/ceramic/linear
+import ../../kernels/ceramic/linear_quant/linear
 import ../../kernels/ceramic/tile_widen
-import ../../kernels/ceramic/ffn_moe_decode_single
-import ../../kernels/ceramic/moe_router
+import ../../kernels/ceramic/ffn_moe/ffn_moe_decode_single
+import ../../kernels/ceramic/ffn_moe/moe_router
 import ../../kernels/ceramic/attn_ssm/gated_delta_net_o_norm
 import ../../kernels/ceramic/attn_ssm/gated_delta_net_decode_single
 
@@ -140,7 +140,7 @@ const
     ## Out_proj row before the fold (Hidden), the mixer
     ## entry's block-output readback section.
   BfArenaLen* = sBlockOut + Hidden
-    ## bf16 arena extent in elements (≈ 97 KiB).
+    ## bf16 arena size in elements (≈ 97 KiB).
 
 const
   sG* = 0
@@ -154,7 +154,7 @@ const
     ## stage:
     ## - each threadgroup private to its slice of the staged softmax scores
   F32ArenaLen* = sScores + (TopK + 1) * NumExperts
-    ## f32 arena extent in elements (≈ 81 KiB).
+    ## f32 arena size in elements (≈ 81 KiB).
 
 const StageBlocks*: array[13, uint32] = [1'u32, 128, 64, 2, 128, 4, 1, 512,
     4, 32, 1, 9, 64]
@@ -258,7 +258,7 @@ static:
     sBlockOut == 47712, "bf16 arena anchors must match the recorded offsets"
   doAssert BfArenaLen == 49760 and sPartial == 32 and
     sScores == 18464 and F32ArenaLen == 20768,
-    "the arena extents must match the recorded lengths"
+    "the arena sizes must match the recorded lengths"
 
 
 # ─── Wave sync (device-memory counters, seq_cst fences) ──────────────
@@ -352,12 +352,12 @@ proc normRow[T](x, y, normW, stream, outp: ptr UncheckedArray[T], eps: float32) 
     stream[e] = s
     acc += s.float32 * s.float32
   var total = acc
-  total += simdShuffleDown(total, 16'u32)
-  total += simdShuffleDown(total, 8'u32)
-  total += simdShuffleDown(total, 4'u32)
-  total += simdShuffleDown(total, 2'u32)
-  total += simdShuffleDown(total, 1'u32)
-  total = simdShuffle(total, 0'u32)
+  total += simdShuffleDown(total, 16)
+  total += simdShuffleDown(total, 8)
+  total += simdShuffleDown(total, 4)
+  total += simdShuffleDown(total, 2)
+  total += simdShuffleDown(total, 1)
+  total = simdShuffle(total, 0)
   let rstd = rsqrt(total / float32(Hidden) + eps)
   for e in base ..< base + RowLaneSpan:
     outp[e] =

@@ -10,10 +10,8 @@
 import std/macros
 import std/typetraits
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/tests/layouts_testutils
 import workspace/ceramic/src/ptr_arithmetic
 

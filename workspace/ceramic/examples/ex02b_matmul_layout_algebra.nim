@@ -16,12 +16,10 @@
 import std/math
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/kernel_copy_cpu
-import workspace/ceramic/src/kernel_fillwith_cpu
-export int_tuples, layouts, layout_algebra, tensors
+import workspace/ceramic/src/kernels/k_layout_copy_cpu
+import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Activation enum + epilogue_body template

@@ -12,7 +12,7 @@ Rule table (rule | trigger | severity):
 | rule-id              | trigger                                                                                           | severity |
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
-| the-opener           | a doc comment, maintainer comment or heading opens with the article "The"                         | counted  |
+| the-opener           | a title line or heading opens with the article "The" (prose may open with The)                         | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
 | line-length          | a prose line over 140 characters                                                                  | counted  |
@@ -367,6 +367,15 @@ BANNED = [
     (r"\bfrag ordering\b|\bplane row\b|\bband[- ]model\b"
      r"|\bcomposition tier\b|\bband width\b",
      None, "name the thing directly, the quantity, the element, or the width in code terms"),
+    (r"\bextents?\b",
+     None,
+     "use size, dims, or bounds (Vulkan/CUDA ABI type names exempt)"),
+    # path-scoped: the mode ban is ceramic-only (tuples have dimensions there);
+    # crucible and positron keep their own vocabulary
+    (r"\bmodes?\b",
+     lambda l, path="": "ceramic" not in str(path) or bool(
+         re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
+     "tuples and tensors have dimensions, use dimension (compiler, POSIX, and ABI senses exempt)"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
@@ -402,7 +411,7 @@ RULES = {
     "banned-vocab": Rule("banned-vocab", True,
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
-                       "a doc comment, maintainer comment or heading opens with the article \"The\""),
+                       "a title line or heading opens with the article \"The\" (prose may open with The)"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
     "line-length": Rule("line-length", True, "a prose line over 140 characters"),
@@ -989,7 +998,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             m = re.search(pattern, hay)
             if not m:
                 continue
-            if exempt and exempt(low):
+            if exempt and (exempt(low, path) if exempt.__code__.co_argcount == 2 else exempt(low)):
                 continue
             findings.append(Finding(
                 path, n, "banned-vocab",
@@ -1025,7 +1034,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
         m = re.search(pattern, hay)
         if not m:
             continue
-        if exempt and exempt(low):
+        if exempt and (exempt(low, path) if exempt.__code__.co_argcount == 2 else exempt(low)):
             continue
         findings.append(Finding(
             path, n, "banned-vocab",
@@ -1819,11 +1828,6 @@ def scan(path, text, findings):
         check_missing_diagram(path, block, findings)
         first = next(((e[0], e[1], e[2]) for e in block if e[1] and e[2] != "heading"),
                      None)
-        if first and (block_is_doc or first[2] == "hash") \
-                and strip_backticks(first[1]).split()[:1] == ["The"]:
-            findings.append(Finding(
-                path, first[0], "the-opener",
-                "comment opens with The (open with a noun phrase or Returns ...)"))
         run = []
         air_run = []
         prev_bullet = False

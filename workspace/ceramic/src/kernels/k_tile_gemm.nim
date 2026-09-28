@@ -12,18 +12,14 @@
 # ############################################################
 
 import workspace/crucible
-import ../int_tuples
-import ../layouts
-import ../layout_constructors
-import ../layout_indexing
-import ../tensors
-import ../ptr_arithmetic
-import ../tile_algebra
-import ../tile_algebra/tile_epilogues_backend
-import ../tile_algebra/tile_io_bounded
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra
+import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
+import workspace/ceramic/src/tile_algebra/tile_io_bounded
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra, tile_epilogues_backend, tile_io_bounded
+export layout_algebra, tensors, tile_algebra, tile_epilogues_backend, tile_io_bounded
 
 proc gemm_with_epilogue*[TIn, TOut; Epi](
     D: ptr UncheckedArray[TOut], rsd, csd: int32,
@@ -161,7 +157,7 @@ proc gemm*[TIn, TOut](D: ptr UncheckedArray[TOut],
   ##   - the A, B and C tile loads are bounded by the raw dims,
   ##     out-of-range lanes hold zeros in-register and never touch memory
   ##   - the k loop runs ceil(K / tileK) slices and the final D store is
-  ##     masked at the real M×N extent, β = 0 skips the C load
+  ##     masked at the real M×N region, β = 0 skips the C load
   const TileDim = 32
   const tileK = 16
   let gd_a = A.gd(shape = (1, 1, M, K), stride = (0, 0, rsa, csa))

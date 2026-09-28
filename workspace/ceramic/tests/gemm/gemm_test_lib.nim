@@ -7,13 +7,13 @@
 
 import std/[random, strformat, math, typetraits]
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
-import workspace/ceramic/src/atoms_mma_partitioning
-import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/crucible
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -47,9 +47,9 @@ proc allClose(testC, refC: openArray[float32];
 # ═════════════════════════════════════════════════════════════════════════
 
 proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
-    C: var (TensorView[T, ShC, StC] or Tensor[T, ShC, StC]),
-    A: TensorView[T, ShA, StA] or Tensor[T, ShA, StA],
-    B: TensorView[T, ShB, StB] or Tensor[T, ShB, StB]) =
+    C: var (TensorView[T, ShC, StC] or TensorOwned[T, ShC, StC]),
+    A: TensorView[T, ShA, StA] or TensorOwned[T, ShA, StA],
+    B: TensorView[T, ShB, StB] or TensorOwned[T, ShB, StB]) =
   ## Reference fragment gemm: C[m,n] += A[m,k] * B[n,k] (outer product).
   ## Reference GEMM for the GPU kernels, not a performance kernel.
   const
@@ -57,11 +57,11 @@ proc gemm_ref*[T, ShA, StA, ShB, StB, ShC, StC](
     N = ShC.default[1]
     K = ShA.default[1]
   when typeof(ShA.default[0]) isnot typeof(M):
-    {.error: "gemm_ref: A mode 0 (M) != C mode 0".}
+    {.error: "gemm_ref: A dimension 0 (M) != C dimension 0".}
   when typeof(ShB.default[0]) isnot typeof(N):
-    {.error: "gemm_ref: B mode 0 (N) != C mode 1".}
+    {.error: "gemm_ref: B dimension 0 (N) != C dimension 1".}
   when typeof(ShA.default[1]) isnot typeof(K):
-    {.error: "gemm_ref: A mode 1 (K) != B mode 1".}
+    {.error: "gemm_ref: A dimension 1 (K) != B dimension 1".}
   for k in 0 ..< K:
     for m in 0 ..< M:
       for n in 0 ..< N:

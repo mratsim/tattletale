@@ -5,14 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ./int_tuples/int_tuples_filters
+import workspace/ceramic/src/int_tuples/int_tuples_filters
 import std/macros, std/typetraits
-import ./int_tuples/int_tuples_datatypes
-import ./int_tuples/int_tuples_compiletime
-import ./int_tuples/int_tuples_folds
-import ./int_tuples/int_tuples_maps
-import ./int_tuples/int_tuples_transforms
-import ./int_tuples/int_tuples_zips
+import workspace/ceramic/src/int_tuples/int_tuples_datatypes
+import workspace/ceramic/src/int_tuples/int_tuples_compiletime
+import workspace/ceramic/src/int_tuples/int_tuples_folds
+import workspace/ceramic/src/int_tuples/int_tuples_maps
+import workspace/ceramic/src/int_tuples/int_tuples_transforms
+import workspace/ceramic/src/int_tuples/int_tuples_zips
 
 export int_tuples_datatypes
 export int_tuples_filters
@@ -120,5 +120,4 @@ func product_each*(t: IntOrIntTuple): auto =
   ## Examples:
   ##   product_each(((2,2), (2,8)))  →  (4, 16)
 
-  ##
-  mapModesWith(t): product(it)
+  mapDimensionsWith(t): product(it)

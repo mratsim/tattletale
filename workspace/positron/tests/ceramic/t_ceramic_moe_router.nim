@@ -68,8 +68,8 @@
 import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/moe_router
-import ../../src/kernels/ceramic/ffn_moe_decode_single
+import ../../src/kernels/ceramic/ffn_moe/moe_router
+import ../../src/kernels/ceramic/ffn_moe/ffn_moe_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
 from ../../src/kernels/ceramic/math_consts import Log2e
@@ -133,7 +133,7 @@ const MoeRouterMsl = metal:
       x, sgw: ptr UncheckedArray[bfloat16]) {.global.} =
     let t = int32(threadgroup_position_in_grid.x)
     let v = sharedGateLogit[bfloat16, 2048](x, sgw, t)
-    if int(thread_index_in_threadgroup) == 0:
+    if thread_index_in_threadgroup == 0:
       outp[t] = v
 
   proc cer_moe_merge_bf16(
@@ -155,7 +155,7 @@ const MoeRouterMsl = metal:
       x, sgw: ptr UncheckedArray[float16]) {.global.} =
     let t = int32(threadgroup_position_in_grid.x)
     let v = sharedGateLogit[float16, 2048](x, sgw, t)
-    if int(thread_index_in_threadgroup) == 0:
+    if thread_index_in_threadgroup == 0:
       outp[t] = v
 
 # ─── Host, the independent reference ─────────────────────────────────

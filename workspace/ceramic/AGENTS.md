@@ -67,9 +67,9 @@ GPU-suitable kernels use flat-index iteration (`for i: tv(i) = ...`), acceptable
 
 | Category | File |
 |----------|------|
-| Fill (GPU) | `kernel_fillwith_gpu.nim` |
-| Fill (CPU) | `kernel_fillwith_cpu.nim` |
-| Copy (GPU) | `kernel_copy_gpu.nim` |
-| Copy (CPU) | `kernel_copy_cpu.nim` |
-| GEMM | `kernel_gemm_gpu.nim` |
-| Epilogue | `kernel_gemm_epilogues.nim` |
+| Fill (GPU) | `k_layout_fillwith_gpu.nim` |
+| Fill (CPU) | `k_layout_fillwith_cpu.nim` |
+| Copy (GPU) | `k_layout_copy_gpu.nim` |
+| Copy (CPU) | `k_layout_copy_cpu.nim` |
+| GEMM | `k_layout_gemm.nim` |
+| Epilogue | `k_layout_gemm_epilogues.nim` |

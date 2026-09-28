@@ -4,7 +4,6 @@
 ## that are reused across all experiment files.
 
 import std/[math, strformat, strutils, random]
-import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/crucible
@@ -52,7 +51,7 @@ proc naive_matmul[T](
 #  Validation
 # ═════════════════════════════════════════════════════════════════════════
 
-proc allClose[T](testC: Tensor[T, _, _], refC: Tensor[T, _, _];
+proc allClose[T](testC: TensorOwned[T, _, _], refC: TensorOwned[T, _, _];
                     rel_tol: T = T(1e-5); abs_tol: T = T(1e-8)) =
   ## Compare two tensors element-wise with numpy.allclose semantics:
   ## |test - ref| <= abs_tol + rel_tol·|ref| (single condition, NaN never

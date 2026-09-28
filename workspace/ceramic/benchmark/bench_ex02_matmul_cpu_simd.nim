@@ -27,6 +27,9 @@ import workspace/ceramic/examples/ex02a_matmul_handtuned as v_a
 import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
 import workspace/ceramic/benchmark/laser_matmul/gemm as laser_gemm
 import workspace/ceramic/benchmark/bench_utils
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 
 const
   ProblemSizes = [128, 512, 1024, 1920]

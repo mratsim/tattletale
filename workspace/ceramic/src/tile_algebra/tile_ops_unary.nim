@@ -4,8 +4,8 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-import ../int_tuples
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/tensors
 import ./tiles
 import ./tile_config
 import workspace/crucible
@@ -31,35 +31,35 @@ template to*(x: untyped, TOut: typedesc): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 func rsqrt*[T; rowTiles, vpt: static int](
-    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
-    src: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    dst: var TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst = 1/sqrt(src), per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = rsqrt(src.data[i])
 
 func exp2*[T; rowTiles, vpt: static int](
-    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
-    src: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    dst: var TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst = 2^src, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = exp2(src.data[i])
 
 func zero*[T; rowTiles, vpt: static int](
-    vec: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    vec: var TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## Zeroes the col-vec's slots.
   for i in 0 ..< rowTiles * vpt:
     vec.data[i] = 0.0'f32
 
 func neg_infty*[T; rowTiles, vpt: static int](
-    vec: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    vec: var TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## Seeds each slot with the most-negative finite fp32. Any finite
   ## tile value exceeds it, so the first 3-arg `row_max` replaces it.
   for i in 0 ..< rowTiles * vpt:
     vec.data[i] = -3.402823466e38'f32
 
 func copy*[T; rowTiles, vpt: static int](
-    dst: var Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
-    src: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    dst: var TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    src: TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst = src, per slot.
   for i in 0 ..< rowTiles * vpt:
     dst.data[i] = src.data[i]
@@ -137,7 +137,7 @@ template map*[TOut, TIn; R, C: static int; A: static MmaAtom](
     f: untyped): untyped =
   ## dst[i] = f(src[i]) per element, over the tile's whole fragment walk.
   ##
-  ## Contract:
+  ## 
   ## - the body reads the source element as `x`
   ##
   ## Example, RNE round-and-widen back to f32 over the score tile:
@@ -158,7 +158,7 @@ template map2*[TOut, TIn; R, C: static int; A: static MmaAtom](
     f: untyped): untyped =
   ## dst[i] = f(src1[i], src2[i]) per element, over the tile's whole fragment walk.
   ##
-  ## Contract:
+  ## 
   ## - the body reads the source elements as `x` and `y`
   ## - both operands share one element type and geometry
   ##

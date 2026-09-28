@@ -39,7 +39,7 @@
 import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/ffn_moe_decode_single
+import ../../src/kernels/ceramic/ffn_moe/ffn_moe_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
 import ../properties/properties

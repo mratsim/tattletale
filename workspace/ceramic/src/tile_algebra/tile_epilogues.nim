@@ -6,12 +6,10 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import ../int_tuples
-import ../layouts
-import ../layout_constructors
-import ../tensors
-import ../ptr_arithmetic
-import ../atoms_mma_partitioning
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/h_properties
 import ./tiles
 import ./tile_config
 import ./tile_ops_unary
@@ -30,7 +28,7 @@ export tiles, tile_ops_unary, tile_ops_binary,
 type Epilogue* = concept
   ## A tile epilogue computes the output tile D = f(AB)
   ## from the accumulated GEMM result.
-  proc apply(op: Self, tmp: var (TensorView or Tensor), AB: TensorView or Tensor)
+  proc apply(op: Self, tmp: var (TensorView or TensorOwned), AB: TensorView or TensorOwned)
   proc apply(op: Self, tmp: var RtLeft, AB: RtLeft)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -64,8 +62,8 @@ type EpiIdentity* = object
 
 func apply*[T, Sh, StAB, StR](
     op: EpiIdentity,
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB, per element.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -93,8 +91,8 @@ type EpiReLU* = object
 
 func apply*[T, Sh, StAB, StR](
     op: EpiReLU,
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), per element.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -130,8 +128,8 @@ func initEpiAXPBY*[T, Sh, StC](alpha: T, beta: T,
 
 func apply*[T, Sh, StAB, StC, StR](
     op: EpiAXPBY[T, Sh, StC],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = α·AB + β·C, per element.
   ## β = 0 skips reading C, saving memory bandwidth
   ## α = 1 skips the multiply.
@@ -258,7 +256,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
     CReg: RtLeft[T, R, C, A]) {.inline.} =
   ## D = α·AB + β·CReg, per owned slot, the C operand a register tile.
   ##
-  ## Contract:
+  ## 
   ##   - C arrives bounded-loaded, the boundary loader already applied
   ##     the runtime strides, so op.C is never dereferenced
   ##   - out-of-range lanes hold the zero fill
@@ -305,8 +303,8 @@ func initEpiAddBias*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiAddBias[T, Sh, 
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiAddBias[T, Sh, StB],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, the bias a column vector broadcast over the tile rows.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:
@@ -333,7 +331,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
     BiasReg: RtLeft[T, R, C, A]) {.inline.} =
   ## D = AB + BiasReg, per owned slot, the bias a bounded register tile.
   ##
-  ## Contract:
+  ## 
   ##   - the bias_gmem view stays unsharded and never dereferenced
   ##   - out-of-range columns carry the zero fill, so the add is inert
   ##     on the lanes the masked store drops
@@ -360,8 +358,8 @@ func initEpiLinearBiasReLU*[T, Sh, St](bias: TensorView[T, Sh, St]): EpiLinearBi
 
 func apply*[T, Sh, StAB, StB, StR](
     op: EpiLinearBiasReLU[T, Sh, StB],
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]),
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB + bias), the bias a column vector broadcast over the tile rows.
   const S = size(tmp).toIntVal()
   for i in 0 ..< S:

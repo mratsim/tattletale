@@ -23,10 +23,10 @@
 
 import std/math
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
 
 {.experimental: "callOperator".}
 

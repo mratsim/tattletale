@@ -54,6 +54,28 @@ def main():
                  [r for r in rules_at(
                      "## the walk joins keyHeadOf, the shared derivation\n")
                   if r[1] == "decl-of-suffix"], [])
+    ok &= expect("extent fires",
+                 [r for r in rules_at("## the tile reads over the padded extent\n")
+                  if r[1] == "banned-vocab"],
+                 [(1, "banned-vocab")])
+    ok &= expect("extents plural fires",
+                 [r for r in rules_at("## launch extents come from the chevron\n")
+                  if r[1] == "banned-vocab"],
+                 [(1, "banned-vocab")])
+    ok &= expect("mode fires",
+                 [r for r in rules_at("## per-mode contribution of the coord\n",
+                          name="workspace/ceramic/src/probe.nim")
+                  if r[1] == "banned-vocab"],
+                 [(1, "banned-vocab")])
+    ok &= expect("posix mode quiet",
+                 [r for r in rules_at("proc dlopen(path: cstring; mode: cint): pointer\n")
+                  if r[1] == "banned-vocab"], [])
+    ok &= expect("variant phrasing quiet",
+                 [r for r in rules_at("## the store guard is M in both variants\n")
+                  if r[1] == "banned-vocab"], [])
+    ok &= expect("dimension quiet",
+                 [r for r in rules_at("## per-dimension contribution of the coord\n")
+                  if r[1] == "banned-vocab"], [])
     ok &= expect("plain name quiet",
                  [r for r in rules_at("proc widenDtype(x: int): int = x\n")
                   if r[1] == "decl-of-suffix"], [])

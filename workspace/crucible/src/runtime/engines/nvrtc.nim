@@ -9,7 +9,7 @@
 ##
 ## The NVRTC JIT driver helpers (initNvrtc/compile/getPtx/load) are private
 ## engine internals: `ingest` compiles via NVRTC and `runImpl` loads the
-## module and launches. Launch extents come from the chevron `LaunchConfig`
+## module and launches. Launch dims come from the chevron `LaunchConfig`
 ## (grid/blk are full 3D Dim3) — there is no public low-level `execute`
 ## entry point. This module imports no codegen modules. Kernels travel as
 ## source strings.
@@ -187,10 +187,10 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
   ## engines alive the wrong context could otherwise be targeted).
   check cuCtxSetCurrent(engine.nvrtc.context)
   doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
-    "CUDA grid extent must have every axis > 0, got " &
+    "CUDA grid dims must have every axis > 0, got " &
     $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
   doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
-    "CUDA block extent must have every axis > 0, got " &
+    "CUDA block dims must have every axis > 0, got " &
     $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()

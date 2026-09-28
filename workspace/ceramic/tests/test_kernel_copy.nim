@@ -3,10 +3,10 @@
 ## Tests both CPU and GPU copy paths with static and dynamic layouts.
 
 import ../src/int_tuples
-import ../src/layouts
+import ../src/layout_algebra
 import ../src/tensors
-import ../src/kernel_copy_cpu
-import ../src/kernel_copy_gpu
+import ../src/kernels/k_layout_copy_cpu
+import ../src/kernels/k_layout_copy_gpu
 
 {.experimental: "callOperator".}
 

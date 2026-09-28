@@ -11,10 +11,9 @@
 import std/[unittest]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/tensor_datatypes
+import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/kernel_fillwith_gpu
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 const kernel = cuda:
   proc kernel(C: ptr UncheckedArray[float32]) {.global.} =

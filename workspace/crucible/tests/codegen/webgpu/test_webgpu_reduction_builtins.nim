@@ -34,9 +34,9 @@ macro webgpuEmit*(body: typed): string =
 const kernelCode = webgpuEmit:
   proc reductionKernel(output: ptr UncheckedArray[float32]) {.global.} =
     let acc = output[0]
-    let v = simdShuffleDown(acc, 1'u32)
+    let v = simdShuffleDown(acc, 1)
     output[1] = v
-    let w = simdShuffle(v, 0'u32)
+    let w = simdShuffle(v, 0)
     output[2] = w
 
 proc runTest() =

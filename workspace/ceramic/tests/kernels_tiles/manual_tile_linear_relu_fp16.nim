@@ -12,8 +12,8 @@
 ##   workspace/ceramic/tests/kernels_tiles/manual_tile_linear_relu_fp16.nim
 
 import workspace/crucible
-import ../libtest_epilogues
-import ../../src/kernels/k_tile_gemm
+import workspace/ceramic/tests/libtest_epilogues
+import workspace/ceramic/src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 

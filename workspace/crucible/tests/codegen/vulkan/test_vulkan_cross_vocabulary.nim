@@ -19,16 +19,16 @@ const kernel2d = vulkan:
   proc crossVocab2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     let gx = blockIdx.x * blockDim.x + threadIdx.x
     let gy = blockIdx.y * blockDim.y + threadIdx.y
-    C[gy * 8'u32 + gx] = gy * 8'u32 + gx
+    C[gy * 8 + gx] = uint32(gy * 8 + gx)
     # OpenCL idiom in a Vulkan kernel: get_global_id(d) must agree with the CUDA-idiom global id above.
-    if gx == get_global_id(0'u32) and gy == get_global_id(1'u32):
+    if gx == get_global_id(0) and gy == get_global_id(1):
       # Position-derived flat-local value: with blk (4,2) the x-major flat
       # index maps (tx, ty) -> ty*4 + tx, so slot i holds tx + 10*ty for
       # the (tx, ty) at that slot. A y-major mapping permutes these values.
-      C[64'u32 + thread_index_in_threadgroup] =
-        thread_position_in_threadgroup.x + 10'u32 * thread_position_in_threadgroup.y
+      C[64 + thread_index_in_threadgroup] =
+        uint32(thread_position_in_threadgroup.x + 10 * thread_position_in_threadgroup.y)
     else:
-      C[64'u32 + thread_index_in_threadgroup] = 99'u32
+      C[64 + thread_index_in_threadgroup] = 99'u32
     syncthreads()
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return

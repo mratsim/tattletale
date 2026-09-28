@@ -8,8 +8,8 @@
 ## Bounded tile I/O:
 ##   the ragged edge of a register tile against the real region.
 ##
-## A register tile straddles the region edge when its plane origin plus extent
-## crosses the raw runtime (row, col) extents. The per-lane contract:
+## A register tile straddles the region edge when its plane origin plus size
+## crosses the raw runtime (row, col) bounds. The per-lane contract:
 ##
 ## | lane          | loadTileBounded | tileStoreMask | storeTileMasked           |
 ## | ------------- | --------------- | ------------- | ------------------------- |
@@ -21,9 +21,9 @@
 ## grid-aligned shapes keep the aligned path bit-for-bit.
 
 import workspace/crucible
-import ../int_tuples
-import ../layout_indexing
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 import ./tiles
 import ./tile_config
 import ./tile_io
@@ -58,7 +58,7 @@ proc loadTileBounded*[TIn; TOut; R, C: static int; A: static MmaAtom](
   ##   - tile, an unowned (R, C) register tile, loaded lane by lane
   ##   - gl, the (rows, cols) global-memory view, the tile's plane at plane
   ##     origin `origin[2]·R` (rows) and `origin[3]·C` (cols)
-  ##   - limitRows and limitCols, the raw extents along the view's dims
+  ##   - limitRows and limitCols, the raw bounds along the view's dims
   ##
   ## Output:
   ##   tile.frags holds the loaded values for the in-range lanes and `T(0)`
@@ -75,7 +75,7 @@ proc loadTileBounded*[TIn; TOut; R, C: static int; A: static MmaAtom](
     const rowTiles = R div M
     const colTiles = C div N
     const vpt = A.getVpt()
-    let lane = int(thread_index_in_threadgroup)
+    let lane = thread_index_in_threadgroup
     let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
     let row = cell mod M
     let col = cell div M
@@ -110,7 +110,7 @@ proc loadTileBounded*[TIn; TOut; R, C: static int; A: static MmaAtom](
     const rowTiles = R div M
     const colTiles = C div N
     const vpt = A.getVpt()
-    let lane = int(thread_index_in_threadgroup)
+    let lane = thread_index_in_threadgroup
     let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
     let row = cell mod M
     let col = cell div M
@@ -141,7 +141,7 @@ proc tileStoreMask*[T; R, C: static int; A: static MmaAtom](
   ## Per-lane store predication for a LayoutLeft tile's valid (M, N) range,
   ## measured from the tile's plane origin.
   ##
-  ## Contract:
+  ## 
   ##   - bit ((n·colTiles + m)·vpt + v) is set when the lane's cell
   ##     (row + n·M, col + m·N + v) is inside the valid range
   ##   - the bit order matches `storeTile`/`storeTileMasked`'s iteration order
@@ -151,7 +151,7 @@ proc tileStoreMask*[T; R, C: static int; A: static MmaAtom](
   const rowTiles = R div M
   const colTiles = C div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -170,7 +170,7 @@ proc storeTileMasked*[TIn; TOut; R, C: static int; A: static MmaAtom](
   ## Masked store for a LayoutLeft tile, writes only the tile's cells inside
   ## (validM, validN), the valid counts measured from the tile's plane origin.
   ##
-  ## Contract:
+  ## 
   ##   - out-of-range cells leave the destination untouched, the destination buffer may be larger than the real region and keep the padding
   ##   - lane→cell mapping and iteration order match `storeTile`
   ##   - a tile fully inside both limits stores through `storeTile` (no guard)
@@ -182,7 +182,7 @@ proc storeTileMasked*[TIn; TOut; R, C: static int; A: static MmaAtom](
     const rowTiles = R div M
     const colTiles = C div N
     const vpt = A.getVpt()
-    let lane = int(thread_index_in_threadgroup)
+    let lane = thread_index_in_threadgroup
     let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
     let row = cell mod M
     let col = cell div M

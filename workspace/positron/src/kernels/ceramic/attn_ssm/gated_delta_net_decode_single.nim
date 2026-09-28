@@ -11,17 +11,17 @@
 ##
 ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
 ##
-  ## | contract       | value                                                                                                                                                  |
-  ## | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  ## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                             |
-  ## | q, k           | (B·Hk, Dk) element dtype, already l2-normalized (l2norm stays host-side)                                                                               |
-  ## | v, beta        | (B·Hv, Dv) and (B·Hv,) element dtype, g is (B·Hv,) f32 log-decay                                                                                       |
-  ## | y              | (B·Hv, Dv) element dtype, one round-to-nearest-even                                                                                                    |
-  ## | element dtype  | compile-time element type of one body (`gdnDecodeStepTile`'s `T` generic, inferred from the pointers)                                                  |
-  ## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                           |
-  ## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                     |
-  ## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
-  ## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state                                                       |
+## | contract       | value                                                                                                                                                  |
+## | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+## | state math     | all fp32 and never rounds, one 8-row state tile per threadgroup, no inter-threadgroup sync                                                             |
+## | q, k           | (B·Hk, Dk) element dtype, already l2-normalized (l2norm stays host-side)                                                                               |
+## | v, beta        | (B·Hv, Dv) and (B·Hv,) element dtype, g is (B·Hv,) f32 log-decay                                                                                       |
+## | y              | (B·Hv, Dv) element dtype, one round-to-nearest-even                                                                                                    |
+## | element dtype  | compile-time element type of one body (`gdnDecodeStepTile`'s `T` generic, inferred from the pointers)                                                  |
+## | head mapping   | value head bh reads key head `(bh mod Hv) div hkRatio + (bh div Hv)·Hk`, hkRatio = Hv div Hk                                                           |
+## | batch          | the head axis, one launch at grid (Dv div TileR, B·Hv) over per-sequence stacked inputs is the batched decode step                                     |
+## | decay / q̃     | exp2(g·log2e), the log2e factor is the shared `math_consts.Log2e`, Dk^-0.5 folded into q in f32 (rsqrt-multiply form, Metal has no exp device builtin) |
+## | g precondition | finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the persistent f32 state                                                       |
 
 #
 ## Register-tile naming convention, shared by the gdn and kda kernels:
@@ -31,11 +31,11 @@
 ##   operand loads straight into its `32` form, an element-dtype operand
 ##   widens its `T` form into the `32` form
 ##
-## - Entries are consumer-side, a `metal:` block wraps the grid-driven proc with concrete
+## - Entries are consumer-side, a `metal:` block wraps the launch-driven proc with concrete
 ##   static (Dk, Dv, TileR), one call-site line per static binding set
 ## - The engine's monomorphization key erases static bindings, calls sharing a call-site line collapse into one body
 ## - The decode mega kernel composes the tile core `gatedDeltaDecodeStepTileAt` inline instead,
-##   the kda module's grid-driven entry forwards into it with decayChannel = true and qDivQScale = true
+##   the kda module's launch-driven entry forwards into it with decayChannel = true and qDivQScale = true
 ##
 ## Binding and state ABI:
 ## - hosts binding through the Metal engine's no-copy path get in-place state
@@ -55,8 +55,7 @@ import workspace/crucible
 import workspace/ceramic
 import ../tile_widen
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # ─── Module-local device helpers ─────────────────────────────────────
 
@@ -78,54 +77,44 @@ proc gatedDeltaDecodeStepTileAt*[T; U; B](
     decayChannel: static bool = false,    # the decay form, false the gdn scalar g broadcast over the state tile, true the kda per-channel g tile
     qDivQScale: static bool = false,      # the q̃ form, false multiply by the device-side rsqrt(Dk), true divide by the runtime qScale
     Dk, Dv, TileR: static int) {.device.} =
-  ## One (bh, TileR-row) state tile of the shared gated-delta decode step (gdn and kda forms)
-  ## at the caller's coordinates
+  ## One (bh, TileR-row) state tile of the shared gated-delta decode step
+  ## (gdn and kda forms) at the caller's coordinates:
+  ## - `decayChannel = false`, the gdn form, S ← S·exp2(g·log2e), one scalar
+  ##   log-decay per value head
+  ## - `decayChannel = true`, the kda form, S ← S·Diag(exp2(g·log2e)), one
+  ##   log-decay per key channel
+  ## - `qDivQScale = false`, q̃ = q·rsqrt(Dk) device-side in f32
+  ## - `qDivQScale = true`, q̃ = q/qScale with the runtime qScale, the host's
+  ##   f64 √Dk cast to f32
+  ## - every fork keeps each form's exact op sequence and operand order, no
+  ##   shared expression re-associates and no op crosses a rounding point
+  ## - the element-dtype loads and the one element-dtype y rounding are the
+  ##   only dtype-dependent steps, the tile walk is dtype-mechanical
+  ## - Hk > 0, Hv an exact multiple of Hk, hkRatio = Hv div Hk
   ##
-  ## - `decayChannel = false`, the gdn form, S ← S·exp2(g·log2e), one scalar log-decay per value head
-  ## - `decayChannel = true`, the kda form, S ← S·Diag(exp2(g·log2e)), one log-decay per key channel
-  ## - the q̃ forms, `qDivQScale = false` q̃ = q·rsqrt(Dk) device-side in f32, `true` q̃ = q/qScale with the runtime qScale, the host's f64 √Dk
-  ##
-  ## | parameter     | shape, dtype, layout                                                                                                                                             | producer                                                                                                                                                         | unit                       |
-  ## | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-  ## | state         | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state, written back in place                              | the previous step's launch writes it, this kernel reads and rewrites it in place, the buffer persists with no in-kernel reset, the host owns layout and lifetime | f32, never rounds          |
-  ## | y             | (B·Hv, Dv) El, row-major, the step's output, one round-to-nearest-even per element                                                                               | this kernel                                                                                                                                                      | El                         |
-  ## | k             | row-major, the key vector of the key head this tile serves, post-l2norm (the l2norm stays host-side), gdn element dtype, kda f32                                 | host-computed                                                                                                                                                    | U                          |
-  ## | q             | row-major, the query vector of the same key head, post-l2norm, host-computed, the q̃ fold happens device-side in f32 per the q̃ form                             | host-computed (the fold device-side)                                                                                                                             | U                          |
-  ## | v             | (B·Hv, Dv) El, row-major, the value vector of the value head this tile serves                                                                                    | host-computed                                                                                                                                                    | El                         |
-  ## | g             | f32 log decay, gdn (B·Hv,) per value head, kda (B·Hk, Dk) per key channel, finite and ≤ 0 by construction, no kernel clamp, a violating g explodes the f32 state | host-computed                                                                                                                                                    | natural-log decay exponent |
-  ## | beta          | (B·Hv,) one per value head, the delta weighting, gdn element dtype, kda f32                                                                                      | host-computed                                                                                                                                                    | dimensionless              |
-  ## | qScale        | √Dk, the host's f64 sqrt cast to f32, dead under the rsqrt q̃ form                                                                                               | host-computed (the divide device-side)                                                                                                                           | dimensionless              |
-  ## | Hv, Hk        | value and key head counts, host-derived from the model config                                                                                                    | host-computed                                                                                                                                                    | heads                      |
-  ## | hkRatio       | Hv div Hk, the GQA head ratio                                                                                                                                    | host-computed                                                                                                                                                    | dimensionless              |
-  ## | Dk, Dv, TileR | static tile geometry (head dim, value dim, the row block height)                                                                                                 | compile-time                                                                                                                                                     | elements                   |
-  ## | decayChannel  | the decay form, false the gdn scalar g, true the kda per-channel g tile                                                                                          | compile-time                                                                                                                                                     | form                       |
-  ## | qDivQScale    | the q̃ form, false the gdn rsqrt-multiply, true the kda divide by the runtime qScale                                                                             | compile-time                                                                                                                                                     | form                       |
-  ## | dvBlock, bh   | the Dv div TileR row-block index and the (sequence, value head) flat head index                                                                                  | device-computed grid coordinates                                                                                                                                 | elements                   |
-  ##
-  ## - the element dtype is an unconstrained compile-time generic, U the k/q storage dtype,
-  ##   B the beta storage dtype, both inferred from the call
-  ## - every fork keeps each form's exact op sequence and operand order, no shared
-  ##   expression re-associates and no op crosses a rounding point
-  ## - the element-dtype loads and the one element-dtype y rounding are the only
-  ##   dtype-dependent steps, the tile walk is dtype-mechanical
-  ##
-  ##   S ← S·exp2(g·log2e) + k ⊗ (β·(v − (S·exp2(g·log2e))·k))    y ← S'·(q·Dk^-0.5)
-  ##
-  ## Contract:
-  ## - all state arithmetic is fp32, the state never rounds
-  ## - precondition, Hk > 0, Hv an exact multiple of Hk and hkRatio = Hv div Hk
-  ##
-  ## - the decay applies before the kv read (the recurrence's step order)
-  ## - the state stores in place, f32, no rounding
-  ##
-  ##   kv_mem[row] = Σ_dk decayed[row][dk]·k[dk]
-  ##   delta[row] = β·(v[row] − kv_mem[row])
-  ##   y[row] = Σ_dk S'[row][dk]·(q[dk]·Dk^-0.5), one element-dtype round
-  ##
-  ## Y write goes to the lanes whose fragment column is 0, one lane per state row.
-  ##
+## Launch dims (Dv div TileR, B·Hv) when launch-driven, 32 lanes, x = the Dv/TileR row
+## block, y = the (sequence, value head) flat head index bh, TileR = 8.
+##
+## Dataflow, one (bh, dvBlock) tile, tensors on edges, all state math fp32:
+##
+##   S (TileR, Dk) f32 ◄── persistent state (B·Hv, Dv, Dk), read in place
+##
+##   g (bh) ──► [ d = exp2(g·log2e) ] ───────┐  gdn form, one scalar per value head
+##   g tile (TileR, Dk) ──► [ ⊙ exp2(g·log2e) ] ─┤  kda form, one factor per key channel
+##                                           ▼
+##   k (Dk) ──► [ prod = (S·d) ⊙ k ] ──► [ kvMem = rowsum(prod) ]
+##                                           │
+##   v (1) ──► [ delta = β·(v − kvMem) ] ◄── β (bh)
+##                                           ▼
+##   k (Dk) ──► [ S' = S·d + delta·k ]  (addScaled over the tile)
+##                                           │
+##   q (Dk) ──► [ q̃ = q·rsqrt(Dk) | q/qScale ] ──► [ o = rowsum(S' ⊙ q̃) ]
+##                                           │
+##        y (1) ◄── roundToNearestEven[El], lanes whose fragment column is 0,
+##        one lane per state row        │
+##        S' ──► state, f32 in-place store, never rounds
+##
   ## - `bh` is the (sequence, value head) row block, `dvBlock` the Dv/TileR row block
-  ## - grid-driven wrapper, receiving the threadgroup coordinates from the grid
   ## - generic only over the element dtype and the static shape, every (Dk, Dv, TileR)
   ##   binding needs its own call-site line
   const atom = getTileConfig(float32, float32)
@@ -205,7 +194,7 @@ proc gatedDeltaDecodeStepTileAt*[T; U; B](
   oVec.row_sum(oProd)
   let oVal = oVec.rowScalar()
 
-  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (int(thread_index_in_threadgroup), 0)).toIntVal()
+  let cell = crd2idx(APPLE_8x8x8_F32.getLayoutA(), (thread_index_in_threadgroup, 0)).toIntVal()
   let rowIn = cell mod APPLE_8x8x8_F32.getM()
   let colIn = cell div APPLE_8x8x8_F32.getM()
   if colIn == 0:
@@ -222,21 +211,20 @@ proc gdnDecodeStepTile*[T](
     beta: ptr UncheckedArray[T],          # (B·Hv,) element dtype, one per value head
     Hv, Hk, hkRatio: int32,
     Dk, Dv, TileR: static int) {.device.} =
-  ## Grid-driven form of `gatedDeltaDecodeStepTileAt` in its gdn binding, the caller's `metal:` entry wraps this proc.
-  ## Grid (Dv div TileR, B·Hv), one (bh, TileR-row) state tile per threadgroup, TileR = 8, gdn form, scalar g decay, rsqrt-multiply q̃.
+  ## Launch-driven gdn binding of `gatedDeltaDecodeStepTileAt` (scalar g decay,
+  ## rsqrt-multiply q̃), the caller's `metal:` entry wraps this proc.
   ##
-  ## | parameter     | shape, dtype, layout                                                                                                                                                      | producer                                                                                                                                                         | unit                       |
-  ## | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-  ## | state         | (B·Hv, Dv, Dk) f32, dense row-major, head-major over (sequence, value head), the persistent recurrence state, written back in place                                       | the previous step's launch writes it, this kernel reads and rewrites it in place, the buffer persists with no in-kernel reset, the host owns layout and lifetime | f32, never rounds          |
-  ## | y             | (B·Hv, Dv) El, row-major, the step's output, one round-to-nearest-even per element                                                                                        | this kernel                                                                                                                                                      | El                         |
-  ## | k             | (B·Hk, Dk) El, row-major, the key vector of the key head this tile serves, post-l2norm (the l2norm stays host-side)                                                       | host-computed                                                                                                                                                    | El                         |
-  ## | q             | (B·Hk, Dk) El, row-major, the query vector of the same key head, post-l2norm, host-computed, the Dk^-0.5 fold happens device-side in f32                                  | host-computed (the fold device-side)                                                                                                                             | El                         |
-  ## | v             | (B·Hv, Dv) El, row-major, the value vector of the value head this tile serves                                                                                             | host-computed                                                                                                                                                    | El                         |
-  ## | g             | (B·Hv,) f32 log decay, one per value head, natural-log exponent (the kernel computes exp2(g·log2e) = e^g), finite and ≤ 0, no clamp, a violating g explodes the f32 state | host-computed                                                                                                                                                    | natural-log decay exponent |
-  ## | beta          | (B·Hv,) El, one per value head, the delta weighting                                                                                                                       | host-computed                                                                                                                                                    | dimensionless              |
-  ## | Hv, Hk        | value and key head counts, host-derived from the model config                                                                                                             | host-computed                                                                                                                                                    | heads                      |
-  ## | hkRatio       | Hv div Hk, the GQA head ratio                                                                                                                                             | host-computed                                                                                                                                                    | dimensionless              |
-  ## | Dk, Dv, TileR | static tile geometry (head dim, value dim, the row block height)                                                                                                          | compile-time                                                                                                                                                     | elements                   |
+## Launch dims (Dv div TileR, B·Hv), 32 lanes, x = the Dv/TileR row block,
+## y = the (sequence, value head) flat head index bh, TileR = 8.
+##
+## Dataflow, one threadgroup:
+##
+##   k, q (hk row) El post-l2norm ──┐
+##   v, beta (bh row) El ───────────┼─► [ gatedDeltaDecodeStepTileAt, gdn form ]
+##   g (bh) f32 log decay ──────────┤        │
+##   state (bh, dvBlock) f32 ───────┘        ▼
+##        y (bh, dvBlock) El ◄── one round-to-nearest-even per element
+##        state (bh, dvBlock) f32 ◄── in-place update, never rounds
   let dvBlock = int32(threadgroup_position_in_grid.x)
   let bh = int32(threadgroup_position_in_grid.y)
   gatedDeltaDecodeStepTileAt(state, y, k, q, v, g, beta, 0'f32, Hv, Hk, hkRatio,

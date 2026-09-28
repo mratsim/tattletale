@@ -4,9 +4,9 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-import ../int_tuples
-import ../layout_indexing
-import ../tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 import ./tiles
 import ./tile_config
 import workspace/crucible
@@ -18,7 +18,7 @@ import workspace/crucible
 type ReductionTree* = tuple
   deltas: array[8, int]
   steps: int
-  mask: uint32
+  mask: int
 
 func getReductionTree*(A: static MmaAtom): ReductionTree =
   ## The row-reduction shuffle tree (deltas, step count, leader mask)
@@ -36,23 +36,23 @@ func getReductionTree*(A: static MmaAtom): ReductionTree =
     var steps = 0
     when colCoeffs[0] != 0:
       result.deltas[steps] = 1
-      result.mask = result.mask or 1'u32
+      result.mask = result.mask or 1
       inc steps
     when colCoeffs[1] != 0:
       result.deltas[steps] = 2
-      result.mask = result.mask or 2'u32
+      result.mask = result.mask or 2
       inc steps
     when colCoeffs[2] != 0:
       result.deltas[steps] = 4
-      result.mask = result.mask or 4'u32
+      result.mask = result.mask or 4
       inc steps
     when colCoeffs[3] != 0:
       result.deltas[steps] = 8
-      result.mask = result.mask or 8'u32
+      result.mask = result.mask or 8
       inc steps
     when colCoeffs[4] != 0:
       result.deltas[steps] = 16
-      result.mask = result.mask or 16'u32
+      result.mask = result.mask or 16
       inc steps
     result.steps = steps
 
@@ -61,7 +61,7 @@ func getReductionTree*(A: static MmaAtom): ReductionTree =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
@@ -88,17 +88,17 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[n][m].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(delta0))
+      acc = acc + simdShuffleDown(acc, delta0)
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(delta1))
+      acc = acc + simdShuffleDown(acc, delta1)
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(delta2))
+      acc = acc + simdShuffleDown(acc, delta2)
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A]) =
   ## dst[n] = Σ over row n of src, per owned row.
   static:
@@ -125,19 +125,19 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[m][n].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(delta0))
+      acc = acc + simdShuffleDown(acc, delta0)
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(delta1))
+      acc = acc + simdShuffleDown(acc, delta1)
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(delta2))
+      acc = acc + simdShuffleDown(acc, delta2)
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src, the online-softmax running-sum update.
   static:
     doAssert rowTiles == R div A.getM(),
@@ -163,19 +163,19 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[n][m].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(delta0))
+      acc = acc + simdShuffleDown(acc, delta0)
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(delta1))
+      acc = acc + simdShuffleDown(acc, delta1)
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(delta2))
+      acc = acc + simdShuffleDown(acc, delta2)
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
 proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = srcAccum[n] + Σ over row n of src.
   static:
     doAssert rowTiles == R div A.getM(),
@@ -201,19 +201,19 @@ proc row_sum*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = acc + src.frags[m][n].frag[vptI]
     when steps >= 1:
-      acc = acc + simdShuffleDown(acc, uint32(delta0))
+      acc = acc + simdShuffleDown(acc, delta0)
     when steps >= 2:
-      acc = acc + simdShuffleDown(acc, uint32(delta1))
+      acc = acc + simdShuffleDown(acc, delta1)
     when steps >= 3:
-      acc = acc + simdShuffleDown(acc, uint32(delta2))
+      acc = acc + simdShuffleDown(acc, delta2)
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = srcAccum.data[n * vpt + vptI] + acc
 
 proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtLeft[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
     doAssert rowTiles == R div A.getM(),
@@ -239,19 +239,19 @@ proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = max(acc, src.frags[n][m].frag[vptI])
     when steps >= 1:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta0)))
+      acc = max(acc, simdShuffleDown(acc, delta0))
     when steps >= 2:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta1)))
+      acc = max(acc, simdShuffleDown(acc, delta1))
     when steps >= 3:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta2)))
+      acc = max(acc, simdShuffleDown(acc, delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = max(srcAccum.data[n * vpt + vptI], acc)
 
 proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
-    dst: var Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
+    dst: var TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])],
     src: RtRight[float32, R, C, A],
-    srcAccum: Tensor[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
+    srcAccum: TensorOwned[float32, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]) =
   ## dst[n] = max(srcAccum[n], max over row n of src).
   static:
     doAssert rowTiles == R div A.getM(),
@@ -277,11 +277,11 @@ proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
       for vptI in 0 ..< vpt0:
         acc = max(acc, src.frags[m][n].frag[vptI])
     when steps >= 1:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta0)))
+      acc = max(acc, simdShuffleDown(acc, delta0))
     when steps >= 2:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta1)))
+      acc = max(acc, simdShuffleDown(acc, delta1))
     when steps >= 3:
-      acc = max(acc, simdShuffleDown(acc, uint32(delta2)))
+      acc = max(acc, simdShuffleDown(acc, delta2))
     acc = simdShuffle(acc, leader)
     for vptI in 0 ..< vpt0:
       dst.data[n * vpt + vptI] = max(srcAccum.data[n * vpt + vptI], acc)
@@ -291,7 +291,7 @@ proc row_max*[A: static MmaAtom; R, C, rowTiles, vpt: static int](
 # ═════════════════════════════════════════════════════════════════════════
 
 proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
-               mTile: uint32): uint32 =
+               mTile: int): uint32 =
   ## The tile's effective K-loop bound in k-block units:
   ## ceil(max over the tile's rows of Lengths[row] / 16).
   ## The block is the gemm's K staging width (TileK = 16).
@@ -315,17 +315,17 @@ proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
   let tid = thread_index_in_threadgroup
   var kEff: array[4, uint32]
   for n in 0 ..< 4:
-    kEff[n] = uint32(Lengths[mTile * 32'u32 + ((tid + uint32(n * 8)) and 31'u32)])
+    kEff[n] = uint32(Lengths[mTile * 32 + ((tid + n * 8) and 31)])
   var laneMax: uint32
   laneMax = kEff[0]
   for n in 1 ..< 4:
     laneMax = max(laneMax, kEff[n])
-  laneMax = max(laneMax, simdShuffleDown(laneMax, 16'u32))
-  laneMax = max(laneMax, simdShuffleDown(laneMax, 8'u32))
-  laneMax = max(laneMax, simdShuffleDown(laneMax, 4'u32))
-  laneMax = max(laneMax, simdShuffleDown(laneMax, 2'u32))
-  laneMax = max(laneMax, simdShuffleDown(laneMax, 1'u32))
-  laneMax = simdShuffle(laneMax, 0'u32)
+  laneMax = max(laneMax, simdShuffleDown(laneMax, 16))
+  laneMax = max(laneMax, simdShuffleDown(laneMax, 8))
+  laneMax = max(laneMax, simdShuffleDown(laneMax, 4))
+  laneMax = max(laneMax, simdShuffleDown(laneMax, 2))
+  laneMax = max(laneMax, simdShuffleDown(laneMax, 1))
+  laneMax = simdShuffle(laneMax, 0)
   result = (laneMax + 15'u32) div 16'u32
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -335,7 +335,7 @@ proc tileKMax*(Lengths: ptr UncheckedArray[uint16],
 template warpReduce*[V](x: var V, reductionOp: untyped): V =
   ## Whole-32-lane simdgroup reduction of `x`, the reduced value on every lane.
   ##
-  ## Contract:
+  ## 
   ## - `x` reduces in place, the caller's value ends up the reduced value,
   ##   no lane-local copy is taken
   ## - 5 reductionOp steps over `simdShuffleDown` deltas (16, 8, 4, 2, 1), one broadcast `simdShuffle` from lane 0
@@ -348,12 +348,12 @@ template warpReduce*[V](x: var V, reductionOp: untyped): V =
   ## and a cross-lane sum of the exponentials:
   ##
   ##   warpReduce(ls, `+`)  # the lane-0-reduced sum on every lane
-  x = reductionOp(x, simdShuffleDown(x, 16'u32))
-  x = reductionOp(x, simdShuffleDown(x, 8'u32))
-  x = reductionOp(x, simdShuffleDown(x, 4'u32))
-  x = reductionOp(x, simdShuffleDown(x, 2'u32))
-  x = reductionOp(x, simdShuffleDown(x, 1'u32))
+  x = reductionOp(x, simdShuffleDown(x, 16))
+  x = reductionOp(x, simdShuffleDown(x, 8))
+  x = reductionOp(x, simdShuffleDown(x, 4))
+  x = reductionOp(x, simdShuffleDown(x, 2))
+  x = reductionOp(x, simdShuffleDown(x, 1))
   # the lane-0 broadcast lands back in `x`, the contract's "reduced value
   # on every lane", the template's value the same broadcast
-  x = simdShuffle(x, 0'u32)
+  x = simdShuffle(x, 0)
   x

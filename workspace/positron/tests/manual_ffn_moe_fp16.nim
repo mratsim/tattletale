@@ -11,7 +11,7 @@
 ##   --outdir:build/wip --nimcache:nimcache/wip workspace/positron/tests/manual_ffn_moe_fp16.nim
 import std/[strformat, math]
 import workspace/crucible
-import ../src/kernels/ceramic/ffn_moe
+import ../src/kernels/ceramic/ffn_moe/ffn_moe
 import properties/properties
 
 # One launcher per MoeAct member, the gguf launchers' shape.

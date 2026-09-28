@@ -17,12 +17,13 @@
 
 import std/math
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
+import workspace/ceramic/benchmark/laser_matmul/compiler_optim_hints
 import workspace/cpuplatforms/x86/simd_x86
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-export int_tuples, layouts, layout_algebra, tensors
+
+proc builtin_prefetch*(p: pointer, rw: cint, locality: cint) {.importc: "__builtin_prefetch", nodecl.}
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Activation enum + epilogue_body template
@@ -251,7 +252,7 @@ proc gemm_strided*[T: SomeNumber](
       let pB_cs = panelB.layout.stride[1]  # col stride of panel
 
       # Pack B — explicit triple loop (copyMem-compatible stride, SIMD-friendly)
-      let packB_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packB_ptr), 32))
+      let packB_aligned = assume_aligned(packB_ptr, 32)
       if pB_cs == 1:
         # B rows are contiguous — use copyMem
         for jr in 0 ..< num_jr:
@@ -283,7 +284,7 @@ proc gemm_strided*[T: SomeNumber](
         let pA_cs = panelA.layout.stride[1]
 
         # Pack A — explicit triple loop (with copyMem for contiguous rows)
-        let packA_aligned = cast[ptr UncheckedArray[T]](builtin_assume_aligned(cast[pointer](packA_ptr), 32))
+        let packA_aligned = assume_aligned(packA_ptr, 32)
         if pA_rs == 1:
           # Rows are contiguous in memory (column-major) — use copyMem
           for ir in 0 ..< num_ir_eff:

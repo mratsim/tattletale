@@ -18,9 +18,7 @@
 
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts {.all.}
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_indexing {.all.}
 import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
@@ -224,10 +222,10 @@ proc runMakeLayoutTests =
   #  13. Stride-order construction — LayoutLeft / LayoutRight
   # ═══════════════════════════════════════════════════════════════
 
-  block:  # LayoutLeft (default): leftmost mode contiguous
+  block:  # LayoutLeft (default): leftmost dimension contiguous
     doAssert make_layout((4, 8), LayoutLeft) === ((4, 8), (1, 4))
 
-  block:  # LayoutRight: rightmost mode contiguous
+  block:  # LayoutRight: rightmost dimension contiguous
     doAssert make_layout((4, 8), LayoutRight) === ((4, 8), (8, 1))
 
   block:  # LayoutLeft on 3D
@@ -509,7 +507,7 @@ proc runCosizeTests =
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_zeros tests (ported from Python tensor-layouts test suite)
-#  Python's `filter` only removes stride-0 modes, which is
+#  Python's `filter` only removes stride-0 dimensions, which is
 #  exactly what filter_zeros → coalesce achieves.
 # ═══════════════════════════════════════════════════════════════
 
@@ -521,7 +519,7 @@ proc runFilterZerosTests =
     let fFlat = flatten(f.shape)
     doAssert d1 * fFlat[0] === 64
     doAssert d1 * fFlat[1] === 8
-    doAssert d1 * fFlat[2] === 1   # stride-0 mode became size-1
+    doAssert d1 * fFlat[2] === 1   # stride-0 dimension became size-1
     doAssert d1 * fFlat[3] === 128
 
   block:
@@ -550,7 +548,7 @@ proc runStringifyTests =
   echo "  Stringify: 3 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  rank — number of modes
+#  rank — number of dimensions
 # ═══════════════════════════════════════════════════════════════
 
 proc runRankTests =
@@ -740,7 +738,7 @@ proc runNCHWTests =
   echo "  NCHW mixed static/dynamic: 1 case OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  zipModes — interleave corresponding modes pairwise
+#  zipDimensions — interleave corresponding dimensions pairwise
 # ═══════════════════════════════════════════════════════════════
 
 proc runZipTests =
@@ -748,21 +746,21 @@ proc runZipTests =
     # Interleave two rank-2 layouts
     let a = make_layout((2, 2), (1, 2))
     let b = make_layout((3, 4), (4, 1))
-    let R = zipModes(a, b)
+    let R = zipDimensions(a, b)
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
-    doAssert m0 === ((2, 3), (1, 4)), "zip mode0: " & $m0
-    doAssert m1 === ((2, 4), (2, 1)), "zip mode1: " & $m1
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === ((2, 3), (1, 4)), "zip dim0: " & $m0
+    doAssert m1 === ((2, 4), (2, 1)), "zip dim1: " & $m1
   block:
     # Single-element interleave (rank-1 with rank-1)
     let a = make_layout(4, 1)
     let b = make_layout(3, 1)
-    let R = zipModes(a, b)
+    let R = zipDimensions(a, b)
     doAssert rank(R) === 2
-    let m0 = mode(R, 0); let m1 = mode(R, 1)
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
     doAssert m0 === (4, 1), "zip m0: " & $m0
     doAssert m1 === (3, 1), "zip m1: " & $m1
-  echo "  zipModes: 2 cases OK"
+  echo "  zipDimensions: 2 cases OK"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -842,7 +840,7 @@ proc runUpcastDowncastTests =
     doAssert b.stride === (2, 1), "stride: " & $b.stride
   # ── Python: test_upcast_hierarchical_value_mode ──
   block:
-    ## upcast handles nested value modes.
+    ## upcast handles nested value dimensions.
     ## SM75_U32x4_LDSM_N dst_layout_bits: (32, (32, 4)):(32, (1, 1024))
     ## upcast<16> → (32, (2, 4)):(2, (1, 64))
     let a = make_layout((32, (32, 4)), (32, (1, 1024)))
@@ -868,7 +866,7 @@ proc runUpcastDowncastTests =
     doAssert b.stride === (8, 1)
   # ── Python: test_upcast_broadcast_stride ──
   block:
-    ## upcast preserves stride-0 (broadcast) modes unchanged.
+    ## upcast preserves stride-0 (broadcast) dimensions unchanged.
     let a = make_layout((4, 8), (0, 1))
     let b = a.upcast(4)
     doAssert b.stride[0] === 0
@@ -1037,21 +1035,21 @@ proc runCompactOrderTests =
     doAssert make_layout_like(make_layout((2,3,4), (3,6,1)))  === ((2,3,4), (4,8,1))
     echo "    6. make_layout_like 3D: 4 cases OK"
 
-  # Mode-reordering rejection
+  # Dimension-reordering rejection
   block:
-    # compact_order: mode i keeps position i; only stride values change
+    # compact_order: dimension i keeps position i; only stride values change
     let cm = compact_order((2,3,4), (1,2,0))
     doAssert cm[0] == 4
     doAssert cm[1] == 8
     doAssert cm[2] == 1
-    echo "    7. Modes NOT reordered: 3 checks OK"
+    echo "    7. Dimensions NOT reordered: 3 checks OK"
 
   block:
     let l = make_layout_like(make_layout((2,3,4), (3,6,1)))
     doAssert l.stride[0].toIntVal == 4
     doAssert l.stride[1].toIntVal == 8
     doAssert l.stride[2].toIntVal == 1
-    echo "    8. make_layout_like mode positions: 3 checks OK"
+    echo "    8. make_layout_like dimension positions: 3 checks OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 proc runTests =
@@ -1081,24 +1079,24 @@ proc runTests =
   runColMajorStridesTests()
   echo "--- NCHW ---"
   runNCHWTests()
-  echo "--- zipModes ---"
-  echo "--- mapModesWith/zipModesWith ---"
+  echo "--- zipDimensions ---"
+  echo "--- mapDimensionsWith/zipDimensionsWith ---"
   block:
-    # map: double each mode's stride
+    # map: double each dimension's stride
     let a = make_layout((2, 4), (1, 2))
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride * 2)
     doAssert r.shape === (2, 4) and r.stride === (2, 4)
   block:
-    # map over single-mode layout
+    # map over single-dimension layout
     let a = make_layout(3, 5)
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride * 10)
     doAssert r.shape === 3 and r.stride === 50
   block:
-    # map over hierarchical layout: scale each mode's stride
+    # map over hierarchical layout: scale each dimension's stride
     let a = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = mapModesWith(a):
+    let r = mapDimensionsWith(a):
       make_layout(it.shape, it.stride.scaleBy(2))
     doAssert r.shape === ((2,2),(2,8))
     doAssert r.stride === ((2,8),(4,16))
@@ -1106,57 +1104,57 @@ proc runTests =
     # zipWith: pairwise — take stride from it_b (rightover writes over)
     let a = make_layout((2, 4), (1, 2))
     let b = make_layout((3, 5), (10, 20))
-    let r = zipModesWith(a, b):
+    let r = zipDimensionsWith(a, b):
       make_layout(it_a.shape, it_b.stride)
     doAssert r.shape === (2, 4) and r.stride === (10, 20)
   block:
     # zipWith: a shorter (leftover b appended)
     let a = make_layout((2,), (1,))
     let b = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = zipModesWith(a, b):
+    let r = zipDimensionsWith(a, b):
       make_layout(it_a.shape, it_b.stride)
     doAssert rank(r) == 2
-    # mode 0 = zip result: shape from a, stride from b mode 0
-    doAssert mode(r, 0).shape === 2
-    doAssert mode(r, 0).stride === (1, 4)
-    # mode 1 = leftover from b (unchanged)
-    doAssert mode(r, 1).shape === (2, 8)
+    # dimension 0 = zip result: shape from a, stride from b dimension 0
+    doAssert dimension(r, 0).shape === 2
+    doAssert dimension(r, 0).stride === (1, 4)
+    # dimension 1 = leftover from b (unchanged)
+    doAssert dimension(r, 1).shape === (2, 8)
   echo "  5 checks OK"
 
-  echo "--- groupModes ---"
+  echo "--- groupDimensions ---"
   block:
     ## Python test_append_prepend_replace_group: group(Layout((2,3,5,7)), 0, 2)
     let a = make_layout((2, 3, 5, 7))
     doAssert a.shape === (2, 3, 5, 7)
     doAssert a.stride === (1, 2, 6, 30)
-    let b = a.groupModes(0, 2)
+    let b = a.groupDimensions(0, 2)
     doAssert b.shape === ((2, 3), 5, 7)
     doAssert b.stride === ((1, 2), 6, 30)
-    let c = b.groupModes(1, 3)
+    let c = b.groupDimensions(1, 3)
     doAssert c.shape === ((2, 3), (5, 7))
     doAssert c.stride === ((1, 2), (6, 30))
   block:
     ## group with non-identity strides
     let a = make_layout((10, 20, 30, 40))
-    let b = a.groupModes(1, 3)
+    let b = a.groupDimensions(1, 3)
     doAssert rank(b) === 3
   # block: -- blocked by tuple hash collision, pending https://github.com/nim-lang/Nim/pull/25889
   #   ## From start (B=0, E=3) — groups 3 elements into sub-tuple
   #   let a = make_layout((2, 3, 5, 7))
-  #   let b = a.groupModes(0, 3)
+  #   let b = a.groupDimensions(0, 3)
   #   doAssert rank(b) === 2
-  echo "    groupModes: 8 checks OK"
+  echo "    groupDimensions: 8 checks OK"
 
   echo "--- padRight/padLeft ---"
   block:
-    ## padRight: append identity modes
+    ## padRight: append identity dimensions
     let a = make_layout((3, 4))
     let b = padRight(a, 3)
     doAssert b.shape === (3, 4, 1)
     doAssert b.stride === (1, 3, 0)
     doAssert rank(b) === 3
   block:
-    ## padLeft: prepend identity modes
+    ## padLeft: prepend identity dimensions
     let a = make_layout((3, 4))
     let b = padLeft(a, 3)
     doAssert b.shape === (1, 3, 4)
@@ -1187,44 +1185,44 @@ proc runTests =
     doAssert b.shape === (1, 1, 5)
     doAssert b.stride === (0, 0, 1)
   echo "    padRight/padLeft: 6 cases OK"
-  echo "--- takeModes/selectModes ---"
+  echo "--- takeDimensions/selectDimensions ---"
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(1, 3)
+    let b = a.takeDimensions(1, 3)
     doAssert b.shape === (3, 5)
     doAssert b.stride === (2, 6)
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(0, 3)
+    let b = a.selectDimensions(0, 3)
     doAssert b.shape === (2, 7)
     doAssert b.stride === (1, 30)
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(0, 1)
+    let b = a.takeDimensions(0, 1)
     doAssert b.shape === 2
     doAssert b.stride === 1
   block:
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(2)
+    let b = a.selectDimensions(2)
     doAssert b.shape === 5
     doAssert b.stride === 6
   block:
-    ## const indirection for takeModes
+    ## const indirection for takeDimensions
     const B = 1
     const E = 3
     let a = make_layout((2, 3, 5, 7))
-    let b = a.takeModes(B, E)
+    let b = a.takeDimensions(B, E)
     doAssert b.shape === (3, 5)
     doAssert b.stride === (2, 6)
   block:
-    ## const indirection for selectModes
+    ## const indirection for selectDimensions
     const I0 = 0
     const I3 = 3
     let a = make_layout((2, 3, 5, 7))
-    let b = a.selectModes(I0, I3)
+    let b = a.selectDimensions(I0, I3)
     doAssert b.shape === (2, 7)
     doAssert b.stride === (1, 30)
-  echo "    takeModes/selectModes: 6 cases OK"
+  echo "    takeDimensions/selectDimensions: 6 cases OK"
 
   echo "--- mapLeavesWith ---"
   runMapLeavesWithTests()

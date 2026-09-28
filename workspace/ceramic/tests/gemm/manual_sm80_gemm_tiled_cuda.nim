@@ -29,20 +29,17 @@
 ##     workspace/ceramic/tests/gemm/manual_sm80_gemm_tiled_cuda.nim
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_gemm_gpu
-import workspace/ceramic/src/kernel_gemm_epilogues
-import workspace/ceramic/src/kernel_fillwith_gpu
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 
@@ -151,14 +148,14 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    gemmTiledMicrotile(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+    gemmTiledMicrotile(tiled, threadIdx.x, alpha, C, A, B, beta)
 
 const kernelCodeK32 = cuda:
   proc gemmTiledKernelK32(
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    gemmTiledMicrotileK32(tiled, int(threadIdx.x), alpha, C, A, B, beta)
+    gemmTiledMicrotileK32(tiled, threadIdx.x, alpha, C, A, B, beta)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

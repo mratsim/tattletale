@@ -481,19 +481,19 @@ proc runZip2ByTests =
   echo "  zip2_by: 10 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  mapModesWith / zipModesWith
+#  mapDimensionsWith / zipDimensionsWith
 # ═══════════════════════════════════════════════════════════════
 
 proc runMapZipWithTests =
   block:
-    let r = mapModesWith((2, 4, 6)): it * 2
+    let r = mapDimensionsWith((2, 4, 6)): it * 2
     doAssert r === (4, 8, 12)
   block:
-    let r = mapModesWith((Int[2](), Int[4]())): it * 3
+    let r = mapDimensionsWith((Int[2](), Int[4]())): it * 3
     doAssert r === (6, 12)
   block:
     # product_each: product of each top-level element
-    let r = mapModesWith(((2,2), (2,8))): product(it)
+    let r = mapDimensionsWith(((2,2), (2,8))): product(it)
     doAssert r === (4, 16)
   block:
     # product_each: product of each top-level element
@@ -508,18 +508,18 @@ proc runMapZipWithTests =
     let r = product_each(((4,4),))
     doAssert r === (16,)
   block:
-    let r = zipModesWith((2, 4), (10, 20)): it_a + it_b
+    let r = zipDimensionsWith((2, 4), (10, 20)): it_a + it_b
     doAssert r === (12, 24)
   block:
-    let r = zipModesWith((2, 4, 6), (10, 20)): it_a + it_b
+    let r = zipDimensionsWith((2, 4, 6), (10, 20)): it_a + it_b
     doAssert r === (12, 24, 6)
   block:
-    let r = zipModesWith((2, 4), (10, 20, 30)): it_a + it_b
+    let r = zipDimensionsWith((2, 4), (10, 20, 30)): it_a + it_b
     doAssert r === (12, 24, 30)
   block:
-    let r = zipModesWith((7, 10, 15), (3, 4, 6)): ceil_div(it_a, it_b)
+    let r = zipDimensionsWith((7, 10, 15), (3, 4, 6)): ceil_div(it_a, it_b)
     doAssert r === (3, 3, 3)
-  echo "  mapModesWith/zipModesWith: 7 checks OK"
+  echo "  mapDimensionsWith/zipDimensionsWith: 7 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith — plain int
@@ -695,19 +695,19 @@ proc runFilterZipWithTests =
 
 proc runSelectTests* =
   block:
-    ## N1: Extract non-adjacent modes
+    ## N1: Extract non-adjacent dimensions
     let M = Int[128](); let N = Int[64](); let K = Int[32]()
     let result = (M, N, K).select(0, 2)
     doAssert result === (M, K), "N1: expected (M, K) got " & $result
 
   block:
-    ## N2: Extract adjacent modes
+    ## N2: Extract adjacent dimensions
     let M = Int[128](); let N = Int[64](); let K = Int[32]()
     let result = (M, N, K).select(1, 2)
     doAssert result === (N, K), "N2: expected (N, K) got " & $result
 
   block:
-    ## N3: First two modes
+    ## N3: First two dimensions
     let M = Int[128](); let N = Int[64](); let K = Int[32]()
     let result = (M, N, K).select(0, 1)
     doAssert result === (M, N), "N3: expected (M, N) got " & $result
@@ -756,10 +756,10 @@ proc runSelectTests* =
 
   block:
     ## N11: Select with mixed types in tuple
-    let mode = Int[3]()
-    let result = (mode, 1, 2.5).select(0, 2)
+    let dimension = Int[3]()
+    let result = (dimension, 1, 2.5).select(0, 2)
     # Int[3] -> Int[V], 2.5 is float, so result should be (Int[3](), 2.5)
-    doAssert result[0] === mode, "N11: first element is Int[3]"
+    doAssert result[0] === dimension, "N11: first element is Int[3]"
     doAssert typeof(result[1]) is float, "N11: second element is float"
     doAssert result[1] == 2.5, "N11: float value correct"
 

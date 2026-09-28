@@ -18,14 +18,14 @@
 ##   atoms_nvidia.nim declares its SM80_* fragment layout types as
 ##   module-scope `typeof(make_layout(...))` aliases. Any module that
 ##   declares such aliases (this one does, below) breaks the nested-RHS
-##   path of `compose` — mapModesWith's getTypeInst(make_layout(
+##   path of `compose` — mapDimensionsWith's getTypeInst(make_layout(
 ##   rhsShapes, rhsStrides)) resolves to an nnkSym → "cannot get child
 ##   of node kind: nnkSym". The flat-RHS and coalescable-LHS paths are
 ##   unaffected.
 ##
 ##   The layoutTypeArgs helper (nnkSym-safe shape/stride type
 ##   extraction) keeps this path working. The file's compose output is
-##   CuTe-flat (single-mode results unwrapped to scalars), matching the
+##   CuTe-flat (single-dimension results unwrapped to scalars), matching the
 ##   unwrap in CuTe's composition_impl.
 ##
 ## Section 2 — inline coalesce(make_layout(...)) with a constant layout:
@@ -33,9 +33,9 @@
 ##   does NOT capture the failure (returns true) — only a real compile
 ##   surfaces it, so the guarded case is a direct assert, not a
 ##   compiles() check.
-## Section 3 — complement, multi-mode layout + compile-time bound:
+## Section 3 — complement, multi-dimension layout + compile-time bound:
 ##   complement with a compile-time bound must produce the coalesced
-##   result: a statically-1 remainder mode is dropped by coalesce's
+##   result: a statically-1 remainder dimension is dropped by coalesce's
 ##   trailing size-1 discard, and a lone size-1 result is the library's
 ##   (1):(0) sentinel. Both coalesced values cross-checked against CuTe
 ##   host-side output.
@@ -47,8 +47,6 @@
 {.experimental: "callOperator".}
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/tests/layouts_testutils
 
@@ -118,11 +116,11 @@ proc runCoalesceConstantFixtureTests =
   echo "    coalesce constant fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 3 — complement must work for multi-mode layouts
+#  Section 3 — complement must work for multi-dimension layouts
 # ═══════════════════════════════════════════════════════════════
 proc runComplementFixtureTests =
   # Guarded cases — complement with a compile-time bound must produce
-  # the coalesced result: the rem mode (ceil_div(460, 512) = 1) is
+  # the coalesced result: the rem dimension (ceil_div(460, 512) = 1) is
   # statically 1, so coalesce's trailing size-1 discard removes it; a
   # lone size-1 result is the library's (1):(0) sentinel.
   block:
@@ -198,7 +196,7 @@ proc runTests =
   runComposeFixtureTests()
   echo "── Section 2: inline coalesce + constant layout ──"
   runCoalesceConstantFixtureTests()
-  echo "── Section 3: complement multi-mode + compile-time bound ──"
+  echo "── Section 3: complement multi-dimension + compile-time bound ──"
   runComplementFixtureTests()
   echo "── Section 4: complement runtime shape = static twin ──"
   runComplementDynamicShapeTests()

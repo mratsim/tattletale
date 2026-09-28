@@ -7,7 +7,7 @@
 
 
 import std/macros, std/typetraits
-import ../macros/static_for
+import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] — compile-time integer type
@@ -18,6 +18,7 @@ type Int*[V: static int] = object
   ##   Int<4>  ⇔  Int[4]
 
 type IntOrIntTuple* = int | Int | tuple
+
   ## Shape/stride element type alias for convenience.
 
 ## ── PERF CRITICAL: templates, not funcs ──

@@ -5,12 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ../int_tuples
-import ../layouts
-import ../layout_constructors
-import ../layout_indexing
-import ../tensors
-import ../ptr_arithmetic
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
 import ./tile_config
 import workspace/crucible
 
@@ -63,7 +60,7 @@ template rv*(T: typedesc, R, C: static int, A: untyped = getTileConfig(float32, 
   ## Column vector of shape (rows, values per thread).
   ## This stores the result of
   ## a row-reduction operation f a tile like max or sum
-  Tensor[T,
+  TensorOwned[T,
          (Int[R div A.getM()], Int[A.getVpt()]),
          (Int[A.getVpt()], Int[1])]
 
@@ -75,7 +72,7 @@ func laneScalar*[T; R, C: static int; A: static MmaAtom](
     tile: RtLeft[T, R, C, A]): T =
   ## Returns the single-value slot of a tile, `tile.frags[0][0].frag[0]`.
   ##
-  ## Contract:
+  ## 
   ## - the tile's one useful element carries the (0, 0) fragment of every lane
   ## - serves the v operand's scalar read and one-element broadcast loads
   ##
@@ -86,7 +83,7 @@ func laneScalar*[T; R, C: static int; A: static MmaAtom](
   tile.frags[0][0].frag[0]
 
 func rowScalar*[T; rowTiles, vpt: static int](
-    vec: Tensor[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
+    vec: TensorOwned[T, (Int[rowTiles], Int[vpt]), (Int[vpt], Int[1])]): T =
   ## Returns the calling lane's row-0 slot of the row-reduction col-vec,
   ## `vec.data[0]`, the scalar its fragment row just reduced.
   ##

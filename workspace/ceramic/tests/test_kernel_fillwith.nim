@@ -4,10 +4,10 @@
 ## and dynamic shapes/stride.
 
 import ../src/int_tuples
-import ../src/layouts
+import ../src/layout_algebra
 import ../src/tensors
-import ../src/kernel_fillwith_cpu
-import ../src/kernel_fillwith_gpu
+import ../src/kernels/k_layout_fillwith_cpu
+import ../src/kernels/k_layout_fillwith_gpu
 
 {.experimental: "callOperator".}
 

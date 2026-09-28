@@ -23,9 +23,9 @@ const kernel2d = opencl:
     # get_local_size / get_local_id.
     let gx = blockIdx.x * blockDim.x + threadIdx.x
     let gy = blockIdx.y * blockDim.y + threadIdx.y
-    C[gy * 8'u32 + gx] = gy * 8'u32 + gx
+    C[gy * 8 + gx] = uint32(gy * 8 + gx)
     # canonical flat local index -> linearization formula
-    C[64'u32 + thread_index_in_threadgroup] = thread_index_in_threadgroup
+    C[64 + thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     syncthreads()
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return

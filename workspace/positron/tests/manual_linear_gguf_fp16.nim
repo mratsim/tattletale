@@ -14,7 +14,7 @@ import std/strformat, workspace/crucible, workspace/ceramic
 import workspace/libtorch, workspace/libtorch as F
 import workspace/libtorch_testutils
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/linear_gguf
+import ../src/kernels/ceramic/linear_quant/linear_gguf
 import ./gguf_test_utils
 
 const ggufLinearMsl = metal:

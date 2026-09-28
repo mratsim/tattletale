@@ -14,8 +14,8 @@ const kernel2d = vulkan:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     # direct builtin use — binding gl_GlobalInvocationID to a local let
     # hits an addr-lowering gap (global-let path), so index it inline
-    C[gl_GlobalInvocationID[1] * 8'u32 + gl_GlobalInvocationID[0]] =
-      gl_GlobalInvocationID[1] * 8'u32 + gl_GlobalInvocationID[0]
+    C[gl_GlobalInvocationID[1] * 8 + gl_GlobalInvocationID[0]] =
+      uint32(gl_GlobalInvocationID[1] * 8 + gl_GlobalInvocationID[0])
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernel2d

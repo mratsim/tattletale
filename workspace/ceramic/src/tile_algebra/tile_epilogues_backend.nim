@@ -7,13 +7,10 @@
 
 import std/macros
 import workspace/crucible
-import ../int_tuples
-import ../layouts
-import ../layout_constructors
-import ../layout_indexing
-import ../tensors
-import ../ptr_arithmetic
-import ../atoms_mma_partitioning
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/h_properties
 import ./tiles
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -37,7 +34,7 @@ template shardView*[T; R, C: static int; A: static MmaAtom](
     strideRow, strideCol: static int,
     origin: untyped): untyped =
   ## Per-lane gmem view of an epilogue operand
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let baseOff = (uint32(origin[2]) * uint32(R)) * uint32(strideRow) +
                 (uint32(origin[3]) * uint32(C)) * uint32(strideCol) +
@@ -93,7 +90,7 @@ template shardStridedOperand*[T; R, C: static int; A: static MmaAtom](
   ## Per-lane view of a runtime-strided operand: base = the tile-origin
   ## offset plus the lane's cell offset. The args are named rscArg/cscArg
   ## so the constructor field names rsc/csc survive template substitution.
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let base = (uint32(origin[2]) * uint32(R)) * uint32(rscArg) +
              (uint32(origin[3]) * uint32(C)) * uint32(cscArg) +

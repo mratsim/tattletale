@@ -15,19 +15,16 @@
 ##     workspace/ceramic/tests/gemm/manual_gemm_cta_k64_cuda.nim
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_gemm_gpu
-import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 
@@ -44,17 +41,17 @@ const kernelCode = cuda:
       C: ptr UncheckedArray[float32],
       A, B: ptr UncheckedArray[uint32],
       alpha, beta: float32) {.global.} =
-    let blk = int(blockIdx.x)
+    let blk = blockIdx.x
     let mCTA = blk mod 2
     let nCTA = blk div 2
     let pA = make_view(A, (64, 64), (1, 64))
     let pB = make_view(B, (32, 64), (1, 32))
     let pC = make_view(C, (64, 32), (1, 64))
     let tC = local_tile(pC, (32, 16), (mCTA, nCTA))
-    let thr = tiled.get_slice(int(threadIdx.x))
+    let thr = tiled.get_slice(threadIdx.x)
     var tCv = tiled.partition_C(thr, tC)
     var epi = initEpiAXPBY(alpha, beta, tCv)
-    gemm_cta(tiled, tCv, pA, pB, 64, 32, 64, epi, (32, 16, 32), mCTA, nCTA, int(threadIdx.x))
+    gemm_cta(tiled, tCv, pA, pB, 64, 32, 64, epi, (32, 16, 32), mCTA, nCTA, threadIdx.x)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

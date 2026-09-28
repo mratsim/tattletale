@@ -172,7 +172,7 @@ proc main() =
           worstRel = maxRel
           worstDesc = "smeGemmUkernel32x32"
           worstSeed = seed
-      # Fused kernels: alpha/beta/ReLU applied in streaming mode.
+      # Fused kernels: alpha/beta/ReLU applied in streaming dimension.
       for (alpha, beta) in AlphaBeta:
         for relu in [0, 1]:
           block:

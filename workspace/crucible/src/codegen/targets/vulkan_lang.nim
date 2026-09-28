@@ -268,12 +268,12 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   ## GLSL spelling of a canonical coordinate builtin referenced whole.
   ## All six canonicals are native GLSL builtins, so this is a plain rename.
   case kind
-  of gbkThreadPositionInGrid: "gl_GlobalInvocationID"
-  of gbkThreadgroupPositionInGrid: "gl_WorkGroupID"
-  of gbkThreadPositionInThreadgroup: "gl_LocalInvocationID"
-  of gbkThreadsPerThreadgroup: "gl_WorkGroupSize"
-  of gbkThreadgroupsPerGrid: "gl_NumWorkGroups"
-  of gbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
+  of gbkThreadPositionInGrid: "ivec3(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y), int(gl_GlobalInvocationID.z))"
+  of gbkThreadgroupPositionInGrid: "ivec3(int(gl_WorkGroupID.x), int(gl_WorkGroupID.y), int(gl_WorkGroupID.z))"
+  of gbkThreadPositionInThreadgroup: "ivec3(int(gl_LocalInvocationID.x), int(gl_LocalInvocationID.y), int(gl_LocalInvocationID.z))"
+  of gbkThreadsPerThreadgroup: "ivec3(int(gl_WorkGroupSize.x), int(gl_WorkGroupSize.y), int(gl_WorkGroupSize.z))"
+  of gbkThreadgroupsPerGrid: "ivec3(int(gl_NumWorkGroups.x), int(gl_NumWorkGroups.y), int(gl_NumWorkGroups.z))"
+  of gbkThreadIndexInThreadgroup: "int(gl_LocalInvocationIndex)"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind"
@@ -384,7 +384,12 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result &= indentStr & '}'
 
   of gpuDot:
-    result = ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField)
+    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
+       ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
+      # Component of an unsigned GLSL builtin, cast to standard Nim `int` from default uint.
+      result = "int(" & ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField) & ")"
+    else:
+      result = ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField)
 
   of gpuIndex:
     result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
@@ -407,15 +412,22 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
         # gated by GL_KHR_shader_subgroup_shuffle_relative (the umbrella
         # GL_KHR_shader_subgroup is not a GLSL extension name).
+        # The delta/lane operand is uint in GLSL, int-literal
+        # args get the U suffix, the canonical Nim arg is int,
+        # the printer casts.
+        var delta = ctx.genVulkan(ast.cArgs[1])
+        if delta.allCharsInSet(Digits):
+          delta.add 'U'
         result = indentStr & "subgroupShuffleDown(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " &
-                 ctx.genVulkan(ast.cArgs[1]) & ')'
+                 ctx.genVulkan(ast.cArgs[0]) & ", " & delta & ')'
       of gbkSimdShuffle:
         # SIMD-group gather from an absolute lane index, gated by
-        # GL_KHR_shader_subgroup_shuffle.
+        # GL_KHR_shader_subgroup_shuffle. Lane operand is uint in GLSL.
+        var lane = ctx.genVulkan(ast.cArgs[1])
+        if lane.allCharsInSet(Digits):
+          lane.add 'U'
         result = indentStr & "subgroupShuffle(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " &
-                 ctx.genVulkan(ast.cArgs[1]) & ')'
+                 ctx.genVulkan(ast.cArgs[0]) & ", " & lane & ')'
       of gbkNone:
         var vkArgs: seq[string]
         for arg in ast.cArgs:

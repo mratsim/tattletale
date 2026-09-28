@@ -12,9 +12,9 @@
 ##   workspace/ceramic/tests/kernels_tiles/manual_tile_epilogue_user_fp16.nim
 
 import workspace/crucible
-import ../libtest_epilogues
-import ../../src/atoms_mma_partitioning
-import ../../src/kernels/k_tile_gemm
+import workspace/ceramic/tests/libtest_epilogues
+import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/kernels/k_tile_gemm
 
 {.experimental: "callOperator".}
 
@@ -28,8 +28,8 @@ type EpiScale[T] = object
 
 func apply[T, Sh, StAB, StR](
     op: EpiScale[T];
-    tmp: var (TensorView[T, Sh, StR] or Tensor[T, Sh, StR]);
-    AB: TensorView[T, Sh, StAB] or Tensor[T, Sh, StAB]) {.inline.} =
+    tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
+    AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## Per-thread epilogue math: tmp = s·AB.
   const S = toIntVal(size(tmp))
   for i in 0 ..< S:

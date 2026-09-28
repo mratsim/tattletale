@@ -5,25 +5,10 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## MMA atom property getters — method-call syntax on the enum.
-##
-## Each getter resolves the per-atom const the registry generated
-## (`NAME_m`, `NAME_aLayout`, …) via `bindSym($Name & "_suffix")`, the Constantine
-## `getCoefA`/`baseFieldModulus` pattern. The resolved const
-## keeps its declared type: scalars fold as ints, the layout getters
-## return the real Layout consts (heterogeneous per atom — no typed
-## layout table exists, and none is possible: the SM80 16×8×8 and the 1×1×1
-## atoms have structurally distinct Layout types).
-##
-## Usage: `A.getM()`, `A.getLayoutA()` with `A: static MmaAtom`, in type
-## bodies (`array[A.getVpt(), T]`), in `const` blocks and in `when`
-## branches.
-##
-## `{.experimental: "dynamicBindSym".}` is required: without it the computed-name
-## `bindSym($A & "_suffix")` fails to evaluate `A` at
-## compile time.
-
+## MMA atom property getters and derived atom geometry.
 import std/macros
+import workspace/ceramic/src/int_tuples
+import ./h_configgen
 import ./h_registry
 
 {.experimental: "dynamicBindSym".}
@@ -43,8 +28,33 @@ macro getK*(A: static MmaAtom): untyped =
 macro getVpt*(A: static MmaAtom): untyped =
   ## Returns the A fragment's values per thread (V in the (T, V) layout),
   ## the registry's per-atom `vpt` const. The B and C fragments' V derive
-  ## from their layouts (`valuesPerThread`, in atoms_mma_partitioning).
+  ## from their layouts (`valuesPerThread`, below).
   result = bindSym($A & "_vpt")
+
+template threadCount*(atom: static MmaAtom; operand: static MmaOperand): untyped =
+  ## Threads cooperating on the atom for operand A, B or C in the `C <- A*B + C` microkernel.
+  ##
+  ## Returns the atom's thread count, wrapped in `Int`.
+  ## Every declared GPU atom uses the same thread count for all three operands.
+  Int[atom.getThreadCount()]()
+
+template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): untyped =
+  ## Operand values per thread. A, B and C may each differ.
+  ##
+  ## Returns the operand layout's cosize divided by the atom's thread count.
+  ##
+  ## Declared atoms' V_A/V_B/V_C
+  ##
+  ## | Atom class                | V_A/V_B/V_C |
+  ## | ------------------------- | ----------- |
+  ## | tf32                      | 4/2/4       |
+  ## | f16+bf16 (k16)            | 8/4/4       |
+  ## | int8+e4m3 (k32)           | 16/8/4      |
+  ## | universal 8x8x8 and Apple | 2/2/2       |
+  ## | 1x1x1                     | 1/1/1       |
+  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount(opA)
+  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount(opB)
+  else:                cosize(atom.getLayoutC()) div atom.threadCount(opC)
 
 macro getThreadCount*(A: static MmaAtom): untyped =
   ## Returns the number of threads one atom invocation cooperates over.

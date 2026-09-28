@@ -26,7 +26,7 @@ import std/macros
 
 type
   Dim3* = object
-    ## A 3D launch extent — used for both the grid and the block axes of a
+    ## A 3D launch dims — used for both the grid and the block axes of a
     ## launch. Nominal object (no structural collision with user tuples);
     ## field defaults make `Dim3(x: n)` → (n, 1, 1).
     x*, y*, z* = 1
@@ -58,7 +58,7 @@ type
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
-# Private: the Dim3 extent-conversion overloads + the LaunchProxy factory.
+# Private: the Dim3 dim-conversion overloads + the LaunchProxy factory.
 # Both must precede the `<<` macro — bindSym and quote resolve symbols at
 # macro definition, so they cannot follow it.
 proc dim3(x: int): Dim3 {.inline.} = Dim3(x: x)
@@ -87,9 +87,9 @@ proc run*[E](engine: E): RunSugar[E] =
 macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
   ## Chevron launch-config sugar — field mapping only: named fields are read
   ## by name (any order; defaults grid=blk=1, sharedMem=stream=0); positional
-  ## forms take 2..4 args in (grid, blk, sharedMem, stream) order. Each extent
+  ## forms take 2..4 args in (grid, blk, sharedMem, stream) order. Each dim
   ## is emitted as `dim3(<raw expr>)` — the overloads convert int / 1-tuple /
-  ## 2-tuple / 3-tuple (extents are positional tuples).
+  ## 2-tuple / 3-tuple (dims are positional tuples).
   ## Mixed named/positional, unknown named fields and positional counts outside
   ## 2..4 are rejected loudly at compile time.
   let cfgAst = cfg

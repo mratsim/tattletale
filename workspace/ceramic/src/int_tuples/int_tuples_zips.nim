@@ -10,10 +10,10 @@ import ./int_tuples_datatypes
 import ./int_tuples_transforms
 
 # ═══════════════════════════════════════════════════════════════
-#  zipModesWith — zip tuple top-level with `op`
+#  zipDimensionsWith — zip tuple top-level with `op`
 # ═══════════════════════════════════════════════════════════════
 
-macro zipModesWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
+macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
   ## Zip top-level elements of tuples `a` and `b` pairwise via `body` (does NOT recurse into nested tuples).
   ## `it_a` / `it_b` bind to corresponding elements.
   ## Leftover elements from the longer tuple are appended unchanged.

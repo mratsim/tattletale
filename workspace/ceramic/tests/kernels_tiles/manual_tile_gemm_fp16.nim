@@ -13,8 +13,8 @@
 
 import std/[strformat, strutils]
 import workspace/crucible
-import ../tile_test_utils
-import ../../src/kernels/k_tile_gemm
+import workspace/ceramic/tests/tile_test_utils
+import workspace/ceramic/src/kernels/k_tile_gemm
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The thin {.global.} launcher. First param = the output buffer D:

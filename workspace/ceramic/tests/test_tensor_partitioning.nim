@@ -5,7 +5,6 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
-import workspace/ceramic/src/layouts
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
@@ -82,7 +81,7 @@ proc runOuter3dScalarCoord(errors: var int) =
   for i in 0..<96: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,2), 0)
-  # rest group (2,2,3):(4,16,32), all modes at coord 0
+  # rest group (2,2,3):(4,16,32), all dimensions at coord 0
   doAssert p.layout.shape === (2,2,3), "shape=(2,2,3)"
   doAssert p(0,0,0) == 0.0'f32, "(0,0,0)==0"
   doAssert p(1,0,0) == 4.0'f32, "(1,0,0)==4"
@@ -118,7 +117,7 @@ proc runInner3dScalarCoord(errors: var int) =
 #     CuTe: data (8,8), tiler (4,4), coord (1, _)
 #     ceramic: data (9,9), tiler (3,3), coord (1, X())
 #     (Int[9]/Int[3] avoids C++ backend hash collision w/ tests 1-3)
-#     rest mode 0 fixed to 1 (offset=1*3=3), rest mode 1 kept
+#     rest dimension 0 fixed to 1 (offset=1*3=3), rest dimension 1 kept
 #     → shape (3,3,3):(1,9,27)
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -141,7 +140,7 @@ proc runInner2dUnderscore(errors: var int) =
 #  7. outer_partition — 2D, _ (X) in coord
 #     CuTe: data (8,8), tiler (4,4), coord (1, _)
 #     ceramic: data (9,9), tiler (3,3), coord (1, X())
-#     tile mode 0 fixed to 1, tile mode 1 kept free, rest kept
+#     tile dimension 0 fixed to 1, tile dimension 1 kept free, rest kept
 #     → shape (3,3,3):(9,3,27), offset=1
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -164,7 +163,7 @@ proc runOuter2dUnderscore(errors: var int) =
 #  8. inner_partition — 2D, _ (X) in coord (3D result, offset=0)
 #     CuTe: data (8,8), tiler (4,4), coord (0, _)
 #     ceramic: data (9,9), tiler (3,3), coord (0, X())
-#     rest mode 0 fixed to 0 (offset=0), rest mode 1 kept
+#     rest dimension 0 fixed to 0 (offset=0), rest dimension 1 kept
 #     → shape (3,3,3):(1,9,27)
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -205,8 +204,8 @@ proc runLocalTileCtaExtraction(errors: var int) =
     # dice(proj, tiler)  → (128, 8)
     # dice(proj, coord0) → (0, _)
     # inner_partition(mA, (128,8), (0,_)):
-    #   zipped_divide: mode 0 split by 128→(128,4), mode 1 split by 8→(8,8)
-    #   slice(0,_): keep tile, fix rest mode 0 to 0
+    #   zipped_divide: dimension 0 split by 128→(128,4), dimension 1 split by 8→(8,8)
+    #   slice(0,_): keep tile, fix rest dimension 0 to 0
     #   shape: (128, 8, 8)
     doAssert gA.layout.shape === (bM, bK, K div bK), "shape=(" & $bM & "," & $bK & "," & $(K div bK) & ")"
     doAssert gA(0,0,0) == 0.0'f32, "(0,0,0)==0"
@@ -231,10 +230,10 @@ proc runLocalTileCtaExtraction(errors: var int) =
     for i in 0..<M*N: mC(i) = float32(i)
     let v = mC
     let gC = local_tile(v, tiler, coord0, (Y, Y, X))
-    # dice: keep modes 0,1 → (128, 128)
+    # dice: keep dimensions 0,1 → (128, 128)
     # local_tile(mC, (128,128), (0,0)):
-    #   zipped_divide: split mode 0 by 128→(128,4), mode 1 by 128→(128,4)
-    #   slice(0,0): keep tile, fix both rest modes
+    #   zipped_divide: split dimension 0 by 128→(128,4), dimension 1 by 128→(128,4)
+    #   slice(0,0): keep tile, fix both rest dimensions
     #   shape: (128, 128)
     doAssert gC.layout.shape === (bM, bN), "shape=(" & $bM & "," & $bN & ")"
     doAssert gC(0,0) == 0.0'f32, "(0,0)==0"

@@ -30,19 +30,16 @@
 ##     workspace/ceramic/tests/gemm/manual_gemm_kernel_cuda.nim
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_gemm_gpu
-import workspace/ceramic/src/kernel_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 

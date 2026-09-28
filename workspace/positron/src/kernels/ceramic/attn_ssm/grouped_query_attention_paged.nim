@@ -29,7 +29,7 @@
 ## The softmax is online: each kv block rescales the running O
 ## and row sum by exp2(m_prev − m_cur).
 ##
-## Modes:
+## Regimes:
 ##   - decode (q_len == 1): causal off, each query attends the cached
 ##     rows [0, cache_seqlen)
 ##   - prefill (q_len ≥ 2): causal on over [0, cache_seqlen + q_len),
@@ -66,20 +66,16 @@
 ##     Vᵀ from the natural slab view
 ##
 ## Partial last page:
-##   - K/V rows are bounded by cache_seqlens[seq] (decode)
-##     or cache_seqlen + q_len (prefill), never by page multiples.
-##     The tail page may hold garbage beyond the covered length
-##     (bound, don't filter)
+##   - K/V rows bounded by cache_seqlens[seq] (decode) or
+##     cache_seqlen + q_len (prefill), never by page multiples, the
+##     tail page may hold garbage beyond the covered length
+##   - garbage rows load as valid slab memory, excluded by the banded
+##     mask (the masking numerics sit on `maskCausal`'s doc)
 ##   - the KV loop stays inside the seq's table pages
-##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8))
-##     and inside the last block's attended range
-##     (lastKey = min(cachedLen + q0Local + 7, totalK − 1)). A block
-##     beyond the last table page would read a -1 padding slot
-##   - garbage rows load as valid slab memory and are excluded
-##     by the banded mask. Masked S columns become the most-negative
-##     finite fp32 (−3.402823466e38), so the running row max ignores
-##     them and exp2(S − m) underflows to exact +0.0. The P, l
-##     and O accumulations never see them
+##     (pageBlocks = ceil(totalK/page_size)·(page_size div 8)) and the
+##     last block's attended range (lastKey = min(cachedLen +
+##     q0Local + 7, totalK − 1)), a block beyond the last table page
+##     would read a -1 padding slot
 ##
 ## Numerics:
 ##   - online softmax in the exp2 shape, q_mul = scale·log2(e) folded
@@ -106,8 +102,7 @@ import workspace/ceramic
 import ../tile_io_rows
 from ../math_consts import Log2e, InvSqrt128
 
-export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
-       ptr_arithmetic, tile_algebra
+export layout_algebra, tensors, tile_algebra, ptr_arithmetic
 
 # ════════════════════════════════════════
 #  Local device extensions: the tile API gaps the paged fetch needs
@@ -116,21 +111,25 @@ export int_tuples, layouts, layout_constructors, layout_indexing, tensors,
 proc maskCausal[A: static MmaAtom](
     tile: var RtLeft[float32, 8, 8, A],
     limit: int32) {.device.} =
-  ## Banded causal mask on an 8×8 S tile: element (r, c) is attended
-  ## iff c <= limit + r. Masked elements become the most-negative
-  ## finite fp32 (−3.402823466e38), so the online softmax excludes
-  ## them (the row max ignores them, exp2(S − m) underflows to exact
-  ## +0.0). `limit` is the block's band offset (cachedLen + q0Local −
-  ## kv_idx·8 − decodeAdj), signed: a negative limit masks every
-  ## column of the row, where an unsigned wrap would leave them
-  ## attended. The frag walk follows the loadTile lane→element mapping,
-  ## so the mask hits exactly the elements the Q·Kᵀ mma produced.
+  ## Element (r, c) is attended iff c <= limit + r, `limit` is the
+  ## block's band offset, signed, a negative limit masks whole rows.
+  ## For limit = 0, X marks masked elements:
+  ##
+  ##      c:  0 1 2 3 4 5 6 7
+  ##  r = 0:  . X X X X X X X
+  ##  r = 1:  . . X X X X X X
+  ##  r = 2:  . . . X X X X X
+  ##  r = 3:  . . . . X X X X
+  ##  r = 4:  . . . . . X X X
+  ##  r = 5:  . . . . . . X X
+  ##  r = 6:  . . . . . . . X
+  ##  r = 7:  . . . . . . . .
   const M = A.getM()
   const N = A.getN()
   const rowTiles = 8 div M
   const colTiles = 8 div N
   const vpt = A.getVpt()
-  let lane = int(thread_index_in_threadgroup)
+  let lane = thread_index_in_threadgroup
   let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
   let row = cell mod M
   let col = cell div M
@@ -154,12 +153,41 @@ proc paged_attn_fwd*(
     cu_seqlens_q: ptr UncheckedArray[int32],   # (num_seqs+1) prefill q ranges
     num_seqs, H, Nkv, max_pages, num_layers, layer: int32,
     page_size: static int, D: static int) {.device.} =
-  ## One grid point = (seq, head, 8-row q block), following the module
-  ## doc's contract: the q tile loads row-bounded, the KV loop is
-  ## bounded by the seq's table pages and the banded causal mask, and
-  ## the fp16 store writes only the seq's q rows.
-  ## Grid: (q token blocks, H, num_seqs), 32 lanes. x = the seq's
-  ## 8-row q block, y = head, z = seq.
+  ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
+  ##
+  ##   x = the seq's 8-row q block
+  ##   y = head
+  ##   z = seq
+  ##
+  ## One grid point computes 8 q rows against the seq's KV columns
+  ## (its table pages), causal-banded per row:
+  ##
+  ##          KV columns (table pages)
+  ##           page 0    page 1    …
+  ##   q row 0  ███████   X         X
+  ##   q row 1  ███████   ██        X
+  ##   …        ███████   ███████   ██
+  ##   q row 7  ███████   ███████   ██
+  ##
+  ##   █ = attended (c <= limit + r), X = masked.
+  ## The q tile loads row-bounded and the fp16 store writes
+  ## only the seq's q rows.
+  ##
+  ## Dataflow, one threadgroup (tensors on edges, ops in boxes,
+  ## per KV block of the online softmax):
+  ##
+  ##   q (8, D) ──► scale·log2e pre-scale ──┐
+  ##                                        ▼
+  ##   K (D, 8) ──► [ S = q·Kᵀ ] ──► [ band mask ] ──► [ m ← max(m, S) ]
+  ##                                        │                   │
+  ##   P̃ = exp2(S − m) ◄────────────────────┘                   ▼
+  ##        │                                        rescale = exp2(m_prev − m)
+  ##        │             ┌────────────────────────────────────┐
+  ##        │             │  l ← l·rescale + rowsum(P̃)        │
+  ##   V (8, D) ──► [ O ← O·rescale + P̃·V (fp32) ]            │
+  ##                └───────────────┬────────────────────────┘
+  ##                                 ▼
+  ##                 o (8, D) = O / l, fp16 store
   static: doAssert D == 64 or D == 128
   static: doAssert page_size mod 8 == 0
 

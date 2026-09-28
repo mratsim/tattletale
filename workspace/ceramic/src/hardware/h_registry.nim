@@ -78,9 +78,8 @@
 ## atoms (AMX, SIMD ukernels) are not declared.
 # TODO: pending the CPU-atom registry at CPU-merge time.
 
-import ../int_tuples
-import ../layouts
-import ../layout_constructors
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/int_tuples
 import ./h_configgen
 
 # ═════════════════════════════════════════════════════════════════════════

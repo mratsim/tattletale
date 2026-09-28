@@ -237,7 +237,7 @@ proc concat*[V: static int](a: static int; b: Int[V]): static auto {.inline, noI
 # ═══════════════════════════════════════════════════════════════
 
 macro select*(t: IntOrIntTuple; indices: varargs[int]{lit|`const`}): untyped =
-  ## Tuple-level selectModes: extract elements by compile-time index.
+  ## Tuple-level selectDimensions: extract elements by compile-time index.
   ##
   ## Examples:
   ##   t.select(0, 2)  → (M,K)  (method-call syntax)

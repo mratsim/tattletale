@@ -16,21 +16,18 @@
 ##     workspace/ceramic/tests/gemm/manual_sm80_gemm_warp_cuda.nim
 
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layouts
-import workspace/ceramic/src/layout_constructors
-import workspace/ceramic/src/layout_indexing
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_configgen
 import workspace/ceramic/src/hardware/h_registry
 import workspace/ceramic/src/hardware/h_properties
 
-import workspace/ceramic/src/atoms_mma_partitioning
+import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/src/kernel_copy_gpu
-import workspace/ceramic/src/kernel_fillwith_gpu
-import workspace/ceramic/src/kernel_gemm_epilogues
-import workspace/ceramic/src/kernel_gemm_gpu
+import workspace/ceramic/src/kernels/k_layout_copy_gpu
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
+import workspace/ceramic/src/kernels/k_layout_gemm_epilogues
+import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/ceramic/tests/gemm/gemm_test_lib
 import workspace/crucible
 
@@ -59,7 +56,7 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
   var tCv = tma.partition_C(thr, make_view(C, make_layout((M, N), (1, M))))
   # fragments as owning tensors shaped like the partitions:
   # V flattened to atom register order, the k slices in the partition's
-  # RepeatK mode, so one copyFrom gathers all slices in the flat order
+  # RepeatK dimension, so one copyFrom gathers all slices in the flat order
   # gemm_warp indexes per k slice
   var aFrag = make_fragment_A(tma.atom, tAv)
   aFrag.copyFrom(tAv)
@@ -77,7 +74,7 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
 const kernelCode = cuda:
   proc gemmWarpKernel(C: ptr UncheckedArray[float32],
                          A, B: ptr UncheckedArray[uint32]) {.global.} =
-    gemmWarpMicrotile(tiled, int(threadIdx.x), C, A, B)
+    gemmWarpMicrotile(tiled, threadIdx.x, C, A, B)
 
 proc runTest() =
   var engine = bkCuda.init(kernelCode)

@@ -9,17 +9,17 @@
 ## Import this one module to get the tile types, ops, io, mma and
 ## epilogues.
 
-import ./layout_algebra
-import ./tile_algebra/tiles
-import ./tile_algebra/tile_config
-import ./tile_algebra/tile_io
-import ./tile_algebra/tile_mma
-import ./tile_algebra/tile_ops_unary
-import ./tile_algebra/tile_ops_binary
-import ./tile_algebra/tile_ops_reductions
-import ./tile_algebra/tile_epilogues
-import ./tile_algebra/tile_epilogues_backend
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tile_algebra/tiles
+import workspace/ceramic/src/tile_algebra/tile_config
+import workspace/ceramic/src/tile_algebra/tile_io
+import workspace/ceramic/src/tile_algebra/tile_mma
+import workspace/ceramic/src/tile_algebra/tile_ops_unary
+import workspace/ceramic/src/tile_algebra/tile_ops_binary
+import workspace/ceramic/src/tile_algebra/tile_ops_reductions
+import workspace/ceramic/src/tile_algebra/tile_epilogues
+import workspace/ceramic/src/tile_algebra/tile_epilogues_backend
 
-export layout_algebra, tiles, tile_config, tile_io,
+export tiles, tile_config, tile_io,
        tile_mma, tile_ops_unary, tile_ops_binary,
        tile_ops_reductions, tile_epilogues, tile_epilogues_backend
