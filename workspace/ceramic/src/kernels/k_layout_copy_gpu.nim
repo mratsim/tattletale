@@ -37,16 +37,18 @@ func basePtr[T, Sh, St](t: (TensorView[T, Sh, St] or TensorOwned[T, Sh, St])): p
   else:
     cast[ptr T](t.data)
 
-func getContiguity*[T, ShD, StD, ShS, StS](
+func getContiguity[T, ShD, StD, ShS, StS](
     dst: (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
     src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])): int {.inline.} =
-  ## Largest N with dst(flat k) == k == src(flat k) for all 0 <= k < N.
-  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
-    max_common_vector(default(Layout[ShD, StD]), default(Layout[ShS, StS]))
-  else:
-    const R = min(tupleLen(ShD), tupleLen(ShS))
-    var span = 1
-    for d in 0 ..< R:
+  ## Largest N with dst(flat k) == k == src(flat k) for all 0 <= k < N,
+  ## flat k in the element operator's column-major order, dimension 0
+  ## walks fastest, unequal shapes keep the min of the two sizes.
+  const R = min(tupleLen(ShD), tupleLen(ShS))
+  var
+    span = 1
+    stop = false
+  staticFor d, 0, R:
+    if not stop:
       let shD = dst.layout.shape[d]
       let stD = dst.layout.stride[d]
       let shS = src.layout.shape[d]
@@ -54,8 +56,8 @@ func getContiguity*[T, ShD, StD, ShS, StS](
       if stD === span and stS === span:
         span = min(span * shD, span * shS)
       else:
-        break
-    span
+        stop = true
+  span
 
 func copyElementwise[T, ShD, StD, ShS, StS](
     dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
@@ -89,54 +91,28 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
   ## Copies every element of src to dst, dst(flat k) = src(flat k).
   ##
-  ## For runtime strides, assumes 128B alignment for vectorized copies
+  ## The first commonSpan elements run as flat vector chunks, the rest
+  ## loops elementwise, vector granularity up to 128 bits, base pointers
+  ## assumed 16-byte aligned.
   const elemBits = sizeof(T) * 8
-  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
-    const
-      commonSpan = max_common_vector(default(Layout[ShD, StD]), default(Layout[ShS, StS]))
-      vecElems = gcd(commonSpan, 128 div elemBits)
-    when commonSpan === size(default(Layout[ShD, StD])) and vecElems > 1:
-      const
-        dstL = default(Layout[ShD, StD])
-        srcL = default(Layout[ShS, StS])
-        dstCastable = dstL.stride.fold(true, acc and (
-          it.V == 0 or abs(it.V) mod vecElems == 0 or vecElems mod abs(it.V) == 0))
-        srcCastable = srcL.stride.fold(true, acc and (
-          it.V == 0 or abs(it.V) mod vecElems == 0 or vecElems mod abs(it.V) == 0))
-      when dstCastable and srcCastable:
-        const
-          dstChunksL = upcast(dstL, vecElems)
-          srcChunksL = upcast(srcL, vecElems)
-        when size(dstChunksL) === size(srcChunksL):
-          const nChunks = size(dstChunksL).V
-          type Chunk = array[vecElems, T]
-          let
-            dstChunks = make_view(cast[ptr UncheckedArray[Chunk]](basePtr(dst)), dstChunksL)
-            srcChunks = make_view(cast[ptr UncheckedArray[Chunk]](basePtr(src)), srcChunksL)
-          for i in 0 ..< nChunks:
-            dstChunks(i) = srcChunks(i)
-          return
-    copyElementwise(dst, src)
-  else:
-    let commonSpan = getContiguity(dst, src)
-    if commonSpan > 1:
-      let vecElems = min(commonSpan and -commonSpan, 128 div elemBits)
-      when 128 div elemBits >= 16:
-        if vecElems >= 16:
-          copyFlatChunks(dst, src, 16, commonSpan)
-      when 128 div elemBits >= 8:
-        if vecElems < 16 and vecElems >= 8:
-          copyFlatChunks(dst, src, 8, commonSpan)
-      when 128 div elemBits >= 4:
-        if vecElems < 8 and vecElems >= 4:
-          copyFlatChunks(dst, src, 4, commonSpan)
-      when 128 div elemBits >= 2:
-        if vecElems < 4 and vecElems >= 2:
-          copyFlatChunks(dst, src, 2, commonSpan)
-      if vecElems < 2:
-        copyFlatChunks(dst, src, 1, commonSpan)
-    for i in commonSpan ..< size(src):
-      dst(i) = src(i)
+  let commonSpan = getContiguity(dst, src)
+  let vecElems = min(commonSpan and -commonSpan, 128 div elemBits)
+  when 128 div elemBits >= 16:
+    if vecElems >= 16:
+      copyFlatChunks(dst, src, 16, commonSpan)
+  when 128 div elemBits >= 8:
+    if vecElems < 16 and vecElems >= 8:
+      copyFlatChunks(dst, src, 8, commonSpan)
+  when 128 div elemBits >= 4:
+    if vecElems < 8 and vecElems >= 4:
+      copyFlatChunks(dst, src, 4, commonSpan)
+  when 128 div elemBits >= 2:
+    if vecElems < 4 and vecElems >= 2:
+      copyFlatChunks(dst, src, 2, commonSpan)
+  if vecElems < 2:
+    copyFlatChunks(dst, src, 1, commonSpan)
+  for i in commonSpan ..< size(src):
+    dst(i) = src(i)
 
 func copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];
@@ -155,11 +131,10 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
       copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0])
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The copy partition
+#   Partitioned copies
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  The copy partition is the gmem → smem leg of the GEMM pipeline, the
-#  counterpart of the MMA partition on the smem → register leg:
+#  Partitioned copy set up data for Tensor-Cores (MMA):
 #
 #    gmem --------> smem --------> registers
 #    partition_S    partition_D    partition_A/B/C

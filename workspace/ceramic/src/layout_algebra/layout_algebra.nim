@@ -782,54 +782,6 @@ func left_inverse*(layout: Layout): auto =
   leftInverseImpl(flatten(c.shape), flatten(c.stride))
 
 
-template max_common_layout*(a, b: typed): untyped =
-  ## Return a Layout for the maximum contiguous elements common to both.
-  ## a(R(i)) == i and b(R(i)) == i for all i < size(result).
-  block:
-    evalOnceAs(va, a)
-    evalOnceAs(vb, b)
-    let inv_b = right_inverse(vb)
-    let common = coalesce(compose(va, inv_b))
-    type StrideT = typeof(common.stride)
-    when StrideT is tuple:
-      type FirstStride = typeof(common.stride[0])
-      const s0 = FirstStride.V
-      when s0 == 1:
-        type FirstShape = typeof(common.shape[0])
-        coalesce(compose(inv_b, make_layout(FirstShape.V, 1)))
-      else:
-        make_layout(1, 0)
-    else:
-      const s = StrideT.V
-      when s == 1:
-        type Sh = typeof(common.shape)
-        coalesce(compose(inv_b, make_layout(Sh.V, 1)))
-      else:
-        make_layout(1, 0)
-
-template max_common_vector*(a, b: typed): int =
-  ## Return N: for 0 <= i < N, a(R(i)) == i and b(R(i)) == i.
-  block:
-    evalOnceAs(va, a)
-    evalOnceAs(vb, b)
-    let common = coalesce(compose(va, right_inverse(vb)))
-    type StrideT = typeof(common.stride)
-    when StrideT is tuple:
-      type FirstStride = typeof(common.stride[0])
-      const s0 = FirstStride.V
-      when s0 == 1:
-        type FirstShape = typeof(common.shape[0])
-        FirstShape.V
-      else:
-        1
-    else:
-      const s = StrideT.V
-      when s == 1:
-        type Sh = typeof(common.shape)
-        Sh.V
-      else:
-        1
-
 # ═══════════════════════════════════════════════════════════════
 #  logical_product — reproduce a block over a tiler
 # ═══════════════════════════════════════════════════════════════
