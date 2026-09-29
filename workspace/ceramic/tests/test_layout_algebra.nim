@@ -1492,3 +1492,35 @@ proc runTileToShapeTests: void =
     doAssert size(r) === 24
     doAssert rank(r) === 2
   echo "    tile_to_shape: 8 cases OK"
+# ────────────────────────────────────────────────────────────────
+# transform_layout, dimension-wise remapping with tuple and Layout tilers
+# ────────────────────────────────────────────────────────────────
+echo "── transform_layout [CUTE] ──"
+block:
+  ## [cute] Zip a rank-1 layout against a rank-2 Layout tiler
+  ## CuTe: transform_layout(make_layout(2), make_layout(((2,2),(2,8)), ((1,4),(2,8))), f)
+  let a = make_layout((2,), (1,))
+  let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))
+  let r = transform_layout(a, b):
+    make_layout(it_l.shape, it_t.stride)
+  doAssert $r == "(Int[2], (Int[2], Int[8])):((Int[1], Int[4]), (Int[2], Int[8]))", $r
+block:
+  ## [cute] Tiler longer than the layout, leftover tiler dimensions pass through
+  let l = make_layout((4,), (2,))
+  let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))
+  let r = transform_layout(l, b):
+    make_layout(it_l.shape, it_t.stride)
+  doAssert $r == "(Int[4], (Int[2], Int[8])):((Int[1], Int[4]), (Int[2], Int[8]))", $r
+block:
+  ## Layout longer than the tiler, leftover layout dimensions pass through
+  let l = make_layout((2, 4, 8), (1, 2, 3))
+  let r = transform_layout(l, (1, 1)):
+    make_layout(it_l.shape, it_l.stride * it_t)
+  doAssert $r == "(Int[2], Int[4], Int[8]):(1, 2, Int[3])", $r
+block:
+  ## [cute] mapDimensionsWith, the one-operand arity
+  let l = make_layout((2, 4), (1, 2))
+  let r = mapDimensionsWith(l):
+    make_layout(it.shape, it.stride * 2)
+  doAssert $r == "(Int[2], Int[4]):(Int[2], Int[4])", $r
+echo "    transform_layout: 4 cases OK"

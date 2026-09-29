@@ -77,7 +77,6 @@ export layouts.takeDimensions
 export layouts.selectDimensions
 export layouts.replaceDimension
 export layouts.zipDimensions
-export layouts.zipDimensionsWith
 export layouts.mapDimensionsWith
 export layouts.transform_layout
 

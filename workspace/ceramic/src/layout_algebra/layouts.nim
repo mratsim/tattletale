@@ -52,17 +52,17 @@ func isCompact*(layout: static Layout): static bool =
 # ═══════════════════════════════════════════════════════════════
 
 macro filterZerosFlat(sh, st: typed): untyped =
-  ## Stride-0 dimension shapes → Int[1](), everything else as-is.
+  ## Stride-0 dimension shapes become Int[1], everything else stays as-is.
   let stT = st.getTypeInst()
   let shT = sh.getTypeInst()
-  # ── scalar path: single dimension ──
+  # scalar path, single dimension
   if shT.kind != nnkTupleConstr:
     if stT.kind == nnkBracketExpr and $stT[0] == "Int" and stT[1].intVal == 0:
       result = IntCT(1)
     else:
       result = sh
     return
-  # ── tuple path: iterate over dimensions ──
+  # tuple path, one shape element per stride type
   result = newNimNode(nnkTupleConstr)
   for i in 0 ..< shT.len:
     let stN = stT[i]
@@ -376,164 +376,119 @@ macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  map, apply a function to each dimension independently
-#  zipWith, pairwise function over two layouts' dimensions
+#  transform_layout, map a layout's modes, one or two at a time
 # ═══════════════════════════════════════════════════════════════
 
-macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
-  ## Apply `body` to each dimension of Layout `arg`. Within body, `it` is the current dimension.
-  ## `body` must evaluate to a Layout.
-  ##
-  ## Example:
-  ##   mapDimensionsWith(make_layout((2, 4), (1, 2))):
-  ##     make_layout(it.shape, it.stride * 2)
-  ##   # → (2, 4):(2, 4)
-  let shTy = layoutTypeArgs(arg).shapeTy
-  let R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
+proc dimensionExpr(l: NimNode; idx: int): NimNode {.compileTime.} =
+  ## `l.dimension(idx)` as a method-call node.
+  let dim = ident"dimension"
+  result = newCall(nnkDotExpr.newTree(l, dim), newLit(idx))
 
-  result = newStmtList()
-  proc subst(n: NimNode; i: int; la: NimNode): NimNode =
-    if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it"):
-      result = newCall(bindSym"dimension", la, newLit(i))
-    else:
-      result = n.copyNimTree()
-      for j in 0 ..< n.len:
-        result[j] = subst(n[j], i, la)
+proc substDims(n: NimNode; itL, itT: NimNode): NimNode {.compileTime.} =
+  ## Replace `it_l` with `itL` and `it_t` with `itT`, a nil binding stays as-is.
+  if n.kind in {nnkIdent, nnkSym}:
+    if itL != nil and n.eqIdent("it_l"):
+      return itL
+    if itT != nil and n.eqIdent("it_t"):
+      return itT
+    return n
+  result = n.copyNimTree()
+  for j in 0 ..< n.len:
+    result[j] = substDims(n[j], itL, itT)
 
-  var ct = LayoutCT()
-  for i in 0 ..< R:
-    let bodyExpr = subst(body, i, arg)
-    let resName = ident("r" & $i)
-    result.add newLetStmt(resName, bodyExpr)
-    ct.append(newTree(nnkDotExpr, resName, ident"shape"),
-               newTree(nnkDotExpr, resName, ident"stride"))
-  result.add ct.emit()
+proc dimCount(ty: NimNode): int {.compileTime.} =
+  ## Top-level dimension count of a shape or layout type node.
+  if ty.kind in {nnkTupleConstr, nnkTupleTy}:
+    ty.len
+  else:
+    1
 
-macro zipDimensionsWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
-  ## Zip dimensions of two layouts pairwise via body, appending leftovers from the longer one.
-  ##
-  ## Within body, `it_a` is the current dimension of `a` and `it_b` the current dimension of `b`.
-  ## Body must return a Layout.
-  ##
-  ## For the first `min(rank(a), rank(b))` dimensions, both `it_a` and `it_b` are available, the body combines them.
-  ## Any remaining dimensions from the longer layout are appended unchanged.
-  ##
-  ## Example (a shorter, b longer):
-  ##   let a = make_layout((2,), (1,))           # rank-1
-  ##   let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))  # rank-2
-  ##   let r = zipDimensionsWith(a, b):
-  ##     make_layout(it_a.shape, it_b.stride)   # shape from a, stride from b's 1st dimension
-  ##   # dimension 0, the zip result (2):(1, 4), shape from a (2) and stride from b's 1st (1, 4)
-  ##   # dimension 1, b's 2nd dimension leftover (2, 8):(2, 8)
-  ##
-  ## Example (same rank):
-  ##   let a = make_layout((2, 4), (1, 2))
-  ##   let b = make_layout((3, 5), (10, 20))
-  ##   let r = zipDimensionsWith(a, b):
-  ##     make_layout(it_a.shape, it_b.stride)   # take shape from a, stride from b
-  ##   # r == (2, 4):(10, 20)
-  let (shA, _) = layoutTypeArgs(a)
-  let (shB, _) = layoutTypeArgs(b)
-  let RA = if shA.kind == nnkTupleConstr: shA.len else: 1
-  let RB = if shB.kind == nnkTupleConstr: shB.len else: 1
-  let rMin = min(RA, RB)
-  let rMax = max(RA, RB)
+proc emitDimLet(stmts, accSh, accSt: var seq[NimNode]; name: NimNode;
+                  dimExpr: NimNode) {.compileTime.} =
+  ## Bind `dimExpr` to `name`, append its shape and stride to the accumulators.
+  stmts.add nnkLetSection.newTree(
+    nnkIdentDefs.newTree(name, newEmptyNode(), dimExpr))
+  accSh.add name.newDotExpr(ident"shape")
+  accSt.add name.newDotExpr(ident"stride")
 
-  proc subst(n: NimNode; i: int; la, lb: NimNode): NimNode =
-    if n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_a"):
-      result = newCall(bindSym"dimension", la, newLit(i))
-    elif n.kind in {nnkIdent, nnkSym} and n.eqIdent("it_b"):
-      result = newCall(bindSym"dimension", lb, newLit(i))
-    else:
-      result = n.copyNimTree()
-      for j in 0 ..< n.len:
-        result[j] = subst(n[j], i, la, lb)
-
-  var ct = LayoutCT()
-  result = newStmtList()
-  for i in 0 ..< rMax:
-    if i < rMin:
-      let bodyExpr = subst(body, i, a, b)
-      let resName = ident("r" & $i)
-      result.add newLetStmt(resName, bodyExpr)
-      ct.append(newTree(nnkDotExpr, resName, ident"shape"),
-                 newTree(nnkDotExpr, resName, ident"stride"))
-    elif i < RA:
-      let mName = ident("m" & $i)
-      result.add newLetStmt(mName, newCall(bindSym"dimension", a, newLit(i)))
-      ct.append(newTree(nnkDotExpr, mName, ident"shape"),
-                 newTree(nnkDotExpr, mName, ident"stride"))
-    else:
-      let mName = ident("m" & $i)
-      result.add newLetStmt(mName, newCall(bindSym"dimension", b, newLit(i)))
-      ct.append(newTree(nnkDotExpr, mName, ident"shape"),
-                 newTree(nnkDotExpr, mName, ident"stride"))
-  result.add ct.emit()
-
-# ═══════════════════════════════════════════════════════════════
-#  transform_layout, map a layout and a tiler tuple dimension-wise
-# ═══════════════════════════════════════════════════════════════
+proc emitMappedDims(bindings, stmts, accSh, accSt: seq[NimNode];
+    flatTop: bool): NimNode {.compileTime.} =
+  ## Rebuild the layout over the accumulated shape and stride.
+  ## flatTop unwraps a single dimension to scalar shape and stride,
+  ## false keeps a 1-tuple.
+  result = nnkStmtListExpr.newNimNode()
+  for b in bindings:
+    result.add b
+  for st in stmts:
+    result.add st
+  result.add bindSym"make_layout".newCall(
+    newTree(if flatTop: nnkPar else: nnkTupleConstr, accSh),
+    newTree(if flatTop: nnkPar else: nnkTupleConstr, accSt))
 
 macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =
-  ## Rebuilds a layout dimension by dimension.
+  ## Map the dimensions of `layout` against the dimensions of `tiler` through `body`.
   ##
-  ## - for dimension i the body binds `it_l` to that dimension, a rank-1 Layout
-  ## - the body binds `it_t` to the i-th tiler element, unconverted
-  ## - the body returns the replacement Layout for that dimension
+  ## - `it_l` binds to layout dimension i, a rank-1 Layout
+  ## - `it_t` binds to tiler dimension i, a rank-1 Layout for a Layout tiler
+  ##   and the raw element for a tuple tiler
+  ## - dimensions past the shorter side pass through unchanged, a tuple tiler
+  ##   longer than the layout is a compile-time error
   ##
-  ## - dimensions past the tiler length pass through unchanged
-  ## - a longer tiler is a compile-time error
+  ## Returns the layout rebuilt dimension by dimension.
   ##
   ## CuTe: transform_layout(l, t, f)
-  let lyt = genSym(nskLet, "lyt")
-  let tlr = genSym(nskLet, "tlr")
-  let shapeType = layout.getTypeInst()[1]
-  let R = if shapeType.kind in {nnkTupleConstr, nnkTupleTy}:
-            shapeType.len
-          else:
-            1
-  let tilerRank = tiler.getTypeInst().len
-  doAssert tilerRank <= R,
-    "transform_layout: tiler has more dimensions (" & $tilerRank &
-    ") than layout (" & $R & ")"
-
-  proc subst(n: NimNode; idx: int): NimNode =
-    # Replace `it_l` with dimension idx of `lyt`, `it_t` with the raw element idx of `tlr`.
-    if n.kind in {nnkIdent, nnkSym}:
-      if n.eqIdent("it_l"):
-        result = newCall(nnkDotExpr.newTree(lyt, ident"dimension"), newLit(idx))
-      elif n.eqIdent("it_t"):
-        result = nnkBracketExpr.newTree(tlr, newLit(idx))
-      else:
-        result = n
-    else:
-      result = n.copyNimTree()
-      for j in 0 ..< n.len:
-        result[j] = subst(n[j], idx)
+  let R = dimCount(layout.getTypeInst()[1])
+  let tilerInst = tiler.getTypeInst()
+  let tilerIsLayout = tilerInst.kind == nnkBracketExpr and tilerInst[0].eqIdent("Layout")
+  let tilerRank = if tilerIsLayout:
+                    dimCount(layoutTypeArgs(tiler).shapeTy)
+                  else:
+                    tilerInst.len
+  if not tilerIsLayout:
+    doAssert tilerRank <= R,
+      "transform_layout: tiler has more dimensions (" & $tilerRank &
+      ") than layout (" & $R & ")"
 
   var accSh, accSt: seq[NimNode]
   var stmts: seq[NimNode]
-  for idx in 0 ..< R:
-    if idx < tilerRank:
-      let d = genSym(nskLet, "d")
-      stmts.add nnkLetSection.newTree(
-        nnkIdentDefs.newTree(d, newEmptyNode(), subst(body, idx)))
-      accSh.add d.newDotExpr(ident"shape")
-      accSt.add d.newDotExpr(ident"stride")
+  let tlrNode = genSym(nskLet, "tlr")
+  for idx in 0 ..< max(R, tilerRank):
+    if idx < min(R, tilerRank):
+      let itT = if tilerIsLayout:
+                  dimensionExpr(ident("tlr"), idx)
+                else:
+                  nnkBracketExpr.newTree(tlrNode, newLit(idx))
+      stmts.emitDimLet(accSh, accSt, genSym(nskLet, "d"),
+        substDims(body, dimensionExpr(ident("lyt"), idx), itT))
+    elif idx < R:
+      stmts.emitDimLet(accSh, accSt, genSym(nskLet, "m"), dimensionExpr(ident("lyt"), idx))
     else:
-      let m = genSym(nskLet, "m")
-      stmts.add nnkLetSection.newTree(
-        nnkIdentDefs.newTree(m, newEmptyNode(),
-          newCall(nnkDotExpr.newTree(lyt, ident"dimension"), newLit(idx))))
-      accSh.add m.newDotExpr(ident"shape")
-      accSt.add m.newDotExpr(ident"stride")
+      stmts.emitDimLet(accSh, accSt, genSym(nskLet, "m"), dimensionExpr(ident("tlr"), idx))
+  let bindings = if tilerIsLayout:
+                   @[newCall(bindSym"evalOnceAs", ident"lyt", layout),
+                     newCall(bindSym"evalOnceAs", ident"tlr", tiler)]
+                 else:
+                   @[newCall(bindSym"evalOnceAs", ident"lyt", layout)]
+  if not tilerIsLayout:
+    stmts.insert(nnkLetSection.newTree(
+      nnkIdentDefs.newTree(tlrNode, newEmptyNode(), tiler)), 0)
+  result = emitMappedDims(bindings, stmts, accSh, accSt, false)
 
-  let shapeTuple = newTree(nnkTupleConstr, accSh)
-  let strideTuple = newTree(nnkTupleConstr, accSt)
-  result = nnkStmtListExpr.newTree(
-    nnkLetSection.newTree(
-      nnkIdentDefs.newTree(lyt, newEmptyNode(), layout),
-      nnkIdentDefs.newTree(tlr, newEmptyNode(), tiler)))
-  for st in stmts:
-    result.add st
-  result.add bindSym"make_layout".newCall(shapeTuple, strideTuple)
+macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
+  ## Map each dimension of Layout `arg` through `body`.
+  ##
+  ## - `it_l` binds to the current dimension, a rank-1 Layout
+  ## - `body` evaluates to the replacement per dimension
+  ##
+  ## Returns the layout rebuilt dimension by dimension.
+  ##
+  ## CuTe: transform_layout(l, f)
+  let R = dimCount(layoutTypeArgs(arg).shapeTy)
+  var accSh, accSt: seq[NimNode]
+  var stmts: seq[NimNode]
+  for idx in 0 ..< R:
+    stmts.emitDimLet(accSh, accSt, ident("r" & $idx),
+      substDims(body, dimensionExpr(ident("lyt"), idx), nil))
+  result = emitMappedDims(
+    @[newCall(bindSym"evalOnceAs", ident"lyt", arg)],
+    stmts, accSh, accSt, true)
