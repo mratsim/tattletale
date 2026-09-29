@@ -117,6 +117,20 @@ block:
 
 echo "  [OK] idx2crd: 24 elements roundtrip"
 
+block:
+  # pycute alignment, the quotient runs unmod'd at the most-significant leaf,
+  # and the excess accumulates there without wrapping, per pycute's idx2crd.
+  # CuTe C++ mods every leaf and wraps, so the case below diverges
+  # from CuTe C++ on purpose.
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd(L, 100) === (0, 25)
+  # for a non-compact layout the most-significant leaf = the largest
+  # stride (16 here), not the positional last, so (1, 7) below stays (1, 7)
+  let n = make_layout((4, 8), (16, 1))
+  doAssert idx2crd(n, 31) === (1, 7)
+
+echo "  [OK] idx2crd: pycute absorb"
+
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd(shape, idx) — shape-based (valid for non-compact shapes)
 # ═══════════════════════════════════════════════════════════════
@@ -127,6 +141,12 @@ block:
   doAssert idx2crd((4, 8), 5) === (1, 1)
   doAssert idx2crd((2, 2), 3) === (1, 1)
   doAssert idx2crd(2, 1) === 1
+  # a scalar shape is the degenerate case of the absorb rule, so the coordinate equals the index itself
+  doAssert idx2crd(1, 5) === 5
+  # out of bounds, the last flat leaf absorbs the excess, so the result
+  # does not wrap
+  doAssert idx2crd((3, 7, 2), 42) === (0, 0, 2)
+  doAssert idx2crd(((4, 8), (2, 2)), 1000) === ((0, 2), (1, 15))
   # nested shape: recursive per-dimension split
   doAssert idx2crd(((4, 8), (2, 2)), 31) === ((3, 7), (0, 0))
   # roundtrip with crd2idx over the shape (compact basis)

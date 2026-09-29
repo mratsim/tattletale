@@ -38,73 +38,88 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
   ## Coordinate = `(idx div stride) mod shape` per dimension, valid for
-  ## compact (contiguous) layouts only.
+  ## compact (contiguous) layouts only, where the largest stride sits
+  ## at the last dimension.
   ## For non-compact shapes use the shape-based `idx2crd(shape, idx)`.
   ##
-  ## Cases for `(idx, shape, stride)`:
-  ## - shape == 1 → 0 whatever the stride, broadcast and size-1 skip division
-  ## - shape != 1, stride == 0 → invalid layout, unreachable
-  ## - shape != 1, stride != 0 → (idx div stride) mod shape
+  ## Contract:
+  ## - excess accumulates at the largest static stride and does not wrap
+  ## - rank-1 layouts are the degenerate case of that rule
+  ## - pycute decomposes this way, while CuTe C++ mods every leaf and wraps
+  ##
+  ## A static shape-1 dimension maps to 0 before the division, keeping
+  ## stride-0 broadcasts away from it.
+  ##
+  ## Contract on the guard:
+  ## - no runtime shape-1 guard exists
+  ## - pycute never sees strides and CuTe C++ guards only the static case
+  ## - a dynamic broadcast violates the compact precondition
   let shT = layoutTypeArgs(layout).shapeTy
+  let stT = layoutTypeArgs(layout).strideTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
     result = quote do:
       when `sh` is Int[1]:
         Int[0]()
-      elif `sh` is int:
-        if `sh` == 1:
-          0
-        else:
-          `idx` div `st`
       else:
         `idx` div `st`
   else:
-    # Tuple shape, each dimension gets its own guard
+    # most-significant leaf = the largest stride, identifiable only
+    # when every stride is static, so dynamic strides keep the mod
+    var maxIdx = -1
+    var maxV = 0
+    var allStatic = true
+    for i in 0 ..< stT.len:
+      if stT[i].kind == nnkBracketExpr and $stT[i][0] == "Int":
+        let v = stT[i][1].intVal
+        if v > maxV:
+          maxV = v
+          maxIdx = i
+      else:
+        allStatic = false
+    # for tuple shapes, the quotient runs unmod'd at the largest static stride
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
       let shI = newCall(bindSym"[]", sh, newLit(i))
+      let leaf = if allStatic and i == maxIdx:
+        quote do: `idx` div `s`
+      else:
+        quote do: (`idx` div `s`) mod `shI`
       parts.add quote do:
         when `shI` is Int[1]:
           Int[0]()
-        elif `shI` is int:
-          if `shI` == 1:
-            0
-          else:
-            (`idx` div `s`) mod `shI`
         else:
-          (`idx` div `s`) mod `shI`
+          `leaf`
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd, index to coordinate decomposition
 # ═══════════════════════════════════════════════════════════════
 
-proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
-                     prefix: NimNode): NimNode =
-  ## Decompose `idxExpr` over the shape type `shTy`.
-  ## `prefix` is the product of the preceding sibling dimensions' sizes.
-  ## `value` is the shape value expression at the current depth, shape[i0][i1]...
-  if shTy.kind in {nnkTupleTy, nnkTupleConstr}:
-    var parts: seq[NimNode] = @[]
-    var p = prefix
-    for i in 0 ..< shTy.len:
-      let subValue = newCall(bindSym"[]", value, newLit(i))
-      let mSize = newCall(bindSym"product", subValue)
-      let mIdx = newCall(bindSym"mod", newCall(bindSym"div", idxExpr, p), mSize)
-      parts.add emitShapeDecomp(subValue, shTy[i], mIdx, newLit(1))
-      p = newCall(bindSym"*", p, mSize)
-    nnkPar.newTree(parts)
+proc emitCoordTree(profile: NimNode; parts: seq[NimNode]; i: var int): NimNode {.compileTime.} =
+  ## Rebuild the shape's nesting over the flat decomposition `parts`.
+  if profile.kind in {nnkTupleTy, nnkTupleConstr}:
+    result = nnkPar.newTree()
+    for j in 0 ..< profile.len:
+      result.add emitCoordTree(profile[j], parts, i)
   else:
-    idxExpr  # scalar leaf: the mod was applied by the parent
+    result = parts[i]
+    inc i
 
 macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ## Decompose a flat index into a coordinate over SHAPE.
   ##
   ## Returns the coordinate tuple, colexicographic over the leaf sizes,
-  ## first dimension fastest. Nested shapes decompose recursively,
-  ## each dimension's flat index split by its own sub-shape.
+  ## first dimension fastest.
+  ##
+  ## Contract:
+  ## - excess stays on the last flat leaf, which keeps the full quotient
+  ##   and absorbs it without wrapping
+  ## - pycute decomposes this way, while CuTe C++ mods every leaf and wraps
+  ## - a scalar shape is the degenerate case of that rule, so the coordinate
+  ##   is the index itself
   ##
   ## Valid for ANY shape (compact or not), unlike the stride-based
   ## compact-only idx2crd(layout, idx).
@@ -114,12 +129,21 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ##   idx2crd((4, 8), 31)            == (3, 7)
   ##   idx2crd(((4, 8), (2, 2)), 31)  == ((3, 7), (0, 0))
   ##   idx2crd(2, 1)                  == 1
+  ##   idx2crd((3, 7, 2), 42)         == (0, 0, 2)
   let shT = shape.getTypeInst()
   if shT.kind in {nnkTupleTy, nnkTupleConstr}:
-    result = emitShapeDecomp(shape, shT, idx, newLit(1))
+    let flat = flatLeaves(shape)
+    var parts: seq[NimNode] = @[]
+    var q = idx
+    for k in 0 ..< flat.len - 1:
+      let s = flat[k].leaf
+      parts.add newCall(bindSym"mod", q, s)
+      q = newCall(bindSym"div", q, s)
+    parts.add q
+    var i = 0
+    result = emitCoordTree(shT, parts, i)
   else:
-    # scalar shape, idx mod shape
-    result = newCall(bindSym"mod", idx, shape)
+    result = idx
 
 # ═══════════════════════════════════════════════════════════════
 #  slice and dice, marker-based dimension selection

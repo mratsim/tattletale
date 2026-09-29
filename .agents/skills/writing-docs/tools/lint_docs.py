@@ -13,6 +13,7 @@ Rule table (rule | trigger | severity):
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
 | the-opener           | a title line or heading opens with the article "The" (prose may open with The)                         | counted  |
+| the-fragment         | a noun phrase opening on the/The that carries no verb, as a sentence or comma segment                 | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
 | line-length          | a prose line over 140 characters                                                                  | counted  |
@@ -134,6 +135,31 @@ ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
 CONNECTIVE_EOL = {"with", "of", "for", "to", "in", "and", "or", "on", "at",
                   "by", "from", "as", "so", "then", "when"}
 ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "cf"}
+
+# Verb detection for the-fragment: auxiliaries count directly, an -s word
+# counts as a finite verb (third person or a plural noun, which is an
+# accepted false negative). -ed and -ing words read as participles inside
+# noun phrases and never count, so "the documented divergence" stays a
+# fragment.
+FRAGMENT_AUX = frozenset((
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "has", "have", "had", "does", "do", "did", "will", "would",
+    "shall", "should", "can", "could", "may", "might", "must", "not"))
+FRAGMENT_S_STOP = frozenset((
+    "this", "its", "as", "us", "plus", "minus", "less", "across",
+    "always", "perhaps", "status", "toward", "towards"))
+
+
+def _has_verb(seg):
+    """True when the segment carries a verblike token under the conservative
+    the-fragment heuristic."""
+    for tok in re.findall(r"[A-Za-z'-]+", seg):
+        tl = tok.lower().strip("'-")
+        if tl in FRAGMENT_AUX:
+            return True
+        if tl.endswith("s") and len(tl) > 2 and tl not in FRAGMENT_S_STOP:
+            return True
+    return False
 
 # Sentence starters that legitimately precede the bare word `newline`.
 # Any other Capitalized + `newline` adjacency is escape residue.
@@ -413,6 +439,8 @@ RULES = {
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
                        "a title line or heading opens with the article \"The\" (prose may open with The)"),
+    "the-fragment": Rule("the-fragment", True,
+                         "a noun phrase opening on the/The that carries no verb, as a sentence or comma segment"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
     "line-length": Rule("line-length", True, "a prose line over 140 characters"),
@@ -988,6 +1016,26 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
         findings.append(Finding(
             path, n, "the-opener",
             "prose opens with the (open with a noun phrase)"))
+    if kind != "fence":
+        # A noun phrase opening on the/The is a fragment when it carries no
+        # verb. Sentence segments and comma segments both count. A first
+        # segment opening on the stays out, the-opener already covers that
+        # line. Verb detection is conservative: auxiliaries and -s words
+        # only, -ed and -ing words read as participles inside fragments and
+        # stay unverblike.
+        segs = re.split(r"[.!?](?:\s+|$)|,\s+", bare)
+        for k, seg in enumerate(segs):
+            seg = seg.strip("-*+ \"'()")
+            ws = seg.split()
+            if not ws or ws[0].lower() != "the":
+                continue
+            if k == 0 and words and words[0].lower() == "the":
+                continue
+            if _has_verb(seg):
+                continue
+            findings.append(Finding(
+                path, n, "the-fragment",
+                "noun phrase opening on the carries no verb: \"%s\"" % seg[:60]))
     if kind == "fence":
         # Fenced content is code-with-layout.
         # - the vocabulary rules apply
