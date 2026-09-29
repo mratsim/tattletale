@@ -416,50 +416,14 @@ func logical_divide*[L: Layout](layout: L; tiler: static int): auto {.inline.} =
   logical_divide_impl(layout, make_layout(Int[tiler]()))
 
 macro logical_divide*(layout: Layout; tiler: tuple): untyped =
-  ## Logical divide by a tuple tiler.
-  ## Each tiler element applies to the corresponding layout dimension.
+  ## Divides the layout by the tiler, one tiler element per dimension.
   ##
-  ## - Dimensions beyond len(tiler) pass through unchanged
-  let lyt = genSym(nskLet, "lyt")
-  let tlr = genSym(nskLet, "tlr")
-  let shapeType = layout.getTypeInst()[1]
-  let R = if shapeType.kind in {nnkTupleConstr, nnkTupleTy}:
-            shapeType.len
-          else:
-            1
-  let tilerRank = tiler.getTypeInst().len
-  doAssert tilerRank <= R,
-    "logical_divide: tiler has more dimensions (" & $tilerRank &
-    ") than layout (" & $R & ")"
-
-
-  template dimDivided(d, lyt, tlr, idx) =
-    let d = logical_divide(dimension(lyt, idx), tlr[idx])
-
-  var accSh, accSt: seq[NimNode]
-  var stmts: seq[NimNode]
-  for idx in 0 ..< R:
-    if idx < tilerRank:
-      let d = genSym(nskLet, "d")
-      stmts.add getAst(dimDivided(d, lyt, tlr, newLit(idx)))
-      accSh.add d.newDotExpr(ident"shape")
-      accSt.add d.newDotExpr(ident"stride")
-    else:
-      let m = genSym(nskLet, "m")
-      stmts.add nnkLetSection.newTree(
-        nnkIdentDefs.newTree(m, newEmptyNode(), bindSym"dimension".newCall(lyt, newLit(idx))))
-      accSh.add m.newDotExpr(ident"shape")
-      accSt.add m.newDotExpr(ident"stride")
-
-  let shapeTuple = newTree(nnkTupleConstr, accSh)
-  let strideTuple = newTree(nnkTupleConstr, accSt)
-  result = nnkStmtListExpr.newTree(
-    nnkLetSection.newTree(
-      nnkIdentDefs.newTree(lyt, newEmptyNode(), layout),
-      nnkIdentDefs.newTree(tlr, newEmptyNode(), tiler)))
-  for st in stmts:
-    result.add st
-  result.add bindSym"make_layout".newCall(shapeTuple, strideTuple)
+  ## - a divided dimension becomes the (tile, rest) pair
+  ## - dimensions past the tiler length pass through unchanged
+  template logicalDivideT(l, t) =
+    transform_layout(l, t):
+      logical_divide(it_l, it_t)
+  getAst(logicalDivideT(layout, tiler))
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest

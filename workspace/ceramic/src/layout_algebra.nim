@@ -79,6 +79,7 @@ export layouts.replaceDimension
 export layouts.zipDimensions
 export layouts.zipDimensionsWith
 export layouts.mapDimensionsWith
+export layouts.transform_layout
 
 # crd2idx, idx2crd, slice, dice, X/Y markers, call operator.
 # `hasUnderscoreImpl` is a private helper of layout_indexing.nim

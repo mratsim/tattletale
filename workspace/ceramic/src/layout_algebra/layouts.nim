@@ -467,3 +467,71 @@ macro zipDimensionsWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
       ct.append(newTree(nnkDotExpr, mName, ident"shape"),
                  newTree(nnkDotExpr, mName, ident"stride"))
   result.add ct.emit()
+
+# ═══════════════════════════════════════════════════════════════
+#  transform_layout, map a Layout and a tiler tuple dimension-wise
+# ═══════════════════════════════════════════════════════════════
+
+macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =
+  ## Rebuilds a layout dimension by dimension.
+  ##
+  ## - for dimension i the body binds `it_l` to that dimension, a rank-1 Layout
+  ## - the body binds `it_t` to the i-th tiler element, unconverted
+  ## - the body returns the replacement Layout for that dimension
+  ##
+  ## - dimensions past the tiler length pass through unchanged
+  ## - a longer tiler is a compile-time error
+  ##
+  ## CuTe: transform_layout(l, t, f)
+  let lyt = genSym(nskLet, "lyt")
+  let tlr = genSym(nskLet, "tlr")
+  let shapeType = layout.getTypeInst()[1]
+  let R = if shapeType.kind in {nnkTupleConstr, nnkTupleTy}:
+            shapeType.len
+          else:
+            1
+  let tilerRank = tiler.getTypeInst().len
+  doAssert tilerRank <= R,
+    "transform_layout: tiler has more dimensions (" & $tilerRank &
+    ") than layout (" & $R & ")"
+
+  proc subst(n: NimNode; idx: int): NimNode =
+    # Replace `it_l` with dimension idx of `lyt`, `it_t` with the raw element idx of `tlr`.
+    if n.kind in {nnkIdent, nnkSym}:
+      if n.eqIdent("it_l"):
+        result = newCall(nnkDotExpr.newTree(lyt, ident"dimension"), newLit(idx))
+      elif n.eqIdent("it_t"):
+        result = nnkBracketExpr.newTree(tlr, newLit(idx))
+      else:
+        result = n
+    else:
+      result = n.copyNimTree()
+      for j in 0 ..< n.len:
+        result[j] = subst(n[j], idx)
+
+  var accSh, accSt: seq[NimNode]
+  var stmts: seq[NimNode]
+  for idx in 0 ..< R:
+    if idx < tilerRank:
+      let d = genSym(nskLet, "d")
+      stmts.add nnkLetSection.newTree(
+        nnkIdentDefs.newTree(d, newEmptyNode(), subst(body, idx)))
+      accSh.add d.newDotExpr(ident"shape")
+      accSt.add d.newDotExpr(ident"stride")
+    else:
+      let m = genSym(nskLet, "m")
+      stmts.add nnkLetSection.newTree(
+        nnkIdentDefs.newTree(m, newEmptyNode(),
+          newCall(nnkDotExpr.newTree(lyt, ident"dimension"), newLit(idx))))
+      accSh.add m.newDotExpr(ident"shape")
+      accSt.add m.newDotExpr(ident"stride")
+
+  let shapeTuple = newTree(nnkTupleConstr, accSh)
+  let strideTuple = newTree(nnkTupleConstr, accSt)
+  result = nnkStmtListExpr.newTree(
+    nnkLetSection.newTree(
+      nnkIdentDefs.newTree(lyt, newEmptyNode(), layout),
+      nnkIdentDefs.newTree(tlr, newEmptyNode(), tiler)))
+  for st in stmts:
+    result.add st
+  result.add bindSym"make_layout".newCall(shapeTuple, strideTuple)
