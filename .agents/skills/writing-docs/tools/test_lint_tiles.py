@@ -15,6 +15,12 @@ newcall-method cases:
 
 - newCall(bindSym"dimension", la, newLit(i)) flags, the method form la.dimension(i) exists
 - infix keywords and make_* constructors stay exempt
+
+body-wrap cases:
+
+- a wrapped single-expression body joins at the header line
+  while the joined form fits the 140-char budget
+- a statement, colon block, two-statement body, comment, spanning string literal or over-budget body stays legal
 """
 
 import struct
@@ -300,7 +306,65 @@ ok &= expect("newcall-method exempts make_* constructors",
 ok &= expect("newcall-method skips comment lines",
              run(PROC % '# let x = newCall(bindSym"dimension", a, b)\n'), [])
 
-cases = 39
+ok &= expect("body-wrap fires on a wrapped single-expression body",
+             run('template gapDim(s, cur) =\n'
+                 '  max(Int[1](),\n'
+                 '      Int[s]() div cur)\n'),
+             [(1, "body-wrap")])
+ok &= expect("body-wrap joins a body starting on the = line",
+             run('template remDim(bound, cur) = ceil_div(\n'
+                 '  bound, cur)\n'),
+             [(1, "body-wrap")])
+ok &= expect("body-wrap stays quiet past the joined budget",
+             run('template wide(a, b) =\n'
+                 '  combine(argument_one_value, argument_two_value,\n'
+                 '      argument_three_value, argument_four_value,\n'
+                 '      argument_five_value, argument_six_value,\n'
+                 '      argument_seven_value, argument_eight_value)\n'),
+             [])
+ok &= expect("body-wrap stays quiet on a statement body",
+             run('template stmt(a, b) =\n'
+                 '  let x = a + b\n'
+                 '  x * 2\n'),
+             [])
+ok &= expect("body-wrap stays quiet on a branch body",
+             run('template branchy(a) =\n'
+                 '  if a > 0:\n'
+                 '    a\n'
+                 '  else:\n'
+                 '    1\n'),
+             [])
+ok &= expect("body-wrap stays quiet on a one-line body",
+             run('template tiny(a) =\n'
+                 '  a + 1\n'),
+             [(1, "one-liner")])
+ok &= expect("body-wrap stays quiet when a body line carries a comment",
+             run('template commented(a) =\n'
+                 '  foo(a,\n'
+                 '      a + 1) # the tail carries intent\n'),
+             [])
+ok &= expect("body-wrap stays quiet around a blank line",
+             run('template spaced(a) =\n'
+                 '  foo(a,\n\n'
+                 '      a + 1)\n'),
+             [])
+ok &= expect("body-wrap stays quiet on a two-statement body",
+             run('proc append*(ct: var int; sh, st: int) =\n'
+                 '  ct.shape.add sh\n'
+                 '  ct.stride.add st\n'),
+             [])
+ok &= expect("body-wrap stays quiet on a colon-block body",
+             run('template scaleBy*(t: int, scale: int): auto =\n'
+                 '  t.mapLeavesWith():\n'
+                 '    it * scale\n'),
+             [])
+ok &= expect("body-wrap fires on a func and a macro the same way",
+             run('func pairSum(a, b): auto =\n'
+                 '  a +\n'
+                 '      b\n'),
+             [(1, "body-wrap")])
+
+cases = 50
 print("ALL PASS" if ok else "FAILURES", "(%d cases)" % cases)
 sys.exit(0 if ok else 1)
 

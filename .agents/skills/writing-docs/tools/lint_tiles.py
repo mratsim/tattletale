@@ -24,6 +24,7 @@ these roots:
 | one-liner         | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review | advisory |
 | explicit-generics | a call site spells generic arguments the compiler infers from the value arguments                | counted  |
 | newcall-method    | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the house form      | counted  |
+| body-wrap         | a single-expression proc, func, or template body split across lines that fits one line           | counted  |
 
 
 Module-scope exemptions, where a frag walk IS the tile implementation:
@@ -117,6 +118,8 @@ RULES = {
                          "infers from the value arguments",
     "newcall-method": "a newCall(bindSym\"f\", x, ...) meta-call where method "
                       "call syntax x.f(...) is the house form",
+    "body-wrap": "a single-expression callable body is split across lines "
+                 "while the joined form fits one line",
 }
 
 # Names that never take method call syntax.
@@ -748,10 +751,12 @@ def decls(lines):
                 value_text = pm.group(1)
         # the body count reads the code lines between the terminator and the dedent
         body_count = 0
+        body_lines = []
         if eq_line is not None:
             rest = _strip_comment(lines[eq_line - 1][eq_col + 1:])[0]
             if rest.strip():
                 body_count += 1
+                body_lines.append(eq_line)
             k = eq_line
             while k < n:
                 line = lines[k]
@@ -763,11 +768,12 @@ def decls(lines):
                 code, comment_only = _strip_comment(line)
                 if code.strip():
                     body_count += 1
+                    body_lines.append(k + 1)
                 k += 1
         out.append({"name": name, "kind": kind, "start": i + 1,
-                    "eq_line": eq_line, "indent": indent,
+                    "eq_line": eq_line, "eq_col": eq_col, "indent": indent,
                     "generics": generics, "value_text": value_text,
-                    "body": body_count})
+                    "body": body_count, "body_lines": body_lines})
         i = max(i + 1, eq_line or i + 1)
     return out
 
@@ -856,6 +862,89 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "newcall-method",
                 "newCall builds %s(x, ...) where x.%s(...) is the method "
                 "call form" % (name, name)))
+
+
+BODY_WRAP_MAX = 140
+
+# Bodies starting a statement stay out of the join, the expression join is
+# only safe for one expression.
+BODY_STMT_HEAD_RE = re.compile(
+    r"^(?:let |var |const |if |elif |when |else\b|for |while |case |of "
+    r"|return |discard |yield |block |try |raise |echo |asm |static |"
+    r"defer |mixin |bind |import |include |from |importas )")
+
+# A line ending or starting on one of these continues the same expression,
+# the line break is not a statement boundary.
+BODY_CONT_END_CHARS = set("+-*/%<>=&|@?$~^,\\([{")
+BODY_CONT_START_CHARS = set("+-*/%<>=&|@?$~^.)]}")
+
+
+def _body_bracket_delta(s):
+    """Returns the net opening-bracket count of one code line."""
+    d = 0
+    for ch in s:
+        if ch in "([{":
+            d += 1
+        elif ch in ")]}":
+            d -= 1
+    return d
+
+
+def scan_body_wrap(path, lines, ds, blocked, findings):
+    """Flags a single-expression body split across lines that fits one line.
+
+    Contract:
+    - joins the body's code lines with single spaces, fires at the header
+      line while the joined form fits BODY_WRAP_MAX
+    - legal bodies: statements (let, if, when, for, ...), colon blocks,
+      blank lines, comments, spanning string literals, over-budget bodies
+    - bracket-depth tracking allows one statement boundary total, a line
+      break on an operator counts as continuation
+    """
+    for d in ds:
+        if d["name"] is None or d["kind"] not in RULE_KINDS:
+            continue
+        body = d["body_lines"]
+        if d["eq_line"] is None or len(body) < 2:
+            continue
+        if any(no in blocked for no in body):
+            continue
+        if any(not lines[k].strip() or '"""' in lines[k]
+               for k in range(body[0] - 1, body[-1])):
+            continue
+        parts = []
+        broken = False
+        for no in body:
+            raw = lines[no - 1]
+            if no == d["eq_line"]:
+                raw = raw[d["eq_col"] + 1:]
+            code, comment_only = _strip_comment(raw)
+            if comment_only or code.strip() == "" or code.strip() != raw.strip():
+                broken = True
+                break
+            if code.rstrip().endswith(":"):
+                broken = True
+                break
+            parts.append(code.strip())
+        if broken or any(BODY_STMT_HEAD_RE.match(p) for p in parts):
+            continue
+        depth, boundaries = 0, 0
+        for k, p in enumerate(parts):
+            depth += _body_bracket_delta(p)
+            if k + 1 == len(parts):
+                break
+            ends_cont = p[-1] in BODY_CONT_END_CHARS
+            starts_cont = parts[k + 1][0] in BODY_CONT_START_CHARS
+            if depth <= 0 and not ends_cont and not starts_cont:
+                boundaries += 1
+        if boundaries == 0 and depth == 0:
+            joined = " ".join(p for seg in parts for p in seg.split())
+            if len(joined) <= BODY_WRAP_MAX:
+                findings.append(Finding(
+                    path, d["start"], "body-wrap",
+                    "the body of %s %s fits one %d-char line (%d joined), "
+                    "do not wrap" % (d["kind"], d["name"], BODY_WRAP_MAX,
+                                     len(joined))))
 
 
 def scan_one_liner(path, ds, findings):
@@ -962,6 +1051,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
         generic_map = build_generic_map([(path, lines)])
     scan_hash_above_proc(path, lines, blocked, findings)
     scan_newcall_method(path, lines, findings)
+    scan_body_wrap(path, lines, ds, blocked, findings)
     scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     for proc in procs:
