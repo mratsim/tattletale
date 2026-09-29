@@ -355,6 +355,52 @@ proc runFoldWrapperTests =
 #  flatten / concat — extra cases
 # ═══════════════════════════════════════════════════════════════
 
+proc runFlatIterTests* =
+  ## Order, reverse order and leaf types of the leaf streams over typed expressions.
+  macro leafReprs(e: typed): untyped =
+    var reprs: seq[string]
+    for (lf, _) in flatLeaves(e):
+      reprs.add lf.repr
+    result = newLit(reprs)
+
+  macro leafTypeReprs(e: typed): untyped =
+    var reprs: seq[string]
+    for (_, ty) in flatLeaves(e):
+      reprs.add ty.repr
+    result = newLit(reprs)
+
+  macro leafReprsRev(e: typed): untyped =
+    var reprs: seq[string]
+    for (lf, _) in flatLeavesRev(e):
+      reprs.add lf.repr
+    result = newLit(reprs)
+
+  block:
+    # Flat tuple of static Int leaves
+    let t = (Int[2](), Int[3](), Int[5]())
+    doAssert leafReprs(t) == @["t[0]", "t[1]", "t[2]"]
+    doAssert leafTypeReprs(t) == @["Int[2]", "Int[3]", "Int[5]"]
+  block:
+    # Nested tuple, runtime int leaves
+    let t = (4, (5, 6))
+    doAssert leafReprs(t) == @["t[0]", "t[1][0]", "t[1][1]"]
+    doAssert leafTypeReprs(t) == @["int", "int", "int"]
+  block:
+    # Mixed nesting depths, static and runtime leaves
+    let t = (Int[2](), (Int[3](), 5))
+    doAssert leafReprs(t) == @["t[0]", "t[1][0]", "t[1][1]"]
+    doAssert leafTypeReprs(t) == @["Int[2]", "Int[3]", "int"]
+  block:
+    # Scalar is a single leaf
+    let t = Int[7]()
+    doAssert leafReprs(t) == @["t"]
+    doAssert leafTypeReprs(t) == @["Int[7]"]
+  block:
+    # Reverse stream is the exact mirror of the forward stream
+    let t = (Int[2](), (Int[3](), 5))
+    doAssert leafReprsRev(t) == @["t[1][1]", "t[1][0]", "t[0]"]
+  echo "  Flat iter: 5 cases OK"
+
 proc runFlattenConcatTests =
   block:
     doAssert flatten((4, 8, 2)) === (4, 8, 2)
@@ -813,6 +859,7 @@ proc runTests* =
   runTypeClassTests()
   runFoldWrapperTests()
 
+  runFlatIterTests()
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
   runZip2ByTests()

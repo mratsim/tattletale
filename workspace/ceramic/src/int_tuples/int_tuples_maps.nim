@@ -8,6 +8,8 @@
 import std/macros
 import ./int_tuples_datatypes
 
+proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.}
+
 # ═══════════════════════════════════════════════════════════════════════
 #  mapLeavesWith — recursive leaf‑wise tuple map
 # ═══════════════════════════════════════════════════════════════════════
@@ -76,12 +78,6 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
     (t.kind == nnkSym and $t == "int") or
     (t.kind == nnkBracketExpr and $t[0] == "Int")
 
-  proc leafAccess(e, t: NimNode; idx: int): NimNode =
-    if e.kind in {nnkTupleConstr, nnkPar} and e.len == t.len:
-      e[idx]
-    else:
-      newTree(nnkBracketExpr, e, newLit(idx))
-
   proc collect(acc: var NimNode; e: NimNode; t: NimNode) =
     if t.kind == nnkTupleConstr:
       for idx in 0 ..< t.len:
@@ -118,6 +114,88 @@ macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   ##
   ##   flatMapLeaves((2, 3), it * 10)       → (20, 30)
   flatMapLeavesImpl(t, body)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  flatLeaves / flatLeavesRev — compile-time leaf streams
+# ═══════════════════════════════════════════════════════════════════════
+
+proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.} =
+  ## Field access of element `idx` of tuple expression `e`.
+  ## Tuple constructions splice the element directly, other expressions
+  ## get bracket access.
+  if e.kind in {nnkTupleConstr, nnkPar} and e.len == t.len:
+    e[idx]
+  else:
+    newTree(nnkBracketExpr, e, newLit(idx))
+
+type
+  FlatLeafPair* = tuple[leaf, leafTy: NimNode]
+    ## A leaf of a (possibly nested) IntOrIntTuple expression:
+    ## the leaf access expression and its leaf type node.
+
+proc unwrapStmtListExpr(e0: NimNode): NimNode {.compileTime.} =
+  ## Typed macro parameters of macro/template call arguments arrive wrapped in a statement list. The value is the last child.
+  if e0.kind == nnkStmtListExpr: e0[^1] else: e0
+
+proc flatLeavesImpl(e0, t0: NimNode): seq[FlatLeafPair] {.compileTime.} =
+  ## Forward leaf stream over the type tree of expression `e`.
+  let e = unwrapStmtListExpr(e0)
+  let t = if t0.kind == nnkExprColonExpr: t0[1] else: t0
+  if t.kind in {nnkTupleConstr, nnkTupleTy}:
+    for idx in 0 ..< t.len:
+      let sub = leafAccess(e, t, idx)
+      result.add flatLeavesImpl(sub, t[idx])
+  else:
+    result.add (e, t)
+
+proc flatLeavesRevImpl(e0, t0: NimNode): seq[FlatLeafPair] {.compileTime.} =
+  ## Reverse leaf stream over the type tree of expression `e`,
+  ## the exact mirror order of `flatLeavesImpl`.
+  let e = unwrapStmtListExpr(e0)
+  let t = if t0.kind == nnkExprColonExpr: t0[1] else: t0
+  if t.kind in {nnkTupleConstr, nnkTupleTy}:
+    for idx in countdown(t.len - 1, 0):
+      let sub = leafAccess(e, t, idx)
+      result.add flatLeavesRevImpl(sub, t[idx])
+  else:
+    result.add (e, t)
+
+func flatLeaves*(e: NimNode): seq[FlatLeafPair] {.compileTime.} =
+  ## Stream the leaves of the (possibly nested) IntOrIntTuple expression
+  ## `e` in order, each with its leaf type node.
+  ##
+  ## Returns one FlatLeafPair per leaf in document order.
+  ## - Static `Int[N]` leaves keep their `Int[V]` type
+  ## - Runtime `int` leaves keep their `int` type
+  ##
+  ## Nim rejects `{.compileTime.}` on iterators.
+  ## The stream is a compile-time function, consumed with the same for-loop syntax.
+  flatLeavesImpl(e, e.getTypeInst())
+
+func flatLeavesRev*(e: NimNode): seq[FlatLeafPair] {.compileTime.} =
+  ## Stream the leaves of the (possibly nested) IntOrIntTuple expression
+  ## `e` in reverse order, the mirror of `flatLeaves`.
+  flatLeavesRevImpl(e, e.getTypeInst())
+
+macro countLeaves*(t: typed): untyped =
+  ## Number of leaves of the (possibly nested) IntOrIntTuple `t`.
+  var n = 0
+  for _ in flatLeaves(t):
+    inc n
+  result = newLit(n)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  concatFlat — the leaves of two tuples as one flat tuple
+# ═══════════════════════════════════════════════════════════════════════
+
+macro concatFlat*(a, b: typed): untyped =
+  ## The leaves of `a` then the leaves of `b` as one flat tuple,
+  ## no intermediate flattened tuple materializes.
+  result = nnkTupleConstr.newTree()
+  for (leaf, _) in flatLeaves(a):
+    result.add leaf
+  for (leaf, _) in flatLeaves(b):
+    result.add leaf
 
 # ═══════════════════════════════════════════════════════════════════════
 #  mapDimensionsWith — Top-level only tuple map

@@ -32,55 +32,54 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce — merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool = false): untyped =
-  template at(n, i: untyped): untyped = newTree(nnkBracketExpr, n, newLit(i))
-  let stype = csShape.getTypeInst()
-  let stype2 = csStride.getTypeInst()
+macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
+  var shLeaves, shTypes, stLeaves, stTypes: seq[NimNode]
+  for (leaf, ty) in flatLeavesRev(layoutShape):
+    shLeaves.add leaf
+    shTypes.add ty
+  for (leaf, ty) in flatLeavesRev(layoutStride):
+    stLeaves.add leaf
+    stTypes.add ty
 
-  # Scalar guard: single-dimension Layout
-  if stype.kind != nnkTupleConstr and stype2.kind != nnkTupleConstr:
+  # Scalar guard for a single leaf (plain scalar or 1-element tuple)
+  if shLeaves.len == 1 and stLeaves.len == 1:
     # Check if scalar shape is size-1 (inactive dimension)
-    if (stype.kind == nnkBracketExpr and $stype[0] == "Int" and stype[1].intVal == 1) or
-       (stype.kind == nnkIntLit and stype.intVal == 1):
+    if isStaticOne(shTypes[0]):
       result = newCall(bindSym"make_layout", newLit(1), newLit(0))
     else:
-      result = newCall(bindSym"make_layout", csShape, csStride)
+      result = newCall(bindSym"make_layout", shLeaves[0], stLeaves[0])
     return
-
-  let N = stype.len
 
   var resShapes: seq[NimNode] = @[]
   var resStrides: seq[NimNode] = @[]
   var resSTypes: seq[NimNode] = @[]
   var resSTypes2: seq[NimNode] = @[]
 
-  # Seed: add last dimension
-  resShapes.add csShape.at(N - 1)
-  resStrides.add csStride.at(N - 1)
-  resSTypes.add stype[N - 1]
-  resSTypes2.add stype2[N - 1]
+  # Seed with the last dimension, the leaf streams are in reverse order
+  resShapes.add shLeaves[0]
+  resStrides.add stLeaves[0]
+  resSTypes.add shTypes[0]
+  resSTypes2.add stTypes[0]
 
   if preserveTrailing:
     # When preserving trailing size-1 dimensions, seed with `low(int)` (non-1 sentinel)
     # to prevent the post-loop discard from removing the last dimension.
     # Mirrors CuTe's coalesce_x which seeds bw_coalesce with Int<2>{} sentinel.
-    let lastST = stype[N - 1]
-    if (lastST.kind == nnkBracketExpr and $lastST[0] == "Int" and lastST[1].intVal == 1) or
-       (lastST.kind == nnkIntLit and lastST.intVal == 1):
+    if isStaticOne(shTypes[0]):
       resShapes[0] = IntCT(low(int))
       resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
 
-  for i in countdown(N - 2, 0):
-    let curST = stype[i]
-    let curST2 = stype2[i]
+  for k in 1 ..< shLeaves.len:
+    let curST = shTypes[k]
+    let curST2 = stTypes[k]
 
     if isStaticOne(curST):
       continue
 
     # CuTe branch 3: when seed (resSTypes[0]) is size-1, replace seed with current
     if isStaticOne(resSTypes[0]):
-      resShapes[0] = csShape.at(i)
-      resStrides[0] = csStride.at(i)
+      resShapes[0] = shLeaves[k]
+      resStrides[0] = stLeaves[k]
       resSTypes[0] = curST
       resSTypes2[0] = curST2
       continue
@@ -92,13 +91,13 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
         let mergedVal = getStaticInt(curST) * getStaticInt(resSTypes[0])
         let mergedNode = IntCT(mergedVal)
         resShapes[0] = mergedNode
-        resStrides[0] = csStride.at(i)
+        resStrides[0] = stLeaves[k]
         resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal))
         resSTypes2[0] = curST2
         continue
 
-    resShapes.insert(csShape.at(i), 0)
-    resStrides.insert(csStride.at(i), 0)
+    resShapes.insert(shLeaves[k], 0)
+    resStrides.insert(stLeaves[k], 0)
     resSTypes.insert(curST, 0)
     resSTypes2.insert(curST2, 0)
 
@@ -126,22 +125,15 @@ macro coalesceBackward(csShape, csStride: typed; preserveTrailing: static bool =
   result = newCall(bindSym"make_layout", rShape, rStride)
 
 func coalesce*(layout: Layout): auto {.inline, noInit.} =
-  ## Merge contiguous dimensions. Flatten preserves Int[N] types with getTypeInst.
-  coalesceBackward(
-    flatten(layout.shape),
-    flatten(layout.stride)
-  )
+  ## Merge contiguous dimensions.
+  coalesceBackward(layout.shape, layout.stride)
 
 func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
   ## Like `coalesce` but preserves trailing size-1 dimensions (e.g. stride-0 broadcasts).
   ## Mirrors CuTe's `coalesce_x`: seeds backward coalescence with `low(int)`
   ## sentinel instead of `Int[1]`, preventing the post-loop discard from
   ## removing the last dimension.
-  coalesceBackward(
-    flatten(layout.shape),
-    flatten(layout.stride),
-    preserveTrailing = true
-  )
+  coalesceBackward(layout.shape, layout.stride, preserveTrailing = true)
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_inactive — remove stride-0 and size-1 dimensions
@@ -399,9 +391,7 @@ template divisibilityCheck(remainingShape, clampedShape: untyped) =
     doAssert remainingShape mod clampedShape == 0,
       "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
 
-macro composeImpl*(
-    remainingShape, remainingStride, lhsShapes, lhsStrides: untyped;
-    LayoutRank: static int): untyped =
+macro composeImpl*(remainingShape, remainingStride: untyped; lhsShapes, lhsStrides: typed): untyped =
   ## Fold over LHS dimensions with a 2-state accumulator, the remaining
   ## shape and stride, emitting one (shape, stride) dimension pair per
   ## unconsumed LHS dimension.
@@ -415,11 +405,15 @@ macro composeImpl*(
   ##
   ## Returns the composed layout as an untyped node.
   ##
-  ## - `LayoutRank` is passed explicitly, as in `logical_divide_builder`
   ## - The value parameters are untyped. Typed macro parameters arrive
   ##   nil for arguments whose types are still being computed
 
-  let R = LayoutRank
+  var lhsShLeaves, lhsStLeaves: seq[NimNode]
+  for (leaf, _) in flatLeaves(lhsShapes):
+    lhsShLeaves.add leaf
+  for (leaf, _) in flatLeaves(lhsStrides):
+    lhsStLeaves.add leaf
+  let R = lhsShLeaves.len
 
   proc pack(nodes: seq[NimNode]): NimNode =
     nnkTupleConstr.newTree(nodes)
@@ -436,7 +430,8 @@ macro composeImpl*(
   proc letBind(sym: NimNode; expr: NimNode): NimNode =
     newTree(nnkLetSection, newTree(nnkIdentDefs, sym, newEmptyNode(), expr))
 
-  proc emitStep(dimIdx: int; remSh, remSt, lhsSh, lhsSt: NimNode;
+  proc emitStep(dimIdx: int; remSh, remSt: NimNode;
+                lhsShLeaves, lhsStLeaves: seq[NimNode];
                 accSh, accSt: seq[NimNode]): NimNode =
     if dimIdx >= R - 1:
       # Emits:
@@ -444,7 +439,7 @@ macro composeImpl*(
       #     make_layout(unwrap((accSh...)), unwrap((accSt...)))  # accumulated only
       #   else:
       #     make_layout(unwrap((accSh..., remSh)), unwrap((accSt..., remSt * lhsSt[R-1])))
-      let lastSt = newTree(nnkBracketExpr, lhsSt, newLit(dimIdx))
+      let lastSt = lhsStLeaves[dimIdx]
       let scaled = newTree(nnkInfix, ident"*", remSt, lastSt)
       if accSh.len == 0:
         return newCall(bindSym("make_layout"),
@@ -491,7 +486,7 @@ macro composeImpl*(
           newTree(nnkInfix, ident"*",
             newCall(bindSym("ceil_div"), absRem, currShape),
             newCall(bindSym("sign"), remSt))),
-        emitStep(dimIdx + 1, remSh, nextSt, lhsSh, lhsSt, accSh, accSt))
+        emitStep(dimIdx + 1, remSh, nextSt, lhsShLeaves, lhsStLeaves, accSh, accSt))
 
       let elseBody = nnkStmtListExpr.newTree(
         letBind(clamped, newCall(bindSym("min"), nextSh, remSh)),
@@ -501,12 +496,12 @@ macro composeImpl*(
           newTree(nnkInfix, ident"*",
             newCall(bindSym("ceil_div"), absRem, currShape),
             newCall(bindSym("sign"), remSt))),
-        emitStep(dimIdx + 1, remSh2, nextSt, lhsSh, lhsSt,
+        emitStep(dimIdx + 1, remSh2, nextSt, lhsShLeaves, lhsStLeaves,
                  accSh & @[clamped], accSt & @[scaled]))
 
       return nnkStmtListExpr.newTree(
-        letBind(currShape, newTree(nnkBracketExpr, lhsSh, newLit(dimIdx))),
-        letBind(currStride, newTree(nnkBracketExpr, lhsSt, newLit(dimIdx))),
+        letBind(currShape, lhsShLeaves[dimIdx]),
+        letBind(currStride, lhsStLeaves[dimIdx]),
         letBind(absRem, newCall(bindSym("abs"), remSt)),
         letBind(nextSh, newCall(bindSym("ceil_div"), currShape, absRem)),
         nnkWhenStmt.newTree(
@@ -517,14 +512,10 @@ macro composeImpl*(
 
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
-  let lhsSh0 = genSym(nskLet, "lhsShapes")
-  let lhsSt0 = genSym(nskLet, "lhsStrides")
   result = nnkStmtListExpr.newTree(
     letBind(remSh0, remainingShape),
-    letBind(remSt0, remainingStride),
-    letBind(lhsSh0, lhsShapes),
-    letBind(lhsSt0, lhsStrides))
-  result.add emitStep(0, remSh0, remSt0, lhsSh0, lhsSt0, @[], @[])
+    letBind(remSt0, remainingStride))
+  result.add emitStep(0, remSh0, remSt0, lhsShLeaves, lhsStLeaves, @[], @[])
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
   ## Layer RHS dimensions one by one over the FULL coalesced LHS via mapDimensionsWith.
@@ -534,7 +525,7 @@ func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tupl
     when it.shape is tuple:
       composeDistribute(lhsShapes, lhsStrides, it.shape, it.stride)
     else:
-      composeImpl(it.shape, it.stride, lhsShapes, lhsStrides, rank(lhsShapes))
+      composeImpl(it.shape, it.stride, lhsShapes, lhsStrides)
 
 
 func compose*[A, B: Layout](a: A, b: B): auto =
@@ -544,14 +535,12 @@ func compose*[A, B: Layout](a: A, b: B): auto =
   ## `i` in `0 ..< cosize(B)`.
   when a.shape isnot tuple:
     when b.stride is tuple:
-      when rank(b.shape) != rank(flatten(b.shape)):
+      when countLeaves(b.shape) != rank(b.shape):
         composeDistribute((a.shape,), (a.stride,), b.shape, b.stride)
       else:
-        let bSh = b.shape.flatten()
-        let bSt = b.stride.flatten()
-        make_layout(bSh, buildStride(bSt, a.stride))
+        make_layout(b.shape, buildStride(b.stride, a.stride))
     else:
-      make_layout(b.shape.flatten(), b.stride.flatten() * a.stride)
+      make_layout(flatMapLeaves(b.shape, it), b.stride * a.stride)
   elif b.shape isnot tuple:
     # CuTe: coalesce LHS first (preserving trailing stride-0 dimensions), then compose with scalar RHS
     # Uses coalesce_preserve_trailing to match CuTe's coalesce_x in composition.
@@ -560,9 +549,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       # flatA is rank-1 scalar: RHS shape is result, strides = b.stride * flatA.stride
       make_layout(b.shape, b.stride.scaleBy(flatA.stride))
     else:
-      let aFlatShape = flatA.shape.flatten()
-      let aFlatStride = flatA.stride.flatten()
-      composeImpl(b.shape, b.stride, aFlatShape, aFlatStride, rank(aFlatShape))
+      composeImpl(b.shape, b.stride, flatA.shape, flatA.stride)
   else:
     # CuTe: coalesce LHS first (preserving trailing stride-0 dimensions), then compose with tuple RHS
     let flatA = coalesce_preserve_trailing(a)
@@ -755,13 +742,13 @@ template tiled_divide*(layout: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zd, zipped_divide(lyt, tlr))
     make_layout(
-      concat(
-        (flatten(dimension(zd, 0).shape),),
-        flatten(dimension(zd, 1).shape)
+      concatFlat(
+        (dimension(zd, 0).shape,),
+        dimension(zd, 1).shape
       ),
-      concat(
-        (flatten(dimension(zd, 0).stride),),
-        flatten(dimension(zd, 1).stride)
+      concatFlat(
+        (dimension(zd, 0).stride,),
+        dimension(zd, 1).stride
       )
     )
 
@@ -773,13 +760,13 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zd, zipped_divide(lyt, tlr))
     make_layout(
-      concat(
-        flatten(dimension(zd, 0).shape),
-        flatten(dimension(zd, 1).shape),
+      concatFlat(
+        dimension(zd, 0).shape,
+        dimension(zd, 1).shape,
       ),
-      concat(
-        flatten(dimension(zd, 0).stride),
-        flatten(dimension(zd, 1).stride),
+      concatFlat(
+        dimension(zd, 0).stride,
+        dimension(zd, 1).stride,
       ),
     )
 
@@ -991,13 +978,13 @@ template tiled_product*(blk: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zp, zipped_product(bk, tlr))
     make_layout(
-      concat(
-        (flatten(dimension(zp, 0).shape),),
-        flatten(dimension(zp, 1).shape),
+      concatFlat(
+        (dimension(zp, 0).shape,),
+        dimension(zp, 1).shape,
       ),
-      concat(
-        (flatten(dimension(zp, 0).stride),),
-        flatten(dimension(zp, 1).stride),
+      concatFlat(
+        (dimension(zp, 0).stride,),
+        dimension(zp, 1).stride,
       ),
     )
 
@@ -1009,13 +996,13 @@ template flat_product*(blk: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zp, zipped_product(bk, tlr))
     make_layout(
-      concat(
-        flatten(dimension(zp, 0).shape),
-        flatten(dimension(zp, 1).shape),
+      concatFlat(
+        dimension(zp, 0).shape,
+        dimension(zp, 1).shape,
       ),
-      concat(
-        flatten(dimension(zp, 0).stride),
-        flatten(dimension(zp, 1).stride),
+      concatFlat(
+        dimension(zp, 0).stride,
+        dimension(zp, 1).stride,
       ),
     )
 

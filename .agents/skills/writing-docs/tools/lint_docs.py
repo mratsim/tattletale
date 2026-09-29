@@ -333,6 +333,7 @@ BANNED = [
     (r"\bRED\b|\bGREEN\b", None,
      "state the invariant in present tense"),
     (r"\boracles?\b", None, "use reference implementation"),
+    (r"\bfacts?\b", None, "state the value or the invariant, not facts"),
     (r"\bprobes?\b", _probe_exempt,
      "use test (the record field name `probe` and `probe_*` schema keys stay)"),
     (r"\bdeviation classes?\b", None, "describe the actual difference"),
