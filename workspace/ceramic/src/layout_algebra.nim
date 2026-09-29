@@ -17,7 +17,7 @@
 ## | Indexing              | `crd2idx`, `idx2crd`, `slice`, `dice`, `X`/`Y`/`_`                             |
 ## | Algebra               | `coalesce`, `filter_zeros`, `filter_inactive`, `complement`, `compose`         |
 ## | Partitioning          | `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `tile_unzip` |
-## | Inverses and analysis | `right_inverse`, `left_inverse`, `max_common_layout`, `max_common_vector`      |
+## | Inverses and analysis | `right_inverse`, `left_inverse`                                                |
 ## | Products              | `logical_product` through `tile_to_shape`                                      |
 ## | Pointer arithmetic    | `+%`                                                                           |
 ##
@@ -135,15 +135,6 @@ export layout_algebra.right_inverse
 
 ## Left inverse `b` such that `b ∘ layout` is compact.
 export layout_algebra.left_inverse
-
-## Largest dimension-wise common sub-layout of two layouts.
-export layout_algebra.max_common_layout
-
-## Largest vector width common to two layouts, their contiguous size.
-export layout_algebra.max_common_vector
-
-## Type-level staticness of a layout, every shape and stride leaf compile-time.
-export layouts.isStaticLayout
 
 # ═══════════════════════════════════════════════════════════════
 #  Products: extend a block layout by a tiler layout

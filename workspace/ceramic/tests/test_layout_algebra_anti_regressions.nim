@@ -224,7 +224,24 @@ proc runComposeZeroStrideTests =
     let permuted = logical_divide(lhs, right_inverse(lhs))
     check(toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int)
     check(permuted.stride[1], Int[0](), Int[0])
-    check(max_common_vector(lhs, lhs), 6, int)
+
+#  Section 7. Nested-shape indexing and Layout-tiler unzip
+
+proc runNestedShapeIntegrationTests =
+  ## crd2idx with nested shape, layout[coord] on (2, (3,4)):((1,6),3)
+  block:
+    let l = make_layout((2, (3, 4)), (3, (1, 6)))
+    doAssert l(0) === 0
+    doAssert l(6) === 6
+    doAssert l(1) === 3
+    doAssert l(23) === 23
+  ## tile_unzip with Layout tiler
+  block:
+    let A = make_layout((8, 8), (1, 8))
+    let T = make_layout((2, 2), (1, 4))
+    let zd = zipped_divide(A, T)
+    doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
+  echo "    PASS"
 
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
@@ -240,6 +257,8 @@ proc runTests =
   runMakeLayoutLikeAliasTests()
   echo "── Section 6: compose with static stride-0 RHS dim ──"
   runComposeZeroStrideTests()
+  echo "── Section 7. Nested-shape indexing and Layout-tiler unzip ──"
+  runNestedShapeIntegrationTests()
   echo "  All tests passed."
 
 when isMainModule:

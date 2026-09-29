@@ -27,13 +27,6 @@ export layout_constructors
 #  dimension — extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
-macro isStaticLayout*(L: typed): bool =
-  ## True when every shape and stride leaf of the layout is compile-time `Int[N]`.
-  let t = L.getTypeInst()
-  let shapeSeq = toSeqStaticInts(t[1])
-  let strideSeq = toSeqStaticInts(t[2])
-  result = newLit(not (DynamicSentinel in shapeSeq or DynamicSentinel in strideSeq))
-
 template dimension*(layout: Layout; idx: static int): auto =
   ## Extract dimension `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
