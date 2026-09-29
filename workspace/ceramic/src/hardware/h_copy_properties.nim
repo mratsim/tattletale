@@ -37,7 +37,4 @@ template tilerMN*[T; NumPacked: static int](_: typedesc[CpAsyncAtomImpl[T, NumPa
   (NumPacked, 1)
 
 macro getVecBytes*(atom: static CopyAtom): untyped =
-  ## The atom's chunk width in bytes, the registry's `vecBytes` const.
-  ## Usage, the chunk width in elements for a view's element type T:
-  ##   const chunkElems = atom.getVecBytes() div sizeof(T)
   result = bindSym($atom & "_vecBytes")

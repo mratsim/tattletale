@@ -408,10 +408,6 @@ testCopyFromGuardBroadcastPair()
 testCopyFromGuardDynamicSrcStride()
 
 proc testCopyLegBlockingAtomExecutes() =
-  ## The gemm copy leg on the host target, the universal blocking atom.
-  ## A portable elementwise chunk copy, zero-fill predication, discard
-  ## commit and wait slots, executed here (no DSL, no GPU).
-  ## - two 16-byte chunks of 4 float32, chunk 1 predicated false
   const units = 2
   var dstBuf: array[8, float32]
   var srcBuf: array[8, float32]

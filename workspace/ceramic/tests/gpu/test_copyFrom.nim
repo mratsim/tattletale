@@ -48,19 +48,6 @@ const test4 = cuda:
     var tv = make_view(C, L)
     copyFrom(tv, tv)
 
-# The gemm_cta copy leg, one copy-atom chunk per predicate unit,
-# then the group commit and wait resolved from the element type
-# (the universal atom abstraction).
-# - CUDA takes the async sm80 cp.async atom, committed and waited in groups
-# - OpenCL takes the universal blocking atom, a portable elementwise chunk copy,
-#   the commit and wait slots discard
-# The chunk views stand in for partition_S
-# and partition_D, the real smem/gmem tile views carry the addresses.
-# The legs use different element types, Nim caches a generic instantiation
-# per (proc, T) so the first backend that instantiates getCopyAsyncAtom(T)
-# fixes its atom for the whole compilation.
-# The OpenCL leg instantiates float32 (the universal blocking atom),
-# the CUDA leg uint32 (the sm80 atom).
 const gemmCopyLegOpencl = opencl:
   proc copyLegKernel(gmemA: ptr UncheckedArray[float32]) {.global.} =
     const

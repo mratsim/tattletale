@@ -38,31 +38,7 @@ func getCopyAsyncAtom*(T: typedesc): static auto {.inline.} =
 #  copy_unpack: instruction emission from a registry entry
 # ═════════════════════════════════════════════════════════════════════════
 
-proc blockingCopyBody(dstView, srcView, pred: NimNode;
-                      zfill: bool; chunkElems: int): NimNode =
-  ## The blocking tier's copy body, a portable elementwise chunk copy.
-  ## No instruction is emitted, it compiles and executes on every backend.
-  ## - the unit views anchor the chunk's start, the copy moves chunkElems
-  ##   elements from the anchor
-  ## - a zero-fill-capable atom zero-fills the chunk's elements
-  ##   on a false predicate
-  let i = ident("i")
-  let dstElems = newTree(nnkBracketExpr,
-    newTree(nnkDotExpr, dstView, ident"data"), i)
-  let srcElems = newTree(nnkBracketExpr,
-    newTree(nnkDotExpr, srcView, ident"data"), i)
-  let copyLoop = newTree(nnkForStmt, i,
-    newTree(nnkInfix, bindSym"..<", newIntLitNode(0), newIntLitNode(chunkElems)),
-    newTree(nnkAsgn, dstElems, srcElems))
-  let zeroLoop = newTree(nnkForStmt, i,
-    newTree(nnkInfix, bindSym"..<", newIntLitNode(0), newIntLitNode(chunkElems)),
-    newTree(nnkAsgn, dstElems, newIntLitNode(0)))
-  if zfill:
-    result = newTree(nnkIfStmt,
-      newTree(nnkElifBranch, pred, copyLoop),
-      newTree(nnkElse, zeroLoop))
-  else:
-    result = copyLoop
+
 
 proc copyBody(atomName: string;
               dstView, srcView: NimNode; srcSize: NimNode;
@@ -99,12 +75,33 @@ macro copyIf*(atom: static CopyAtom;
   ## - other atoms guard the chunk copy with a runtime if
   ## The unit views anchor the chunk's start, chunkElems is the chunk
   ## width in elements (the atom's vecBytes div the element size)
+  ## Prepare a cp.async copy from global memory (gmem)
+  ##   to the per-warp shared memory (smem)
+  ## Contract, one predication behavior per atom capability
+  ## - issued asynchronously with other prepared copies in the same commit_group,
+  ##   waited for with wait_group
+  ## - a zero-fill-capable atom with a false predicate zero-fills the chunk
+  ##   (the instruction's src-size operand is the chunk width or 0)
+  ## - other atoms guard the chunk copy with a runtime if
+  template chunkCopy(dstView, srcView: untyped; chunkElems: int) =
+    for i in 0 ..< chunkElems:
+      dstView.data[i] = srcView.data[i]
+  template chunkZeroFill(dstView: untyped; chunkElems: int) =
+    for i in 0 ..< chunkElems:
+      dstView.data[i] = 0
+  template predicatedChunk(dstView, srcView, pred: untyped; chunkElems: int) =
+    if pred:
+      chunkCopy(dstView, srcView, chunkElems)
+    else:
+      chunkZeroFill(dstView, chunkElems)
   let name = $atom
-  # the zeroFill const is typed as a bool, its impl node is an int literal (1/0)
   let zfill = bindSym(name & "_zeroFill").getImpl()[2].intVal == 1
   let chunkB = bindSym(name & "_vecBytes").getImpl()[2].intVal
   if bindSym(name & "_instr").getImpl()[2].strVal == "":
-    result = blockingCopyBody(dstView, srcView, pred, zfill, chunkElems)
+    if zfill:
+      result = getAst(predicatedChunk(dstView, srcView, pred, chunkElems))
+    else:
+      result = getAst(chunkCopy(dstView, srcView, chunkElems))
   elif zfill:
     # the predicate folds into the instruction (srcSize 0 zero-fills the chunk)
     let srcSize = newTree(nnkIfExpr,
