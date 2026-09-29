@@ -731,10 +731,10 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
 # ═══════════════════════════════════════════════════════════════
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
-  ## Contract, one behavior per tiler kind
-  ## - Layout tiler passes through logical_divide(layout, tiler) with no reshape applied
-  ## - tuple or int tiler divides the layout then unzips the divide output, per dimension
-  ##   tile_unzip(logical_divide(layout, tiler), tiler) as the second call
+  ##
+  ## CuTe: zipped_divide =
+  ##   - Layout tiler: logical_divide(layout, tiler)
+  ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
   when TilerT is Layout:
     logical_divide(layout, tiler)
   elif TilerT is int or TilerT is Int:
