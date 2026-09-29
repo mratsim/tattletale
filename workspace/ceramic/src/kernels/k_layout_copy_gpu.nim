@@ -117,25 +117,11 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
     wV = when typeof(C.shape) is tuple: toIntVal(C.shape[0]) else: toIntVal(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  when typeof(size(R)) is Int and typeof(size(srcV.layout)) is Int:
-    when toIntVal(size(R)) == toIntVal(size(srcV.layout)):
-      when typeof(s0) is Int:
-        when toIntVal(s0) == 1:
-          copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
-        else:
-          copyElementwise(dstV, srcV)
-      else:
-        if s0 === 1:
-          copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
-        else:
-          copyElementwise(dstV, srcV)
-    else:
-      copyElementwise(dstV, srcV)
+  let spansCover = toIntVal(size(R)) == toIntVal(size(srcV.layout))
+  if spansCover and s0 === 1:
+    copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
   else:
-    if size(R) === size(srcV.layout) and s0 === 1:
-      copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
-    else:
-      copyElementwise(dstV, srcV)
+    copyElementwise(dstV, srcV)
 
 
 func copyFromIfAsync*[T, Sh, StA, StB, StP](
