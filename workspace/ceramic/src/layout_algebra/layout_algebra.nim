@@ -136,71 +136,70 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 #  complement
 # ═══════════════════════════════════════════════════════════════
 
-proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
-  ## Scalar complement, uniform emission:
-  ##
-  ## - gap = max(1, st), prd = st * sh, rem = ceil_div(bound, prd)
-  ## - result = coalesceBackward((gap, rem), (1, prd))
-  ## - Trivial dimensions fold away in the coalesce fold
-  let stTyp = st.getTypeInst()
-  if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
-    return newCall(bindSym"make_layout", boundExpr, newLit(1))
-
-  let gap = newCall(bindSym"max", IntCT(1), st)
-  let prd = newCall(bindSym"*", st, sh)
-  let rem = newCall(bindSym"ceil_div", boundExpr, prd)
-  newCall(bindSym"coalesceBackward",
-    newTree(nnkTupleConstr, gap, rem),
-    newTree(nnkTupleConstr, newLit(1), prd))
-
-proc complementGaps(
-    strides: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
-  ## Build the complement as (gap, cur) dimensions in ascending-stride order,
-  ## then the remainder (ceil_div(bound, cur), cur).
-  ##
-  ## - `cur` is the span end of the previous dimension, `Int[s] * shape`
-  ##   is static when the shape is static, a runtime product otherwise
-  ## - Gaps are at least 1, a static gap of 1 folds away in the coalesce fold
-  result = LayoutCT()
-  var curNode = IntCT(1)
-  for idx in getIndicesSortedByStride(strides):
-    result.append(
-      newCall(bindSym"max", IntCT(1),
-              newCall(bindSym"div", IntCT(strides[idx]), curNode)),
-      curNode)
-    curNode = newCall(bindSym"*", IntCT(strides[idx]),
-                      newTree(nnkBracketExpr, shNode, newLit(idx)))
-  result.append(newCall(bindSym"ceil_div", boundExpr, curNode), curNode)
-
-proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
-  ## Multi-dimension complement, dimensions folded in ascending-stride order.
-  ## All strides must be static Int leaves (compile-time check).
-  let stTyp = st.getTypeInst()
-
-  doAssert stTyp.kind == nnkTupleConstr,
-    "complementMulti: expected tuple type for strides"
-  for i in 0 ..< stTyp.len:
-    let stNode = stTyp[i]
-    doAssert stNode.kind == nnkBracketExpr and $stNode[0] == "Int",
-      "complement: multi-dimension with dynamic strides not supported at index " & $i
-
-  let strides = toSeqStaticInts(stTyp)
-  let acc = complementGaps(strides, sh, boundExpr)
-  newCall(bindSym"coalesceBackward",
-    newTree(nnkPar, acc.shape),
-    newTree(nnkPar, acc.stride))
-
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
+
+  template scalarComplement(shLeaf, stLeaf, bound) =
+    # Uniform emission, gap = max(1, st), prd = st*sh,
+    # rem = ceil_div(bound, prd)
+    # -> coalesceBackward((gap, rem), (1, prd))
+    # Trivial dimensions fold away in the coalesce fold
+    coalesceBackward(
+      (max(Int[1](), stLeaf), ceil_div(bound, stLeaf * shLeaf)),
+      (1, stLeaf * shLeaf))
+
+  template gapDim(s, cur) =
+    max(Int[1](),
+        Int[s]() div cur)
+
+  template spanDim(s, i, shTup) =
+    Int[s]() *
+      shTup[i]
+
+  template remDim(bound, cur) =
+    ceil_div(
+      bound, cur)
+
+  template multiComplement(gaps, curs) =
+    coalesceBackward(
+      gaps, curs)
+
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
       newCall(bindSym"product", cosizeBound)
     else:
       cosizeBound
   if sh.getTypeInst().kind != nnkTupleConstr:
-    complementScalar(sh, st, boundExpr)
+    let stTyp = st.getTypeInst()
+    if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
+      # Static zero stride, every coordinate maps to offset 0
+      result = newCall(bindSym"make_layout", boundExpr, newLit(1))
+    else:
+      result = getAst(scalarComplement(sh, st, boundExpr))
   else:
-    complementMulti(sh, st, boundExpr)
+    # Multi-dimension complement, all strides must be static Int leaves,
+    # the dimensions fold in ascending-stride order
+    let stTyp = st.getTypeInst()
+    doAssert stTyp.kind == nnkTupleConstr,
+      "complement: expected tuple type for strides"
+    for i in 0 ..< stTyp.len:
+      doAssert stTyp[i].kind == nnkBracketExpr and $stTyp[i][0] == "Int",
+        "complement: multi-dimension with dynamic strides not supported at index " & $i
+
+    # `cur` is the span end of the previous dimension, Int[s] * shape
+    # is static when the shape leaf is static, a runtime product otherwise
+    let strides = toSeqStaticInts(stTyp)
+    var gapNodes, curNodes: seq[NimNode]
+    var curNode = IntCT(1)
+    for idx in getIndicesSortedByStride(strides):
+      gapNodes.add getAst(gapDim(newLit(strides[idx]), curNode))
+      curNodes.add curNode
+      curNode = getAst(spanDim(newLit(strides[idx]), newLit(idx), sh))
+    gapNodes.add getAst(remDim(boundExpr, curNode))
+    curNodes.add curNode
+    # One getAst call, coalesceBackward runs the fold at expansion time
+    result = getAst(multiComplement(
+      nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
