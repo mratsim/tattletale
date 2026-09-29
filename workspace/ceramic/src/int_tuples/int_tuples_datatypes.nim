@@ -112,7 +112,6 @@ func `!==`*(a, b: auto): bool {.inline.} = not (a === b)
 # ═══════════════════════════════════════════════════════════════
 
 func ceil_div*(a, b: int): int {.inline.} =
-  ## Integer ceiling division, called by the emitted compose and divide arithmetic
   (a + b - 1) div b
 
 func sign*(x: int): int {.inline.} =

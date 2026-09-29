@@ -22,10 +22,6 @@ export int_tuples_maps
 export int_tuples_transforms
 export int_tuples_zips
 
-# ═══════════════════════════════════════════════════════════════
-#  makeIntTuple — wrap static ints / Int literals in Int[N]
-# ═══════════════════════════════════════════════════════════════
-
 #  Leaf procs — dispatch on exact type
 
 template makeIntTupleLeaf*(leaf: int): int =
@@ -38,13 +34,9 @@ template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
   x
 
 template makeIntTuple*(t: IntOrIntTuple): auto =
-  ## Convert all `int` leaves in `t` (at any nesting depth) to `Int[N]()`.
-  runnableExamples:
-    let t = makeIntTuple((3, 4))
-    doAssert t is (Int[3], Int[4])
-
   mixin makeIntTupleLeaf # Keep symbol open for X / Y markers defined in layout_indexing
   mapLeavesWith(t, makeIntTupleLeaf(it))
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Maps
