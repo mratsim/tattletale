@@ -611,7 +611,9 @@ proc emitZippedDivide(layout: NimNode; shTy, stTy: NimNode;
   let k = tilerVs.len
   var tileSh, tileSt, restSh, restSt: seq[NimNode]
   for i in 0 ..< k:
-    let tilerLeaf = nnkBracketExpr.newTree(tiler, newLit(i))
+    let tilerLeaf =
+      if tiler.kind == nnkTupleConstr: tiler[i]
+      else: nnkBracketExpr.newTree(tiler, newLit(i))
     let shLeaf = nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i))
     let stLeaf = nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i))
     tileSh.add tilerLeaf
@@ -759,8 +761,8 @@ macro zipped_divide*(layout: Layout; tiler: typed): untyped =
   ## CuTe: zipped_divide =
   ##   - Layout and scalar tilers delegate to logical_divide(layout, tiler)
   ##   - tuple tiler on all-scalar dimensions with static scalar tilers
-  ##     emits the closed form inline per dimension, (T):(d) and
-  ##     ((s + T - 1) div T):(d*T), zipped into ((T),(rest))
+  ##     emits the closed form inline per dimension,
+  ##     (T):(d) and ((s + T - 1) div T):(d*T), zipped into ((T),(rest))
   ##   - other tuple tilers take tile_unzip(logical_divide(layout, tiler), tiler)
   let tilerTy = tiler.getTypeInst()
   let tilerIsTuple = tilerTy.kind in {nnkTupleConstr, nnkTupleTy}
