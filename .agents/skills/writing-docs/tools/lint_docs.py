@@ -1008,12 +1008,16 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
     # A prose colon ends its line under the colon-inline rule.
     # What it introduces goes on the next lines, never the same line.
     # URLs keep their scheme colon.
+    # Math definition lines are exempt: a colon introducing a call or an
+    # equals-sign definition states math, not prose.
     cm = re.search(r":\s+\S", bare)
     if cm and "://" not in bare[:cm.start() + 2]:
-        findings.append(Finding(
-            path, n, "colon-inline",
-            "a prose colon is followed by prose on the same line "
-            "(move what it introduces to the next lines)"))
+        tail = bare[cm.end():].lstrip()
+        if not re.match(r"[\w`][\w`\[\].]*\s*(\(|=)", tail):
+            findings.append(Finding(
+                path, n, "colon-inline",
+                "a prose colon is followed by prose on the same line "
+                "(move what it introduces to the next lines)"))
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
