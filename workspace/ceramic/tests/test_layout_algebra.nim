@@ -1344,23 +1344,24 @@ proc runTiledProductTests =
     doAssert rank(td) === 2, "rank-1 tiled rank: " & $rank(td)
     doAssert size(dimension(td, 0)) === 3
     doAssert size(dimension(td, 1)) === 4
-  # block:
-  #   ## tiled_divide: rank-2, exact dimension structure
-  #   let L = make_layout((4, 8), (1, 4))
-  #   let td = tiled_divide(L, (2, 4))
-  #   doAssert rank(td) === 3, "tiled rank: " & $rank(td)
-  #   doAssert size(dimension(td, 0)) === 8
-  #   doAssert size(dimension(td, 1)) === 2
-  #   doAssert size(dimension(td, 2)) === 2
-  # block:
-  #   ## [PY-L] CuTe C++: tiled_divide with Layout tiler
-  #   ## A=(8,8):(1,8), T=(2,2):(1,4)
-  #   ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
-  #   let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
-  #   doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
-  #   ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
-  #   let L = make_layout((4, 8), (1, 4))
-  #   doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
+  block:
+    ## tiled_divide, rank-2 exact dimension structure
+    let L = make_layout((4, 8), (1, 4))
+    let td = tiled_divide(L, (2, 4))
+    doAssert rank(td) === 3, "tiled rank: " & $rank(td)
+    doAssert size(dimension(td, 0)) === 8
+    doAssert size(dimension(td, 1)) === 2
+    doAssert size(dimension(td, 2)) === 2
+  block:
+    ## [PY-L] CuTe C++ tiled_divide, A=(8,8):(1,8), T=(2,2):(1,4)
+    ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
+    let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
+    doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
+    ## Meta tensor-layouts doc, tiled_divide(Layout((8,8)), (2,2)) -> ((2,2), 4, 4)
+    doAssert tiled_divide(make_layout((8, 8), (1, 8)), (2, 2)) === (((2, 2), 4, 4), ((1, 8), 2, 16))
+    ## tiled vs flat, same input, rank(tiled) = rank(flat) - 1
+    let L = make_layout((4, 8), (1, 4))
+    doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
 
   block:
     ## tiled_product: smoke test

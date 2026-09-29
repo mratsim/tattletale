@@ -406,6 +406,18 @@ func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): au
   else:
     tile_unzip(logical_divide(layout, tiler), tiler)
 
+macro groupedHead(head, tail: typed): untyped =
+  ## Tuple (head, tail[0], tail[1], ...) with head verbatim so nesting survives,
+  ## tail top-level elements unpacked one level, a scalar tail kept whole.
+  ## tiled_divide/tiled_product reassembly, the CuTe `result(_, repeat<R1>(_))` slice.
+  result = nnkTupleConstr.newTree(head)
+  let tt = tail.getTypeInst()
+  if tt.kind notin {nnkTupleTy, nnkTupleConstr} or tt.len == 0:
+    result.add tail
+    return
+  for i in 0 ..< tt.len:
+    result.add nnkBracketExpr.newTree(tail, newLit(i))
+
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second dimension into individual dimensions.
   ## Keeps dimension-0 grouped (the tile).
@@ -414,14 +426,8 @@ template tiled_divide*(layout: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zd, zipped_divide(lyt, tlr))
     make_layout(
-      concatFlat(
-        (dimension(zd, 0).shape,),
-        dimension(zd, 1).shape
-      ),
-      concatFlat(
-        (dimension(zd, 0).stride,),
-        dimension(zd, 1).stride
-      )
+      groupedHead(dimension(zd, 0).shape, dimension(zd, 1).shape),
+      groupedHead(dimension(zd, 0).stride, dimension(zd, 1).stride)
     )
 
 template flat_divide*(layout: Layout; tiler: auto): auto =
@@ -591,14 +597,8 @@ template tiled_product*(blk: Layout; tiler: auto): auto =
     evalOnceAs(tlr, tiler)
     evalOnceAs(zp, zipped_product(bk, tlr))
     make_layout(
-      concatFlat(
-        (dimension(zp, 0).shape,),
-        dimension(zp, 1).shape,
-      ),
-      concatFlat(
-        (dimension(zp, 0).stride,),
-        dimension(zp, 1).stride,
-      ),
+      groupedHead(dimension(zp, 0).shape, dimension(zp, 1).shape),
+      groupedHead(dimension(zp, 0).stride, dimension(zp, 1).stride),
     )
 
 template flat_product*(blk: Layout; tiler: auto): auto =
