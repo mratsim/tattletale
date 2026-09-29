@@ -10,7 +10,13 @@ Cases:
 - the structural rules, hash-above-proc, divider-space, the one-liner advisory, the explicit-generics call-site ban
 
 Each case builds a device-proc snippet in memory, runs scan(), asserts the expected rule ids at the expected lines.
+
+newcall-method cases:
+
+- newCall(bindSym"dimension", la, newLit(i)) flags, the method form la.dimension(i) exists
+- infix keywords and make_* constructors stay exempt
 """
+
 import struct
 import sys
 import tempfile
@@ -281,6 +287,20 @@ ok &= expect("explicit path without default roots scans",
              [(x.rule, x.warning) for x in res],
              [("one-liner", True)])
 
-cases = 34
+ok &= expect("newcall-method fires on the method-shaped newCall",
+             run(PROC % 'let d = newCall(bindSym"dimension", la, newLit(i))\n'),
+             [(7, "newcall-method")])
+ok &= expect("newcall-method fires through bindSym(...) form",
+             run(PROC % 'let d = newCall(bindSym("dimension"), la, newLit(i))\n'),
+             [(7, "newcall-method")])
+ok &= expect("newcall-method exempts infix keywords",
+             run(PROC % 'let x = newCall(bindSym"mod", a, b)\n'), [])
+ok &= expect("newcall-method exempts make_* constructors",
+             run(PROC % 'let x = newCall(bindSym"make_layout", sh, st)\n'), [])
+ok &= expect("newcall-method skips comment lines",
+             run(PROC % '# let x = newCall(bindSym"dimension", a, b)\n'), [])
+
+cases = 39
 print("ALL PASS" if ok else "FAILURES", "(%d cases)" % cases)
 sys.exit(0 if ok else 1)
+

@@ -23,6 +23,8 @@ these roots:
 | divider-space     | a section divider (`# ─── ... ───`) without a blank line before or after it                      | counted  |
 | one-liner         | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review | advisory |
 | explicit-generics | a call site spells generic arguments the compiler infers from the value arguments                | counted  |
+| newcall-method    | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the house form      | counted  |
+
 
 Module-scope exemptions, where a frag walk IS the tile implementation:
 
@@ -113,7 +115,18 @@ RULES = {
                  "is named at review, never a violation",
     "explicit-generics": "a call site spells generic arguments the compiler "
                          "infers from the value arguments",
+    "newcall-method": "a newCall(bindSym\"f\", x, ...) meta-call where method "
+                      "call syntax x.f(...) is the house form",
 }
+
+# Names that never take method call syntax.
+# Nim infix keywords read infix, constructors spell make_* functional.
+NEWCALL_METHOD_EXEMPT = frozenset((
+    "mod", "div", "shl", "shr", "and", "or", "xor", "not", "in", "notin",
+    "is", "isnot", "of"))
+NEWCALL_METHOD_RE = re.compile(
+    r"\bnewCall\s*\(\s*bindSym\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']"
+    r'(?:\s*\))?\s*,')
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -823,6 +836,28 @@ def scan_hash_above_proc(path, lines, blocked, findings):
         i += 1
 
 
+def scan_newcall_method(path, lines, findings):
+    """Flags newCall(bindSym"f", x, ...) sites that read better as x.f(...).
+
+    Contract:
+    - fires once per call site, on the line carrying the callee
+    - names stay exempt when they are Nim infix keywords (mod, div, and, ...)
+      that only read infix, or make_* constructors that are functional
+    """
+
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        for name in NEWCALL_METHOD_RE.findall(line):
+            if name in NEWCALL_METHOD_EXEMPT or name.startswith("make"):
+                continue
+            findings.append(Finding(
+                path, i + 1, "newcall-method",
+                "newCall builds %s(x, ...) where x.%s(...) is the method "
+                "call form" % (name, name)))
+
+
 def scan_one_liner(path, ds, findings):
     """Runs the one-liner advisory over a file's callable declarations.
 
@@ -926,6 +961,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
     if generic_map is None:
         generic_map = build_generic_map([(path, lines)])
     scan_hash_above_proc(path, lines, blocked, findings)
+    scan_newcall_method(path, lines, findings)
     scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     for proc in procs:
