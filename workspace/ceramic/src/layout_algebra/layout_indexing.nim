@@ -6,9 +6,6 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Layout indexing: crd2idx, idx2crd, slice, dice.
-##
-## These are the Layout-consuming wrappers. The raw 3-arg crd2idx
-## overloads live in `layout_indexing_gpu.nim`.
 {.experimental: "callOperator".}
 
 
@@ -26,49 +23,33 @@ export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
 
-#  crd2idx / idx2crd — via layout_indexing_gpu
+#  crd2idx / idx2crd, delegates to layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
-#
-#  The raw 3-arg crd2idx overloads live in layout_indexing_gpu.nim.
-#  These Layout-consuming wrappers delegate to them.
 
 template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
   ## Logical-to-memory offset for a coordinate on a Layout.
   ##
   ## `coord` can be:
-  ##   • an `int`   — decomposed column-major across all dimensions
-  ##   • a `tuple`  — inner product `coord·stride` per dimension
-  ##   • a static `Int[V]` — same, compile-time constant
-  ##
-  ## External code must use this (or `layout(coord)`) rather than
-  ## calling the raw `crd2idx(coord, shape, stride)` directly,
-  ## which is module-private to layouts.nim.
+  ## - an `int`, decomposed column-major across all dimensions
+  ## - a `tuple`, inner product `coord·stride` per dimension
+  ## - a static `Int[V]`, same at compile time
   crd2idx(makeIntTuple(coord), layout.shape, layout.stride)
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
   ##
-  ## STRIDE-BASED: `(idx div stride) mod shape` per dimension — only valid for
-  ## COMPACT (contiguous) layouts, matching CuTe's 3-arg
-  ## `idx2crd(i, shape, stride)` which documents the same restriction
-  ## ("This only works for compact shape+stride layouts"). For
-  ## non-compact shapes (e.g. the atom fragment (T, V) dimensions) use the
-  ## shape-based overload `idx2crd(shape, idx)`.
+  ## Coordinate = `(idx div stride) mod shape` per dimension, valid for
+  ## compact (contiguous) layouts only.
+  ## For non-compact shapes use the shape-based `idx2crd(shape, idx)`.
   ##
-  ##   Cases for `(idx, shape, stride)`:
-  ##     shape == 1, stride == 0   →   0  (broadcast — skip division)
-  ##     shape == 1, stride != 0   →   0  (size-1 — result always 0)
-  ##     shape != 1, stride == 0   ─── invalid layout (unreachable)
-  ##     shape != 1, stride != 0   →   (idx div stride) mod shape
-  ##
-  ## The guard on `shape == 1` matches CuTe's `is_constant<1, Shape>`
-  ## check and handles both broadcast dimensions and trivial dimensions,
-  ## avoiding potential division-by-zero on stride-0.
+  ## Cases for `(idx, shape, stride)`:
+  ## - shape == 1 → 0 whatever the stride, broadcast and size-1 skip division
+  ## - shape != 1, stride == 0 → invalid layout, unreachable
+  ## - shape != 1, stride != 0 → (idx div stride) mod shape
   let shT = layoutTypeArgs(layout).shapeTy
   let sh = newTree(nnkDotExpr, layout, ident"shape")
   let st = newTree(nnkDotExpr, layout, ident"stride")
   if shT.kind != nnkTupleConstr:
-    # `block:` wrapper forces expression context for `when`
     result = quote do:
       when `sh` is Int[1]:
         Int[0]()
@@ -80,7 +61,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
       else:
         `idx` div `st`
   else:
-    # Tuple shape: each dimension gets its own guard
+    # Tuple shape, each dimension gets its own guard
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
       let s = newCall(bindSym"[]", st, newLit(i))
@@ -103,11 +84,9 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
 
 proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
                      prefix: NimNode): NimNode =
-  ## Decompose `idxExpr` over the shape type `shTy`; `prefix` is the
-  ## product of the preceding sibling dimensions' sizes. `value` is the shape
-  ## value expression at the current nesting depth (shape[i0][i1]…).
-  ## Module-level (not nested in the macro): a nested proc breaks
-  ## macro-time emission.
+  ## Decompose `idxExpr` over the shape type `shTy`.
+  ## `prefix` is the product of the preceding sibling dimensions' sizes.
+  ## `value` is the shape value expression at the current depth, shape[i0][i1]...
   if shTy.kind in {nnkTupleTy, nnkTupleConstr}:
     var parts: seq[NimNode] = @[]
     var p = prefix
@@ -122,20 +101,17 @@ proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
     idxExpr  # scalar leaf: the mod was applied by the parent
 
 macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
-  ## Decompose a flat index into a coordinate over SHAPE — colexicographic
-  ## over the shape's leaf sizes (first dimension fastest):
-  ##   c0 = (idx div 1)        mod s0
-  ##   c1 = (idx div s0)       mod s1
-  ##   c2 = (idx div (s0·s1))  mod s2
-  ## ...
-  ## Nested shapes decompose recursively: each dimension's flat index is split
-  ## by that dimension's own sub-shape.
+  ## Decompose a flat index into a coordinate over SHAPE.
   ##
-  ## Valid for ANY shape (compact or not) — unlike `idx2crd(layout, idx)`,
-  ## which is stride-based and compact-only. Matches CuTe's 2-arg
-  ## `idx2crd(i, shape)` and tensor-layouts' `idx2crd(coord, shape)`.
+  ## Returns the coordinate tuple, colexicographic over the leaf sizes,
+  ## first dimension fastest. Nested shapes decompose recursively,
+  ## each dimension's flat index split by its own sub-shape.
+  ##
+  ## Valid for ANY shape (compact or not), unlike the stride-based
+  ## compact-only idx2crd(layout, idx).
   ##
   ## Examples:
+  ##
   ##   idx2crd((4, 8), 31)            == (3, 7)
   ##   idx2crd(((4, 8), (2, 2)), 31)  == ((3, 7), (0, 0))
   ##   idx2crd(2, 1)                  == 1
@@ -143,32 +119,38 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   if shT.kind in {nnkTupleTy, nnkTupleConstr}:
     result = emitShapeDecomp(shape, shT, idx, newLit(1))
   else:
-    # scalar shape: idx mod shape
+    # scalar shape, idx mod shape
     result = newCall(bindSym"mod", idx, shape)
 
 # ═══════════════════════════════════════════════════════════════
-#  Slice and dice — marker-based dimension selection
+#  Slice and dice, marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
 
 template slice*(target: tuple; selector: typed): auto =
-  ## Slice a tuple: keep elements where selector entry is X; drop where it's Y, int, or Int.
+  ## Slice a tuple, keep elements where the selector entry is X.
+  ## Elements with a Y, int, or Int selector are dropped.
   filterZipWith(selector, target):
     (when it_a is X: (it_b,)
      elif it_a is Y or it_a is int or it_a is Int: ()
      else: {.error: "slice: selector items must be X, Y, or ints".})
 
 template dice*(target: tuple; selector: typed): auto =
-  ## Dice a tuple: keep elements where selector entry is Y, int, or Int; drop where it's X.
+  ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
+  ## Elements with an X selector are dropped.
   filterZipWith(selector, target):
     (when it_a is Y or it_a is int or it_a is Int: (it_b,)
      elif it_a is X: ()
      else: {.error: "dice: selector items must be X, Y, or ints".})
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout: dimensions marked with X / _ are kept; Y, int, Int are dropped.
+  ## Extract a sub-Layout.
+  ##
+  ## Returns the layout keeping the dimensions marked X or _,
+  ## dimensions marked Y, int, or Int are dropped.
+  ##
   ## Accepts both varargs and a single tuple argument:
-  ##   slice(L, X, Y)          — two separate args
-  ##   slice(L, (X, Y))        — single tuple arg (equivalent)
+  ## - slice(L, X, Y)     two separate args
+  ## - slice(L, (X, Y))   single tuple argument, equivalent
   block:
     evalOnceAs(t, target)
     make_layout(
@@ -176,10 +158,14 @@ template slice*(target: Layout; selectors: varargs[untyped]): untyped =
       slice(t.stride, varargs_to_par(selectors)))
 
 template dice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout: dimensions marked with Y / int / Int are kept, X are dropped.
+  ## Extract a sub-Layout.
+  ##
+  ## Returns the layout keeping the dimensions marked Y, int, or Int,
+  ## dimensions marked X are dropped.
+  ##
   ## Accepts both varargs and a single tuple argument:
-  ##   dice(L, Y, X)          — two separate args
-  ##   dice(L, (Y, X))        — single tuple arg (equivalent)
+  ## - dice(L, Y, X)     two separate args
+  ## - dice(L, (Y, X))   single tuple argument, equivalent
   block:
     evalOnceAs(t, target)
     make_layout(
@@ -222,9 +208,9 @@ macro hasUnderscore*(Cs: varargs[untyped]): bool =
   result = newBlockStmt(result)
 
 template callImpl(layout: Layout; coord: typed): auto =
-  ## Layout indexing:
-  ##   • coord has _ / X → slice (returns sub-Layout)
-  ##   • coord is all ints → crd2idx (returns int)
+  ## Index a layout with a coordinate.
+  ## - coord with _ or X → slice, returns a sub-Layout
+  ## - all-int coord → crd2idx, returns an offset
   when hasUnderscore(coord):
     slice(layout, coord)
   else:
