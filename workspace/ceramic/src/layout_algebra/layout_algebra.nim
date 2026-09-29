@@ -415,63 +415,53 @@ macro composeImpl*(remainingShape, remainingStride: untyped; lhsShapes, lhsStrid
     lhsStLeaves.add leaf
   let R = lhsShLeaves.len
 
-  proc pack(nodes: seq[NimNode]): NimNode =
-    nnkTupleConstr.newTree(nodes)
+  template consumeStep(currShLeaf, currStLeaf, remSh, remSt,
+                       currShape, currStride, absRem, nextSh, nextSt,
+                       clamped, remSh2, scaled, skipBody, elseBody) =
+    let currShape = currShLeaf
+    let currStride = currStLeaf
+    let absRem = abs(remSt)
+    let nextSh = ceil_div(currShape, absRem)
+    when nextSh is Int and typeof(nextSh) is Int[1] or
+        remSh is Int and typeof(remSh) is Int[1]:
+      skipBody
+    else:
+      elseBody
 
-  proc whenInt1(x: NimNode): NimNode =
-    ## The consume check of the original fold, `x is Int and typeof(x) is
-    ## Int[1]`, on an emitted expression.
-    let isInt = newTree(nnkInfix, ident"is", x, ident"Int")
-    let isInt1 = newTree(nnkInfix, ident"is",
-      newCall(ident"typeof", x),
-      nnkBracketExpr.newTree(ident"Int", newLit(1)))
-    newTree(nnkInfix, ident"and", isInt, isInt1)
+  template consumeSkip(nextSt, absRem, currShape, remSt, tail) =
+    let nextSt = ceil_div(absRem, currShape) * sign(remSt)
+    tail
 
-  proc letBind(sym: NimNode; expr: NimNode): NimNode =
-    newTree(nnkLetSection, newTree(nnkIdentDefs, sym, newEmptyNode(), expr))
+  template consumeElse(clamped, nextSh, remSh, remSh2, nextSt,
+                       absRem, currShape, remSt, scaled, tail) =
+    let clamped = min(nextSh, remSh)
+    divisibilityCheck(remSh, clamped)
+    let remSh2 = remSh div clamped
+    let nextSt = ceil_div(absRem, currShape) * sign(remSt)
+    tail
+
+  template consumeLastShared(remSh, accShN, accStN, fullSh, fullSt) =
+    when remSh is Int and typeof(remSh) is Int[1]:
+      make_layout(unwrap(accShN), unwrap(accStN))
+    else:
+      make_layout(unwrap(fullSh), unwrap(fullSt))
 
   proc emitStep(dimIdx: int; remSh, remSt: NimNode;
-                lhsShLeaves, lhsStLeaves: seq[NimNode];
                 accSh, accSt: seq[NimNode]): NimNode =
+    ## Emit the fold step for LHS dimension `dimIdx`, nesting the next
+    ## dimension's step, consuming `remSh`/`remSt` as it goes.
     if dimIdx >= R - 1:
-      # Emits:
-      #   when remSh is Int[1] and typeof(remSh) is Int[1]:
-      #     make_layout(unwrap((accSh...)), unwrap((accSt...)))  # accumulated only
-      #   else:
-      #     make_layout(unwrap((accSh..., remSh)), unwrap((accSt..., remSt * lhsSt[R-1])))
-      let lastSt = lhsStLeaves[dimIdx]
-      let scaled = newTree(nnkInfix, ident"*", remSt, lastSt)
+      let scaled = nnkInfix.newTree(ident"*", remSt, lhsStLeaves[dimIdx])
       if accSh.len == 0:
-        return newCall(bindSym("make_layout"),
-          newCall(bindSym("unwrap"), pack(@[remSh])),
-          newCall(bindSym("unwrap"), pack(@[scaled])))
-      let yes = nnkStmtListExpr.newTree(
-        newCall(bindSym("make_layout"),
-          newCall(bindSym("unwrap"), pack(accSh)),
-          newCall(bindSym("unwrap"), pack(accSt))))
-      let no = nnkStmtListExpr.newTree(
-        newCall(bindSym("make_layout"),
-          newCall(bindSym("unwrap"), pack(accSh & @[remSh])),
-          newCall(bindSym("unwrap"), pack(accSt & @[scaled]))))
-      return nnkWhenStmt.newTree(
-        nnkElifBranch.newTree(whenInt1(remSh), yes),
-        nnkElse.newTree(no))
+        return bindSym"make_layout".newCall(
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(remSh)),
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(scaled)))
+      let accShN = nnkTupleConstr.newTree(accSh)
+      let accStN = nnkTupleConstr.newTree(accSt)
+      let fullSh = nnkTupleConstr.newTree(accSh & @[remSh])
+      let fullSt = nnkTupleConstr.newTree(accSt & @[scaled])
+      return getAst(consumeLastShared(remSh, accShN, accStN, fullSh, fullSt))
     else:
-      # Emits:
-      #   let currShape = lhsSh[d]
-      #   let currStride = lhsSt[d]
-      #   let absRem = abs(remSt)
-      #   let nextShape = ceil_div(currShape, absRem)
-      #   when (nextShape is Int and typeof(nextShape) is Int[1])
-      #     or (remSh is Int and typeof(remSh) is Int[1]):
-      #     let nextStride = sign(remSt) * ceil_div(absRem, currShape)
-      #     <emitStep(d+1, remSh, nextStride)>
-      #   else:
-      #     let clampedShape = min(nextShape, remSh)
-      #     divisibilityCheck(remSh, clampedShape)  # compile-time doAssert
-      #     let remainingShape = remSh div clampedShape
-      #     let nextStride = sign(remSt) * ceil_div(absRem, currShape)
-      #     <emitStep(d+1, remainingShape, nextStride)>
       let currShape  = genSym(nskLet, "currShape")
       let currStride = genSym(nskLet, "currStride")
       let absRem     = genSym(nskLet, "absRem")
@@ -479,43 +469,27 @@ macro composeImpl*(remainingShape, remainingStride: untyped; lhsShapes, lhsStrid
       let nextSt     = genSym(nskLet, "nextStride")
       let clamped    = genSym(nskLet, "clampedShape")
       let remSh2     = genSym(nskLet, "remainingShape")
-      let scaled     = newTree(nnkInfix, ident"*", remSt, currStride)
-
-      let skipBody = nnkStmtListExpr.newTree(
-        letBind(nextSt,
-          newTree(nnkInfix, ident"*",
-            newCall(bindSym("ceil_div"), absRem, currShape),
-            newCall(bindSym("sign"), remSt))),
-        emitStep(dimIdx + 1, remSh, nextSt, lhsShLeaves, lhsStLeaves, accSh, accSt))
-
-      let elseBody = nnkStmtListExpr.newTree(
-        letBind(clamped, newCall(bindSym("min"), nextSh, remSh)),
-        newCall(bindSym("divisibilityCheck"), remSh, clamped),
-        letBind(remSh2, newTree(nnkInfix, ident"div", remSh, clamped)),
-        letBind(nextSt,
-          newTree(nnkInfix, ident"*",
-            newCall(bindSym("ceil_div"), absRem, currShape),
-            newCall(bindSym("sign"), remSt))),
-        emitStep(dimIdx + 1, remSh2, nextSt, lhsShLeaves, lhsStLeaves,
-                 accSh & @[clamped], accSt & @[scaled]))
-
-      return nnkStmtListExpr.newTree(
-        letBind(currShape, lhsShLeaves[dimIdx]),
-        letBind(currStride, lhsStLeaves[dimIdx]),
-        letBind(absRem, newCall(bindSym("abs"), remSt)),
-        letBind(nextSh, newCall(bindSym("ceil_div"), currShape, absRem)),
-        nnkWhenStmt.newTree(
-          nnkElifBranch.newTree(
-            newTree(nnkInfix, ident"or", whenInt1(nextSh), whenInt1(remSh)),
-            skipBody),
-          nnkElse.newTree(elseBody)))
+      let scaled     = nnkInfix.newTree(ident"*", remSt, currStride)
+      let skipTail = emitStep(dimIdx + 1, remSh, nextSt, accSh, accSt)
+      let skipBody = getAst(consumeSkip(nextSt, absRem, currShape, remSt, skipTail))
+      let elseTail = emitStep(dimIdx + 1, remSh2, nextSt,
+                              accSh & @[clamped], accSt & @[scaled])
+      let elseBody = getAst(consumeElse(clamped, nextSh, remSh, remSh2, nextSt,
+                                        absRem, currShape, remSt, scaled, elseTail))
+      return getAst(consumeStep(lhsShLeaves[dimIdx], lhsStLeaves[dimIdx],
+                                remSh, remSt, currShape, currStride, absRem,
+                                nextSh, nextSt, clamped, remSh2, scaled,
+                                skipBody, elseBody))
 
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
+  let firstStep = emitStep(0, remSh0, remSt0, @[], @[])
   result = nnkStmtListExpr.newTree(
-    letBind(remSh0, remainingShape),
-    letBind(remSt0, remainingStride))
-  result.add emitStep(0, remSh0, remSt0, lhsShLeaves, lhsStLeaves, @[], @[])
+    nnkLetSection.newTree(
+      nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
+      nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
+    firstStep)
+
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
   ## Layer RHS dimensions one by one over the FULL coalesced LHS via mapDimensionsWith.
@@ -565,7 +539,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
 # ═══════════════════════════════════════════════════════════════
 #
 #  CuTe formula:  logical_divide(A, B) = compose(A, Layout(B, complement(B, shape(coalesce(A)))))
-#  Tuple tiler:    transform_layout(logical_divide, layout, tiler)  — per-dimension divide
+#  Tuple tiler → per-dimension divide
 #  int / Int:      make_layout(tiler) then CuTe formula
 #
 
@@ -593,54 +567,51 @@ func logical_divide*[L: Layout](layout: L; tiler: static int): auto {.inline.} =
   ## Compile-time int tiler (const) → preserve via Int[N] wrap → CuTe formula.
   logical_divide_impl(layout, make_layout(Int[tiler]()))
 
-macro logical_divide_builder*(layout, tiler: typed; LayoutRank: static int): untyped =
-  ## Build helper for logical_divide over a tuple tiler, one pass over
-  ## the layout dimensions.
+macro logical_divide*(layout: Layout; tiler: tuple): untyped =
+  ## Tuple tiler → per-dimension divide.
+  ## Each tiler element applies to the corresponding layout dimension.
   ##
-  ## - Each divided dimension packs into the final (shape, stride) tuple
-  ##   construction directly, with no per-dimension `concat` accumulator
-  ##   and no intermediate tuple types
-  ## Returns the divided layout as an untyped node.
+  ## - Dimensions beyond len(tiler) pass through unchanged
   let lyt = genSym(nskLet, "lyt")
   let tlr = genSym(nskLet, "tlr")
+  let shapeType = layout.getTypeInst()[1]
+  let R = if shapeType.kind in {nnkTupleConstr, nnkTupleTy}:
+            shapeType.len
+          else:
+            1
   let tilerRank = tiler.getTypeInst().len
+  doAssert tilerRank <= R,
+    "logical_divide: tiler has more dimensions (" & $tilerRank &
+    ") than layout (" & $R & ")"
+
+
+  template dimDivided(d, lyt, tlr, idx) =
+    let d = logical_divide(dimension(lyt, idx), tlr[idx])
+
   var accSh, accSt: seq[NimNode]
   var stmts: seq[NimNode]
-
-  proc pack(nodes: seq[NimNode]): NimNode =
-    nnkTupleConstr.newTree(nodes)
-
-  for idx in 0 ..< LayoutRank:
-    let dimExpr = newCall(bindSym"dimension", lyt, newLit(idx))
+  for idx in 0 ..< R:
     if idx < tilerRank:
       let d = genSym(nskLet, "d")
-      stmts.add newTree(nnkLetSection, newTree(nnkIdentDefs, d,
-        newEmptyNode(),
-        newCall(bindSym"logical_divide", dimExpr, newTree(nnkBracketExpr, tlr, newLit(idx)))))
-      accSh.add newDotExpr(d, ident"shape")
-      accSt.add newDotExpr(d, ident"stride")
+      stmts.add getAst(dimDivided(d, lyt, tlr, newLit(idx)))
+      accSh.add d.newDotExpr(ident"shape")
+      accSt.add d.newDotExpr(ident"stride")
     else:
       let m = genSym(nskLet, "m")
-      stmts.add newTree(nnkLetSection, newTree(nnkIdentDefs, m,
-        newEmptyNode(), dimExpr))
-      accSh.add newDotExpr(m, ident"shape")
-      accSt.add newDotExpr(m, ident"stride")
+      stmts.add nnkLetSection.newTree(
+        nnkIdentDefs.newTree(m, newEmptyNode(), bindSym"dimension".newCall(lyt, newLit(idx))))
+      accSh.add m.newDotExpr(ident"shape")
+      accSt.add m.newDotExpr(ident"stride")
 
+  let shapeTuple = newTree(nnkTupleConstr, accSh)
+  let strideTuple = newTree(nnkTupleConstr, accSt)
   result = nnkStmtListExpr.newTree(
-    newTree(nnkLetSection, newTree(nnkIdentDefs, lyt, newEmptyNode(), layout)),
-    newTree(nnkLetSection, newTree(nnkIdentDefs, tlr, newEmptyNode(), tiler)))
-  for st in stmts: result.add st
-  result.add newCall(bindSym"make_layout", pack(accSh), pack(accSt))
-
-func logical_divide*(layout: Layout; tiler: tuple): auto {.inline.} =
-  ## Tuple tiler → per-dimension divide (transform_layout).
-  ## Each tiler element applies to the corresponding layout dimension.
-  ## Dimensions beyond len(tiler) pass through unchanged.
-  const R = static(rank(layout))
-  static: doAssert rank(tiler) <= R,
-    "logical_divide: tiler has more dimensions (" & $rank(tiler) &
-    ") than layout (" & $R & ")"
-  logical_divide_builder(layout, tiler, R)
+    nnkLetSection.newTree(
+      nnkIdentDefs.newTree(lyt, newEmptyNode(), layout),
+      nnkIdentDefs.newTree(tlr, newEmptyNode(), tiler)))
+  for st in stmts:
+    result.add st
+  result.add bindSym"make_layout".newCall(shapeTuple, strideTuple)
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_unzip — unzip a logical_divide/product result into tiles+rest
@@ -662,57 +633,6 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
         zip2_by(lyt.stride, tlr))
 
 # ═══════════════════════════════════════════════════════════════
-#  zipped_divide_builder — one-pass build for tuple tiler
-# ═══════════════════════════════════════════════════════════════
-
-macro zipped_divide_builder*(layout, tiler: typed; LayoutRank: static int): untyped =
-  ## Build helper for zipped_divide over a tuple tiler, one pass over
-  ## the layout dimensions building the (tile, rest) groups directly.
-  ##
-  ## - The final tuple constructions are packed in one shot, no
-  ##   per-dimension `concat` accumulators and no intermediate tuple types
-  ## - Intermediate tuple types trigger the Nim tuple hash collision
-  ##   (nim-lang/Nim issue 25883), so they must not appear
-  ## Returns the zipped layout as an untyped node.
-  let lyt = genSym(nskLet, "lyt")
-  let tlr = genSym(nskLet, "tlr")
-  let tilerRank = tiler.getTypeInst().len
-  var tileSh, tileSt, restSh, restSt: seq[NimNode]
-
-  proc pack(nodes: seq[NimNode]): NimNode =
-    nnkTupleConstr.newTree(nodes)
-
-  var stmts: seq[NimNode]
-  for idx in 0 ..< LayoutRank:
-    let dimExpr = newCall(bindSym"dimension", lyt, newLit(idx))
-    if idx < tilerRank:
-      let d = genSym(nskLet, "d")
-      stmts.add newTree(nnkLetSection, newTree(nnkIdentDefs, d,
-        newEmptyNode(),
-        newCall(bindSym"logical_divide", dimExpr, newTree(nnkBracketExpr, tlr, newLit(idx)))))
-      for part in [0, 1]:
-        let dd = newCall(bindSym"dimension", d, newLit(part))
-        if part == 0:
-          tileSh.add newDotExpr(dd, ident"shape")
-          tileSt.add newDotExpr(dd, ident"stride")
-        else:
-          restSh.add newDotExpr(dd, ident"shape")
-          restSt.add newDotExpr(dd, ident"stride")
-    else:
-      let m = genSym(nskLet, "m")
-      stmts.add newTree(nnkLetSection, newTree(nnkIdentDefs, m,
-        newEmptyNode(), dimExpr))
-      restSh.add newDotExpr(m, ident"shape")
-      restSt.add newDotExpr(m, ident"stride")
-
-  result = nnkStmtListExpr.newTree(
-    newTree(nnkLetSection, newTree(nnkIdentDefs, lyt, newEmptyNode(), layout)),
-    newTree(nnkLetSection, newTree(nnkIdentDefs, tlr, newEmptyNode(), tiler)))
-  for st in stmts: result.add st
-  result.add newCall(bindSym"make_layout",
-    nnkPar.newTree(pack(tileSh), pack(restSh)),
-    nnkPar.newTree(pack(tileSt), pack(restSt)))
-
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   ##
@@ -725,14 +645,7 @@ func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): au
     # Scalar tiler
     logical_divide(layout, tiler)
   else:
-    # Tuple tiler: one-pass builder avoids intermediate concat types
-    # that trigger Nim C++ backend struct hash collision
-    # (see https://github.com/nim-lang/Nim/issues/25883#issuecomment-4658908569)
-    const R = static(rank(layout))
-    const Tr = static(rank(tiler))
-    static: doAssert Tr <= R,
-      "zipped_divide: tiler has more dimensions (" & $Tr & ") than layout (" & $R & ")"
-    zipped_divide_builder(layout, tiler, R)
+    tile_unzip(logical_divide(layout, tiler), tiler)
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second dimension into individual dimensions.
