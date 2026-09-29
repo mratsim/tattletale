@@ -555,6 +555,93 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       composeDistribute(flatA.shape, flatA.stride, b.shape, b.stride)
 
 # ═══════════════════════════════════════════════════════════════
+#  Closed-form emission — (s):(d) ÷ static scalar T
+# ═══════════════════════════════════════════════════════════════
+#
+#  Compile-time helpers shared by the logical_divide and zipped_divide
+#  macros. Scalar dimensions divided by static scalar tilers emit
+#  the closed form inline, (T):(d) and ((s + T - 1) div T):(d*T).
+#  Zero runtime function instantiation.
+
+func staticIntLeafV(t: NimNode): int {.compileTime.} =
+  ## Static value V for an Int[V] type node, -1 for dynamic
+  if t.kind == nnkBracketExpr and $t[0] == "Int":
+    int(t[1].intVal)
+  else:
+    -1
+
+func isScalarLeafTy(t: NimNode): bool {.compileTime.} =
+  ## int or Int[N] leaf type
+  staticIntLeafV(t) >= 0 or (t.kind == nnkSym and $t == "int")
+
+proc tupleConstr(items: seq[NimNode]): NimNode {.compileTime.} =
+  ## nnkTupleConstr over a seq of nodes
+  result = newNimNode(nnkTupleConstr)
+  for it in items:
+    result.add it
+
+proc closedFormRest(sh, st, tiler: NimNode; shTyLeaf: NimNode;
+                    tilerV: int): tuple[sh, st: NimNode] {.compileTime.} =
+  ## Rest (shape, stride) of (s):(d) divided by static scalar T:
+  ## shape (s + T - 1) div T, stride d * T.
+  ## Int-typed shapes fold to Int literals, genBinOp folds static strides.
+  let shV = staticIntLeafV(shTyLeaf)
+  if shV >= 0:
+    result.sh = IntCT((shV + tilerV - 1) div tilerV)
+  else:
+    result.sh = nnkInfix.newTree(ident"div",
+      nnkPar.newTree(nnkInfix.newTree(ident"+", sh, newLit(tilerV - 1))),
+      newLit(tilerV))
+  result.st = nnkInfix.newTree(ident"*", st, tiler)
+
+proc emitDimDivide(sh, st, shTyLeaf, tiler: NimNode; tilerV: int): NimNode {.compileTime.} =
+  ## (s):(d) divided by static scalar T, closed form:
+  ## make_layout((T, rest shape), (d, d*T))
+  let rf = closedFormRest(sh, st, tiler, shTyLeaf, tilerV)
+  newCall(bindSym"make_layout",
+    tupleConstr(@[tiler, rf.sh]),
+    tupleConstr(@[st, rf.st]))
+
+proc emitZippedDivide(layout: NimNode; shTy, stTy: NimNode;
+                      tiler: NimNode; tilerVs: seq[int]): NimNode {.compileTime.} =
+  ## Zipped closed form over scalar dimensions, one make_layout expression:
+  ##   shape  ((T_0, .., T_k-1), (rest shapes, passthrough shapes))
+  ##   stride ((d_0, .., d_k-1), (d_i*T_i, passthrough strides))
+  let R = shTy.len
+  let k = tilerVs.len
+  var tileSh, tileSt, restSh, restSt: seq[NimNode]
+  for i in 0 ..< k:
+    let tilerLeaf = nnkBracketExpr.newTree(tiler, newLit(i))
+    let shLeaf = nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i))
+    let stLeaf = nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i))
+    tileSh.add tilerLeaf
+    tileSt.add stLeaf
+    let rf = closedFormRest(shLeaf, stLeaf, tilerLeaf, shTy[i], tilerVs[i])
+    restSh.add rf.sh
+    restSt.add rf.st
+  for i in k ..< R:
+    restSh.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i))
+    restSt.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i))
+  newCall(bindSym"make_layout",
+    tupleConstr(@[tupleConstr(tileSh), tupleConstr(restSh)]),
+    tupleConstr(@[tupleConstr(tileSt), tupleConstr(restSt)]))
+
+func zippedClosedFormProvable(layout: NimNode; tilerTy: NimNode): bool {.compileTime.} =
+  ## True when every layout dimension is scalar and every tiler element
+  ## is a static Int scalar with the tiler rank at most the layout rank
+  let (shTy, stTy) = layoutTypeArgs(layout)
+  if shTy.kind notin {nnkTupleConstr, nnkTupleTy}: return false
+  if stTy.kind notin {nnkTupleConstr, nnkTupleTy}: return false
+  if stTy.len != shTy.len: return false
+  if tilerTy.len > shTy.len: return false
+  for i in 0 ..< shTy.len:
+    if not isScalarLeafTy(shTy[i]): return false
+    if not isScalarLeafTy(stTy[i]): return false
+  for i in 0 ..< tilerTy.len:
+    if staticIntLeafV(tilerTy[i]) < 1: return false
+  true
+
+# ═══════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide — tile a layout into (tile, rest)
 # ═══════════════════════════════════════════════════════════════
@@ -666,19 +753,44 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
         zip2_by(lyt.stride, tlr))
 
 # ═══════════════════════════════════════════════════════════════
-func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
+macro zipped_divide*(layout: Layout; tiler: typed): untyped =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   ##
   ## CuTe: zipped_divide =
-  ##   - Layout tiler: logical_divide(layout, tiler)
-  ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
-  when TilerT is Layout:
-    logical_divide(layout, tiler)
-  elif TilerT is int or TilerT is Int:
-    # Scalar tiler
-    logical_divide(layout, tiler)
+  ##   - Layout and scalar tilers delegate to logical_divide(layout, tiler)
+  ##   - tuple tiler on all-scalar dimensions with static scalar tilers
+  ##     emits the closed form inline per dimension, (T):(d) and
+  ##     ((s + T - 1) div T):(d*T), zipped into ((T),(rest))
+  ##   - other tuple tilers take tile_unzip(logical_divide(layout, tiler), tiler)
+  let tilerTy = tiler.getTypeInst()
+  let tilerIsTuple = tilerTy.kind in {nnkTupleConstr, nnkTupleTy}
+  let tilerIsScalar =
+    (tilerTy.kind == nnkBracketExpr and $tilerTy[0] == "Int") or
+    (tilerTy.kind == nnkSym and $tilerTy == "int")
+  if tilerIsTuple and zippedClosedFormProvable(layout, tilerTy):
+    let (shTy, stTy) = layoutTypeArgs(layout)
+    result = emitZippedDivide(layout, shTy, stTy, tiler, toSeqStaticInts(tilerTy))
+  elif tilerIsScalar or (tilerTy.kind == nnkBracketExpr and $tilerTy[0] == "Layout"):
+    result = newCall(bindSym"logical_divide", layout, tiler)
+  elif tilerIsTuple:
+    result = newCall(bindSym"tile_unzip",
+      newCall(bindSym"logical_divide", layout, tiler),
+      tiler)
   else:
-    tile_unzip(logical_divide(layout, tiler), tiler)
+    # Layout tiler behind a type alias is resolved via its typedef.
+    # Unknown non-tuple types take the tile_unzip route
+    # like the previous dispatch
+    var isLyt = false
+    if tilerTy.kind == nnkSym:
+      let impl = tilerTy.getImpl()
+      isLyt = impl.kind == nnkTypeDef and impl[2].kind == nnkBracketExpr and
+              $impl[2][0] == "Layout"
+    if isLyt:
+      result = newCall(bindSym"logical_divide", layout, tiler)
+    else:
+      result = newCall(bindSym"tile_unzip",
+        newCall(bindSym"logical_divide", layout, tiler),
+        tiler)
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second dimension into individual dimensions.
