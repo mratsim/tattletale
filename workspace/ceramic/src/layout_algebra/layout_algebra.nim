@@ -729,15 +729,15 @@ template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
         zip2_by(lyt.stride, tlr))
 
 # ═══════════════════════════════════════════════════════════════
-func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
+func zipped_divide*[L: Layout, T](layout: L, tiler: T): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   ##
   ## CuTe: zipped_divide =
   ##   - Layout tiler: logical_divide(layout, tiler)
   ##   - tuple/int tiler: tile_unzip(logical_divide(layout, tiler), tiler)
-  when TilerT is Layout:
+  when T is Layout:
     logical_divide(layout, tiler)
-  elif TilerT is int or TilerT is Int:
+  elif T is int or T is Int:
     logical_divide(layout, tiler)
   else:
     tile_unzip(logical_divide(layout, tiler), tiler)
