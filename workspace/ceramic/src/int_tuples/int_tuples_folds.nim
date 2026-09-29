@@ -10,10 +10,10 @@ import ./int_tuples_datatypes
 import ./int_tuples_transforms
 
 # ═══════════════════════════════════════════════════════════════
-#  fold — left-fold reduction with Int[N] support
+#  fold, left-fold reduction with Int[N] support
 # ═══════════════════════════════════════════════════════════════
 #
-#  Adapted from the pattern in int_tuples.nim.bak:
+#  The fold pattern adapts to scalar and Int[N] elements:
 #    - Scalar `int` → inject `acc`, `it`, evaluate body
 #    - Scalar `Int[N]` → inject `acc`, `it` (Int[V] → int via * overloads)
 #    - Tuple → recurse over fields via `for f in fields(t)`
@@ -51,7 +51,7 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
       fold_recurse(0, t, startingAcc, body)
 
 # ═══════════════════════════════════════════════════════════════
-#  prefix_scanIt / suffix_scanIt - scans while preserving constness
+#  prefix_scanIt and suffix_scanIt, scans preserving constness
 # ═══════════════════════════════════════════════════════════════
 #
 #  Recursive template block + concat for type-correct tuple building.

@@ -10,7 +10,7 @@ import std/macros, std/typetraits, std/math
 import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] — compile-time integer type
+#  Int[N], the compile-time integer type
 # ═══════════════════════════════════════════════════════════════
 
 type Int*[V: static int] = object
@@ -53,7 +53,7 @@ template rank*(t: IntOrIntTuple): static int =
     tupleLen(typeof(t))
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] == int — global overloads for tuple comparison
+#  Int[N] == int, global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 
 func `<=`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V <= b
@@ -64,7 +64,7 @@ func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
 func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
 
 # ═══════════════════════════════════════════════════════════════
-#  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
+#  `===`, deep element-wise comparison across Int[N] and int
 # ═══════════════════════════════════════════════════════════════
 
 func `===`*(a, b: int): bool {.inline.} = a == b
@@ -102,7 +102,7 @@ func `===`*[U: tuple](a: int; b: U): bool {.inline.} =
     false
 
 # ═══════════════════════════════════════════════════════════════
-#  `!==` — negation of deep element-wise tuple comparison
+#  `!==`, negation of the deep element-wise comparison
 # ═══════════════════════════════════════════════════════════════
 
 func `!==`*(a, b: auto): bool {.inline.} = not (a === b)
@@ -150,7 +150,7 @@ genBinOp(`gcd`)
 func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
 
 # ═══════════════════════════════════════════════════════════════
-#  Iteration bounds
+#  iteration bounds
 # ═══════════════════════════════════════════════════════════════
 
 template `..<`*[V: static int](start: int; bound: Int[V]): Slice[int] =

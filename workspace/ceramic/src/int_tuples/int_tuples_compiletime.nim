@@ -17,7 +17,7 @@ const DynamicSentinel* = low(int)
   ## with a stride of literal 0 (Int[0], broadcasting).
 
 # ═══════════════════════════════════════════════════════════════
-#  isConst — compile-time detection (runtime via proc dispatch)
+#  isConst, compile-time detection with a runtime dispatch
 # ═══════════════════════════════════════════════════════════════
 
 template isConst*(a: static int): bool = true
@@ -28,7 +28,7 @@ template isConst*(a: static tuple): bool = true
 template isConst*(a: tuple): bool = false
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] compile-time helpers (for macros)
+#  Int[N] compile-time helpers for macros
 # ═══════════════════════════════════════════════════════════════
 
 # TODO rationalize this section as there are duplicate use cases
@@ -50,8 +50,9 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   elif t.kind == nnkIntLit: int(t.intVal)
   else: error("getStaticInt on non-static: " & t.repr)
 
+# ═══════════════════════════════════════════════════════════════
 #  Compile-time type helpers for the recursive macro
-# --------------------------------------------------
+# ═══════════════════════════════════════════════════════════════
 
 func isIntType(x: NimNode): bool {.compileTime.} =
   ## True if `x` is typed as plain `int`.
@@ -66,8 +67,9 @@ func isStaticIntType(x: NimNode): bool {.compileTime.} =
   let t = x.getTypeInst()
   t.kind == nnkBracketExpr and $t[0] == "Int"
 
+# ═══════════════════════════════════════════════════════════════
 #  Constant foldable check
-# --------------------------------------------------
+# ═══════════════════════════════════════════════════════════════
 
 func isCompileTime*(node: NimNode): bool {.compileTime.} =
   ## True if `node` is a compile-time known integer expression.
@@ -178,7 +180,7 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
   false
 
 # ═══════════════════════════════════════════════════════════════
-#  Compile-time seq[int]
+#  compile-time seq[int]
 # ═══════════════════════════════════════════════════════════════
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
@@ -209,7 +211,7 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
       result.add DynamicSentinel
 
 # ═══════════════════════════════════════════════════════════════
-#  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
+#  evalOnceAs, evaluate at most once, preserve Int[N] for CT expressions
 # ═══════════════════════════════════════════════════════════════
 #
 #  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.

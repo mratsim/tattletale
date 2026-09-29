@@ -14,7 +14,9 @@ import std/[macros, typetraits]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/static_for
 
-#  Markers for slice and dice
+
+# ═══════════════════════════════════════════════════════════════
+#  slice and dice markers
 # ═══════════════════════════════════════════════════════════════
 
 type
@@ -35,7 +37,7 @@ template mapLeavesWith*(singleton: X, body: untyped): X =
   singleton
 
 # ═══════════════════════════════════════════════════════════════
-#  Scalar overloads
+#  scalar overloads
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idx*(coord, shape: int): int = coord
@@ -48,7 +50,7 @@ template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): auto =
 template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
 
 # ═══════════════════════════════════════════════════════════════
-#  Tuple overloads
+#  tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idxDimension*(coord, shape, stride: typed): auto =

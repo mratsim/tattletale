@@ -10,7 +10,7 @@ import ./int_tuples_datatypes
 import ./int_tuples_transforms
 
 # ═══════════════════════════════════════════════════════════════
-#  zipDimensionsWith — zip tuple top-level with `op`
+#  zipDimensionsWith, zip the top-level elements with a binary op
 # ═══════════════════════════════════════════════════════════════
 
 macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
@@ -53,9 +53,9 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
   # Multi-item: construct a tuple like nnkTupleConstr.
   result.add nnkPar.newTree(items)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  zipLeavesWith — element-wise binary op for equal-structure tuples
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  zipLeavesWith, element-wise binary op for equal-structure tuples
+# ═══════════════════════════════════════════════════════════════
 
 template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
   ## Internal: walk tuple from index `idx`, recurse into nested tuples.
@@ -92,7 +92,7 @@ template zipLeavesWith*(a, b: typed; body: untyped): untyped =
     body
 
 # ═══════════════════════════════════════════════════════════════
-#  foldZipWith — fold(zipWith(`op`(it_a, it_b)))
+#  foldZipWith, fold a binary op over paired elements
 # ═══════════════════════════════════════════════════════════════
 
 template foldZipWith_recurse*(idx: static int; a, b: tuple; state: typed; body: untyped): auto =
@@ -117,7 +117,7 @@ template foldZipWith*(a, b: typed; startingAcc: typed; body: untyped): auto =
       body
 
 # ═══════════════════════════════════════════════════════════════
-#  zip2_by — guided zip for rank-2 tuples
+#  zip2_by, guided zip for rank-2 tuples
 # ═══════════════════════════════════════════════════════════════
 
 template zip2_by*(t: tuple; guide: int): auto =

@@ -11,7 +11,7 @@ import ./int_tuples_datatypes
 proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.}
 
 # ═══════════════════════════════════════════════════════════════════════
-#  mapLeavesWith — recursive leaf‑wise tuple map
+#  mapLeavesWith, recursive leaf-wise tuple map
 # ═══════════════════════════════════════════════════════════════════════
 
 macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
@@ -133,7 +133,7 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
       `t`
 
 # ═══════════════════════════════════════════════════════════════════════
-#  flatMapLeaves — flat leaf-wise tuple map (single pack)
+#  flatMapLeaves, flat leaf-wise tuple map of a single pack
 # ═══════════════════════════════════════════════════════════════════════
 
 proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
@@ -196,7 +196,7 @@ macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   flatMapLeavesImpl(t, body)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  flatLeaves / flatLeavesRev — compile-time leaf streams
+#  flatLeaves and flatLeavesRev, compile-time leaf streams
 # ═══════════════════════════════════════════════════════════════════════
 
 proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.} =
@@ -265,7 +265,7 @@ macro countLeaves*(t: typed): untyped =
   result = newLit(n)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  concatFlat — the leaves of two tuples as one flat tuple
+#  concatFlat, the leaves of two tuples as one flat tuple
 # ═══════════════════════════════════════════════════════════════════════
 
 macro concatFlat*(a, b: typed): untyped =
@@ -278,7 +278,7 @@ macro concatFlat*(a, b: typed): untyped =
     result.add leaf
 
 # ═══════════════════════════════════════════════════════════════════════
-#  mapDimensionsWith — Top-level only tuple map
+#  mapDimensionsWith, top-level-only tuple map
 # ═══════════════════════════════════════════════════════════════════════
 
 macro mapDimensionsWith*(t: tuple; body: untyped): untyped =

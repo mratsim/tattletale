@@ -29,6 +29,7 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
       if strides[result[i]] > strides[result[j]]:
         swap result[i], result[j]
 
+# ═══════════════════════════════════════════════════════════════
 #  coalesce, merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
@@ -133,7 +134,7 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
   coalesce(filter_zeros(layout))
 
 # ═══════════════════════════════════════════════════════════════
-#  complement
+#  complement, fill stride gaps up to the cosize bound
 # ═══════════════════════════════════════════════════════════════
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
@@ -209,7 +210,7 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
   complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
 
 # ═══════════════════════════════════════════════════════════════
-#  compose, layout composition
+#  compose, apply a layout through another
 # ═══════════════════════════════════════════════════════════════
 
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
@@ -364,10 +365,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       composeDistribute(flatA.shape, flatA.stride, b.shape, b.stride)
 
 # ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
 #  logical_divide, tile a layout into (tile, rest)
-# ═══════════════════════════════════════════════════════════════
-
 # ═══════════════════════════════════════════════════════════════
 
 func logical_divide_impl[A, B: Layout](layout: A; tiler: B): auto =
@@ -413,7 +411,7 @@ macro logical_divide*(layout: Layout; tiler: tuple): untyped =
   getAst(logicalDivideT(layout, tiler))
 
 # ═══════════════════════════════════════════════════════════════
-#  tile_unzip — unzip a logical_divide/product result into tiles+rest
+#  tile_unzip, unzip a divide or product result into tiles and rest
 # ═══════════════════════════════════════════════════════════════
 
 template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =

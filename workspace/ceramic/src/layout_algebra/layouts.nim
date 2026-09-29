@@ -324,6 +324,8 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
 
+
+# ═══════════════════════════════════════════════════════════════
 #  takeDimensions, extract dimensions [B, E) into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
@@ -374,8 +376,8 @@ macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  map, apply fn to each dimension independently
-#  zipWith, pairwise fn over dimensions of two Layouts
+#  map, apply a function to each dimension independently
+#  zipWith, pairwise function over two layouts' dimensions
 # ═══════════════════════════════════════════════════════════════
 
 macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
@@ -469,7 +471,7 @@ macro zipDimensionsWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
   result.add ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  transform_layout, map a Layout and a tiler tuple dimension-wise
+#  transform_layout, map a layout and a tiler tuple dimension-wise
 # ═══════════════════════════════════════════════════════════════
 
 macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =

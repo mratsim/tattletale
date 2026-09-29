@@ -87,7 +87,7 @@ func cosize*[A, B](_: typedesc[Layout[A, B]]): static int =
   cosize(tmp).toIntVal()
 
 # ═══════════════════════════════════════════════════════════════
-#  StrideOrder — layout-left (col-major) / layout-right (row-major)
+#  StrideOrder, layout-left (col-major) or layout-right (row-major)
 # ═══════════════════════════════════════════════════════════════
 
 type StrideOrder* = enum
@@ -106,7 +106,7 @@ type StrideOrder* = enum
     ##   make_layout((3, 4, 5), LayoutRight) -> (3, 4, 5) : (20, 5, 1)
 
 # ═══════════════════════════════════════════════════════════════
-#  Shape-structure predicates (operate on IntOrIntTuple)
+#  shape-structure predicates over IntOrIntTuple
 # ═══════════════════════════════════════════════════════════════
 
 template congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =

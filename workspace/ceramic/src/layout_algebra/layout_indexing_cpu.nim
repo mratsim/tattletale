@@ -28,7 +28,7 @@ import workspace/ceramic/src/int_tuples
 import ./layouts
 
 # ═══════════════════════════════════════════════════════════════
-#  CoordWheel — iterate logical positions without divmod
+#  CoordWheel, iterate logical positions without divmod
 # ═══════════════════════════════════════════════════════════════
 
 type CoordWheel*[Rank: static int] = object
@@ -78,7 +78,7 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
       result += wheel.coord[i] * int(strides[i])
 
 # ═══════════════════════════════════════════════════════════════
-#  CPU wrappers (for useGpuIndexing dispatch)
+#  CPU wrappers, dispatch targets for useGpuIndexing
 # ═══════════════════════════════════════════════════════════════
 
 import ./layout_indexing_gpu

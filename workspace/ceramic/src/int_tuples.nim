@@ -31,7 +31,7 @@ template makeIntTuple*(t: IntOrIntTuple): auto =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Maps
+#  maps
 # ═══════════════════════════════════════════════════════════════
 
 template scaleBy*(t: IntOrIntTuple, scale: int): auto =
@@ -43,7 +43,7 @@ template scaleBy*(t: IntOrIntTuple, scale: Int): auto =
     it * scale
 
 # ═══════════════════════════════════════════════════════════════
-#  Prefix / suffix scans
+#  prefix and suffix scans
 # ═══════════════════════════════════════════════════════════════
 
 template prefix_product*(shape: IntOrIntTuple): untyped =
@@ -79,7 +79,7 @@ template suffix_product*(shape: IntOrIntTuple): untyped =
   suffix_scanIt(shape, Int[1](), acc * it)
 
 # ═══════════════════════════════════════════════════════════════
-#  Reductions
+#  reductions
 # ═══════════════════════════════════════════════════════════════
 
 func product*(t: IntOrIntTuple): auto =
@@ -95,7 +95,7 @@ func min*(t: IntOrIntTuple): auto =
   fold(t, Int[high(int)](), min(acc, it))
 
 # ═══════════════════════════════════════════════════════════════
-#  product_each — product of each top-level tuple element
+#  product_each, product of each top-level tuple element
 # ═══════════════════════════════════════════════════════════════
 
 func product_each*(t: IntOrIntTuple): auto =

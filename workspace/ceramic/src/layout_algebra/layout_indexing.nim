@@ -22,7 +22,6 @@ export layout_indexing_cpu
 export layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
-
 #  crd2idx / idx2crd, delegates to layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 
@@ -79,7 +78,7 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
     result = nnkPar.newTree(parts)
 
 # ═══════════════════════════════════════════════════════════════
-#  idx2crd(shape, idx) — shape-based decomposition
+#  idx2crd, index to coordinate decomposition
 # ═══════════════════════════════════════════════════════════════
 
 proc emitShapeDecomp(value: NimNode; shTy: NimNode; idxExpr: NimNode;
@@ -123,7 +122,7 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
     result = newCall(bindSym"mod", idx, shape)
 
 # ═══════════════════════════════════════════════════════════════
-#  Slice and dice, marker-based dimension selection
+#  slice and dice, marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
 
 template slice*(target: tuple; selector: typed): auto =
@@ -171,7 +170,6 @@ template dice*(target: Layout; selectors: varargs[untyped]): untyped =
     make_layout(
       dice(t.shape, varargs_to_par(selectors)),
       dice(t.stride, varargs_to_par(selectors)))
-
 
 # ═══════════════════════════════════════════════════════════════
 #  layout() call syntax
