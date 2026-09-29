@@ -251,6 +251,14 @@ template upcast*(layout: Layout; N: static int): auto =
       when it_st.V == 0:
         (it_sh, it_st)
       else:
+        # CuTe upcast divisibility condition.
+        # Either the stride is a multiple of N (strides divided by N) or N
+        # is a multiple of the stride (the shape collapses onto the coarser slots).
+        # Without it, the ceil_div arithmetic below silently produces
+        # a lossy layout.
+        static:
+          doAssert abs(it_st.V) mod N == 0 or N mod abs(it_st.V) == 0,
+            "upcast: stride " & $it_st.V & " and granularity " & $N & " are not divisible"
         (
           ceil_div(
             it_sh,

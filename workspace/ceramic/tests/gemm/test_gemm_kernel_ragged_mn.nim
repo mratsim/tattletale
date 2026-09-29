@@ -28,9 +28,9 @@
 import std/math
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/hardware/h_configgen
-import workspace/ceramic/src/hardware/h_registry
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/kernels/k_layout_gemm

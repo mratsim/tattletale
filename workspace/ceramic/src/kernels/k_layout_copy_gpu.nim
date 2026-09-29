@@ -12,53 +12,140 @@
 ## however on GPU there is branch-free alternative.
 ## Any branch would potentially lead to warp divergence per dimension of the tensors involved.
 ##
+## `copyFrom` copies the span decomposition of the coalesced common layout
+## of src and dst:
+##   - each span as 16/8/4/2-element flat chunks capped at 128 bits
+##   - a scalar per-span remainder
+## Layouts the decomposition does not fully cover copy elementwise.
+##
 ## On CPU, use `k_layout_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
 ## which avoids divmod entirely via if/else branching and can fuse contiguous accesses.
 
-import std/macros
+import std/[macros, math, typetraits]
 
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/hw_copy_nvidia
+import workspace/ceramic/src/hardware/h_copy_registry
+import workspace/ceramic/src/hardware/h_copy_properties
+import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/crucible
 
 {.experimental: "callOperator".}
 
-template copyFrom*[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: AnyTensor[T, ShS, StS]) =
-  ## Copy every logical element from src to dst.
-  ## Uses flat-index iteration (`dst(i) = src(i)`)
-  ## which is divmod-based.
-  ##
-  ## This is slow but unavoidable on GPU as if/else-based indexing
-  ## would trigger warp-divergence.
-  for i in 0 ..< size(dst):
+macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
+  ## Static error on an ambiguous multi-write:
+  ##   - a dst leaf with static stride 0 and static shape > 1
+  ##   - paired with a non-zero static src leaf stride
+  ## i.e. a write on a broadcasted tensor
+  let
+    shDv = toSeqStaticInts(shD.getTypeInst())
+    stDv = toSeqStaticInts(stD.getTypeInst())
+    shSv = toSeqStaticInts(shS.getTypeInst())
+    stSv = toSeqStaticInts(stS.getTypeInst())
+  let R = min(min(min(shDv.len, stDv.len), shSv.len), stSv.len)
+  result = newStmtList()
+  for d in 0 ..< R:
+    if stDv[d] == 0 and shDv[d] > 1 and
+        stSv[d] != DynamicSentinel and stSv[d] != 0:
+      result.add newTree(nnkPragma,
+        newTree(nnkExprColonExpr, ident"error",
+          newLit("copyFrom: ambiguous multi-write, dst leaf " & $d &
+                 " has stride 0 with shape > 1 and src stride " & $stSv[d] &
+                 " is non-zero")))
+
+func copyChunks[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
+                             dstP, srcP: ptr UncheckedArray[T];
+                             dstOff, srcOff, srcStride: int;
+                             W, vecCap: int; elemBits: static int) {.inline.} =
+  ## Copies dst <- src by chunks
+  when d == rank(C):
+    let
+      aDst = if dstOff == 0: vecCap else: dstOff and -dstOff
+      aSrc = if srcOff == 0: vecCap else: srcOff and -srcOff
+      w = min(min(vecCap, aDst), aSrc)
+    template tier(width: static int) =
+      when 128 div elemBits >= width:
+        if vecCap >= width and w >= width and w < width * 2:
+          type Chunk = array[width, T]
+          let
+            dstChunks = cast[ptr UncheckedArray[Chunk]](addr dstP[dstOff])
+            srcChunks = cast[ptr UncheckedArray[Chunk]](addr srcP[srcOff])
+            chunks = W div width
+          for c in 0 ..< chunks:
+            dstChunks[c] = srcChunks[c]
+          for i in chunks * width ..< W:
+            dstP[dstOff + i] = srcP[srcOff + i]
+    tier(16)
+    tier(8)
+    tier(4)
+    tier(2)
+    if w < 2:
+      for i in 0 ..< W:
+        dstP[dstOff + i] = srcP[srcOff + i]
+  else:
+    let
+      cdI = toIntVal(C.shape[d])
+      sdI = toIntVal(C.stride[d])
+    for j in 0 ..< cdI:
+      copyChunks(C, d + 1, dstP, srcP,
+                 dstOff + sdI * j, srcOff + srcStride * j, srcStride * cdI,
+                 W, vecCap, elemBits)
+
+
+func copyElementwise[T, ShD, StD, ShS, StS](
+    dst: var TensorView[T, ShD, StD];
+    src: TensorView[T, ShS, StS]) {.inline.} =
+  for i in 0 ..< size(src):
     dst(i) = src(i)
 
+func copyFrom*[T, ShD, StD, ShS, StS](
+    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
+    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+  ## Copies every element of src to dst, dst(flat k) = src(flat k).
+  ##
+  ## For runtime strides, assumes 128B alignment for vectorized copies
+  guardWriteDisjointness(dst.layout.shape, dst.layout.stride,
+                         src.layout.shape, src.layout.stride)
+  var dstV = when typeof(dst) is TensorOwned: view(dst) else: dst
+  let srcV = when typeof(src) is TensorOwned: view(src) else: src
+  let R = right_inverse(srcV.layout)
+  let C = coalesce(compose(dstV.layout, R))
+  const elemBits = sizeof(T) * 8
+  let
+    s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
+    wV = when typeof(C.shape) is tuple: toIntVal(C.shape[0]) else: toIntVal(C.shape)
+    vecCap = min(wV and -wV, 128 div elemBits)
+  let spansCover = toIntVal(size(R)) == toIntVal(size(srcV.layout))
+  if spansCover and s0 === 1:
+    copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
+  else:
+    copyElementwise(dstV, srcV)
 
-template copyFromIfAsync*[T, Sh, StA, StB, StP](
+
+func copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];
     src: TensorView[T, Sh, StA];
-    predicate: AnyTensor[bool, Sh, StP]) =
+    predicate: (TensorView[bool, Sh, StP] or TensorOwned[bool, Sh, StP])) {.inline.} =
   ## Predicated **async** copy
   ##
-  ## This requires cp.async.commit_group to actually enqueue the copy
-  ## and cp.async.wait_group to wait for its completion
+  ## This requires commit_group to actually enqueue the copy
+  ## and wait_group to wait for its completion
 
+  const atom = getCopyAsyncAtom(T)
+  const chunkElems = atom.getVecBytes() div sizeof(T)
   when Sh.rank == 1:
-    cp.async.cg_shared_global_16B(dst, src, if predicate.data[0]: 16 else: 0)
+    copyIf(atom, dst, src, predicate.data[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
-      cp.async.cg_shared_global_16B(dst(_, i), src(_, i), if predicate(_, i).data[0]: 16 else: 0)
+      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0], chunkElems)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The copy partition
+#   Partitioned copies
 # ═════════════════════════════════════════════════════════════════════════
 #
-#  The copy partition is the gmem → smem leg of the GEMM pipeline, the
-#  counterpart of the MMA partition on the smem → register leg:
+#  Partitioned copy set up data for Tensor-Cores (MMA):
 #
 #    gmem --------> smem --------> registers
 #    partition_S    partition_D    partition_A/B/C
@@ -88,16 +175,16 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   ## - 1, the single chunk per thread position
   ## - tileK div kRows, the thread's chunks along k
   ##
+  ## The flat thread id decomposes as (tc, tr) against the grid.
+  ## Thread (tc, tr) owns the chunks at column tc and k-rows tr + i·kRows,
+  ## for i in 0 ..< tileK div kRows, flat chunk position c = tid + i·blockSize.
+  ##
   ## Numbers:
   ## - chunkWidth = numPacked(atom), 16 div sizeof(T) elements:
   ##   4 for int32, 16 for int8
   ## - chunkCols = tileM div chunkWidth, the tile's chunk-columns
   ##   (tileM = the first dimension, M for A, N for B)
   ## - kRows = blockSize div chunkCols, the grid's k-rows
-  ##
-  ## The flat thread id decomposes as (tc, tr) against the grid.
-  ## Thread (tc, tr) owns the chunks at column tc and k-rows tr + i·kRows,
-  ## for i in 0 ..< tileK div kRows, flat chunk position c = tid + i·blockSize.
   ##
   ## Example: a (16, 8) int32 tile with 8 threads has chunkWidth 4,
   ## chunkCols 4, kRows 2, layout ((4, 2), 1, 4). The chunk grid
@@ -107,7 +194,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   ##   m 0-3    T0  T4  T0  T4  T0  T4  T0  T4
   ##   ↓ 4-7    T1  T5  T1  T5  T1  T5  T1  T5
   ##     8-11   T2  T6  T2  T6  T2  T6  T2  T6
-  ##     12-15  T3  T7  T3  T7  T3  T7  T3  T7
+  ##     12-15   T3  T7  T3  T7  T3  T7  T3  T7
   ##
   ## Thread 4 (column 0, k-rows 1, 3, 5, 7) owns the chunks at
   ## element offsets m + 16·k = 16, 48, 80, 112.
@@ -139,7 +226,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   ## S = Source, the gmem side of the copy.
   ##
   ## In use, each thread slices its source and destination chunks,
-  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ## then copyFromIfAsync issues one atom chunk per chunk position:
   ##
   ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
   ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)
@@ -158,7 +245,7 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ## D = Destination, the smem side of the copy.
   ##
   ## In use, each thread slices its source and destination chunks,
-  ## then copyFromIfAsync issues one 16-byte cp.async per chunk:
+  ## then copyFromIfAsync issues one atom chunk per chunk position:
   ##
   ##   let srcChunks = partition_S(tileA, atom, blockSize, threadIdx)
   ##   var dstChunks = partition_D(stageA, atom, blockSize, threadIdx)

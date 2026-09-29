@@ -22,7 +22,8 @@
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/hw_copy_nvidia
+import workspace/ceramic/src/hardware/h_copy_registry
+import workspace/ceramic/src/hardware/h_copy_properties
 import workspace/ceramic/src/kernels/k_layout_copy_gpu
 import workspace/ceramic/tests/layouts_testutils
 

@@ -119,7 +119,7 @@ proc topkScores[A: static MmaAtom; F, K: static int](
   ##   mapping at chunk m
   ## - the lane's fragment cells decode through the layout's lane bits
   ##   b0..b4 (row = b1+2b2+4b4, col = 2b0+4b3), the mapping
-  ##   the `Apple8x8_AC_Layout` doc in `hardware/h_registry.nim` documents
+  ##   the `Apple8x8_AC_Layout` doc in `hardware/h_mma_registry.nim` documents
   ##
   ## Poisoned pass (NaN/Inf-poisoned scores):
   ## - the group max is NaN, `==` never matches NaN, no score equals the max,

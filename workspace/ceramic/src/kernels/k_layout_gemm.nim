@@ -149,13 +149,16 @@ import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/h_configgen
-import workspace/ceramic/src/hardware/h_registry
-import workspace/ceramic/src/hardware/h_properties
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/hardware/h_copy_registry
+import workspace/ceramic/src/hardware/h_copy_properties
+import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/ceramic/src/tensors/tensors_mma_partitioning
 import ./k_layout_copy_gpu
-import workspace/ceramic/src/hardware/hw_copy_nvidia
+
 import ./k_layout_fillwith_gpu
 import ./k_layout_gemm_epilogues
 import workspace/ceramic/src/macros/static_for
@@ -501,8 +504,8 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     copyFromIfAsync(tBsB, tBgB, tBpBv)
 
     # one commit group for both loads
-    cp.async.commit_group()
-    cp.async.wait_group(0)
+    TA.commit_group()
+    TB.wait_group(0)
     syncthreads() # Wait until all threads have copied their tiles
     tma.gemm_tiled(dFrag, sA, sB, TileShape, threadIdx)
     syncthreads() # Wait until all threads have processed gemm_tiled

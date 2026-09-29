@@ -388,12 +388,6 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##
 ##            (fold(make_seq<R-1>{}, ...) + append remainder)
 
-func unwrap(t: tuple): auto {.inline.} =
-  when rank(t) == 1:
-    t[0]
-  else:
-    t
-
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.
   ## Static leaves assert at compile time, runtime shapes are not asserted,
@@ -495,6 +489,15 @@ macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStride
                                 nextSh, nextSt, clamped, remSh2, scaled,
                                 skipBody, elseBody))
 
+  template strideZeroEntry(remSh, remSt, fold) =
+    when remSt is Int and typeof(remSt) is Int[0]:
+      # Static stride-0 RHS dimension, every coordinate maps to offset 0,
+      # the composed dimension is the RHS dimension itself
+      # (CuTe composition_impl is_constant<0, RStride> shortcut).
+      make_layout(remSh, remSt)
+    else:
+      fold
+
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
   let firstStep = emitStep(0, remSh0, remSt0, @[], @[])
@@ -502,7 +505,7 @@ macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStride
     nnkLetSection.newTree(
       nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
       nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
-    firstStep)
+    getAst(strideZeroEntry(remSh0, remSt0, firstStep)))
 
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
@@ -828,54 +831,6 @@ func left_inverse*(layout: Layout): auto =
   let c = coalesce(layout)
   leftInverseImpl(flatten(c.shape), flatten(c.stride))
 
-
-template max_common_layout*(a, b: typed): untyped =
-  ## Return a Layout for the maximum contiguous elements common to both.
-  ## a(R(i)) == i and b(R(i)) == i for all i < size(result).
-  block:
-    evalOnceAs(va, a)
-    evalOnceAs(vb, b)
-    let inv_b = right_inverse(vb)
-    let common = coalesce(compose(va, inv_b))
-    type StrideT = typeof(common.stride)
-    when StrideT is tuple:
-      type FirstStride = typeof(common.stride[0])
-      const s0 = FirstStride.V
-      when s0 == 1:
-        type FirstShape = typeof(common.shape[0])
-        coalesce(compose(inv_b, make_layout(FirstShape.V, 1)))
-      else:
-        make_layout(1, 0)
-    else:
-      const s = StrideT.V
-      when s == 1:
-        type Sh = typeof(common.shape)
-        coalesce(compose(inv_b, make_layout(Sh.V, 1)))
-      else:
-        make_layout(1, 0)
-
-template max_common_vector*(a, b: typed): int =
-  ## Return N: for 0 <= i < N, a(R(i)) == i and b(R(i)) == i.
-  block:
-    evalOnceAs(va, a)
-    evalOnceAs(vb, b)
-    let common = coalesce(compose(va, right_inverse(vb)))
-    type StrideT = typeof(common.stride)
-    when StrideT is tuple:
-      type FirstStride = typeof(common.stride[0])
-      const s0 = FirstStride.V
-      when s0 == 1:
-        type FirstShape = typeof(common.shape[0])
-        FirstShape.V
-      else:
-        1
-    else:
-      const s = StrideT.V
-      when s == 1:
-        type Sh = typeof(common.shape)
-        Sh.V
-      else:
-        1
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product — reproduce a block over a tiler
