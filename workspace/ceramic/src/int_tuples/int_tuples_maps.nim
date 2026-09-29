@@ -17,6 +17,25 @@ proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.}
 macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
   ## Recursively walk `t` (int | Int[N] | tuple) and apply `body` to
   ## every leaf.  Returns a value of the same shape with leaves transformed.
+  ##
+  ## Identity:
+  ## - when `body` maps every leaf to itself, the result is `t` verbatim,
+  ##   no tuple reconstruction
+  ## - a leaf body `when cond: replacement else: leaf` keeps this identity
+  ##   whenever every `cond` folds false, decided at compile time
+  ##   over one combined `when` statement
+  ##
+  ## Example spellings:
+  ##
+  ##   mapLeavesWith((1, (2, 3)), it * 10)  →  (10, (20, 30))
+  ##   mapLeavesWith(5, it)                 →  5
+  ##   mapLeavesWith((2, 3), it * 10)       →  (20, 30)
+
+  # An untyped macro parameter captured by a nested proc closure is lazily semchecked
+  # against the caller scope, silently degrading to a nil node when the leaf
+  # placeholder `it` is unbound there. The body is therefore materialized
+  # into a local before any nested proc closes over it.
+  let rawBody = body
 
   proc replaceNodes(ast, what, by: NimNode): NimNode =
     proc inspect(node: NimNode): NimNode =
@@ -32,25 +51,86 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
           result.add inspect(child)
     result = inspect(ast)
 
-  let tType = t.getTypeInst()
+  proc unwrapValueExpr(n: NimNode): NimNode =
+    ## Single-statement wrapper around an expression value. Statement lists wrap expressions one level deep.
+    result = n
+    while result.kind in {nnkStmtList, nnkStmtListExpr} and result.len == 1:
+      result = result[0]
 
-  if tType.kind in {nnkTupleTy, nnkTupleConstr}:
-    var elems: seq[NimNode]
-    if t.kind == nnkTupleConstr:
-      ## Direct destructure — preserves compile-time info for const elements
-      for child in t:
-        let recurse = newCall(ident"mapLeavesWith", child, body)
-        elems.add recurse
+  proc sameExpr(a, b: NimNode): bool =
+    ## Structural equality of two expression nodes. Each side first unwraps
+    ## its statement wrappers, then the treeRepr strings are compared for equality.
+    let reprA = treeRepr(unwrapValueExpr(a))
+    let reprB = treeRepr(unwrapValueExpr(b))
+    reprA == reprB
+
+  proc inExprSlot(n: NimNode): NimNode =
+    ## A `when` statement occupies an expression slot only in block-wrapped form.
+    if unwrapValueExpr(n).kind == nnkWhenStmt:
+      newTree(nnkBlockStmt, newEmptyNode(), n)
     else:
-      ## Bracket access for variables / function returns
-      for i in 0 ..< tType.len:
-        let fieldAccess = nnkBracketExpr.newTree(t, newLit i)
-        let recurse = newCall(ident"mapLeavesWith", fieldAccess, body)
-        elems.add recurse
-    result = nnkTupleConstr.newTree(elems)
+      n
+
+  proc leafIdentity(built, expect: NimNode): tuple[identity: bool, conds: seq[NimNode]] =
+    ## Reduction of the leaf body `built` to the leaf expression `expect`.
+    ##
+    ## Returns:
+    ## - identity true with no conditions, `built` is `expect` verbatim
+    ## - identity true with conditions, `built` is a `when` whose every
+    ##   branch condition folds false selects `expect`, the conditions are
+    ##   returned verbatim for a combined compile-time fold
+    ## - identity false, the leaf must be reconstructed
+    let core = unwrapValueExpr(built)
+    if sameExpr(core, expect):
+      return (true, @[])
+    if core.kind != nnkWhenStmt:
+      return (false, @[])
+    let last = core[^1]
+    if last.kind notin {nnkElse, nnkElseExpr} or not sameExpr(last[^1], expect):
+      return (false, @[])
+    var conds: seq[NimNode]
+    for branch in core:
+      if branch.kind in {nnkElifBranch, nnkElifExpr}:
+        conds.add branch[0]
+    (true, conds)
+
+  var leaves: seq[tuple[built, expect: NimNode]]
+
+  proc walk(e, ty: NimNode): NimNode =
+    ## Bottom-up build of the shape-preserving result. Nested tuple types recurse
+    ## one element type at a time, every leaf gets `rawBody` spliced with `it`
+    ## bound to the leaf access and recorded with its expected value.
+    if ty.kind in {nnkTupleTy, nnkTupleConstr}:
+      var elems: seq[NimNode]
+      for idx in 0 ..< ty.len:
+        elems.add inExprSlot(walk(leafAccess(e, ty, idx), ty[idx]))
+      result = nnkTupleConstr.newTree(elems)
+    else:
+      result = rawBody.replaceNodes(ident"it", e)
+      leaves.add (result, e)
+
+  let built = walk(t, t.getTypeInst())
+
+  var conds: seq[NimNode]
+  for lf in leaves:
+    let (identity, branchConds) = leafIdentity(lf.built, lf.expect)
+    if not identity:
+      result = built
+      return
+    conds.add branchConds
+
+  if conds.len == 0:
+    result = t
     return
 
-  result = body.replaceNodes(ident"it", t)
+  var combined = conds[0]
+  for i in 1 ..< conds.len:
+    combined = nnkInfix.newTree(ident"or", combined, conds[i])
+  result = quote do:
+    when `combined`:
+      `built`
+    else:
+      `t`
 
 # ═══════════════════════════════════════════════════════════════════════
 #  flatMapLeaves — flat leaf-wise tuple map (single pack)
@@ -60,6 +140,8 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
   ## Build the flat pack for `tNode`, one node per leaf, `body` with `it`
   ## replaced by the leaf access. Returns the untyped tuple construction.
 
+  echo "--- mapLeavesWith debug: body ---"
+  echo treeRepr(body)
   proc replaceNodes(ast, what, by: NimNode): NimNode =
     proc inspect(node: NimNode): NimNode =
       case node.kind

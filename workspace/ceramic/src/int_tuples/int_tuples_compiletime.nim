@@ -124,7 +124,7 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
       if not isCompileTime(node[i]):
         return false
     return true
-  # BindStmt: compile-time directive (e.g. `bind makeIntTupleLeaf`) — always CT
+  # BindStmt is a compile-time directive (e.g. `bind makeIntTuple`), always CT
   if node.kind == nnkBindStmt:
     return true
   # ExprColonExpr (a: 7 inside named tuples): only the value (child 1) matters
