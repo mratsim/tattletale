@@ -104,6 +104,50 @@ proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.
     else:
       result[i] = ordVals[i]
 
+proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
+  ## Strides of the compact layout preserving an (shape, stride) pair's element-access order.
+  ## - stride-0 dimensions collapse to shape 1 and keep stride 0
+  ## - dynamic strides take the slowest free positions
+  ## - remaining strides scale by `scale`, the number of positions before them, 1 when none
+  var fsh = sh
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      fsh[i] = 1
+  result = compactOrderStridesImpl(fsh, compactOrderDynamicSubstitution(st))
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      result[i] = 0
+    else:
+      result[i] *= scale
+
+proc fragmentVPart(sh, st, vShape: seq[int]): tuple[va, vStride, vCosize: int] {.compileTime.} =
+  ## The V block of a fragment layout, the first vShape.len leaves flattened
+  ## to one (VA):(1|0) dimension.
+  ## - broadcast V (all strides 0) keeps stride 0
+  ## - otherwise the V block is stride-1, broadcast shapes count 1 toward the V cosize
+  let vc = vShape.len
+  doAssert vc >= 1 and vc <= sh.len,
+    "make_fragment_like: V leaf count (" & $vc & ") out of range for rank " & $sh.len
+  result.va = 1
+  result.vCosize = 1
+  var allZero = true
+  var allNonZero = true
+  for i in 0 ..< vc:
+    doAssert vShape[i] == DynamicSentinel or vShape[i] == sh[i],
+      "make_fragment_like: vShape leaf " & $i & " value " & $vShape[i] &
+      " != layout V leaf " & $sh[i]
+    result.va *= sh[i]
+    if st[i] == 0:
+      allNonZero = false
+    else:
+      allZero = false
+      result.vCosize *= sh[i]
+  doAssert allZero or allNonZero,
+    "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
+    " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
+    " register group without stride collisions"
+  result.vStride = if allZero: 0 else: 1
+
 # ── AST-level helpers (compile-time value extraction) ──
 
 proc flattenAst(n: NimNode): seq[NimNode] {.compileTime.} =
@@ -148,6 +192,24 @@ proc typeIntVal(t: NimNode): int {.compileTime.} =
     t[1].intVal
   else:
     DynamicSentinel
+
+proc typeIntVals(t: NimNode): seq[int] {.compileTime.} =
+  ## Flattened leaf values of an Int tuple type, DynamicSentinel where a leaf is not a static Int.
+  for leaf in flattenType(t):
+    result.add typeIntVal(leaf)
+
+proc typedLeafVals(expr: NimNode): seq[int] {.compileTime.} =
+  ## Int leaf values of a typed expression's static type, one per flat element.
+  let ty = expr.getTypeInst()
+  let inner = if ty.kind == nnkBracketExpr and $ty[0] == "typeDesc": ty[1] else: ty
+  for leaf in flattenType(inner):
+    result.add typeIntVal(leaf)
+
+proc litTuple(vals: seq[int]): NimNode {.compileTime.} =
+  ## Int literal tuple expression, scalar when single-valued.
+  result = nnkPar.newNimNode()
+  for v in vals:
+    result.add newLit(v)
 
 func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
   ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
@@ -238,45 +300,16 @@ macro make_layout_like*(layout: Layout): untyped =
   ## - dimension 1 (stride 6) slowest → stride 1*4*2 = 8
 
   let (shTyp, stTyp) = layoutTypeArgs(layout)
+  let shVals = typeIntVals(shTyp)
+  let stVals = typeIntVals(stTyp)
 
-  let shLeaves = flattenType(shTyp)
-  let stLeaves = flattenType(stTyp)
-  let n = shLeaves.len
-
-  if stLeaves.len != n:
+  if shVals.len != stVals.len:
     error "make_layout_like: shape/stride rank mismatch"
 
-  var shVals = newSeq[int](n)
-  var stVals = newSeq[int](n)
-
-  for i in 0 ..< n:
-    shVals[i] = typeIntVal(shLeaves[i])
-    stVals[i] = typeIntVal(stLeaves[i])
-
-  # Step 1, filter_zeros, replace stride-0 shapes with 1
-  var fsh = shVals
-  for i in 0 ..< n:
-    if stVals[i] != DynamicSentinel and stVals[i] == 0:
-      fsh[i] = 1
-
-  # Step 2, max-order substitution for dynamic strides
-  let resolvedOrder = compactOrderDynamicSubstitution(stVals)
-
-  # Step 3: compact_order(filtered_shape, resolved_order)
-  var strides = compactOrderStridesImpl(fsh, resolvedOrder)
-
-  # Step 4: restore broadcast strides
-  for i in 0 ..< n:
-    if stVals[i] != DynamicSentinel and stVals[i] == 0:
-      strides[i] = 0
-
-  # Emit result
-  var strideTuple = nnkTupleConstr.newTree()
-  for s in strides:
-    strideTuple.add newLit(s)
-
+  let strides = compactLikeStrides(shVals, stVals)
+  let outSt = litTuple(strides)
   result = quote do:
-    make_layout(`layout`.shape, `strideTuple`)
+    make_layout(`layout`.shape, `outSt`)
 
 macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## Build a fragment layout from a partition view.
@@ -287,106 +320,22 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ## - The V dimension carries stride-1, broadcast V keeps stride-0
   ## - The remaining leaves keep the view's order, compacted by stride value and scaled after the V dimension
   let (shTyp, stTyp) = layoutTypeArgs(layout)
+  let shVals = typeIntVals(shTyp)
+  let stVals = typeIntVals(stTyp)
 
-  let shLeaves = flattenType(shTyp)
-  let stLeaves = flattenType(stTyp)
-  let n = shLeaves.len
-
-  if stLeaves.len != n:
+  if shVals.len != stVals.len:
     error "make_fragment_like: shape/stride rank mismatch"
 
-  for i in 0 ..< n:
-    if typeIntVal(shLeaves[i]) == DynamicSentinel:
+  for v in shVals:
+    if v == DynamicSentinel:
       error "make_fragment_like: dynamic shapes unsupported — static layout required"
 
-  if n == 1:
-    # Rank-1 compacts to stride-1, a broadcast dimension keeps stride-0
-    let shNode = newLit(typeIntVal(shLeaves[0]))
-    if typeIntVal(stLeaves[0]) == 0:
-      result = quote do:
-        make_layout(Int[`shNode`](), Int[0]())
-    else:
-      result = quote do:
-        make_layout(Int[`shNode`]())
-    return
+  let vShapeVals = typedLeafVals(vShape)
+  let (va, vStride, vCosize) = fragmentVPart(shVals, stVals, vShapeVals)
+  let vc = vShapeVals.len
+  let restStrides = compactLikeStrides(shVals[vc ..< shVals.len], stVals[vc ..< stVals.len], vCosize)
 
-  # ── V part, the first vLeafCount leaves flattened to (VA,):(1|0,) ──
-  let vShapeTy = vShape.getTypeInst()
-  let vShapeInner = if vShapeTy.kind == nnkBracketExpr and $vShapeTy[0] == "typeDesc":
-                      vShapeTy[1]
-                    else:
-                      vShapeTy
-  let vLeafCount = flattenType(vShapeInner).len
-  doAssert vLeafCount >= 1 and vLeafCount <= n,
-    "make_fragment_like: V leaf count (" & $vLeafCount & ") out of range for rank " & $n
-  var vShapeVals = newSeq[int](vLeafCount)
-  var vStrideVals = newSeq[int](vLeafCount)
-  var va = 1
-  var vAllZero = true
-  var vAllNonZero = true
-  for i in 0 ..< vLeafCount:
-    vShapeVals[i] = typeIntVal(shLeaves[i])
-    vStrideVals[i] = typeIntVal(stLeaves[i])
-    va *= vShapeVals[i]
-    if vStrideVals[i] == 0:
-      vAllNonZero = false
-    else:
-      vAllZero = false
-  # vShape leaf values must match the layout's leading V leaves
-  let vShapeLeafTys = flattenType(vShapeInner)
-  for i in 0 ..< vLeafCount:
-    let vsv = typeIntVal(vShapeLeafTys[i])
-    if vsv != DynamicSentinel:
-      doAssert vsv == vShapeVals[i],
-        "make_fragment_like: vShape leaf " & $i & " value " & $vsv &
-        " != layout V leaf " & $vShapeVals[i]
-  doAssert vAllZero or vAllNonZero,
-    "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
-    " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
-    " register group without stride collisions"
-  let vStride = if vAllZero: 0 else: 1
-  # V cosize, broadcast shapes count 1
-  var vCosize = 1
-  for i in 0 ..< vLeafCount:
-    if vStrideVals[i] != 0:
-      vCosize *= vShapeVals[i]
-
-  # ── remaining leaves, compact by stride value ──
-  var rsh = newSeq[int](n - vLeafCount)
-  var rst = newSeq[int](n - vLeafCount)
-  for i in vLeafCount ..< n:
-    rsh[i - vLeafCount] = typeIntVal(shLeaves[i])
-    rst[i - vLeafCount] = typeIntVal(stLeaves[i])
-
-  # Step 1, filter_zeros, replace stride-0 shapes with 1
-  var fsh = rsh
-  for i in 0 ..< rsh.len:
-    if rst[i] != DynamicSentinel and rst[i] == 0:
-      fsh[i] = 1
-
-  # Step 2, max-order substitution for dynamic strides
-  let resolvedOrder = compactOrderDynamicSubstitution(rst)
-
-  # Step 3: compact_order(filtered_shape, resolved_order)
-  var restStrides = compactOrderStridesImpl(fsh, resolvedOrder)
-
-  # Step 4, restore broadcast strides, scale the rest after the V dimension
-  for i in 0 ..< rsh.len:
-    if rst[i] != DynamicSentinel and rst[i] == 0:
-      restStrides[i] = 0
-    else:
-      restStrides[i] *= vCosize
-
-  # ── emit, (VA, rest...) : (1|0, restStrides...), V flattened to one dimension ──
-  var outSh = nnkTupleConstr.newTree()
-  outSh.add newLit(va)
-  for i in vLeafCount ..< n:
-    outSh.add newLit(typeIntVal(shLeaves[i]))
-
-  var outSt = nnkTupleConstr.newTree()
-  outSt.add newLit(vStride)
-  for s in restStrides:
-    outSt.add newLit(s)
-
+  let outSh = litTuple(@[va] & shVals[vc ..< shVals.len])
+  let outSt = litTuple(@[vStride] & restStrides)
   result = quote do:
     make_layout(`outSh`, `outSt`)
