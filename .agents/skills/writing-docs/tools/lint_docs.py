@@ -979,6 +979,15 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             findings.append(Finding(
                 path, n, "the-opener",
                 "title opens with the (open with a noun phrase)"))
+    # The article ban: no prose line opens on "the", titles included.
+    # The title form above already segments comma-separated colon titles;
+    # this check covers every other prose line, bullet content included.
+    lead = bare.lstrip("-*+ ")
+    words = lead.split()
+    if not c.endswith(":") and words and words[0].lower() == "the":
+        findings.append(Finding(
+            path, n, "the-opener",
+            "prose opens with the (open with a noun phrase)"))
     if kind == "fence":
         # Fenced content is code-with-layout.
         # - the vocabulary rules apply
