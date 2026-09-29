@@ -148,7 +148,7 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
 
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
-      newCall(bindSym"product", cosizeBound)
+      bindSym"product".newCall(cosizeBound)
     else:
       cosizeBound
   if sh.getTypeInst().kind != nnkTupleConstr:
@@ -157,10 +157,14 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       # Static zero stride, every coordinate maps to offset 0
       result = newCall(bindSym"make_layout", boundExpr, newLit(1))
     else:
-      result = quote do:
-        coalesceBackward(
-          (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
-          (1, `st` * `sh`))
+      let prod = nnkInfix.newTree(bindSym"*", st, sh)
+      result = bindSym"coalesceBackward".newCall(
+        nnkPar.newTree(
+          bindSym"max".newCall(
+            nnkBracketExpr.newTree(ident"Int", newLit 1).newCall(),
+            st),
+          bindSym"ceil_div".newCall(boundExpr, prod)),
+        nnkPar.newTree(newLit 1, prod))
   else:
     # Multi-dimension complement, all strides must be static Int leaves,
     # the dimensions fold in ascending-stride order
@@ -180,14 +184,11 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       gapNodes.add getAst(gapDim(newLit(strides[idx]), curNode))
       curNodes.add curNode
       curNode = getAst(spanDim(newLit(strides[idx]), newLit(idx), sh))
-    gapNodes.add quote do:
-      ceil_div(`boundExpr`, `curNode`)
+    gapNodes.add bindSym"ceil_div".newCall(boundExpr, curNode)
     curNodes.add curNode
-    let gapTuple = nnkPar.newTree(gapNodes)
-    let curTuple = nnkPar.newTree(curNodes)
-    # One quote, coalesceBackward runs the fold at expansion time
-    result = quote do:
-      coalesceBackward(`gapTuple`, `curTuple`)
+    # coalesceBackward is a macro and folds when the call site expands
+    result = bindSym"coalesceBackward".newCall(
+      nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
