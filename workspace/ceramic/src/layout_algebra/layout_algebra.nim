@@ -157,14 +157,10 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       # Static zero stride, every coordinate maps to offset 0
       result = newCall(bindSym"make_layout", boundExpr, newLit(1))
     else:
-      let prod = nnkInfix.newTree(bindSym"*", st, sh)
-      result = bindSym"coalesceBackward".newCall(
-        nnkPar.newTree(
-          bindSym"max".newCall(
-            nnkBracketExpr.newTree(ident"Int", newLit 1).newCall(),
-            st),
-          bindSym"ceil_div".newCall(boundExpr, prod)),
-        nnkPar.newTree(newLit 1, prod))
+      result = quote do:
+        coalesceBackward(
+          (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
+          (1, `st` * `sh`))
   else:
     # Multi-dimension complement, all strides must be static Int leaves,
     # the dimensions fold in ascending-stride order
