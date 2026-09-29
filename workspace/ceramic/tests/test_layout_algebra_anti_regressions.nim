@@ -190,6 +190,42 @@ proc runMakeLayoutLikeAliasTests =
     doAssert toIntVal(size(c)) > 0
   echo "    make_layout_like under alias fixture: 2 guarded cases OK"
 
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 6 — compose with a static stride-0 RHS dimension
+# ═══════════════════════════════════════════════════════════════
+#
+#  CuTe's composition_impl shortcuts a static stride-0 RHS dimension.
+#  Every coordinate maps to offset 0, so the composed dimension is the RHS
+#  dimension itself and the LHS is never touched.
+#
+#  This arises when composing with a logical_divide whose complement
+#  filler is (1):(0), i.e. tiler cosize == cosize bound.
+#  For example, take max_alignment of a rank-2 layout whose strides are
+#  fully contiguous after sorting by stride.
+#  coalesce cannot merge them in the original dimension order, but
+#  right_inverse covers the whole cosize of make_layout((2, 3), (3, 1)).
+
+proc runComposeZeroStrideTests =
+  block:
+    ## Isolated shortcut. Composing a rank-2 LHS with a (1):(0) RHS dim yields (1):(0).
+    ## No division by a zero stride at compile time.
+    let lhs = make_layout((2, 3), (3, 1))
+    check(compose(lhs, make_layout(1, 0)), make_layout(1, 0), Layout)
+
+  block:
+    ## The (1):(0) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
+    ## This is the pipeline consumed by max_alignment (k_layout_copy_gpu),
+    ## CuTe formula gcd(size<0>, stride<1>).
+    ##
+    ## size<0> = the sorted-by-stride contiguous run = 6.
+    ## The filler's stride<1> is 0 (every coordinate maps to offset 0), and gcd(6, 0) = 6.
+    let lhs = make_layout((2, 3), (3, 1))
+    let permuted = logical_divide(lhs, right_inverse(lhs))
+    check(toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int)
+    check(permuted.stride[1], Int[0](), Int[0])
+    check(max_common_vector(lhs, lhs), 6, int)
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -202,6 +238,8 @@ proc runTests =
   runComplementDynamicShapeTests()
   echo "── Section 5: make_layout_like under typeof-alias fixture ──"
   runMakeLayoutLikeAliasTests()
+  echo "── Section 6: compose with static stride-0 RHS dim ──"
+  runComposeZeroStrideTests()
   echo "  All tests passed."
 
 when isMainModule:

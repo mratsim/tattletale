@@ -412,7 +412,13 @@ func composeImpl(
   ## (accShapes, accStrides, remainingShape, remainingStride).
   ## Uses recursion because the accumulator types change each iteration
   ## (shape/stride tuples grow via concat).
-  when dimIdx >= rank(lhsShapes) - 1:
+  when remainingStride is Int and typeof(remainingStride) is Int[0]:
+    # Static stride-0 RHS dimension.
+    # Every coordinate maps to offset 0, so the composed dimension is
+    # the RHS dimension itself.
+    # Same as CuTe composition_impl's is_constant<0, RStride> shortcut.
+    make_layout(remainingShape, remainingStride)
+  elif dimIdx >= rank(lhsShapes) - 1:
     ## Last dimension (R-1): append remaining RHS as final dimension,
     ## but skip when RHS was fully consumed (remaining is an Int[1] artifact).
     const skipLast =

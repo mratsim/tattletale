@@ -142,6 +142,9 @@ export layout_algebra.max_common_layout
 ## Largest vector width common to two layouts, their contiguous size.
 export layout_algebra.max_common_vector
 
+## Type-level staticness of a layout, every shape and stride leaf compile-time.
+export layouts.isStaticLayout
+
 # ═══════════════════════════════════════════════════════════════
 #  Products: extend a block layout by a tiler layout
 # ═══════════════════════════════════════════════════════════════
