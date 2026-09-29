@@ -37,45 +37,29 @@ type CoordWheel*[Rank: static int] = object
   ## `incr` advances by one position via carry-chain (no divmod).
   coord*: array[Rank, int]
 
-func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]; shape: auto): CoordWheel[Rank] =
-  ## Initialize wheel at (0, 0, ..., 0).
-  discard
-  CoordWheel[Rank](coord: default(array[Rank, int]))
-
 func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
+  ## Wheel at (0, 0, ..., 0), the first logical position.
   CoordWheel[Rank](coord: default(array[Rank, int]))
 
 import workspace/ceramic/src/macros/static_for
 func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
-  ## Advance coordinate by one logical position (carry-chain).
-  ## Innermost dim (dim-0) is fastest-changing, so carry chain starts from dim-0.
-  ## Tuples need staticFor (compile-time index), arrays support runtime.
-  when shape is tuple:
-    staticFor k, 0, Rank:
-      if wheel.coord[k] < int(shape[k]) - 1:
-        wheel.coord[k] += 1
-        return
-      else:
-        wheel.coord[k] = 0
-  else:
-    for k in 0 ..< Rank:
-      if wheel.coord[k] < int(shape[k]) - 1:
-        wheel.coord[k] += 1
-        return
-      else:
-        wheel.coord[k] = 0
+  ## Advance the coordinate by one logical position (carry-chain).
+  ##
+  ## - in-range carry, the coordinate never reaches the shape
+  ## - dim-0 is fastest-changing
+  ##
+  ## staticFor unrolls the walk, indexing tuples and arrays alike.
+  staticFor k, 0, Rank:
+    if wheel.coord[k] < int(shape[k]) - 1:
+      wheel.coord[k] += 1
+      return
+    else:
+      wheel.coord[k] = 0
 
-import workspace/ceramic/src/macros/static_for
 func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int =
-  ## Compute linear offset = sum(coord[i] * stride[i]).
-  ## Pure multiply-add, no divmod.
-  ## Tuples need compile-time index (staticFor), arrays support runtime.
-  when strides is tuple:
-    staticFor i, 0, Rank:
-      result += wheel.coord[i] * int(strides[i])
-  else:
-    for i in 0 ..< Rank:
-      result += wheel.coord[i] * int(strides[i])
+  ## Linear offset = sum(coord[i] * stride[i]), pure multiply-add.
+  staticFor i, 0, Rank:
+    result += wheel.coord[i] * int(strides[i])
 
 # ═══════════════════════════════════════════════════════════════
 #  CPU wrappers, dispatch targets for useGpuIndexing

@@ -215,7 +215,7 @@ block:
 block:
   let shape = (3, 4)
   let strides = (1, 3)
-  var wheel = initCoordWheel(CoordWheel[2], shape)
+  var wheel = initCoordWheel(CoordWheel[2])
   var expectedIdx = 0
   for _ in 0 ..< 12:
     let off = wheel.coordOffset(strides)
@@ -234,7 +234,7 @@ echo "  [OK] CoordWheel: 2D iteration"
 block:
   let shape = (2, 3, 4)
   let strides = (1, 2, 6)
-  var wheel = initCoordWheel(CoordWheel[3], shape)
+  var wheel = initCoordWheel(CoordWheel[3])
   # Expected: coord (0,0,0)→(1,0,0)→(0,1,0)→(1,1,0)→(0,2,0)→...
   var expected: array[3, int]
   for idx in 0 ..< 24:
@@ -262,7 +262,7 @@ echo "  [OK] CoordWheel: 3D iteration"
 block:
   let shape = (1,)
   let strides = (1,)
-  var wheel = initCoordWheel(CoordWheel[1], shape)
+  var wheel = initCoordWheel(CoordWheel[1])
   doAssert wheel.coordOffset(strides) == 0
   wheel.incr(shape)
   # After one incr: coord goes (0) → (0) because 1-1 == 0, so it resets to 0
@@ -280,8 +280,8 @@ block:
   let shape = (3, 4)
   let rightStrides = (1, 3)
   let leftStrides = (4, 1)
-  var wR = initCoordWheel(CoordWheel[2], shape)
-  var wL = initCoordWheel(CoordWheel[2], shape)
+  var wR = initCoordWheel(CoordWheel[2])
+  var wL = initCoordWheel(CoordWheel[2])
   for r in 0 ..< 3:
     for c in 0 ..< 4:
       let offR = wR.coordOffset(rightStrides)
