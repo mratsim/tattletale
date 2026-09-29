@@ -28,7 +28,7 @@
 ## | `getIndicesSortedByStride`         | stride-sorted index permutation         |
 ## | `complementScalar`/`Multi`/`Gaps`  | complement backends                     |
 ## | `rightInverseChain`, `composeImpl` | inverse-chain and composition internals |
-## | `unwrap`, `buildStride`            | macro helpers                           |
+## | `unwrap`                           | macro helpers                           |
 ## | `divisibilityCheck`, `LayoutCT`    | macro helpers                           |
 
 import

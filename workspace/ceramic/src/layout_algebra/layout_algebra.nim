@@ -130,9 +130,6 @@ func coalesce*(layout: Layout): auto {.inline, noInit.} =
 
 func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
   ## Like `coalesce` but preserves trailing size-1 dimensions (e.g. stride-0 broadcasts).
-  ## Mirrors CuTe's `coalesce_x`: seeds backward coalescence with `low(int)`
-  ## sentinel instead of `Int[1]`, preventing the post-loop discard from
-  ## removing the last dimension.
   coalesceBackward(layout.shape, layout.stride, preserveTrailing = true)
 
 # ═══════════════════════════════════════════════════════════════
@@ -221,9 +218,9 @@ proc complementGaps(
     strides, shapes: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
   ## Build full complement LayoutCT (gap dimensions + remainder), folding over
   ## dimensions in ascending-stride order: each dimension contributes a gap dimension
-  ## (stride div cur, cur) and advances cur = stride * shape. Runtime
-  ## shapes advance cur with a runtime expression — the fold continues
-  ## past them. Statically-1 dimensions are skipped; runtime dimensions are
+  ## (stride div cur, cur) and advances cur = stride * shape.
+  ## Runtime shapes advance cur with a runtime expression, the fold continues
+  ## past them, statically-1 dimensions are skipped, runtime dimensions are
   ## appended unconditionally.
   var cur = 1
   var curNode: NimNode = IntCT(1)
@@ -352,29 +349,10 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##            (fold(make_seq<R-1>{}, ...) + append remainder)
 
 func unwrap(t: tuple): auto {.inline.} =
-  ## CuTe's `unwrap`: collapse a single-element tuple to its scalar so a
-  ## composed single-dimension result stays scalar (CuTe's composition_impl
-  ## does `Layout{unwrap(result_shape), unwrap(result_stride)}`);
-  ## multi-element tuples pass through unchanged. Without this, every
-  ## composed leaf comes out as a rank-1 1-tuple `(4,)` and dimension
-  ## collection nests them as `((4,), (8,))` instead of CuTe's flat
-  ## `(4, 8)`.
   when rank(t) == 1:
     t[0]
   else:
     t
-
-macro buildStride*(t: tuple; s: typed): untyped =
-  ## Broadcast helper, multiply each element of tuple t by scalar s.
-  ##
-  ## - Emits a single flat tuple construction (flatMapLeaves)
-  ## - Intermediate tuple types and per-element concat chains do not appear
-  ## Returns the multiplied tuple as an untyped node.
-  result = newCall(bindSym"flatMapLeaves", t, newTree(nnkInfix, ident"*", ident"it", s))
-
-func buildStride[T, S: int or Int](t: T; s: S, idx: static int = 0): auto {.inline.} =
-  static: doAssert idx == 0
-  ((t * s))
 
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.
@@ -391,7 +369,7 @@ template divisibilityCheck(remainingShape, clampedShape: untyped) =
     doAssert remainingShape mod clampedShape == 0,
       "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
 
-macro composeImpl*(remainingShape, remainingStride: untyped; lhsShapes, lhsStrides: typed): untyped =
+macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStrides: typed): untyped =
   ## Fold over LHS dimensions with a 2-state accumulator, the remaining
   ## shape and stride, emitting one (shape, stride) dimension pair per
   ## unconsumed LHS dimension.
@@ -512,7 +490,7 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       when countLeaves(b.shape) != rank(b.shape):
         composeDistribute((a.shape,), (a.stride,), b.shape, b.stride)
       else:
-        make_layout(b.shape, buildStride(b.stride, a.stride))
+        make_layout(b.shape, flatMapLeaves(b.stride, it * a.stride))
     else:
       make_layout(flatMapLeaves(b.shape, it), b.stride * a.stride)
   elif b.shape isnot tuple:
@@ -687,7 +665,7 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 #  right_inverse — quasi-inverse sorted by stride
 # ═══════════════════════════════════════════════════════════════
 
-proc rightInverseChain*(
+proc rightInverseChain(
     strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
   ## Return right-inverse dimensions as LayoutCT (empty if no chain found).
   result = LayoutCT()
