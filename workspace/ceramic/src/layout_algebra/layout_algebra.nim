@@ -291,10 +291,10 @@ func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tupl
   ## Nested RHS dimensions recurse into composeDistribute.
   ## Scalar dimensions go directly to composeImpl.
   mapDimensionsWith(make_layout(rhsShapes, rhsStrides)):
-    when it.shape is tuple:
-      composeDistribute(lhsShapes, lhsStrides, it.shape, it.stride)
+    when it_l.shape is tuple:
+      composeDistribute(lhsShapes, lhsStrides, it_l.shape, it_l.stride)
     else:
-      composeImpl(it.shape, it.stride, lhsShapes, lhsStrides)
+      composeImpl(it_l.shape, it_l.stride, lhsShapes, lhsStrides)
 
 
 func compose*[A, B: Layout](a: A, b: B): auto =

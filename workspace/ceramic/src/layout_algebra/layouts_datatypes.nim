@@ -112,35 +112,29 @@ type StrideOrder* = enum
 template congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if `a` and `b` have the same hierarchical rank structure.
   ## Returns a bool typedesc, usable in both `static` and runtime contexts.
-  when a is (int or Int):
-    when b is (int or Int):
-      true
-    else:
+  when a is (int or Int) or b is (int or Int):
+    a is (int or Int) and b is (int or Int)
+  elif a is tuple and b is tuple:
+    when rank(a) != rank(b):
       false
-  elif a is tuple:
-    when b is tuple:
-      when rank(a) != rank(b):
-        false
-      else:
-        block:
-          var ok = true
-          staticFor i, 0, rank(a):
-            if not congruent(a[i], b[i]):
-              ok = false
-          ok
     else:
-      false
+      block:
+        var ok = true
+        staticFor i, 0, rank(a):
+          if not congruent(a[i], b[i]):
+            ok = false
+        ok
   else:
     false
 
 func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if A's nesting is contained in B's structure.
   ## Scalar matches anything; tuple must have at least as much structure.
-  when a is int or a is Int:
+  when a is (int or Int):
     true
-  elif b is int or b is Int:
+  elif b is (int or Int):
     false
-  else:
+  elif a is tuple and b is tuple:
     when rank(a) != rank(b):
       false
     else:
@@ -150,6 +144,8 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
           if not weakly_congruent(a[i], b[i]):
             ok = false
         ok
+  else:
+    false
 
 func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
   ## Find consecutive dimensions in `a` from `aStartIdx` whose product equals `b`.

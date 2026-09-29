@@ -1080,46 +1080,62 @@ proc runTests =
   echo "--- NCHW ---"
   runNCHWTests()
   echo "--- zipDimensions ---"
-  echo "--- mapDimensionsWith/zipDimensionsWith ---"
+  echo "--- mapDimensionsWith/transform_layout zip ---"
   block:
     # map: double each dimension's stride
     let a = make_layout((2, 4), (1, 2))
     let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride * 2)
+      make_layout(it_l.shape, it_l.stride * 2)
     doAssert r.shape === (2, 4) and r.stride === (2, 4)
   block:
     # map over single-dimension layout
     let a = make_layout(3, 5)
     let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride * 10)
+      make_layout(it_l.shape, it_l.stride * 10)
     doAssert r.shape === 3 and r.stride === 50
   block:
     # map over hierarchical layout: scale each dimension's stride
     let a = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
     let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride.scaleBy(2))
+      make_layout(it_l.shape, it_l.stride.scaleBy(2))
     doAssert r.shape === ((2,2),(2,8))
     doAssert r.stride === ((2,8),(4,16))
   block:
     # zipWith: pairwise — take stride from it_b (rightover writes over)
     let a = make_layout((2, 4), (1, 2))
     let b = make_layout((3, 5), (10, 20))
-    let r = zipDimensionsWith(a, b):
-      make_layout(it_a.shape, it_b.stride)
+    let r = transform_layout(a, b):
+      make_layout(it_l.shape, it_t.stride)
     doAssert r.shape === (2, 4) and r.stride === (10, 20)
   block:
     # zipWith: a shorter (leftover b appended)
     let a = make_layout((2,), (1,))
     let b = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = zipDimensionsWith(a, b):
-      make_layout(it_a.shape, it_b.stride)
+    let r = transform_layout(a, b):
+      make_layout(it_l.shape, it_t.stride)
     doAssert rank(r) == 2
     # dimension 0 = zip result: shape from a, stride from b dimension 0
     doAssert dimension(r, 0).shape === 2
     doAssert dimension(r, 0).stride === (1, 4)
     # dimension 1 = leftover from b (unchanged)
     doAssert dimension(r, 1).shape === (2, 8)
-  echo "  5 checks OK"
+  block:
+    ## Dynamic batch layout, the full rank stays visible to the map
+    let dM = 4; let dN = 5
+    let l = make_layout((dM, dN), (1, 16))
+    let r = mapDimensionsWith(l):
+      make_layout(it_l.shape, it_l.stride * 2)
+    doAssert rank(r) == 2
+    doAssert r.stride === (2, 32)
+  block:
+    ## Dynamic layout zipped against a static tuple tiler
+    let dM = 4; let dN = 5
+    let l = make_layout((dM, dN), (1, 16))
+    let r = transform_layout(l, (4, 4)):
+      make_layout(it_l.shape, it_l.stride * it_t)
+    doAssert rank(r) == 2
+    doAssert r.stride === (4, 64)
+  echo "  7 checks OK"
 
   echo "--- groupDimensions ---"
   block:

@@ -1521,6 +1521,6 @@ block:
   ## [cute] mapDimensionsWith, the one-operand arity
   let l = make_layout((2, 4), (1, 2))
   let r = mapDimensionsWith(l):
-    make_layout(it.shape, it.stride * 2)
+    make_layout(it_l.shape, it_l.stride * 2)
   doAssert $r == "(Int[2], Int[4]):(Int[2], Int[4])", $r
 echo "    transform_layout: 4 cases OK"
