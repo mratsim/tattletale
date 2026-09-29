@@ -120,28 +120,6 @@ proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
-proc fragmentVPart(sh, st: seq[int]): tuple[va, vStride, vCosize: int] {.compileTime.} =
-  ## V block of a fragment layout, the whole (shape, stride) pair flattened
-  ## to one (VA):(1|0) dimension.
-  ## - broadcast V (all strides 0) keeps stride 0
-  ## - otherwise the V block is stride-1, broadcast shapes count 1 toward the V cosize
-  result.va = 1
-  result.vCosize = 1
-  var allZero = true
-  var allNonZero = true
-  for i in 0 ..< sh.len:
-    result.va *= sh[i]
-    if st[i] == 0:
-      allNonZero = false
-    else:
-      allZero = false
-      result.vCosize *= sh[i]
-  doAssert allZero or allNonZero,
-    "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
-    " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
-    " register group without stride collisions"
-  result.vStride = if allZero: 0 else: 1
-
 # ── AST-level helpers (compile-time value extraction) ──
 
 proc flattenAst(n: NimNode): seq[NimNode] {.compileTime.} =
@@ -303,43 +281,24 @@ macro make_layout_like*(layout: Layout): untyped =
   result = quote do:
     make_layout(`layout`.shape, `outSt`)
 
-macro make_fragment_like*(layout: Layout): untyped =
-  ## Build a fragment layout from a partition view.
+template make_fragment_like*(layout: Layout): auto =
+  ## Register-buffer layout for a partition view.
   ##
   ## Contract:
-  ## - dimension 0 of the view = the V block, its flat leaves make one (VA):(1|0) dimension
-  ## - V carries stride-1, broadcast V (all strides 0) keeps stride-0
-  ## - remaining dimensions keep the view's order, compacted by stride value and scaled after V
-  let (shTyp, stTyp) = layoutTypeArgs(layout)
-
-  if shTyp.kind notin {nnkTupleTy, nnkTupleConstr}:
-    # rank-1 view, no V boundary, the fragment keeps the shape (CuTe layout.hpp make_fragment_like)
-    result = quote do:
-      make_layout(`layout`.shape)
-    return
-
-  doAssert stTyp.kind in {nnkTupleTy, nnkTupleConstr} and shTyp.len == stTyp.len,
-    "make_fragment_like: shape/stride rank mismatch"
-
-  var vShVals: seq[int]
-  var vStVals: seq[int]
-  for v in typeIntVals(shTyp[0]): vShVals.add v
-  for v in typeIntVals(stTyp[0]): vStVals.add v
-  for v in vShVals & typeIntVals(shTyp):
-    if v == DynamicSentinel:
-      error "make_fragment_like: dynamic shapes unsupported — static layout required"
-
-  var restShNode = nnkTupleConstr.newNimNode()
-  var restStNode = nnkTupleConstr.newNimNode()
-  for i in 1 ..< shTyp.len:
-    restShNode.add shTyp[i]
-    restStNode.add stTyp[i]
-  let (va, vStride, vCosize) = fragmentVPart(vShVals, vStVals)
-  let restShVals = typeIntVals(restShNode)
-  let restStVals = typeIntVals(restStNode)
-  let restStrides = compactLikeStrides(restShVals, restStVals, vCosize)
-
-  let outSh = litTuple(@[va] & restShVals)
-  let outSt = litTuple(@[vStride] & restStrides)
-  result = quote do:
-    make_layout(`outSh`, `outSt`)
+  ## - dimension 0 = the registers each thread owns, packed dense col-major (stride-1 chain)
+  ## - broadcast registers (cosize 1, all strides 0) keep the zero strides verbatim
+  ## - dimensions 1.. keep the view's stride order, compacted, scaled after the registers,
+  ##   same size and flat access order as the view so view and fragment copies match
+  ##
+  ## Precondition, static shape and stride, the register part compact col-major or all-zero
+  block:
+    evalOnceAs(lyt, layout)
+    when rank(lyt) == 1:
+      make_layout(lyt.shape)
+    else:
+      evalOnceAs(v, dimension(lyt, 0))
+      evalOnceAs(rest, takeDimensions(lyt, 1, rank(lyt)))
+      when cosize(typeof(v)) == 1:
+        tiled_product(v, make_layout_like(rest))
+      else:
+        tiled_product(make_layout(v.shape), make_layout_like(rest))

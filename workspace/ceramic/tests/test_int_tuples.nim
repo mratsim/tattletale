@@ -654,14 +654,21 @@ proc runFilterZipWithTests =
     doAssert r === (5, 7)
 
   # ── structural: nested tuples ──
-  block:  # nested: keep sub-elements where inner coord matches
-    const r = filterZipWith(((X, Y), X), ((2, 3), 4)):
+  #
+  # Sub-tuples keep 2+ leaves each, Nim 2.2.10 maps both nesting arrangements to one C++ struct name
+
+  block:  # nested, the kept sub stays one element
+    const r = filterZipWith(((X, Y, X), (X, X)), ((2, 3, 4), (5, 6))):
       (when it_a is X: (it_b,) else: ())
-    doAssert r === (2, 4)
-  block:  # nested: keep all
-    const r = filterZipWith(((X, X), X), ((2, 3), 4)):
+    doAssert r === ((2, 4), (5, 6))
+  block:  # nested, keep all, the sub stays grouped
+    const r = filterZipWith(((X, X, X), (X, X)), ((2, 3, 4), (5, 6))):
       (when it_a is X: (it_b,) else: ())
-    doAssert r === (2, 3, 4)
+    doAssert r === ((2, 3, 4), (5, 6))
+  block:  # nested, a fully dropped sub vanishes
+    const r = filterZipWith(((X, (Y, Y)), (X, X)), ((1, (2, 3)), (4, 5))):
+      (when it_a is X: (it_b,) else: ())
+    doAssert r === ((1,), (4, 5))
   block:  # deeply nested
     const r = filterZipWith(((X, (Y, X)), X), (((1, 2), (3, 4)), 5)):
       (when it_a is X: (it_b,) else: ())

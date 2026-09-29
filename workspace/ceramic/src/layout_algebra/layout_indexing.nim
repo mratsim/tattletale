@@ -125,69 +125,21 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
 #  slice and dice, marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
 
-proc tupleFilterElem(selNode, selT, tgtNode, tgtT: NimNode; keep: static bool): NimNode {.compileTime.} =
-  ## Kept sub-tuple or element for one (selector, target) pair, nil when dropped.
-  ##
-  ## Contract:
-  ## - keep = the slice test, X-marked leaves and the underscore hole, which sems to X
-  ## - keep = false = the dice test, Y-marked and int/Int leaves, the underscore hole drops
-  ## - selector entries may be marker VALUES (X(), X()), marker TYPES (X), or ints
-  ##
-  ## selT/tgtT carry the pair's type nodes, element brackets are never semmed
-  if selT.kind in {nnkTupleTy, nnkTupleConstr}:
-    doAssert tgtT.kind in {nnkTupleTy, nnkTupleConstr} and selT.len == tgtT.len,
-      "slice: selector rank " & $selT.len & " != target rank " & $tgtT.len
-    result = nnkTupleConstr.newNimNode()
-    for i in 0 ..< selT.len:
-      let selElem = if selNode.kind in {nnkTupleConstr, nnkPar}: selNode[i]
-                    else: nnkBracketExpr.newTree(selNode, newLit(i))
-      let tgtElem = if tgtNode.kind in {nnkTupleConstr, nnkPar}: tgtNode[i]
-                    else: nnkBracketExpr.newTree(tgtNode, newLit(i))
-      let sub = tupleFilterElem(selElem, selT[i], tgtElem, tgtT[i], keep)
-      if sub != nil:
-        result.add sub
-    if result.len == 0:
-      result = nil
-  else:
-    let known =
-      if selT.kind == nnkSym: selT.strVal in ["X", "Y", "int"]
-      else: selT.kind == nnkBracketExpr and selT[0].strVal == "Int"
-    doAssert known, "slice: selector items must be X, Y, or ints"
-    let keepMe = if keep: selT.kind == nnkSym and selT.strVal == "X"
-                 else: (selT.kind == nnkSym and selT.strVal in ["Y", "int"]) or
-                       (selT.kind == nnkBracketExpr and selT[0].strVal == "Int")
-    if keepMe:
-      result = tgtNode
-    else:
-      result = nil
+template slice*(target: tuple; selector: typed): auto =
+  ## Slice a tuple, keep elements where the selector entry is X.
+  ## Elements with a Y, int, or Int selector are dropped.
+  filterZipWith(selector, target):
+    (when it_a is X: (it_b,)
+     elif it_a is Y or it_a is int or it_a is Int: ()
+     else: {.error: "slice: selector items must be X, Y, or ints".})
 
-proc normTypeNode(e: NimNode): NimNode {.compileTime.} =
-  ## Expression type with a typeDesc wrapper stripped, or the type node itself.
-  let t = e.getTypeInst()
-  if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
-    t[1]
-  else:
-    t
-
-macro slice*(target: tuple; selector: typed): untyped =
-  ## Slice a tuple, keep elements where the selector entry is X or _.
-  ##
-  ## Contract:
-  ## - nested selector entries recurse and stay nested, a fully dropped entry vanishes
-  ## - elements with a Y, int, or Int selector are dropped
-  result = tupleFilterElem(selector, normTypeNode(selector), target, normTypeNode(target), keep = true)
-  if result == nil:
-    result = nnkTupleConstr.newNimNode()
-
-macro dice*(target: tuple; selector: typed): untyped =
+template dice*(target: tuple; selector: typed): auto =
   ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
-  ##
-  ## Contract:
-  ## - nested selector entries recurse and stay nested, a fully dropped entry vanishes
-  ## - elements with an X selector are dropped
-  result = tupleFilterElem(selector, normTypeNode(selector), target, normTypeNode(target), keep = false)
-  if result == nil:
-    result = nnkTupleConstr.newNimNode()
+  ## Elements with an X selector are dropped.
+  filterZipWith(selector, target):
+    (when it_a is Y or it_a is int or it_a is Int: (it_b,)
+     elif it_a is X: ()
+     else: {.error: "dice: selector items must be X, Y, or ints".})
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.

@@ -51,23 +51,18 @@ func tupleElement(n: NimNode; i: int): NimNode {.compileTime.} =
 
 macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
   ## Zip two tuples element-wise, apply `body` to each pair, and
-  ## concatenate the kept elements into a flat result tuple.
+  ## concatenate the kept elements into the result tuple.
   ##
-  ## `a`, `b` — two tuples of same length, zipped element-wise
-  ## `body` — expression returning `()` to drop or `(expr,)` to keep
+  ## Contract:
+  ## - a nested `a` element recurses, the recursion result stays one element of the parent
+  ## - a fully dropped sub-result vanishes (value-predicate bodies wrap the sub by the type's arity)
+  ## - `it_a` and `it_b` are injected for the corresponding elements, the decision must be compile-time
   ##
-  ## `it_a` and `it_b` are injected for the corresponding elements.
-  ## The keep/drop decision must be compile-time.
+  ## Example:
   ##
-  ## Pattern: positions in `a` control keep/drop based on type:
   ##   type X = object
   ##   filterZipWith((X, X), (10, 20)):
   ##     (when it_a is X: (it_b,) else: ())
-  ##
-  ## Multiple marker types:
-  ##   type Y = object
-  ##   filterZipWith((X, Y), (10, 20)):
-  ##     (when it_a is X: (it_b,) elif it_a is Y: (it_a,) else: ())
   if a.isTuple():
     let n = a.tupleTypeLen()
     let bLen = b.tupleTypeLen()
@@ -78,7 +73,9 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
       let subB = if b.kind in {nnkTupleConstr, nnkPar}: b[i] else: nnkBracketExpr.newTree(b, newLit(i))
       let subIsTuple = subA.isTuple()
       if subIsTuple:
-        parts.add newCall(bindSym"filterZipWith", subA, subB, body)
+        let sub = quote do: `subA`.filterZipWith(`subB`, `body`)
+        parts.add quote do:
+          (when typeof(`sub`) is tuple[]: () else: (`sub`,))
       else:
         parts.add substIt(body, subA, subB)
     if parts.len == 0:
