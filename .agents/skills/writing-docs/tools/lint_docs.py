@@ -460,8 +460,9 @@ RULES = {
                                  "a module header past 8 tight prose lines"),
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
-    "missing-doc": Rule("missing-doc", True,
-                        "a public item with no doc comment (exported Nim proc or type, module-level Python def or class)"),
+    # "missing-doc": Rule("missing-doc", True,
+    #                     "a public item with no doc comment (exported Nim proc or type, module-level Python def or class)"),
+    # Disabled per owner ruling: the missing-doc rule targeted older LLM models.
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1694,10 +1695,8 @@ def nim_structure_checks(path, text, header_nos, findings):
                         "multi-line doc states no contract marker "
                         "(add Args, Returns, Precondition, or bullet the contract)"))
             else:
-                findings.append(Finding(
-                    path, i + 1, "missing-doc",
-                    "exported %s carries no doc comment, the doc comment is "
-                    "the first body line" % m.group(1)))
+                # missing-doc disabled per owner ruling (older LLM models)
+                pass
             continue
         if re.match(r"^\s*(?:proc|func)\b", line):
             if above_banned:
@@ -1725,9 +1724,8 @@ def nim_structure_checks(path, text, header_nos, findings):
             j -= 1
             depth += 1
         if not doc_lines and not _type_has_field_docs(lines, i):
-            findings.append(Finding(
-                path, i + 1, "missing-doc",
-                "exported %s carries no doc comment" % tm.group(1)))
+            # missing-doc disabled per owner ruling (older LLM models)
+            pass
             continue
         prose = [(n, c) for n, c in reversed(doc_lines) if c and not structural(c)]
         if (len(prose) >= 3
@@ -1757,9 +1755,8 @@ def py_structure_checks(path, tree, func_docs, findings):
         if node.name.startswith("_") or node.name.startswith("test"):
             continue
         if node.body[0].lineno not in documented:
-            findings.append(Finding(
-                path, node.lineno, "missing-doc",
-                "public %s carries no docstring" % node.name))
+            # missing-doc disabled per owner ruling (older LLM models)
+            pass
     for start, contents in func_docs:
         prose = [c for c in contents if c and not structural(c)]
         if (len(prose) >= 3
