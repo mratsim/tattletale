@@ -137,14 +137,27 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 #  complement, fill stride gaps up to the cosize bound
 # ═══════════════════════════════════════════════════════════════
 
+proc complementFold(shNode, boundExpr: NimNode;
+                    strides: seq[int]): NimNode {.compileTime.} =
+  ## Multi-dimension complement fold, one (gap, stride) pair per
+  ## stride-sorted dimension plus the final gap up to the bound.
+  var gapNodes, curNodes: seq[NimNode]
+  var curNode = IntCT(1)
+  for idx in getIndicesSortedByStride(strides):
+    let s = IntCT(strides[idx])
+    gapNodes.add bindSym"max".newCall(
+      IntCT(1), nnkInfix.newTree(ident"div", s, curNode))
+    curNodes.add curNode
+    curNode = nnkInfix.newTree(
+      ident"*", s, nnkBracketExpr.newTree(shNode, newLit(idx)))
+  gapNodes.add bindSym"ceil_div".newCall(boundExpr, curNode)
+  curNodes.add curNode
+  # coalesceBackward is a macro and folds when the call site expands
+  result = bindSym"coalesceBackward".newCall(
+    nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
+
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
-
-  template gapDim(s, cur) =
-    max(Int[1](), Int[s]() div cur)
-
-  template spanDim(s, i, shTup) =
-    Int[s]() * shTup[i]
 
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
@@ -162,29 +175,14 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
           (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
           (1, `st` * `sh`))
   else:
-    # Multi-dimension complement, all strides must be static Int leaves,
-    # the dimensions fold in ascending-stride order
+    # Multi-dimension complement, all strides must be static Int leaves
     let stTyp = st.getTypeInst()
     doAssert stTyp.kind == nnkTupleConstr,
       "complement: expected tuple type for strides"
     for i in 0 ..< stTyp.len:
       doAssert stTyp[i].kind == nnkBracketExpr and $stTyp[i][0] == "Int",
         "complement: multi-dimension with dynamic strides not supported at index " & $i
-
-    # `cur` is the span end of the previous dimension, Int[s] * shape
-    # is static when the shape leaf is static, a runtime product otherwise
-    let strides = toSeqStaticInts(stTyp)
-    var gapNodes, curNodes: seq[NimNode]
-    var curNode = IntCT(1)
-    for idx in getIndicesSortedByStride(strides):
-      gapNodes.add getAst(gapDim(newLit(strides[idx]), curNode))
-      curNodes.add curNode
-      curNode = getAst(spanDim(newLit(strides[idx]), newLit(idx), sh))
-    gapNodes.add bindSym"ceil_div".newCall(boundExpr, curNode)
-    curNodes.add curNode
-    # coalesceBackward is a macro and folds when the call site expands
-    result = bindSym"coalesceBackward".newCall(
-      nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
+    result = complementFold(sh, boundExpr, toSeqStaticInts(stTyp))
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
