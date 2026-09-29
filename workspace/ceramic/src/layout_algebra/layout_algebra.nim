@@ -139,30 +139,11 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
 
-  template scalarComplement(shLeaf, stLeaf, bound) =
-    # Uniform emission, gap = max(1, st), prd = st*sh,
-    # rem = ceil_div(bound, prd)
-    # -> coalesceBackward((gap, rem), (1, prd))
-    # Trivial dimensions fold away in the coalesce fold
-    coalesceBackward(
-      (max(Int[1](), stLeaf), ceil_div(bound, stLeaf * shLeaf)),
-      (1, stLeaf * shLeaf))
-
   template gapDim(s, cur) =
-    max(Int[1](),
-        Int[s]() div cur)
+    max(Int[1](), Int[s]() div cur)
 
   template spanDim(s, i, shTup) =
-    Int[s]() *
-      shTup[i]
-
-  template remDim(bound, cur) =
-    ceil_div(
-      bound, cur)
-
-  template multiComplement(gaps, curs) =
-    coalesceBackward(
-      gaps, curs)
+    Int[s]() * shTup[i]
 
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
@@ -175,7 +156,10 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       # Static zero stride, every coordinate maps to offset 0
       result = newCall(bindSym"make_layout", boundExpr, newLit(1))
     else:
-      result = getAst(scalarComplement(sh, st, boundExpr))
+      result = quote do:
+        coalesceBackward(
+          (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
+          (1, `st` * `sh`))
   else:
     # Multi-dimension complement, all strides must be static Int leaves,
     # the dimensions fold in ascending-stride order
@@ -195,11 +179,14 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       gapNodes.add getAst(gapDim(newLit(strides[idx]), curNode))
       curNodes.add curNode
       curNode = getAst(spanDim(newLit(strides[idx]), newLit(idx), sh))
-    gapNodes.add getAst(remDim(boundExpr, curNode))
+    gapNodes.add quote do:
+      ceil_div(`boundExpr`, `curNode`)
     curNodes.add curNode
-    # One getAst call, coalesceBackward runs the fold at expansion time
-    result = getAst(multiComplement(
-      nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
+    let gapTuple = nnkPar.newTree(gapNodes)
+    let curTuple = nnkPar.newTree(curNodes)
+    # One quote, coalesceBackward runs the fold at expansion time
+    result = quote do:
+      coalesceBackward(`gapTuple`, `curTuple`)
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
