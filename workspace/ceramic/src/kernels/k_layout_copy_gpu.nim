@@ -34,11 +34,10 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
-func basePtr[T, Sh, St](t: (TensorView[T, Sh, St] or TensorOwned[T, Sh, St])): ptr UncheckedArray[T] {.inline.} =
-  when typeof(t) is TensorOwned:
-    cast[ptr UncheckedArray[T]](addr t.data[0])
-  else:
-    cast[ptr UncheckedArray[T]](t.data)
+func basePtr[T, Sh, St](t: TensorView[T, Sh, St]): ptr UncheckedArray[T] {.inline.} =
+  ## The tensor's raw data pointer.
+  let p = cast[ptr UncheckedArray[T]](t.data)
+  p
 
 macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
   ## Static error on an ambiguous multi-write:
@@ -107,52 +106,32 @@ template spanCopyAt(dstP, srcP: untyped; dstOff, srcOff: int;
   if w < 2:
     copyFlatChunks(dstP, srcP, dstOff, srcOff, 1, W)
 
-template copySpanRec(C: Layout; d: static int; dstP, srcP: untyped;
-                     dstOff, srcOff, srcStride: int;
-                     W, vecCap: int; elemBits: static int) =
+func copySpanRec[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
+                              dstP, srcP: ptr UncheckedArray[T];
+                              dstOff, srcOff, srcStride: int;
+                              W, vecCap: int; elemBits: static int) {.inline.} =
   ## Visits C's span index space, dimensions 1 ..< rank(C), nested loops.
   ##   - dst span base = the C.stride entries dotted with the span index
   ##   - src span base = W times the column-major flat span index
   when d == rank(C):
     spanCopyAt(dstP, srcP, dstOff, srcOff, W, vecCap, elemBits)
   else:
-    let
-      cd = C.shape[d]
-      sd = C.stride[d]
-    for j in 0 ..< cd:
+    when typeof(C.shape[d]) is Int:
+      const cdI = typeof(C.shape[d]).V
+    else:
+      let cdI = C.shape[d]
+    when typeof(C.stride[d]) is Int:
+      const sdI = typeof(C.stride[d]).V
+    else:
+      let sdI = C.stride[d]
+    for j in 0 ..< cdI:
       copySpanRec(C, d + 1, dstP, srcP,
-                  dstOff + sd * j, srcOff + srcStride * j, srcStride * cd,
+                  dstOff + sdI * j, srcOff + srcStride * j, srcStride * cdI,
                   W, vecCap, elemBits)
 
-template copyCommonSpanBody(C: Layout; dst, src: untyped; elemBits: static int) =
-  ## W-ladder over C's span decomposition, dimension 0 = the span at stride 1.
-  block:
-    when typeof(C.stride) is tuple:
-      when typeof(C.shape[0]) is Int:
-        const
-          wV = typeof(C.shape[0]).V
-          vecCap = min(wV and -wV, 128 div elemBits)
-        copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
-      else:
-        let
-          wV = C.shape[0]
-          vecCap = min(wV and -wV, 128 div elemBits)
-        copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
-    else:
-      when typeof(C.stride) is Int:
-        const
-          wV = typeof(C.shape).V
-          vecCap = min(wV and -wV, 128 div elemBits)
-        copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
-      else:
-        let
-          wV = C.shape
-          vecCap = min(wV and -wV, 128 div elemBits)
-        copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
-
 func copyCommonSpans[T, ShD, StD, ShS, StS, ShR, StR](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS]);
+    dst: var TensorView[T, ShD, StD];
+    src: TensorView[T, ShS, StS];
     R: Layout[ShR, StR]) {.inline.} =
   ## Copies the span decomposition of the coalesced common layout
   ## C = coalesce(compose(dst.layout, R)), R the quasi-inverse of src.layout.
@@ -161,32 +140,56 @@ func copyCommonSpans[T, ShD, StD, ShS, StS, ShR, StR](
   ##   - anything else falls back to the element loop
   const elemBits = sizeof(T) * 8
   let C = coalesce(compose(dst.layout, R))
+  template spanEntry {.dirty.} =
+    block:
+      when typeof(C.stride) is tuple:
+        when typeof(C.shape[0]) is Int:
+          const
+            wV = typeof(C.shape[0]).V
+            vecCap = min(wV and -wV, 128 div elemBits)
+          copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
+        else:
+          let
+            wV = C.shape[0]
+            vecCap = min(wV and -wV, 128 div elemBits)
+          copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
+      else:
+        when typeof(C.stride) is Int:
+          const
+            wV = typeof(C.shape).V
+            vecCap = min(wV and -wV, 128 div elemBits)
+          copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
+        else:
+          let
+            wV = C.shape
+            vecCap = min(wV and -wV, 128 div elemBits)
+          copySpanRec(C, 1, basePtr(dst), basePtr(src), 0, 0, wV, wV, vecCap, elemBits)
   when typeof(C.stride) is tuple:
     when typeof(C.stride[0]) is Int:
       when typeof(C.stride[0]).V == 1:
-        copyCommonSpanBody(C, dst, src, elemBits)
+        spanEntry()
       else:
         copyElementwise(dst, src)
     else:
       if C.stride[0] === 1:
-        copyCommonSpanBody(C, dst, src, elemBits)
+        spanEntry()
       else:
         copyElementwise(dst, src)
   else:
     when typeof(C.stride) is Int:
       when typeof(C.stride).V == 1:
-        copyCommonSpanBody(C, dst, src, elemBits)
+        spanEntry()
       else:
         copyElementwise(dst, src)
     else:
       if C.stride === 1:
-        copyCommonSpanBody(C, dst, src, elemBits)
+        spanEntry()
       else:
         copyElementwise(dst, src)
 
 func copyElementwise[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+    dst: var TensorView[T, ShD, StD];
+    src: TensorView[T, ShS, StS]) {.inline.} =
   ## Element loop, one scalar load and store per logical element.
   for i in 0 ..< size(src):
     dst(i) = src(i)
@@ -200,21 +203,29 @@ func copyFrom*[T, ShD, StD, ShS, StS](
   ## For runtime strides, assumes 128B alignment for vectorized copies
   guardWriteDisjointness(dst.layout.shape, dst.layout.stride,
                          src.layout.shape, src.layout.stride)
+  when typeof(dst) is TensorOwned:
+    var dstV = view(dst)
+  else:
+    var dstV = dst
+  when typeof(src) is TensorOwned:
+    let srcV = view(src)
+  else:
+    let srcV = src
   block:
-    let R = right_inverse(src.layout)
+    let R = right_inverse(srcV.layout)
     type
       SizeR = typeof(size(R))
-      SizeS = typeof(size(src.layout))
+      SizeS = typeof(size(srcV.layout))
     when SizeR is Int and SizeS is Int:
       when SizeR.V == SizeS.V:
-        copyCommonSpans(dst, src, R)
+        copyCommonSpans(dstV, srcV, R)
       else:
-        copyElementwise(dst, src)
+        copyElementwise(dstV, srcV)
     else:
-      if size(R) === size(src.layout):
-        copyCommonSpans(dst, src, R)
+      if size(R) === size(srcV.layout):
+        copyCommonSpans(dstV, srcV, R)
       else:
-        copyElementwise(dst, src)
+        copyElementwise(dstV, srcV)
 
 func copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];

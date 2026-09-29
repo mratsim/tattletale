@@ -240,5 +240,154 @@ block:
     for j in 0 ..< 4:
       doAssert dst[i * 5 + j] == float32(i * 5 + j)
 
+# ═══════════════════════════════════════════════════════════════
+#  copyFrom (GPU path) — coalesced common layout span decomposition
+# ═══════════════════════════════════════════════════════════════
+
+template fill(src: var seq[float32]; n: int) =
+  for i in 0 ..< n:
+    src[i] = float32(i)
+
+template checkSpanCopy(dst, src: var seq[float32]; dstL, srcL: untyped;
+                       dstLen, srcLen: int) =
+  fill(src, srcLen)
+  for i in 0 ..< dstLen:
+    dst[i] = -1.0'f32
+  var dstTV = make_view(dst, dstL)
+  let srcTV = make_view(src, srcL)
+  copyFrom(dstTV, srcTV)
+
+# KV write, row-padded dst, row-compact src
+block:
+  var dst = newSeq[float32](8448)
+  var src = newSeq[float32](8192)
+  let dstL = make_layout((1, 1, 64, 128), (1, 1, 132, 1))
+  let srcL = make_layout((1, 1, 64, 128), (1, 1, 128, 1))
+  checkSpanCopy(dst, src, dstL, srcL, 8448, 8192)
+  for s in 0 ..< 64:
+    for d in 0 ..< 128:
+      doAssert dst[s * 132 + d] == float32(s * 128 + d), "KV write"
+  doAssert dst[128] == -1.0'f32 and dst[131] == -1.0'f32, "KV padding untouched"
+  doAssert dst[8447] == -1.0'f32, "KV trailing padding untouched"
+
+# KV write, odd row paddings (130, 131) exercise 8B chunks and scalar spans
+block:
+  for rowLen in [130, 131]:
+    var dst = newSeq[float32](rowLen * 64)
+    var src = newSeq[float32](8192)
+    let dstL = make_layout((1, 1, 64, 128), (1, 1, rowLen, 1))
+    let srcL = make_layout((1, 1, 64, 128), (1, 1, 128, 1))
+    checkSpanCopy(dst, src, dstL, srcL, rowLen * 64, 8192)
+    for s in 0 ..< 64:
+      for d in 0 ..< 128:
+        doAssert dst[s * rowLen + d] == float32(s * 128 + d), "KV write rowLen " & $rowLen
+    doAssert dst[63 * rowLen + 127] == float32(8191), "KV write last element"
+
+# GEMM gmem tile (32,16):(1,64) <- (32,16):(1,32)
+block:
+  var dst = newSeq[float32](992)
+  var src = newSeq[float32](512)
+  let dstL = make_layout((32, 16), (1, 64))
+  let srcL = make_layout((32, 16), (1, 32))
+  checkSpanCopy(dst, src, dstL, srcL, 992, 512)
+  for y in 0 ..< 16:
+    for x in 0 ..< 32:
+      doAssert dst[x + 64 * y] == float32(x + 32 * y), "GEMM gmem tile"
+  doAssert dst[32] == -1.0'f32 and dst[63] == -1.0'f32, "GEMM tile gaps untouched"
+
+# fully compact static (32,16):(1,32)
+block:
+  var dst = newSeq[float32](512)
+  var src = newSeq[float32](512)
+  let L = make_layout((32, 16), (1, 32))
+  checkSpanCopy(dst, src, L, L, 512, 512)
+  for i in 0 ..< 512:
+    doAssert dst[i] == float32(i), "compact copy"
+
+# LayoutRight pair (32,16):(16,1)
+block:
+  var dst = newSeq[float32](512)
+  var src = newSeq[float32](512)
+  let L = make_layout((32, 16), LayoutRight)
+  checkSpanCopy(dst, src, L, L, 512, 512)
+  for i in 0 ..< 512:
+    doAssert dst[i] == float32(i), "LayoutRight copy"
+
+# three span dimensions, (4,8,8):(1,40,400) <- compact col-major src
+block:
+  var dst = newSeq[float32](3600)
+  var src = newSeq[float32](256)
+  let dstL = make_layout((4, 8, 8), (1, 40, 400))
+  let srcL = make_layout((4, 8, 8), (1, 4, 32))
+  checkSpanCopy(dst, src, dstL, srcL, 3600, 256)
+  for j2 in 0 ..< 8:
+    for j1 in 0 ..< 8:
+      for w in 0 ..< 4:
+        doAssert dst[40 * j1 + 400 * j2 + w] ==
+          float32(4 * j1 + 32 * j2 + w), "three span dimensions"
+
+# dynamic self-copy, runtime span path at N == 1, elementwise at N > 1
+block:
+  for N in [1, 3]:
+    let sh = (Int[32](), Int[8](), N)
+    let st = (Int[1](), Int[32](), N)
+    var dst = newSeq[float32](32 * 8 * N)
+    var src = newSeq[float32](32 * 8 * N)
+    fill(src, 32 * 8 * N)
+    var dstTV = make_view(dst, make_layout(sh, st))
+    let srcTV = make_view(src, make_layout(sh, st))
+    copyFrom(dstTV, srcTV)
+    for z in 0 ..< N:
+      for b in 0 ..< 8:
+        for a in 0 ..< 32:
+          doAssert dst[a + 32 * b + N * z] == src[a + 32 * b + N * z],
+            "dynamic self-copy N=" & $N
+
+# broadcast read, src stride 0 writes the same value to every dst element
+block:
+  var dst = newSeq[float32](8)
+  var src = newSeq[float32](1)
+  src[0] = 7.5'f32
+  var dstTV = make_view(dst, make_layout(8, 1))
+  let srcTV = make_view(src, make_layout(8, 0))
+  copyFrom(dstTV, srcTV)
+  for i in 0 ..< 8:
+    doAssert dst[i] == 7.5'f32, "broadcast read"
+
+# TensorOwned destination, copyFrom into an owned tensor
+block:
+  var src = newSeq[float32](512)
+  fill(src, 512)
+  let srcTV = make_view(src, make_layout((32, 16), (1, 32)))
+  var own = make_tensor(float32, make_layout((32, 16), (1, 32)))
+  copyFrom(own, srcTV)
+  for i in 0 ..< 512:
+    doAssert own.data[i] == float32(i), "TensorOwned destination"
+
+# write-disjointness guard, ambiguous multi-write is a compile-time error
+block:
+  var buf = newSeq[float32](64)
+  let ambiguousDst = make_layout((4, 8), (1, 0))
+  let stridedSrc = make_layout((4, 8), (1, 2))
+  doAssert not compiles(copyFrom(make_view(buf, ambiguousDst), make_view(buf, stridedSrc))),
+    "dst stride-0 leaf with shape > 1 and non-zero src stride must not compile"
+
+# guard positives, broadcast pair compiles and copies
+block:
+  var buf = newSeq[float32](32)
+  let bL = make_layout((4, 8), (1, 0))
+  var dstTV = make_view(buf, bL)
+  let srcTV = make_view(buf, bL)
+  copyFrom(dstTV, srcTV)
+
+# guard positive, dynamic src stride with a dst stride-0 leaf compiles (unprovable)
+block:
+  var buf = newSeq[float32](64)
+  let s = 2
+  let dynSrc = make_layout((4, 8), (1, s))
+  var dstTV = make_view(buf, make_layout((4, 8), (1, 0)))
+  let srcTV = make_view(buf, dynSrc)
+  copyFrom(dstTV, srcTV)
+
 echo "\n--- kernel_copy tests ---"
 echo "  All tests passed."
