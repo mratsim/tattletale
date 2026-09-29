@@ -27,6 +27,21 @@ func constraintLetter(elemTypeName: string): string =
   else:
     raiseAssert "unsupported register element type: " & elemTypeName
 
+func accumulatorElementName*(instr: string): string =
+  ## Returns the accumulator's register element type for the instruction
+  ## signature (PTX ISA, mma.sync, D and C share one register class).
+  ## - the D-type dot token names the accumulator class
+  ## - f32 → float32, the float registers ("f")
+  ## - s32 → int32, the integer registers ("r")
+  const prefix = "mma.sync.aligned."
+  doAssert instr.startsWith(prefix), "unsupported instruction: " & instr
+  let tokens = instr[len(prefix) ..< instr.len].split('.')
+  doAssert tokens.len == 7, "unsupported instruction: " & instr
+  result = case tokens[3]
+    of "f32": "float32"
+    of "s32": "int32"
+    else: raiseAssert "unsupported accumulator type in " & instr
+
 func regList(first, count: int): string =
   ## GCC operand register list "{%0,%1,...,%N-1}"
   result = "{"
@@ -221,14 +236,14 @@ macro gemm_mma*(atom: static MmaAtom; dFrag, aFrag, bFrag: untyped): untyped =
   else:
     if not instr.startsWith("mma.sync.aligned."):
       error("gemm_mma: unsupported instruction `" & instr & "`")
-  let dElem = "float32"
+  let dElem = accumulatorElementName(instr)
   let aElem = "uint32"
   let bElem = "uint32"
   let asmStr = buildNvidiaMmaAsm(instr, aV, bV, dV, "d", "a", "b", "d",
                                  dElem, aElem, bElem, dElem)
 
   # scalar register locals, one per fragment element
-  #   d0..d(dV-1), var float32, seeded from the accumulator, written back after
+  #   d0..d(dV-1), var accumulator element, seeded from the accumulator, written back after
   #   a0..a(aV-1), b0..b(bV-1), let uint32, read from the operand tensors
   result = newStmtList()
   for i in 0 ..< dV:
