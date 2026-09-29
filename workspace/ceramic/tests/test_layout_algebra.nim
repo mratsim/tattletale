@@ -268,6 +268,42 @@ proc runCoalesceCppTests =
     doAssert c === ((3, 4, 5), (1, 1, 12))
   echo "  Additional [CUTE-C]: 2 cases OK"
 
+proc runCoalesceNestedLeafTests =
+  ## Coalesce over nested shape and stride layouts.
+  ## Leafwise merge with the single-leaf collapse kept exact.
+  block:
+    # Nested 1-tuple wrappers collapse to the rank-1 layout of their single leaf
+    let l = make_layout(((Int[4](),),), ((Int[2](),),))
+    let c = coalesce(l)
+    chkCoalesce(l)
+    doAssert c === (4, 2)
+  block:
+    # Nested single-leaf size-1 shape (inactive dimension)
+    let l = make_layout(((Int[1](),),), ((Int[0](),),))
+    let c = coalesce(l)
+    chkCoalesce(l)
+    doAssert c === (1, 0)
+  block:
+    # Nested coalescable pair
+    let l = make_layout(((Int[4](), Int[2]()),), ((Int[1](), Int[4]()),))
+    let c = coalesce(l)
+    chkCoalesce(l)
+    doAssert c === (8, 1)
+  block:
+    # Nested non-contiguous pair stays split
+    let l = make_layout(((Int[2](), Int[3]()),), ((Int[1](), Int[4]()),))
+    let c = coalesce(l)
+    chkCoalesce(l)
+    doAssert c === ((2, 3), (1, 4))
+  block:
+    # Mixed nesting depths and dynamic leaves
+    let d8 = 8
+    let l = make_layout(((d8, Int[2]()),), ((Int[1](), Int[4]()),))
+    let c = coalesce(l)
+    chkCoalesce(l)
+    doAssert c === ((8, 2), (1, 4))
+  echo "  Nested leaves: 5 cases OK"
+
 proc runCoalesceTests =
   runCoalesceScalarTests()
   runCoalesceColMajorTests()
@@ -277,6 +313,8 @@ proc runCoalesceTests =
   runCoalesceMixedTests()
   runCoalesceDynamicTests()
   runCoalesceCppTests()
+  runCoalesceNestedLeafTests()
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Complement post-condition checks (CuTe test_complement)
@@ -705,6 +743,18 @@ proc runComposeNestedTests =
   # [CUTE-CM] #33: (4,8,2):(2,8,1) / (4,2,2):(2,8,1)
   doAssert chkCompose(make_layout((4,8,2),(2,8,1)), make_layout((4,2,2),(2,8,1)))
   echo "    5/5"
+  # Scalar LHS, flat and nested RHS must compose leafwise exactly.
+  # Exact values locked, a rank-1 nested RHS shape flattens.
+  # Deeper nesting stays per top-level dimension, so the compatible()
+  # precheck against the original nested b.shape does not hold.
+  doAssert chkCompose(make_layout(16, 1), make_layout((4, 2), (1, 16)))
+  doAssert compose(make_layout(16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
+  doAssert compose(make_layout(16, 1), make_layout(((4, 2), (2,)), ((1, 16), (32,)))) ===
+    (((4, 2), 2), ((1, 16), 32))
+  doAssert chkCompose(make_layout(8, 2), make_layout(4, 1))
+  let d16 = 16
+  doAssert compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
+  echo "    Scalar LHS: 5/5"
 
 proc runComposeSwizzleTests =
   echo "    Swizzle [CUTE-CM #55-56]:"

@@ -49,6 +49,39 @@ block:
 echo "  [OK] crd2idx: tuple coord (6 cases)"
 
 # ═══════════════════════════════════════════════════════════════
+#  crd2idx — scalar coord into nested shape/stride
+# ═══════════════════════════════════════════════════════════════
+
+proc runCrd2idxNestedLeafTests =
+  ## Scalar coord over nested shape and stride.
+  ## The inner product reads the (coord, stride) leaf pairs in order,
+  ## single-leaf collapse included.
+  block:
+    # Static nested shape and stride
+    check crd2idx(5, ((3, 4),), ((2, 8),)), 12, Int
+    check crd2idx(7, ((3, 4),), ((2, 8),)), 18, Int
+    # Single-leaf nested collapses to the plain inner product
+    check crd2idx(3, ((10,),), ((2,),)), 6, Int
+    # Deeply nested 1-tuple wrappers
+    check crd2idx(7, (((3, 4),),), (((2, 8),),)), 18, Int
+  block:
+    # Dynamic nested shape and stride
+    let s = ((3, 4),)
+    let st = ((2, 8),)
+    check crd2idx(5, s, st), 12, int
+    let s1 = ((10,),)
+    let st1 = ((2,),)
+    check crd2idx(3, s1, st1), 6, int
+  block:
+    # Nested layout indexed through the crd2idx(L, coord) wrapper
+    let l = make_layout(((3, 4),), ((2, 8),))
+    check crd2idx(l, 5), 12, Int
+    check crd2idx(l, 7), 18, Int
+
+runCrd2idxNestedLeafTests()
+echo "  [OK] crd2idx: nested leaf shapes (7 cases)"
+
+# ═══════════════════════════════════════════════════════════════
 #  crd2idx — via Layout
 # ═══════════════════════════════════════════════════════════════
 

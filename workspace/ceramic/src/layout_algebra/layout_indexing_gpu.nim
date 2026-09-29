@@ -91,7 +91,7 @@ template crd2idxDimension*(coord, shape, stride: typed): auto =
       crd2idxRecur(coord, shape, stride, 0)
     else:
       # Scalar coord into a nested dimension: delegate to the scalar
-      # decomposition path (foldDim over the flattened dimension)
+      # decomposition path (foldDim over the dimension's leaves)
       crd2idx(coord, shape, stride)
   else:
     # Flat dimension: inner product of the coord element with the stride
@@ -122,48 +122,39 @@ template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
     crd2idxRecur(P(), S(), D(), 0)
 
 macro foldDim*(co, sh, st: typed; i: static int): auto =
+  ## Args:
+  ## - `co`, the coord expression
+  ## - `sh`, `st` flat tuples for shape and stride
+  ## - `i`, the first component to accumulate
+  ## Returns one nested expression summing per-component contributions
+  ##   `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
+  ## Typed templates cannot self-recurse at instantiation so the macro
+  ## unrolls the fold directly.
   block:
-    ## Args
-    ## - `co` coord expression
-    ## - `sh`, `st` flat shape and stride tuples
-    ## - `i` first component to accumulate from
-    ## Returns one nested expression summing per-component contributions
-    ## `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
-    ## Typed templates cannot self-recurse at instantiation, so the
-    ## macro unrolls the fold directly.
-  proc tupleLen(n: NimNode): int =
-    case n.kind
-    of nnkPar, nnkTupleConstr, nnkBracket:
-      n.len
-    else:
-      let t = n.getTypeImpl
-      if t.kind in {nnkTupleTy, nnkPar, nnkTupleConstr}:
-        t.len
+    var shLeaves, stLeaves: seq[NimNode]
+    for (leaf, _) in flatLeaves(sh):
+      shLeaves.add leaf
+    for (leaf, _) in flatLeaves(st):
+      stLeaves.add leaf
+    let r = shLeaves.len
+    if stLeaves.len != r:
+      error("foldDim: shape and stride leaf counts differ: " & $r & " vs " & $stLeaves.len)
+    if r == 0:
+      error("foldDim: empty shape")
+    proc foldFrom(c: NimNode, k: int): NimNode =
+      let shK = shLeaves[k]
+      let stK = stLeaves[k]
+      if k == r - 1:
+        result = quote do: `c` * `stK`
       else:
-        1
-  let r = tupleLen(sh)
-  let shN = sh
-  let stN = st
-  proc foldFrom(c: NimNode, k: int): NimNode =
-    if k == r - 1:
-      result = quote do: `c` * `stN`[`k`]
-    else:
-      let rest = foldFrom(quote do: `c` div `shN`[`k`], k + 1)
-      result = quote do: (`c` mod `shN`[`k`]) * `stN`[`k`] + `rest`
-  result = foldFrom(co, i)
+        let rest = foldFrom(quote do: `c` div `shK`, k + 1)
+        result = quote do: (`c` mod `shK`) * `stK` + `rest`
+    result = foldFrom(co, i)
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape dimensions with strides.
   ##
-  ## PERF: Must stay template. Uses `int rank(S)` instead of `toIntVal rank(S)`
-  ## to avoid a toIntVal call (even at compile time — it's a func).
+  ## PERF. Must stay template.
   block:
-    evalOnceAs(S, flatten(makeIntTuple(shape)))
-    evalOnceAs(D, flatten(makeIntTuple(stride)))
     evalOnceAs(P, makeIntTuple(coord))
-    const R = int rank(S)  # int() avoids toIntVal func call
-    when S is tuple and R > 1:
-      foldDim(P, S, D, 0)
-    else:
-      # Single dimension after flatten — no decomposition needed
-      P * D
+    foldDim(P, makeIntTuple(shape), makeIntTuple(stride), 0)

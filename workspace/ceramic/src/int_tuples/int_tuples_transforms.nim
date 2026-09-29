@@ -7,37 +7,13 @@
 
 import std/macros, std/typetraits
 import ./int_tuples_datatypes
+import ./int_tuples_maps {.all.}
 
 # ═══════════════════════════════════════════════════════════════
 #  flatten — recursively collect leaf elements of a tuple
 # ═══════════════════════════════════════════════════════════════
 
-macro flattenImpl(t: IntOrIntTuple): untyped =
-  let tNode = t
-  let ttype = tNode.getTypeImpl()
-
-  proc isLeaf(t: NimNode): bool =
-    (t.kind == nnkSym and $t == "int") or
-    (t.kind == nnkBracketExpr and $t[0] == "Int")
-
-  proc collect(acc: var NimNode; e: NimNode; t: NimNode) =
-    if t.kind == nnkTupleConstr:
-      for idx in 0 ..< t.len:
-        let fd = t[idx]
-        let fa = newTree(nnkBracketExpr, e, newLit(idx))
-        if isLeaf(fd):
-          acc.add fa
-        else:
-          collect(acc, fa, fd)
-    else:
-      acc.add e
-
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  result = newNimNode(nnkPar)
-  collect(result, tNode, ttype)
-
-proc flatten*(t: IntOrIntTuple): auto {.inline, noInit.}=
+func flatten*(t: IntOrIntTuple): auto {.inline, noInit.}=
   ## Recursively collect leaf fields of a (possibly nested) tuple.
   ## Scalars and Int[N] are leaves; tuples are expanded.
   ##
@@ -47,21 +23,17 @@ proc flatten*(t: IntOrIntTuple): auto {.inline, noInit.}=
   ##   flatten(5)          → 5
   ##   flatten((1,2,3))    → (1,2,3)
   ##   flatten((1,(2,3)))  → (1,2,3)
-  flattenImpl(t)
+  flatMapLeaves(t, it)
 
-proc flatten*(t: static IntOrIntTuple): static auto {.inline, noInit.} =
+func flatten*(t: static IntOrIntTuple): static auto {.inline, noInit.} =
   ## Recursively collect leaf fields of a (possibly nested) tuple.
   ## Scalars and Int[N] are leaves; tuples are expanded.
-  ##
-  ## CuTe: `flatten(t)` → flat tuple of leaf elements.
   ##
   ## Examples:
   ##   flatten(5)          → 5
   ##   flatten((1,2,3))    → (1,2,3)
   ##   flatten((1,(2,3)))  → (1,2,3)
-  ##
-  ## Compile-time overload for full-compile-time input
-  flattenImpl(t)
+  flatMapLeaves(t, it)
 
 # ═══════════════════════════════════════════════════════════════
 #  concat — concatenate two tuples or a scalar and a tuple

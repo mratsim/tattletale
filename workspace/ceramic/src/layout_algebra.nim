@@ -28,8 +28,7 @@
 ## | `getIndicesSortedByStride`         | stride-sorted index permutation         |
 ## | `complementScalar`/`Multi`/`Gaps`  | complement backends                     |
 ## | `rightInverseChain`, `composeImpl` | inverse-chain and composition internals |
-## | `zipped_divide_builder`            | divide builder                          |
-## | `unwrap`, `buildStride`            | macro helpers                           |
+## | `unwrap`                           | macro helpers                           |
 ## | `divisibilityCheck`, `LayoutCT`    | macro helpers                           |
 
 import
@@ -79,6 +78,7 @@ export layouts.selectDimensions
 export layouts.replaceDimension
 export layouts.zipDimensions
 export layouts.zipDimensionsWith
+export layouts.mapDimensionsWith
 
 # crd2idx, idx2crd, slice, dice, X/Y markers, call operator.
 # `hasUnderscoreImpl` is a private helper of layout_indexing.nim
