@@ -149,6 +149,23 @@ proc typeIntVal(t: NimNode): int {.compileTime.} =
   else:
     DynamicSentinel
 
+func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
+  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
+  let typ = layout.getTypeInst()
+  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
+    return (typ[1], typ[2])
+  if typ.kind == nnkSym:
+    let objTy = typ.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          result.shapeTy = field[1]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          result.strideTy = field[1]
+      if result.shapeTy != nil and result.strideTy != nil:
+        return
+  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
+
 macro compact_order*(shape, order): untyped =
   ## Produce compact strides for a given dimension permutation.
   ##
