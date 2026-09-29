@@ -65,24 +65,6 @@ proc copyBody(atomName: string;
 macro copyIf*(atom: static CopyAtom;
               dstView, srcView: untyped; pred: untyped;
               chunkElems: static int): untyped =
-  ## Prepare one copy-atom chunk, dst <- src
-  ## Contract, one predication behavior per atom capability:
-  ## - the async atoms issue the chunk copy asynchronously,
-  ##   commit_group enqueues it, wait_group blocks for its completion
-  ## - a zero-fill-capable atom with a false predicate zero-fills the chunk,
-  ##   the instruction's src-size operand is the chunk width or 0,
-  ##   the blocking tier zero-fills the chunk's elements instead
-  ## - other atoms guard the chunk copy with a runtime if
-  ## The unit views anchor the chunk's start, chunkElems is the chunk
-  ## width in elements (the atom's vecBytes div the element size)
-  ## Prepare a cp.async copy from global memory (gmem)
-  ##   to the per-warp shared memory (smem)
-  ## Contract, one predication behavior per atom capability
-  ## - issued asynchronously with other prepared copies in the same commit_group,
-  ##   waited for with wait_group
-  ## - a zero-fill-capable atom with a false predicate zero-fills the chunk
-  ##   (the instruction's src-size operand is the chunk width or 0)
-  ## - other atoms guard the chunk copy with a runtime if
   template chunkCopy(dstView, srcView: untyped; chunkElems: int) =
     for i in 0 ..< chunkElems:
       dstView.data[i] = srcView.data[i]
