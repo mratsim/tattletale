@@ -205,6 +205,9 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   let shV = leafV(shTyp, sh)
   let boundV =
     if boundExpr.kind == nnkIntLit: boundExpr.intVal.int
+    elif boundExpr.kind == nnkSym and boundExpr.getTypeInst.kind == nnkBracketExpr and
+        $boundExpr.getTypeInst[0] == "Int":
+      boundExpr.getTypeInst[1].intVal.int
     elif boundExpr.kind == nnkCall and boundExpr[0].kind == nnkBracketExpr and
         $boundExpr[0][0] == "Int":
       boundExpr[0][1].intVal.int
@@ -518,6 +521,10 @@ func compose*[A, B: Layout](a: A, b: B): auto =
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
+  ##
+  ## Divisibility of the consumed shape is a caller precondition:
+  ## static leaves assert at compile time, runtime shapes are unchecked
+  ## (device code carries no doAssert).
   when a.shape isnot tuple:
     when b.stride is tuple:
       when countLeaves(b.shape) != rank(b.shape):

@@ -29,6 +29,7 @@ import workspace/ceramic/src/layout_algebra
 proc runCoalesceTests: void
 proc runComplementStaticRank1Tests: void
 proc runComplementExactValueTests: void
+proc runComplementSymbolBoundTests: void
 proc runComplementMultiDimensionStaticTests: void
 proc runComplementDynamicTests: void
 proc runComplementDisjointnessTests: void
@@ -69,6 +70,7 @@ proc runTests =
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
   runComplementStaticRank1Tests()
   runComplementExactValueTests()
+  runComplementSymbolBoundTests()
   runComplementMultiDimensionStaticTests()
   runComplementDynamicTests()
   runComplementDisjointnessTests()
@@ -471,6 +473,16 @@ proc runComplementExactValueTests =
     doAssert r.shape === (4, 2)
     doAssert r.stride === (1, 16)
   echo "  Exact-value: 10 Python assertions OK"
+
+# ─── Symbol-routed static bound ──────────────────────────────────────
+proc runComplementSymbolBoundTests =
+  # The Int or int overload receives the bound as a symbol, the static
+  # branch must read V from the type
+  block:
+    let r = complement(make_layout(4, 2), Int[8]())
+    doAssert r.shape === 2
+    doAssert r.stride === 1
+  echo "  Symbol-routed static bound: 1 pin OK"
 
 # ─── Multi-dimension static [CUTE-CP] ───────────────────────────────
 proc runComplementMultiDimensionStaticTests =
