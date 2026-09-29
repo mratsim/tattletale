@@ -10,6 +10,7 @@
 
 
 import std/macros
+import std/sequtils
 import std/typetraits
 
 import workspace/ceramic/src/int_tuples
@@ -67,17 +68,9 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   else:
     # most-significant leaf = the largest stride, identifiable only
     # when every stride is static, so dynamic strides keep the mod
-    var maxIdx = -1
-    var maxV = 0
-    var allStatic = true
-    for i in 0 ..< stT.len:
-      if stT[i].kind == nnkBracketExpr and $stT[i][0] == "Int":
-        let v = stT[i][1].intVal
-        if v > maxV:
-          maxV = v
-          maxIdx = i
-      else:
-        allStatic = false
+    let stVals = toSeqStaticInts(stT)
+    let maxIdx = stVals.maxIndex
+    let allStatic = DynamicSentinel notin stVals
     # for tuple shapes, the quotient runs unmod'd at the largest static stride
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
