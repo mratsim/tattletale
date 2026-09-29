@@ -78,26 +78,6 @@ template filter_zeros*(layout: Layout): auto =
   make_layout(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
-#  layoutTypeArgs, shape/stride TYPE extraction, nnkSym-safe
-# ═══════════════════════════════════════════════════════════════
-
-func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
-  ## Extract the Layout type's shape and stride type nodes, handling type aliases.
-  let typ = layout.getTypeInst()
-  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
-    return (typ[1], typ[2])
-  if typ.kind == nnkSym:
-    let rhs = typ.getImpl()[2]          # typedef RHS: A = <type expr>
-    let inner =                         # unwrap typeof(...)
-      if rhs.kind in {nnkCall, nnkCommand} and rhs[0].eqIdent("typeof"): rhs[1]
-      else: rhs
-    if inner.kind in {nnkCall, nnkCommand} and inner[0].eqIdent("make_layout"):
-      return (inner[1].getTypeInst(), inner[2].getTypeInst())
-    if inner.kind == nnkBracketExpr and inner[0].eqIdent("Layout"):
-      return (inner[1], inner[2])
-  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
-
-# ═══════════════════════════════════════════════════════════════
 #  Padding
 # ═══════════════════════════════════════════════════════════════
 
