@@ -8,9 +8,9 @@
 ## CPU-optimized indexing: wheel-winding iteration (no divmod).
 ##
 ## Provides:
-##   - CoordWheel[Rank] — iterate all logical positions of a layout
-##     without divmod (O(1) amortized per step via carry-chain).
-##   - crd2idx_cpu / idx2crd_cpu — wrappers for useGpuIndexing dispatch.
+##   - CoordWheel[Rank], iterate all logical positions of a layout
+##     without divmod, O(1) amortized per step via carry-chain
+##   - crd2idx_cpu / idx2crd_cpu, wrappers for useGpuIndexing dispatch
 ##
 ## For random-access idx2crd (single flat index → coordinate), there is
 ## no way around divmod. The wheel-winding only benefits sequential
@@ -80,15 +80,6 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 # ═══════════════════════════════════════════════════════════════
 #  CPU wrappers (for useGpuIndexing dispatch)
 # ═══════════════════════════════════════════════════════════════
-#
-#  These delegate to the layout_indexing_gpu 3-arg functions for
-#  tuple-coord crd2idx (which is already multiply-add, no divmod).
-#  They exist so callers can do a uniform `crd2idx_cpu` call
-#  regardless of whether the underlying impl differs.
-#
-#  Note: layouts.nim defines the main `crd2idx(layout, coord)`
-#  dispatch with `useGpuIndexing` parameter. The `_cpu` suffix
-#  here is for code that explicitly wants CPU-optimized semantics.
 
 import ./layout_indexing_gpu
 import std/macros
