@@ -9,6 +9,7 @@
 
 import std/macros
 import ./h_copy_registry
+import ./h_copy_configgen
 import ./h_copy_properties
 import workspace/crucible
 
@@ -20,10 +21,19 @@ import workspace/crucible
 
 func getCopyAsyncAtom*(T: typedesc): static auto {.inline.} =
   ## The backend's async copy atom for element type `T`
-  when ccGetBackend() == ctCuda:
-    SM80_CP_ASYNC_CG_16B_ZFILL
+  ##
+  ## Reads the compiler target directly, not ccGetBackend.
+  ## gemm_cta also instantiates on the host where ccGetBackend has no
+  ## enclosing DSL block, the GEMM guard tests call it inside `compiles`.
+  when crucibleCompileTarget == ctMetal:
+    # Metal has no cp.async instruction, no async copy atom for it yet
+    {.error: "getCopyAsyncAtom: no async copy atom for the Metal backend".}
   else:
-    {.error: "getCopyAsyncAtom: no async copy atom for backend " & $ccGetBackend().}
+    # The sm80 cp.async atom serves CUDA and NVIDIA-OpenCL, whose GEMM
+    # kernels embed cp.async PTX like they already embed the mma.sync PTX.
+    # On the host the atom's asm only evaluates inside `compiles` checks,
+    # C codegen never reaches it.
+    SM80_CP_ASYNC_CG_16B_ZFILL
 
 # ═════════════════════════════════════════════════════════════════════════
 #  copy_unpack: instruction emission from a registry entry
@@ -69,7 +79,8 @@ macro copyIf*(atom: static CopyAtom;
   ##   (the instruction's src-size operand is the chunk width or 0)
   ## - other atoms guard the chunk copy with a runtime if
   let name = $atom
-  let zfill = bindSym(name & "_zeroFill").getImpl()[2].strVal == "true"
+  # the zeroFill const is typed as a bool, its impl node is an int literal (1/0)
+  let zfill = bindSym(name & "_zeroFill").getImpl()[2].intVal == 1
   let chunkB = bindSym(name & "_vecBytes").getImpl()[2].intVal
   if zfill:
     # the predicate folds into the instruction (srcSize 0 zero-fills the chunk)
@@ -89,9 +100,10 @@ macro copyIf*(atom: static CopyAtom;
 macro commit_group*(atom: static CopyAtom): untyped =
   ## Commit the cp.async copies prepared since the previous commit
   let name = $atom
-  let kind = bindSym(name & "_kind").getImpl()[2].strVal
-  let slot = (if kind == "commit": name
-              elif kind == "copy": bindSym(name & "_commitAtom").getImpl()[2].strVal
+  # the kind const holds a typed CopyKind value, its impl node is the ordinal
+  let kind = CopyKind(bindSym(name & "_kind").getImpl()[2].intVal)
+  let slot = (if kind == ckCommit: name
+              elif kind == ckCopy: bindSym(name & "_commitAtom").getImpl()[2].strVal
               else: "")
   if slot == "":
     error("commit_group: the atom must be a copy or commit-kind atom")
@@ -108,9 +120,10 @@ macro wait_group*(atom: static CopyAtom; depth: static int): untyped =
   ## - N = 1, double-buffered
   ## - N = 2, triple-buffered
   let name = $atom
-  let kind = bindSym(name & "_kind").getImpl()[2].strVal
-  let slot = (if kind == "wait": name
-              elif kind == "copy": bindSym(name & "_waitAtom").getImpl()[2].strVal
+  # the kind const holds a typed CopyKind value, its impl node is the ordinal
+  let kind = CopyKind(bindSym(name & "_kind").getImpl()[2].intVal)
+  let slot = (if kind == ckWait: name
+              elif kind == ckCopy: bindSym(name & "_waitAtom").getImpl()[2].strVal
               else: "")
   if slot == "":
     error("wait_group: the atom must be a copy or wait-kind atom")
@@ -123,3 +136,16 @@ macro wait_group*(atom: static CopyAtom; depth: static int): untyped =
       "wait_group: depth " & $depth & " exceeds the wait atom's supported depth " & $depthCap
     result = newTree(nnkAsmStmt, newEmptyNode(),
       newLit("\"" & instr & ";\" :: \"n\"(" & $depth & ") : \"memory\""))
+
+func commit_group*(T: typedesc) {.inline.} =
+  ## Commit the pending copies of the backend's async copy atom for element type `T`
+  ## - the blocking tier's slots discard, the sm80 tier's commit_group enqueues
+  ## Wraps the atom-level commit_group with the resolved atom.
+  commit_group(getCopyAsyncAtom(T))
+
+func wait_group*(T: typedesc; N: static int) {.inline.} =
+  ## Block until all but N of the recent copy groups of the backend's async
+  ## copy atom for element type `T` are fully copied to shared memory
+  ## - the buffering depth is N + 1 stages
+  ## - Wraps the atom-level wait_group with the resolved atom.
+  wait_group(getCopyAsyncAtom(T), N)

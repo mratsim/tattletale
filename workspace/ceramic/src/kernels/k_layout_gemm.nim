@@ -406,7 +406,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     tileK = TileShape[2]
     blockSize = tma.threadCount()
     unitsA = (tileM * tileK) div (numPacked(CpAsyncAtom[TA]) * blockSize)
-    unitsB = (tileN * tileK) div (4 * blockSize)
+    unitsB = (tileN * tileK) div (numPacked(CpAsyncAtom[TB]) * blockSize)
   static:
     doAssert ShA.default[1] === ShB.default[1],
       "gemm_cta: the A and B input views must agree on the allocated K (" & $kView & " vs " &
@@ -504,9 +504,8 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     copyFromIfAsync(tBsB, tBgB, tBpBv)
 
     # one commit group for both loads
-    # one commit group for both loads
-    commit_group(getCopyAsyncAtom(TA))
-    wait_group(getCopyAsyncAtom(TB), 0)
+    TA.commit_group()
+    TB.wait_group(0)
     syncthreads() # Wait until all threads have copied their tiles
     tma.gemm_tiled(dFrag, sA, sB, TileShape, threadIdx)
     syncthreads() # Wait until all threads have processed gemm_tiled

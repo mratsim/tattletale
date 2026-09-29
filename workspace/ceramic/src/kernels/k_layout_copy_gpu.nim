@@ -127,7 +127,7 @@ func copyFrom*[T, ShD, StD, ShS, StS](
 func copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];
     src: TensorView[T, Sh, StA];
-    predicate: AnyTensor[bool, Sh, StP]) {.inline.} =
+    predicate: (TensorView[bool, Sh, StP] or TensorOwned[bool, Sh, StP])) {.inline.} =
   ## Predicated **async** copy
   ##
   ## This requires commit_group to actually enqueue the copy
