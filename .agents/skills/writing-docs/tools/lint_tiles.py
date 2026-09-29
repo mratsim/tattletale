@@ -126,7 +126,11 @@ RULES = {
 # Nim infix keywords read infix, constructors spell make_* functional.
 NEWCALL_METHOD_EXEMPT = frozenset((
     "mod", "div", "shl", "shr", "and", "or", "xor", "not", "in", "notin",
-    "is", "isnot", "of"))
+    "is", "isnot", "of",
+    # evalOnceAs is an alias-first binding macro. The method form x.f(y)
+    # sems the receiver x, but x is the name being bound and stays
+    # unresolvable by construction, so the plain call is the house form.
+    "evalOnceAs"))
 NEWCALL_METHOD_RE = re.compile(
     r"\bnewCall\s*\(\s*bindSym\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']"
     r'(?:\s*\))?\s*,')
