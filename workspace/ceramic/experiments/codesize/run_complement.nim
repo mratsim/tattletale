@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## the command is in tests/codesize/README.md.
+## Usage in experiments/codesize/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the complement track.

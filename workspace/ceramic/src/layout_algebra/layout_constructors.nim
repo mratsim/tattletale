@@ -178,7 +178,7 @@ proc leafIntVal(n: NimNode): int {.compileTime.} =
   else:
     DynamicSentinel
 
-proc flattenType(t: NimNode): seq[NimNode] {.compileTime.} =
+proc flattenType*(t: NimNode): seq[NimNode] {.compileTime.} =
   case t.kind
   of nnkTupleConstr:
     for child in t:

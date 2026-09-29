@@ -16,13 +16,13 @@ source size under the crucible metal backend.
 Run from the tattletale/ dir, suite flags (the `testerCmd` flags of `config.nims`):
 
     nim c -r -d:release --stackTrace:on --lineTrace:on --lineDir:on --debugger:native \
-      --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/ceramic/tests/codesize/<runner>.nim
+      --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/ceramic/experiments/codesize/<runner>.nim
 
 ## Baselines and the update protocol
 
 The baseline tables and the measurement protocol live in `.scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md`.
 
-- every simplification commit on these units re-runs the six runners,
+- every simplification commit on these units re-runs the seven runners,
   updates the table with the new branch-tip hash and sizes
 - a regression over 200 B on an untouched call site is a stop-and-report
 - always measure with the suite flags above, `-d:release` folds debug runtime

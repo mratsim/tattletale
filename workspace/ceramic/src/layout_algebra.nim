@@ -27,7 +27,7 @@
 ## | ---------------------------------- | --------------------------------------- |
 ## | `getIndicesSortedByStride`         | stride-sorted index permutation         |
 ## | `complementImpl`                   | complement dispatch and emission        |
-## | `rightInverseChain`, `composeImpl` | inverse-chain and composition internals |
+## | `getMaxContiguous`, `getGaps`, `composeImpl` | inverse-chain and composition internals |
 ## | `unwrap`                           | macro helpers                           |
 ## | `divisibilityCheck`, `LayoutCT`    | macro helpers                           |
 
