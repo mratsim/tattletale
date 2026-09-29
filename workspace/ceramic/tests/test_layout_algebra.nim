@@ -467,7 +467,21 @@ proc runComplementExactValueTests =
     let r = complement(make_layout(4, 4), 32)
     doAssert r.shape === (4, 2)
     doAssert r.stride === (1, 16)
-  echo "  Exact-value: 10 Python assertions OK"
+
+  # Fully-folded corner, the size-1 sentinel (1):(0)
+  # when gap and rem both fold to 1
+  block:
+    let r = complement(make_layout(2, 1), 2)
+    doAssert r.shape === 1
+    doAssert r.stride === 0
+
+  # Overlapping strides, the second gap clamps to 1
+  # (stride below the accumulated span), only the remainder dimension survives
+  block:
+    let r = complement(make_layout((2, 2), (1, 1)))
+    doAssert r.shape === 2
+    doAssert r.stride === 2
+  echo "  Exact-value: 12 Python assertions OK"
 
 # ─── Symbol-routed static bound ──────────────────────────────────────
 proc runComplementSymbolBoundTests =

@@ -137,117 +137,45 @@ func filter_inactive*(layout: Layout): auto {.inline.} =
 # ═══════════════════════════════════════════════════════════════
 
 proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
-  ## Scalar complement formula.
-  ##   gap = max(1, st), prd = st * sh, rem = ceil_div(bound, prd)
-  ##   result = coalesce(Layout((gap, rem), (1, prd)))
+  ## Scalar complement, uniform emission:
+  ##
+  ## - gap = max(1, st), prd = st * sh, rem = ceil_div(bound, prd)
+  ## - result = coalesceBackward((gap, rem), (1, prd))
+  ## - Trivial dimensions fold away in the coalesce fold
   let stTyp = st.getTypeInst()
-
   if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
     return newCall(bindSym"make_layout", boundExpr, newLit(1))
 
-  template leafV(typ, node: NimNode): int =
-    ## Static leaf value from an Int[V] type or an int literal, -1 marks runtime
-    if typ.kind == nnkBracketExpr and $typ[0] == "Int":
-      typ[1].intVal.int
-    elif node.kind == nnkIntLit:
-      node.intVal.int
-    else:
-      -1
-
-  let shTyp = sh.getTypeInst()
-  let stV = leafV(stTyp, st)
-  let shV = leafV(shTyp, sh)
-  let boundV =
-    if boundExpr.kind == nnkIntLit: boundExpr.intVal.int
-    elif boundExpr.kind == nnkSym and boundExpr.getTypeInst.kind == nnkBracketExpr and
-        $boundExpr.getTypeInst[0] == "Int":
-      boundExpr.getTypeInst[1].intVal.int
-    elif boundExpr.kind == nnkCall and boundExpr[0].kind == nnkBracketExpr and
-        $boundExpr[0][0] == "Int":
-      boundExpr[0][1].intVal.int
-    else:
-      -1
-  if stV >= 1 and shV >= 1:
-    let gapV = max(1, stV)
-    let prdV = stV * shV
-    if boundV >= 1:
-      let remV = (boundV + prdV - 1) div prdV
-      if remV == 1 and gapV == 1:
-        return newCall(bindSym"make_layout", newLit(1), newLit(0))
-      elif remV == 1:
-        return newCall(bindSym"make_layout", newLit(gapV), newLit(1))
-      elif gapV == 1:
-          return newCall(bindSym"make_layout", newLit(remV), newLit(prdV))
-      elif prdV == gapV:
-          return newCall(bindSym"make_layout", newLit(gapV * remV), newLit(1))
-      else:
-        return newCall(bindSym"make_layout",
-          newTree(nnkTupleConstr, newLit(gapV), newLit(remV)),
-          newTree(nnkTupleConstr, newLit(1), newLit(prdV)))
-    let remExpr = newCall(bindSym"ceil_div", boundExpr, newLit(prdV))
-    if gapV == 1:
-      return newCall(bindSym"make_layout", remExpr, newLit(prdV))
-    elif prdV == gapV:
-      return newCall(bindSym"make_layout",
-        newCall(bindSym"*", newLit(gapV), remExpr), newLit(1))
-    else:
-      return newCall(bindSym"make_layout",
-        newTree(nnkTupleConstr, newLit(gapV), remExpr),
-        newTree(nnkTupleConstr, newLit(1), newLit(prdV)))
-
-  let gap = newCall(bindSym"max", newLit(1), st)
+  let gap = newCall(bindSym"max", IntCT(1), st)
   let prd = newCall(bindSym"*", st, sh)
   let rem = newCall(bindSym"ceil_div", boundExpr, prd)
-  newCall(bindSym"coalesce",
-    newCall(bindSym"make_layout",
-      newTree(nnkTupleConstr, gap, rem),
-      newTree(nnkTupleConstr, newLit(1), prd)))
-
-# ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
-#  Pure seq-based helpers (no NimNode manipulation)
-# ═══════════════════════════════════════════════════════════════
+  newCall(bindSym"coalesceBackward",
+    newTree(nnkTupleConstr, gap, rem),
+    newTree(nnkTupleConstr, newLit(1), prd))
 
 proc complementGaps(
-    strides, shapes: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
-  ## Build the full complement as a LayoutCT, gap dimensions plus the remainder.
+    strides: seq[int]; shNode, boundExpr: NimNode): LayoutCT {.compileTime.} =
+  ## Build the complement as (gap, cur) dimensions in ascending-stride order,
+  ## then the remainder (ceil_div(bound, cur), cur).
   ##
-  ## - Dimensions fold in ascending-stride order, each contributes a gap
-  ##   dimension (stride div cur, cur) and advances cur = stride * shape
-  ## - Runtime shapes advance cur with a runtime expression, the fold
-  ##   continues past them
-  ## - Statically-1 dimensions contribute nothing
-  var cur = 1
-  var curNode: NimNode = IntCT(1)
-  var curStatic = true
+  ## - `cur` is the span end of the previous dimension, `Int[s] * shape`
+  ##   is static when the shape is static, a runtime product otherwise
+  ## - Gaps are at least 1, a static gap of 1 folds away in the coalesce fold
   result = LayoutCT()
+  var curNode = IntCT(1)
   for idx in getIndicesSortedByStride(strides):
-    if curStatic:
-      let gap = if strides[idx] > cur: strides[idx] div cur else: 1
-      if gap > 1:
-        result.append(IntCT(gap), IntCT(cur))
-    else:
-      # cur is a runtime expression, the gap cannot be proven statically
-      # and runtime dimensions are appended unconditionally
-      result.append(newCall(bindSym"div", IntCT(strides[idx]), curNode), curNode)
-    if shapes[idx] == DynamicSentinel:
-      # runtime shape, cur advances with a runtime expression
-      curNode = newCall(bindSym"*", IntCT(strides[idx]),
-                        newTree(nnkBracketExpr, shNode, newLit(idx)))
-      curStatic = false
-    else:
-      # static shape, cur folds back to Int[N]
-      cur = strides[idx] * shapes[idx]
-      curNode = IntCT(cur)
-      curStatic = true
-  let rem = newCall(bindSym"ceil_div", boundExpr, curNode)
-  result.append(rem, curNode)
+    result.append(
+      newCall(bindSym"max", IntCT(1),
+              newCall(bindSym"div", IntCT(strides[idx]), curNode)),
+      curNode)
+    curNode = newCall(bindSym"*", IntCT(strides[idx]),
+                      newTree(nnkBracketExpr, shNode, newLit(idx)))
+  result.append(newCall(bindSym"ceil_div", boundExpr, curNode), curNode)
 
 proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
-  ## Multi-dimension complement, sort by stride and fold to fill gaps.
-  ## All strides must be static Int[N] (compile-time check).
+  ## Multi-dimension complement, dimensions folded in ascending-stride order.
+  ## All strides must be static Int leaves (compile-time check).
   let stTyp = st.getTypeInst()
-  let shTyp = sh.getTypeInst()
 
   doAssert stTyp.kind == nnkTupleConstr,
     "complementMulti: expected tuple type for strides"
@@ -257,9 +185,10 @@ proc complementMulti(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
       "complement: multi-dimension with dynamic strides not supported at index " & $i
 
   let strides = toSeqStaticInts(stTyp)
-  let shapes  = toSeqStaticInts(shTyp)
-  let acc = complementGaps(strides, shapes, sh, boundExpr)
-  newCall(bindSym"coalesce", acc.emit())
+  let acc = complementGaps(strides, sh, boundExpr)
+  newCall(bindSym"coalesceBackward",
+    newTree(nnkPar, acc.shape),
+    newTree(nnkPar, acc.stride))
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
