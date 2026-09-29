@@ -49,68 +49,45 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
       result = newCall(bindSym"make_layout", shLeaves[0], stLeaves[0])
     return
 
-  var resShapes: seq[NimNode] = @[]
-  var resStrides: seq[NimNode] = @[]
-  var resSTypes: seq[NimNode] = @[]
-  var resSTypes2: seq[NimNode] = @[]
-
-  resShapes.add shLeaves[0]
-  resStrides.add stLeaves[0]
-  resSTypes.add shTypes[0]
-  resSTypes2.add stTypes[0]
-
-  if preserveTrailing:
-    if isStaticOne(shTypes[0]):
-      resShapes[0] = IntCT(low(int))
-      resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
+  # chunks collect back-to-front while the walk merges frontward, the head
+  # is the current front chunk, the emission walks the chunk list backward
+  type Chunk = tuple[shape, shapeTy, stride, strideTy: NimNode]
+  var chunks: seq[Chunk]
+  var head: Chunk = (shLeaves[0], shTypes[0], stLeaves[0], stTypes[0])
+  if preserveTrailing and isStaticOne(shTypes[0]):
+    head.shape = IntCT(low(int))
+    head.shapeTy = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
 
   for k in 1 ..< shLeaves.len:
-    let curST = shTypes[k]
-    let curST2 = stTypes[k]
-
-    if isStaticOne(curST):
+    if isStaticOne(shTypes[k]):
       continue
-
-    if isStaticOne(resSTypes[0]):
-      resShapes[0] = shLeaves[k]
-      resStrides[0] = stLeaves[k]
-      resSTypes[0] = curST
-      resSTypes2[0] = curST2
-      continue
-
-    if isStaticInt(curST) and isStaticInt(curST2) and
-       isStaticInt(resSTypes2[0]) and isStaticInt(resSTypes[0]):
-      let curProd = getStaticInt(curST) * getStaticInt(curST2)
-      if curProd == getStaticInt(resSTypes2[0]):
-        let mergedVal = getStaticInt(curST) * getStaticInt(resSTypes[0])
-        let mergedNode = IntCT(mergedVal)
-        resShapes[0] = mergedNode
-        resStrides[0] = stLeaves[k]
-        resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal))
-        resSTypes2[0] = curST2
-        continue
-
-    resShapes.insert(shLeaves[k], 0)
-    resStrides.insert(stLeaves[k], 0)
-    resSTypes.insert(curST, 0)
-    resSTypes2.insert(curST2, 0)
+    if isStaticOne(head.shapeTy):
+      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
+    elif isStaticInt(shTypes[k]) and isStaticInt(stTypes[k]) and
+        isStaticInt(head.shapeTy) and isStaticInt(head.strideTy) and
+        getStaticInt(shTypes[k]) * getStaticInt(stTypes[k]) == getStaticInt(head.strideTy):
+      let mergedVal = getStaticInt(shTypes[k]) * getStaticInt(head.shapeTy)
+      head = (IntCT(mergedVal),
+              newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal)),
+              stLeaves[k], stTypes[k])
+    else:
+      chunks.add head
+      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
+  chunks.add head
 
   if not preserveTrailing:
-    while resShapes.len > 0 and isStaticOne(resSTypes[^1]):
-      discard resShapes.pop()
-      discard resStrides.pop()
-      discard resSTypes.pop()
-      discard resSTypes2.pop()
+    while chunks.len > 0 and isStaticOne(chunks[0].shapeTy):
+      discard chunks.pop()  # back chunks sit at the seq front
 
-  if resShapes.len == 0:
+  if chunks.len == 0:
     result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
     return
 
   var rShape = newNimNode(nnkTupleConstr)
   var rStride = newNimNode(nnkTupleConstr)
-  for idx in 0 ..< resShapes.len:
-    rShape.add resShapes[idx]
-    rStride.add resStrides[idx]
+  for idx in countdown(chunks.len - 1, 0):
+    rShape.add chunks[idx].shape
+    rStride.add chunks[idx].stride
   if rShape.len == 1:
     rShape = rShape[0]
     rStride = rStride[0]
