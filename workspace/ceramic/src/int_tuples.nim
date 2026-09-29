@@ -22,20 +22,12 @@ export int_tuples_maps
 export int_tuples_transforms
 export int_tuples_zips
 
-#  Leaf procs — dispatch on exact type
-
-template makeIntTupleLeaf*(leaf: int): int =
-  leaf
-
-template makeIntTupleLeaf*(leaf: static int): auto =
-  Int[leaf]()
-
-template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
-  x
-
 template makeIntTuple*(t: IntOrIntTuple): auto =
-  mixin makeIntTupleLeaf # Keep symbol open for X / Y markers defined in layout_indexing
-  mapLeavesWith(t, makeIntTupleLeaf(it))
+  mapLeavesWith(t):
+    when it is static int:
+      Int[it]()
+    else:
+      it
 
 
 # ═══════════════════════════════════════════════════════════════

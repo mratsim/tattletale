@@ -55,9 +55,6 @@ template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
 template `*`*(s: int; c: X): Int[0] = Int[0]()
 template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
 
-template makeIntTupleLeaf*(leaf: X): X =
-  leaf
-
 template mapLeavesWith*(singleton: X, body: untyped): X =
   singleton
 
