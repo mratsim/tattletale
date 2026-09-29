@@ -140,8 +140,6 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
   ## Build the flat pack for `tNode`, one node per leaf, `body` with `it`
   ## replaced by the leaf access. Returns the untyped tuple construction.
 
-  echo "--- mapLeavesWith debug: body ---"
-  echo treeRepr(body)
   proc replaceNodes(ast, what, by: NimNode): NimNode =
     proc inspect(node: NimNode): NimNode =
       case node.kind
