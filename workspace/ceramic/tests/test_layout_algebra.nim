@@ -999,6 +999,22 @@ proc runDivideTests: void =
   checkDivMap(make_layout((3, 4), (1, 3)), 6)
   echo "    3/3"
 
+  echo "  Rank-1 closed form (value-identical to the general formula):"
+  doAssert logical_divide(make_layout(10, 2), 4) === ((4, 3), (2, 8))
+  doAssert logical_divide(make_layout(10, 0), 4) === ((4, 3), (0, 0))
+  doAssert logical_divide(make_layout(10, 2), Int[4]()) === ((4, 3), (2, 8))
+  let dynS = 16
+  let dynT = 4
+  doAssert logical_divide(make_layout(dynS, 1), 4) === ((4, 4), (1, 4))
+  doAssert logical_divide(make_layout(16, 1), dynT) === ((4, 4), (1, 4))
+  doAssert logical_divide(make_layout(dynS, 1), dynT) === ((4, 4), (1, 4))
+  echo "    6/6"
+
+  echo "  Closed form through the per-dimension tuple-tiler path:"
+  doAssert logical_divide(make_layout((10, 8), (2, 1)), (4, 4)) ===
+    (((4, 3), (4, 2)), ((2, 8), (1, 4)))
+  echo "    1/1"
+
   echo "  Python port: test_logical_divide_tuple_tiler + test_logical_divide_2d:"
   checkDivMap(make_layout((4, 8)), (2, 4))
   checkDivMap(make_layout((4, 6), (1, 4)), (2, 3))

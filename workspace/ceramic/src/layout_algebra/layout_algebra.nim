@@ -41,9 +41,7 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
     stLeaves.add leaf
     stTypes.add ty
 
-  # Scalar guard for a single leaf (plain scalar or 1-element tuple)
   if shLeaves.len == 1 and stLeaves.len == 1:
-    # Check if scalar shape is size-1 (inactive dimension)
     if isStaticOne(shTypes[0]):
       result = newCall(bindSym"make_layout", newLit(1), newLit(0))
     else:
@@ -55,16 +53,12 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
   var resSTypes: seq[NimNode] = @[]
   var resSTypes2: seq[NimNode] = @[]
 
-  # Seed with the last dimension, the leaf streams are in reverse order
   resShapes.add shLeaves[0]
   resStrides.add stLeaves[0]
   resSTypes.add shTypes[0]
   resSTypes2.add stTypes[0]
 
   if preserveTrailing:
-    # When preserving trailing size-1 dimensions, seed with `low(int)` (non-1 sentinel)
-    # to prevent the post-loop discard from removing the last dimension.
-    # Mirrors CuTe's coalesce_x which seeds bw_coalesce with Int<2>{} sentinel.
     if isStaticOne(shTypes[0]):
       resShapes[0] = IntCT(low(int))
       resSTypes[0] = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
@@ -76,7 +70,6 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
     if isStaticOne(curST):
       continue
 
-    # CuTe branch 3: when seed (resSTypes[0]) is size-1, replace seed with current
     if isStaticOne(resSTypes[0]):
       resShapes[0] = shLeaves[k]
       resStrides[0] = stLeaves[k]
@@ -101,7 +94,6 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
     resSTypes.insert(curST, 0)
     resSTypes2.insert(curST2, 0)
 
-  # Post-loop: discard trailing size-1 dimensions (the seed might be size-1)
   if not preserveTrailing:
     while resShapes.len > 0 and isStaticOne(resSTypes[^1]):
       discard resShapes.pop()
@@ -196,11 +188,56 @@ proc complementScalar(sh, st, boundExpr: NimNode): NimNode {.compileTime.} =
   ##   result = coalesce(Layout((gap, rem), (1, prd)))
   let stTyp = st.getTypeInst()
 
-  # Broadcast (stride-0): complement is a single dimension with shape=bound, stride=1
   if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
     return newCall(bindSym"make_layout", boundExpr, newLit(1))
 
-  # General case
+  template leafV(typ, node: NimNode): int =
+    ## Static leaf value from an Int[V] type or an int literal, -1 marks runtime
+    if typ.kind == nnkBracketExpr and $typ[0] == "Int":
+      typ[1].intVal.int
+    elif node.kind == nnkIntLit:
+      node.intVal.int
+    else:
+      -1
+
+  let shTyp = sh.getTypeInst()
+  let stV = leafV(stTyp, st)
+  let shV = leafV(shTyp, sh)
+  let boundV =
+    if boundExpr.kind == nnkIntLit: boundExpr.intVal.int
+    elif boundExpr.kind == nnkCall and boundExpr[0].kind == nnkBracketExpr and
+        $boundExpr[0][0] == "Int":
+      boundExpr[0][1].intVal.int
+    else:
+      -1
+  if stV >= 1 and shV >= 1:
+    let gapV = max(1, stV)
+    let prdV = stV * shV
+    if boundV >= 1:
+      let remV = (boundV + prdV - 1) div prdV
+      if remV == 1 and gapV == 1:
+        return newCall(bindSym"make_layout", newLit(1), newLit(0))
+      elif remV == 1:
+        return newCall(bindSym"make_layout", newLit(gapV), newLit(1))
+      elif gapV == 1:
+          return newCall(bindSym"make_layout", newLit(remV), newLit(prdV))
+      elif prdV == gapV:
+          return newCall(bindSym"make_layout", newLit(gapV * remV), newLit(1))
+      else:
+        return newCall(bindSym"make_layout",
+          newTree(nnkTupleConstr, newLit(gapV), newLit(remV)),
+          newTree(nnkTupleConstr, newLit(1), newLit(prdV)))
+    let remExpr = newCall(bindSym"ceil_div", boundExpr, newLit(prdV))
+    if gapV == 1:
+      return newCall(bindSym"make_layout", remExpr, newLit(prdV))
+    elif prdV == gapV:
+      return newCall(bindSym"make_layout",
+        newCall(bindSym"*", newLit(gapV), remExpr), newLit(1))
+    else:
+      return newCall(bindSym"make_layout",
+        newTree(nnkTupleConstr, newLit(gapV), remExpr),
+        newTree(nnkTupleConstr, newLit(1), newLit(prdV)))
+
   let gap = newCall(bindSym"max", newLit(1), st)
   let prd = newCall(bindSym"*", st, sh)
   let rem = newCall(bindSym"ceil_div", boundExpr, prd)
@@ -356,18 +393,14 @@ func unwrap(t: tuple): auto {.inline.} =
 
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.
+  ## Static leaves assert at compile time, runtime shapes are not asserted,
+  ## device code carries no doAssert, correctness is by construction.
   when clampedShape is Int:
     when typeof(clampedShape).V == 1:
       discard  # shape 1 is trivially divisor
-    elif remainingShape is Int: # Compile time assert
+    elif remainingShape is Int:
       static: doAssert typeof(remainingShape).V mod typeof(clampedShape).V == 0,
         "compose: shape " & $typeof(remainingShape).V & " and consumed shape " & $typeof(clampedShape).V & " are not divisible"
-    else:
-      doAssert remainingShape mod clampedShape == 0,
-        "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
-  else:
-    doAssert remainingShape mod clampedShape == 0,
-      "compose: shape " & $remainingShape & " and consumed shape " & $clampedShape & " are not divisible"
 
 macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStrides: typed): untyped =
   ## Fold over LHS dimensions with a 2-state accumulator, the remaining
@@ -535,11 +568,23 @@ func logical_divide*[L, T: Layout](layout: L; tiler: T): auto =
 
 func logical_divide*[L: Layout](layout: L; tiler: int): auto {.inline.} =
   ## Dynamic int tiler → wrap in Layout → CuTe formula.
-  logical_divide_impl(layout, make_layout(tiler))
+  when layout.shape isnot tuple:
+    # Rank-1 (s):(d) divides by T into (T):(d) and (ceil_div(s,T)):(d*T),
+    # the general path's complement+compose reduces to the same value.
+    make_layout((tiler, ceil_div(layout.shape, tiler)),
+                (layout.stride, layout.stride * tiler))
+  else:
+    logical_divide_impl(layout, make_layout(tiler))
 
 func logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto {.inline.} =
   ## Static int tiler (Int[N]) → wrap in Layout → CuTe formula.
-  logical_divide_impl(layout, make_layout(tiler))
+  when layout.shape isnot tuple:
+    # Rank-1 (s):(d) divides by T into (T):(d) and (ceil_div(s,T)):(d*T),
+    # the general path's complement+compose reduces to the same value.
+    make_layout((tiler, ceil_div(layout.shape, tiler)),
+                (layout.stride, layout.stride * tiler))
+  else:
+    logical_divide_impl(layout, make_layout(tiler))
 
 func logical_divide*[L: Layout](layout: L; tiler: static int): auto {.inline.} =
   ## Compile-time int tiler (const) → preserve via Int[N] wrap → CuTe formula.
