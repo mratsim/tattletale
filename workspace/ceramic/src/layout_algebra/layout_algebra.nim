@@ -233,31 +233,27 @@ proc composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode];
       ceil_div(shVk, absRemV)
     else:
       DynamicSentinel
-    let currShape = body.emitLet("currShape", lhsShLeaves[k])
-    let currStride = body.emitLet("currStride", lhsStLeaves[k])
+    let currShape = lhsShLeaves[k]
     let absRem = body.emitLet("absRem", bindSym"abs".newCall(remStN))
-    let nextSh = body.emitLet("nextShape", bindSym"ceil_div".newCall(currShape, absRem))
-    let nextStExpr = nnkInfix.newTree(
-      ident"*",
-      bindSym"ceil_div".newCall(absRem, currShape),
-      bindSym"sign".newCall(remStN))
     if nextShV != 1 and shV != 1:
       let clampedV = if nextShV != DynamicSentinel and shV != DynamicSentinel:
         min(nextShV, shV)
       else:
         DynamicSentinel
-      if clampedV != DynamicSentinel and shV != DynamicSentinel and clampedV != 1:
+      if clampedV != DynamicSentinel:
         doAssert shV mod clampedV == 0,
           "compose: shape " & $shV & " and consumed shape " & $clampedV & " are not divisible"
-      let clamped = body.emitLet("clampedShape", bindSym"min".newCall(nextSh, remShN))
-      let remSh2 = body.emitLet("remainingShape", nnkInfix.newTree(ident"div", remShN, clamped))
+      let clamped = body.emitLet("clampedShape", bindSym"min".newCall(
+        bindSym"ceil_div".newCall(currShape, absRem), remShN))
+      remShN = body.emitLet("remainingShape", nnkInfix.newTree(ident"div", remShN, clamped))
       accSh.add clamped
-      accSt.add nnkInfix.newTree(ident"*", remStN, currStride)
-      remShN = remSh2
-      if clampedV != DynamicSentinel and shV != DynamicSentinel:
+      accSt.add nnkInfix.newTree(ident"*", remStN, lhsStLeaves[k])
+      if clampedV != DynamicSentinel:
         shV = shV div clampedV
-    let nextSt = body.emitLet("nextStride", nextStExpr)
-    remStN = nextSt
+    remStN = body.emitLet("remainingStride", nnkInfix.newTree(
+      ident"*",
+      bindSym"ceil_div".newCall(absRem, currShape),
+      bindSym"sign".newCall(remStN)))
     if absRemV != DynamicSentinel and shVk != DynamicSentinel and stV != DynamicSentinel:
       stV = ceil_div(absRemV, shVk) * sign(stV)
 
@@ -268,32 +264,27 @@ macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides:
   ##
   ## Returns the composed layout as an untyped node.
 
-  var lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode]
-  for (leaf, ty) in flatLeaves(lhsShapes):
-    lhsShLeaves.add leaf
-    lhsShTys.add ty
-  for (leaf, ty) in flatLeaves(lhsStrides):
-    lhsStLeaves.add leaf
-    lhsStTys.add ty
-
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
-  let remShV0 = staticVal(remainingShape.getTypeInst())
   let remStV0 = staticVal(remainingStride.getTypeInst())
+  let lets = nnkLetSection.newTree(
+    nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
+    nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride))
   # static stride-0 RHS dimension, every coordinate maps to offset 0
   if remStV0 == 0:
     result = nnkStmtListExpr.newTree(
-      nnkLetSection.newTree(
-        nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
-        nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
-      bindSym"make_layout".newCall(remSh0, remSt0))
+      lets, bindSym"make_layout".newCall(remSh0, remSt0))
   else:
-    result = nnkStmtListExpr.newTree(
-      nnkLetSection.newTree(
-        nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
-        nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
-      composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys,
-                  remSh0, remSt0, remShV0, remStV0))
+    var lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode]
+    for (leaf, ty) in flatLeaves(lhsShapes):
+      lhsShLeaves.add leaf
+      lhsShTys.add ty
+    for (leaf, ty) in flatLeaves(lhsStrides):
+      lhsStLeaves.add leaf
+      lhsStTys.add ty
+    result = nnkStmtListExpr.newTree(lets, composeFold(
+      lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys, remSh0, remSt0,
+      staticVal(remainingShape.getTypeInst()), remStV0))
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
   ## Layer RHS dimensions one by one over the full coalesced LHS via mapDimensionsWith.
