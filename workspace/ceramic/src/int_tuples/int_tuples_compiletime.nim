@@ -200,6 +200,18 @@ func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
     # Dynamic int (or other) — mark as unknown (low(int))
     result.add low(int)
 
+proc tupleLeaf*(e: NimNode; count, idx: int): NimNode {.compileTime.} =
+  ## idx-th leaf of a flat IntOrIntTuple value expression node.
+  ## Returns:
+  ## - bare node for a scalar flat value (count == 1)
+  ## - bracket access for a tuple value at the idx-th element
+  ## TODO:
+  ## principled API, the leaf-access family has no single home yet
+  if count == 1:
+    e
+  else:
+    newTree(nnkBracketExpr, e, newLit(idx))
+
 func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
   ## Prefix product of a flat seq (DynamicSentinel treated as 1 for scan,
   ## but produce DynamicSentinel in output to mark unknown positions).

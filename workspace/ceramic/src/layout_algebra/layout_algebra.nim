@@ -476,116 +476,105 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 #  right_inverse, quasi-inverse sorted by stride
 # ═══════════════════════════════════════════════════════════════
 
-proc rightInverseChain(
-    strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
-  ## Return right-inverse dimensions as LayoutCT (empty if no chain found).
-  result = LayoutCT()
+func emitInverse(acc: LayoutCT): NimNode {.compileTime.} =
+  ## Coalesce the folded inverse dimensions of both inverses,
+  ## an empty fold collapses to the empty layout (1, 0).
+  if acc.shape.len == 0:
+    bindSym"make_layout".newCall(IntCT(1), newLit(0))
+  else:
+    bindSym"coalesce".newCall(acc.emit())
+
+type InverseChain = tuple[shape, stride, leafIdx: int]
+  ## One inverse chain element as flat values:
+  ## - shape, the shape value, DynamicSentinel marks a live leaf
+  ## - stride, the stride value
+  ## - leafIdx, the flat leaf index in the source shape,
+  ##   live only for a DynamicSentinel shape
+
+type InverseFoldFn = proc(strides, shapes, prefixProd: seq[int]): seq[InverseChain] {.nimcall.}
+
+proc getMaxContiguous(
+    strides, shapes, prefixProd: seq[int]): seq[InverseChain] =
+  ## Maximal contiguous chain of the stride-sorted dimensions, empty if none found:
+  ## - a dimension joins when its stride equals the chain span so far
+  ## - a dynamic shape ends the chain, the next stride span is undecidable
   var curr = 1
   for idx in getIndicesSortedByStride(strides):
     if strides[idx] == curr:
-      result.append(
-        newTree(nnkBracketExpr, shNode, newLit(idx)),
-        IntCT(prefixProd[idx]))
-      if shapes[idx] != DynamicSentinel:
-        curr = strides[idx] * shapes[idx]
-      else:
+      result.add((shapes[idx], prefixProd[idx], idx))
+      if shapes[idx] == DynamicSentinel:
         break
+      curr = strides[idx] * shapes[idx]
 
-macro rightInverseImpl(sh, st: typed): untyped =
-  ## right_inverse on flattened (shape, stride).
-  let stTyp = st.getTypeInst()
-  let shTyp = sh.getTypeInst()
-
-  # Scalar, no sorting needed
-  if shTyp.kind != nnkTupleConstr:
-    let stNode = stTyp
-    if stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 1:
-      result = newCall(bindSym"make_layout", sh, st)
+proc inverseFold(shTy, stTy, shNode: NimNode;
+                 fold: InverseFoldFn): LayoutCT {.compileTime.} =
+  ## inverse core shared by both inverses, folds arrive directly:
+  ## - fold over the flat values, emit the chain as Int values
+  ## - a dynamic shape leaf comes from the value node, a scalar shape is bare
+  let shV = toSeqStaticInts(shTy)
+  let stV = toSeqStaticInts(stTy)
+  for chain in fold(stV, shV, prefixProduct(shV)):
+    let leaf = if chain.shape == DynamicSentinel:
+      tupleLeaf(shNode, shV.len, chain.leafIdx)
     else:
-      result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-    return
+      IntCT(chain.shape)
+    result.append(leaf, IntCT(chain.stride))
 
-  # Multi-dimension, extract values and fill the LayoutCT via the helper
-  let strides = toSeqStaticInts(stTyp)
-  let shapes  = toSeqStaticInts(shTyp)
-  let prefixProd = prefixProduct(shapes)
-  let acc = rightInverseChain(strides, shapes, prefixProd, sh)
-  if acc.shape.len == 0:
-    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-  else:
-    result = newCall(bindSym"coalesce", acc.emit())
+macro rightInverseEmit(sh, st: typed): untyped =
+  emitInverse(inverseFold(sh.getTypeInst(), st.getTypeInst(), sh, getMaxContiguous))
 
 func right_inverse*(layout: Layout): auto =
-  ## Quasi-inverse: L(R(i)) == i for all i < size(R).
-  ## Sorts dimensions by stride, finds max contiguous chain.
+  ## Quasi-inverse, the largest injective R with L(R(i)) == i.
+  ## Returns:
+  ## - a coalesced Layout, typically lower rank than L
+  ## - (1, 0) when no chain exists
   let c = coalesce(layout)
-  rightInverseImpl(flatten(c.shape), flatten(c.stride))
+  rightInverseEmit(flatten(c.shape), flatten(c.stride))
 
 # ═══════════════════════════════════════════════════════════════
 #  left_inverse, left inverse (injective layouts only)
 # ═══════════════════════════════════════════════════════════════
 
-proc leftInverseDimensions*(
-    strides, shapes, prefixProd: seq[int]; shNode: NimNode): LayoutCT {.compileTime.} =
-  ## Return left-inverse dimensions as a LayoutCT.
-  ## Builds from stride ratios:
-  ##   result_shape[i] = stride / size_so_far
-  ##   result_prefix[i] = prefixProd[prev_idx]
-  result = LayoutCT()
+proc getGaps(
+    strides, shapes, prefixProd: seq[int]): seq[InverseChain] =
+  ## Returns the left-inverse dimensions as a LayoutCT, built from stride ratios:
+  ##
+  ##   result_shape[i]  = stride / size_so_far
+  ##   result_stride[i] = prefixProd of the previous stride-sorted dimension
+  ##
+  ## Left-inverse dimensions as (gap, stride) values plus the tail, built
+  ## from stride ratios, all strides must be static (compile-time assert)
   var sizeSoFar = 1
   var prevIdx = -1
   var prevPrefix = 0
   for idx in getIndicesSortedByStride(strides):
     if strides[idx] == 0:
       continue
+    doAssert strides[idx] != DynamicSentinel,
+      "left_inverse: dynamic strides are not chainable"
     doAssert strides[idx] mod sizeSoFar == 0,
       "left_inverse: stride " & $strides[idx] & " not divisible by " & $sizeSoFar
-    if prevIdx == -1:
-      # First dimension, computed shape and zero stride
-      result.append(IntCT(strides[idx] div sizeSoFar), IntCT(0))
-    else:
-      # Intermediate dimension, computed shape and previous prefix as stride
-      result.append(IntCT(strides[idx] div sizeSoFar), IntCT(prevPrefix))
+    let gap = strides[idx] div sizeSoFar
+    # a unit gap marks no hole, the final coalesce would drop the shape-1 head
+    if gap != 1:
+      result.add((gap, prevPrefix, idx))
     sizeSoFar = strides[idx]
     prevIdx = idx
     prevPrefix = prefixProd[idx]
-  # Last dimension from original layout
-  result.append(newTree(nnkBracketExpr, shNode, newLit(prevIdx)), IntCT(prevPrefix))
+  if prevIdx >= 0:
+    # tail = the last stride-sorted dimension's own shape
+    result.add((shapes[prevIdx], prevPrefix, prevIdx))
 
-macro leftInverseImpl(sh, st: typed): untyped =
-  ## left_inverse on flattened (shape, stride). All strides must be static.
-  let stTyp = st.getTypeInst()
-  let shTyp = sh.getTypeInst()
-
-  if shTyp.kind != nnkTupleConstr:
-    let stNode = stTyp
-    if stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 1:
-      result = newCall(bindSym"make_layout", sh, st)
-    elif stNode.kind == nnkBracketExpr and $stNode[0] == "Int" and stNode[1].intVal == 0:
-      result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-    else:
-      # Non-unit, non-zero stride: build left_inverse from stride ratios
-      let strideVal = stNode[1].intVal
-      var acc = LayoutCT()
-      acc.append(IntCT(strideVal), IntCT(0))
-      acc.append(sh, IntCT(1))
-      result = newCall(bindSym"coalesce", acc.emit())
-    return
-
-  let strides = toSeqStaticInts(stTyp)
-  let shapes  = toSeqStaticInts(shTyp)
-  let prefixProd = prefixProduct(shapes)
-  let acc = leftInverseDimensions(strides, shapes, prefixProd, sh)
-  if acc.shape.len == 0:
-    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-  else:
-    result = newCall(bindSym"coalesce", acc.emit())
+macro leftInverseEmit(sh, st: typed): untyped =
+  emitInverse(inverseFold(sh.getTypeInst(), st.getTypeInst(), sh, getGaps))
 
 func left_inverse*(layout: Layout): auto =
-  ## Left inverse: Li(L(i)) == i for injective layouts.
-  ## Requires all-static strides. Builds from stride ratios.
+  ## Left inverse, Li(L(i)) == i for injective layouts.
+  ## Returns:
+  ## - a coalesced Layout over the static-stride gaps
+  ## - requires all static strides, compile-time assert
   let c = coalesce(layout)
-  leftInverseImpl(flatten(c.shape), flatten(c.stride))
+  leftInverseEmit(flatten(c.shape), flatten(c.stride))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -711,3 +700,4 @@ template tile_to_shape*(blk: Layout; target_shape: typed; ord_shape: static Stri
     let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
     let tiler = make_layout(product_shape, ord_shape)
     blocked_product(padded_blk, tiler)
+
