@@ -237,26 +237,7 @@ macro make_layout_like*(layout: Layout): untyped =
   ## - dimension 0 (stride 3) middle → stride 1*4 = 4
   ## - dimension 1 (stride 6) slowest → stride 1*4*2 = 8
 
-  let lTyp = layout.getTypeInst()
-  var shTyp, stTyp: NimNode
-  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
-    shTyp = lTyp[1]
-    stTyp = lTyp[2]
-  elif lTyp.kind == nnkSym:
-    # Aliased layout type
-    let objTy = lTyp.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          shTyp = field[2]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          stTyp = field[2]
-      if shTyp == nil or stTyp == nil:
-        error "make_layout_like: Layout object type missing shape/stride fields"
-    else:
-      error "make_layout_like: aliased layout did not yield an object type"
-  else:
-    error "make_layout_like: compile-time Layout expression required"
+  let (shTyp, stTyp) = layoutTypeArgs(layout)
 
   let shLeaves = flattenType(shTyp)
   let stLeaves = flattenType(stTyp)
@@ -305,25 +286,7 @@ macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
   ##   flatten to one `(VA,):(1|0,)` dimension
   ## - The V dimension carries stride-1, broadcast V keeps stride-0
   ## - The remaining leaves keep the view's order, compacted by stride value and scaled after the V dimension
-  let lTyp = layout.getTypeInst()
-  var shTyp, stTyp: NimNode
-  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
-    shTyp = lTyp[1]
-    stTyp = lTyp[2]
-  elif lTyp.kind == nnkSym:
-    let objTy = lTyp.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          shTyp = field[2]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          stTyp = field[2]
-      if shTyp == nil or stTyp == nil:
-        error "make_fragment_like: Layout object type missing shape/stride fields"
-    else:
-      error "make_fragment_like: aliased layout did not yield an object type"
-  else:
-    error "make_fragment_like: compile-time Layout expression required"
+  let (shTyp, stTyp) = layoutTypeArgs(layout)
 
   let shLeaves = flattenType(shTyp)
   let stLeaves = flattenType(stTyp)
