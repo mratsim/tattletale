@@ -23,13 +23,13 @@
 ##
 ## Excluded names and their scope:
 ##
-## | Excluded                           | Scope                                   |
-## | ---------------------------------- | --------------------------------------- |
-## | `getIndicesSortedByStride`         | stride-sorted index permutation         |
-## | `complementImpl`                   | complement dispatch and emission        |
+## | Excluded                                     | Scope                                   |
+## | -------------------------------------------- | --------------------------------------- |
+## | `getIndicesSortedByStride`                   | stride-sorted index permutation         |
+## | `complementImpl`                             | complement dispatch and emission        |
 ## | `getMaxContiguous`, `getGaps`, `composeImpl` | inverse-chain and composition internals |
-## | `unwrap`                           | macro helpers                           |
-## | `divisibilityCheck`, `LayoutCT`    | macro helpers                           |
+## | `unwrap`                                     | macro helpers                           |
+## | `LayoutCT`                                   | macro helpers                           |
 
 import
   workspace/ceramic/src/int_tuples,

@@ -185,111 +185,115 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 #  compose, apply a layout through another
 # ═══════════════════════════════════════════════════════════════
 
-template divisibilityCheck(remainingShape, clampedShape: untyped) =
-  ## Compile-time divisibility check between static shape leaves.
-  ## Runtime shapes are unchecked.
-  when clampedShape is Int:
-    when typeof(clampedShape).V == 1:
-      discard  # shape 1 is trivially divisor
-    elif remainingShape is Int:
-      static: doAssert typeof(remainingShape).V mod typeof(clampedShape).V == 0,
-        "compose: shape " & $typeof(remainingShape).V & " and consumed shape " & $typeof(clampedShape).V & " are not divisible"
+proc emitLet(body: NimNode; name: string; expr: NimNode): NimNode {.compileTime.} =
+  ## Bind `expr` to a fresh let symbol appended to `body`, return the symbol.
+  let sym = genSym(nskLet, name)
+  body.add nnkLetSection.newTree(
+    nnkIdentDefs.newTree(sym, newEmptyNode(), expr))
+  sym
 
-macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStrides: typed): untyped =
+proc staticVal(t: NimNode): int {.compileTime.} =
+  ## Static Int value of a type node, DynamicSentinel when not static.
+  if isStaticInt(t):
+    getStaticInt(t)
+  else:
+    DynamicSentinel
+
+proc composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode];
+                 remSh, remSt: NimNode; remShV, remStV: int): NimNode {.compileTime.} =
+  ## Composition fold over LHS dimensions as one flat let-chain:
+  ## - remaining shape and stride carry static values beside their nodes
+  ## - a static-1 next shape or remaining shape skips the dimension
+  ## - otherwise the clamped remainder accumulates one (shape, stride) pair
+  let R = lhsShLeaves.len
+  var remShN = remSh
+  var remStN = remSt
+  var shV = remShV
+  var stV = remStV
+  var accSh, accSt: seq[NimNode]
+  let body = newNimNode(nnkStmtList)
+  for k in 0 ..< R:
+    if k == R - 1:
+      let scaled = nnkInfix.newTree(ident"*", remStN, lhsStLeaves[k])
+      if accSh.len == 0:
+        return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(remShN)),
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(scaled))))
+      if shV == 1:
+        return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSh)),
+          bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSt))))
+      return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
+        bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSh & @[remShN])),
+        bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSt & @[scaled]))))
+    let shVk = staticVal(lhsShTys[k])
+    let stVk = staticVal(lhsStTys[k])
+    let absRemV = if stV != DynamicSentinel: abs(stV) else: DynamicSentinel
+    let nextShV = if shVk != DynamicSentinel and absRemV != DynamicSentinel:
+      ceil_div(shVk, absRemV)
+    else:
+      DynamicSentinel
+    let currShape = body.emitLet("currShape", lhsShLeaves[k])
+    let currStride = body.emitLet("currStride", lhsStLeaves[k])
+    let absRem = body.emitLet("absRem", bindSym"abs".newCall(remStN))
+    let nextSh = body.emitLet("nextShape", bindSym"ceil_div".newCall(currShape, absRem))
+    let nextStExpr = nnkInfix.newTree(
+      ident"*",
+      bindSym"ceil_div".newCall(absRem, currShape),
+      bindSym"sign".newCall(remStN))
+    if nextShV != 1 and shV != 1:
+      let clampedV = if nextShV != DynamicSentinel and shV != DynamicSentinel:
+        min(nextShV, shV)
+      else:
+        DynamicSentinel
+      if clampedV != DynamicSentinel and shV != DynamicSentinel and clampedV != 1:
+        doAssert shV mod clampedV == 0,
+          "compose: shape " & $shV & " and consumed shape " & $clampedV & " are not divisible"
+      let clamped = body.emitLet("clampedShape", bindSym"min".newCall(nextSh, remShN))
+      let remSh2 = body.emitLet("remainingShape", nnkInfix.newTree(ident"div", remShN, clamped))
+      accSh.add clamped
+      accSt.add nnkInfix.newTree(ident"*", remStN, currStride)
+      remShN = remSh2
+      if clampedV != DynamicSentinel and shV != DynamicSentinel:
+        shV = shV div clampedV
+    let nextSt = body.emitLet("nextStride", nextStExpr)
+    remStN = nextSt
+    if absRemV != DynamicSentinel and shVk != DynamicSentinel and stV != DynamicSentinel:
+      stV = ceil_div(absRemV, shVk) * sign(stV)
+
+macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides: typed): untyped =
   ## Fold over LHS dimensions with a 2-state accumulator, the remaining
   ## shape and stride, emitting one (shape, stride) dimension pair per
   ## unconsumed LHS dimension.
   ##
   ## Returns the composed layout as an untyped node.
 
-  var lhsShLeaves, lhsStLeaves: seq[NimNode]
-  for (leaf, _) in flatLeaves(lhsShapes):
+  var lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode]
+  for (leaf, ty) in flatLeaves(lhsShapes):
     lhsShLeaves.add leaf
-  for (leaf, _) in flatLeaves(lhsStrides):
+    lhsShTys.add ty
+  for (leaf, ty) in flatLeaves(lhsStrides):
     lhsStLeaves.add leaf
-  let R = lhsShLeaves.len
-
-  template consumeStep(currShLeaf, currStLeaf, remSh, remSt,
-                       currShape, currStride, absRem, nextSh, nextSt,
-                       clamped, remSh2, scaled, skipBody, elseBody) =
-    let currShape = currShLeaf
-    let currStride = currStLeaf
-    let absRem = abs(remSt)
-    let nextSh = ceil_div(currShape, absRem)
-    when nextSh is Int and typeof(nextSh) is Int[1] or
-        remSh is Int and typeof(remSh) is Int[1]:
-      skipBody
-    else:
-      elseBody
-
-  template consumeSkip(nextSt, absRem, currShape, remSt, tail) =
-    let nextSt = ceil_div(absRem, currShape) * sign(remSt)
-    tail
-
-  template consumeElse(clamped, nextSh, remSh, remSh2, nextSt,
-                       absRem, currShape, remSt, scaled, tail) =
-    let clamped = min(nextSh, remSh)
-    divisibilityCheck(remSh, clamped)
-    let remSh2 = remSh div clamped
-    let nextSt = ceil_div(absRem, currShape) * sign(remSt)
-    tail
-
-  template consumeLastShared(remSh, accShN, accStN, fullSh, fullSt) =
-    when remSh is Int and typeof(remSh) is Int[1]:
-      make_layout(unwrap(accShN), unwrap(accStN))
-    else:
-      make_layout(unwrap(fullSh), unwrap(fullSt))
-
-  proc emitStep(dimIdx: int; remSh, remSt: NimNode;
-                accSh, accSt: seq[NimNode]): NimNode =
-    ## Emit the fold step for LHS dimension `dimIdx`, nesting the next dimension's step.
-    if dimIdx >= R - 1:
-      let scaled = nnkInfix.newTree(ident"*", remSt, lhsStLeaves[dimIdx])
-      if accSh.len == 0:
-        return bindSym"make_layout".newCall(
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(remSh)),
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(scaled)))
-      let accShN = nnkTupleConstr.newTree(accSh)
-      let accStN = nnkTupleConstr.newTree(accSt)
-      let fullSh = nnkTupleConstr.newTree(accSh & @[remSh])
-      let fullSt = nnkTupleConstr.newTree(accSt & @[scaled])
-      return getAst(consumeLastShared(remSh, accShN, accStN, fullSh, fullSt))
-    else:
-      let currShape  = genSym(nskLet, "currShape")
-      let currStride = genSym(nskLet, "currStride")
-      let absRem     = genSym(nskLet, "absRem")
-      let nextSh     = genSym(nskLet, "nextShape")
-      let nextSt     = genSym(nskLet, "nextStride")
-      let clamped    = genSym(nskLet, "clampedShape")
-      let remSh2     = genSym(nskLet, "remainingShape")
-      let scaled     = nnkInfix.newTree(ident"*", remSt, currStride)
-      let skipTail = emitStep(dimIdx + 1, remSh, nextSt, accSh, accSt)
-      let skipBody = getAst(consumeSkip(nextSt, absRem, currShape, remSt, skipTail))
-      let elseTail = emitStep(dimIdx + 1, remSh2, nextSt,
-                              accSh & @[clamped], accSt & @[scaled])
-      let elseBody = getAst(consumeElse(clamped, nextSh, remSh, remSh2, nextSt,
-                                        absRem, currShape, remSt, scaled, elseTail))
-      return getAst(consumeStep(lhsShLeaves[dimIdx], lhsStLeaves[dimIdx],
-                                remSh, remSt, currShape, currStride, absRem,
-                                nextSh, nextSt, clamped, remSh2, scaled,
-                                skipBody, elseBody))
-
-  template strideZeroEntry(remSh, remSt, fold) =
-    when remSt is Int and typeof(remSt) is Int[0]:
-      # Static stride-0 RHS dimension, every coordinate maps to offset 0
-      make_layout(remSh, remSt)
-    else:
-      fold
+    lhsStTys.add ty
 
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
-  let firstStep = emitStep(0, remSh0, remSt0, @[], @[])
-  result = nnkStmtListExpr.newTree(
-    nnkLetSection.newTree(
-      nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
-      nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
-    getAst(strideZeroEntry(remSh0, remSt0, firstStep)))
-
+  let remShV0 = staticVal(remainingShape.getTypeInst())
+  let remStV0 = staticVal(remainingStride.getTypeInst())
+  # static stride-0 RHS dimension, every coordinate maps to offset 0
+  if remStV0 == 0:
+    result = nnkStmtListExpr.newTree(
+      nnkLetSection.newTree(
+        nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
+        nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
+      bindSym"make_layout".newCall(remSh0, remSt0))
+  else:
+    result = nnkStmtListExpr.newTree(
+      nnkLetSection.newTree(
+        nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
+        nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
+      composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys,
+                  remSh0, remSt0, remShV0, remStV0))
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
   ## Layer RHS dimensions one by one over the full coalesced LHS via mapDimensionsWith.
