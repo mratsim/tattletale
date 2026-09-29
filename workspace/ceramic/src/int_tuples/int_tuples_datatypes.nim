@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 
-import std/macros, std/typetraits
+import std/macros, std/typetraits, std/math
 import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
@@ -142,6 +142,7 @@ genBinOp(`mod`)
 genBinOp(`max`)
 genBinOp(`min`)
 genBinOp(`ceil_div`)
+genBinOp(`gcd`)
 
 func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
 

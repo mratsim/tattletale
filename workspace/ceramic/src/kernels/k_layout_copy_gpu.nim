@@ -18,10 +18,10 @@
 ## On CPU, use `k_layout_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
 ## which avoids divmod entirely via if/else branching and can fuse contiguous accesses.
 
-import std/macros
-import std/math
+import std/[math, typetraits]
 
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_copy_registry
@@ -31,121 +31,117 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
-# ═══════════════════════════════════════════════════════════════
-#  Layout staticness and alignment facts (copy-kernel side)
-# ═══════════════════════════════════════════════════════════════
-#
-#  Facts consumed by copyFrom to size the copy chunks,
-#  per CuTe copy.hpp AutoVectorizingCopyWithAssumedAlignment:
-#  - is_static<Layout> → `isStaticLayout` from the layout algebra
-#  - max_alignment(Layout) → `max_alignment` below
-#  - max_common_vector(a, b) comes from the layout algebra.
-
-template max_alignment*(L: Layout): int =
-  ## Maximum alignment of a layout, in elements:
-  ## - the largest N for which `upcast<N>(L)` is valid
-  ## - i.e. the largest chunk granularity that respects every static
-  ##   shape and stride of L
-  ##
-  ## Compile-time. Requires a fully static layout (checked by callers).
-  ##
-  ## Examples:
-  ##   max_alignment(make_layout((32, 16), (1, 32)))  # → 512, coalesces to (512):(1)
-  ##   max_alignment(make_layout((32, 16), (32, 1)))  # → 16, columns are 32 elements apart
-  ##
-  ## Contract (cute layout.hpp max_alignment):
-  ## - dynamic leaves are masked out, shape → 1 and stride → 0
-  ## - only the static component of the layout is trusted
-  ## - dynamic strides are assumed to be large multiples of the result
-  block:
-    let flat = coalesce(L)
-    let filterL = mapLeavesWith(flat):
-      when it_sh is Int:
-        (it_sh, when it_st is Int: it_st else: Int[0]())
-      else:
-        (Int[1](), when it_st is Int: it_st else: Int[0]())
-    let permuted = logical_divide(filterL, right_inverse(filterL))
-    let leadingSize = size(make_layout(permuted.shape[0], permuted.stride[0]))
-    let trailingStride = permuted.stride[1]
-    when typeof(trailingStride) is tuple:
-      gcd(toIntVal(leadingSize), toIntVal(flatten(trailingStride)[0]))
-    else:
-      gcd(toIntVal(leadingSize), toIntVal(trailingStride))
-
-template copyFrom*[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: AnyTensor[T, ShS, StS]) =
-  ## Copy every logical element from src to dst.
-  ## Unpredicated whole-tensor copy with no predicate:
-  ## `dst(flat k) = src(flat k)` for all k.
-  ##
-  ## Flat-index iteration (`dst(i) = src(i)`) is divmod-based, slow but
-  ## unavoidable on GPU as if/else-based indexing would trigger warp
-  ## divergence per dimension.
-  ##
-  ## For fully static layouts (all shape and stride leaves compile-time)
-  ## the copy auto-vectorizes per CuTe's
-  ## `AutoVectorizingCopyWithAssumedAlignment<128>` (copy.hpp):
-  ##
-  ##   vec_bits = gcd(max_common_vector(dst, src)·elem_bits,
-  ##                  max_alignment(dst), max_alignment(src), 128)
-  ##
-  ## - `max_common_vector(dst, src)` is the longest contiguous run present
-  ##   in both element orders
-  ## - the 128-bit term is an assumption on the data pointers, not a check
-  ## - when the chunk is larger than one element, both tensors are recast
-  ##   to `array[vecElems, T]` chunks via `upcast` and copied with one
-  ##   multi-byte copy per chunk
-  ##
-  ## With any dynamic leaf (CuTe's 8-bit alignment tier), the assumed
-  ## alignment is 8 bits, which never exceeds an element, so the copy
-  ## degrades to the plain element loop below.
-  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
-    # The layout facts live in the types (`Int[N]` leaves), so rebuild
-    # compile-time layout values from the type parameters.
-    const
-      elemBits = sizeof(T) * 8
-      dstL = default(Layout[ShD, StD])
-      srcL = default(Layout[ShS, StS])
-      commonElems = max_common_vector(dstL, srcL)
-      alignBits = gcd(gcd(max_alignment(dstL), max_alignment(srcL)), 128)
-      vecBits = gcd(commonElems * elemBits, alignBits)
-    when vecBits mod 8 == 0 and vecBits mod elemBits == 0 and vecBits > elemBits:
-      const vecElems = vecBits div elemBits
-      when toIntVal(size(dst)) mod vecElems == 0:
-        type Chunk = array[vecElems, T]
-        let dstChunks = make_view(
-          when dst is TensorOwned:
-            cast[ptr UncheckedArray[Chunk]](addr dst.data[0])
-          else:
-            cast[ptr UncheckedArray[Chunk]](dst.data),
-          upcast(dst.layout, vecElems))
-        let srcChunks = make_view(
-          when src is TensorOwned:
-            cast[ptr UncheckedArray[Chunk]](addr src.data[0])
-          else:
-            cast[ptr UncheckedArray[Chunk]](src.data),
-          upcast(src.layout, vecElems))
-        static:
-          doAssert toIntVal(size(srcChunks)) == toIntVal(size(dstChunks)),
-            "copyFrom: recast chunk counts of src and dst disagree; " &
-            "the copy is not chunkable, use the element loop"
-        for i in 0 ..< size(dstChunks):
-          dstChunks(i) = srcChunks(i)
-      else:
-        for i in 0 ..< size(dst):
-          dst(i) = src(i)
-    else:
-      for i in 0 ..< size(dst):
-        dst(i) = src(i)
+func basePtr[T, Sh, St](t: (TensorView[T, Sh, St] or TensorOwned[T, Sh, St])): ptr T {.inline.} =
+  when typeof(t) is TensorOwned:
+    addr t.data[0]
   else:
-    for i in 0 ..< size(dst):
+    cast[ptr T](t.data)
+
+func getContiguity*[T, ShD, StD, ShS, StS](
+    dst: (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
+    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])): int {.inline.} =
+  ## Largest N with dst(flat k) == k == src(flat k) for all 0 <= k < N.
+  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
+    max_common_vector(default(Layout[ShD, StD]), default(Layout[ShS, StS]))
+  else:
+    const R = min(tupleLen(ShD), tupleLen(ShS))
+    var span = 1
+    for d in 0 ..< R:
+      let shD = dst.layout.shape[d]
+      let stD = dst.layout.stride[d]
+      let shS = src.layout.shape[d]
+      let stS = src.layout.stride[d]
+      if stD === span and stS === span:
+        span = min(span * shD, span * shS)
+      else:
+        break
+    span
+
+func copyElementwise[T, ShD, StD, ShS, StS](
+    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
+    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+  ## Element loop, one scalar load and store per logical element.
+  for i in 0 ..< size(src):
+    dst(i) = src(i)
+
+func copyFlatChunks[T, ShD, StD, ShS, StS](
+    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
+    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS]);
+    W: static int;
+    n: int) {.inline.} =
+  let
+    dstBase = basePtr(dst)
+    srcBase = basePtr(src)
+  type Chunk = array[W, T]
+  let
+    dstChunks = cast[ptr UncheckedArray[Chunk]](dstBase)
+    srcChunks = cast[ptr UncheckedArray[Chunk]](srcBase)
+    dstElems = cast[ptr UncheckedArray[T]](dstBase)
+    srcElems = cast[ptr UncheckedArray[T]](srcBase)
+    chunks = n div W
+  for c in 0 ..< chunks:
+    dstChunks[c] = srcChunks[c]
+  for i in chunks * W ..< n:
+    dstElems[i] = srcElems[i]
+
+func copyFrom*[T, ShD, StD, ShS, StS](
+    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
+    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+  ## Copies every element of src to dst, dst(flat k) = src(flat k).
+  ##
+  ## For runtime strides, assumes 128B alignment for vectorized copies
+  const elemBits = sizeof(T) * 8
+  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
+    const
+      commonSpan = max_common_vector(default(Layout[ShD, StD]), default(Layout[ShS, StS]))
+      vecElems = gcd(commonSpan, 128 div elemBits)
+    when commonSpan === size(default(Layout[ShD, StD])) and vecElems > 1:
+      const
+        dstL = default(Layout[ShD, StD])
+        srcL = default(Layout[ShS, StS])
+        dstCastable = dstL.stride.fold(true, acc and (
+          it.V == 0 or abs(it.V) mod vecElems == 0 or vecElems mod abs(it.V) == 0))
+        srcCastable = srcL.stride.fold(true, acc and (
+          it.V == 0 or abs(it.V) mod vecElems == 0 or vecElems mod abs(it.V) == 0))
+      when dstCastable and srcCastable:
+        const
+          dstChunksL = upcast(dstL, vecElems)
+          srcChunksL = upcast(srcL, vecElems)
+        when size(dstChunksL) === size(srcChunksL):
+          const nChunks = size(dstChunksL).V
+          type Chunk = array[vecElems, T]
+          let
+            dstChunks = make_view(cast[ptr UncheckedArray[Chunk]](basePtr(dst)), dstChunksL)
+            srcChunks = make_view(cast[ptr UncheckedArray[Chunk]](basePtr(src)), srcChunksL)
+          for i in 0 ..< nChunks:
+            dstChunks(i) = srcChunks(i)
+          return
+    copyElementwise(dst, src)
+  else:
+    let commonSpan = getContiguity(dst, src)
+    if commonSpan > 1:
+      let vecElems = min(commonSpan and -commonSpan, 128 div elemBits)
+      when 128 div elemBits >= 16:
+        if vecElems >= 16:
+          copyFlatChunks(dst, src, 16, commonSpan)
+      when 128 div elemBits >= 8:
+        if vecElems < 16 and vecElems >= 8:
+          copyFlatChunks(dst, src, 8, commonSpan)
+      when 128 div elemBits >= 4:
+        if vecElems < 8 and vecElems >= 4:
+          copyFlatChunks(dst, src, 4, commonSpan)
+      when 128 div elemBits >= 2:
+        if vecElems < 4 and vecElems >= 2:
+          copyFlatChunks(dst, src, 2, commonSpan)
+      if vecElems < 2:
+        copyFlatChunks(dst, src, 1, commonSpan)
+    for i in commonSpan ..< size(src):
       dst(i) = src(i)
 
-template copyFromIfAsync*[T, Sh, StA, StB, StP](
+func copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];
     src: TensorView[T, Sh, StA];
-    predicate: AnyTensor[bool, Sh, StP]) =
+    predicate: AnyTensor[bool, Sh, StP]) {.inline.} =
   ## Predicated **async** copy
   ##
   ## This requires commit_group to actually enqueue the copy
@@ -157,6 +153,7 @@ template copyFromIfAsync*[T, Sh, StA, StB, StP](
   else:
     for i in 0 ..< size(predicate):
       copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0])
+
 # ═════════════════════════════════════════════════════════════════════════
 #  The copy partition
 # ═════════════════════════════════════════════════════════════════════════
@@ -192,16 +189,16 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   ## - 1, the single chunk per thread position
   ## - tileK div kRows, the thread's chunks along k
   ##
+  ## The flat thread id decomposes as (tc, tr) against the grid.
+  ## Thread (tc, tr) owns the chunks at column tc and k-rows tr + i·kRows,
+  ## for i in 0 ..< tileK div kRows, flat chunk position c = tid + i·blockSize.
+  ##
   ## Numbers:
   ## - chunkWidth = numPacked(atom), 16 div sizeof(T) elements:
   ##   4 for int32, 16 for int8
   ## - chunkCols = tileM div chunkWidth, the tile's chunk-columns
   ##   (tileM = the first dimension, M for A, N for B)
   ## - kRows = blockSize div chunkCols, the grid's k-rows
-  ##
-  ## The flat thread id decomposes as (tc, tr) against the grid.
-  ## Thread (tc, tr) owns the chunks at column tc and k-rows tr + i·kRows,
-  ## for i in 0 ..< tileK div kRows, flat chunk position c = tid + i·blockSize.
   ##
   ## Example: a (16, 8) int32 tile with 8 threads has chunkWidth 4,
   ## chunkCols 4, kRows 2, layout ((4, 2), 1, 4). The chunk grid
@@ -211,7 +208,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   ##   m 0-3    T0  T4  T0  T4  T0  T4  T0  T4
   ##   ↓ 4-7    T1  T5  T1  T5  T1  T5  T1  T5
   ##     8-11   T2  T6  T2  T6  T2  T6  T2  T6
-  ##     12-15  T3  T7  T3  T7  T3  T7  T3  T7
+  ##     12-15   T3  T7  T3  T7  T3  T7  T3  T7
   ##
   ## Thread 4 (column 0, k-rows 1, 3, 5, 7) owns the chunks at
   ## element offsets m + 16·k = 16, 48, 80, 112.
