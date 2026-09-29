@@ -11,6 +11,7 @@ import ../src/layout_algebra
 import ../src/tensors
 import ../src/kernels/k_layout_copy_cpu
 import ../src/kernels/k_layout_copy_gpu
+import ../src/hardware/h_copy_dispatch
 
 {.experimental: "callOperator".}
 
@@ -405,6 +406,32 @@ testCopyFromOwnedDst()
 testCopyFromGuardRejectsAmbiguousMultiWrite()
 testCopyFromGuardBroadcastPair()
 testCopyFromGuardDynamicSrcStride()
+
+proc testCopyLegBlockingAtomExecutes() =
+  ## The gemm copy leg on the host target, the universal blocking atom.
+  ## A portable elementwise chunk copy, zero-fill predication, discard
+  ## commit and wait slots, executed here (no DSL, no GPU).
+  ## - two 16-byte chunks of 4 float32, chunk 1 predicated false
+  const units = 2
+  var dstBuf: array[8, float32]
+  var srcBuf: array[8, float32]
+  for i in 0 ..< 8:
+    srcBuf[i] = float32(i + 1)
+  for i in 0 ..< 8:
+    dstBuf[i] = 7.5'f32
+  var dstChunks = make_view(addr dstBuf[0], make_layout((1, units), (0, 4)))
+  let srcChunks = make_view(addr srcBuf[0], make_layout((1, units), (0, 4)))
+  var pred: array[units, bool] = [true, false]
+  let predChunks = make_view(addr pred[0], make_layout((1, units), (0, 1)))
+  copyFromIfAsync(dstChunks, srcChunks, predChunks)
+  float32.commit_group()
+  float32.wait_group(0)
+  for i in 0 ..< 4:
+    doAssert dstBuf[i] == float32(i + 1), "the predicated chunk copies"
+  for i in 4 ..< 8:
+    doAssert dstBuf[i] == 0.0'f32, "the false chunk zero-fills"
+
+testCopyLegBlockingAtomExecutes()
 
 echo "\n--- kernel_copy tests ---"
 echo "  All tests passed."

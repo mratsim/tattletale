@@ -12,14 +12,16 @@ import ./h_copy_configgen
 declareCopyAtoms:
   # Universal blocking copy
   # - a dst element <- src element assignment with no asm
-  # - any memory spaces, every backend
+  # - any memory spaces, every backend, the atom for every non-NVIDIA path
   # - synchronous, the commit/wait slots discard
+  # - a false predicate zero-fills the chunk, the GEMM ragged-K contract
   atom UNIVERSAL_COPY:
     kind: ckCopy
     srcSpace: spAny
     dstSpace: spAny
     vecBytes: 16
     minAlign: 1
+    zeroFill: true
     cache: cache_default
     instr: ""
   atom SM80_CP_ASYNC_CG_16B:

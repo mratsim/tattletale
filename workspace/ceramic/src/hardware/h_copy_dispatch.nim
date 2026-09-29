@@ -20,38 +20,56 @@ import workspace/crucible
 # ═════════════════════════════════════════════════════════════════════════
 
 func getCopyAsyncAtom*(T: typedesc): static auto {.inline.} =
-  ## The backend's async copy atom for element type `T`
+  ## Returns the backend's copy atom for element type `T`
+  ## - CUDA takes the async sm80 cp.async atom, committed and waited in groups
+  ## - every other target (host, OpenCL, Metal, Vulkan) takes the universal
+  ##   blocking copy atom, a portable elementwise chunk copy with discard
+  ##   commit and wait slots
   ##
   ## Reads the compiler target directly, not ccGetBackend.
   ## gemm_cta also instantiates on the host where ccGetBackend has no
   ## enclosing DSL block, the GEMM guard tests call it inside `compiles`.
-  when crucibleCompileTarget == ctMetal:
-    # Metal has no cp.async instruction, no async copy atom for it yet
-    {.error: "getCopyAsyncAtom: no async copy atom for the Metal backend".}
-  else:
-    # The sm80 cp.async atom serves CUDA and NVIDIA-OpenCL, whose GEMM
-    # kernels embed cp.async PTX like they already embed the mma.sync PTX.
-    # On the host the atom's asm only evaluates inside `compiles` checks,
-    # C codegen never reaches it.
+  when crucibleCompileTarget == ctCuda:
     SM80_CP_ASYNC_CG_16B_ZFILL
+  else:
+    UNIVERSAL_COPY
 
 # ═════════════════════════════════════════════════════════════════════════
 #  copy_unpack: instruction emission from a registry entry
 # ═════════════════════════════════════════════════════════════════════════
 
+proc blockingCopyBody(dstView, srcView, pred: NimNode;
+                      zfill: bool; chunkElems: int): NimNode =
+  ## The blocking tier's copy body, a portable elementwise chunk copy.
+  ## No instruction is emitted, it compiles and executes on every backend.
+  ## - the unit views anchor the chunk's start, the copy moves chunkElems
+  ##   elements from the anchor
+  ## - a zero-fill-capable atom zero-fills the chunk's elements
+  ##   on a false predicate
+  let i = ident("i")
+  let dstElems = newTree(nnkBracketExpr,
+    newTree(nnkDotExpr, dstView, ident"data"), i)
+  let srcElems = newTree(nnkBracketExpr,
+    newTree(nnkDotExpr, srcView, ident"data"), i)
+  let copyLoop = newTree(nnkForStmt, i,
+    newTree(nnkInfix, bindSym"..<", newIntLitNode(0), newIntLitNode(chunkElems)),
+    newTree(nnkAsgn, dstElems, srcElems))
+  let zeroLoop = newTree(nnkForStmt, i,
+    newTree(nnkInfix, bindSym"..<", newIntLitNode(0), newIntLitNode(chunkElems)),
+    newTree(nnkAsgn, dstElems, newIntLitNode(0)))
+  if zfill:
+    result = newTree(nnkIfStmt,
+      newTree(nnkElifBranch, pred, copyLoop),
+      newTree(nnkElse, zeroLoop))
+  else:
+    result = copyLoop
+
 proc copyBody(atomName: string;
               dstView, srcView: NimNode; srcSize: NimNode;
               zfill: bool; chunkBytes: int): NimNode =
+  ## The async atoms' asm body, the atom's instruction from the registry.
   let instr = bindSym(atomName & "_instr").getImpl()[2].strVal
-  if instr == "":
-    doAssert not zfill,
-      "copyIf: the universal copy has no zero-fill fold"
-    let i = ident("i")
-    result = newTree(nnkForStmt, i,
-      newTree(nnkInfix, bindSym".. <", newIntLitNode(0),
-        newCall(bindSym"size", dstView)),
-      newAssignment(newCall(dstView, i), newCall(srcView, i)))
-  else:
+  if true:
     var operandStr = " :: \"r\"(`smemInt`), \"l\"(`gmemPtr`), \"n\"(" &
       $chunkBytes & ")"
     if zfill:
@@ -69,20 +87,25 @@ proc copyBody(atomName: string;
       newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr)))
 
 macro copyIf*(atom: static CopyAtom;
-              dstView, srcView: untyped; pred: untyped): untyped =
-  ## Prepare a cp.async copy from global memory (gmem)
-  ##   to the per-warp shared memory (smem)
-  ## Contract, one predication behavior per atom capability
-  ## - issued asynchronously with other prepared copies in the same commit_group,
-  ##   waited for with wait_group
-  ## - a zero-fill-capable atom with a false predicate zero-fills the chunk
-  ##   (the instruction's src-size operand is the chunk width or 0)
+              dstView, srcView: untyped; pred: untyped;
+              chunkElems: static int): untyped =
+  ## Prepare one copy-atom chunk, dst <- src
+  ## Contract, one predication behavior per atom capability:
+  ## - the async atoms issue the chunk copy asynchronously,
+  ##   commit_group enqueues it, wait_group blocks for its completion
+  ## - a zero-fill-capable atom with a false predicate zero-fills the chunk,
+  ##   the instruction's src-size operand is the chunk width or 0,
+  ##   the blocking tier zero-fills the chunk's elements instead
   ## - other atoms guard the chunk copy with a runtime if
+  ## The unit views anchor the chunk's start, chunkElems is the chunk
+  ## width in elements (the atom's vecBytes div the element size)
   let name = $atom
   # the zeroFill const is typed as a bool, its impl node is an int literal (1/0)
   let zfill = bindSym(name & "_zeroFill").getImpl()[2].intVal == 1
   let chunkB = bindSym(name & "_vecBytes").getImpl()[2].intVal
-  if zfill:
+  if bindSym(name & "_instr").getImpl()[2].strVal == "":
+    result = blockingCopyBody(dstView, srcView, pred, zfill, chunkElems)
+  elif zfill:
     # the predicate folds into the instruction (srcSize 0 zero-fills the chunk)
     let srcSize = newTree(nnkIfExpr,
       newTree(nnkElifExpr, pred, newIntLitNode(chunkB)),

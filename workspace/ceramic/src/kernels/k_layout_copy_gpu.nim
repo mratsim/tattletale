@@ -134,11 +134,12 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
   ## and wait_group to wait for its completion
 
   const atom = getCopyAsyncAtom(T)
+  const chunkElems = atom.getVecBytes() div sizeof(T)
   when Sh.rank == 1:
-    copyIf(atom, dst, src, predicate.data[0])
+    copyIf(atom, dst, src, predicate.data[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
-      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0])
+      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0], chunkElems)
 
 # ═════════════════════════════════════════════════════════════════════════
 #   Partitioned copies

@@ -48,36 +48,40 @@ const test4 = cuda:
     var tv = make_view(C, L)
     copyFrom(tv, tv)
 
-# The gemm_cta copy leg, one cp.async atom chunk per predicate unit,
+# The gemm_cta copy leg, one copy-atom chunk per predicate unit,
 # then the group commit and wait resolved from the element type
-# (the universal atom abstraction). Compile-checked for CUDA
-# and NVIDIA-OpenCL. The chunk views stand in for partition_S
+# (the universal atom abstraction).
+# - CUDA takes the async sm80 cp.async atom, committed and waited in groups
+# - OpenCL takes the universal blocking atom, a portable elementwise chunk copy,
+#   the commit and wait slots discard
+# The chunk views stand in for partition_S
 # and partition_D, the real smem/gmem tile views carry the addresses.
-const gemmCopyLegCuda = cuda:
-  proc copyLegKernel(gmemA: ptr UncheckedArray[uint32]) {.global.} =
-    # units, the thread's cp.async chunks,
-    # (tileM * tileK) div (numPacked(CpAsyncAtom[uint32]) * 128) = 1024 div 512
-    # The DSL array-length resolver needs an infix length expression.
+# The legs use different element types, Nim caches a generic instantiation
+# per (proc, T) so the first backend that instantiates getCopyAsyncAtom(T)
+# fixes its atom for the whole compilation.
+# The OpenCL leg instantiates float32 (the universal blocking atom),
+# the CUDA leg uint32 (the sm80 atom).
+const gemmCopyLegOpencl = opencl:
+  proc copyLegKernel(gmemA: ptr UncheckedArray[float32]) {.global.} =
     const
       tileM = 32
       tileK = 32
-      packedW = 4        # numPacked(CpAsyncAtom[uint32]), the chunk width
+      packedW = 4        # the chunk width in float32, 16 div sizeof(float32)
       blockSize = 128
       units = tileM * tileK div (packedW * blockSize)
-    var smem {.smem.}: array[tileM * tileK, uint32]
+    var smem {.smem.}: array[tileM * tileK, float32]
     var dstChunks = make_view(addr smem[0], make_layout((1, units)))
     let srcChunks = make_view(gmemA, make_layout((1, units)))
     var pred: array[tileM * tileK div (packedW * blockSize), bool]
     let predChunks = make_view(addr pred[0], make_layout((1, units)))
     copyFromIfAsync(dstChunks, srcChunks, predChunks)
-    uint32.commit_group()
-    uint32.wait_group(0)
+    float32.commit_group()
+    float32.wait_group(0)
 
-const gemmCopyLegOpencl = opencl:
+const gemmCopyLegCuda = cuda:
   proc copyLegKernel(gmemA: ptr UncheckedArray[uint32]) {.global.} =
     # units, the thread's cp.async chunks,
     # (tileM * tileK) div (numPacked(CpAsyncAtom[uint32]) * 128) = 1024 div 512
-    # The DSL array-length resolver needs an infix length expression.
     const
       tileM = 32
       tileK = 32
@@ -111,12 +115,6 @@ suite "size() / copyFrom in cuda:":
 
   test "gemm copy leg compiles for OpenCL":
     discard cstring(gemmCopyLegOpencl)
-
-  test "commit and wait resolve from the element type on the host":
-    # The host instantiation is legal at the semantic layer.
-    # The asm is only reached inside compiles evaluations, never by C codegen.
-    doAssert compiles(uint32.commit_group())
-    doAssert compiles(uint32.wait_group(0))
 
   test "commit_group rejects a wait-kind atom":
     doAssert not compiles(commit_group(SM80_CP_ASYNC_WAIT))
