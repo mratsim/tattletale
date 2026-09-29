@@ -27,6 +27,13 @@ export layout_constructors
 #  dimension — extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
+macro isStaticLayout*(L: typed): bool =
+  ## True when every shape and stride leaf of the layout is compile-time `Int[N]`.
+  let t = L.getTypeInst()
+  let shapeSeq = toSeqStaticInts(t[1])
+  let strideSeq = toSeqStaticInts(t[2])
+  result = newLit(not (DynamicSentinel in shapeSeq or DynamicSentinel in strideSeq))
+
 template dimension*(layout: Layout; idx: static int): auto =
   ## Extract dimension `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
@@ -251,6 +258,14 @@ template upcast*(layout: Layout; N: static int): auto =
       when it_st.V == 0:
         (it_sh, it_st)
       else:
+        # CuTe upcast divisibility condition.
+        # Either the stride is a multiple of N (strides divided by N) or N
+        # is a multiple of the stride (the shape collapses onto the coarser slots).
+        # Without it, the ceil_div arithmetic below silently produces
+        # a lossy layout.
+        static:
+          doAssert abs(it_st.V) mod N == 0 or N mod abs(it_st.V) == 0,
+            "upcast: stride " & $it_st.V & " and granularity " & $N & " are not divisible"
         (
           ceil_div(
             it_sh,

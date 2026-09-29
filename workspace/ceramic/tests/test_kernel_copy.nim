@@ -1,4 +1,8 @@
-## Test: kernel_copy — copySameShape_cpu, copyPermuted_cpu, copyFrom (GPU)
+## Test:
+##   kernel_copy, copySameShape_cpu, copyPermuted_cpu, copyFrom (GPU)
+##
+## Run:
+##   nim cpp -r tests/test_kernel_copy.nim
 ##
 ## Tests both CPU and GPU copy paths with static and dynamic layouts.
 
@@ -63,7 +67,7 @@ block:
   var src = newSeq[float32](20)
   var dst = newSeq[float32](20)
   for i in 0 ..< 20: src[i] = float32(i)
-  # src shape=(4,), stride=(2,) — every other element
+  # src shape=(4,), stride=(2,), every other element
   let srcTV = make_view(src, make_layout(4, 2))
   var dstTV = make_view(dst, make_layout(4, 2))
   copySameShape_cpu(dstTV, srcTV)
@@ -72,8 +76,8 @@ block:
   doAssert dst[2] == 2.0'f32  # logical coord 1 = src[2]
   doAssert dst[4] == 4.0'f32  # logical coord 2 = src[4]
   doAssert dst[6] == 6.0'f32  # logical coord 3 = src[6]
-  doAssert dst[1] == 0.0'f32  # gap untouched
-  doAssert dst[3] == 0.0'f32  # gap untouched
+  doAssert dst[1] == 0.0'f32  # gap at index 1 untouched
+  doAssert dst[3] == 0.0'f32  # gap at index 3 untouched
 
 # ═══════════════════════════════════════════════════════════════
 #  copySameShape_cpu — with blockSize parameter
@@ -157,7 +161,7 @@ block:
   var src = newSeq[float32](8)
   var dst = newSeq[float32](8)
   for i in 0 ..< 8: src[i] = float32(i)
-  # shape (1, 8) — first dim size-1
+  # shape (1, 8), first dim size-1
   let srcTV = make_view(src, make_layout((1, 8), (8, 1)))
   var dstTV = make_view(dst, make_layout((1, 8), (8, 1)))
   copySameShape_cpu(dstTV, srcTV)
@@ -176,7 +180,8 @@ block:
   let srcTV = make_view(src, make_layout((N, C, H, W), LayoutRight))
   var dstTV = make_view(dst, make_layout((C, N, H, W), LayoutRight))
   copyPermuted_cpu(dstTV, srcTV, [1, 0, 2, 3])
-  # Verify: dst[n,c,h,w] == src[c,n,h,w]
+  # Verify:
+  #   dst[n,c,h,w] == src[c,n,h,w]
   for n in 0 ..< N:
     for c in 0 ..< C:
       for h in 0 ..< H:
@@ -227,7 +232,7 @@ block:
   var src = newSeq[float32](20)
   var dst = newSeq[float32](20)
   for i in 0 ..< 20: src[i] = float32(i)
-  # shape (3, 4) stride (5, 1) — strided src
+  # shape (3, 4) stride (5, 1), strided src
   let srcTV = make_view(src, make_layout((3, 4), (5, 1)))
   var dstTV = make_view(dst, make_layout((3, 4), (5, 1)))
   copyFrom(dstTV, srcTV)

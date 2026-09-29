@@ -459,6 +459,15 @@ macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStride
                                 nextSh, nextSt, clamped, remSh2, scaled,
                                 skipBody, elseBody))
 
+  template strideZeroEntry(remSh, remSt, fold) =
+    when remSt is Int and typeof(remSt) is Int[0]:
+      # Static stride-0 RHS dimension, every coordinate maps to offset 0,
+      # the composed dimension is the RHS dimension itself
+      # (CuTe composition_impl is_constant<0, RStride> shortcut).
+      make_layout(remSh, remSt)
+    else:
+      fold
+
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
   let firstStep = emitStep(0, remSh0, remSt0, @[], @[])
@@ -466,7 +475,7 @@ macro composeImpl(remainingShape, remainingStride: untyped; lhsShapes, lhsStride
     nnkLetSection.newTree(
       nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
       nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride)),
-    firstStep)
+    getAst(strideZeroEntry(remSh0, remSt0, firstStep)))
 
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =

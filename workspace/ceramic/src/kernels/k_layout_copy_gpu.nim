@@ -12,10 +12,14 @@
 ## however on GPU there is branch-free alternative.
 ## Any branch would potentially lead to warp divergence per dimension of the tensors involved.
 ##
+## `copyFrom` auto-vectorizes on fully static layouts.
+## It copies the common contiguous run of src and dst in multi-element chunks.
+##
 ## On CPU, use `k_layout_copy_cpu` (`copySameShape_cpu`/`copyPermuted_cpu`)
 ## which avoids divmod entirely via if/else branching and can fuse contiguous accesses.
 
 import std/macros
+import std/math
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -27,18 +31,116 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
+# ═══════════════════════════════════════════════════════════════
+#  Layout staticness and alignment facts (copy-kernel side)
+# ═══════════════════════════════════════════════════════════════
+#
+#  Chunk sizing inputs for copyFrom,
+#  per CuTe copy.hpp AutoVectorizingCopyWithAssumedAlignment:
+#  - is_static<Layout> → `isStaticLayout` from the layout algebra
+#  - max_alignment(Layout) → `max_alignment` below
+#  - max_common_vector(a, b) comes from the layout algebra.
+
+template max_alignment*(L: Layout): int =
+  ## Maximum alignment of a layout, in elements:
+  ## - the largest N for which `upcast<N>(L)` is valid
+  ## - i.e. the largest chunk granularity that respects every static
+  ##   shape and stride of L
+  ##
+  ## Compile-time. Requires a fully static layout (checked by callers).
+  ##
+  ## Examples:
+  ##   max_alignment(make_layout((32, 16), (1, 32)))  # → 512, coalesces to (512):(1)
+  ##   max_alignment(make_layout((32, 16), (32, 1)))  # → 16, columns are 32 elements apart
+  ##
+  ## Contract (cute layout.hpp max_alignment):
+  ## - dynamic leaves are masked out, shape → 1 and stride → 0
+  ## - only the static component of the layout is trusted
+  ## - dynamic strides are assumed to be large multiples of the result
+  block:
+    let flat = coalesce(L)
+    let filterL = mapLeavesWith(flat):
+      when it_sh is Int:
+        (it_sh, when it_st is Int: it_st else: Int[0]())
+      else:
+        (Int[1](), when it_st is Int: it_st else: Int[0]())
+    let permuted = logical_divide(filterL, right_inverse(filterL))
+    let leadingSize = size(make_layout(permuted.shape[0], permuted.stride[0]))
+    let trailingStride = permuted.stride[1]
+    when typeof(trailingStride) is tuple:
+      gcd(toIntVal(leadingSize), toIntVal(flatten(trailingStride)[0]))
+    else:
+      gcd(toIntVal(leadingSize), toIntVal(trailingStride))
+
 template copyFrom*[T, ShD, StD, ShS, StS](
     dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
     src: AnyTensor[T, ShS, StS]) =
   ## Copy every logical element from src to dst.
-  ## Uses flat-index iteration (`dst(i) = src(i)`)
-  ## which is divmod-based.
+  ## Unpredicated whole-tensor copy with no predicate:
+  ## `dst(flat k) = src(flat k)` for all k.
   ##
-  ## This is slow but unavoidable on GPU as if/else-based indexing
-  ## would trigger warp-divergence.
-  for i in 0 ..< size(dst):
-    dst(i) = src(i)
-
+  ## Flat-index iteration (`dst(i) = src(i)`) is divmod-based, slow but
+  ## unavoidable on GPU as if/else-based indexing would trigger warp
+  ## divergence per dimension.
+  ##
+  ## For fully static layouts (all shape and stride leaves compile-time)
+  ## the copy auto-vectorizes per CuTe's
+  ## `AutoVectorizingCopyWithAssumedAlignment<128>` (copy.hpp):
+  ##
+  ##   vec_bits = gcd(max_common_vector(dst, src)·elem_bits,
+  ##                  max_alignment(dst), max_alignment(src), 128)
+  ##
+  ## - `max_common_vector(dst, src)` is the longest contiguous run present
+  ##   in both element orders
+  ## - the 128-bit term is an assumption on the data pointers, not a check
+  ## - when the chunk is larger than one element, both tensors are recast
+  ##   to `array[vecElems, T]` chunks via `upcast` and copied with one
+  ##   multi-byte copy per chunk
+  ##
+  ## With any dynamic leaf (CuTe's 8-bit alignment tier), the assumed
+  ## alignment is 8 bits, which never exceeds an element, so the copy
+  ## degrades to the plain element loop below.
+  when isStaticLayout(dst.layout) and isStaticLayout(src.layout):
+    # The layout structure lives in the types (`Int[N]` leaves), so rebuild
+    # compile-time layout values from the type parameters.
+    const
+      elemBits = sizeof(T) * 8
+      dstL = default(Layout[ShD, StD])
+      srcL = default(Layout[ShS, StS])
+      commonElems = max_common_vector(dstL, srcL)
+      alignBits = gcd(gcd(max_alignment(dstL), max_alignment(srcL)), 128)
+      vecBits = gcd(commonElems * elemBits, alignBits)
+    when vecBits mod 8 == 0 and vecBits mod elemBits == 0 and vecBits > elemBits:
+      const vecElems = vecBits div elemBits
+      when toIntVal(size(dst)) mod vecElems == 0:
+        type Chunk = array[vecElems, T]
+        let dstChunks = make_view(
+          when dst is TensorOwned:
+            cast[ptr UncheckedArray[Chunk]](addr dst.data[0])
+          else:
+            cast[ptr UncheckedArray[Chunk]](dst.data),
+          upcast(dst.layout, vecElems))
+        let srcChunks = make_view(
+          when src is TensorOwned:
+            cast[ptr UncheckedArray[Chunk]](addr src.data[0])
+          else:
+            cast[ptr UncheckedArray[Chunk]](src.data),
+          upcast(src.layout, vecElems))
+        static:
+          doAssert toIntVal(size(srcChunks)) == toIntVal(size(dstChunks)),
+            "copyFrom: recast chunk counts of src and dst disagree; " &
+            "the copy is not chunkable, use the element loop"
+        for i in 0 ..< size(dstChunks):
+          dstChunks(i) = srcChunks(i)
+      else:
+        for i in 0 ..< size(dst):
+          dst(i) = src(i)
+    else:
+      for i in 0 ..< size(dst):
+        dst(i) = src(i)
+  else:
+    for i in 0 ..< size(dst):
+      dst(i) = src(i)
 
 template copyFromIfAsync*[T, Sh, StA, StB, StP](
     dst: var TensorView[T, Sh, StB];
@@ -55,7 +157,6 @@ template copyFromIfAsync*[T, Sh, StA, StB, StP](
   else:
     for i in 0 ..< size(predicate):
       copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0])
-
 # ═════════════════════════════════════════════════════════════════════════
 #  The copy partition
 # ═════════════════════════════════════════════════════════════════════════
