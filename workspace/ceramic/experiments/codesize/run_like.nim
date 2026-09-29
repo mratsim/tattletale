@@ -27,18 +27,18 @@ const layoutLikeDynStrideMsl = metal:
     let r = make_layout_like(p.layout)
     C[0] = float32 toIntVal size(r)
 
-# make_fragment_like with V leaves (16, 2), the tensor-core fragment call site
+# make_fragment_like with a (16, 2) V block, the tensor-core fragment call site
 const fragmentLikeVMsl = metal:
   proc fragmentLikeVKernel(C: ptr UncheckedArray[float32]) {.global.} =
-    let L = make_layout((16, 16), (1, 16))
-    let f = make_fragment_like(L, (16, 2))
+    let L = make_layout(((16, 2), 16), ((1, 16), 4))
+    let f = make_fragment_like(L)
     C[0] = float32 toIntVal size(f)
 
 # make_fragment_like with a broadcast V, the epilogue broadcast-bias call site
 const fragmentLikeBroadcastMsl = metal:
   proc fragmentLikeBroadcastKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 8), (0, 1))
-    let f = make_fragment_like(L, 8)
+    let f = make_fragment_like(L)
     C[0] = float32 toIntVal size(f)
 
 echo "layoutLikeCompactKernel: ", cstring(layoutLikeCompactMsl).len

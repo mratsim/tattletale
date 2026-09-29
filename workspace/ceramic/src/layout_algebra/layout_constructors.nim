@@ -120,22 +120,16 @@ proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
-proc fragmentVPart(sh, st, vShape: seq[int]): tuple[va, vStride, vCosize: int] {.compileTime.} =
-  ## The V block of a fragment layout, the first vShape.len leaves flattened
+proc fragmentVPart(sh, st: seq[int]): tuple[va, vStride, vCosize: int] {.compileTime.} =
+  ## V block of a fragment layout, the whole (shape, stride) pair flattened
   ## to one (VA):(1|0) dimension.
   ## - broadcast V (all strides 0) keeps stride 0
   ## - otherwise the V block is stride-1, broadcast shapes count 1 toward the V cosize
-  let vc = vShape.len
-  doAssert vc >= 1 and vc <= sh.len,
-    "make_fragment_like: V leaf count (" & $vc & ") out of range for rank " & $sh.len
   result.va = 1
   result.vCosize = 1
   var allZero = true
   var allNonZero = true
-  for i in 0 ..< vc:
-    doAssert vShape[i] == DynamicSentinel or vShape[i] == sh[i],
-      "make_fragment_like: vShape leaf " & $i & " value " & $vShape[i] &
-      " != layout V leaf " & $sh[i]
+  for i in 0 ..< sh.len:
     result.va *= sh[i]
     if st[i] == 0:
       allNonZero = false
@@ -196,13 +190,6 @@ proc typeIntVal(t: NimNode): int {.compileTime.} =
 proc typeIntVals(t: NimNode): seq[int] {.compileTime.} =
   ## Flattened leaf values of an Int tuple type, DynamicSentinel where a leaf is not a static Int.
   for leaf in flattenType(t):
-    result.add typeIntVal(leaf)
-
-proc typedLeafVals(expr: NimNode): seq[int] {.compileTime.} =
-  ## Int leaf values of a typed expression's static type, one per flat element.
-  let ty = expr.getTypeInst()
-  let inner = if ty.kind == nnkBracketExpr and $ty[0] == "typeDesc": ty[1] else: ty
-  for leaf in flattenType(inner):
     result.add typeIntVal(leaf)
 
 proc litTuple(vals: seq[int]): NimNode {.compileTime.} =
@@ -316,31 +303,43 @@ macro make_layout_like*(layout: Layout): untyped =
   result = quote do:
     make_layout(`layout`.shape, `outSt`)
 
-macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
+macro make_fragment_like*(layout: Layout): untyped =
   ## Build a fragment layout from a partition view.
   ##
   ## Contract:
-  ## - The V dimensions, the first `flattenType(typeof(vShape))` shape leaves,
-  ##   flatten to one `(VA,):(1|0,)` dimension
-  ## - The V dimension carries stride-1, broadcast V keeps stride-0
-  ## - The remaining leaves keep the view's order, compacted by stride value and scaled after the V dimension
+  ## - dimension 0 of the view = the V block, its flat leaves make one (VA):(1|0) dimension
+  ## - V carries stride-1, broadcast V (all strides 0) keeps stride-0
+  ## - remaining dimensions keep the view's order, compacted by stride value and scaled after V
   let (shTyp, stTyp) = layoutTypeArgs(layout)
-  let shVals = typeIntVals(shTyp)
-  let stVals = typeIntVals(stTyp)
 
-  if shVals.len != stVals.len:
-    error "make_fragment_like: shape/stride rank mismatch"
+  if shTyp.kind notin {nnkTupleTy, nnkTupleConstr}:
+    # rank-1 view, no V boundary, the fragment keeps the shape (CuTe layout.hpp make_fragment_like)
+    result = quote do:
+      make_layout(`layout`.shape)
+    return
 
-  for v in shVals:
+  doAssert stTyp.kind in {nnkTupleTy, nnkTupleConstr} and shTyp.len == stTyp.len,
+    "make_fragment_like: shape/stride rank mismatch"
+
+  var vShVals: seq[int]
+  var vStVals: seq[int]
+  for v in typeIntVals(shTyp[0]): vShVals.add v
+  for v in typeIntVals(stTyp[0]): vStVals.add v
+  for v in vShVals & typeIntVals(shTyp):
     if v == DynamicSentinel:
       error "make_fragment_like: dynamic shapes unsupported — static layout required"
 
-  let vShapeVals = typedLeafVals(vShape)
-  let (va, vStride, vCosize) = fragmentVPart(shVals, stVals, vShapeVals)
-  let vc = vShapeVals.len
-  let restStrides = compactLikeStrides(shVals[vc ..< shVals.len], stVals[vc ..< stVals.len], vCosize)
+  var restShNode = nnkTupleConstr.newNimNode()
+  var restStNode = nnkTupleConstr.newNimNode()
+  for i in 1 ..< shTyp.len:
+    restShNode.add shTyp[i]
+    restStNode.add stTyp[i]
+  let (va, vStride, vCosize) = fragmentVPart(vShVals, vStVals)
+  let restShVals = typeIntVals(restShNode)
+  let restStVals = typeIntVals(restStNode)
+  let restStrides = compactLikeStrides(restShVals, restStVals, vCosize)
 
-  let outSh = litTuple(@[va] & shVals[vc ..< shVals.len])
+  let outSh = litTuple(@[va] & restShVals)
   let outSt = litTuple(@[vStride] & restStrides)
   result = quote do:
     make_layout(`outSh`, `outSt`)
