@@ -10,9 +10,6 @@
 ##
 ## Re-exports `layouts_datatypes` (Layout type, predicates) and
 ## `layout_constructors` (make_layout, col_major_strides, LayoutCT).
-##
-## Reference:
-##   - CuTe C++: layout.hpp
 
 import std/macros
 import workspace/ceramic/src/int_tuples
@@ -24,7 +21,7 @@ export layouts_datatypes
 export layout_constructors
 
 # ═══════════════════════════════════════════════════════════════
-#  dimension — extract dimension as rank-1 Layout
+#  dimension, extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
 template dimension*(layout: Layout; idx: static int): auto =
@@ -37,21 +34,21 @@ template dimension*(layout: Layout; idx: static int): auto =
     layout
 
 # ═══════════════════════════════════════════════════════════════
-#  isCompact — check if strides match canonical col-major ordering
+#  isCompact, check if strides match canonical col-major ordering
 # ═══════════════════════════════════════════════════════════════
 
 func isCompact*(layout: Layout): bool =
   ## True when strides match canonical column-major ordering.
-  ## Note: does NOT coalesce first — size-1 dimensions may cause false negatives.
+  ## Does not coalesce first, size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
 
 func isCompact*(layout: static Layout): static bool =
   ## True when strides match canonical column-major ordering.
-  ## Note: does NOT coalesce first — size-1 dimensions may cause false negatives.
+  ## Does not coalesce first, size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
 
 # ═══════════════════════════════════════════════════════════════
-#  filter_zeros — replace stride-0 shapes with Int[1]
+#  filter_zeros, replace stride-0 shapes with Int[1]
 # ═══════════════════════════════════════════════════════════════
 
 macro filterZerosFlat(sh, st: typed): untyped =
@@ -81,10 +78,11 @@ template filter_zeros*(layout: Layout): auto =
   make_layout(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
-#  layoutTypeArgs — shape/stride TYPE extraction, nnkSym-safe
+#  layoutTypeArgs, shape/stride TYPE extraction, nnkSym-safe
 # ═══════════════════════════════════════════════════════════════
 
 func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
+  ## Extract the Layout type's shape and stride type nodes, handling type aliases.
   let typ = layout.getTypeInst()
   if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
     return (typ[1], typ[2])
@@ -151,7 +149,7 @@ macro padLeft*(layout: Layout; rank: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  mapLeavesWith — apply body to each leaf (shape, stride) pair
+#  mapLeavesWith, apply body to each leaf (shape, stride) pair
 # ═══════════════════════════════════════════════════════════════
 
 proc mapLeavesRec(
@@ -221,13 +219,8 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  upcast / downcast — reinterpret layout at coarser/finer granularity
+#  upcast / downcast, reinterpret layout at coarser/finer granularity
 # ═══════════════════════════════════════════════════════════════
-#
-#  CuTe: upcast<N>(layout), downcast<N>(layout)
-#
-#  Building block of recast_layout<OldType, NewType>.  upcast by N when
-#  sizeof ratio = N (e.g. int8→int32 is upcast<4>); downcast when ratio < 1.
 
 template upcast*(layout: Layout; N: static int): auto =
   ## Reinterpret layout from finer to coarser granularity.
@@ -239,23 +232,12 @@ template upcast*(layout: Layout; N: static int): auto =
   ##   upcast<4>(make_layout(32, 1))  # → (8, 1)  32 int8 → 8 int32
   ##   upcast<4>(make_layout(8, 2))   # → (4, 1)  strided int8 → int32
 
-  # ── Why not just shape/N and stride*N? ──
-  # N consecutive elements at stride |d| span N·|d| memory units.
-  # ceil_div(N, |d|) counts how many fit in one coarse slot:
-  #   new_shape = ceil_div(sh, ceil_div(N, |d|))
-  #   new_stride = ceil_div(|d|, N)
-  # Broadcast (stride 0) is unchanged.  Dynamic strides keep shape
-  # unchanged (no compile-time info), stride = ceil_div(st, N).
   mapLeavesWith(layout):
     when it_st is Int:
       when it_st.V == 0:
         (it_sh, it_st)
       else:
-        # CuTe upcast divisibility condition.
-        # Either the stride is a multiple of N (strides divided by N) or N
-        # is a multiple of the stride (the shape collapses onto the coarser slots).
-        # Without it, the ceil_div arithmetic below silently produces
-        # a lossy layout.
+        # The stride is a multiple of N or N is a multiple of the stride
         static:
           doAssert abs(it_st.V) mod N == 0 or N mod abs(it_st.V) == 0,
             "upcast: stride " & $it_st.V & " and granularity " & $N & " are not divisible"
@@ -279,13 +261,6 @@ template downcast*(layout: Layout; N: static int): auto =
   ##   downcast<4>(make_layout(8, 1))  # → (32, 1)  8 int32 → 32 int8
   ##   downcast<4>(make_layout(8, 2))  # → (8, 8)   strided int32 → int8
 
-  # ── Why not just shape*N and stride/N? ──
-  # If |stride| == 1 (contiguous): each coarse slot splits into N,
-  #   shape*N, stride unchanged.
-  # If |stride| > 1: stride was in coarse-element units; after splitting
-  #   each coarse stride d becomes d·N in fine units, stride*N, shape unchanged.
-  # Dynamic strides use a runtime check: if |st|==1 → shape*N else stride*N.
-  # Broadcast (stride 0) is unchanged.
   mapLeavesWith(layout):
     when it_st is Int:
       when abs(it_st.V) == 1:
@@ -299,7 +274,7 @@ template downcast*(layout: Layout; N: static int): auto =
         (new_sh, new_st)
 
 # ═══════════════════════════════════════════════════════════════
-#  zipDimensions — interleave corresponding dimensions of two layouts
+#  zipDimensions, interleave corresponding dimensions of two layouts
 # ═══════════════════════════════════════════════════════════════
 
 macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
@@ -339,15 +314,12 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   result = newCall(bindSym"make_layout", zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
-#  groupDimensions — wrap dimensions [B, E) into a nested sub-Layout
+#  groupDimensions, wrap dimensions [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   ## Wraps dimensions at indices `[B, E)` into a nested sub-tuple in both
   ## shape and stride, producing a higher-rank Layout.
-  ##
-  ## CuTe: group<B,E>(layout) — layout.hpp:1011
-  ## Python: group(layout, B, E) — algebra.py:319
   ##
   ## Examples:
   ##   groupDimensions(make_layout((2, 3, 5, 7)), 0, 2)
@@ -372,7 +344,7 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
                nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
   result = ct.emit()
 
-#  takeDimensions — extract dimensions [B, E) into a new Layout
+#  takeDimensions, extract dimensions [B, E) into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro takeDimensions*(layout: Layout; B, E: static int): untyped =
@@ -391,7 +363,7 @@ macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  selectDimensions — extract specific dimension indices into a new Layout
+#  selectDimensions, extract specific dimension indices into a new Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
@@ -404,12 +376,11 @@ macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped 
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  replaceDimension — replace a dimension with a sub-Layout
+#  replaceDimension, replace a dimension with a sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
-  ## CuTe: replace<N>(layout, x) — layout.hpp:1001
   let shTyp = layoutTypeArgs(layout).shapeTy
   let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
   var ct = LayoutCT()
@@ -423,8 +394,8 @@ macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
-#  map — apply fn to each dimension independently
-#  zipWith — pairwise fn over dimensions of two Layouts
+#  map, apply fn to each dimension independently
+#  zipWith, pairwise fn over dimensions of two Layouts
 # ═══════════════════════════════════════════════════════════════
 
 macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
@@ -462,17 +433,16 @@ macro zipDimensionsWith*[A, B: Layout](a: A; b: B; body: untyped): untyped =
   ## Within body, `it_a` is the current dimension of `a` and `it_b` the current dimension of `b`.
   ## Body must return a Layout.
   ##
-  ## For the first `min(rank(a), rank(b))` dimensions, both `it_a` and `it_b` are
-  ## available — the body combines them. Any remaining dimensions from the longer
-  ## layout are appended unchanged.
+  ## For the first `min(rank(a), rank(b))` dimensions, both `it_a` and `it_b` are available, the body combines them.
+  ## Any remaining dimensions from the longer layout are appended unchanged.
   ##
   ## Example (a shorter, b longer):
   ##   let a = make_layout((2,), (1,))           # rank-1
   ##   let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))  # rank-2
   ##   let r = zipDimensionsWith(a, b):
   ##     make_layout(it_a.shape, it_b.stride)   # shape from a, stride from b's 1st dimension
-  ##   # dimension 0 = zip result:  (2):(1, 4)       — shape from a (2), stride from b's 1st (1, 4)
-  ##   # dimension 1 = b's 2nd dimension leftover:  (2, 8):(2, 8)
+  ##   # dimension 0, the zip result (2):(1, 4), shape from a (2) and stride from b's 1st (1, 4)
+  ##   # dimension 1, b's 2nd dimension leftover (2, 8):(2, 8)
   ##
   ## Example (same rank):
   ##   let a = make_layout((2, 4), (1, 2))
