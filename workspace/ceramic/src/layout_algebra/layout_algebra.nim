@@ -219,9 +219,9 @@ proc complementGaps(
   ## Build full complement LayoutCT (gap dimensions + remainder), folding over
   ## dimensions in ascending-stride order: each dimension contributes a gap dimension
   ## (stride div cur, cur) and advances cur = stride * shape.
-  ## Runtime shapes advance cur with a runtime expression, the fold continues
-  ## past them, statically-1 dimensions are skipped, runtime dimensions are
-  ## appended unconditionally.
+  ## Runtime shapes advance cur with a runtime expression, the fold
+  ## continues past them.
+  ## Statically-1 dimensions are skipped, runtime dimensions are appended unconditionally.
   var cur = 1
   var curNode: NimNode = IntCT(1)
   var curStatic = true
