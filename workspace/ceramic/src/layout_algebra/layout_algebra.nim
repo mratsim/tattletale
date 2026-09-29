@@ -348,12 +348,6 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 ##
 ##            (fold(make_seq<R-1>{}, ...) + append remainder)
 
-func unwrap(t: tuple): auto {.inline.} =
-  when rank(t) == 1:
-    t[0]
-  else:
-    t
-
 template divisibilityCheck(remainingShape, clampedShape: untyped) =
   ## Python tensor-layouts compatible divisibility check.
   when clampedShape is Int:
