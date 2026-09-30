@@ -76,18 +76,11 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
 
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Compact stride of each dimension under a static stride order.
-  ##
-  ## - result[m] = the product of the shapes whose order value is
-  ##   smaller than order[m]
-  ## - a size-1 dimension carries stride 0, its shape cannot accumulate
-  ##   into any other stride (CuTe compact scalar branch)
+  ## Compute stride for each dimension m as product of shapes of dimensions
+  ## whose order value is smaller than order[m].
   let n = shVals.len
   result = newSeq[int](n)
   for m in 0 ..< n:
-    if shVals[m] == 1:
-      result[m] = 0
-      continue
     var strideStart = 1
     for k in 0 ..< n:
       if ordVals[k] < ordVals[m]:
@@ -111,18 +104,21 @@ proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.
     else:
       result[i] = ordVals[i]
 
-proc filterZerosValues(shapeVals, strideVals: seq[int]): seq[int] {.compileTime.} =
-  ## filter_zeros value fold over flat static leaves.
-  ##
-  ## - every stride-0 dimension collapses to 1
-  ## - a scalar stride broadcasts over the shape profile (CuTe repeat_like),
-  ##   callers fill the paired stride list first, as complementEmit does
-  ## - stride 0 comes out of the compact order's size-1 branch
-  doAssert shapeVals.len == strideVals.len,
-    "filter_zeros: shape/stride rank mismatch"
-  result = newSeq[int](shapeVals.len)
-  for i in 0 ..< shapeVals.len:
-    result[i] = if strideVals[i] == 0: 1 else: shapeVals[i]
+proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
+  ## Strides of the compact layout preserving an (shape, stride) pair's element-access order.
+  ## - stride-0 dimensions collapse to shape 1 and keep stride 0
+  ## - dynamic strides take the slowest free positions
+  ## - remaining strides scale by `scale`, the number of positions before them, 1 when none
+  var fsh = sh
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      fsh[i] = 1
+  result = compactOrderStridesImpl(fsh, compactOrderDynamicSubstitution(st))
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      result[i] = 0
+    else:
+      result[i] *= scale
 
 # ── AST-level helpers (compile-time value extraction) ──
 
@@ -204,11 +200,6 @@ macro compact_order*(shape, order): untyped =
   ## smaller value = faster-varying (smaller stride).
   ## Returns a tuple of strides where the dimension with `order[i] = 0` gets
   ## stride 1, the next gets stride = shape[fastest], and so on.
-  ## A size-1 dimension carries stride 0, its shape cannot accumulate into
-  ## any other stride (CuTe compact scalar branch).
-  ##
-  ## Example, size-1 collapse:
-  ##   compact_order((2,1), (1,3))  → (1, 0)
   ##
   ## Example, 2D permutations:
   ##   compact_order((2,3), (0,1))  → (1, 2)   # col-major (dimension 0 fastest)
@@ -257,9 +248,7 @@ macro make_layout_like*(layout: Layout): untyped =
   ##
   ## Produce a compact layout that accesses elements in the same logical
   ## order as the input, compaction order comes from the input strides.
-  ## - a stride-0 broadcast dimension keeps stride 0
-  ## - a size-1 dimension compacts to stride 0 (CuTe compact scalar branch)
-  ## - a scalar stride broadcasts over the shape profile (CuTe repeat_like)
+  ## Broadcast dimensions (statically Int[0]) keep stride 0.
   ##
   ## Example, non-compact (2,1) gives compact row-major (3,1):
   ##
@@ -270,10 +259,6 @@ macro make_layout_like*(layout: Layout): untyped =
   ## Example, broadcast dimension preserved:
   ##   make_layout_like(make_layout((2,3), (0,1)))  # → (2,3):(0,1)
   ##
-  ## Example, size-1 collapse and scalar stride broadcast:
-  ##   make_layout_like(make_layout((2,1), (1,3)))  # → (2,1):(1,0)
-  ##   make_layout_like(make_layout((2,3), 0))      # → (2,3):(0,0)
-  ##
   ## Example, 3D reordering, (2,3,4):(3,6,1) gives (2,3,4):(4,8,1):
   ## - dimension 2 (stride 1) fastest → stride 1
   ## - dimension 0 (stride 3) middle → stride 1*4 = 4
@@ -283,22 +268,10 @@ macro make_layout_like*(layout: Layout): untyped =
   let shVals = typeIntVals(shTyp)
   let stVals = typeIntVals(stTyp)
 
-  # CuTe factored form, layout.hpp:441-445:
-  #   make_layout(layout.shape, compact_order(filter_zeros(layout.stride, layout.shape), layout.stride))
-  # - stride-0 dimensions collapse to size 1 in the profile
-  # - compact order emits the collapse as stride 0, remaining strides
-  #   compact by the stride order
-  let pairedStrides =
-    if stTyp.kind in {nnkTupleConstr, nnkTupleTy}:
-      stVals
-    else:
-      # scalar stride broadcasts over the shape profile (repeat_like)
-      var s = newSeq[int](shVals.len)
-      for i in 0 ..< shVals.len:
-        s[i] = stVals[0]
-      s
-  let profile = filterZerosValues(shVals, pairedStrides)
-  let strides = compactOrderStridesImpl(profile, compactOrderDynamicSubstitution(pairedStrides))
+  if shVals.len != stVals.len:
+    error "make_layout_like: shape/stride rank mismatch"
+
+  let strides = compactLikeStrides(shVals, stVals)
   # Rank-1 compaction stays a 1-tuple so the like of a rank-1 layout
   # keeps the same shape and stride tuple rank.
   let outSt = if strides.len == 1:

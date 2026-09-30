@@ -1105,26 +1105,6 @@ proc runCompactOrderTests =
     doAssert l.stride[1].toIntVal == 8
     doAssert l.stride[2].toIntVal == 1
     echo "    8. make_layout_like dimension positions: 3 checks OK"
-
-  # Size-1 collapse per the CuTe compact scalar branch, a size-1 dimension
-  # carries stride 0, its shape cannot accumulate into any other stride
-  block:
-    doAssert make_layout((2,1), compact_order((2,1), (1,3)))  === ((2,1), (1,0))
-    doAssert make_layout((2,3,1), compact_order((2,3,1), (2,1,0))) === ((2,3,1), (3,1,0))
-    echo "    9. compact_order size-1 collapse: 2 cases OK"
-
-  # make_layout_like passes size-1 dimensions through the same collapse,
-  # a stride-0 broadcast keeps its zero
-  block:
-    doAssert make_layout_like(make_layout((2,1), (1,3))) === ((2,1), (1,0))
-    doAssert make_layout_like(make_layout((2,1), (0,1))) === ((2,1), (0,0))
-    echo "   10. make_layout_like size-1 collapse: 2 cases OK"
-
-  # Scalar stride broadcasts over the shape profile (filter_zeros repeat_like)
-  block:
-    doAssert make_layout_like(make_layout((2,3), 0)) === ((2,3), (0,0))
-    doAssert make_layout_like(make_layout((2,3), 5)) === ((2,3), (1,1))
-    echo "   11. make_layout_like scalar stride: 2 cases OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 proc runTests =

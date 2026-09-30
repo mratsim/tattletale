@@ -243,51 +243,6 @@ proc runNestedShapeIntegrationTests =
     doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
   echo "    PASS"
 
-# ═══════════════════════════════════════════════════════════════
-#  Section 8, coalesce rejoin order and trailing size-1 absorption
-# ═══════════════════════════════════════════════════════════════
-#
-#  Coalesce folds front to back. A completed chunk emits at its layout position,
-#  interior size-1 dimensions drop without splitting the join across them,
-#  trailing size-1 dimensions are absorbed or preserved per pycute's _coalesce_z.
-
-proc runCoalesceRejoinTests =
-  block:
-    ## Chunks emit in layout order across dropped size-1 dimensions.
-    let r = coalesce(make_layout((2, 1, 4), (1, 0, 3)))
-    check r.shape, (2, 4), (Int[2], Int[4])
-    check r.stride, (1, 3), (Int[1], Int[3])
-  block:
-    ## A size-1 dimension with a foreign stride does not split the join across it.
-    let r = coalesce(make_layout((2, 1, 4), (1, 5, 3)))
-    check r.shape, (2, 4), (Int[2], Int[4])
-    check r.stride, (1, 3), (Int[1], Int[3])
-  block:
-    ## Leading size-1 dimensions drop the same way.
-    let r = coalesce(make_layout((1, 2, 1, 4), (0, 1, 0, 3)))
-    check r.shape, (2, 4), (Int[2], Int[4])
-    check r.stride, (1, 3), (Int[1], Int[3])
-  block:
-    ## Trailing size-1 absorption, the chunk span reaches the trailing stride
-    ## and the size-1 dimension vanishes
-    ## (values cross-checked against the pycute _coalesce_z fold).
-    let r = compose(make_layout((4, 1), (1, 4)), make_layout(4, 1))
-    check r.shape, 4, Int[4]
-    check r.stride, 1, Int[1]
-  block:
-    ## Absorption over an all-broadcast layout, span 0 reaches stride 0.
-    let r = compose(make_layout((2, 1, 1), (0, 0, 0)), make_layout(2, 1))
-    check r.shape, 2, Int[2]
-    check r.stride, 0, Int[0]
-  block:
-    ## A stride-0 trailing broadcast is never absorbed, span 4 does not reach
-    ## stride 0, and it stays in the trailing position through composition.
-    let r = compose(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
-    check r.shape, (4, 3, 2), (Int[4], Int[3], Int[2])
-    check r.stride, (3, 1, 0), (Int[3], Int[1], Int[0])
-  echo "    coalesce rejoin + absorption: 6 cases OK"
-
-
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -304,8 +259,6 @@ proc runTests =
   runComposeZeroStrideTests()
   echo "── Section 7. Nested-shape indexing and Layout-tiler unzip ──"
   runNestedShapeIntegrationTests()
-  echo "── Section 8. coalesce rejoin order and trailing size-1 absorption ──"
-  runCoalesceRejoinTests()
   echo "  All tests passed."
 
 when isMainModule:

@@ -34,90 +34,74 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce, merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-type
-  CoalesceChunk = tuple[shape, shapeTy, stride, strideTy: NimNode]
-    ## Coalesce result dimension under construction. It carries the emitted
-    ## shape/stride nodes beside their static leaf types (`int` for a dynamic leaf).
+macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
+  var shLeaves, shTypes, stLeaves, stTypes: seq[NimNode]
+  for (leaf, ty) in flatLeavesRev(layoutShape):
+    shLeaves.add leaf
+    shTypes.add ty
+  for (leaf, ty) in flatLeavesRev(layoutStride):
+    stLeaves.add leaf
+    stTypes.add ty
 
-proc isContiguousJoin(shapeTy, strideTy, nextStrideTy: NimNode): bool {.compileTime.} =
-  ## Merge rule of pycute's `_coalesce_z`. A dimension with static
-  ## shape/stride types `shapeTy`/`strideTy` joins the dimension behind it
-  ## when its span `shape * stride` reaches the next stride `nextStrideTy`.
-  isStaticInt(shapeTy) and isStaticInt(strideTy) and isStaticInt(nextStrideTy) and
-    getStaticInt(shapeTy) * getStaticInt(strideTy) == getStaticInt(nextStrideTy)
-
-proc trailingOneChunk(stLeaf: FlatLeafPair): CoalesceChunk {.compileTime.} =
-  ## Preserved trailing size-1 dimension. Shape/shapeTy carry the dynamic
-  ## `Int[DynamicSentinel]` marker so the layout keeps a runtime dimension
-  ## there and stride/strideTy are `stLeaf` verbatim.
-  result.shape = IntCT(DynamicSentinel)
-  result.shapeTy = newNimNode(nnkBracketExpr).add(ident"Int", newLit(DynamicSentinel))
-  result.stride = stLeaf.leaf
-  result.strideTy = stLeaf.leafTy
-
-macro coalesceFlat(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
-  ## Coalesce the flat leaves of a (possibly nested) shape/stride pair (pycute's `_coalesce_z` fold).
-  ##
-  ## - dimensions merge front-to-back when the front dimension's span
-  ##   reaches the back dimension's stride
-  ## - interior size-1 dimensions drop
-  ## - a trailing size-1 dimension is kept when `preserveTrailing`, absorbed
-  ##   away when the chunk in front reaches its stride (the chunk unchanged)
-  let shLeaves = flatLeaves(layoutShape)
-  let stLeaves = flatLeaves(layoutStride)
   if shLeaves.len == 1 and stLeaves.len == 1:
-    if isStaticOne(shLeaves[0].leafTy):
+    if isStaticOne(shTypes[0]):
       result = newCall(bindSym"make_layout", newLit(1), newLit(0))
     else:
-      result = newCall(bindSym"make_layout", shLeaves[0].leaf, stLeaves[0].leaf)
+      result = newCall(bindSym"make_layout", shLeaves[0], stLeaves[0])
     return
 
-  var chunks: seq[CoalesceChunk]
-  var head: CoalesceChunk = (shLeaves[0].leaf, shLeaves[0].leafTy, stLeaves[0].leaf, stLeaves[0].leafTy)
+  # chunks collect back-to-front while the walk merges frontward.
+  # head is the current front chunk, the emission walks the chunk list backward
+  type Chunk = tuple[shape, shapeTy, stride, strideTy: NimNode]
+  var chunks: seq[Chunk]
+  var head: Chunk = (shLeaves[0], shTypes[0], stLeaves[0], stTypes[0])
+  if preserveTrailing and isStaticOne(shTypes[0]):
+    head.shape = IntCT(low(int))
+    head.shapeTy = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
+
   for k in 1 ..< shLeaves.len:
-    if isStaticOne(shLeaves[k].leafTy):
+    if isStaticOne(shTypes[k]):
       continue
     if isStaticOne(head.shapeTy):
-      head = (shLeaves[k].leaf, shLeaves[k].leafTy, stLeaves[k].leaf, stLeaves[k].leafTy)
-    elif isStaticInt(shLeaves[k].leafTy) and
-        isContiguousJoin(head.shapeTy, head.strideTy, stLeaves[k].leafTy):
-      let merged = getStaticInt(head.shapeTy) * getStaticInt(shLeaves[k].leafTy)
-      head = (IntCT(merged), newNimNode(nnkBracketExpr).add(ident"Int", newLit(merged)),
-              head.stride, head.strideTy)
+      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
+    elif isStaticInt(shTypes[k]) and isStaticInt(stTypes[k]) and
+        isStaticInt(head.shapeTy) and isStaticInt(head.strideTy) and
+        getStaticInt(shTypes[k]) * getStaticInt(stTypes[k]) == getStaticInt(head.strideTy):
+      let mergedVal = getStaticInt(shTypes[k]) * getStaticInt(head.shapeTy)
+      head = (IntCT(mergedVal),
+              newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal)),
+              stLeaves[k], stTypes[k])
     else:
       chunks.add head
-      head = (shLeaves[k].leaf, shLeaves[k].leafTy, stLeaves[k].leaf, stLeaves[k].leafTy)
-  if isStaticOne(head.shapeTy):
-    # all leaves are size-1, the trailing one survives when asked, otherwise
-    # a lone (1):(0) sentinel results
-    if preserveTrailing:
-      chunks.add trailingOneChunk(stLeaves[^1])
-    else:
-      result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
-      return
-  else:
-    chunks.add head
-    if preserveTrailing and isStaticOne(shLeaves[^1].leafTy) and
-        not isContiguousJoin(head.shapeTy, head.strideTy, stLeaves[^1].leafTy):
-      chunks.add trailingOneChunk(stLeaves[^1])
+      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
+  chunks.add head
+
+  if not preserveTrailing:
+    while chunks.len > 0 and isStaticOne(chunks[0].shapeTy):
+      discard chunks.pop()  # back chunks sit at the seq front
+
+  if chunks.len == 0:
+    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    return
 
   var rShape = newNimNode(nnkTupleConstr)
   var rStride = newNimNode(nnkTupleConstr)
-  for chunk in chunks:
-    rShape.add chunk.shape
-    rStride.add chunk.stride
+  for idx in countdown(chunks.len - 1, 0):
+    rShape.add chunks[idx].shape
+    rStride.add chunks[idx].stride
   if rShape.len == 1:
     rShape = rShape[0]
     rStride = rStride[0]
+
   result = newCall(bindSym"make_layout", rShape, rStride)
 
 func coalesce*(layout: Layout): auto {.inline, noInit.} =
   ## Merge contiguous dimensions.
-  coalesceFlat(layout.shape, layout.stride)
+  coalesceBackward(layout.shape, layout.stride)
 
 func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
   ## Like `coalesce` but preserves trailing size-1 dimensions (e.g. stride-0 broadcasts).
-  coalesceFlat(layout.shape, layout.stride, preserveTrailing = true)
+  coalesceBackward(layout.shape, layout.stride, preserveTrailing = true)
 
 # ═══════════════════════════════════════════════════════════════
 #  filter_inactive, remove stride-0 and size-1 dimensions
@@ -146,8 +130,8 @@ proc complementFold(shNode, boundExpr: NimNode;
       ident"*", s, nnkBracketExpr.newTree(shNode, newLit(idx)))
   gapNodes.add bindSym"ceil_div".newCall(boundExpr, curNode)
   curNodes.add curNode
-  # coalesceFlat is a macro and folds when the call site expands
-  result = bindSym"coalesceFlat".newCall(
+  # coalesceBackward is a macro and folds when the call site expands
+  result = bindSym"coalesceBackward".newCall(
     nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
@@ -169,7 +153,7 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
       result = newCall(bindSym"make_layout", boundExpr, newLit(1))
     else:
       result = quote do:
-        coalesceFlat(
+        coalesceBackward(
           (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
           (1, `st` * `sh`))
   else:
@@ -188,7 +172,7 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
 
 proc filterInactiveValues(shapeVals, strideVals: seq[int]): tuple[shape, stride: seq[int]] {.compileTime.} =
   ## filter_zeros + coalesce as one compile-time fold over flat static values,
-  ## coalesce's chunk walk in value form, walked back-to-front:
+  ## coalesceBackward's chunk walk in value form, walked back-to-front:
   ## - a stride of 0 shrinks its shape to 1
   ## - size-1 shapes drop
   ## - a dimension whose span ends where the head's stride begins merges
