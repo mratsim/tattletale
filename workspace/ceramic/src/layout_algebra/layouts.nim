@@ -304,6 +304,28 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   result = newCall(bindSym"make_layout", zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
+#  selection-macro helpers, dimension access and rank
+# ═══════════════════════════════════════════════════════════════
+
+proc dimAt(l: NimNode; field: static string; i: int): NimNode {.compileTime.} =
+  ## `l.field[i]` as a bracket-index node over the field dot-expr.
+  let accessor = nnkDotExpr.newTree(l, ident(field))
+  nnkBracketExpr.newTree(accessor, newLit(i))
+
+proc appendDim(ct: var LayoutCT; l: NimNode; i: int) {.compileTime.} =
+  ## Append dimension `i` of `l`, shape with stride, to a LayoutCT accumulator.
+  let sh = dimAt(l, "shape", i)
+  let st = dimAt(l, "stride", i)
+  ct.append(sh, st)
+
+proc shapeRank(shTyp: NimNode): int {.compileTime.} =
+  ## Rank of a layout given its shape type node, tuple constr = element count, scalar = 1.
+  if shTyp.kind == nnkTupleConstr:
+    shTyp.len
+  else:
+    1
+
+# ═══════════════════════════════════════════════════════════════
 #  groupDimensions, wrap dimensions [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
 
@@ -315,25 +337,16 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   ##   groupDimensions(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
   var ct = LayoutCT()
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let R =
-    if shTyp.kind == nnkTupleConstr:
-      shTyp.len
-    else: 1
-  for i in 0 ..< B:
-    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
-               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
+  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
+  for i in 0 ..< B: ct.appendDim(layout, i)
   var gSh = nnkPar.newNimNode()
   var gSt = nnkPar.newNimNode()
   for i in B ..< E:
-    gSh.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i)
-    gSt.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i)
+    gSh.add dimAt(layout, "shape", i)
+    gSt.add dimAt(layout, "stride", i)
   ct.append(gSh, gSt)
-  for i in E ..< R:
-    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i),
-               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i))
+  for i in E ..< R: ct.appendDim(layout, i)
   result = ct.emit()
-
 
 # ═══════════════════════════════════════════════════════════════
 #  takeDimensions, extract dimensions [B, E) into a new Layout
@@ -347,11 +360,8 @@ macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ##   takeDimensions(make_layout((2, 3, 5, 7)), 1, 3)
   ##   # → (3, 5):(2, 6)
   var ct = LayoutCT()
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
-  for i in B ..< min(E, R):
-    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
-               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
+  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
+  for i in B ..< min(E, R): ct.appendDim(layout, i)
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
@@ -361,10 +371,7 @@ macro takeDimensions*(layout: Layout; B, E: static int): untyped =
 macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   ## Extract specific dimension indices into a new Layout.
   var ct = LayoutCT()
-  for i in 0 ..< Is.len:
-    let idx = Is[i].intVal
-    ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(idx)),
-               nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(idx)))
+  for i in 0 ..< Is.len: ct.appendDim(layout, Is[i].intVal)
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
@@ -373,16 +380,14 @@ macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped 
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let R = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
   var ct = LayoutCT()
+  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
   for i in 0 ..< R:
     if i == N:
       ct.append(newTree(nnkDotExpr, x, ident"shape"),
                  newTree(nnkDotExpr, x, ident"stride"))
     else:
-      ct.append(nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit(i)),
-                 nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit(i)))
+      ct.appendDim(layout, i)
   result = ct.emit()
 
 # ═══════════════════════════════════════════════════════════════
