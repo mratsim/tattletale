@@ -217,15 +217,20 @@ func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
 #  evalOnceAs, evaluate at most once, preserve Int[N] for CT expressions
 # ═══════════════════════════════════════════════════════════════
 #
-#  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
+#  ⚠  Wrap every use inside a template body in a `block:`.
 #
-#     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-#     when two inline evalOnceAs-using template calls appear as
-#     arguments to a generic proc — both get the first argument's
-#     concrete type. The `block:` forces independent per-expansion
-#     scope, working around this Nim compiler limitation.
+#     A template body is copied into every call site.
+#     When a call lands inside another call's arguments, both copies
+#     share one scope, and the second copy's name resolves
+#     to the first copy's value, silently taking the first call's value and type.
 #
-#     See: test_evalonceas_procarg.nim, layouts.nim:make_layout
+#     `block:` gives every copy its own scope. Each name then resolves
+#     to its own value.
+#
+#     Standalone statements in a func body need no `block:`.
+#     Nim binds each statement's name before the next statement starts.
+#
+#     See tests/test_evalonceas.nim, generic-proc-arg cases
 #
 
 #
@@ -236,13 +241,9 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`c
   ##
   ## Constant expressions are constant-folded
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
+  ##     See the section comment at the top of this file.
 
   # Generate the following with `genSym` alias to avoid collisions
   #
@@ -262,13 +263,9 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
   ##
   ## Constant expressions are constant-folded
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
+  ##     See the section comment at the top of this file.
 
   # const evalOnceCT_staticInt = expression
   # template `alias`(): untyped =
@@ -294,13 +291,9 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ##
   ## Constant expressions are constant-folded.
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
+  ##     See the section comment at the top of this file.
 
   # Uses a generated `when expression is static:` to choose
   # between `const` (compile-time) and `let` (runtime) storage.

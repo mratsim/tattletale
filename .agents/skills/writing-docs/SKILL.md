@@ -15,8 +15,11 @@ metadata:
 This skill is the repository documentation contract.
 It distills the eight canonical files' style (REFERENCE.md) plus the Write
 Without Hidden Context framing below into one enforceable standard.
-- the reader is a developer who just cloned the repo
-- the reader carries no history, no pipeline labels, no campaign vocabulary
+- readers are developers who just cloned the repo, carrying no history,
+  no pipeline labels, no campaign vocabulary
+- a CS undergraduate is the comprehension floor
+- terse writing scales with the concept's complexity:
+  no hidden context, flourish, mannerism, jargon, or lawyer or defensive speech
 
 ## When to use me
 
@@ -29,7 +32,8 @@ kernel docs, Lean comments, test file headers, and commit messages.
 ## Golden rules
 
 1. **Think who is your audience.** A *user* gets `##` docs on correct use, never a drowning in how it is done.
-2. **Think who is your audience, part two.** A *maintainer* gets `#` comments in industry-standard jargon.
+2. **Think who is your audience, part two.** A *maintainer* gets
+   `#` comments in industry-standard jargon. A CS undergraduate is the comprehension floor.
 3. **Write without hidden context.** Rewrite any sentence a repo puller cannot understand.
 4. **A wall of text is hostile.** Prefer diagrams for lifecycles, dataflow, and multidimensional structures.
 5. **A wall of text is hostile, part two.** Prefer bullet points for contracts.
@@ -52,6 +56,7 @@ Applies to all repository prose.
 Everything must make sense to a technically capable reader.
 The reader has the repository.
 The reader carries none of the conversation or development history.
+A CS undergraduate is the comprehension floor.
 
 - Describe the system as it exists with purpose, behavior, invariants, interfaces, evidence, and limits.
 - Never narrate the journey.

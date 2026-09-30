@@ -476,9 +476,11 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
 
 func logical_divide_impl[A, B: Layout](layout: A; tiler: B): auto =
   ## Complement the tiler up to the layout size, then compose.
-  let comp = complement(tiler, size(coalesce(layout)))
-  let combined = make_layout((tiler.shape, comp.shape), (tiler.stride, comp.stride))
-  compose(layout, combined)
+  block:
+    mixin comp, combined
+    evalOnceAs(comp, complement(tiler, size(layout)))
+    evalOnceAs(combined, make_layout((tiler.shape, comp.shape), (tiler.stride, comp.stride)))
+    compose(layout, combined)
 
 func logical_divide*[L, T: Layout](layout: L; tiler: T): auto =
   ## Logical divide by a layout tiler.
