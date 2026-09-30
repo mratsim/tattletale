@@ -9,6 +9,7 @@
 ## prefix_scanIt, suffix_scanIt, prefix_product, suffix_product.
 
 import std/macros
+import std/algorithm
 import workspace/ceramic/src/int_tuples {.all.}
 
 # ═══════════════════════════════════════════════════════════════
@@ -359,19 +360,19 @@ proc runFlatIterTests* =
   ## Order, reverse order and leaf types of the leaf streams over typed expressions.
   macro leafReprs(e: typed): untyped =
     var reprs: seq[string]
-    for (lf, _) in flatLeaves(e):
+    for (lf, _) in e.tupleFlatten():
       reprs.add lf.repr
     result = newLit(reprs)
 
   macro leafTypeReprs(e: typed): untyped =
     var reprs: seq[string]
-    for (_, ty) in flatLeaves(e):
+    for (_, ty) in e.tupleFlatten():
       reprs.add ty.repr
     result = newLit(reprs)
 
   macro leafReprsRev(e: typed): untyped =
     var reprs: seq[string]
-    for (lf, _) in flatLeavesRev(e):
+    for (lf, _) in e.tupleFlatten().reversed():
       reprs.add lf.repr
     result = newLit(reprs)
 

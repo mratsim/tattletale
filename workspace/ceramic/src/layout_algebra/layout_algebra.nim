@@ -38,10 +38,10 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 
 macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
   var shLeaves, shTypes, stLeaves, stTypes: seq[NimNode]
-  for (leaf, ty) in flatLeavesRev(layoutShape):
+  for (leaf, ty) in layoutShape.tupleFlatten().reversed():
     shLeaves.add leaf
     shTypes.add ty
-  for (leaf, ty) in flatLeavesRev(layoutStride):
+  for (leaf, ty) in layoutStride.tupleFlatten().reversed():
     stLeaves.add leaf
     stTypes.add ty
 
@@ -359,10 +359,10 @@ macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides:
       lets, bindSym"make_layout".newCall(remSh0, remSt0))
   else:
     var lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode]
-    for (leaf, ty) in flatLeaves(lhsShapes):
+    for (leaf, ty) in lhsShapes.tupleFlatten():
       lhsShLeaves.add leaf
       lhsShTys.add ty
-    for (leaf, ty) in flatLeaves(lhsStrides):
+    for (leaf, ty) in lhsStrides.tupleFlatten():
       lhsStLeaves.add leaf
       lhsStTys.add ty
     result = nnkStmtListExpr.newTree(lets, composeFold(

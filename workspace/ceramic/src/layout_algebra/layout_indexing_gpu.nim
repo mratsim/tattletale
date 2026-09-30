@@ -96,9 +96,9 @@ macro foldDim*(co, sh, st: typed; i: static int): auto =
   ##   `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
   block:
     var shLeaves, stLeaves: seq[NimNode]
-    for (leaf, _) in flatLeaves(sh):
+    for (leaf, _) in sh.tupleFlatten():
       shLeaves.add leaf
-    for (leaf, _) in flatLeaves(st):
+    for (leaf, _) in st.tupleFlatten():
       stLeaves.add leaf
     let r = shLeaves.len
     if stLeaves.len != r:

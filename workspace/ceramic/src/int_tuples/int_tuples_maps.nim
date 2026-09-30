@@ -7,9 +7,8 @@
 
 import std/macros
 import ./int_tuples_datatypes
+import ./int_tuples_streams
 import workspace/ceramic/src/macros/replace_nodes
-
-proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.}
 
 # ═══════════════════════════════════════════════════════════════════════
 #  mapLeavesWith, recursive leaf-wise tuple map
@@ -90,7 +89,7 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
     if ty.kind in {nnkTupleTy, nnkTupleConstr}:
       var elems: seq[NimNode]
       for idx in 0 ..< ty.len:
-        elems.add inExprSlot(walk(leafAccess(e, ty, idx), ty[idx]))
+        elems.add inExprSlot(walk(getTupleIndex(e, idx), ty[idx]))
       result = nnkTupleConstr.newTree(elems)
     else:
       result = rawBody.replaceNodes(("it", e))
@@ -126,28 +125,11 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
 proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
   ## Build the flat pack for `tNode`, one node per leaf, `body` with `it`
   ## replaced by the leaf access. Returns the untyped tuple construction.
-
-  proc isLeaf(t: NimNode): bool =
-    (t.kind == nnkSym and $t == "int") or
-    (t.kind == nnkBracketExpr and $t[0] == "Int")
-
-  proc collect(acc: var NimNode; e: NimNode; t: NimNode) =
-    if t.kind == nnkTupleConstr:
-      for idx in 0 ..< t.len:
-        let fd = t[idx]
-        let fa = leafAccess(e, t, idx)
-        if isLeaf(fd):
-          acc.add body.replaceNodes(("it", fa))
-        else:
-          collect(acc, fa, fd)
-    else:
-      acc.add body.replaceNodes(("it", e))
-
-  let tType = tNode.getTypeImpl()
   # nnkPar keeps a single-item result scalar and packs multi-item results
   # like nnkTupleConstr, avoiding an explicit `if result.len == 1` branch.
   result = newNimNode(nnkPar)
-  collect(result, tNode, tType)
+  for (leaf, _) in tupleStream(tNode).leaves():
+    result.add body.replaceNodes(("it", leaf))
 
 macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   ## Map every leaf of a (possibly nested) tuple to exactly one output
@@ -168,72 +150,10 @@ macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   ##   flatMapLeaves((2, 3), it * 10)       → (20, 30)
   flatMapLeavesImpl(t, body)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  flatLeaves and flatLeavesRev, compile-time leaf streams
-# ═══════════════════════════════════════════════════════════════════════
-
-proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.} =
-  ## Field access of element `idx` of tuple expression `e`.
-  ## Tuple constructions splice the element directly, other expressions
-  ## get bracket access.
-  if e.kind in {nnkTupleConstr, nnkPar} and e.len == t.len:
-    e[idx]
-  else:
-    newTree(nnkBracketExpr, e, newLit(idx))
-
-type
-  FlatLeafPair* = tuple[leaf, leafTy: NimNode]
-    ## A leaf of a (possibly nested) IntOrIntTuple expression:
-    ## the leaf access expression and its leaf type node.
-
-proc unwrapStmtListExpr(e0: NimNode): NimNode {.compileTime.} =
-  ## Typed macro parameters of macro/template call arguments arrive wrapped in a statement list. The value is the last child.
-  if e0.kind == nnkStmtListExpr: e0[^1] else: e0
-
-proc flatLeavesImpl(e0, t0: NimNode): seq[FlatLeafPair] {.compileTime.} =
-  ## Forward leaf stream over the type tree of expression `e`.
-  let e = unwrapStmtListExpr(e0)
-  let t = if t0.kind == nnkExprColonExpr: t0[1] else: t0
-  if t.kind in {nnkTupleConstr, nnkTupleTy}:
-    for idx in 0 ..< t.len:
-      let sub = leafAccess(e, t, idx)
-      result.add flatLeavesImpl(sub, t[idx])
-  else:
-    result.add (e, t)
-
-proc flatLeavesRevImpl(e0, t0: NimNode): seq[FlatLeafPair] {.compileTime.} =
-  ## Reverse leaf stream over the type tree of expression `e`,
-  ## the exact mirror order of `flatLeavesImpl`.
-  let e = unwrapStmtListExpr(e0)
-  let t = if t0.kind == nnkExprColonExpr: t0[1] else: t0
-  if t.kind in {nnkTupleConstr, nnkTupleTy}:
-    for idx in countdown(t.len - 1, 0):
-      let sub = leafAccess(e, t, idx)
-      result.add flatLeavesRevImpl(sub, t[idx])
-  else:
-    result.add (e, t)
-
-func flatLeaves*(e: NimNode): seq[FlatLeafPair] {.compileTime.} =
-  ## Stream the leaves of the (possibly nested) IntOrIntTuple expression
-  ## `e` in order, each with its leaf type node.
-  ##
-  ## Returns one FlatLeafPair per leaf in document order.
-  ## - Static `Int[N]` leaves keep their `Int[V]` type
-  ## - Runtime `int` leaves keep their `int` type
-  ##
-  ## Nim rejects `{.compileTime.}` on iterators.
-  ## The stream is a compile-time function, consumed with the same for-loop syntax.
-  flatLeavesImpl(e, e.getTypeInst())
-
-func flatLeavesRev*(e: NimNode): seq[FlatLeafPair] {.compileTime.} =
-  ## Stream the leaves of the (possibly nested) IntOrIntTuple expression
-  ## `e` in reverse order, the mirror of `flatLeaves`.
-  flatLeavesRevImpl(e, e.getTypeInst())
-
 macro countLeaves*(t: typed): untyped =
   ## Number of leaves of the (possibly nested) IntOrIntTuple `t`.
   var n = 0
-  for _ in flatLeaves(t):
+  for _ in t.tupleFlatten():
     inc n
   result = newLit(n)
 
@@ -245,9 +165,9 @@ macro concatFlat*(a, b: typed): untyped =
   ## The leaves of `a` then the leaves of `b` as one flat tuple,
   ## no intermediate flattened tuple materializes.
   result = nnkTupleConstr.newTree()
-  for (leaf, _) in flatLeaves(a):
+  for (leaf, _) in a.tupleFlatten():
     result.add leaf
-  for (leaf, _) in flatLeaves(b):
+  for (leaf, _) in b.tupleFlatten():
     result.add leaf
 
 # ═══════════════════════════════════════════════════════════════════════

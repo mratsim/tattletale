@@ -13,6 +13,7 @@ import workspace/ceramic/src/int_tuples/int_tuples_folds
 import workspace/ceramic/src/int_tuples/int_tuples_maps
 import workspace/ceramic/src/int_tuples/int_tuples_transforms
 import workspace/ceramic/src/int_tuples/int_tuples_zips
+import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 
 export int_tuples_datatypes
@@ -22,6 +23,7 @@ export int_tuples_folds
 export int_tuples_maps
 export int_tuples_transforms
 export int_tuples_zips
+export int_tuples_streams
 export int_tuples_unsanctioned_helpers
 
 template makeIntTuple*(t: IntOrIntTuple): auto =

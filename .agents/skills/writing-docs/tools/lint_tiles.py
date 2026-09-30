@@ -24,6 +24,7 @@ these roots:
 | one-liner         | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review | advisory |
 | explicit-generics | a call site spells generic arguments the compiler infers from the value arguments                | counted  |
 | newcall-method    | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the house form      | counted  |
+| tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the house form | counted  |
 | body-wrap         | a single-expression proc, func, or template body split across lines that fits one line           | counted  |
 
 
@@ -133,6 +134,9 @@ RULES = {
                          "infers from the value arguments",
     "newcall-method": "a newCall(bindSym\"f\", x, ...) meta-call where method "
                       "call syntax x.f(...) is the house form",
+    "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
+                           "where method call syntax x.tupleFlatten() is the "
+                           "house form",
     "body-wrap": "a single-expression callable body is split across lines "
                  "while the joined form fits one line",
 }
@@ -149,6 +153,14 @@ NEWCALL_METHOD_EXEMPT = frozenset((
 NEWCALL_METHOD_RE = re.compile(
     r"\bnewCall\s*\(\s*bindSym\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']"
     r'(?:\s*\))?\s*,')
+
+# tupleFlatten always reads as a method call with parens, x.tupleFlatten().
+# Violations:
+# - plain call `tupleFlatten(x)`
+# - bare property form `x.tupleFlatten`, parens missing
+# - decl header stays out, the exported marker `*` sits before the paren there
+TUPLEFLATTEN_CALL_RE = re.compile(r"(?<![.\w])tupleFlatten\s*\(")
+TUPLEFLATTEN_BARE_RE = re.compile(r"\.\s*tupleFlatten(?!\s*[(\*])")
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -993,7 +1005,7 @@ def scan_hash_above_proc(path, lines, blocked, findings):
 
 
 def scan_newcall_method(path, lines, findings):
-    """Flags newCall(bindSym"f", x, ...) sites that read better as x.f(...).
+    """Flags call sites that read better as method call syntax.
 
     Contract:
     - fires once per call site, on the line carrying the callee
@@ -1012,6 +1024,16 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "newcall-method",
                 "newCall builds %s(x, ...) where x.%s(...) is the method "
                 "call form" % (name, name)))
+        if TUPLEFLATTEN_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tupleflatten-method",
+                "tupleFlatten reads as a plain call here, write "
+                "x.tupleFlatten()"))
+        elif TUPLEFLATTEN_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tupleflatten-method",
+                "tupleFlatten reads without call parens here, write "
+                "x.tupleFlatten()"))
 
 
 BODY_WRAP_MAX = 180

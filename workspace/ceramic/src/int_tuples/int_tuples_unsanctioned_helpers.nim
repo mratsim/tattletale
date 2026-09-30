@@ -6,6 +6,8 @@
 ## - sanctioned modules may import this file while a helper awaits its home
 ## - what survives rationalization is re-exported through the family module
 import std/macros, std/typetraits
+import ./int_tuples_compiletime
+import ./int_tuples_streams
 
 macro groupedHead*(head, tail: typed): untyped =
   ## Tuple (head, tail[0], tail[1], ...) with head verbatim so nesting survives,
@@ -43,16 +45,8 @@ func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## - ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
   ## - ((int, int), (int, int))                  → @[DynamicSentinel, DynamicSentinel, ...]
   ## - Int[64]                                   → @[64]
-  if t.kind == nnkBracketExpr and $t[0] == "Int":
-    # Single Int[N] (scalar type, not tuple)
-    result.add int(t[1].intVal)
-  elif t.kind == nnkTupleConstr or t.kind == nnkTupleTy:
-    # Recurse into tuple elements
-    for i in 0 ..< t.len:
-      result.add toSeqStaticInts(t[i])
-  else:
-    # Dynamic int (or other), mark as unknown (low(int))
-    result.add low(int)
+  for (_, ty) in tupleStream(t).leaves():
+    result.add ty.getStaticInt()
 
 proc tupleLeaf*(e: NimNode; count, idx: int): NimNode {.compileTime.} =
   ## idx-th leaf of a flat IntOrIntTuple value expression node.

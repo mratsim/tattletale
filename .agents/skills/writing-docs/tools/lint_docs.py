@@ -12,7 +12,7 @@ Rule table (rule | trigger | severity):
 | rule-id              | trigger                                                                                           | severity |
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
-| the-opener           | a title line or heading opens with the article "The" (prose may open with The)                         | counted  |
+| the-opener           | a title line or heading opens with the article "The" (title position = air or separator above or below) | counted  |
 | the-fragment         | a noun phrase opening on the/The that carries no verb, as a sentence or comma segment                 | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
@@ -263,7 +263,7 @@ ARTIFACT = [
 
 # Narration of the how over the what (the how-narration rule, advisory).
 HOW_NARRATION = [
-    (r"^\s*This (?:function|method|class|module|procedure|proc|loop|test) ",
+    (r"^\s*This (?:function|method|class|procedure|proc|loop|test) ",
      "narrates the code instead of stating the contract"),
     (r"^\s*Here,? we\b", "narrates the author's walk-through"),
     (r"^\s*We (?:iterate|walk|loop|increment|start by|first)\b",
@@ -439,7 +439,9 @@ RULES = {
     "banned-vocab": Rule("banned-vocab", True,
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
-                       "a title line or heading opens with the article \"The\" (prose may open with The)"),
+                       "a title line or heading opens with the article \"The\" "
+                       "(title position = air or separator above or below; "
+                       "prose inside a paragraph may open with The)"),
     "the-fragment": Rule("the-fragment", True,
                          "a noun phrase opening on the/The that carries no verb, as a sentence or comma segment"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
@@ -994,7 +996,8 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
             warning=warning))
 
 
-def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None):
+def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
+               standalone=True):
     """Runs the per-line rules over one prose line."""
     if not c:
         return
@@ -1011,12 +1014,13 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None):
             findings.append(Finding(
                 path, n, "the-opener",
                 "title opens with the (open with a noun phrase)"))
-    # The article ban: no prose line opens on "the", titles included.
-    # The title form above already segments comma-separated colon titles;
-    # this check covers every other prose line, bullet content included.
+    # The article ban targets titles and subtitles: a line is a title
+    # position only when air or a separator sits above or below it, prose
+    # inside a paragraph block keeps its The opener legal.
     lead = bare.lstrip("-*+ ")
     words = lead.split()
-    if not c.endswith(":") and words and words[0].lower() == "the":
+    if (not c.endswith(":") and standalone and words
+            and words[0].lower() == "the"):
         findings.append(Finding(
             path, n, "the-opener",
             "prose opens with the (open with a noun phrase)"))
@@ -1903,6 +1907,18 @@ def scan(path, text, findings):
         for i, e in enumerate(entries):
             if i + 1 < len(entries):
                 next_text[e[0]] = entries[i + 1][1]
+
+    raws = text.splitlines()
+
+    def air_or_sep(raw):
+        s = raw.strip()
+        if not s:
+            return True
+        if s.startswith("#"):
+            core = s.lstrip("#").strip()
+            return bool(core) and set(core) <= {"#", "-", "═", "─", "━", " "}
+        return False
+
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
@@ -1917,6 +1933,8 @@ def scan(path, text, findings):
         last_entry = None
         for n, c, kind, indent, trailing in block:
             prev_entry, last_entry = last_entry, c
+            standalone = (n <= 1 or air_or_sep(raws[n - 2])) or \
+                (n >= len(raws) or air_or_sep(raws[n]))
             if kind == "heading":
                 if strip_backticks(c).split()[:1] == ["The"]:
                     findings.append(Finding(
@@ -1937,9 +1955,11 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
-                check_line(path, n, c, kind, is_nim, prev_text, findings, next_text)
+                check_line(path, n, c, kind, is_nim, prev_text, findings,
+                           next_text, standalone)
                 continue
-            check_line(path, n, c, kind, is_nim, prev_text, findings, next_text)
+            check_line(path, n, c, kind, is_nim, prev_text, findings,
+                       next_text, standalone)
             if structural(c):
                 flush_wall(path, run, findings)
                 run = []

@@ -125,7 +125,7 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
   ##   idx2crd((3, 7, 2), 42)         == (0, 0, 2)
   let shT = shape.getTypeInst()
   if shT.kind in {nnkTupleTy, nnkTupleConstr}:
-    let flat = flatLeaves(shape)
+    let flat = shape.tupleFlatten()
     var parts: seq[NimNode] = @[]
     var q = idx
     for k in 0 ..< flat.len - 1:
