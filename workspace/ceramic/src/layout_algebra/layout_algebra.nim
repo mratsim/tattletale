@@ -47,9 +47,9 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
 
   if shLeaves.len == 1 and stLeaves.len == 1:
     if isStaticOne(shTypes[0]):
-      result = newCall(bindSym"make_layout", newLit(1), newLit(0))
+      result = bindSym"make_layout".newCall(newLit(1), newLit(0))
     else:
-      result = newCall(bindSym"make_layout", shLeaves[0], stLeaves[0])
+      result = bindSym"make_layout".newCall(shLeaves[0], stLeaves[0])
     return
 
   # chunks collect back-to-front while the walk merges frontward.
@@ -68,8 +68,8 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
       head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
     elif isStaticInt(shTypes[k]) and isStaticInt(stTypes[k]) and
         isStaticInt(head.shapeTy) and isStaticInt(head.strideTy) and
-        getStaticInt(shTypes[k]) * getStaticInt(stTypes[k]) == getStaticInt(head.strideTy):
-      let mergedVal = getStaticInt(shTypes[k]) * getStaticInt(head.shapeTy)
+        shTypes[k].getStaticInt() * stTypes[k].getStaticInt() == head.strideTy.getStaticInt():
+      let mergedVal = shTypes[k].getStaticInt() * head.shapeTy.getStaticInt()
       head = (IntCT(mergedVal),
               newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal)),
               stLeaves[k], stTypes[k])
@@ -83,7 +83,7 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
       discard chunks.pop()  # back chunks sit at the seq front
 
   if chunks.len == 0:
-    result = newCall(bindSym"make_layout", IntCT(1), newLit(0))
+    result = bindSym"make_layout".newCall(IntCT(1), newLit(0))
     return
 
   var rShape = newNimNode(nnkTupleConstr)
@@ -95,7 +95,7 @@ macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: stati
     rShape = rShape[0]
     rStride = rStride[0]
 
-  result = newCall(bindSym"make_layout", rShape, rStride)
+  result = bindSym"make_layout".newCall(rShape, rStride)
 
 func coalesce*(layout: Layout): auto {.inline, noInit.} =
   ## Merge contiguous dimensions.
@@ -152,7 +152,7 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
     let stTyp = st.getTypeInst()
     if stTyp.kind == nnkBracketExpr and $stTyp[0] == "Int" and stTyp[1].intVal == 0:
       # Static zero stride, every coordinate maps to offset 0
-      result = newCall(bindSym"make_layout", boundExpr, newLit(1))
+      result = bindSym"make_layout".newCall(boundExpr, newLit(1))
     else:
       result = quote do:
         coalesceBackward(
@@ -241,7 +241,7 @@ macro complementEmit(lyt, cosizeBound: typed; defaultBound: static bool): untype
       bound = IntCT(b)
     if pairs.shape.len == 0:
       # every dimension broadcasts or is size-1, the complement collapses to (bound):(1)
-      result = newCall(bindSym"make_layout", bound, newLit(1))
+      result = bindSym"make_layout".newCall(bound, newLit(1))
     else:
       var shN = newNimNode(nnkTupleConstr)
       var stN = newNimNode(nnkTupleConstr)
@@ -309,8 +309,8 @@ proc composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode];
       return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
         bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSh & @[remShN])),
         bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSt & @[scaled]))))
-    let shVk = staticVal(lhsShTys[k])
-    let stVk = staticVal(lhsStTys[k])
+    let shVk = lhsShTys[k].getStaticInt()
+    let stVk = lhsStTys[k].getStaticInt()
     let absRemV = if stV != DynamicSentinel: abs(stV) else: DynamicSentinel
     let nextShV = if shVk != DynamicSentinel and absRemV != DynamicSentinel:
       ceil_div(shVk, absRemV)
@@ -349,7 +349,7 @@ macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides:
 
   let remSh0 = genSym(nskLet, "remainingShape")
   let remSt0 = genSym(nskLet, "remainingStride")
-  let remStV0 = staticVal(remainingStride.getTypeInst())
+  let remStV0 = remainingStride.getTypeInst().getStaticInt()
   let lets = nnkLetSection.newTree(
     nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
     nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride))
@@ -367,7 +367,7 @@ macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides:
       lhsStTys.add ty
     result = nnkStmtListExpr.newTree(lets, composeFold(
       lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys, remSh0, remSt0,
-      staticVal(remainingShape.getTypeInst()), remStV0))
+      remainingShape.getTypeInst().getStaticInt(), remStV0))
 
 func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
   ## Layer RHS dimensions one by one over the full coalesced LHS via mapDimensionsWith.
@@ -582,7 +582,7 @@ macro hier_unzip*(splitter: untyped; layout: typed; tiler: typed): untyped =
       when needBinding:
         let nodeR = freshAlias()
         stmts.add newCall(bindSym"evalOnceAs", nodeR,
-          newCall(bindSym"make_layout",
+          bindSym"make_layout".newCall(
             nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fsh),
                                    nnkTupleConstr.newTree(result.ssh)),
             nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fst),
@@ -604,7 +604,7 @@ macro hier_unzip*(splitter: untyped; layout: typed; tiler: typed): untyped =
   stmts.insert(0, newCall(bindSym"evalOnceAs", ident"huzLyt", layout))
   stmts.insert(1, nnkLetSection.newTree(
     nnkIdentDefs.newTree(ident"huzTlr", newEmptyNode(), tiler)))
-  stmts.add newCall(bindSym"make_layout",
+  stmts.add bindSym"make_layout".newCall(
     nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fsh), nnkTupleConstr.newTree(top.ssh)),
     nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fst), nnkTupleConstr.newTree(top.sst)))
   result = nnkBlockExpr.newTree(newEmptyNode(), stmts)

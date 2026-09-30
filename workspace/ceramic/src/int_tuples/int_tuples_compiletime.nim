@@ -40,9 +40,18 @@ func isStaticOne*(t: NimNode): bool {.compileTime.} =
   (t.kind == nnkIntLit and t.intVal == 1)
 
 func getStaticInt*(t: NimNode): int {.compileTime.} =
-  if t.kind == nnkBracketExpr and $t[0] == "Int": int(t[1].intVal)
-  elif t.kind == nnkIntLit: int(t.intVal)
-  else: error("getStaticInt on non-static: " & t.repr)
+  ## Static Int value of a node, DynamicSentinel when the node carries
+  ## no static Int (not a literal, not an Int[V] type or construction).
+  case t.kind
+  of nnkIntLit, nnkUIntLit:
+    int(t.intVal)
+  of nnkCall, nnkBracketExpr:
+    if t.len >= 1 and $t[0] == "Int" and t[1].kind == nnkIntLit:
+      int(t[1].intVal)
+    else:
+      DynamicSentinel
+  else:
+    DynamicSentinel
 
 # ═══════════════════════════════════════════════════════════════
 #  Constant foldable check

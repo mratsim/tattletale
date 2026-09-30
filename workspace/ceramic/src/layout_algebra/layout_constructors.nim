@@ -23,7 +23,7 @@ func col_major_strides*(shape: IntOrIntTuple): auto =
   prefix_product(shape)
 
 # ═══════════════════════════════════════════════════════════════
-#  make_layout, construct Layout values
+#  make_layout
 # ═══════════════════════════════════════════════════════════════
 
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
@@ -51,6 +51,27 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
   )
 
 # ═══════════════════════════════════════════════════════════════
+#  layoutTypeArgs, layout dimensions+types extraction
+# ═══════════════════════════════════════════════════════════════
+
+func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
+  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
+  let typ = layout.getTypeInst()
+  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
+    return (typ[1], typ[2])
+  if typ.kind == nnkSym:
+    let objTy = typ.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          result.shapeTy = field[1]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          result.strideTy = field[1]
+      if result.shapeTy != nil and result.strideTy != nil:
+        return
+  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
+
+# ═══════════════════════════════════════════════════════════════
 #  LayoutCT, compile-time Layout accumulator for macros
 # ═══════════════════════════════════════════════════════════════
 
@@ -70,10 +91,13 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
   for i in 0 ..< ct.shape.len:
     outSh.add ct.shape[i]; outSt.add ct.stride[i]
   if ct.shape.len == 0:
-    result = newCall(bindSym"make_layout", newLit(1), newLit(0))
+    result = bindSym"make_layout".newCall(newLit(1), newLit(0))
   else:
-    result = newCall(bindSym"make_layout", outSh, outSt)
+    result = bindSym"make_layout".newCall(outSh, outSt)
 
+# ═══════════════════════════════════════════════════════════════
+#  compact_order
+# ═══════════════════════════════════════════════════════════════
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
   ## Compute stride for each dimension m as product of shapes of dimensions
@@ -138,18 +162,6 @@ proc flattenAst(n: NimNode): seq[NimNode] {.compileTime.} =
   else:
     discard
 
-proc leafIntVal(n: NimNode): int {.compileTime.} =
-  case n.kind
-  of nnkIntLit, nnkUIntLit:
-    n.intVal
-  of nnkCall, nnkBracketExpr:
-    if n.len >= 1 and $n[0] == "Int" and n[1].kind == nnkIntLit:
-      n[1].intVal
-    else:
-      DynamicSentinel
-  else:
-    DynamicSentinel
-
 proc flattenType*(t: NimNode): seq[NimNode] {.compileTime.} =
   case t.kind
   of nnkTupleConstr:
@@ -159,39 +171,16 @@ proc flattenType*(t: NimNode): seq[NimNode] {.compileTime.} =
   else:
     result.add t
 
-proc typeIntVal(t: NimNode): int {.compileTime.} =
-  if t.kind == nnkBracketExpr and $t[0] == "Int" and t[1].kind == nnkIntLit:
-    t[1].intVal
-  else:
-    DynamicSentinel
-
 proc typeIntVals(t: NimNode): seq[int] {.compileTime.} =
   ## Flattened leaf values of an Int tuple type, DynamicSentinel where a leaf is not a static Int.
   for leaf in flattenType(t):
-    result.add typeIntVal(leaf)
+    result.add leaf.getStaticInt()
 
 proc litTuple(vals: seq[int]): NimNode {.compileTime.} =
   ## Int literal tuple expression, scalar when single-valued.
   result = nnkPar.newNimNode()
   for v in vals:
     result.add newLit(v)
-
-func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
-  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
-  let typ = layout.getTypeInst()
-  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
-    return (typ[1], typ[2])
-  if typ.kind == nnkSym:
-    let objTy = typ.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          result.shapeTy = field[1]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          result.strideTy = field[1]
-      if result.shapeTy != nil and result.strideTy != nil:
-        return
-  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
 
 macro compact_order*(shape, order): untyped =
   ## Produce compact strides for a given dimension permutation.
@@ -226,8 +215,8 @@ macro compact_order*(shape, order): untyped =
   var ordVals = newSeq[int](n)
 
   for i in 0 ..< n:
-    shVals[i] = leafIntVal(shLeaves[i])
-    ordVals[i] = leafIntVal(ordLeaves[i])
+    shVals[i] = shLeaves[i].getStaticInt()
+    ordVals[i] = ordLeaves[i].getStaticInt()
 
   # Apply max-order substitution for dynamic entries
   let resolvedOrder = compactOrderDynamicSubstitution(ordVals)
@@ -242,6 +231,10 @@ macro compact_order*(shape, order): untyped =
     result = nnkPar.newTree()
     for s in strides:
       result.add newLit(s)
+
+# ═══════════════════════════════════════════════════════════════
+#  make_layout_like
+# ═══════════════════════════════════════════════════════════════
 
 macro make_layout_like*(layout: Layout): untyped =
   ## Create a compact layout with the same shape and element-access order.
@@ -280,6 +273,10 @@ macro make_layout_like*(layout: Layout): untyped =
                 litTuple(strides)
   result = quote do:
     make_layout(`layout`.shape, `outSt`)
+
+# ═══════════════════════════════════════════════════════════════
+#  make_fragment_like
+# ═══════════════════════════════════════════════════════════════
 
 template make_fragment_like*(layout: Layout): auto =
   ## Register-buffer layout for a partition view.

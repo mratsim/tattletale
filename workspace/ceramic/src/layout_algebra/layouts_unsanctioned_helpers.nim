@@ -28,10 +28,3 @@ proc dimCount*(ty: NimNode): int {.compileTime.} =
     ty.len
   else:
     1
-
-proc staticVal*(t: NimNode): int {.compileTime.} =
-  ## Static Int value of a type node, DynamicSentinel when not static.
-  if isStaticInt(t):
-    getStaticInt(t)
-  else:
-    DynamicSentinel

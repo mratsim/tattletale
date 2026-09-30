@@ -198,7 +198,7 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   let stExpr = newTree(nnkDotExpr, layout, ident"stride")
   var stmts = newStmtList()
   let (outSh, outSt) = mapLeavesRec(stmts, shExpr, shTyp, stExpr, stTyp, bodyExpr)
-  stmts.add nnkCall.newTree(bindSym"make_layout", outSh, outSt)
+  stmts.add bindSym"make_layout".newCall(outSh, outSt)
   result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
 
@@ -295,7 +295,7 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
 
   let zShape = zipElems(aShape, bShape, aShT, bShT)
   let zStride = zipElems(aStride, bStride, aStT, bStT)
-  result = newCall(bindSym"make_layout", zShape, zStride)
+  result = bindSym"make_layout".newCall(zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
 #  selection-macro helpers, dimension access and rank
