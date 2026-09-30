@@ -39,6 +39,7 @@ proc runComposeMultiDimensionTests: void
 proc runComposeDynamicTests: void
 proc runComposeRemainderTests: void
 proc runComposeNestedTests: void
+proc runComposeTilerTests: void
 proc runComposeSwizzleTests: void
 proc runComposeEStrideTests: void
 proc runComposeNegStrideTests: void
@@ -80,6 +81,7 @@ proc runTests =
   runComposeDynamicTests()
   runComposeRemainderTests()
   runComposeNestedTests()
+  runComposeTilerTests()
   runComposeSwizzleTests()
   runComposeEStrideTests()
   runComposeNegStrideTests()
@@ -785,6 +787,32 @@ proc runComposeNestedTests =
   let d16 = 16
   doAssert compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
   echo "    Scalar LHS: 5/5"
+
+proc runComposeTilerTests =
+  ## Tiler-tuple composition, CuTe composition's tuple variant
+  ## (transform_layout over the first tiler dimensions, leftovers drop)
+  ## and pycute `_composition` (zip-per-dimension).
+  echo "    Tiler tuple [CUTE-CM tuple variant + PY-L _composition]:"
+  # int tiler elements compose each dimension with (N):(1), the first N positions
+  doAssert compose(make_layout((32, 8), (1, 32)), (16, 2)) === ((16, 2), (1, 32))
+  # keep tiler element, `_` passes the dimension through whole
+  doAssert compose(make_layout((4, 8), (1, 4)), (_, 2)) === ((4, 2), (1, 4))
+  # leftover dimensions drop, CuTe and pycute agree
+  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, 4)) === ((2, 4), (1, 4))
+  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, _, _)) === ((2, 8, 2), (1, 4, 32))
+  # Layout tiler element, a (T, V) atom pattern composed per dimension
+  doAssert compose(make_layout((4, 8), (1, 4)), (make_layout(2, 2), _)) === ((2, 8), (2, 4))
+  doAssert compose(make_layout((16, 8), (1, 16)), (make_layout((2, 4), (1, 4)), _)) ===
+    (((2, 4), 8), ((1, 4), 16))
+  # static tiler literals promote through makeIntTuple forms too
+  doAssert compose(make_layout((32, 8), (1, 32)), makeIntTuple((16, 2))) === ((16, 2), (1, 32))
+  # runtime int stride, the consume stays runtime
+  let dS = 2
+  doAssert compose(make_layout((32, 8), (1, dS)), (16, 4)) === ((16, 4), (1, dS))
+  # a tiler longer than the layout is a compile-time error
+  static:
+    doAssert not compiles(compose(make_layout(4, 1), (2, 3)))
+  echo "    9/9"
 
 proc runComposeSwizzleTests =
   echo "    Swizzle [CUTE-CM #55-56]:"

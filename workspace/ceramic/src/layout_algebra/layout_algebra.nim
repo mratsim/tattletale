@@ -13,6 +13,7 @@ import std/algorithm
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  getIndicesSortedByStride, sort permutation by stride
@@ -433,6 +434,57 @@ func compose*[A, B: Layout](a: A, b: B): auto =
       make_layout(b.shape, b.stride.scaleBy(flatA.stride))
     else:
       composeDistribute(flatA.shape, flatA.stride, b.shape, b.stride)
+
+macro compose*(layout: Layout; tiler: tuple): untyped =
+  ## Compose with a tiler tuple, one tiler element per dimension.
+  ##
+  ## Contract:
+  ## - dimension i composes with `tiler[i]`
+  ## - dimensions past the tiler length drop, CuTe and pycute agree
+  ## - a tiler longer than the layout is rejected at expansion
+  ##
+  ## Tiler elements:
+  ## - a Layout composes by layout algebra
+  ## - an int/Int takes the dimension's first N positions
+  ## - `_` passes the dimension through whole
+  ##
+  ## Example:
+  ##   compose(make_layout((32, 8), (1, 32)), (16, _))
+  ##   # → (16, 8):(1, 32)
+  ##
+  ## Dimension 0 consumes 16 positions, dimension 1 passes through.
+  let
+    shTy = layoutTypeArgs(layout).shapeTy
+    R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
+    tilerRank = tiler.getTypeInst().len
+  doAssert tilerRank <= R,
+    "compose: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
+  if tilerRank < R:
+    template dropT(l, t) =
+      ## Dimensions past the tiler length drop, slice them off first,
+      ## transform_layout passes leftovers through otherwise.
+      transform_layout(takeDimensions(l, 0, tupleLen(typeof(t))), t):
+        when it_t is X:
+          it_l
+        elif it_t is (int or Int):
+          compose(it_l, make_layout(it_t))
+        else:
+          compose(it_l, it_t)
+    result = getAst(dropT(layout, tiler))
+  else:
+    template keepT(l, t) =
+      ## Full-rank tiler, every dimension is hit.
+      transform_layout(l, t):
+        when it_t is X:
+          it_l
+        elif it_t is (int or Int):
+          compose(it_l, make_layout(it_t))
+        else:
+          compose(it_l, it_t)
+    result = getAst(keepT(layout, tiler))
+  if tilerRank == 1:
+    # a rank-1 tiler rebuilds flat in CuTe and pycute, unwrap the 1-tuple
+    result = newCall(nnkDotExpr.newTree(result, bindSym"dimension"), newLit 0)
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide, tile a layout into (tile, rest)
