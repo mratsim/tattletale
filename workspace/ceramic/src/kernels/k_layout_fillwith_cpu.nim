@@ -39,6 +39,7 @@
 ##
 import std/[macros, algorithm]
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import system/memory

@@ -3,8 +3,8 @@
 ## Helpers landing here bypass the sanctioned op surface, the funnel pass
 ## later promotes, keeps, or kills each one.
 ##
-## - nothing outside int_tuples imports this file
-## - sanctioned modules re-export what survives rationalization
+## - sanctioned modules may import this file while a helper awaits its home
+## - what survives rationalization is re-exported through the family module
 import std/macros, std/typetraits
 
 macro groupedHead(head, tail: typed): untyped =
@@ -34,3 +34,34 @@ func tupleTypeLen*(n: NimNode): int {.compileTime.} =
   ## Length of the resolved tuple type node, callers guard with isTuple first.
   let t = n.tupleType()
   result = t.len
+
+func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
+  ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
+  ## Returns low(int) (DynamicSentinel) for non-static (dynamic int) elements.
+  ##
+  ## Handles:
+  ## - ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
+  ## - ((int, int), (int, int))                  → @[DynamicSentinel, DynamicSentinel, ...]
+  ## - Int[64]                                   → @[64]
+  if t.kind == nnkBracketExpr and $t[0] == "Int":
+    # Single Int[N] (scalar type, not tuple)
+    result.add int(t[1].intVal)
+  elif t.kind == nnkTupleConstr or t.kind == nnkTupleTy:
+    # Recurse into tuple elements
+    for i in 0 ..< t.len:
+      result.add toSeqStaticInts(t[i])
+  else:
+    # Dynamic int (or other), mark as unknown (low(int))
+    result.add low(int)
+
+proc tupleLeaf*(e: NimNode; count, idx: int): NimNode {.compileTime.} =
+  ## idx-th leaf of a flat IntOrIntTuple value expression node.
+  ## Returns:
+  ## - bare node for a scalar flat value (count == 1)
+  ## - bracket access for a tuple value at the idx-th element
+  ## TODO:
+  ## principled API, the leaf-access family has no single home yet
+  if count == 1:
+    e
+  else:
+    newTree(nnkBracketExpr, e, newLit(idx))

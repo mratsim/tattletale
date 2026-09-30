@@ -20,10 +20,10 @@ Rule table (rule | trigger | severity):
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| colon-inline         | a prose colon followed by prose on the same line                                                  | counted  |
+| colon-inline         | a prose colon followed by prose on the same line while the next comment line carries prose          | counted  |
 | unit-split           | a line opens on a severed one-word continuation ("apply,")                                        | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
-| single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
+| single-word-eol      | a 1-2 word stub under 10% of the cap, directly after a period- or comma-final prose line          | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
 | bullet-list-length   | a bullet list with 4 or more items                                                                | counted  |
 | bullet-item-length   | a single bullet item spanning 4 or more lines                                                     | counted  |
@@ -96,9 +96,9 @@ writing the fixed text back.
 | mechanical class            | transform                                                                                                        |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
-| single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
+| single-word-eol             | fuse the stub into the severed line above, or give the phrase its full line                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
-| colon-inline                | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean     |
+| colon-inline                | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean, the next comment line being air exempts |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
@@ -118,7 +118,7 @@ from collections import Counter
 from pathlib import Path
 
 PROSE_CAP = 180
-SINGLE_WORD_EOL_PREV_MAX = 110
+
 WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
 # A table cell over this many words is a wall of prose in a cell,
@@ -452,12 +452,15 @@ RULES = {
     "colon-break": Rule("colon-break", True,
                         "a colon orphaned at line start or split from its lead phrase"),
     "colon-inline": Rule("colon-inline", True,
-                         "a prose colon followed by prose on the same line"),
+                         "a prose colon followed by prose on the same line "
+                         "while the next comment line carries prose"),
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "single-word-eol": Rule("single-word-eol", True,
-                            "a 1-2 word stub line with reflow room on the previous line"),
+                            "a 1-2 word prose stub under 10% of the cap, "
+                            "directly after a period- or comma-final line, "
+                            "backticked-token-only lines are air"),
     "doc-above-type": Rule("doc-above-type", True,
                            "a ## block sits directly above a type declaration"),
     "bullet-list-length": Rule("bullet-list-length", True,
@@ -991,7 +994,7 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
             warning=warning))
 
 
-def check_line(path, n, c, kind, is_nim, prev_text, findings):
+def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None):
     """Runs the per-line rules over one prose line."""
     if not c:
         return
@@ -1069,14 +1072,18 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
     # URLs keep their scheme colon.
     # Math definition lines are exempt: a colon introducing a call or an
     # equals-sign definition states math, not prose.
+    # A colon tail ending at air stays: the next comment line holds no
+    # prose words, so the inline enumeration closes the entry.
     cm = re.search(r":\s+\S", bare)
     if cm and "://" not in bare[:cm.start() + 2]:
         tail = bare[cm.end():].lstrip()
         if not re.match(r"[\w`][\w`\[\].]*\s*(\(|=)", tail):
-            findings.append(Finding(
-                path, n, "colon-inline",
-                "a prose colon is followed by prose on the same line "
-                "(move what it introduces to the next lines)"))
+            nxt = next_text.get(n, "") if next_text else ""
+            if strip_backticks(nxt).split():
+                findings.append(Finding(
+                    path, n, "colon-inline",
+                    "a prose colon is followed by prose on the same line "
+                    "(move what it introduces to the next lines)"))
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
@@ -1141,7 +1148,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             findings.append(Finding(
                 path, n, "stray-fragment",
                 "line ends on the bare connective `%s`" % tok))
-    m = re.search(r"(?<![.\d])\.\s+(\S+(?:\s+\S+)?)$", bare)
+    m = re.search(r"(?<![.\d])(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?<!cf)\.\s+(\S+(?:\s+\S+)?)$", c)
     if m:
         lead = m.group(1).split()[0].strip(".,;:()'\"*").lower()
         if lead not in ABBREVIATIONS and "`" not in m.group(1):
@@ -1876,10 +1883,26 @@ def scan(path, text, findings):
                 pass
             py_structure_checks(path, tree, meta["func_docs"], findings)
 
-    prev_prose = None
     prev_text = {}
+    next_text = {}
     for n, c, kind, _, _ in entries:
         prev_text[n] = c
+    if is_nim:
+        # adjacency rides the raw lines, dropped bare-# air lines must count
+        raws = text.splitlines()
+        for e in entries:
+            n = e[0]
+            if n >= len(raws):
+                continue
+            s = raws[n].strip()
+            if s.startswith("#"):
+                content = s.lstrip("#").strip()
+                if content and not set(content) <= {"#", "-", "═", " "}:
+                    next_text[n] = content
+    else:
+        for i, e in enumerate(entries):
+            if i + 1 < len(entries):
+                next_text[e[0]] = entries[i + 1][1]
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
@@ -1891,7 +1914,9 @@ def scan(path, text, findings):
         run = []
         air_run = []
         prev_bullet = False
+        last_entry = None
         for n, c, kind, indent, trailing in block:
+            prev_entry, last_entry = last_entry, c
             if kind == "heading":
                 if strip_backticks(c).split()[:1] == ["The"]:
                     findings.append(Finding(
@@ -1912,9 +1937,9 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
-                check_line(path, n, c, kind, is_nim, prev_text, findings)
+                check_line(path, n, c, kind, is_nim, prev_text, findings, next_text)
                 continue
-            check_line(path, n, c, kind, is_nim, prev_text, findings)
+            check_line(path, n, c, kind, is_nim, prev_text, findings, next_text)
             if structural(c):
                 flush_wall(path, run, findings)
                 run = []
@@ -1937,13 +1962,15 @@ def scan(path, text, findings):
             if structural(c):
                 continue
             wc = len(words(strip_backticks(c)))
-            if (wc <= 2 and not c.endswith(":") and prev_prose is not None
-                    and len(prev_prose[1]) < SINGLE_WORD_EOL_PREV_MAX):
+            if (0 < wc <= 2 and not c.endswith(":") and prev_entry is not None
+                    and words(strip_backticks(prev_entry))
+                    and prev_entry.rstrip().endswith((".", ","))
+                    and len(c.strip()) * 10 < PROSE_CAP):
                 findings.append(Finding(
                     path, n, "single-word-eol",
-                    "line ends on a %d-word stub, the previous line had room "
-                    "to reflow" % wc))
-            prev_prose = (n, c)
+                    "a %d-word stub follows a period- or comma-final line at "
+                    "%d%% of the cap, fuse it into the line above or pad "
+                    "the phrase" % (wc, len(c.strip()) * 100 // PROSE_CAP)))
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 
@@ -2182,7 +2209,7 @@ def _tail_bad(body):
     elif tok:
         if tok in ARTICLE_EOL or tok.endswith("'s") or tok in CONNECTIVE_EOL:
             return True
-    m = re.search(r"(?<![.\d])\.\s+(\S+(?:\s+\S+)?)$", bare)
+    m = re.search(r"(?<![.\d])(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?<!cf)\.\s+(\S+(?:\s+\S+)?)$", c)
     if m:
         lead = m.group(1).split()[0].strip(".,;:()'\"*").lower()
         if lead not in ABBREVIATIONS and "`" not in m.group(1):

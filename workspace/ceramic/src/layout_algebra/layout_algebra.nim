@@ -12,6 +12,7 @@ import std/sequtils
 import std/algorithm
 import std/typetraits
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import ./layouts
 import ./layouts_unsanctioned_helpers
 import ./layout_indexing_gpu
