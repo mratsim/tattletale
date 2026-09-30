@@ -21,7 +21,13 @@ type
     kOpen, kLeaf, kClose
 
   TupleStreamEvent* = object
+    ## Stream a tuple
+    ## 
+    ## Tracks modification so an identity stream for a tuple `t` = (11, 22, 33)
+    ## can return `t` directly.
+    ## Otherwise return tuple would be (t[0], t[1], t[2)), leading to unnecessary temporaries
     depth*: int
+    verbatim*: bool #
     case kind*: TupleStreamEventKind
     of kLeaf:
       leaf*, leafTy*: NimNode
@@ -57,9 +63,9 @@ func tupleStream*(e: NimNode): TupleStream =
   let ty = e.getTypeInst()
   if ty.kind in {nnkTupleConstr, nnkTupleTy}:
     s.stack.add (ev, ty, 0, 0)
-    s.pending = TupleStreamEvent(depth: 0, kind: kOpen)
-  else:
-    s.pending = TupleStreamEvent(depth: 0, kind: kLeaf, leaf: ev, leafTy: ty)
+    s.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
+  else: # Scalars
+    s.pending = TupleStreamEvent(depth: 0, kind: kLeaf, leaf: ev, leafTy: ty, verbatim: true)
   s.hasPending = true
   s
 
@@ -78,14 +84,14 @@ func next*(s: var TupleStream): TupleStreamEvent =
       let childT = f.ty[f.idx]
       inc s.stack[^1].idx
       if childT.kind in {nnkTupleConstr, nnkTupleTy}:
-        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kOpen)
+        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kOpen, verbatim: true)
         s.stack.add (childE, childT, 0, f.depth + 1)
       else:
-        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kLeaf, leaf: childE, leafTy: childT)
+        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
     else:
       let depth = f.depth
       discard s.stack.pop()
-      s.pending = TupleStreamEvent(depth: depth, kind: kClose)
+      s.pending = TupleStreamEvent(depth: depth, kind: kClose, verbatim: true)
     s.hasPending = true
 
 iterator items*(s: var TupleStream): TupleStreamEvent =
@@ -142,21 +148,26 @@ func tupleFlatten*(e: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
 type
   TupleBuilderFlat* = object
     accums*: seq[seq[NimNode]]
+    verbatim*: bool = true
 
 func new*(T: type TupleBuilderFlat, numTuples = 1): T =
   result.accums.newSeq(numTuples)
+  result.verbatim = true
 
 func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
+    if not ev.verbatim:
+      tb.verbatim = false
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
 
-func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
-  result = if emitScalarForSize1: nnkPar.newTree()
-           else: nnkTupleConstr.newTree()
+func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
+  var node = if emitScalarForSize1: nnkPar.newTree()
+             else: nnkTupleConstr.newTree()
   for n in tb.accums[id]:
-    result.add n
+    node.add n
+  result = (node, tb.verbatim)
 
 # ═════ Nested tuple builder ══════════════════════════════════════════
 
@@ -164,14 +175,18 @@ type
   TupleBuilderNested* = object
     accums*: seq[seq[NimNode]]
     completed*: seq[NimNode]
+    verbatim*: bool = true
 
 func new*(T: type TupleBuilderNested, numTuples = 1): T =
   result.accums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
+  result.verbatim = true
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
+    if not ev.verbatim:
+      tb.verbatim = false
     case ev.kind
     of kOpen:
       tb.accums[i].add newNimNode(nnkTupleConstr)
@@ -187,6 +202,6 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
       else:
         tb.accums[i][^1].add node
 
-func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
+func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
-  tb.completed[id]
+  (tb.completed[id], tb.verbatim)
