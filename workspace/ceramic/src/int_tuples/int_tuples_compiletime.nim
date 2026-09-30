@@ -54,18 +54,9 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
 #  Compile-time type helpers for the recursive macro
 # ═══════════════════════════════════════════════════════════════
 
-func isIntType(x: NimNode): bool {.compileTime.} =
-  ## True if `x` is typed as plain `int`.
-  sameType(x, bindSym"int")
-
 func isTupleType*(x: NimNode): bool {.compileTime.} =
   ## True if `x` is typed as a tuple type.
   x.getTypeImpl().kind == nnkTupleConstr
-
-func isStaticIntType(x: NimNode): bool {.compileTime.} =
-  ## True if `x` is typed as `Int[N]`.
-  let t = x.getTypeInst()
-  t.kind == nnkBracketExpr and $t[0] == "Int"
 
 # ═══════════════════════════════════════════════════════════════
 #  Constant foldable check

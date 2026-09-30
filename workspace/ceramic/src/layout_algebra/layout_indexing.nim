@@ -222,15 +222,6 @@ macro hasUnderscore*(Cs: varargs[untyped]): bool =
     `r`
   result = newBlockStmt(result)
 
-template callImpl(layout: Layout; coord: typed): auto =
-  ## Index a layout with a coordinate.
-  ## - coord with _ or X → slice, returns a sub-Layout
-  ## - all-int coord → crd2idx, returns an offset
-  when hasUnderscore(coord):
-    slice(layout, coord)
-  else:
-    crd2idx(layout, coord)
-
 template `()`*(layout: Layout; args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
   block:
