@@ -7,7 +7,7 @@
 ## - what survives rationalization is re-exported through the family module
 import std/macros, std/typetraits
 
-macro groupedHead(head, tail: typed): untyped =
+macro groupedHead*(head, tail: typed): untyped =
   ## Tuple (head, tail[0], tail[1], ...) with head verbatim so nesting survives,
   ## tail top-level elements unpacked one level, a scalar tail kept whole.
   ## tiled_divide/tiled_product reassembly, CuTe `result(_, repeat<R1>(_))` as a slice.

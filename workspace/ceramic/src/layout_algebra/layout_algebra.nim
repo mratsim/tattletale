@@ -282,13 +282,6 @@ proc emitLet(body: NimNode; name: string; expr: NimNode): NimNode {.compileTime.
     nnkIdentDefs.newTree(sym, newEmptyNode(), expr))
   sym
 
-proc staticVal(t: NimNode): int {.compileTime.} =
-  ## Static Int value of a type node, DynamicSentinel when not static.
-  if isStaticInt(t):
-    getStaticInt(t)
-  else:
-    DynamicSentinel
-
 proc composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode];
                  remSh, remSt: NimNode; remShV, remStV: int): NimNode {.compileTime.} =
   ## Composition fold over LHS dimensions as one flat let-chain:
@@ -619,18 +612,6 @@ macro hier_unzip*(splitter: untyped; layout: typed; tiler: typed): untyped =
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   hier_unzip(logical_divide, layout, tiler)
-
-macro groupedHead(head, tail: typed): untyped =
-  ## Tuple (head, tail[0], tail[1], ...) with head verbatim so nesting survives,
-  ## tail top-level elements unpacked one level, a scalar tail kept whole.
-  ## tiled_divide/tiled_product reassembly, the CuTe `result(_, repeat<R1>(_))` slice.
-  result = nnkTupleConstr.newTree(head)
-  let tt = tail.getTypeInst()
-  if tt.kind notin {nnkTupleTy, nnkTupleConstr} or tt.len == 0:
-    result.add tail
-    return
-  for i in 0 ..< tt.len:
-    result.add nnkBracketExpr.newTree(tail, newLit(i))
 
 template tiled_divide*(layout: Layout; tiler: auto): auto =
   ## Like zipped_divide but unpack the second dimension into individual dimensions.

@@ -10,9 +10,10 @@
 ## Helpers landing here bypass the sanctioned op surface, the funnel pass
 ## later promotes, keeps, or kills each one.
 ##
-## - nothing outside layout_algebra imports this file
-## - sanctioned modules re-export what survives rationalization
+## - sanctioned modules may import this file while a helper awaits its home
+## - what survives rationalization is re-exported through the family module
 import std/macros
+import workspace/ceramic/src/int_tuples
 
 proc shapeRank*(shTyp: NimNode): int {.compileTime.} =
   ## Rank of a layout given its shape type node, tuple constr = element count, scalar = 1.
@@ -27,3 +28,10 @@ proc dimCount*(ty: NimNode): int {.compileTime.} =
     ty.len
   else:
     1
+
+proc staticVal*(t: NimNode): int {.compileTime.} =
+  ## Static Int value of a type node, DynamicSentinel when not static.
+  if isStaticInt(t):
+    getStaticInt(t)
+  else:
+    DynamicSentinel
