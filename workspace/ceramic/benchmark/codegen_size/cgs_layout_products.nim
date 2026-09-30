@@ -46,7 +46,7 @@ const logicalProductCompMsl = metal:
 
 # ── kernel rows ──
 
-cgsReport("cgs_layout_product", [
+cgsReport("cgs_layout_products", [
   cgsReceipt("floorProductKernel", floorProductMsl),
   cgsReceipt("tiledProductKernel", tiledProductMsl, floorProductMsl.len),
   cgsReceipt("flatProductKernel", flatProductMsl, floorProductMsl.len),

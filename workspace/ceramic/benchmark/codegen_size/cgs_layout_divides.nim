@@ -70,7 +70,7 @@ const zippedDivideRank4Msl = metal:
 
 # ── kernel rows ──
 
-cgsReport("cgs_layout_divide", [
+cgsReport("cgs_layout_divides", [
   cgsReceipt("floorRank2Kernel", floorRank2Msl),
   cgsReceipt("zippedDivideOnlyKernel", zippedDivideOnlyMsl, floorRank2Msl.len),
   cgsReceipt("logicalDivideOnlyKernel", logicalDivideOnlyMsl, floorRank2Msl.len),

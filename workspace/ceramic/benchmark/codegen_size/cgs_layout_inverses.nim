@@ -1,0 +1,63 @@
+## Codesize ledger, layout inverse family.
+##
+## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
+## floorInverseKernel is the floor, a dynamic shape rank-2 layout with static strides consumed by size, inverse rows pair it.
+##
+## right_inverse and left_inverse are the public entries, the copyFrom chain calls right_inverse, emitInverse and inverseFold
+## are compile-time and those rows measure them.
+##
+## weakly_congruent carries no rows
+## - its runtime expansion dies in the metal converter on a nil-typed blit temp
+## - compile-time-only in practice
+##
+## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
+##
+## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
+import workspace/crucible
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
+
+# isolation floor, a dynamic shape rank-2 layout with static strides consumed by size, no inverse call
+const floorInverseMsl = metal:
+  proc floorInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
+    let L = make_layout((int M, int N), (1, 16))
+    C[0] = float32 toIntVal size(L)
+
+# right_inverse over the floor input, copyFrom quasi-inverse call-site shape
+const rightInverseMsl = metal:
+  proc rightInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
+    let L = make_layout((int M, int N), (1, 16))
+    let r = right_inverse(L)
+    C[0] = float32 toIntVal size(r)
+
+# right_inverse over a runtime-stride rank-2 layout, chain keeps the static-stride run, dynamic stride leaf ends it
+const rightInverseDynStrideMsl = metal:
+  proc rightInverseDynStrideKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
+    let L = make_layout((int M, int N), (1, int S))
+    let r = right_inverse(L)
+    C[0] = float32 toIntVal size(r)
+
+# right_inverse over a fully static layout, compile-time fold path, still emits the inline chain
+const rightInverseStaticMsl = metal:
+  proc rightInverseStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
+    let L = make_layout((4, 2), (1, 16))
+    let r = right_inverse(L)
+    C[0] = float32 toIntVal size(r)
+
+# left_inverse over the same dynamic shape rank-2 layout, all strides static per the divisibility precondition
+const leftInverseMsl = metal:
+  proc leftInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
+    let L = make_layout((int M, int N), (1, 16))
+    let r = left_inverse(L)
+    C[0] = float32 toIntVal size(r)
+
+# ── kernel rows ──
+
+cgsReport("cgs_layout_inverses", [
+  cgsReceipt("floorInverseKernel", floorInverseMsl),
+  cgsReceipt("rightInverseKernel", rightInverseMsl, floorInverseMsl.len),
+  cgsReceipt("rightInverseDynStrideKernel", rightInverseDynStrideMsl, floorInverseMsl.len),
+  cgsReceipt("rightInverseStaticKernel", rightInverseStaticMsl),
+  cgsReceipt("leftInverseKernel", leftInverseMsl, floorInverseMsl.len)])

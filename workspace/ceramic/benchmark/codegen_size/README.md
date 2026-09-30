@@ -12,12 +12,32 @@
 | cgs_layout_zip_group.nim          | groupDimensions, zipDimensions                                       |
 | cgs_layout_concat.nim             | concat                                                               |
 | cgs_layout_pad.nim                | pad pair: current hand-emitted macros vs the measured candidates     |
-| cgs_layout_divide.nim             | zipped_divide, logical_divide over all tiler forms                   |
-| cgs_layout_product.nim            | tiled_product, flat_product, logical_product                         |
+| cgs_layout_divides.nim            | zipped_divide, logical_divide over all tiler forms                   |
+| cgs_layout_products.nim           | tiled_product, flat_product, logical_product                         |
 | cgs_layout_local_tile.nim         | local_tile family floors, selectors, and instruments                 |
+| cgs_layout_indexing.nim           | crd2idx coord forms, idx2crd divmod, the L(i, j) accessor            |
+| cgs_layout_filters.nim            | filter_zeros, filter_inactive over runtime and static inputs         |
+| cgs_layout_inverses.nim           | right_inverse, left_inverse over dynamic and static layouts          |
 
 All runners live in the cgs_layout_ namespace (layout-algebra subjects).
 cgs_tile_ is the reserved namespace for future tile and tensor-level end-to-end runners.
+
+## Int-tuple layer
+
+cgs_inttuples_* runners measure the tuple ops the layout stack calls.
+Layer rule, a row measures the op's own layer
+- tuple ops go to cgs_inttuples_*
+- layout ops go to cgs_layout_*
+- ops with no callable runtime form emit nothing, a header note covers them
+
+| runner                            | kernels                                                              |
+| --------------------------------- | -------------------------------------------------------------------- |
+| cgs_inttuples_maps.nim            | mapLeavesWith, mapDimensionsWith, flatMapLeaves, concatFlat          |
+| cgs_inttuples_folds.nim           | fold, prefix_scanIt, suffix_scanIt                                   |
+| cgs_inttuples_transforms.nim      | concat, flatten, unwrap                                              |
+| cgs_inttuples_zips.nim            | zip2_by, zipLeavesWith, zipDimensionsWith, foldZipWith               |
+| cgs_inttuples_filters.nim         | filterZipWith, the slice/dice mechanism                              |
+| cgs_inttuples_datatypes.nim       | ceil_div, makeIntTuple, sign                                         |
 
 codegen_size_analysis.nim is the shared analysis module, bencher reports.nim
 table style. Every runner ends with one `cgsReport` call over its measured
@@ -99,6 +119,40 @@ One line per kernel row, row names say what the row measures.
 | cgs_layout_local_tile         | localTileStaticKernel           | fully static rank-2 layout, runtime coords                                                            |
 | cgs_layout_local_tile         | twoTileKernel                   | 2 real local_tile calls, Marginal = 2nd-call cost over the localTile2arg row                          |
 | cgs_layout_local_tile         | dynFormulaKernel                | the rank-2 inline of the local_tile_dyn body, the formula floor                                       |
+| cgs_inttuples_maps            | mapLeavesKernel                 | mapLeavesWith over the scaleBy leaf map on the divide-chain mode-pair tuple                           |
+| cgs_inttuples_maps            | mapDimensionsKernel             | mapDimensionsWith over the product_each top-level map on runtime mode tuples                          |
+| cgs_inttuples_maps            | flatMapLeavesKernel             | flatMapLeaves into the flat pack with a real leaf body, the flatten mechanism                         |
+| cgs_inttuples_maps            | concatFlatKernel                | concatFlat over two runtime mode tuples, the dimension-concat shape                                   |
+| cgs_inttuples_folds           | foldKernel                      | fold over the runtime product chain, the size/product call-site shape                                 |
+| cgs_inttuples_folds           | prefixScanKernel                | prefix_scanIt over the stride-from-shape scan, recurse + tail_accumulator arms                        |
+| cgs_inttuples_folds           | suffixScanKernel                | suffix_scanIt over the mirrored scan, recurse + head_accumulator arms                                 |
+| cgs_inttuples_transforms      | concatTupleTupleKernel          | concat of two runtime tuples, the tuple + tuple macro arm                                             |
+| cgs_inttuples_transforms      | concatStaticTupleKernel         | concat of a static leading int with a runtime tuple, the prepend-a-static-dim arm                     |
+| cgs_inttuples_transforms      | flattenRuntimeKernel            | flatten over a runtime nested tuple, the leaf-passthrough arm                                         |
+| cgs_inttuples_transforms      | flattenStaticKernel             | flatten over a fully static tuple, the static arm                                                     |
+| cgs_inttuples_transforms      | unwrapKernel                    | unwrap over a runtime rank-1 tuple, the 1-element-mode collapse                                       |
+| cgs_inttuples_zips            | zip2ByOnlyKernel                | zip2_by, the guided zip the divide chains call (moved here from cgs_inttuples_zip)                    |
+| cgs_inttuples_zips            | zipLeavesKernel                 | zipLeavesWith over the filter_zeros stride/shape body on runtime strides                              |
+| cgs_inttuples_zips            | zipDimensionsKernel             | zipDimensionsWith over two runtime tuples, the top-level pairwise map                                 |
+| cgs_inttuples_zips            | foldZipKernel                   | foldZipWith over paired runtime leaves, the inner-product shape                                       |
+| cgs_inttuples_filters         | filterZipKernel                 | filterZipWith against an X/Y selector, the slice/dice mechanism on a runtime 3-tuple                  |
+| cgs_inttuples_datatypes       | ceilDivKernel                   | ceil_div over runtime ints, the complement/pad gap computation                                        |
+| cgs_inttuples_datatypes       | makeIntTupleKernel              | makeIntTuple over a mixed static/runtime tuple, the coord-wrap site crd2idx goes through              |
+| cgs_inttuples_datatypes       | signKernel                      | sign over a runtime stride value, the broadcast-direction shape                                       |
+| cgs_layout_indexing           | floorCrd2idxKernel              | the indexing floor, dynamic rank-2 layout with one direct coord read, no indexing machinery           |
+| cgs_layout_indexing           | crd2idxRank4Kernel              | crd2idx on a runtime rank-4 layout with a runtime multi-dim coord, the NHWC gmem view read            |
+| cgs_layout_indexing           | crd2idxStaticKernel             | crd2idx on a fully static layout, the compile-time folding path                                       |
+| cgs_layout_indexing           | idx2crdCpuKernel                | idx2crd_cpu divmod on a runtime rank-2 layout, Marginal over floorCrd2idx is negative                 |
+| cgs_layout_indexing           | callOperatorKernel              | the L(i, j) call-operator accessor, underscore check plus crd2idx, Marginal over floorCrd2idx         |
+| cgs_layout_filters            | floorFilterKernel               | the filter floor, dynamic rank-2 layout with one stride-0 dimension consumed by size                  |
+| cgs_layout_filters            | filterZerosDynKernel            | filter_zeros over that dynamic layout, Marginal over floorFilter                                      |
+| cgs_layout_filters            | filterZerosStaticKernel         | filter_zeros over a fully static layout with one stride-0 dimension, the Int-branch walk              |
+| cgs_layout_filters            | filterInactiveDynKernel         | filter_inactive over the same dynamic layout, Marginal over floorFilter                               |
+| cgs_layout_inverses           | floorInverseKernel              | the inverse floor, dynamic shape rank-2 layout with static strides consumed by size                   |
+| cgs_layout_inverses           | rightInverseKernel              | right_inverse over that layout, the copyFrom quasi-inverse call-site shape                            |
+| cgs_layout_inverses           | rightInverseDynStrideKernel     | right_inverse over a runtime-stride rank-2 layout, the chain keeps the static-stride run              |
+| cgs_layout_inverses           | rightInverseStaticKernel        | right_inverse over a fully static layout, the compile-time fold path                                  |
+| cgs_layout_inverses           | leftInverseKernel               | left_inverse over the dynamic shape rank-2 layout, all strides static per precondition                |
 
 ## Inspecting generated code
 
