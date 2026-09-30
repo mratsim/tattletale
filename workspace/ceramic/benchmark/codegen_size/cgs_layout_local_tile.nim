@@ -43,8 +43,8 @@ const localTileDynMsl = metal:
 # ── partition selectors, dynamic rank-2 fallback ──
 # on the global-data view the selectors do not compose the loadTile call shape,
 # failure texts and full-arity numbers live in the ledger table:
-# - inner_partition and local_tile with tiler (16, 16) die inside slice
-#   (filterZipWith rank mismatch 2 vs 4)
+# - inner_partition and local_tile with tiler (16, 16) die inside slice,
+#   2 selector entries vs 4 shape leaves, the zip trees are not congruent
 # - rank-4 tiler forms compile but the within-tile element read dies, extra
 #   flat shape leaves trip crd2idxRecur (invalid index)
 

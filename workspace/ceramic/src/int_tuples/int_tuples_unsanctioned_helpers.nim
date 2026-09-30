@@ -33,7 +33,7 @@ func tupleType*(n: NimNode): NimNode {.compileTime.} =
   inner.getTypeImpl()
 
 func tupleTypeLen*(n: NimNode): int {.compileTime.} =
-  ## Length of the resolved tuple type node, callers guard with isTuple first.
+  ## Length of the resolved tuple type node, callers guard with the tuple-kind check first.
   let t = n.tupleType()
   result = t.len
 
@@ -45,7 +45,7 @@ func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## - ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
   ## - ((int, int), (int, int))                  → @[DynamicSentinel, DynamicSentinel, ...]
   ## - Int[64]                                   → @[64]
-  for (_, ty) in tupleStream(t).leaves():
+  for (_, ty) in t.tupleStream().leaves():
     result.add ty.getStaticInt()
 
 proc tupleLeaf*(e: NimNode; count, idx: int): NimNode {.compileTime.} =

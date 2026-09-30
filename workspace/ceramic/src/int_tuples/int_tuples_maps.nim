@@ -128,7 +128,7 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
   # nnkPar keeps a single-item result scalar and packs multi-item results
   # like nnkTupleConstr, avoiding an explicit `if result.len == 1` branch.
   result = newNimNode(nnkPar)
-  for (leaf, _) in tupleStream(tNode).leaves():
+  for (leaf, _) in tNode.tupleStream().leaves():
     result.add body.replaceNodes(("it", leaf))
 
 macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =

@@ -36,7 +36,7 @@ Layer rule, a row measures the op's own layer
 | cgs_inttuples_folds.nim           | fold, prefix_scanIt, suffix_scanIt                                   |
 | cgs_inttuples_transforms.nim      | concat, flatten, unwrap                                              |
 | cgs_inttuples_zips.nim            | zip2_by, zipLeavesWith, zipDimensionsWith, foldZipWith               |
-| cgs_inttuples_filters.nim         | filterZipWith, the slice/dice mechanism                              |
+| cgs_inttuples_filters.nim         | slice, the slice/dice mechanism                                      |
 | cgs_inttuples_datatypes.nim       | ceil_div, makeIntTuple, sign                                         |
 
 codegen_size_analysis.nim is the shared analysis module, bencher reports.nim
@@ -135,7 +135,7 @@ One line per kernel row, row names say what the row measures.
 | cgs_inttuples_zips            | zipLeavesKernel                 | zipLeavesWith over the filter_zeros stride/shape body on runtime strides                              |
 | cgs_inttuples_zips            | zipDimensionsKernel             | zipDimensionsWith over two runtime tuples, the top-level pairwise map                                 |
 | cgs_inttuples_zips            | foldZipKernel                   | foldZipWith over paired runtime leaves, the inner-product shape                                       |
-| cgs_inttuples_filters         | filterZipKernel                 | filterZipWith against an X/Y selector, the slice/dice mechanism on a runtime 3-tuple                  |
+| cgs_inttuples_filters         | filterZipKernel                 | slice against an X/Y selector, the slice/dice mechanism on a runtime 3-tuple                          |
 | cgs_inttuples_datatypes       | ceilDivKernel                   | ceil_div over runtime ints, the complement/pad gap computation                                        |
 | cgs_inttuples_datatypes       | makeIntTupleKernel              | makeIntTuple over a mixed static/runtime tuple, the coord-wrap site crd2idx goes through              |
 | cgs_inttuples_datatypes       | signKernel                      | sign over a runtime stride value, the broadcast-direction shape                                       |

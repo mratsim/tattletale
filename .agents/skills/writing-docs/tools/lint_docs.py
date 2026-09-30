@@ -997,8 +997,11 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
 
 
 def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
-               standalone=True):
-    """Runs the per-line rules over one prose line."""
+               standalone=True, trailing=False):
+    """Runs the per-line rules over one prose line.
+
+    A trailing comment anchors to its code item: it is never a title
+    position, so the title rules stay off it."""
     if not c:
         return
     bare = strip_backticks(c)
@@ -1007,7 +1010,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
     # The title flag fires on a short colon-terminated line.
     # Every comma-separated title segment opens on a noun phrase,
     # including the lowercase article form.
-    if c.endswith(":"):
+    if c.endswith(":") and not trailing:
         segs = [s.strip() for s in bare.split(",") if s.strip()]
         if segs and all(len(s.split()) <= 8 for s in segs) and any(
                 s.split()[0].lower() == "the" for s in segs):
@@ -1019,7 +1022,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
     # inside a paragraph block keeps its The opener legal.
     lead = bare.lstrip("-*+ ")
     words = lead.split()
-    if (not c.endswith(":") and standalone and words
+    if (not c.endswith(":") and standalone and not trailing and words
             and words[0].lower() == "the"):
         findings.append(Finding(
             path, n, "the-opener",
@@ -1762,7 +1765,7 @@ def nim_structure_checks(path, text, header_nos, findings):
                     findings.append(Finding(
                         path, body + 1, "missing-contract",
                         "multi-line doc states no contract marker "
-                        "(add Args, Returns, Precondition, or bullet the contract)"))
+                        "(add Args, Returns, Precondition)", warning=True))
             else:
                 # missing-doc disabled per owner ruling (older LLM models)
                 pass
@@ -1802,7 +1805,7 @@ def nim_structure_checks(path, text, header_nos, findings):
             findings.append(Finding(
                 path, prose[0][0], "missing-contract",
                 "multi-line doc states no contract marker "
-                "(add Args, Returns, Precondition, or bullet the contract)"))
+                "(add Args, Returns, Precondition)", warning=True))
 
 
 def py_structure_checks(path, tree, func_docs, findings):
@@ -1834,7 +1837,7 @@ def py_structure_checks(path, tree, func_docs, findings):
             findings.append(Finding(
                 path, start, "missing-contract",
                 "multi-line doc states no contract marker "
-                "(add Args, Returns, Precondition, or bullet the contract)"))
+                "(add Args, Returns, Precondition)", warning=True))
 
 
 def scan(path, text, findings):
@@ -1956,10 +1959,10 @@ def scan(path, text, findings):
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
                 check_line(path, n, c, kind, is_nim, prev_text, findings,
-                           next_text, standalone)
+                           next_text, standalone, trailing)
                 continue
             check_line(path, n, c, kind, is_nim, prev_text, findings,
-                       next_text, standalone)
+                       next_text, standalone, trailing)
             if structural(c):
                 flush_wall(path, run, findings)
                 run = []

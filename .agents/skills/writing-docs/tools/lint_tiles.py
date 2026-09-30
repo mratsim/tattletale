@@ -161,6 +161,8 @@ NEWCALL_METHOD_RE = re.compile(
 # - decl header stays out, the exported marker `*` sits before the paren there
 TUPLEFLATTEN_CALL_RE = re.compile(r"(?<![.\w])tupleFlatten\s*\(")
 TUPLEFLATTEN_BARE_RE = re.compile(r"\.\s*tupleFlatten(?!\s*[(\*])")
+TUPLESTREAM_CALL_RE = re.compile(r"(?<![.\w])tupleStream\s*\(")
+TUPLESTREAM_BARE_RE = re.compile(r"\.\s*tupleStream(?!\s*[(\*])")
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -1034,6 +1036,16 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "tupleflatten-method",
                 "tupleFlatten reads without call parens here, write "
                 "x.tupleFlatten()"))
+        if TUPLESTREAM_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tuplestream-method",
+                "tupleStream reads as a plain call here, write "
+                "x.tupleStream()"))
+        elif TUPLESTREAM_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tuplestream-method",
+                "tupleStream reads without call parens here, write "
+                "x.tupleStream()"))
 
 
 BODY_WRAP_MAX = 180

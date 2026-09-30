@@ -57,18 +57,16 @@ type
     hasPending: bool
     pending: TupleStreamEvent
 
-func tupleStream*(e: NimNode): TupleStream =
-  var s: TupleStream
-  let ev = unwrapStmtListExpr(e)
-  let ty = e.getTypeInst()
+func tupleStream*(s: NimNode): TupleStream =
+  let ev = unwrapStmtListExpr(s)
+  let ty = s.getTypeInst()
   if ty.kind in {nnkTupleConstr, nnkTupleTy}:
-    s.stack.add (ev, ty, 0, 0)
-    s.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
+    result.stack.add (ev, ty, 0, 0)
+    result.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
-    s.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0)
-    s.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
-  s.hasPending = true
-  s
+    result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0)
+    result.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
+  result.hasPending = true
 
 func done*(s: var TupleStream): bool =
   not s.hasPending and s.stack.len == 0
@@ -181,8 +179,8 @@ func leaves*(s: TupleStream): seq[tuple[leaf, leafTy: NimNode]] =
     if ev.kind == kLeaf:
       result.add (ev.leaf, ev.leafTy)
 
-func tupleFlatten*(e: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
-  tupleStream(e).leaves()
+func tupleFlatten*(s: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
+  s.tupleStream().leaves()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Zip
@@ -217,5 +215,9 @@ iterator items*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
 # ═══════════════════════════════════════════════════════════════════════
 
 func hasType*(x: NimNode; t: static string): bool =
-  ## sameType wrapper: x has the type named `t`.
+  ## Type equality in macro, resolves through aliases.
+  ## This cannot handle generics.
+  ##
+  ## Example
+  ##   x.hasType"int"
   sameType(x, bindSym(t))

@@ -142,21 +142,57 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
 #  slice and dice, marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
 
-template slice*(target: tuple; selector: typed): auto =
+macro slice*(target: tuple; selector: typed): untyped =
   ## Slice a tuple, keep elements where the selector entry is X.
   ## Elements with a Y, int, or Int selector are dropped.
-  filterZipWith(selector, target):
-    (when it_a is X: (it_b,)
-     elif it_a is Y or it_a is int or it_a is Int: ()
-     else: {.error: "slice: selector items must be X, Y, or ints".})
 
-template dice*(target: tuple; selector: typed): auto =
+  let ty = selector.getTypeInst() # The selector is a type or a tuple of types
+  let sel = if ty.kind == nnkBracketExpr: ty[1]
+            else: selector
+  var builder = TupleBuilderNested.new(1)
+  var streamPair = zip(sel.tupleStream(), target.tupleStream())
+  for (selEvent, tgtEvent) in streamPair:
+    case tgtEvent.kind
+    of kOpen, kClose:
+      builder.append(tgtEvent)
+    of kLeaf:
+      let raw = selEvent.leafTy
+      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
+                    raw[1]
+                  else: raw
+      if selTy.hasType"X":
+        builder.append(tgtEvent)
+      elif selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
+        discard
+      else:
+        error "slice: selector items must be X, Y, or ints", selTy
+  result = builder.emit(0).resultTuple
+
+macro dice*(target: tuple; selector: typed): untyped =
   ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
   ## Elements with an X selector are dropped.
-  filterZipWith(selector, target):
-    (when it_a is Y or it_a is int or it_a is Int: (it_b,)
-     elif it_a is X: ()
-     else: {.error: "dice: selector items must be X, Y, or ints".})
+
+  let ty = selector.getTypeInst() # The selector is a type or a tuple of types
+  let sel = if ty.kind == nnkBracketExpr: ty[1]
+            else: selector
+  var builder = TupleBuilderNested.new(1)
+  var streamPair = zip(sel.tupleStream(), target.tupleStream())
+  for (selEvent, tgtEvent) in streamPair:
+    case tgtEvent.kind
+    of kOpen, kClose:
+      builder.append(tgtEvent)
+    of kLeaf:
+      let raw = selEvent.leafTy
+      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
+                    raw[1]
+                  else: raw
+      if selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
+        builder.append(tgtEvent)
+      elif selTy.hasType"X":
+        discard
+      else:
+        error "dice: selector items must be X, Y, or ints", selTy
+  result = builder.emit(0).resultTuple
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.
