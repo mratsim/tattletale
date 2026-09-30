@@ -8,6 +8,7 @@
 import std/macros, std/typetraits
 import ./int_tuples_datatypes
 import ./int_tuples_transforms
+import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
 #  zipDimensionsWith, zip the top-level elements with a binary op
@@ -28,23 +29,13 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
   let rMin = min(RA, RB)
   let rMax = max(RA, RB)
 
-  proc subst(x: NimNode; i: int; la, lb: NimNode): NimNode =
-    if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_a"):
-      result = nnkBracketExpr.newTree(la, newLit(i))
-    elif x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_b"):
-      result = nnkBracketExpr.newTree(lb, newLit(i))
-    else:
-      result = x.copyNimTree()
-      for j in 0 ..< x.len:
-        result[j] = subst(x[j], i, la, lb)
-
   result = newStmtList()
   var items: seq[NimNode]
   for i in 0 ..< rMax:
     let name = ident("__zw" & $i)
     if i < rMin:
       items.add name
-      result.add newLetStmt(name, subst(body, i, a, b))
+      result.add newLetStmt(name, body.replaceNodesAt(("it_a", a), ("it_b", b), i))
     elif i < RA:
       items.add nnkBracketExpr.newTree(a, newLit(i))
     else:

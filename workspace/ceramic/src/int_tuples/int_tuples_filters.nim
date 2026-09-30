@@ -8,21 +8,7 @@
 import std/macros
 import ./int_tuples_datatypes
 import ./int_tuples_transforms
-
-proc substIt(ast, aElem, bElem: NimNode): NimNode =
-  ## Replace `it_a` with `aElem`, `it_b` with `bElem` in `ast`.
-  proc inspect(n: NimNode): NimNode =
-    if n.kind in {nnkIdent, nnkSym}:
-      if n.eqIdent("it_a"):
-        return aElem
-      if n.eqIdent("it_b"):
-        return bElem
-    if n.len == 0:
-      return n
-    result = n.kind.newTree()
-    for child in n:
-      result.add inspect(child)
-  result = inspect(ast)
+import workspace/ceramic/src/macros/replace_nodes
 
 func tupleType(n: NimNode): NimNode {.compileTime.} =
   ## Resolve to the underlying TupleConstr node, handling values, consts,
@@ -77,7 +63,7 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
         parts.add quote do:
           (when typeof(`sub`) is tuple[]: () else: (`sub`,))
       else:
-        parts.add substIt(body, subA, subB)
+        parts.add body.replaceNodes(("it_a", subA), ("it_b", subB))
     if parts.len == 0:
       result = nnkTupleConstr.newTree()
     else:
@@ -85,4 +71,4 @@ macro filterZipWith*(a: typed; b: typed; body: untyped): untyped =
       for i in countdown(parts.len - 1, 0):
         result = newCall(bindSym"concat", parts[i], result)
   else:
-    result = substIt(body, a, b)
+    result = body.replaceNodes(("it_a", a), ("it_b", b))

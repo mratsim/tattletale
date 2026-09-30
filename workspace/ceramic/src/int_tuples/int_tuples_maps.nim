@@ -7,6 +7,7 @@
 
 import std/macros
 import ./int_tuples_datatypes
+import workspace/ceramic/src/macros/replace_nodes
 
 proc leafAccess(e, t: NimNode; idx: int): NimNode {.compileTime.}
 
@@ -36,20 +37,6 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
   # placeholder `it` is unbound there. The body is therefore materialized
   # into a local before any nested proc closes over it.
   let rawBody = body
-
-  proc replaceNodes(ast, what, by: NimNode): NimNode =
-    proc inspect(node: NimNode): NimNode =
-      case node.kind
-      of {nnkIdent, nnkSym}:
-        if node.eqIdent(what): return by
-        return node
-      of nnkEmpty, nnkLiterals:
-        return node
-      else:
-        result = node.kind.newTree()
-        for child in node:
-          result.add inspect(child)
-    result = inspect(ast)
 
   proc unwrapValueExpr(n: NimNode): NimNode =
     ## Single-statement wrapper around an expression value. Statement lists wrap expressions one level deep.
@@ -106,7 +93,7 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
         elems.add inExprSlot(walk(leafAccess(e, ty, idx), ty[idx]))
       result = nnkTupleConstr.newTree(elems)
     else:
-      result = rawBody.replaceNodes(ident"it", e)
+      result = rawBody.replaceNodes(("it", e))
       leaves.add (result, e)
 
   let built = walk(t, t.getTypeInst())
@@ -140,20 +127,6 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
   ## Build the flat pack for `tNode`, one node per leaf, `body` with `it`
   ## replaced by the leaf access. Returns the untyped tuple construction.
 
-  proc replaceNodes(ast, what, by: NimNode): NimNode =
-    proc inspect(node: NimNode): NimNode =
-      case node.kind
-      of {nnkIdent, nnkSym}:
-        if node.eqIdent(what): return by
-        return node
-      of nnkEmpty, nnkLiterals:
-        return node
-      else:
-        result = node.kind.newTree()
-        for child in node:
-          result.add inspect(child)
-    result = inspect(ast)
-
   proc isLeaf(t: NimNode): bool =
     (t.kind == nnkSym and $t == "int") or
     (t.kind == nnkBracketExpr and $t[0] == "Int")
@@ -164,11 +137,11 @@ proc flatMapLeavesImpl(tNode: NimNode; body: NimNode): NimNode {.compileTime.} =
         let fd = t[idx]
         let fa = leafAccess(e, t, idx)
         if isLeaf(fd):
-          acc.add body.replaceNodes(ident"it", fa)
+          acc.add body.replaceNodes(("it", fa))
         else:
           collect(acc, fa, fd)
     else:
-      acc.add body.replaceNodes(ident"it", e)
+      acc.add body.replaceNodes(("it", e))
 
   let tType = tNode.getTypeImpl()
   # nnkPar keeps a single-item result scalar and packs multi-item results
@@ -290,15 +263,8 @@ macro mapDimensionsWith*(t: tuple; body: untyped): untyped =
   let tt = getTypeInst(t)
   let n = tt.len
 
-  proc subst(x: NimNode; i: int; ttup: NimNode): NimNode =
-    if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it"):
-      result = nnkBracketExpr.newTree(ttup, newLit(i))
-    else:
-      result = x.copyNimTree()
-      for j in 0 ..< x.len: result[j] = subst(x[j], i, ttup)
-
   var items: seq[NimNode]
   for i in 0 ..< n:
-    items.add subst(body, i, t)
+    items.add body.replaceNodesAt(("it", t), i)
   # nnkTupleConstr: always preserve tuple structure (even for single-element results)
   result = nnkTupleConstr.newTree(items)
