@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in experiments/codesize/README.md.
+## Usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the compose track.
@@ -45,7 +45,7 @@ const composeDynMsl = metal:
     let r = compose(a, b)
     C[0] = float32 toIntVal crd2idx(r, (1, 1))
 
-echo "composeStaticKernel: ", cstring(composeStaticMsl).len
-echo "composeNestedKernel: ", cstring(composeNestedMsl).len
-echo "composeRank1Kernel: ", cstring(composeRank1Msl).len
-echo "composeDynKernel: ", cstring(composeDynMsl).len
+echo "composeStaticKernel: ", composeStaticMsl.len
+echo "composeNestedKernel: ", composeNestedMsl.len
+echo "composeRank1Kernel: ", composeRank1Msl.len
+echo "composeDynKernel: ", composeDynMsl.len

@@ -9,10 +9,15 @@
 ## - unsuffixed names = the current src
 ## - value parity is asserted on the host side before the kernels
 ##
-## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## usage in experiments/codesize/README.md.
 ## Baselines live in the codesize ledger under .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
-# ── the candidate form, pad to rank over existing concat ──
+## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
+## usage in benchmark/codegen_size/README.md.
+
+import workspace/crucible
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+
 
 func padRightImpl(layout: Layout; n: static int): auto =
   when rank(layout) >= n: layout
@@ -179,15 +184,15 @@ const tileToShapeRecMsl = metal:
     let r = tileToShapeR(make_layout((2, 3), (1, 2)), (6, 12))
     C[0] = float32 toIntVal size(r)
 
-echo "padRightCurrentKernel: ", cstring(padRightCurrentMsl).len
-echo "padRightRecKernel: ", cstring(padRightRecMsl).len
-echo "padLeftCurrentKernel: ", cstring(padLeftCurrentMsl).len
-echo "padLeftRecKernel: ", cstring(padLeftRecMsl).len
-echo "padRightOneShotKernel: ", cstring(padRightOneShotMsl).len
-echo "padLeftOneShotKernel: ", cstring(padLeftOneShotMsl).len
-echo "blockedCurrentKernel: ", cstring(blockedCurrentMsl).len
-echo "blockedRecKernel: ", cstring(blockedRecMsl).len
-echo "rakedCurrentKernel: ", cstring(rakedCurrentMsl).len
-echo "rakedRecKernel: ", cstring(rakedRecMsl).len
-echo "tileToShapeCurrentKernel: ", cstring(tileToShapeCurrentMsl).len
-echo "tileToShapeRecKernel: ", cstring(tileToShapeRecMsl).len
+echo "padRightCurrentKernel: ", padRightCurrentMsl.len
+echo "padRightRecKernel: ", padRightRecMsl.len
+echo "padLeftCurrentKernel: ", padLeftCurrentMsl.len
+echo "padLeftRecKernel: ", padLeftRecMsl.len
+echo "padRightOneShotKernel: ", padRightOneShotMsl.len
+echo "padLeftOneShotKernel: ", padLeftOneShotMsl.len
+echo "blockedCurrentKernel: ", blockedCurrentMsl.len
+echo "blockedRecKernel: ", blockedRecMsl.len
+echo "rakedCurrentKernel: ", rakedCurrentMsl.len
+echo "rakedRecKernel: ", rakedRecMsl.len
+echo "tileToShapeCurrentKernel: ", tileToShapeCurrentMsl.len
+echo "tileToShapeRecKernel: ", tileToShapeRecMsl.len

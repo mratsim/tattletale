@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in experiments/codesize/README.md.
+## Usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the complement track.
@@ -57,9 +57,9 @@ const localTileCompMsl = metal:
     let t = local_tile(p, (16, 16), (int(i), int(j)))
     C[0] = t(0, 0)
 
-echo "complementDirectKernel: ", cstring(complementDirectMsl).len
-echo "complementStaticKernel: ", cstring(complementStaticMsl).len
-echo "logicalDivideCompKernel: ", cstring(logicalDivideCompMsl).len
-echo "logicalProductCompKernel: ", cstring(logicalProductCompMsl).len
-echo "copyChainKernel: ", cstring(copyChainMsl).len
-echo "localTileCompKernel: ", cstring(localTileCompMsl).len
+echo "complementDirectKernel: ", complementDirectMsl.len
+echo "complementStaticKernel: ", complementStaticMsl.len
+echo "logicalDivideCompKernel: ", logicalDivideCompMsl.len
+echo "logicalProductCompKernel: ", logicalProductCompMsl.len
+echo "copyChainKernel: ", copyChainMsl.len
+echo "localTileCompKernel: ", localTileCompMsl.len

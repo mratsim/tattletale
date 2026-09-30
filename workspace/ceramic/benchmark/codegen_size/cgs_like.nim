@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in experiments/codesize/README.md.
+## Usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the like-constructors track.
@@ -41,7 +41,7 @@ const fragmentLikeBroadcastMsl = metal:
     let f = make_fragment_like(L)
     C[0] = float32 toIntVal size(f)
 
-echo "layoutLikeCompactKernel: ", cstring(layoutLikeCompactMsl).len
-echo "layoutLikeDynStrideKernel: ", cstring(layoutLikeDynStrideMsl).len
-echo "fragmentLikeVKernel: ", cstring(fragmentLikeVMsl).len
-echo "fragmentLikeBroadcastKernel: ", cstring(fragmentLikeBroadcastMsl).len
+echo "layoutLikeCompactKernel: ", layoutLikeCompactMsl.len
+echo "layoutLikeDynStrideKernel: ", layoutLikeDynStrideMsl.len
+echo "fragmentLikeVKernel: ", fragmentLikeVMsl.len
+echo "fragmentLikeBroadcastKernel: ", fragmentLikeBroadcastMsl.len

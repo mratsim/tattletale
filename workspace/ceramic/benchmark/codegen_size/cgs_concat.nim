@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in experiments/codesize/README.md.
+## Usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the concat track.
@@ -33,6 +33,6 @@ const flatProductMsl = metal:
     let p = flat_product(blk, make_layout((2, 2)))
     C[0] = float32 toIntVal size(p)
 
-echo "concatDirectKernel: ", cstring(concatDirectMsl).len
-echo "tiledProductKernel: ", cstring(tiledProductMsl).len
-echo "flatProductKernel: ", cstring(flatProductMsl).len
+echo "concatDirectKernel: ", concatDirectMsl.len
+echo "tiledProductKernel: ", tiledProductMsl.len
+echo "flatProductKernel: ", flatProductMsl.len

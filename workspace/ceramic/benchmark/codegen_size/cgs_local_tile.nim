@@ -12,7 +12,7 @@
 ## - dynPair inlines the local_tile_dyn body, marginals and the headroom split print at the end
 ## MSL dumps of the v2 rows land in /tmp under a zzz_ prefix.
 ##
-## Run from the worktree root, suite flags of config.nims testerCmd, usage in experiments/codesize/README.md.
+## Run from the worktree root, suite flags of config.nims testerCmd, usage in benchmark/codegen_size/README.md.
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 import workspace/crucible
 import workspace/ceramic/src/int_tuples

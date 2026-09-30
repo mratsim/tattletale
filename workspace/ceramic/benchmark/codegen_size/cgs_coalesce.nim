@@ -4,7 +4,7 @@
 ## metal backend and prints its MSL byte size.
 ##
 ## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in experiments/codesize/README.md.
+## Usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the coalesce track.
@@ -41,7 +41,7 @@ const coalesceDynMsl = metal:
     let r = coalesce(p.layout)
     C[0] = float32 toIntVal size(r)
 
-echo "coalesceStaticKernel: ", cstring(coalesceStaticMsl).len
-echo "coalesceZerosKernel: ", cstring(coalesceZerosMsl).len
-echo "filterInactiveKernel: ", cstring(filterInactiveMsl).len
-echo "coalesceDynKernel: ", cstring(coalesceDynMsl).len
+echo "coalesceStaticKernel: ", coalesceStaticMsl.len
+echo "coalesceZerosKernel: ", coalesceZerosMsl.len
+echo "filterInactiveKernel: ", filterInactiveMsl.len
+echo "coalesceDynKernel: ", coalesceDynMsl.len
