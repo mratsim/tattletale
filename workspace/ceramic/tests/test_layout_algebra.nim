@@ -481,7 +481,16 @@ proc runComplementExactValueTests =
     let r = complement(make_layout((2, 2), (1, 1)))
     doAssert r.shape === 2
     doAssert r.stride === 2
-  echo "  Exact-value: 12 Python assertions OK"
+
+  # Broadcast layout, a scalar stride-0 over a nested shape collapses to (bound):(1)
+  block:
+    let r = complement(make_layout((8, 4), 0), 32)
+    doAssert r.shape === 32
+    doAssert r.stride === 1
+    let rDefault = complement(make_layout((8, 4), 0))
+    doAssert rDefault.shape === 1
+    doAssert rDefault.stride === 1
+  echo "  Exact-value: 14 Python assertions OK"
 
 # ─── Symbol-routed static bound ──────────────────────────────────────
 proc runComplementSymbolBoundTests =

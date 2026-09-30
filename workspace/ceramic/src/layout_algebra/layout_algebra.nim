@@ -135,6 +135,10 @@ proc complementFold(shNode, boundExpr: NimNode;
 
 macro complementImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
+  ##
+  ## Contract:
+  ## - shape and stride args are flat, filter_zeros and coalesce fold
+  ##   before the call
 
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
@@ -153,19 +157,104 @@ macro complementImpl(sh, st, cosizeBound: typed): untyped =
           (1, `st` * `sh`))
   else:
     # Multi-dimension complement, all strides must be static Int leaves
+    let shTyp = sh.getTypeInst()
     let stTyp = st.getTypeInst()
     doAssert stTyp.kind == nnkTupleConstr,
       "complement: expected tuple type for strides"
+    for i in 0 ..< shTyp.len:
+      doAssert shTyp[i].kind notin {nnkTupleConstr, nnkTupleTy},
+        "complement: non-flat shape at index " & $i
     for i in 0 ..< stTyp.len:
       doAssert stTyp[i].kind == nnkBracketExpr and $stTyp[i][0] == "Int",
         "complement: multi-dimension with dynamic strides not supported at index " & $i
     result = complementFold(sh, boundExpr, toSeqStaticInts(stTyp))
 
+proc filterInactiveValues(shapeVals, strideVals: seq[int]): tuple[shape, stride: seq[int]] {.compileTime.} =
+  ## filter_zeros + coalesce as one compile-time fold over flat static values,
+  ## coalesceBackward's chunk walk in value form, walked back-to-front:
+  ## - a stride of 0 shrinks its shape to 1
+  ## - size-1 shapes drop
+  ## - a dimension whose span ends where the head's stride begins merges
+  ##   into the head and takes the dimension's own stride, the result stays
+  ##   in forward order
+  var head = -1
+  for i in countdown(shapeVals.len - 1, 0):
+    let stI = strideVals[i]
+    let shI = if stI == 0: 1 else: shapeVals[i]
+    if shI == 1: continue
+    if head == -1:
+      head = 0
+      result.shape.add shI
+      result.stride.add stI
+    elif shI * stI == result.stride[head]:
+      result.shape[head] *= shI
+      result.stride[head] = stI
+    else:
+      result.shape.insert(shI, 0)
+      result.stride.insert(stI, 0)
+
+macro complementEmit(lyt, cosizeBound: typed; defaultBound: static bool): untyped =
+  ## complement's emission, dispatched on the layout's staticness:
+  ## - a fully static layout folds filter_zeros and coalesce to constant
+  ##   values at compile time and emits the complement over them alone, no
+  ##   runtime filter chain
+  ## - any other layout runs filter_inactive at runtime, complementImpl folds
+  ##   gap arithmetic from the coalesced shape/stride
+  ## defaultBound swaps cosizeBound for cosize of the filtered layout.
+  let (shTy, stTy) = layoutTypeArgs(lyt)
+  let shVals = toSeqStaticInts(shTy)
+  let stVals = toSeqStaticInts(stTy)
+  if DynamicSentinel in shVals or DynamicSentinel in stVals:
+    # a runtime leaf, the bound is the caller's expression or cosize(f),
+    # plain idents in spliced subtrees resolve by name at the call site
+    let f = ident"f"
+    let bound = if defaultBound: bindSym"cosize".newCall(f) else: cosizeBound
+    result = nnkStmtListExpr.newTree(
+      nnkLetSection.newTree(nnkIdentDefs.newTree(
+        f, newEmptyNode(), bindSym"filter_inactive".newCall(lyt))),
+      bindSym"complementImpl".newCall(
+        f.newDotExpr(ident"shape"), f.newDotExpr(ident"stride"), bound))
+  else:
+    # scalar stride broadcasts over the shape profile (repeat_like)
+    let pairedStrides =
+      if stTy.kind in {nnkTupleConstr, nnkTupleTy}:
+        doAssert shTy.kind in {nnkTupleConstr, nnkTupleTy},
+          "complement: stride profile larger than shape profile"
+        stVals
+      else:
+        var s = newSeq[int](shVals.len)
+        for i in 0 ..< shVals.len:
+          s[i] = stVals[0]
+        s
+    let pairs = filterInactiveValues(shVals, pairedStrides)
+    var bound = if cosizeBound.getTypeInst().kind == nnkTupleConstr:
+      bindSym"product".newCall(cosizeBound)
+    else:
+      cosizeBound
+    if defaultBound:
+      var b = 1
+      for i in 0 ..< pairs.shape.len:
+        b += (pairs.shape[i] - 1) * abs(pairs.stride[i])
+      bound = IntCT(b)
+    if pairs.shape.len == 0:
+      # every dimension broadcasts or is size-1, the complement collapses to (bound):(1)
+      result = newCall(bindSym"make_layout", bound, newLit(1))
+    else:
+      var shN = newNimNode(nnkTupleConstr)
+      var stN = newNimNode(nnkTupleConstr)
+      for i in 0 ..< pairs.shape.len:
+        shN.add IntCT(pairs.shape[i])
+        stN.add IntCT(pairs.stride[i])
+      if shN.len == 1:
+        shN = shN[0]
+        stN = stN[0]
+      result = bindSym"complementImpl".newCall(shN, stN, bound)
+
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
-  ## Filters inactive dimensions first.
-  let f = filter_inactive(layout)
-  complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
+  ## Filters inactive dimensions first, the filter folds at compile time
+  ## for fully static layouts.
+  complementEmit(layout, cosizeBound, false)
 
 func complement*(layout: Layout; cosizeBound: static int): auto =
   ## Compile-time int overload.
@@ -173,13 +262,11 @@ func complement*(layout: Layout; cosizeBound: static int): auto =
 
 func complement*(layout: Layout): auto =
   ## Compute complement with default bound = cosize(filtered layout).
-  let f = filter_inactive(layout)
-  complementImpl(flatten(f.shape), flatten(f.stride), cosize(f))
+  complementEmit(layout, Int[1](), true)
 
 func complement*(layout: Layout; cosizeBound: tuple): auto =
   ## Compute complement with a shape-tuple bound (size converted to product).
-  let f = filter_inactive(layout)
-  complementImpl(flatten(f.shape), flatten(f.stride), cosizeBound)
+  complementEmit(layout, cosizeBound, false)
 
 # ═══════════════════════════════════════════════════════════════
 #  compose, apply a layout through another

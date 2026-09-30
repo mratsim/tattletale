@@ -51,31 +51,41 @@ func isCompact*(layout: static Layout): static bool =
 #  filter_zeros, replace stride-0 shapes with Int[1]
 # ═══════════════════════════════════════════════════════════════
 
-macro filterZerosFlat(sh, st: typed): untyped =
-  ## Stride-0 dimension shapes become Int[1], everything else stays as-is.
-  let stT = st.getTypeInst()
-  let shT = sh.getTypeInst()
-  # scalar path, single dimension
-  if shT.kind != nnkTupleConstr:
-    if stT.kind == nnkBracketExpr and $stT[0] == "Int" and stT[1].intVal == 0:
-      result = IntCT(1)
-    else:
-      result = sh
-    return
-  # tuple path, one shape element per stride type
-  result = newNimNode(nnkTupleConstr)
-  for i in 0 ..< shT.len:
-    let stN = stT[i]
-    if stN.kind == nnkBracketExpr and $stN[0] == "Int" and stN[1].intVal == 0:
-      result.add IntCT(1)
-    else:
-      result.add newTree(nnkBracketExpr, sh, newLit(i))
-
 template filter_zeros*(layout: Layout): auto =
-  ## Replace stride-0 shapes with 1; returns flat (both shape and stride flattened).
-  let st = flatten(layout.stride)
-  let sh = filterZerosFlat(flatten(layout.shape), st)
-  make_layout(sh, st)
+  ## Replace the shape of every stride-0 dimension with 1.
+  ##
+  ## Contract:
+  ## - nesting survives, shape profiles map leaf for leaf and stride
+  ##   tuples pass through verbatim
+  ## - a scalar stride broadcasts over the shape profile (CuTe repeat_like),
+  ##   both result profiles come out congruent, filter_inactive's coalesce
+  ##   call stays the one flattening point downstream
+  ## - a static Int[0] stride folds at compile time, a runtime stride
+  ##   compares against 0 at runtime where the shape leaf is runtime too,
+  ##   a static shape leaf passes through (it cannot shrink at runtime)
+  when layout.stride is tuple:
+    let sh = zipLeavesWith(layout.stride, layout.shape):
+      block:
+        when it_a is Int:
+          when it_a.V == 0: Int[1]() else: it_b
+        elif it_b is Int: it_b
+        else: (if it_a == 0: 1 else: it_b)
+    make_layout(sh, layout.stride)
+  else:
+    # scalar stride, broadcast over the shape profile
+    let sh = mapLeavesWith(layout.shape):
+      block:
+        when layout.stride is Int:
+          when layout.stride.V == 0: Int[1]() else: it
+        elif it is Int: it
+        else: (if layout.stride == 0: 1 else: it)
+    when sh is tuple:
+      # scalar strides fill to the shape profile
+      let st = mapLeavesWith(sh):
+        layout.stride
+      make_layout(sh, st)
+    else:
+      make_layout(sh, layout.stride)
 
 # ═══════════════════════════════════════════════════════════════
 #  Padding
