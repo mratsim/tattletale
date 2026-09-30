@@ -40,6 +40,12 @@ Exemption behavior:
 - only tile_algebra silences lane-cell, the lane-to-cell decomposition
   belongs in that module
 
+Decl-name T-suffix ban (decl-t-suffix):
+
+- camelCaseT and PascalCaseT names are banned across proc, func, template, macro, iterator, converter and type declarations
+- setT and listT carry the ban, renaming is the fix, one finding per declaration with no marker exemption
+- a capital before the trailing T keeps the CT marker allowed, short names and bracketed generic parameter lists stay out
+
 Allowlist marker, proc scope:
 
 - a `# tiles-allow <what> needs <primitive>` line in a proc body or up
@@ -637,6 +643,82 @@ def scan_doc_shape(path, proc, lines, findings, exempt_file):
             "parameter comments"))
 
 
+DECL_T_SUFFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*T$")
+TYPE_SUFFIX_RE = re.compile(
+    r"^\s*(?:type\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b"
+    r"|([A-Za-z_][A-Za-z0-9_]*)\s*\*?\s*=\s*"
+    r"(?:object|ref|distinct|enum|tuple|concept)\b)")
+
+
+def _t_suffix_banned(name):
+    """True when a declaration name carries the banned trailing-T suffix.
+
+    Contract:
+
+    - camelCaseT and PascalCaseT carry the ban with a lowercase letter or digit before the T
+    - a capital before the T keeps the CT marker allowed, names under three characters stay out
+    """
+    if not DECL_T_SUFFIX_RE.match(name) or len(name) < 3:
+        return False
+    # a capital before the trailing T marks a suffix group and stays
+    # allowed (the compile-time marker CT, LayoutCT, IntCT)
+    return name[-2].islower() or name[-2].isdigit() or name[-2] == "_"
+
+
+def scan_decl_t_suffix(path, ds, lines, findings):
+    """Flags declarations whose name ends in the T suffix.
+
+    Contract:
+
+    - camelCaseT and PascalCaseT declarations each carry one finding, renaming is the fix with no marker exemption
+    - setT and listT carry the ban
+    - a capital before the trailing T keeps the CT marker allowed, short names and bracketed generic parameter lists sit outside the ban
+    """
+    local = []
+    for d in ds:
+        name = d["name"]
+        if name and _t_suffix_banned(name):
+            local.append(Finding(
+                path, d["start"], "decl-t-suffix",
+                "%s %s ends in the T suffix, that naming convention is "
+                "banned, rename without the trailing T" % (d["kind"], name)))
+    for i, raw in enumerate(lines):
+        code, _c = _strip_comment(raw)
+        tm = TYPE_SUFFIX_RE.match(code)
+        if tm:
+            name = tm.group(1) or tm.group(2)
+            if _t_suffix_banned(name):
+                local.append(Finding(
+                    path, i + 1, "decl-t-suffix",
+                    "type %s ends in the T suffix, that naming convention "
+                    "is banned, rename without the trailing T" % name))
+            continue
+        if re.match(r"^\s*type\s*$", code):
+            # bare `type` opens a block, the members carry the names
+            base_indent = len(raw) - len(raw.lstrip())
+            j = i + 1
+            while j < len(lines):
+                member, _c2 = _strip_comment(lines[j])
+                m_indent = len(lines[j]) - len(lines[j].lstrip())
+                if not member.strip() or m_indent <= base_indent:
+                    break
+                mm = re.match(r"\s*\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b", member)
+                if mm:
+                    name = mm.group(1)
+                    if _t_suffix_banned(name):
+                        local.append(Finding(
+                            path, j + 1, "decl-t-suffix",
+                            "type %s ends in the T suffix, that naming "
+                            "convention is banned, rename without the "
+                            "trailing T" % name))
+                j += 1
+    seen = set()
+    for f in local:
+        if (f.line, f.reason) not in seen:
+            seen.add((f.line, f.reason))
+            findings.append(f)
+
+
 def load_builtins():
     """Reads the Crucible builtin names from builtins_catalog.nim.
 
@@ -1064,6 +1146,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
     scan_body_wrap(path, lines, ds, blocked, findings)
     scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
+    scan_decl_t_suffix(path, ds, lines, findings)
     for proc in procs:
         if not proc["device"]:
             continue
