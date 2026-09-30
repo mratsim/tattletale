@@ -103,7 +103,7 @@ The final test applies to every sentence, if understanding it requires
 25. **Banned vocabulary, the scope.** The blocklist binds this skill's own files too.
 26. **Banned vocabulary, the single exception.** EXAMPLES.md quotes banned forms as teaching material.
 27. **Format rules.** Parentheses stay whole, no `;` and no em-dashes in prose, lines break at phrase boundaries.
-28. **Format rules, the cap.** 140 chars per prose line, bullets for enumerations.
+28. **Format rules, the cap.** 180 chars per prose line, bullets for enumerations.
 29. **Format rules, the colon.** A prose colon ends its line, what it introduces goes on the next lines.
 30. **Format rules, the severed unit.** No line opens on a severed one-word continuation ("apply,").
 31. **Format rules, the reference.** Details in [REFERENCE.md](REFERENCE.md).

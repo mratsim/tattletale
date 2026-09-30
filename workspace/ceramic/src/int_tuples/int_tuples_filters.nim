@@ -8,24 +8,11 @@
 import std/macros
 import ./int_tuples_datatypes
 import ./int_tuples_transforms
+import ./int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/macros/replace_nodes
-
-func tupleType(n: NimNode): NimNode {.compileTime.} =
-  ## Resolve to the underlying TupleConstr node, handling values, consts,
-  ## and type aliases uniformly.
-  let t = n.getType()
-  let inner =
-    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
-      t[1]
-    else:
-      t
-  inner.getTypeImpl()
 
 func isTuple(n: NimNode): bool {.compileTime.} =
   n.kind in {nnkTupleConstr, nnkPar} or n.tupleType().kind in {nnkTupleConstr, nnkTupleTy}
-
-func tupleTypeLen(n: NimNode): int {.compileTime.} =
-  n.tupleType().len
 
 func tupleElement(n: NimNode; i: int): NimNode {.compileTime.} =
   ## For literal tuples return the raw AST child (value or type symbol),

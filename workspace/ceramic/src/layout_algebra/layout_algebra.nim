@@ -13,6 +13,7 @@ import std/algorithm
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layouts_unsanctioned_helpers
 import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
@@ -447,7 +448,7 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
     template dropT(l, t) =
       ## Dimensions past the tiler length drop, slice them off first,
       ## transform_layout passes leftovers through otherwise.
-      transform_layout(takeDimensions(l, 0, tupleLen(typeof(t))), t):
+      transform_layout(takeDimensions(l, 0, t.rank()), t):
         when it_t is X:
           it_l
         elif it_t is (int or Int):
@@ -531,12 +532,6 @@ macro hier_unzip*(splitter: untyped; layout: typed; tiler: typed): untyped =
   ##   let r = hier_unzip(logical_divide, make_layout((4, 8), (1, 4)), (2, 4))
   ##   doAssert r === (((2, 4), (2, 2)), ((1, 4), (2, 16)))
   let splitterNode = splitter
-  proc dimCount(ty: NimNode): int {.compileTime.} =
-    ## Top-level dimension count, tuples count elements, scalars count 1.
-    if ty.kind in {nnkTupleConstr, nnkTupleTy}:
-      ty.len
-    else:
-      1
   proc dimensionCall(e: NimNode; idx: int): NimNode =
     ## `e.dimension(idx)` as a method-call node.
     let dim = ident"dimension"
@@ -838,7 +833,7 @@ template flat_product*(blk: Layout; tiler: auto): auto =
 func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, each block contiguous.
   ## Results in ((BLK_A, TILER_A), (BLK_B, TILER_B), ...).
-  const mxR = max(rank(type(blk)), rank(type(tiler)))
+  const mxR = max(blk.rank(), tiler.rank())
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = dimension(lp, 0)
   let m1 = dimension(lp, 1)
@@ -851,7 +846,7 @@ func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
 func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
   ## Repeat block over tiler grid, blocks interleaved.
   ## Results in ((TILER_A, BLK_A), (TILER_B, BLK_B), ...).
-  const mxR = max(rank(type(blk)), rank(type(tiler)))
+  const mxR = max(blk.rank(), tiler.rank())
   let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
   let m0 = dimension(lp, 0)
   let m1 = dimension(lp, 1)

@@ -50,7 +50,7 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
 
 template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
   ## Internal: walk tuple from index `idx`, recurse into nested tuples.
-  when idx < tupleLen(typeof(a)):
+  when idx < a.rank():
     when a[idx] is tuple:
       concat((zipLeavesRecur(a[idx], b[idx], 0, body),),
              zipLeavesRecur(a, b, idx + 1, body))
@@ -58,7 +58,7 @@ template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
       block:
         let it_a {.inject.} = a[idx]
         let it_b {.inject.} = b[idx]
-        when idx == tupleLen(typeof(a)) - 1:
+        when idx == a.rank() - 1:
           (body,)
         else:
           concat((body,), zipLeavesRecur(a, b, idx + 1, body))

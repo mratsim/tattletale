@@ -17,6 +17,7 @@ import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/macros/replace_nodes
 import ./layouts_datatypes
 import ./layout_constructors
+import ./layouts_unsanctioned_helpers
 
 export layouts_datatypes
 export layout_constructors
@@ -311,13 +312,6 @@ proc appendDim(ct: var LayoutCT; l: NimNode; i: int) {.compileTime.} =
   let st = dimAt(l, "stride", i)
   ct.append(sh, st)
 
-proc shapeRank(shTyp: NimNode): int {.compileTime.} =
-  ## Rank of a layout given its shape type node, tuple constr = element count, scalar = 1.
-  if shTyp.kind == nnkTupleConstr:
-    shTyp.len
-  else:
-    1
-
 # ═══════════════════════════════════════════════════════════════
 #  groupDimensions, wrap dimensions [B, E) into a nested sub-Layout
 # ═══════════════════════════════════════════════════════════════
@@ -386,13 +380,6 @@ macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
 # ═══════════════════════════════════════════════════════════════
 #  transform_layout, map a layout's modes, one or two at a time
 # ═══════════════════════════════════════════════════════════════
-
-proc dimCount(ty: NimNode): int {.compileTime.} =
-  ## Top-level dimension count of a shape or layout type node.
-  if ty.kind in {nnkTupleConstr, nnkTupleTy}:
-    ty.len
-  else:
-    1
 
 macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =
   ## Map the dimensions of `layout` against the dimensions of `tiler` through `body`.

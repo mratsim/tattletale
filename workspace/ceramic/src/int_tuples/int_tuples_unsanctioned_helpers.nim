@@ -18,3 +18,19 @@ macro groupedHead(head, tail: typed): untyped =
     return
   for i in 0 ..< tt.len:
     result.add nnkBracketExpr.newTree(tail, newLit(i))
+
+func tupleType*(n: NimNode): NimNode {.compileTime.} =
+  ## Resolve to the underlying TupleConstr node, handling values, consts,
+  ## and type aliases uniformly.
+  let t = n.getType()
+  let inner =
+    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
+      t[1]
+    else:
+      t
+  inner.getTypeImpl()
+
+func tupleTypeLen*(n: NimNode): int {.compileTime.} =
+  ## Length of the resolved tuple type node, callers guard with isTuple first.
+  let t = n.tupleType()
+  result = t.len

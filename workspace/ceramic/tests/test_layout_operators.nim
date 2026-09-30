@@ -328,7 +328,7 @@ proc runEdgeCaseTests =
   block:  # zipped_divide layout structure
     let L = make_layout((6, 6), (1, 6))
     let zd = zipped_divide(L, (2, 2))
-    doAssert tupleLen(zd.shape) == 2
+    doAssert zd.shape.rank() == 2
     doAssert zd.shape[0][0] === 2
     doAssert zd.shape[0][1] === 2
     doAssert zd.shape[1][0] === 3

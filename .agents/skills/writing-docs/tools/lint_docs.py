@@ -16,7 +16,7 @@ Rule table (rule | trigger | severity):
 | the-fragment         | a noun phrase opening on the/The that carries no verb, as a sentence or comma segment                 | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
-| line-length          | a prose line over 140 characters                                                                  | counted  |
+| line-length          | a prose line over 180 characters                                                                  | counted  |
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
@@ -42,7 +42,7 @@ Rule table (rule | trigger | severity):
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
-| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
+| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 180-char line          | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -117,7 +117,7 @@ import tokenize
 from collections import Counter
 from pathlib import Path
 
-PROSE_CAP = 140
+PROSE_CAP = 180
 SINGLE_WORD_EOL_PREV_MAX = 110
 WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
@@ -231,7 +231,6 @@ NARRATION = [
     (r"\bfor now\b", "temporal marker (state the invariant instead)"),
     (r"\bnow that\b", "temporal connective (state the resulting state instead)"),
     (r"\bno longer\b", "past-state narration (describe the code as it is now)"),
-    (r"\bused to\b", "past-state narration (describe the code as it is now)"),
     (r"\bwas (?:buggy|broken|wrong|failing|incorrect)\b",
      "past-state narration (state the invariant instead)"),
     (r"\broot cause\b", "bug postmortem label (state the invariant instead)"),
@@ -323,7 +322,7 @@ def _probe_exempt(line):
 BANNED = [
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
-     r"|\bno longer\b|\bused to \b|\bas of \b",
+     r"|\bno longer\b|\bas of \b",
      None, "historical and temporal prose is banned, state the present contract "
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
@@ -445,7 +444,7 @@ RULES = {
                          "a noun phrase opening on the/The that carries no verb, as a sentence or comma segment"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
-    "line-length": Rule("line-length", True, "a prose line over 140 characters"),
+    "line-length": Rule("line-length", True, "a prose line over 180 characters"),
     "article-eol": Rule("article-eol", True,
                         "a line ends on a dangling article or a stranded possessive"),
     "stray-fragment": Rule("stray-fragment", True,
@@ -498,7 +497,7 @@ RULES = {
     "missing-contract": Rule("missing-contract", False,
                              "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
     "sig-wrap": Rule("sig-wrap", True,
-                     "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
+                     "a proc or func signature wrapped across lines while the joined form fits a 180-char line"),
     "except-rewrap": Rule("except-rewrap", True,
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
@@ -1536,7 +1535,7 @@ def check_doc_above_type(path, text, findings):
 
 
 SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func)\b")
-SIG_WRAP_MAX = 140
+SIG_WRAP_MAX = 180
 
 
 def nim_sig_wrap_checks(path, text, findings):

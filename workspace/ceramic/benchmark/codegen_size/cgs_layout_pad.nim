@@ -50,12 +50,12 @@ func padLeftO(layout: Layout; n: static int): auto =
 
 # candidate consumers, same bodies as src with the candidate pads
 template blockedProductR(blk, tlr): auto =
-  const mxR = max(rank(typeof(blk)), rank(typeof(tlr)))
+  const mxR = max(blk.rank(), tlr.rank())
   let lp = logical_product(padRightR(blk, mxR), padRightR(tlr, mxR))
   zipDimensions(dimension(lp, 0), dimension(lp, 1))
 
 template rakedProductR(blk, tlr): auto =
-  const mxR = max(rank(typeof(blk)), rank(typeof(tlr)))
+  const mxR = max(blk.rank(), tlr.rank())
   let lp = logical_product(padRightR(blk, mxR), padRightR(tlr, mxR))
   zipDimensions(dimension(lp, 1), dimension(lp, 0))
 

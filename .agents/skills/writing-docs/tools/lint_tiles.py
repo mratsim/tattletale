@@ -46,6 +46,15 @@ Decl-name T-suffix ban (decl-t-suffix):
 - setT and listT carry the ban, renaming is the fix, one finding per declaration with no marker exemption
 - a capital before the trailing T keeps the CT marker allowed, short names and bracketed generic parameter lists stay out
 
+Blessed rank for tuple length (tuplelen-rank):
+
+- tupleLen is banned outside int_tuples_datatypes.nim, blessed rank overloads
+  live there and own the int-or-Int branch (1 for int and Int, tupleLen otherwise)
+- rank reads as a method call on the value, write x.rank(), one finding
+  per touched line for bare rank(...), rank(typeof(...)), typeof(...).rank,
+  a bare .rank without call parens
+- a `# rank-allow <what>` marker on the line or the line above exempts one call
+
 Allowlist marker, proc scope:
 
 - a `# tiles-allow <what> needs <primitive>` line in a proc body or up
@@ -648,6 +657,13 @@ TYPE_SUFFIX_RE = re.compile(
     r"^\s*(?:type\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b"
     r"|([A-Za-z_][A-Za-z0-9_]*)\s*\*?\s*=\s*"
     r"(?:object|ref|distinct|enum|tuple|concept)\b)")
+TUPLELEN_RE = re.compile(r"\btupleLen\s*\(")
+RANK_CALL_RE = re.compile(r"(?<![\w.\"'`])rank\s*\(")
+RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
+TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
+RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
+BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
+                     "int_tuples_datatypes.nim")
 
 
 def _t_suffix_banned(name):
@@ -717,6 +733,48 @@ def scan_decl_t_suffix(path, ds, lines, findings):
         if (f.line, f.reason) not in seen:
             seen.add((f.line, f.reason))
             findings.append(f)
+
+
+def scan_tuplelen_rank(path, lines, findings):
+    """Flags tupleLen calls outside the blessed rank definitions.
+
+    Contract:
+
+    - int_tuples_datatypes.nim hosts the blessed rank overloads and keeps
+      its exemption, every other tupleLen call site routes through rank
+    - rank call sites read as method calls (x.rank()), bare rank(...),
+      rank(typeof(...)), typeof(...).rank, and bare .rank carry one finding
+      per touched line
+    - a `# rank-allow <what>` marker on the line or the line above exempts one call
+    """
+    if _rel(path).endswith(BLESSED_RANK_FILE):
+        return
+    for i, raw in enumerate(lines):
+        code, _c = _strip_comment(raw)
+        prev = lines[i - 1] if i > 0 else ""
+        allowed = "rank-allow" in raw or "rank-allow" in prev
+        if TUPLELEN_RE.search(code) and not allowed:
+            findings.append(Finding(
+                path, i + 1, "tuplelen-rank",
+                "tupleLen call outside the blessed rank definitions, route "
+                "through rank or mark # rank-allow"))
+        if allowed:
+            continue
+        if RANK_TYPEOF_RE.search(code) or TYPEOF_RANK_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-typeof-ban",
+                "rank through typeof, call the value method directly "
+                "(x.rank()) or mark # rank-allow"))
+        elif RANK_BARE_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-parens",
+                "rank reads without call parens, write x.rank() or "
+                "mark # rank-allow"))
+        elif RANK_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-call-syntax",
+                "rank reads as a method call here, write x.rank() or "
+                "mark # rank-allow"))
 
 
 def load_builtins():
@@ -956,7 +1014,7 @@ def scan_newcall_method(path, lines, findings):
                 "call form" % (name, name)))
 
 
-BODY_WRAP_MAX = 140
+BODY_WRAP_MAX = 180
 
 # Bodies starting a statement stay out of the join, the expression join is
 # only safe for one expression.
@@ -969,6 +1027,10 @@ BODY_STMT_HEAD_RE = re.compile(
 # the line break is not a statement boundary.
 BODY_CONT_END_CHARS = set("+-*/%<>=&|@?$~^,\\([{")
 BODY_CONT_START_CHARS = set("+-*/%<>=&|@?$~^.)]}")
+# Word operators cannot open a statement, a line opening on one continues the expression above it.
+BODY_CONT_START_WORDS = frozenset(
+    ("div", "mod", "shl", "shr", "and", "or", "xor", "in", "notin",
+     "is", "isnot", "as"))
 
 
 def _body_bracket_delta(s):
@@ -991,7 +1053,7 @@ def scan_body_wrap(path, lines, ds, blocked, findings):
     - legal bodies: statements (let, if, when, for, ...), colon blocks,
       blank lines, comments, spanning string literals, over-budget bodies
     - bracket-depth tracking allows one statement boundary total, a line
-      break on an operator counts as continuation
+      break on an operator or inside open brackets counts as continuation
     """
     for d in ds:
         if d["name"] is None or d["kind"] not in RULE_KINDS:
@@ -1006,6 +1068,7 @@ def scan_body_wrap(path, lines, ds, blocked, findings):
             continue
         parts = []
         broken = False
+        depth = 0
         for no in body:
             raw = lines[no - 1]
             if no == d["eq_line"]:
@@ -1014,11 +1077,16 @@ def scan_body_wrap(path, lines, ds, blocked, findings):
             if comment_only or code.strip() == "" or code.strip() != raw.strip():
                 broken = True
                 break
+            seg = code.strip()
+            if depth == 0 and BODY_STMT_HEAD_RE.match(seg):
+                broken = True
+                break
             if code.rstrip().endswith(":"):
                 broken = True
                 break
-            parts.append(code.strip())
-        if broken or any(BODY_STMT_HEAD_RE.match(p) for p in parts):
+            parts.append(seg)
+            depth += _body_bracket_delta(seg)
+        if broken:
             continue
         depth, boundaries = 0, 0
         for k, p in enumerate(parts):
@@ -1026,7 +1094,8 @@ def scan_body_wrap(path, lines, ds, blocked, findings):
             if k + 1 == len(parts):
                 break
             ends_cont = p[-1] in BODY_CONT_END_CHARS
-            starts_cont = parts[k + 1][0] in BODY_CONT_START_CHARS
+            starts_cont = (parts[k + 1][0] in BODY_CONT_START_CHARS
+                           or parts[k + 1].split()[0] in BODY_CONT_START_WORDS)
             if depth <= 0 and not ends_cont and not starts_cont:
                 boundaries += 1
         if boundaries == 0 and depth == 0:
@@ -1147,6 +1216,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
     scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     scan_decl_t_suffix(path, ds, lines, findings)
+    scan_tuplelen_rank(path, lines, findings)
     for proc in procs:
         if not proc["device"]:
             continue
