@@ -35,7 +35,11 @@ type
     le5*: int           ## functions of at most 5 body lines
     le30*: int          ## functions of at most 30 body lines
     le70*: int          ## functions of at most 70 body lines
-    gt70*: int          ## functions above 70 body lines
+    le150*: int         ## functions of at most 150 body lines
+    le300*: int         ## functions of at most 300 body lines
+    le700*: int         ## functions of at most 700 body lines
+    le1400*: int        ## functions of at most 1400 body lines
+    gt1400*: int        ## functions above 1400 body lines
 
   CgsOverloadBuckets* = object
     groups*: CgsLocBuckets  ## overload families bucketed by summed member LOC
@@ -418,14 +422,24 @@ proc scan(msl: string): Scan =
     inc result.stats.calls, calls
 
 proc addTo(b: var CgsLocBuckets, loc: int) =
+  ## Bucket edges are fixed constants for cross-commit comparability, top
+  ## edges catch macro/template inlining explosions.
   if loc <= 5:
     inc b.le5
   elif loc <= 30:
     inc b.le30
   elif loc <= 70:
     inc b.le70
+  elif loc <= 150:
+    inc b.le150
+  elif loc <= 300:
+    inc b.le300
+  elif loc <= 700:
+    inc b.le700
+  elif loc <= 1400:
+    inc b.le1400
   else:
-    inc b.gt70
+    inc b.gt1400
 
 proc lineBytes(rawLines: seq[string], k: int, endsWithNewline: bool): int =
   ## Byte weight of line k, its line break included, the file's last break
@@ -439,7 +453,8 @@ proc analyze*(msl: string): CgsStats =
   scan(msl).stats
 
 proc locBuckets*(msl: string): CgsLocBuckets =
-  ## Function body lines of one MSL source bucketed at the 5/30/70 bounds.
+  ## Function body lines of one MSL source bucketed at the fixed
+  ## 5/30/70/150/300/700/1400 upper bounds.
   for f in scan(msl).funcs:
     result.addTo(f.loc)
 
@@ -588,11 +603,19 @@ proc cgsReport*(receipts: openArray[CgsReceipt]) =
     over.groups.le5 += o.groups.le5
     over.groups.le30 += o.groups.le30
     over.groups.le70 += o.groups.le70
-    over.groups.gt70 += o.groups.gt70
+    over.groups.le150 += o.groups.le150
+    over.groups.le300 += o.groups.le300
+    over.groups.le700 += o.groups.le700
+    over.groups.le1400 += o.groups.le1400
+    over.groups.gt1400 += o.groups.gt1400
     over.members.le5 += o.members.le5
     over.members.le30 += o.members.le30
     over.members.le70 += o.members.le70
-    over.members.gt70 += o.members.gt70
+    over.members.le150 += o.members.le150
+    over.members.le300 += o.members.le300
+    over.members.le700 += o.members.le700
+    over.members.le1400 += o.members.le1400
+    over.members.gt1400 += o.members.gt1400
   let inl = $total.inlineFuncs & "/" & $total.nonInlineFuncs
   echo colSep, "total".alignLeft(nameW), colSep, ($total.bytes).align(8), colSep,
     ($total.lines).align(6), colSep, ($total.types).align(6), colSep,
@@ -602,7 +625,9 @@ proc cgsReport*(receipts: openArray[CgsReceipt]) =
   echo colSep, ctr("Function LOC", 14), colSep, ctr("Funcs", 10), colSep
   echo "|" & "-".repeat(14) & "|" & "-".repeat(10) & "|"
   let funcRows: seq[(string, int)] = @[("<=5", funcB.le5), ("<=30", funcB.le30),
-                                       ("<=70", funcB.le70), (">70", funcB.gt70)]
+                                       ("<=70", funcB.le70), ("<=150", funcB.le150),
+    ("<=300", funcB.le300), ("<=700", funcB.le700), ("<=1400", funcB.le1400),
+    (">1400", funcB.gt1400)]
   for (label, n) in funcRows:
     echo colSep, label.align(14), colSep, ($n).align(10), colSep
   echo "\n"
@@ -612,7 +637,11 @@ proc cgsReport*(receipts: openArray[CgsReceipt]) =
   let overRows: seq[(string, int, int)] = @[("<=5", over.groups.le5, over.members.le5),
       ("<=30", over.groups.le30, over.members.le30),
       ("<=70", over.groups.le70, over.members.le70),
-      (">70", over.groups.gt70, over.members.gt70)]
+      ("<=150", over.groups.le150, over.members.le150),
+      ("<=300", over.groups.le300, over.members.le300),
+      ("<=700", over.groups.le700, over.members.le700),
+      ("<=1400", over.groups.le1400, over.members.le1400),
+      (">1400", over.groups.gt1400, over.members.gt1400)]
   for (label, g, m) in overRows:
     echo colSep, label.align(14), colSep, ($g).align(10), colSep,
       ($m).align(10), colSep

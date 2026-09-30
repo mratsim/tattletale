@@ -15,7 +15,7 @@ codegen_size_analysis.nim is the shared analysis module, bencher reports.nim tab
 Every runner ends with one `cgsReport` call after the per-kernel lines:
 
 - a per-kernel table of bytes, LOC, types, vars, funcs, calls, inline/non-inline
-- function-LOC buckets at the 5/30/70 bounds, overload families likewise
+- function-LOC buckets at the 5/30/70/150/300/700/1400 bounds, overload families likewise
 - per-kernel line attribution with a pareto cut, size per call site, overload
   variant counts per Nim origin
 
@@ -23,10 +23,9 @@ Each kernel is a `const xMsl = metal:` block in its runner, mirroring one real
 call site. The runner prints one `<kernel>: <bytes>` line per kernel, the MSL
 source size under the crucible metal backend.
 
-Run from the tattletale/ dir, suite flags (the `testerCmd` flags of `config.nims`):
+Run from the tattletale/ dir, plain release protocol:
 
-    nim c -r -d:release --stackTrace:on --lineTrace:on --lineDir:on --debugger:native \
-      --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip workspace/ceramic/benchmark/codegen_size/<runner>.nim
+    nim c -r -d:release --outdir:build/wip --nimcache:nimcache/wip workspace/ceramic/benchmark/codegen_size/<runner>.nim
 
 ## Baselines and the update protocol
 
@@ -35,7 +34,10 @@ The baseline tables and the measurement protocol live in `.scratchspace/20260929
 - every simplification commit on these units re-runs the runners,
   updates the table with the new branch-tip hash and sizes
 - a regression over 200 B on an untouched call site is a stop-and-report
-- always measure with the suite flags above, `-d:release` folds debug runtime
-  checks out of the MSL and shifts the byte counts
+- always measure with the plain release flags above, `-d:release` folds debug
+  runtime checks out of the MSL and shifts the byte counts
+- line-info flags `--lineTrace:on`, `--lineDir:on`, `--debugger:native` change
+  mangled-name suffixes in the emitted MSL
+- never mix run protocols across one comparison, the byte counts shift with the flags
 
 The runners are not part of the suite scan (no `test_`/`t_` prefix), run them manually.

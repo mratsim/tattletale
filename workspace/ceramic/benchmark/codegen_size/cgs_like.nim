@@ -3,8 +3,7 @@
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible
 ## metal backend and prints its MSL byte size.
 ##
-## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## Usage in benchmark/codegen_size/README.md.
+## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
 ## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Kernels cover the call sites of the like-constructors track.

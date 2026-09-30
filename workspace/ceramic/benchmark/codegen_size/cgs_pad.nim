@@ -10,8 +10,7 @@
 ## - value parity is asserted on the host side before the kernels
 ##
 ## Baselines live in the codesize ledger under .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
-## Run from the tattletale/ dir with the suite flags of config.nims testerCmd,
-## usage in benchmark/codegen_size/README.md.
+## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
