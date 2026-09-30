@@ -1,7 +1,8 @@
 ## Codesize ledger, compose family.
 ##
-## Every kernel compiles one real call site to Metal Shading Language with the crucible
-## metal backend and prints its MSL byte size.
+## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
+## cgsReport renders cost of 1 call plus the marginal over the paired floor.
+## No floor pairs exist in this family, the Marginal column prints `-` throughout.
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
@@ -45,16 +46,10 @@ const composeDynMsl = metal:
     let r = compose(a, b)
     C[0] = float32 toIntVal crd2idx(r, (1, 1))
 
-echo "composeStaticKernel: ", composeStaticMsl.len
-echo "composeNestedKernel: ", composeNestedMsl.len
-echo "composeRank1Kernel: ", composeRank1Msl.len
-echo "composeDynKernel: ", composeDynMsl.len
+# ── kernel rows ──
 
-
-# ── standard codegen-size report ──
-
-cgsReport([
-  ("composeStaticKernel", composeStaticMsl),
-  ("composeNestedKernel", composeNestedMsl),
-  ("composeRank1Kernel", composeRank1Msl),
-  ("composeDynKernel", composeDynMsl)])
+cgsReport("cgs_layout_compose", [
+  cgsReceipt("composeStaticKernel", composeStaticMsl),
+  cgsReceipt("composeNestedKernel", composeNestedMsl),
+  cgsReceipt("composeRank1Kernel", composeRank1Msl),
+  cgsReceipt("composeDynKernel", composeDynMsl)])

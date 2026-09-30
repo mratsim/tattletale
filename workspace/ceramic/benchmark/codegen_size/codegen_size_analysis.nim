@@ -19,6 +19,8 @@
 ## vars never counts struct fields, fields belong to the type declaration.
 ## Scanner input is read-only, MSL is never transformed.
 import std/[algorithm, strformat, strutils, tables]
+when defined(TTT_CgsDump):
+  import std/os
 
 type
   CgsStats* = object
@@ -73,11 +75,28 @@ type
     paretoLines*: int           ## lines of that set
     paretoPct*: float           ## that set's share of totalLines, percent
 
-  CgsReceipt* = tuple[name: string, msl: string]
+  CgsReceipt* = tuple[name: string, msl: string, floor: int]
+    ## One measured kernel row (name, msl, floor) for cgsReport.
+    ##
+    ## floor is the paired floor in bytes for the Marginal column, cgsNoFloor
+    ## prints `-`, a floor may reference a prior row's MSL length.
+    ## A 2-call row pairs its 1-call sibling that way.
 
-const
-  identStart = {'A'..'Z', 'a'..'z', '_'}
-  identChars = {'A'..'Z', 'a'..'z', '0'..'9', '_'}
+const cgsNoFloor* = -1
+  ## Floor value of a kernel with no paired floor, the Marginal column prints
+  ## `-` for such a row.
+
+proc cgsReceipt*(name, msl: string, floor: int = cgsNoFloor): CgsReceipt =
+  ## Builds one kernel row for cgsReport, floor defaults to cgsNoFloor.
+  result.name = name
+  result.msl = msl
+  result.floor = floor
+
+const identStart = {'A'..'Z', 'a'..'z', '_'}
+  ## Characters that may open a Metal identifier.
+
+const identChars = {'A'..'Z', 'a'..'z', '0'..'9', '_'}
+  ## Characters that may continue a Metal identifier.
 
 type
   FuncInfo = object
@@ -564,30 +583,72 @@ proc truncMid(s: string, w: int): string =
   let tail = w - 3 - head
   result = s[0 .. head - 1] & "..." & s[s.len - tail .. ^1]
 
-proc cgsReport*(receipts: openArray[CgsReceipt]) =
-  ## Prints the bencher-style codegen-size report for one runner.
-  ## Adds totals, the bucket tables, and per-kernel attribution.
-  const nameW = 34
-  const colSep = "|"
-  const lineSep = "|" & "-".repeat(nameW) & "|" & "-".repeat(8) & "|" &
-    "-".repeat(6) & "|" & "-".repeat(6) & "|" & "-".repeat(6) & "|" &
-    "-".repeat(6) & "|" & "-".repeat(6) & "|" & "-".repeat(10) & "|"
+proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
+  ## Prints the codegen-size report for one runner, bencher reports.nim table style,
+  ## every number in the output computed here.
+  ##
+  ## Contract:
+  ## - renders one row per kernel, Name, Cost of 1 call, Marginal, totals row
+  ## - Marginal is the kernel cost minus its paired floor, `-` for cgsNoFloor
+  ## - appends runner stats totals, function LOC buckets, overload groups,
+  ##   per-kernel attribution, one pareto line per kernel, and the caveats
+  ##
+  ## -d:TTT_CgsDump writes every analyzed MSL to the dump files
+  ## <runner>_<kernel>.msl and adds a Dump column to the table.
+  ##
+  ## dump dir = workspace/ceramic/benchmark/codegen_size/dumps by default,
+  ## -d:TTT_CgsDumpDir="..." overrides it.
+  const nameW = 30
+  const costW = 14
+  const margW = 9
+  const hasDump = defined(TTT_CgsDump)
+  var header = "|" & ctr("Name", nameW) & "|" & ctr("Cost of 1 call", costW) &
+    "|" & ctr("Marginal", margW) & "|"
+  var lineSep = "|" & "-".repeat(nameW) & "|" & "-".repeat(costW) & "|" &
+    "-".repeat(margW) & "|"
+  when hasDump:
+    const dumpW = 46
+    const cgsDumpDirDefault = "workspace/ceramic/benchmark/codegen_size/dumps"
+      ## Dump location of -d:TTT_CgsDump, relative to the run directory.
+    const TTT_CgsDumpDir {.strdefine.} = ""
+      ## -d:TTT_CgsDumpDir="..." value, the default dump location applies when empty.
+    var dumpDirPath = cgsDumpDirDefault
+    if TTT_CgsDumpDir.len > 0:
+      dumpDirPath = TTT_CgsDumpDir
+    createDir(dumpDirPath)
+    header &= ctr("Dump", dumpW) & "|"
+    lineSep &= "-".repeat(dumpW) & "|"
+  echo "\nrunner: ", runner
+  echo header
+  echo lineSep
+  var totalCost = 0
+  var totalMarginal = 0
+  for (name, msl, floor) in receipts:
+    let cost = msl.len
+    var marginal = "-"
+    if floor != cgsNoFloor:
+      marginal = $(cost - floor)
+      totalMarginal += cost - floor
+    var row = "|" & name.alignLeft(nameW) & "|" & ($cost).align(costW) & "|" &
+      marginal.align(margW) & "|"
+    when hasDump:
+      let dumpFile = runner & "_" & name & ".msl"
+      writeFile(dumpDirPath / dumpFile, msl)
+      row &= dumpFile.alignLeft(dumpW) & "|"
+    echo row
+    totalCost += cost
+  var totalRow = "|" & "total".alignLeft(nameW) & "|" &
+    ($totalCost).align(costW) & "|" & ($totalMarginal).align(margW) & "|"
+  when hasDump:
+    totalRow &= " ".repeat(dumpW) & "|"
+  echo totalRow
+
+  # runner-wide analysis, stats totals plus the bucket ladders
   var total: CgsStats
   var funcB: CgsLocBuckets
   var over: CgsOverloadBuckets
-  echo "\n"
-  echo colSep, ctr("Kernel", nameW), colSep, ctr("Bytes", 8), colSep,
-    ctr("LOC", 6), colSep, ctr("Types", 6), colSep, ctr("Vars", 6),
-    colSep, ctr("Funcs", 6), colSep, ctr("calls", 6), colSep,
-    ctr("inl/ninl", 10), colSep
-  echo lineSep
-  for (name, msl) in receipts:
+  for (_, msl, _) in receipts:
     let s = analyze(msl)
-    let inl = $s.inlineFuncs & "/" & $s.nonInlineFuncs
-    echo colSep, name.alignLeft(nameW), colSep, ($s.bytes).align(8), colSep,
-      ($s.lines).align(6), colSep, ($s.types).align(6), colSep,
-      ($s.vars).align(6), colSep, ($s.funcs).align(6), colSep,
-      ($s.calls).align(6), colSep, inl.align(10), colSep
     total.bytes += s.bytes
     total.lines += s.lines
     total.types += s.types
@@ -617,44 +678,49 @@ proc cgsReport*(receipts: openArray[CgsReceipt]) =
     over.members.le1400 += o.members.le1400
     over.members.gt1400 += o.members.gt1400
   let inl = $total.inlineFuncs & "/" & $total.nonInlineFuncs
-  echo colSep, "total".alignLeft(nameW), colSep, ($total.bytes).align(8), colSep,
-    ($total.lines).align(6), colSep, ($total.types).align(6), colSep,
-    ($total.vars).align(6), colSep, ($total.funcs).align(6), colSep,
-    ($total.calls).align(6), colSep, inl.align(10), colSep
-  echo "\n"
-  echo colSep, ctr("Function LOC", 14), colSep, ctr("Funcs", 10), colSep
+  echo "\nStats totals (runner-wide):"
+  echo "|" & ctr("Bytes", 10) & "|" & ctr("Lines", 8) & "|" & ctr("Types", 6) &
+    "|" & ctr("Vars", 6) & "|" & ctr("Funcs", 6) & "|" & ctr("inl/ninl", 8) &
+    "|" & ctr("Calls", 6) & "|"
+  echo "|" & "-".repeat(10) & "|" & "-".repeat(8) & "|" & "-".repeat(6) & "|" &
+    "-".repeat(6) & "|" & "-".repeat(6) & "|" & "-".repeat(8) & "|" &
+    "-".repeat(6) & "|"
+  echo "|" & ($total.bytes).align(10) & "|" & ($total.lines).align(8) & "|" &
+    ($total.types).align(6) & "|" & ($total.vars).align(6) & "|" &
+    ($total.funcs).align(6) & "|" & inl.align(8) & "|" &
+    ($total.calls).align(6) & "|"
+  echo "\nFunction LOC buckets (funcs by body lines):"
+  echo "|" & ctr("Function LOC", 14) & "|" & ctr("Funcs", 10) & "|"
   echo "|" & "-".repeat(14) & "|" & "-".repeat(10) & "|"
   let funcRows: seq[(string, int)] = @[("<=5", funcB.le5), ("<=30", funcB.le30),
-                                       ("<=70", funcB.le70), ("<=150", funcB.le150),
-    ("<=300", funcB.le300), ("<=700", funcB.le700), ("<=1400", funcB.le1400),
-    (">1400", funcB.gt1400)]
+    ("<=70", funcB.le70), ("<=150", funcB.le150), ("<=300", funcB.le300),
+    ("<=700", funcB.le700), ("<=1400", funcB.le1400), (">1400", funcB.gt1400)]
   for (label, n) in funcRows:
-    echo colSep, label.align(14), colSep, ($n).align(10), colSep
-  echo "\n"
-  echo colSep, ctr("Overload LOC", 14), colSep, ctr("Families", 10), colSep,
-    ctr("Members", 10), colSep
+    echo "|" & label.align(14) & "|" & ($n).align(10) & "|"
+  echo "\nOverload groups (families bucketed by summed member LOC):"
+  echo "|" & ctr("Overload LOC", 14) & "|" & ctr("Families", 10) & "|" &
+    ctr("Members", 10) & "|"
   echo "|" & "-".repeat(14) & "|" & "-".repeat(10) & "|" & "-".repeat(10) & "|"
-  let overRows: seq[(string, int, int)] = @[("<=5", over.groups.le5, over.members.le5),
-      ("<=30", over.groups.le30, over.members.le30),
-      ("<=70", over.groups.le70, over.members.le70),
-      ("<=150", over.groups.le150, over.members.le150),
-      ("<=300", over.groups.le300, over.members.le300),
-      ("<=700", over.groups.le700, over.members.le700),
-      ("<=1400", over.groups.le1400, over.members.le1400),
-      (">1400", over.groups.gt1400, over.members.gt1400)]
+  let overRows: seq[(string, int, int)] = @[("<=5", over.groups.le5,
+    over.members.le5), ("<=30", over.groups.le30, over.members.le30),
+    ("<=70", over.groups.le70, over.members.le70), ("<=150", over.groups.le150,
+    over.members.le150), ("<=300", over.groups.le300, over.members.le300),
+    ("<=700", over.groups.le700, over.members.le700), ("<=1400",
+    over.groups.le1400, over.members.le1400), (">1400", over.groups.gt1400,
+    over.members.gt1400)]
   for (label, g, m) in overRows:
-    echo colSep, label.align(14), colSep, ($g).align(10), colSep,
-      ($m).align(10), colSep
-  echo colSep, ctr("families", 14), colSep, ($over.families).align(10), colSep,
-    ($total.funcs).align(10), colSep
-  # per-kernel line attribution
+    echo "|" & label.align(14) & "|" & ($g).align(10) & "|" &
+      ($m).align(10) & "|"
+  echo "|" & ctr("families", 14) & "|" & ($over.families).align(10) & "|" &
+    ($total.funcs).align(10) & "|"
+
+  # per-kernel line attribution, compact columns
   const ownW = 32
   const orgW = 20
   const attSep = "|" & "-".repeat(ownW) & "|" & "-".repeat(orgW) & "|" &
     "-".repeat(6) & "|" & "-".repeat(6) & "|" & "-".repeat(6) & "|" &
-    "-".repeat(6) & "|" & "-".repeat(8) & "|" & "-".repeat(7) & "|" &
-    "-".repeat(7) & "|" & "-".repeat(4) & "|"
-  for (name, msl) in receipts:
+    "-".repeat(6) & "|" & "-".repeat(4) & "|"
+  for (name, msl, _) in receipts:
     let a = attribution(msl)
     var ownerCount = 0
     for o in a.owners:
@@ -662,39 +728,33 @@ proc cgsReport*(receipts: openArray[CgsReceipt]) =
         inc ownerCount
     echo "\nAttribution for ", name, ", ", $a.totalLines, " lines, ",
       $ownerCount, " owners"
-    echo colSep, ctr("Owner (mangled)", ownW), colSep, ctr("Nim origin", orgW),
-      colSep, ctr("LOC", 6), colSep, ctr("LOC%", 6), colSep, ctr("cum%", 6),
-      colSep, ctr("calls", 6), colSep, ctr("Bytes", 8), colSep,
-      ctr("B/call", 7), colSep, ctr("L/call", 7), colSep, ctr("ovl", 4), colSep
+    echo "|" & ctr("Owner (mangled)", ownW) & "|" & ctr("Nim origin", orgW) &
+      "|" & ctr("LOC", 6) & "|" & ctr("LOC%", 6) & "|" & ctr("cum%", 6) &
+      "|" & ctr("calls", 6) & "|" & ctr("ovl", 4) & "|"
     echo attSep
     var cum = 0
     for o in a.owners:
       cum += o.loc
-      let pct = if a.totalLines > 0: o.loc.float * 100.0 / a.totalLines.float else: 0.0
-      let cpct = if a.totalLines > 0: cum.float * 100.0 / a.totalLines.float else: 0.0
-      let bcall = if o.calls > 0: ($((o.bytes div o.calls))).align(7) else: "-".align(7)
-      let lcall = if o.calls > 0: ($((o.loc div o.calls))).align(7) else: "-".align(7)
+      let pct = if a.totalLines > 0:
+        o.loc.float * 100.0 / a.totalLines.float
+      else:
+        0.0
+      let cpct = if a.totalLines > 0:
+        cum.float * 100.0 / a.totalLines.float
+      else:
+        0.0
       let ovl = if o.variants > 0: ($o.variants).align(4) else: "-".align(4)
       let org = if o.origin.len > 0: truncMid(o.origin, orgW) else: "-"
-      echo colSep, truncMid(o.symbol, ownW).alignLeft(ownW), colSep,
-        org.alignLeft(orgW), colSep, ($o.loc).align(6), colSep,
-        (&"{pct:.1f}").align(6), colSep, (&"{cpct:.1f}").align(6), colSep,
-        ($o.calls).align(6), colSep, ($o.bytes).align(8), colSep,
-        bcall, colSep, lcall, colSep, ovl, colSep
-    let exhausted = a.paretoPct < 80.0 and a.pareto.len == ownerCount
+      echo "|" & truncMid(o.symbol, ownW).alignLeft(ownW) & "|" &
+        org.alignLeft(orgW) & "|" & ($o.loc).align(6) & "|" &
+        (&"{pct:.1f}").align(6) & "|" & (&"{cpct:.1f}").align(6) & "|" &
+        ($o.calls).align(6) & "|" & ovl & "|"
     echo "pareto 80%: ", $a.pareto.len, " of ", $ownerCount, " owners cover ",
-      (&"{a.paretoPct:.1f}"), "% of lines", 
-      if exhausted: " (all owners, the remainder is preamble)" else: "",
-      ": ", a.pareto.join(", ")
-    echo "overload groups: ", $a.families, ", largest ", $a.largestFamily,
-      " variants (", a.largestFamilyName, "), ", $a.singleVariantFamilies,
-      " with a single variant"
+      (&"{a.paretoPct:.1f}"), "% of lines"
   echo "\nattribution caveats:"
   echo "- helpers are attributed per kernel, a cross-kernel dedupe is a compare-level view"
   echo "- a Nim def inlined at N call sites emits N functions, the table reports emitted code"
-  echo "- call counts miss address-taken symbols, count recursive calls, and"
-  echo "  can double-count macro-generated duplicate call names"
-  echo ""
+  echo "- call counts miss address-taken symbols, count recursion, may double-count macro dupes"
 
 proc cgsCompare*(name: string, before, after: CgsStats) =
   ## Prints the side-by-side delta report of two measurements, delta is

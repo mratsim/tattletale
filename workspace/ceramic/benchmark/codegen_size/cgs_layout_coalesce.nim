@@ -1,7 +1,8 @@
 ## Codesize ledger, coalesce family.
 ##
-## Every kernel compiles one real call site to Metal Shading Language with the crucible
-## metal backend and prints its MSL byte size.
+## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
+## cgsReport renders cost of 1 call plus the marginal over the paired floor.
+## No floor pairs exist in this family, the Marginal column prints `-` throughout.
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
@@ -41,16 +42,10 @@ const coalesceDynMsl = metal:
     let r = coalesce(p.layout)
     C[0] = float32 toIntVal size(r)
 
-echo "coalesceStaticKernel: ", coalesceStaticMsl.len
-echo "coalesceZerosKernel: ", coalesceZerosMsl.len
-echo "filterInactiveKernel: ", filterInactiveMsl.len
-echo "coalesceDynKernel: ", coalesceDynMsl.len
+# ── kernel rows ──
 
-
-# ── standard codegen-size report ──
-
-cgsReport([
-  ("coalesceStaticKernel", coalesceStaticMsl),
-  ("coalesceZerosKernel", coalesceZerosMsl),
-  ("filterInactiveKernel", filterInactiveMsl),
-  ("coalesceDynKernel", coalesceDynMsl)])
+cgsReport("cgs_layout_coalesce", [
+  cgsReceipt("coalesceStaticKernel", coalesceStaticMsl),
+  cgsReceipt("coalesceZerosKernel", coalesceZerosMsl),
+  cgsReceipt("filterInactiveKernel", filterInactiveMsl),
+  cgsReceipt("coalesceDynKernel", coalesceDynMsl)])

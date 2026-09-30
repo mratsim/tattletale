@@ -466,8 +466,14 @@ def scan_lane_cell(path, codes, findings, allowed=False):
                 "the tile_algebra `rowScalar` accessor"))
 
 
-def scan_magic_dim(path, code, no, findings):
-    """Runs magic-dim over one device proc body line."""
+def scan_magic_dim(path, code, no, findings, allowed=False):
+    """Runs magic-dim over one device proc body line.
+
+    - a proc carrying its own allowlist marker stays quiet, the marker names
+      its dim and the pending primitive
+    """
+    if allowed:
+        return
     stripped = code.strip()
     if CONST_DEF_RE.match(code):
         return
@@ -1064,9 +1070,9 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
         scan_frag_rules(path, proc, lines, findings, exempt_file)
         scan_doc_shape(path, proc, lines, findings, exempt_file)
         codes = [(no, c) for no, c in proc["body"]]
+        allowed = _allowlisted_proc(proc, lines)
         if not lane_exempt:
-            scan_lane_cell(path, codes, findings,
-                           _allowlisted_proc(proc, lines))
+            scan_lane_cell(path, codes, findings, allowed)
         for no, code in codes:
             if code is None:
                 continue
@@ -1074,7 +1080,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
                 scan_raw_emit(path, code[len("EMIT:"):], no, findings,
                               builtins)
                 continue
-            scan_magic_dim(path, code, no, findings)
+            scan_magic_dim(path, code, no, findings, allowed)
             scan_math_const(path, code, no, findings, consts)
 
 

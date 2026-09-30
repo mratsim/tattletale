@@ -1,7 +1,8 @@
 ## Codesize ledger, complement family.
 ##
-## Every kernel compiles one real call site to Metal Shading Language with the crucible
-## metal backend and prints its MSL byte size.
+## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
+## cgsReport renders cost of 1 call plus the marginal over the paired floor.
+## No floor pairs exist in this family, the Marginal column prints `-` throughout.
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
@@ -28,20 +29,6 @@ const complementStaticMsl = metal:
     let r = complement(L)
     C[0] = float32 toIntVal size(r)
 
-# logical_divide with a Layout tiler, the complement + compose general path
-const logicalDivideCompMsl = metal:
-  proc logicalDivideCompKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
-    let L = make_layout((int(M), int(N)), (1, 16))
-    let d = logical_divide(L, make_layout((16, 4)))
-    C[0] = float32 toIntVal size(d)
-
-# logical_product, the compose(complement(a, ...), tiler) site
-const logicalProductCompMsl = metal:
-  proc logicalProductCompKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
-    let L = make_layout((int(M), int(N)), (1, 16))
-    let p = logical_product(L, make_layout((16, 16)))
-    C[0] = float32 toIntVal size(p)
-
 # the copy chain, right_inverse + coalesce(compose(dst, R)) in copyFrom,
 # the KV-write pattern, row-padded dst and row-compact src
 const copyChainMsl = metal:
@@ -57,20 +44,10 @@ const localTileCompMsl = metal:
     let t = local_tile(p, (16, 16), (int(i), int(j)))
     C[0] = t(0, 0)
 
-echo "complementDirectKernel: ", complementDirectMsl.len
-echo "complementStaticKernel: ", complementStaticMsl.len
-echo "logicalDivideCompKernel: ", logicalDivideCompMsl.len
-echo "logicalProductCompKernel: ", logicalProductCompMsl.len
-echo "copyChainKernel: ", copyChainMsl.len
-echo "localTileCompKernel: ", localTileCompMsl.len
+# ── kernel rows ──
 
-
-# ── standard codegen-size report ──
-
-cgsReport([
-  ("complementDirectKernel", complementDirectMsl),
-  ("complementStaticKernel", complementStaticMsl),
-  ("logicalDivideCompKernel", logicalDivideCompMsl),
-  ("logicalProductCompKernel", logicalProductCompMsl),
-  ("copyChainKernel", copyChainMsl),
-  ("localTileCompKernel", localTileCompMsl)])
+cgsReport("cgs_layout_complement", [
+  cgsReceipt("complementDirectKernel", complementDirectMsl),
+  cgsReceipt("complementStaticKernel", complementStaticMsl),
+  cgsReceipt("copyChainKernel", copyChainMsl),
+  cgsReceipt("localTileCompKernel", localTileCompMsl)])

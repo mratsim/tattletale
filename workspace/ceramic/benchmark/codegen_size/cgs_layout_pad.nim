@@ -1,16 +1,15 @@
 ## Codesize ledger for the pad family, comparing the hand-emitted macros
 ## against the concat-composed recursion candidate over the real call sites.
 ##
-## Every kernel compiles one call site to Metal Shading Language and prints
-## its MSL byte size via the crucible metal backend.
+## Every kernel compiles one call site to Metal Shading Language, one row per kernel.
+## cgsReport renders cost of 1 call plus the marginal over the paired floor:
+## - each candidate row pairs its current-form sibling, the Marginal column shows the candidate delta over that form
+## - R-suffixed templates = the candidate form, pad to rank through concat plus make_layout recursion, no LayoutCT
+## - unsuffixed names = the current src, candidate value parity lives in tests/test_layout_algebra.nim (pad candidate parity section)
 ##
-## - R-suffixed templates = the candidate form, pad to rank through concat
-##   plus make_layout recursion with no LayoutCT
-## - unsuffixed names = the current src
-## - value parity is asserted on the host side before the kernels
-##
-## Baselines live in the codesize ledger under .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
+##
+## Baselines live in .scratchspace/20260929-1527-C07D02-ldivide-emission/reports/codesize_ledger.md.
 
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
@@ -71,38 +70,6 @@ template tileToShapeR(blk, ts): auto =
     let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
     let tiler = make_layout(product_shape, LayoutLeft)
     blockedProductR(padded_blk, tiler)
-
-# ── host-side value parity ──
-
-block:
-  let L = make_layout((8, 4), (16, 1))
-  let N = make_layout((8, (4, 2)), (16, (1, 2)))
-  let S = make_layout(8, 4)
-  let P = make_layout((8, 4, 1), (16, 1, 0))
-  doAssert padRightR(L, 4) === padRight(L, 4)
-  doAssert padLeftR(L, 4) === padLeft(L, 4)
-  doAssert padRightR(N, 4) === padRight(N, 4)
-  doAssert padLeftR(N, 4) === padLeft(N, 4)
-  doAssert padRightR(S, 3) === padRight(S, 3)
-  doAssert padLeftR(S, 3) === padLeft(S, 3)
-  doAssert padRightR(P, 3) === P
-  doAssert padLeftR(P, 3) === P
-  doAssert padRightR(P, 2) === P
-  let blk = make_layout((8, 4), (16, 1))
-  let tiler = make_layout(2, 2)
-  doAssert blockedProductR(blk, tiler) === blocked_product(blk, tiler)
-  doAssert rakedProductR(blk, tiler) === raked_product(blk, tiler)
-  doAssert tileToShapeR(make_layout((2, 3), (1, 2)), (6, 12)) ===
-    tile_to_shape(make_layout((2, 3), (1, 2)), (6, 12))
-  doAssert padRightO(L, 4) === padRight(L, 4)
-  doAssert padLeftO(L, 4) === padLeft(L, 4)
-  doAssert padRightO(N, 4) === padRight(N, 4)
-  doAssert padLeftO(N, 4) === padLeft(N, 4)
-  doAssert padRightO(S, 3) === padRight(S, 3)
-  doAssert padLeftO(S, 3) === padLeft(S, 3)
-  doAssert padRightO(P, 3) === P
-  doAssert padLeftO(P, 3) === P
-echo "VALUE PARITY OK"
 
 # ── pad alone ──
 
@@ -184,31 +151,18 @@ const tileToShapeRecMsl = metal:
     let r = tileToShapeR(make_layout((2, 3), (1, 2)), (6, 12))
     C[0] = float32 toIntVal size(r)
 
-echo "padRightCurrentKernel: ", padRightCurrentMsl.len
-echo "padRightRecKernel: ", padRightRecMsl.len
-echo "padLeftCurrentKernel: ", padLeftCurrentMsl.len
-echo "padLeftRecKernel: ", padLeftRecMsl.len
-echo "padRightOneShotKernel: ", padRightOneShotMsl.len
-echo "padLeftOneShotKernel: ", padLeftOneShotMsl.len
-echo "blockedCurrentKernel: ", blockedCurrentMsl.len
-echo "blockedRecKernel: ", blockedRecMsl.len
-echo "rakedCurrentKernel: ", rakedCurrentMsl.len
-echo "rakedRecKernel: ", rakedRecMsl.len
-echo "tileToShapeCurrentKernel: ", tileToShapeCurrentMsl.len
-echo "tileToShapeRecKernel: ", tileToShapeRecMsl.len
+# ── receipts ──
 
-
-# ── standard codegen-size report ──
-
-cgsReport([
-  ("padRightCurrentKernel", padRightCurrentMsl),
-  ("padRightRecKernel", padRightRecMsl),
-  ("padLeftCurrentKernel", padLeftCurrentMsl),
-  ("padLeftRecKernel", padLeftRecMsl),
-  ("padRightOneShotKernel", padRightOneShotMsl),
-  ("padLeftOneShotKernel", padLeftOneShotMsl),
-  ("blockedCurrentKernel", blockedCurrentMsl),
-  ("blockedRecKernel", blockedRecMsl),
-  ("rakedCurrentKernel", rakedCurrentMsl), ("rakedRecKernel", rakedRecMsl),
-  ("tileToShapeCurrentKernel", tileToShapeCurrentMsl),
-  ("tileToShapeRecKernel", tileToShapeRecMsl)])
+cgsReport("cgs_layout_pad", [
+  cgsReceipt("padRightCurrentKernel", padRightCurrentMsl),
+  cgsReceipt("padRightRecKernel", padRightRecMsl, padRightCurrentMsl.len),
+  cgsReceipt("padRightOneShotKernel", padRightOneShotMsl, padRightCurrentMsl.len),
+  cgsReceipt("padLeftCurrentKernel", padLeftCurrentMsl),
+  cgsReceipt("padLeftRecKernel", padLeftRecMsl, padLeftCurrentMsl.len),
+  cgsReceipt("padLeftOneShotKernel", padLeftOneShotMsl, padLeftCurrentMsl.len),
+  cgsReceipt("blockedCurrentKernel", blockedCurrentMsl),
+  cgsReceipt("blockedRecKernel", blockedRecMsl, blockedCurrentMsl.len),
+  cgsReceipt("rakedCurrentKernel", rakedCurrentMsl),
+  cgsReceipt("rakedRecKernel", rakedRecMsl, rakedCurrentMsl.len),
+  cgsReceipt("tileToShapeCurrentKernel", tileToShapeCurrentMsl),
+  cgsReceipt("tileToShapeRecKernel", tileToShapeRecMsl, tileToShapeCurrentMsl.len)])
