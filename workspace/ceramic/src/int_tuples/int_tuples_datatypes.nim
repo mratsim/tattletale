@@ -125,7 +125,7 @@ template genBinOp(op: untyped): untyped =
   ## Generate arithmetic operators for Int[V] vs int/Int.
   ##
   ## PERF CRITICAL: `Int[V] * int` and `int * Int[V]` MUST be `template`, not `func`.
-  ## These are called inside crd2idx's foldZipWith inner product loop.
+  ## They run inside the crd2idx inner-product loop that crd2idxRecur/foldDim drives in layout_indexing_gpu.nim.
   ## A `func` with `Int[V]` arguments generates C struct-object parameters
   ## that the C++ inliner must unravel. A `template` collapses
   ## `Int[16]() * i` to the bare constant `16 * i` at the Nim codegen level.

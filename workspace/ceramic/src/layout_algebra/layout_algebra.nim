@@ -517,33 +517,110 @@ macro logical_divide*(layout: Layout; tiler: tuple): untyped =
   getAst(logicalDivideT(layout, tiler))
 
 # ═══════════════════════════════════════════════════════════════
-#  tile_unzip, unzip a divide or product result into tiles and rest
+#  hier_unzip, split a layout dimension by dimension, gather tiles and rest
 # ═══════════════════════════════════════════════════════════════
 
-template tile_unzip*[L: Layout, T](layout: L; tiler: T): auto =
-  ## Unzip a logical_divide/logical_product result according to a tiler.
-  ## Returns a rank-2 Layout, the tile dimensions and the rest dimensions.
-  block:
-    evalOnceAs(lyt, layout)
-    evalOnceAs(tlr, tiler)
-    when tiler is Layout:
-      make_layout(
-        zip2_by(lyt.shape, tlr.shape),
-        zip2_by(lyt.stride, tlr.shape))
+macro hier_unzip*(splitter: untyped; layout: typed; tiler: typed): untyped =
+  ## Split `layout` by `tiler` through `splitter` and gather the parts into one rank-2 Layout:
+  ## - dimension 0 carries the tile parts of every tiler element
+  ## - dimension 1 carries the rest parts plus the leftover dimensions, PyCute hier_unzip chain semantics
+  ## - a scalar (int, Int) or Layout tiler becomes `splitter(layout, tiler)` verbatim, a sub-tuple tiler element recurses
+  ## Usage:
+  ##   let r = hier_unzip(logical_divide, make_layout((4, 8), (1, 4)), (2, 4))
+  ##   doAssert r === (((2, 4), (2, 2)), ((1, 4), (2, 16)))
+  let splitterNode = splitter
+  proc dimCount(ty: NimNode): int {.compileTime.} =
+    ## Top-level dimension count, tuples count elements, scalars count 1.
+    if ty.kind in {nnkTupleConstr, nnkTupleTy}:
+      ty.len
     else:
-      make_layout(
-        zip2_by(lyt.shape, tlr),
-        zip2_by(lyt.stride, tlr))
+      1
+  proc dimensionCall(e: NimNode; idx: int): NimNode =
+    ## `e.dimension(idx)` as a method-call node.
+    let dim = ident"dimension"
+    result = newCall(nnkDotExpr.newTree(e, dim), newLit(idx))
+  proc fieldElem(e: NimNode; f: string; idx: int): NimNode =
+    ## Element `idx` of field `f` on `e`.
+    let fld = nnkDotExpr.newTree(e, ident(f))
+    result = nnkBracketExpr.newTree(fld, newLit(idx))
+  proc unwrap(e0: NimNode): NimNode =
+    ## Typed macro parameters of macro call arguments arrive wrapped in a statement list. The value is the last child.
+    result = e0
+    if e0.kind == nnkStmtListExpr:
+      result = e0[^1]
 
-# ═══════════════════════════════════════════════════════════════
+  let layoutShapeTy = layoutTypeArgs(layout).shapeTy
+  let R = dimCount(layoutShapeTy)
+  let tlrTy = unwrap(tiler).getTypeInst()
+  if tlrTy.kind notin {nnkTupleTy, nnkTupleConstr}:
+    return newCall(splitterNode, layout, tiler)
+  let tilerRank = tlrTy.len
+  doAssert tilerRank <= R,
+    "hier_unzip: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
+
+  var stmts = newStmtList()
+  var bindingCount = 0
+  proc freshAlias(): NimNode {.compileTime.} =
+    inc bindingCount
+    ident("huzSplit" & $bindingCount)
+
+  type Parts = tuple[fsh, fst, ssh, sst: seq[NimNode]]
+
+  proc walk(e, eShapeTy, tval, ty: NimNode; needBinding: static bool): Parts {.compileTime.} =
+    ## Split the layout dimension `e` by the tiler element of type `ty`.
+    ## `eShapeTy` carries the element type of `e`, `tval` carries the tiler value expression.
+    ## - a leaf, a scalar or Layout sub-tiler, emits one `splitter` call
+    ## - a sub-tuple tiler emits one `splitter` call per sub-element and binds the gathered rank-2 result once
+    ## Returns the shape and stride of the first and second gathered dimensions,
+    ## one element per sub-dimension plus one per leftover layout dimension.
+    ## `needBinding` false at the top level, there the gathered parts form the final Layout directly.
+    if ty.kind in {nnkTupleTy, nnkTupleConstr}:
+      doAssert ty.len <= dimCount(eShapeTy),
+        "hier_unzip: tiler has more dimensions (" & $ty.len &
+        ") than the layout dimension (" & $dimCount(eShapeTy) & ")"
+      for j in 0 ..< ty.len:
+        let child = walk(dimensionCall(e, j), eShapeTy[j],
+                         nnkBracketExpr.newTree(tval, newLit(j)), ty[j], true)
+        result.fsh.add child.fsh
+        result.fst.add child.fst
+        result.ssh.add child.ssh
+        result.sst.add child.sst
+      for j in ty.len ..< dimCount(eShapeTy):
+        result.ssh.add fieldElem(e, "shape", j)
+        result.sst.add fieldElem(e, "stride", j)
+      when needBinding:
+        let nodeR = freshAlias()
+        stmts.add newCall(bindSym"evalOnceAs", nodeR,
+          newCall(bindSym"make_layout",
+            nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fsh),
+                                   nnkTupleConstr.newTree(result.ssh)),
+            nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fst),
+                                   nnkTupleConstr.newTree(result.sst))))
+        result.fsh = @[fieldElem(nodeR, "shape", 0)]
+        result.fst = @[fieldElem(nodeR, "stride", 0)]
+        result.ssh = @[fieldElem(nodeR, "shape", 1)]
+        result.sst = @[fieldElem(nodeR, "stride", 1)]
+    else:
+      let leafR = freshAlias()
+      stmts.add newCall(bindSym"evalOnceAs", leafR,
+        newCall(splitterNode, e, tval))
+      result.fsh = @[fieldElem(leafR, "shape", 0)]
+      result.fst = @[fieldElem(leafR, "stride", 0)]
+      result.ssh = @[fieldElem(leafR, "shape", 1)]
+      result.sst = @[fieldElem(leafR, "stride", 1)]
+
+  let top = walk(ident"huzLyt", layoutShapeTy, ident"huzTlr", tlrTy, false)
+  stmts.insert(0, newCall(bindSym"evalOnceAs", ident"huzLyt", layout))
+  stmts.insert(1, nnkLetSection.newTree(
+    nnkIdentDefs.newTree(ident"huzTlr", newEmptyNode(), tiler)))
+  stmts.add newCall(bindSym"make_layout",
+    nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fsh), nnkTupleConstr.newTree(top.ssh)),
+    nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fst), nnkTupleConstr.newTree(top.sst)))
+  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
-  when TilerT is Layout:
-    logical_divide(layout, tiler)
-  elif TilerT is int or TilerT is Int:
-    logical_divide(layout, tiler)
-  else:
-    tile_unzip(logical_divide(layout, tiler), tiler)
+  hier_unzip(logical_divide, layout, tiler)
 
 macro groupedHead(head, tail: typed): untyped =
   ## Tuple (head, tail[0], tail[1], ...) with head verbatim so nesting survives,
@@ -719,14 +796,8 @@ func nested_product*[A, B: Layout](a: A; b: B): auto =
 template zipped_product*(blk: Layout; tiler: auto): auto =
   ## Reproduce block over tiler, zipped into rank-2 result.
   ##
-  ## CuTe: zipped_product = tile_unzip(logical_product(block, tiler), tiler)
-  block:
-    evalOnceAs(bk, blk)
-    evalOnceAs(tlr, tiler)
-    when tiler is Layout:
-      logical_product(bk, tlr)
-    else:
-      tile_unzip(logical_product(bk, tlr), tlr)
+  ## CuTe: zipped_product = hier_unzip(logical_product, block, tiler)
+  hier_unzip(logical_product, blk, tiler)
 
 template tiled_product*(blk: Layout; tiler: auto): auto =
   ## Like zipped_product but unpack the second dimension.

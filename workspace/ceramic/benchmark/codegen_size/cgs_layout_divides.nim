@@ -53,7 +53,7 @@ const zippedDivideTupleMsl = metal:
     let zd = zipped_divide(L, (16, 16))
     C[0] = float32 toIntVal size(zd)
 
-# zipped_divide with a Layout tiler, routes through the tile_unzip general path
+# zipped_divide with a Layout tiler, the logical_divide whole-layout call applies to the entire layout
 const zippedDivideLayoutMsl = metal:
   proc zippedDivideLayoutKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, int(N)))

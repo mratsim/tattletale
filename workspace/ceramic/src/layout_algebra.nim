@@ -16,7 +16,7 @@
 ## | Views and selectors   | `dimension`, `groupDimensions`, `zipDimensions`                                               |
 ## | Indexing              | `crd2idx`, `idx2crd`, `slice`, `dice`, `X`/`Y`/`_`                             |
 ## | Algebra               | `coalesce`, `filter_zeros`, `filter_inactive`, `complement`, `compose`         |
-## | Partitioning          | `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `tile_unzip` |
+## | Partitioning          | `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `hier_unzip` |
 ## | Inverses and analysis | `right_inverse`, `left_inverse`                                                |
 ## | Products              | `logical_product` through `tile_to_shape`                                      |
 ## | Pointer arithmetic    | `+%`                                                                           |
@@ -124,7 +124,7 @@ export layout_algebra.tiled_divide
 export layout_algebra.flat_divide
 
 ## logical_divide with tile and rest unzipped afterwards.
-export layout_algebra.tile_unzip
+export layout_algebra.hier_unzip
 
 # ═══════════════════════════════════════════════════════════════
 #  Inverses and common-layout analysis

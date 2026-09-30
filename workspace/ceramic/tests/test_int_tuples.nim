@@ -460,73 +460,6 @@ proc runMixedStaticDynamicTests =
   echo "  Mixed static/dynamic: 2 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  zip2_by — guided zip for rank-2 tuples
-# ═══════════════════════════════════════════════════════════════
-
-proc runZip2ByTests =
-  block:
-    ## Terminal guide — pair pass-through
-    const t = (Int[2](), Int[3]())
-    const guide = 99
-    let r = zip2_by(t, guide)
-    doAssert r === (Int[2](), Int[3]())
-  block:
-    ## Tuple guide with 2 terminals — basic split
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()))
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    doAssert r === ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-  block:
-    ## Nested guide — guide = (X, (X, X))
-    let t = ((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]())))
-    let guide = (1, (2, 3))
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
-    doAssert r === expected
-  block:
-    ## Guide shorter than t — trailing goes to group 1
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[6]())
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[6]()))
-    doAssert r === expected
-  block:
-    ## Guide matches t exactly — no trailing
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()))
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-    doAssert r === expected
-  block:
-    ## MoYe.jl tuple_alg test: chars as stand-ins for Int[N]
-    let t = ((1, 10), ((2, 20), (3, 30)), 100)
-    let guide = (0, (0, 0))
-    let r = zip2_by(t, guide)
-    let expected = ((1, (2, 3)), (10, (20, 30), 100))
-    doAssert r === expected, "got " & $r & " expected " & $expected
-  block:
-    ## Rank-1 input (single pair)
-    const t = (Int[2](), Int[3]())
-    const guide = 0  # terminal
-    let r = zip2_by(t, guide)
-    doAssert r === (Int[2](), Int[3]())
-  # ── zip2_by doc examples ──
-  block:
-    # Flat scalar guide: each t[i] is a pair, split pair-wise
-    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]())), (1, 2)) ===
-      ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-  block:
-    # Mixed guide: scalar splits a pair, tuple recurses into sub-tuple
-    doAssert zip2_by(((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]()))), (1, (2, 3))) ===
-      ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
-  block:
-    # Guide shorter than t — trailing appended to group 1
-    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[99]()), (1, 2)) ===
-      ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[99]()))
-
-  echo "  zip2_by: 10 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  mapDimensionsWith / zipDimensionsWith
 # ═══════════════════════════════════════════════════════════════
 
@@ -869,7 +802,6 @@ proc runTests* =
   runFlatIterTests()
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
-  runZip2ByTests()
   runMapZipWithTests()
   runMapLeavesWithPlainIntTests()
   runFilterZipWithTests()

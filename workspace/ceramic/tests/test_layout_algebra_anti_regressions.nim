@@ -235,7 +235,7 @@ proc runNestedShapeIntegrationTests =
     doAssert l(6) === 6
     doAssert l(1) === 3
     doAssert l(23) === 23
-  ## tile_unzip with Layout tiler
+  ## zipped_divide with Layout tiler
   block:
     let A = make_layout((8, 8), (1, 8))
     let T = make_layout((2, 2), (1, 4))

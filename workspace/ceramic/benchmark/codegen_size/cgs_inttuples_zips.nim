@@ -1,8 +1,7 @@
 ## Codesize ledger, int-tuple zip family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
-## zip2_by measures the guided zip the divide chains call, its first-baseline row moved here from cgs_inttuples_zip.nim.
-## zipLeavesWith, zipDimensionsWith, and foldZipWith get one runtime row each over runtime leaf values.
+## zipLeavesWith and zipDimensionsWith get one runtime row each over runtime leaf values.
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
@@ -12,14 +11,6 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
-
-# zip2_by in isolation, guided zip over a runtime rank-2 pair tuple against a flat tiler guide, leaf read keeps it
-const zip2ByOnlyMsl = metal:
-# tiles-allow measured kernel, the call site reads a tuple leaf raw
-  proc zip2ByOnlyKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
-    let t = ((int(M div 16), 16), (int(N div 16), 16))
-    let z = zip2_by(t, (16, 16))
-    C[0] = float32(z[0][0])
 
 # zipLeavesWith over a stride/shape pair, filter_zeros body, static Int strides branch per type, runtime strides compare against 0
 const zipLeavesMsl = metal:
@@ -41,17 +32,8 @@ const zipDimensionsMsl = metal:
       it_a + it_b
     C[0] = float32 toIntVal(r[0])
 
-# foldZipWith over paired runtime leaves, inner-product call-site shape, body acc + it_a * it_b
-const foldZipMsl = metal:
-# tiles-allow measured kernel, the call site reads a tuple leaf raw
-  proc foldZipKernel(C: ptr UncheckedArray[float32]; M, S: int32) {.global.} =
-    let r = foldZipWith((int(M), 16), (int(S), 32), 0, acc + it_a * it_b)
-    C[0] = float32 r
-
 # ── kernel rows ──
 
 cgsReport("cgs_inttuples_zips", [
-  cgsReceipt("zip2ByOnlyKernel", zip2ByOnlyMsl),
   cgsReceipt("zipLeavesKernel", zipLeavesMsl),
-  cgsReceipt("zipDimensionsKernel", zipDimensionsMsl),
-  cgsReceipt("foldZipKernel", foldZipMsl)])
+  cgsReceipt("zipDimensionsKernel", zipDimensionsMsl)])
