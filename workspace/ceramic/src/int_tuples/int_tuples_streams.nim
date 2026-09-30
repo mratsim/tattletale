@@ -64,8 +64,9 @@ func tupleStream*(e: NimNode): TupleStream =
   if ty.kind in {nnkTupleConstr, nnkTupleTy}:
     s.stack.add (ev, ty, 0, 0)
     s.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
-  else: # Scalars
-    s.pending = TupleStreamEvent(depth: 0, kind: kLeaf, leaf: ev, leafTy: ty, verbatim: true)
+  else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
+    s.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0)
+    s.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
   s.hasPending = true
   s
 
