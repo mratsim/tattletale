@@ -19,6 +19,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra/tiles
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # ── floors, no selector machinery ──
 
@@ -261,3 +262,23 @@ writeFile("/tmp/zzz_twoTile.msl", $twoTileMsl)
 writeFile("/tmp/zzz_zippedDivideOnly.msl", $zippedDivideOnlyMsl)
 writeFile("/tmp/zzz_logicalDivideOnly.msl", $logicalDivideOnlyMsl)
 writeFile("/tmp/zzz_dynPair.msl", $dynPairMsl)
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("floorBareKernel", floorBareMsl), ("floorViewKernel", floorViewMsl),
+  ("floorViewIndexKernel", floorViewIndexMsl),
+  ("floorGlKernel", floorGlMsl), ("floorGlIndexKernel", floorGlIndexMsl),
+  ("localTileDynKernel", localTileDynMsl),
+  ("innerPartitionKernel", innerPartitionMsl),
+  ("outerPartitionKernel", outerPartitionMsl),
+  ("localTile2argKernel", localTile2argMsl),
+  ("localTile4argKernel", localTile4argMsl),
+  ("localPartitionKernel", localPartitionMsl),
+  ("frozenFloorKernel", frozenFloorMsl),
+  ("frozenFloor2Kernel", frozenFloor2Msl), ("twoTileKernel", twoTileMsl),
+  ("zippedDivideOnlyKernel", zippedDivideOnlyMsl),
+  ("logicalDivideOnlyKernel", logicalDivideOnlyMsl),
+  ("dynPairKernel", dynPairMsl),
+  ("localTileStaticKernel", localTileStaticMsl)])

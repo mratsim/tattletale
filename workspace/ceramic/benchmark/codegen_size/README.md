@@ -11,6 +11,14 @@
 | cgs_pad.nim | pad pair: current hand-emitted macros vs the measured candidates |
 | cgs_local_tile.nim | local_tile family floors, selectors, and the v2 instruments |
 
+codegen_size_analysis.nim is the shared analysis module, bencher reports.nim table style.
+Every runner ends with one `cgsReport` call after the per-kernel lines:
+
+- a per-kernel table of bytes, LOC, types, vars, funcs, calls, inline/non-inline
+- function-LOC buckets at the 5/30/70 bounds, overload families likewise
+- per-kernel line attribution with a pareto cut, size per call site, overload
+  variant counts per Nim origin
+
 Each kernel is a `const xMsl = metal:` block in its runner, mirroring one real
 call site. The runner prints one `<kernel>: <bytes>` line per kernel, the MSL
 source size under the crucible metal backend.

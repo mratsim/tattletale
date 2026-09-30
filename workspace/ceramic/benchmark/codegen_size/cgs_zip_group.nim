@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # zipped_divide with a tuple tiler on a runtime rank-2 layout
 const zippedDivideTupleMsl = metal:
@@ -55,3 +56,13 @@ echo "zippedDivideLayoutKernel: ", zippedDivideLayoutMsl.len
 echo "zippedDivideRank4Kernel: ", zippedDivideRank4Msl.len
 echo "groupDimensionsKernel: ", groupDimensionsMsl.len
 echo "zipDimensionsKernel: ", zipDimensionsMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("zippedDivideTupleKernel", zippedDivideTupleMsl),
+  ("zippedDivideLayoutKernel", zippedDivideLayoutMsl),
+  ("zippedDivideRank4Kernel", zippedDivideRank4Msl),
+  ("groupDimensionsKernel", groupDimensionsMsl),
+  ("zipDimensionsKernel", zipDimensionsMsl)])

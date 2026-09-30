@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # direct concat of two tuple layouts into one layout
 const concatDirectMsl = metal:
@@ -36,3 +37,11 @@ const flatProductMsl = metal:
 echo "concatDirectKernel: ", concatDirectMsl.len
 echo "tiledProductKernel: ", tiledProductMsl.len
 echo "flatProductKernel: ", flatProductMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("concatDirectKernel", concatDirectMsl),
+  ("tiledProductKernel", tiledProductMsl),
+  ("flatProductKernel", flatProductMsl)])

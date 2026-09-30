@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # coalesce of a static contiguous rank-3 layout
 const coalesceStaticMsl = metal:
@@ -45,3 +46,12 @@ echo "coalesceStaticKernel: ", coalesceStaticMsl.len
 echo "coalesceZerosKernel: ", coalesceZerosMsl.len
 echo "filterInactiveKernel: ", filterInactiveMsl.len
 echo "coalesceDynKernel: ", coalesceDynMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("coalesceStaticKernel", coalesceStaticMsl),
+  ("coalesceZerosKernel", coalesceZerosMsl),
+  ("filterInactiveKernel", filterInactiveMsl),
+  ("coalesceDynKernel", coalesceDynMsl)])

@@ -17,6 +17,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 
 func padRightImpl(layout: Layout; n: static int): auto =
@@ -196,3 +197,19 @@ echo "rakedCurrentKernel: ", rakedCurrentMsl.len
 echo "rakedRecKernel: ", rakedRecMsl.len
 echo "tileToShapeCurrentKernel: ", tileToShapeCurrentMsl.len
 echo "tileToShapeRecKernel: ", tileToShapeRecMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("padRightCurrentKernel", padRightCurrentMsl),
+  ("padRightRecKernel", padRightRecMsl),
+  ("padLeftCurrentKernel", padLeftCurrentMsl),
+  ("padLeftRecKernel", padLeftRecMsl),
+  ("padRightOneShotKernel", padRightOneShotMsl),
+  ("padLeftOneShotKernel", padLeftOneShotMsl),
+  ("blockedCurrentKernel", blockedCurrentMsl),
+  ("blockedRecKernel", blockedRecMsl),
+  ("rakedCurrentKernel", rakedCurrentMsl), ("rakedRecKernel", rakedRecMsl),
+  ("tileToShapeCurrentKernel", tileToShapeCurrentMsl),
+  ("tileToShapeRecKernel", tileToShapeRecMsl)])

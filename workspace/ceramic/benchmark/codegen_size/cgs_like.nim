@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # make_layout_like on a compacting static rank-2 layout (2,3):(2,1) -> (3,1)
 const layoutLikeCompactMsl = metal:
@@ -45,3 +46,12 @@ echo "layoutLikeCompactKernel: ", layoutLikeCompactMsl.len
 echo "layoutLikeDynStrideKernel: ", layoutLikeDynStrideMsl.len
 echo "fragmentLikeVKernel: ", fragmentLikeVMsl.len
 echo "fragmentLikeBroadcastKernel: ", fragmentLikeBroadcastMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("layoutLikeCompactKernel", layoutLikeCompactMsl),
+  ("layoutLikeDynStrideKernel", layoutLikeDynStrideMsl),
+  ("fragmentLikeVKernel", fragmentLikeVMsl),
+  ("fragmentLikeBroadcastKernel", fragmentLikeBroadcastMsl)])

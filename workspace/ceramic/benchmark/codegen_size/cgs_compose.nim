@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # compose of two static rank-2 layouts, the composeImpl path
 const composeStaticMsl = metal:
@@ -49,3 +50,12 @@ echo "composeStaticKernel: ", composeStaticMsl.len
 echo "composeNestedKernel: ", composeNestedMsl.len
 echo "composeRank1Kernel: ", composeRank1Msl.len
 echo "composeDynKernel: ", composeDynMsl.len
+
+
+# ── standard codegen-size report ──
+
+cgsReport([
+  ("composeStaticKernel", composeStaticMsl),
+  ("composeNestedKernel", composeNestedMsl),
+  ("composeRank1Kernel", composeRank1Msl),
+  ("composeDynKernel", composeDynMsl)])
