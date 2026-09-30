@@ -22,7 +22,7 @@ type
 
   TupleStreamEvent* = object
     ## Stream a tuple
-    ## 
+    ##
     ## Tracks modification so an identity stream for a tuple `t` = (11, 22, 33)
     ## can return `t` directly.
     ## Otherwise return tuple would be (t[0], t[1], t[2)), leading to unnecessary temporaries
@@ -98,46 +98,6 @@ iterator items*(s: var TupleStream): TupleStreamEvent =
   while not s.done:
     yield s.next()
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Zip
-# ═══════════════════════════════════════════════════════════════════════
-
-type
-  TupleZip* = object
-    a, b: TupleStream
-
-func zip*(a, b: TupleStream): TupleZip =
-  TupleZip(a: a, b: b)
-
-func done*(z: var TupleZip): bool =
-  let a_done = z.a.done()
-  let b_done = z.b.done()
-  doAssert a_done == b_done, "zip: the trees are not congruent"
-  a_done
-
-func next*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
-  let a_next = z.a.next()
-  let b_next = z.b.next()
-  if a_next.kind != b_next.kind or a_next.depth != b_next.depth:
-    error "zip: the trees are not congruent"
-  (a_next, b_next)
-
-iterator items*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
-  while not z.done():
-    yield z.next()
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Sinks
-# ═══════════════════════════════════════════════════════════════════════
-
-func leaves*(s: TupleStream): seq[tuple[leaf, leafTy: NimNode]] =
-  var src = s
-  for ev in src.items():
-    if ev.kind == kLeaf:
-      result.add (ev.leaf, ev.leafTy)
-
-func tupleFlatten*(e: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
-  tupleStream(e).leaves()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Builders, append/emit consumers
@@ -197,7 +157,11 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
         tb.accums[i][^1].add ev.leaf
     of kClose:
       let node = tb.accums[i].pop()
-      if tb.accums[i].len == 0:
+      if node.len == 0:
+        # every child of the subtree was dropped, keep nothing in the parent
+        if tb.accums[i].len == 0:
+          tb.completed[i] = nnkTupleConstr.newTree()
+      elif tb.accums[i].len == 0:
         tb.completed[i] = node
       else:
         tb.accums[i][^1].add node
@@ -205,3 +169,52 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
   (tb.completed[id], tb.verbatim)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Sinks
+# ═══════════════════════════════════════════════════════════════════════
+
+func leaves*(s: TupleStream): seq[tuple[leaf, leafTy: NimNode]] =
+  var src = s
+  for ev in src.items():
+    if ev.kind == kLeaf:
+      result.add (ev.leaf, ev.leafTy)
+
+func tupleFlatten*(e: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
+  tupleStream(e).leaves()
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Zip
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  TupleZip* = object
+    a, b: TupleStream
+
+func zip*(a, b: TupleStream): TupleZip =
+  TupleZip(a: a, b: b)
+
+func done*(z: var TupleZip): bool =
+  let a_done = z.a.done()
+  let b_done = z.b.done()
+  doAssert a_done == b_done, "zip: the trees are not congruent"
+  a_done
+
+func next*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
+  let a_next = z.a.next()
+  let b_next = z.b.next()
+  if a_next.kind != b_next.kind or a_next.depth != b_next.depth:
+    error "zip: the trees are not congruent"
+  (a_next, b_next)
+
+iterator items*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
+  while not z.done():
+    yield z.next()
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Filters
+# ═══════════════════════════════════════════════════════════════════════
+
+func hasType*(x: NimNode; t: static string): bool =
+  ## sameType wrapper: x has the type named `t`.
+  sameType(x, bindSym(t))
