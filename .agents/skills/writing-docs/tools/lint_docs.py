@@ -337,6 +337,8 @@ BANNED = [
     (r"\bride\b|\brides\b|\briding\b|\bridden\b|\brode\b", None,
      "use sit on, carry, or restate the mechanism"),
     (r"\bbite\b|\bbites\b", None, "use chunk, step, or case"),
+    (r"\bclosed[- ]form\b", None,
+     "use the direct (T):(d) divide, the direct formula, or per-dimension arithmetic"),
     (r"\bmissions?\b", None, "use the module's real name or path"),
     (r"\bdigests?\b",
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),

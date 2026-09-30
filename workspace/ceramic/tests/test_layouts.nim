@@ -433,22 +433,20 @@ proc runSizeTests =
 #  ⚠ Known discrepancies between implementations of cosize on
 #  COMPOSED layouts (make_layout(l1, l2)):
 #
-#   1. CuTe C++ — uses hierarchical (nested) cosize. For a composed
-#      layout Layout<A,B>, cosize ≈ cosize(A) * cosize(B) effectively,
-#      which is incorrect when the outer layout has non-trivial stride.
+#   1. CuTe C++ uses hierarchical (nested) cosize. For a composed
+#      layout Layout<A,B>, cosize = cosize(A) * cosize(B) effectively,
+#      incorrect when the outer layout carries non-trivial stride.
 #
-#   2. Meta tensor-layouts (Python) — enumerates ALL offsets to compute
-#      max(L(i)) + 1.  This is O(size(L)) but is the only correct
-#      definition for composed layouts.  CuTe's cosize(ComposedLayout)
-#      bug is explicitly documented in the Python source.
+#   2. Meta tensor-layouts (Python) enumerates all offsets to compute
+#      max(L(i)) + 1 in O(size(L)) and covers composed layouts correctly.
+#      CuTe documents the ComposedLayout cosize bug.
 #
-#   3. Our Nim (flat affine) — uses the closed-form
+#   3. Our Nim (flat affine) uses the direct formula
 #      1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
 #      matches Python's affine fast-path and CuTe's rank-1 cosize.
-#      We DO NOT support ComposedLayout / Swizzle — our layouts are
-#      always flat/affine, so the sum formula is correct.
 #
-#  Example cosize values for composed layouts:
+#      ComposedLayout / Swizzle sit unsupported, the layouts stay flat
+#      affine and the sum formula is correct for that class.
 #
 #   Layout                    Affine sum   Cute hier   Python enum (correct)
 #   ───────────────────────   ──────────   ──────────   ─────────────────────
