@@ -27,6 +27,7 @@ these roots:
 | tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the required form | counted  |
 | tuplestream-method  | a tupleStream(x) plain call or bare x.tupleStream, method call syntax x.tupleStream() is the required form    | counted  |
 | onleaves-method     | an onLeaves(x) plain call or bare x.onLeaves, method call syntax x.onLeaves() is the required form            | counted  |
+| staticint-method    | a getStaticInt(x)/isStaticInt(x) plain call or bare property form, method call syntax x.getStaticInt()/x.isStaticInt() is the required form | counted  |
 | body-wrap           | a single-expression proc, func, or template body split across lines that fits one line                        | counted  |
 
 
@@ -145,6 +146,9 @@ RULES = {
     "onleaves-method": "an onLeaves(x) plain call or bare x.onLeaves "
                        "where method call syntax x.onLeaves() is the "
                        "required form",
+    "staticint-method": "a getStaticInt(x)/isStaticInt(x) plain call or bare "
+                        "property form where method call syntax "
+                        "x.getStaticInt()/x.isStaticInt() is the required form",
     "emitlayout-method": "an emitLayout(x) plain call or bare x.emitLayout "
                          "where method call syntax x.emitLayout() is the "
                          "required form",
@@ -178,6 +182,9 @@ ONLEAVES_CALL_RE = re.compile(r"(?<![.\w])onLeaves\s*\(")
 ONLEAVES_BARE_RE = re.compile(r"\.\s*onLeaves(?!\s*[(\*])")
 EMITLAYOUT_CALL_RE = re.compile(r"(?<![.\w])emitLayout\s*\(")
 EMITLAYOUT_BARE_RE = re.compile(r"\.\s*emitLayout(?!\s*[(\*])")
+STATICINT_NAMES = ("getStaticInt", "isStaticInt")
+STATICINT_CALL_RES = {n: re.compile(r"(?<![.\w])%s\s*\(" % n) for n in STATICINT_NAMES}
+STATICINT_BARE_RES = {n: re.compile(r"\.\s*%s(?!\s*[(\*])" % n) for n in STATICINT_NAMES}
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -1071,6 +1078,17 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "onleaves-method",
                 "onLeaves reads without call parens here, write "
                 "x.onLeaves()"))
+        for static_name, static_call_re in STATICINT_CALL_RES.items():
+            if static_call_re.search(line):
+                findings.append(Finding(
+                    path, i + 1, "staticint-method",
+                    "%s reads as a plain call here, write x.%s()" %
+                    (static_name, static_name)))
+            elif STATICINT_BARE_RES[static_name].search(line):
+                findings.append(Finding(
+                    path, i + 1, "staticint-method",
+                    "%s reads without call parens here, write x.%s()" %
+                    (static_name, static_name)))
         if EMITLAYOUT_CALL_RE.search(line):
             findings.append(Finding(
                 path, i + 1, "emitlayout-method",

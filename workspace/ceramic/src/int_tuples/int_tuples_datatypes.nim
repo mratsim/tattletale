@@ -113,7 +113,15 @@ template `!==`*(a, b: auto): bool = not (a === b)
 func ceil_div*(a, b: int): int {.inline.} =
   (a + b - 1) div b
 
+func ceil_div*(a, b: static int): static int {.inline.} =
+  ## Static overload, both arguments fold at compile time.
+  (a + b - 1) div b
+
 func sign*(x: int): int {.inline.} =
+  if x > 0: 1 elif x < 0: -1 else: 0
+
+func sign*(x: static int): static int {.inline.} =
+  ## Static overload, folds at compile time.
   if x > 0: 1 elif x < 0: -1 else: 0
 
 template sign*[V: static int](x: Int[V]): auto =
