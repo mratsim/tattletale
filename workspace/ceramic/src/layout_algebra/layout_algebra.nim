@@ -482,45 +482,84 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
 #  logical_divide, tile a layout into (tile, rest)
 # ═══════════════════════════════════════════════════════════════
 
-func logical_divide_impl[A, B: Layout](layout: A; tiler: B): auto =
-  ## Complement the tiler up to the layout size, then compose.
-  block:
-    mixin comp, combined
-    evalOnceAs(comp, complement(tiler, size(layout)))
-    evalOnceAs(combined, make_layout((tiler.shape, comp.shape), (tiler.stride, comp.stride)))
-    compose(layout, combined)
+template divideFormula(shA, stA, shB, stB) =
+  compose(make_layout(shA, stA),
+          make_layout(
+            (shB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).shape),
+            (stB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).stride)))
 
-func logical_divide*[L, T: Layout](layout: L; tiler: T): auto =
-  ## Logical divide by a layout tiler.
-  logical_divide_impl(layout, tiler)
-
-func logical_divide*[L: Layout](layout: L; tiler: int): auto {.inline.} =
-  ## Logical divide by a dynamic int tiler.
-  when layout.shape isnot tuple:
-    # Rank-1 (s):(d) divides by T into (T):(d) and (ceil_div(s,T)):(d*T)
-    make_layout((tiler, ceil_div(layout.shape, tiler)),
-                (layout.stride, layout.stride * tiler))
+template divideRank1(l, t) =
+  when l.shape isnot tuple:
+    make_layout((t, ceil_div(l.shape, t)), (l.stride, l.stride * t))
   else:
-    logical_divide_impl(layout, make_layout(tiler))
+    logical_divide(l, make_layout(t))
 
-func logical_divide*[L: Layout; V: static int](layout: L; tiler: Int[V]): auto {.inline.} =
-  ## Logical divide by a static int tiler.
-  when layout.shape isnot tuple:
-    # Rank-1 (s):(d) divides by T into (T):(d) and (ceil_div(s,T)):(d*T)
-    make_layout((tiler, ceil_div(layout.shape, tiler)),
-                (layout.stride, layout.stride * tiler))
-  else:
-    logical_divide_impl(layout, make_layout(tiler))
-
-func logical_divide*[L: Layout](layout: L; tiler: static int): auto {.inline.} =
-  ## Logical divide by a compile-time int tiler.
-  logical_divide_impl(layout, make_layout(Int[tiler]()))
-
-macro logical_divide*(layout: Layout; tiler: tuple): untyped =
-  ## Divides the layout by the tiler, one tiler element per dimension.
+macro logical_divide*[A, B: Layout](layout: A, tiler: B): untyped =
+  ## Logical divide: split a layout into a (tile, rest) pair.
   ##
-  ## - a divided dimension becomes the (tile, rest) pair
-  ## - dimensions past the tiler length pass through unchanged
+  ## Say you walk the elements of `layout` in chunks shaped like
+  ## `tiler`, say 4 consecutive elements. The divide answers
+  ## two questions:
+  ## - the tile dimension steps through positions inside a chunk
+  ## - the rest dimension steps through the chunks
+  ##
+  ## Reading element `(t, c)` of the result reads element
+  ## `tiler(t) + tiles(c)` of `layout`: `tiles` numbers
+  ## the chunks, the complement of the tiler.
+  ##
+  ## One-line definition:
+  ##
+  ##    logical_divide(A, B) = compose(A, make_layout(B, complement(B, size(A))))
+  ##
+  ## Contract:
+  ## - a Layout tiler returns a 2-dimension layout, dimension 0
+  ##   is `compose(layout, tiler)`, dimension 1 numbers the tiles
+  ## - every element of `layout` appears exactly once, the divide
+  ##   reorders elements, it drops none
+  ## - the tiler must divide the layout, a caller precondition,
+  ##   checked only on compile-time values
+  ##
+  ##    elements ══ tiler ══▶  chunk positions       (tile)
+  ##    elements ── complement ─▶  chunk numbers     (rest)
+  ##    elements ════════════ the divide result ══▶  (position, chunk)
+  ##
+  ## Examples:
+  ##
+  ##    logical_divide(make_layout(16, 3), 4)
+  ##    # → (4, 4):(3, 12)
+  ##
+  ##    logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
+  ##    # → ((2, 2), (2, 3)):((4, 1), (2, 8))
+  var stmts = newStmtList()
+  let (shA, stA) = stmts.destructureLayout(layout)
+  let (shB, stB) = stmts.destructureLayout(tiler)
+  result = stmts
+  result.add getAst(divideFormula(shA, stA, shB, stB))
+
+macro logical_divide*[L: Layout](layout: L, tiler: int): untyped =
+  ## Logical divide by an int tiler
+  getAst(divideRank1(layout, tiler))
+
+macro logical_divide*[L: Layout, V: static int](layout: L, tiler: Int[V]): untyped =
+  ## Logical divide by a static int tiler, see the Layout
+  ## overload for the contract.
+  getAst(divideRank1(layout, tiler))
+
+macro logical_divide*[L: Layout](layout: L, tiler: static int): untyped =
+  ## Logical divide by a static int tiler
+  var stmts = newStmtList()
+  let (shA, stA) = stmts.destructureLayout(layout)
+  result = stmts
+  result.add getAst(divideFormula(shA, stA,
+    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(tiler))),
+    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(1)))))
+
+macro logical_divide*(layout: Layout, tiler: tuple): untyped =
+  ## Logical divide by a tuple tiler, one tiler element per layout dimension:
+  ## - tiler elements matched positionally to layout dimensions,
+  ##   dimensions past the tiler length pass through undivided
+  ## - a divided dimension becomes the (tile, rest) pair, each
+  ##   pair carries the Layout-tiler contract
   template logicalDivideT(l, t) =
     transform_layout(l, t):
       logical_divide(it_l, it_t)

@@ -947,6 +947,13 @@ proc runDivideTests: void =
   checkDivMap(make_layout(((2, 4), 8), ((1, 2), 8)), (4, 4))
   echo "    1/1"
 
+  # contract-doc Examples on the Layout-tiler overload, locked:
+  # logical_divide(make_layout(16, 3), 4) -> (4, 4):(3, 12)
+  doAssert logical_divide(make_layout(16, 3), 4) === ((4, 4), (3, 12))
+  # CuTe C++ 1-D worked example:
+  # A=(4,2,3):(2,1,8), B=4:2 -> ((2,2),(2,3)):((4,1),(2,8))
+  let ldExample = logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
+  doAssert ldExample === (((2, 2), (2, 3)), ((4, 1), (2, 8)))
 
   ## logical_divide with Layout tiler — triggered compose flattening bug
   ## A=(8,8):(1,8), T=(2,2):(1,4)
