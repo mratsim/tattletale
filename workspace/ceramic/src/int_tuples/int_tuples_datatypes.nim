@@ -110,10 +110,10 @@ template `!==`*(a, b: auto): bool = not (a === b)
 #  Int[N] arithmetic
 # ═══════════════════════════════════════════════════════════════
 
-template ceil_div*(a, b: int): int =
+func ceil_div*(a, b: int): int {.inline.} =
   (a + b - 1) div b
 
-template sign*(x: int): int =
+func sign*(x: int): int {.inline.} =
   if x > 0: 1 elif x < 0: -1 else: 0
 
 template sign*[V: static int](x: Int[V]): auto =
