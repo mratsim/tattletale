@@ -170,20 +170,19 @@ macro complementImpl(lyt, cosizeBound: typed; defaultBound: static bool): untype
     bindSym"product".newCall(cosizeBound)
   else:
     cosizeBound
-  let shTuple =
-  let stTuple = stTy.kind in {nnkTupleConstr, nnkTupleTy}
+
   if DynamicSentinel in shVals or DynamicSentinel in stVals:
     let boundDyn = if defaultBound: bindSym"cosize".newCall(lyt)
                    else: bound
-    if shTy.kind in {nnkTupleConstr, nnkTupleTy}:
+    if shTy.isTupleTy():
       if DynamicSentinel in stVals:
         # dynamic strides stay rank-1, parity with CuTe
         error "complement: multi-dimension with dynamic strides not supported"
-      doAssert shTy.kind in {nnkTupleConstr, nnkTupleTy}, "complement: expected one stride per shape dimension"
+      doAssert shTy.isTupleTy(), "complement: expected one stride per shape dimension"
       for i in 0 ..< shVals.len:
-        doAssert shTy[i].kind notin {nnkTupleConstr, nnkTupleTy}, "complement: non-flat shape at index " & $i
+        doAssert not shTy[i].isTupleTy(), "complement: non-flat shape at index " & $i
       result = complementFold(lyt.newDotExpr(ident"shape"), stVals, shVals, boundDyn, false)
-    elif shTuple:
+    elif shTy.isTupleTy():
       # a scalar stride broadcasts over the shape profile (repeat_like)
       if stVals[0] == DynamicSentinel:
         # a dynamic scalar stride broadcasts into sentinel literals,
@@ -207,13 +206,13 @@ macro complementImpl(lyt, cosizeBound: typed; defaultBound: static bool): untype
             (max(Int[1](), `st`), ceil_div(`boundDyn`, `st` * `sh`)),
             (1, `st` * `sh`)))
   else: # all compile-time values
-    doAssert shTy.kind in {nnkTupleConstr, nnkTupleTy} or
-      stTy.kind notin {nnkTupleConstr, nnkTupleTy}, "complement: stride profile larger than shape profile"
+    doAssert shTy.isTupleTy() or
+      not stTy.isTupleTy(), "complement: stride profile larger than shape profile"
     var shN = newNimNode(nnkTupleConstr)
     for v in shVals:
       shN.add IntCT(v)
     let strides = block:
-      if stTuple:
+      if stTy.isTupleTy():
         stVals
       else:
         # a scalar stride broadcasts
@@ -395,7 +394,7 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   template composeDelegatePlain(aShape2, aStrides2, bShape2, bStrides2) =
     composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
 
-  let aShapeIsTuple = layoutTypeArgs(a).shapeTy.kind in {nnkTupleConstr, nnkTupleTy}
+  let aShapeIsTuple = layoutTypeArgs(a).shapeTy.isTupleTy()
   if aShapeIsTuple:
     result.add getAst(composeDelegateCoalesced(aShape, aStrides, bShape, bStrides))
   else:

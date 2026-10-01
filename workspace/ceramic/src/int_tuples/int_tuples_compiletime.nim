@@ -57,6 +57,9 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
 #  AST syntax sugar
 # ═══════════════════════════════════════════════════════════════
 
+func isTupleTy*(t: NimNode): bool {.compileTime.} =
+  t.kind in {nnkTupleConstr, nnkTupleTy}
+
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)
 

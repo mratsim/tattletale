@@ -24,7 +24,7 @@ proc shapeRank*(shTyp: NimNode): int {.compileTime.} =
 
 proc dimCount*(ty: NimNode): int {.compileTime.} =
   ## Top-level dimension count of a shape or layout type node.
-  if ty.kind in {nnkTupleConstr, nnkTupleTy}:
+  if ty.isTupleTy():
     ty.len
   else:
     1

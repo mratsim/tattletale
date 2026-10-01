@@ -56,6 +56,18 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
 
 func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
   ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
+  ##
+  ## Removability: a macro can often avoid this helper by destructuring
+  ## the layout first and passing
+  ## the destructured shape and stride to a typed macro:
+  ##
+  ## - the destructured nodes arrive semchecked
+  ##   (the nested call's argument semcheck)
+  ## - the inner fold works on nodes and per-leaf values directly
+  ##   (coalesce took this route, complement's transplant candidate)
+  ##
+  ## Prefer the destructure route when the fold does not need
+  ## the whole-profile type peek in one shot.
   let typ = layout.getTypeInst()
   if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
     return (typ[1], typ[2])

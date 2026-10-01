@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
+import ./int_tuples_compiletime
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tuple streams / iterators
@@ -60,7 +61,7 @@ type
 func tupleStream*(s: NimNode): TupleStream =
   let ev = unwrapStmtListExpr(s)
   let ty = s.getTypeInst()
-  if ty.kind in {nnkTupleConstr, nnkTupleTy}:
+  if ty.isTupleTy():
     result.stack.add (ev, ty, 0, 0)
     result.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
@@ -82,7 +83,7 @@ func next*(s: var TupleStream): TupleStreamEvent =
       let childE = getTupleIndex(f.elem, f.idx)
       let childT = f.ty[f.idx]
       inc s.stack[^1].idx
-      if childT.kind in {nnkTupleConstr, nnkTupleTy}:
+      if childT.isTupleTy():
         s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kOpen, verbatim: true)
         s.stack.add (childE, childT, 0, f.depth + 1)
       else:
