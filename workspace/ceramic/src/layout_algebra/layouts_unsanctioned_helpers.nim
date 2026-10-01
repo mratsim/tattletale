@@ -28,3 +28,40 @@ proc dimCount*(ty: NimNode): int {.compileTime.} =
     ty.len
   else:
     1
+
+# ── AST-level helpers (compile-time value extraction) ──
+
+proc flattenAst*(n: NimNode): seq[NimNode] {.compileTime.} =
+  case n.kind
+  of nnkIntLit, nnkUIntLit:
+    result.add n
+  of nnkCall, nnkBracketExpr:
+    # an Int[N]() call leaf stays whole, deeper call shapes drop silently
+    if n.len >= 1 and $n[0] == "Int" and n[1].kind == nnkIntLit: result.add n
+    else: discard
+  of nnkPar, nnkTupleConstr, nnkArgList:
+    for child in n:
+      for leaf in flattenAst(child):
+        result.add leaf
+  else:
+    discard
+
+proc flattenType*(t: NimNode): seq[NimNode] {.compileTime.} =
+  case t.kind
+  of nnkTupleConstr:
+    for child in t:
+      for leaf in flattenType(child):
+        result.add leaf
+  else:
+    result.add t
+
+proc typeIntVals*(t: NimNode): seq[int] {.compileTime.} =
+  ## Flattened leaf values of an Int tuple type, DynamicSentinel where a leaf is not a static Int.
+  for leaf in flattenType(t):
+    result.add leaf.getStaticInt()
+
+proc litTuple*(vals: seq[int]): NimNode {.compileTime.} =
+  ## Int literal tuple expression, scalar when single-valued.
+  result = nnkPar.newNimNode()
+  for v in vals:
+    result.add newLit(v)

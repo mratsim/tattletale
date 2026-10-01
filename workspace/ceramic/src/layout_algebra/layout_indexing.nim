@@ -17,6 +17,7 @@ import workspace/ceramic/src/int_tuples
 import ./layout_indexing_cpu
 import ./layout_indexing_gpu
 import ./layouts
+import ./layout_compiletime
 import workspace/ceramic/src/macros/varargs_to_par
 
 export layout_indexing_cpu
@@ -74,8 +75,8 @@ macro idx2crd*(layout: Layout; idx: int or Int): untyped =
     # for tuple shapes, the quotient runs unmod'd at the largest static stride
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
-      let s = newCall(bindSym"[]", st, newLit(i))
-      let shI = newCall(bindSym"[]", sh, newLit(i))
+      let s = bindSym"[]".newCall(st, newLit(i))
+      let shI = bindSym"[]".newCall(sh, newLit(i))
       let leaf = if allStatic and i == maxIdx:
         quote do: `idx` div `s`
       else:

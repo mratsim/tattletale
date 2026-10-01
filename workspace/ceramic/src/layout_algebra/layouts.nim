@@ -9,7 +9,7 @@
 ## mapLeavesWith, zipDimensions, groupDimensions, upcast/downcast, etc.
 ##
 ## Re-exports `layouts_datatypes` (Layout type, predicates) and
-## `layout_constructors` (make_layout, col_major_strides, LayoutCT).
+## `layout_constructors` (make_layout, col_major_strides).
 
 import std/macros
 import workspace/ceramic/src/int_tuples
@@ -17,6 +17,7 @@ import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/macros/replace_nodes
 import ./layouts_datatypes
 import ./layout_constructors
+import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 
 export layouts_datatypes

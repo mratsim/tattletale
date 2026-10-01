@@ -5,13 +5,11 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout construction primitives: make_layout, col_major_strides, LayoutCT.
-##
-## These primitives construct Layout values from shapes and strides.
-
 import std/macros
 import workspace/ceramic/src/int_tuples
 import ./layouts_datatypes
+import ./layout_compiletime
+import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides, canonical column-major strides
@@ -49,155 +47,6 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
     shape: makeIntTuple(shapeArg),
     stride: makeIntTuple(strideArg)
   )
-
-# ═══════════════════════════════════════════════════════════════
-#  layoutTypeArgs, layout dimensions+types extraction
-# ═══════════════════════════════════════════════════════════════
-
-func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
-  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
-  ##
-  ## Removability: a macro can often avoid this helper by destructuring
-  ## the layout first and passing
-  ## the destructured shape and stride to a typed macro:
-  ##
-  ## - the destructured nodes arrive semchecked
-  ##   (the nested call's argument semcheck)
-  ## - the inner fold works on nodes and per-leaf values directly
-  ##   (coalesce took this route, complement's transplant candidate)
-  ##
-  ## Prefer the destructure route when the fold does not need
-  ## the whole-profile type peek in one shot.
-  let typ = layout.getTypeInst()
-  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
-    return (typ[1], typ[2])
-  if typ.kind == nnkSym:
-    let objTy = typ.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          result.shapeTy = field[1]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          result.strideTy = field[1]
-      if result.shapeTy != nil and result.strideTy != nil:
-        return
-  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
-
-# ═══════════════════════════════════════════════════════════════
-#  LayoutCT, compile-time Layout accumulator for macros
-# ═══════════════════════════════════════════════════════════════
-
-type LayoutCT* = object
-  shape*, stride*: seq[NimNode]
-
-proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh
-  ct.stride.add st
-
-func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated dimensions (no coalesce).
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  var outSh = newNimNode(nnkPar)
-  var outSt = newNimNode(nnkPar)
-  for i in 0 ..< ct.shape.len:
-    outSh.add ct.shape[i]; outSt.add ct.stride[i]
-  if ct.shape.len == 0:
-    result = bindSym"make_layout".newCall(newLit(1), newLit(0))
-  else:
-    result = bindSym"make_layout".newCall(outSh, outSt)
-
-# ═══════════════════════════════════════════════════════════════
-#  emitLayout, builder-to-layout constructor
-# ═══════════════════════════════════════════════════════════════
-
-func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil):
-    tuple[resultLayout: NimNode, verbatim: bool] {.compileTime.} =
-  ## Emit a flat layout from an arity-2 tuple builder.
-  ## If no `ctor` is passed, "make_layout(accumulated_shape, accumulated_stride)" will be emitted
-  ##
-  ## A verbatim flag is returned so the caller can use the original symbol
-  ## if no transformation was applied to the stream.
-  ## Otherwise the layout is reconstructed from elements.
-  ##
-  ## An empty builder emits make_layout(1, 0).
-  let (sh, shV) = tb.emit(0, emitScalarForSize1 = true)
-  let (st, stV) = tb.emit(1, emitScalarForSize1 = true)
-  if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
-    (bindSym"make_layout".newCall(IntCT(1), newLit(0)), shV and stV)
-  elif ctor.isNil():
-    (bindSym"make_layout".newCall(sh, st), shV and stV)
-  else:
-    (ctor.newCall(sh, st), shV and stV)
-
-proc appendDimension*(builder: var TupleBuilderNested;
-                      pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
-  ## Append a fold's pair set as one dimension slot.
-  if pairs.len == 1:
-    builder.append(pairs[0].shape, pairs[0].stride)
-    return
-  builder.append(TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true),
-                 TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true))
-  for p in pairs:
-    builder.append(p.shape, p.stride)
-  builder.append(TupleStreamEvent(depth: 0, kind: kClose, verbatim: true),
-                 TupleStreamEvent(depth: 0, kind: kClose, verbatim: true))
-
-# ═══════════════════════════════════════════════════════════════
-#  destructureLayout, layout AST -> (shape, stride) expressions
-# ═══════════════════════════════════════════════════════════════
-
-func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shape, strides: NimNode] =
-  ## Destructure a typed Layout into (shape, stride) tuple expressions,
-  ## without forcing a Layout materialization when the AST already
-  ## carries the base tuples:
-  ## - lvalue emits `layout.shape` / `layout.stride` field reads
-  ## - Layout object constructor, possibly wrapped in a StmtListExpr:
-  ##   strips it, the base tuples pass through as-is
-  ## - layout-valued call or a `typeof(make_layout(...))` alias-typed
-  ##   value materializes once through evalOnceAs, the binding is
-  ##   appended to `resultStmt`
-  ##
-  ## Args:
-  ##   - resultStmt
-  ##     statement list extended with materialization bindings
-  ##   - layoutAst
-  ##     a typed Layout expression
-  ## Returns:
-  ##   - shape, carries the shape tuple expression of the destructured layout
-  ##   - strides, carries the stride tuple expression of the destructured layout
-  ## Precondition:
-  ##   - layoutAst semantically type-checks as a Layout
-  let typ = layoutAst.getTypeInst()
-  let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
-  doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
-    "destructureLayout: expected a Layout, got " & typ.repr
-  let inner = if layoutAst.kind == nnkStmtListExpr: layoutAst[^1] else: layoutAst
-  if inner.kind == nnkObjConstr:
-    for field in inner:
-      if field.kind == nnkExprColonExpr:
-        if field[0].eqIdent("shape"):
-          result.shape = field[1]
-        elif field[0].eqIdent("stride"):
-          result.strides = field[1]
-    # the semchecked constructor fields wrap the base tuples
-    # in a hidden conversion, unwrap it.
-    if result.shape.kind == nnkHiddenSubConv: result.shape = result.shape[^1]
-    if result.strides.kind == nnkHiddenSubConv:
-      result.strides = result.strides[^1]
-    doAssert result.shape != nil and result.strides != nil,
-      "destructureLayout: Layout constructor without shape/stride fields"
-  elif layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
-      inner.kind in {nnkCall, nnkCommand}:
-    # A layout-valued call, or a value typed through
-    # a `typeof(make_layout(...))` alias symbol.
-    let alias = ident("destructuredLayout")
-    resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
-    result.shape = alias.newDotExpr(ident"shape")
-    result.strides = alias.newDotExpr(ident"stride")
-  else:
-    result.shape = layoutAst.newDotExpr(ident"shape")
-    result.strides = layoutAst.newDotExpr(ident"stride")
 
 # ═══════════════════════════════════════════════════════════════
 #  compact_order
@@ -247,44 +96,6 @@ proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
       result[i] = 0
     else:
       result[i] *= scale
-
-# ── AST-level helpers (compile-time value extraction) ──
-
-proc flattenAst(n: NimNode): seq[NimNode] {.compileTime.} =
-  case n.kind
-  of nnkIntLit, nnkUIntLit:
-    result.add n
-  of nnkCall, nnkBracketExpr:
-    if n.len >= 1 and $n[0] == "Int" and n[1].kind == nnkIntLit:
-      result.add n  # Int[N]()
-    else:
-      discard
-  of nnkPar, nnkTupleConstr, nnkArgList:
-    for child in n:
-      for leaf in flattenAst(child):
-        result.add leaf
-  else:
-    discard
-
-proc flattenType*(t: NimNode): seq[NimNode] {.compileTime.} =
-  case t.kind
-  of nnkTupleConstr:
-    for child in t:
-      for leaf in flattenType(child):
-        result.add leaf
-  else:
-    result.add t
-
-proc typeIntVals(t: NimNode): seq[int] {.compileTime.} =
-  ## Flattened leaf values of an Int tuple type, DynamicSentinel where a leaf is not a static Int.
-  for leaf in flattenType(t):
-    result.add leaf.getStaticInt()
-
-proc litTuple(vals: seq[int]): NimNode {.compileTime.} =
-  ## Int literal tuple expression, scalar when single-valued.
-  result = nnkPar.newNimNode()
-  for v in vals:
-    result.add newLit(v)
 
 macro compact_order*(shape, order): untyped =
   ## Produce compact strides for a given dimension permutation.

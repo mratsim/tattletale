@@ -13,6 +13,7 @@ import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import ./layouts
+import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 import ./layout_indexing_gpu
 

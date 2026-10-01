@@ -23,7 +23,7 @@ Rule table (rule | trigger | severity):
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
-| bullet-list-length   | a bullet list with 4 or more items                                                                | counted  |
+| bullet-list-length   | a bullet list with 5 or more items                                                                | counted  |
 | bullet-item-length   | a single bullet item spanning 5 or more lines                                                     | counted  |
 | table-separator      | a table with no |---| separator row after the header                                              | counted  |
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
@@ -127,10 +127,10 @@ DEEP_EXAMPLE_INDENT = 4
 # split it into bullets or a diagram.
 TABLE_CELL_MAX_WORDS = 30
 MODULE_HEADER_MAX_LINES = 8
-# Bullet-shape caps. A bullet list holds at most 3 items and one item
-# spans at most 3 lines, a 4-item list is banned, longer bullet walls
+# Bullet-shape caps. A bullet list holds at most 4 items and one item
+# spans at most 3 lines, a 5-item list is banned, longer bullet walls
 # belong in a table or diagram.
-BULLET_LIST_MAX_ITEMS = 3
+BULLET_LIST_MAX_ITEMS = 4
 BULLET_ITEM_MAX_LINES = 4
 
 ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
@@ -1140,8 +1140,8 @@ def _bullet_continuation(entry, lead_indent):
 def check_bullets(path, block, findings):
     """Fires the bullet-shape rules over one block of prose entries.
 
-    Threshold contract, a bullet list holds at most 3 items and one item
-    spans at most 3 lines, a 4-item list is banned. Longer bullet walls
+    Threshold contract, a bullet list holds at most 4 items and one item
+    spans at most 3 lines, a 5-item list is banned. Longer bullet walls
     belong in a diagram, a table, or split lists.
 
     A list is a maximal run of entries where every member is a bullet

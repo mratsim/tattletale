@@ -26,6 +26,7 @@
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layout_compiletime
 
 # ═══════════════════════════════════════════════════════════════
 #  CoordWheel, iterate logical positions without divmod
@@ -87,8 +88,8 @@ macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
   else:
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
-      let s = newCall(bindSym"[]", st, newLit(i))
-      let shI = newCall(bindSym"[]", sh, newLit(i))
+      let s = bindSym"[]".newCall(st, newLit(i))
+      let shI = bindSym"[]".newCall(sh, newLit(i))
       parts.add newCall(bindSym"mod",
         newCall(bindSym"div", idx, s), shI)
     result = nnkPar.newTree(parts)

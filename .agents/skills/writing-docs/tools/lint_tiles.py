@@ -23,7 +23,7 @@ these roots:
 | divider-space       | a section divider (`# ─── ... ───`) without a blank line before or after it                                   | counted  |
 | one-liner           | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review              | advisory |
 | explicit-generics   | a call site spells generic arguments the compiler infers from the value arguments                             | counted  |
-| newcall-method      | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the required form                | counted  |
+| newcall-method      | a newCall(x, ...) plain call, method call syntax x.newCall(...) is the required form (constructed nnk callees exempt)                       | counted  |
 | tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the required form | counted  |
 | tuplestream-method  | a tupleStream(x) plain call or bare x.tupleStream, method call syntax x.tupleStream() is the required form    | counted  |
 | onleaves-method     | an onLeaves(x) plain call or bare x.onLeaves, method call syntax x.onLeaves() is the required form            | counted  |
@@ -137,8 +137,9 @@ RULES = {
                  "is named at review, never a violation",
     "explicit-generics": "a call site spells generic arguments the compiler "
                          "infers from the value arguments",
-    "newcall-method": "a newCall(bindSym\"f\", x, ...) meta-call where method "
-                      "call syntax x.f(...) is the required form",
+    "newcall-method": "a newCall(x, ...) plain call, method "
+                      "call syntax x.newCall(...) is the required form",
+
     "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
                            "where method call syntax x.tupleFlatten() is the "
                            "required form",
@@ -173,8 +174,9 @@ NEWCALL_METHOD_EXEMPT = frozenset((
     # unresolvable by construction, so the plain call stays legal.
     "evalOnceAs"))
 NEWCALL_METHOD_RE = re.compile(
-    r"\bnewCall\s*\(\s*bindSym\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']"
-    r'(?:\s*\))?\s*,')
+    r"(?<![.\w])newCall\s*\(")
+NEWCALL_CALLEE_NAME_RE = re.compile(
+    r"(bindSym|bindsym|ident)\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']")
 
 # tupleFlatten always reads as a method call with parens, x.tupleFlatten().
 # Violations:
@@ -1048,13 +1050,35 @@ def scan_newcall_method(path, lines, findings):
         stripped = line.lstrip()
         if stripped.startswith("#"):
             continue
-        for name in NEWCALL_METHOD_RE.findall(line):
-            if name in NEWCALL_METHOD_EXEMPT or name.startswith("make"):
-                continue
-            findings.append(Finding(
-                path, i + 1, "newcall-method",
-                "newCall builds %s(x, ...) where x.%s(...) is the method "
-                "call form" % (name, name)))
+        m = NEWCALL_METHOD_RE.search(line)
+        if m is not None:
+            # first argument after the open paren decides the form:
+            # - an nnk* constructed callee builds the method call content
+            #   itself (e.newTree(..) as callee), method syntax is meaningless
+            # - a bindSym-named callee applies the full name exemptions:
+            #   make_* functional constructors stay plain calls
+            # - an ident-named callee gets only the infix exemptions,
+            #   ident-named newCall stays a violation (owner ruling)
+            # - anything else, a node variable or a runtime-built ident,
+            #   converts to receiver.newCall(args) directly
+            rest = line[m.end():].lstrip()
+            nm = None
+            if not rest.startswith("nnk"):
+                nm = NEWCALL_CALLEE_NAME_RE.match(rest)
+            if nm is None and not rest.startswith("nnk"):
+                # a node variable or a runtime-built ident, no literal name
+                findings.append(Finding(
+                    path, i + 1, "newcall-method",
+                    "newCall reads as a plain call here, write "
+                    "x.newCall(...) method call syntax"))
+            elif nm is not None:
+                kind, name = nm.group(1), nm.group(2)
+                functional = kind.lower() == "bindsym" and name.startswith("make")
+                if not (name in NEWCALL_METHOD_EXEMPT or functional):
+                    findings.append(Finding(
+                        path, i + 1, "newcall-method",
+                        "newCall builds %s(x, ...) where x.%s(...) is the method "
+                        "call form" % (name, name)))
         if TUPLEFLATTEN_CALL_RE.search(line):
             findings.append(Finding(
                 path, i + 1, "tupleflatten-method",
