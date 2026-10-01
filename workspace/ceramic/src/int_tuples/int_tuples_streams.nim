@@ -121,11 +121,22 @@ func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) 
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
 
-func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
+template appendImpl(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], isVerbatim: bool) =
+  # vargards[NimNode] + default arguments doesn't seem to work
   doAssert tb.accums.len == leafValues.len
-  tb.verbatim = false
+  if not isVerbatim:
+    tb.verbatim = false
   for i, leaf in leafValues:
     tb.accums[i].add leaf
+
+func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
+  tb.appendImpl(leafValues, isVerbatim = false)
+
+func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], verbatim: bool) =
+  tb.appendImpl(leafValues, isVerbatim = verbatim)
+
+func markNonVerbatim*(tb: var TupleBuilderFlat) =
+  tb.verbatim = false
 
 func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   var node = if emitScalarForSize1: nnkPar.newTree()
@@ -171,14 +182,25 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
       else:
         tb.accums[i][^1].add node
 
-func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
+template appendImpl(tb: var TupleBuilderNested, leafValues: varargs[NimNode], isVerbatim: bool) =
+  # vargards[NimNode] + default arguments doesn't seem to work
   doAssert tb.accums.len == leafValues.len
-  tb.verbatim = false
+  if not isVerbatim:
+    tb.verbatim = false
   for i, leaf in leafValues:
     if tb.accums[i].len == 0:
       tb.completed[i] = leaf
     else:
       tb.accums[i][^1].add leaf
+
+func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
+  tb.appendImpl(leafValues, isVerbatim = false)
+
+func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode], verbatim: bool) =
+  tb.appendImpl(leafValues, isVerbatim = verbatim)
+
+func markNonVerbatim*(tb: var TupleBuilderNested) =
+  tb.verbatim = false
 
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
