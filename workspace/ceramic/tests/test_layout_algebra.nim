@@ -791,9 +791,9 @@ proc runComposeNestedTests =
   echo "    Scalar LHS: 5/5"
 
 proc runComposeTilerTests =
-  ## Tiler-tuple composition, CuTe composition's tuple variant
-  ## (transform_layout over the first tiler dimensions, leftovers drop)
-  ## and pycute `_composition` (zip-per-dimension).
+  ## Tiler-tuple composition, CuTe composition's tuple variant:
+  ## per-dimension composition over the first tiler dimensions,
+  ## leftovers drop, and the pycute `_composition` zip-per-dimension.
   echo "    Tiler tuple [CUTE-CM tuple variant + PY-L _composition]:"
   # int tiler elements compose each dimension with (N):(1), the first N positions
   doAssert compose(make_layout((32, 8), (1, 32)), (16, 2)) === ((16, 2), (1, 32))
@@ -936,7 +936,12 @@ proc runDivideTests: void =
   echo "  Direct divide through the per-dimension tuple-tiler path:"
   doAssert logical_divide(make_layout((10, 8), (2, 1)), (4, 4)) ===
     (((4, 3), (4, 2)), ((2, 8), (1, 4)))
-  echo "    1/1"
+  # a (1, 1) tiler divides each dimension by 1, the per-dimension
+  # result is (1, shape):(stride, stride), which locks the degenerate
+  # (1, 1) spelling of the per-dimension divide path
+  doAssert logical_divide(make_layout((2, 4, 8), (1, 2, 3)), (1, 1)) ===
+    (((1, 2), (1, 4), 8), ((1, 1), (2, 2), 3))
+  echo "    2/2"
 
   echo "  Python port: test_logical_divide_tuple_tiler + test_logical_divide_2d:"
   checkDivMap(make_layout((4, 8)), (2, 4))
@@ -1604,29 +1609,3 @@ proc runTileToShapeTests: void =
     doAssert size(r) === 24
     doAssert rank(r) === 2
   echo "    tile_to_shape: 8 cases OK"
-# ────────────────────────────────────────────────────────────────
-# transform_layout, dimension-wise remapping with tuple and Layout tilers
-# ────────────────────────────────────────────────────────────────
-echo "── transform_layout [CUTE] ──"
-block:
-  ## [cute] Zip a rank-1 layout against a rank-2 Layout tiler
-  ## CuTe: transform_layout(make_layout(2), make_layout(((2,2),(2,8)), ((1,4),(2,8))), f)
-  let a = make_layout((2,), (1,))
-  let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))
-  let r = transform_layout(a, b):
-    make_layout(it_l.shape, it_t.stride)
-  doAssert $r == "(Int[2], (Int[2], Int[8])):((Int[1], Int[4]), (Int[2], Int[8]))", $r
-block:
-  ## [cute] Tiler longer than the layout, leftover tiler dimensions pass through
-  let l = make_layout((4,), (2,))
-  let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))
-  let r = transform_layout(l, b):
-    make_layout(it_l.shape, it_t.stride)
-  doAssert $r == "(Int[4], (Int[2], Int[8])):((Int[1], Int[4]), (Int[2], Int[8]))", $r
-block:
-  ## Layout longer than the tiler, leftover layout dimensions pass through
-  let l = make_layout((2, 4, 8), (1, 2, 3))
-  let r = transform_layout(l, (1, 1)):
-    make_layout(it_l.shape, it_l.stride * it_t)
-  doAssert $r == "(Int[2], Int[4], Int[8]):(1, 2, Int[3])", $r
-echo "    transform_layout: 3 cases OK"

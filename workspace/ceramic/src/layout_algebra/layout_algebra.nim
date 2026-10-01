@@ -554,16 +554,62 @@ macro logical_divide*[L: Layout](layout: L, tiler: static int): untyped =
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(tiler))),
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(1)))))
 
+macro divideTupleImpl(sh, st, tiler: typed): untyped =
+  ## Per-dimension divide over the destructured layout.
+  ##
+  ## - one tiler element per layout dimension
+  ## - dimensions past the tiler pass through
+  ## - a divided dimension carries the (tile, rest) pair.
+  template divideTupleDimShape(dsh, dst, dtl) =
+    logical_divide(make_layout(dsh, dst), dtl).shape
+  template divideTupleDimStride(dsh, dst, dtl) =
+    logical_divide(make_layout(dsh, dst), dtl).stride
+  let shTy = sh.getTypeInst()
+  let layoutRank = if shTy.kind == nnkTupleConstr: shTy.len else: 1
+  let tilerRank = tiler.getTypeInst().len
+  if tilerRank > layoutRank:
+    error "logical_divide: tiler has more dimensions (" & $tilerRank &
+      ") than the layout (" & $layoutRank & ")"
+  var builder = TupleBuilderFlat.new(2)
+  var tilerDims = tiler.tupleDimsStream()
+  for (shEv, stEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    shEv.onLeaves():
+      if not tilerDims.done():
+        # the per-dim divide is emitted twice, once per projection.
+        # Both copies stay pure expressions the C compiler folds and deduplicates,
+        # a binding would instead materialize a wall of temporaries + temp types
+        # that might be harder to optimize away on certain backends (Vulkan / WebGPU that don't use LLVM for example)
+        let tilerEv = tilerDims.next()
+        builder.append(getAst(divideTupleDimShape(shEv.leaf, stEv.leaf, tilerEv.leaf)),
+                       getAst(divideTupleDimStride(shEv.leaf, stEv.leaf, tilerEv.leaf)))
+      else:
+        # a pass-through dimension, the dimension arrives whole
+        builder.append(shEv.leaf, stEv.leaf)
+  result = builder.emitLayout().resultLayout
+
 macro logical_divide*(layout: Layout, tiler: tuple): untyped =
   ## Logical divide by a tuple tiler, one tiler element per layout dimension:
   ## - tiler elements matched positionally to layout dimensions,
   ##   dimensions past the tiler length pass through undivided
   ## - a divided dimension becomes the (tile, rest) pair, each
   ##   pair carries the Layout-tiler contract
-  template logicalDivideT(l, t) =
-    transform_layout(l, t):
-      logical_divide(it_l, it_t)
-  getAst(logicalDivideT(layout, tiler))
+  ## - an empty tiler divides nothing, every dimension passes through
+
+  proc unwrapSLE(e: NimNode): NimNode =
+    result = e
+    while result.kind == nnkStmtListExpr:
+      result = result[^1]
+  if unwrapSLE(tiler).getTypeInst().len == 0:
+    # an empty tiler divides nothing, the layout passes through verbatim
+    result = newStmtList()
+    result.add layout
+  else:
+    var stmts = newStmtList()
+    let (sh, st) = stmts.destructureLayout(layout)
+    template divideTupleDelegate(sh2, st2, tiler2) =
+      divideTupleImpl(sh2, st2, tiler2)
+    result = stmts
+    result.add getAst(divideTupleDelegate(sh, st, tiler))
 
 # ═══════════════════════════════════════════════════════════════
 #  hier_unzip, split a layout dimension by dimension, gather tiles and rest
