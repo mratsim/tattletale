@@ -93,10 +93,10 @@ func next*(s: var TupleStream): TupleStreamEvent =
       s.pending = TupleStreamEvent(depth: depth, kind: kClose, verbatim: true)
     s.hasPending = true
 
-iterator items*(s: var TupleStream): TupleStreamEvent =
-  while not s.done:
-    yield s.next()
-
+iterator items*(s: TupleStream): TupleStreamEvent =
+  var w = s
+  while not w.done():
+    yield w.next()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Builders, append/emit consumers
@@ -106,8 +106,8 @@ iterator items*(s: var TupleStream): TupleStreamEvent =
 
 type
   TupleBuilderFlat* = object
-    accums*: seq[seq[NimNode]]
-    verbatim*: bool = true
+    accums: seq[seq[NimNode]]
+    verbatim: bool = true
 
 func new*(T: type TupleBuilderFlat, numTuples = 1): T =
   result.accums.newSeq(numTuples)
@@ -121,6 +121,12 @@ func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) 
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
 
+func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
+  doAssert tb.accums.len == leafValues.len
+  tb.verbatim = false
+  for i, leaf in leafValues:
+    tb.accums[i].add leaf
+
 func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   var node = if emitScalarForSize1: nnkPar.newTree()
              else: nnkTupleConstr.newTree()
@@ -132,9 +138,9 @@ func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): tuple[res
 
 type
   TupleBuilderNested* = object
-    accums*: seq[seq[NimNode]]
-    completed*: seq[NimNode]
-    verbatim*: bool = true
+    accums: seq[seq[NimNode]]
+    completed: seq[NimNode]
+    verbatim: bool = true
 
 func new*(T: type TupleBuilderNested, numTuples = 1): T =
   result.accums.newSeq(numTuples)
@@ -165,6 +171,15 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
       else:
         tb.accums[i][^1].add node
 
+func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
+  doAssert tb.accums.len == leafValues.len
+  tb.verbatim = false
+  for i, leaf in leafValues:
+    if tb.accums[i].len == 0:
+      tb.completed[i] = leaf
+    else:
+      tb.accums[i][^1].add leaf
+
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
   (tb.completed[id], tb.verbatim)
@@ -185,8 +200,7 @@ template onLeaves*(event: TupleStreamEvent, body: untyped): untyped =
 # ═══════════════════════════════════════════════════════════════════════
 
 func leaves*(s: TupleStream): seq[tuple[leaf, leafTy: NimNode]] =
-  var src = s
-  for ev in src.items():
+  for ev in s.items():
     if ev.kind == kLeaf:
       result.add (ev.leaf, ev.leafTy)
 
@@ -217,9 +231,10 @@ func next*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
     error "zip: the trees are not congruent"
   (a_next, b_next)
 
-iterator items*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
-  while not z.done():
-    yield z.next()
+iterator items*(z: TupleZip): tuple[a, b: TupleStreamEvent] =
+  var w = z
+  while not w.done():
+    yield w.next()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Filters

@@ -96,6 +96,29 @@ func emit*(ct: LayoutCT): NimNode {.compileTime.} =
     result = bindSym"make_layout".newCall(outSh, outSt)
 
 # ═══════════════════════════════════════════════════════════════
+#  emitLayout, builder-to-layout constructor
+# ═══════════════════════════════════════════════════════════════
+
+func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil):
+    tuple[resultLayout: NimNode, verbatim: bool] {.compileTime.} =
+  ## Emit a flat layout from an arity-2 tuple builder.
+  ## If no `ctor` is passed, "make_layout(accumulated_shape, accumulated_stride)" will be emitted
+  ##
+  ## A verbatim flag is returned so the caller can use the original symbol
+  ## if no transformation was applied to the stream.
+  ## Otherwise the layout is reconstructed from elements.
+  ##
+  ## An empty builder emits make_layout(1, 0)
+  let (sh, shV) = tb.emit(0, emitScalarForSize1 = true)
+  let (st, stV) = tb.emit(1, emitScalarForSize1 = true)
+  if sh.len == 0:
+    (bindSym"make_layout".newCall(IntCT(1), newLit(0)), shV and stV)
+  elif ctor.isNil():
+    (bindSym"make_layout".newCall(sh, st), shV and stV)
+  else:
+    (ctor.newCall(sh, st), shV and stV)
+
+# ═══════════════════════════════════════════════════════════════
 #  compact_order
 # ═══════════════════════════════════════════════════════════════
 

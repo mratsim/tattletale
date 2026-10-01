@@ -147,16 +147,6 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
     return true
   false
 
-func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
-  ## Prefix product of a flat seq (DynamicSentinel treated as 1 for scan,
-  ## but produce DynamicSentinel in output to mark unknown positions).
-  result = @[1]
-  for i in 0 ..< vals.len:
-    if vals[i] != DynamicSentinel:
-      result.add result[^1] * vals[i]
-    else:
-      result.add DynamicSentinel
-
 # ═══════════════════════════════════════════════════════════════
 #  evalOnceAs
 # ═══════════════════════════════════════════════════════════════

@@ -145,6 +145,9 @@ RULES = {
     "onleaves-method": "an onLeaves(x) plain call or bare x.onLeaves "
                        "where method call syntax x.onLeaves() is the "
                        "required form",
+    "emitlayout-method": "an emitLayout(x) plain call or bare x.emitLayout "
+                         "where method call syntax x.emitLayout() is the "
+                         "required form",
     "body-wrap": "a single-expression callable body is split across lines "
                  "while the joined form fits one line",
 }
@@ -173,6 +176,8 @@ TUPLESTREAM_CALL_RE = re.compile(r"(?<![.\w])tupleStream\s*\(")
 TUPLESTREAM_BARE_RE = re.compile(r"\.\s*tupleStream(?!\s*[(\*])")
 ONLEAVES_CALL_RE = re.compile(r"(?<![.\w])onLeaves\s*\(")
 ONLEAVES_BARE_RE = re.compile(r"\.\s*onLeaves(?!\s*[(\*])")
+EMITLAYOUT_CALL_RE = re.compile(r"(?<![.\w])emitLayout\s*\(")
+EMITLAYOUT_BARE_RE = re.compile(r"\.\s*emitLayout(?!\s*[(\*])")
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -1066,6 +1071,16 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "onleaves-method",
                 "onLeaves reads without call parens here, write "
                 "x.onLeaves()"))
+        if EMITLAYOUT_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "emitlayout-method",
+                "emitLayout reads as a plain call here, write "
+                "x.emitLayout()"))
+        elif EMITLAYOUT_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "emitlayout-method",
+                "emitLayout reads without call parens here, write "
+                "x.emitLayout()"))
 
 
 BODY_WRAP_MAX = 180

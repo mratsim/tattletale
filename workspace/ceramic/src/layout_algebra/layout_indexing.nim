@@ -150,8 +150,7 @@ macro slice*(target: tuple; selector: typed): untyped =
   let sel = if ty.kind == nnkBracketExpr: ty[1]
             else: selector
   var builder = TupleBuilderNested.new(1)
-  var streamPair = zip(sel.tupleStream(), target.tupleStream())
-  for (selEvent, tgtEvent) in streamPair:
+  for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     tgtEvent.onLeaves():
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
@@ -173,8 +172,7 @@ macro dice*(target: tuple; selector: typed): untyped =
   let sel = if ty.kind == nnkBracketExpr: ty[1]
             else: selector
   var builder = TupleBuilderNested.new(1)
-  var streamPair = zip(sel.tupleStream(), target.tupleStream())
-  for (selEvent, tgtEvent) in streamPair:
+  for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     tgtEvent.onLeaves():
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):

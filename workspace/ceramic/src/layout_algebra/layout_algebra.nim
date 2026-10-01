@@ -647,97 +647,87 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 #  right_inverse, quasi-inverse sorted by stride
 # ═══════════════════════════════════════════════════════════════
 
-func emitInverse(acc: LayoutCT): NimNode {.compileTime.} =
-  ## Coalesce the folded inverse dimensions of both inverses,
-  ## an empty fold collapses to the empty layout (1, 0).
-  if acc.shape.len == 0:
-    bindSym"make_layout".newCall(IntCT(1), newLit(0))
-  else:
-    bindSym"coalesce".newCall(acc.emit())
-
-type InverseChain = tuple[shape, stride, leafIdx: int]
-  ## One inverse chain element as flat values:
-  ## - shape, the shape value, DynamicSentinel marks a live leaf
-  ## - stride, the stride value
-  ## - leafIdx, the flat leaf index in the source shape,
-  ##   live only for a DynamicSentinel shape
-
-type InverseFoldFn = proc(strides, shapes, prefixProd: seq[int]): seq[InverseChain] {.nimcall.}
-
-proc getMaxContiguous(
-    strides, shapes, prefixProd: seq[int]): seq[InverseChain] =
-  ## Maximal contiguous chain of the stride-sorted dimensions, empty if none found:
-  ## - a dimension joins when its stride equals the chain span so far
-  ## - a dynamic shape ends the chain, the next stride span is undecidable
-  var curr = 1
-  for idx in getIndicesSortedByStride(strides):
-    if strides[idx] == curr:
-      result.add((shapes[idx], prefixProd[idx], idx))
-      if shapes[idx] == DynamicSentinel:
-        break
-      curr = strides[idx] * shapes[idx]
-
-proc inverseFold(shTy, stTy, shNode: NimNode;
-                 fold: InverseFoldFn): LayoutCT {.compileTime.} =
-  ## inverse core shared by both inverses, folds arrive directly:
-  ## - fold over the flat values, emit the chain as Int values
-  ## - a dynamic shape leaf comes from the value node, a scalar shape is bare
-  let shV = toSeqStaticInts(shTy)
-  let stV = toSeqStaticInts(stTy)
-  for chain in fold(stV, shV, prefixProduct(shV)):
-    let leaf = if chain.shape == DynamicSentinel:
-      tupleLeaf(shNode, shV.len, chain.leafIdx)
-    else:
-      IntCT(chain.shape)
-    result.append(leaf, IntCT(chain.stride))
-
 macro rightInverseEmit(sh, st: typed): untyped =
-  emitInverse(inverseFold(sh.getTypeInst(), st.getTypeInst(), sh, getMaxContiguous))
+  ## right_inverse core, emits coalesced contiguous chains in stride order:
+  ## - a dimension joins when its stride equals the chain span
+  ## - a dynamic shape ends the chain and keeps its own value node
+  ## - an empty chain collapses to the empty layout (1, 0)
+  var dims: seq[tuple[stride, shape, prefix: int, leaf: NimNode]]
+  var prefix = 1
+  for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
+    if shEv.kind != kLeaf:
+      continue
+    let shape = shEv.leafTy.getStaticInt()
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, shEv.leaf)
+    # past a dynamic shape the prefix is unknown, no sentinel arithmetic
+    prefix = if shape == DynamicSentinel: DynamicSentinel
+             else: prefix * shape
+
+  var builder = TupleBuilderFlat.new(2)
+  var curr = 1
+  for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
+    let dim = dims[idx]
+    if dim.stride == curr:
+      let shLeaf = if dim.shape == DynamicSentinel: dim.leaf else: IntCT(dim.shape)
+      builder.append(shLeaf, IntCT(dim.prefix))
+      if dim.shape == DynamicSentinel:
+        break
+      curr = dim.stride * dim.shape
+  result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
 
 func right_inverse*(layout: Layout): auto =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
   ## Returns:
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists
-  let c = coalesce(layout)
-  rightInverseEmit(flatten(c.shape), flatten(c.stride))
+  rightInverseEmit(layout.shape, layout.stride)
 
 # ═══════════════════════════════════════════════════════════════
 #  left_inverse, left inverse (injective layouts only)
 # ═══════════════════════════════════════════════════════════════
 
-proc getGaps(
-    strides, shapes, prefixProd: seq[int]): seq[InverseChain] =
-  ## Returns the left-inverse dimensions as a LayoutCT, built from stride ratios:
+macro leftInverseEmit(sh, st: typed): untyped =
+  ## Left-inverse dimensions built from stride ratios:
   ##
   ##   result_shape[i]  = stride / size_so_far
-  ##   result_stride[i] = prefixProd of the previous stride-sorted dimension
+  ##   result_stride[i] = shape prefix of the previous stride-sorted dimension
   ##
-  ## Left-inverse dimensions as (gap, stride) values plus the tail, built
-  ## from stride ratios, all strides must be static (compile-time assert)
+  ## All strides must be static (compile-time assert).
+  var dims: seq[tuple[stride, shape, prefix: int, leaf: NimNode]]
+  var prefix = 1
+  for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
+    if shEv.kind != kLeaf:
+      continue
+    let shape = shEv.leafTy.getStaticInt()
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, shEv.leaf)
+    # past a dynamic shape the prefix is unknown, no sentinel arithmetic
+    prefix = if shape == DynamicSentinel: DynamicSentinel else: prefix * shape
+
+  var builder = TupleBuilderFlat.new(2)
   var sizeSoFar = 1
   var prevIdx = -1
   var prevPrefix = 0
-  for idx in getIndicesSortedByStride(strides):
-    if strides[idx] == 0:
+  for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
+    let dim = dims[idx]
+    if dim.stride == 0:
       continue
-    doAssert strides[idx] != DynamicSentinel,
+    doAssert dim.stride != DynamicSentinel,
       "left_inverse: dynamic strides are not chainable"
-    doAssert strides[idx] mod sizeSoFar == 0,
-      "left_inverse: stride " & $strides[idx] & " not divisible by " & $sizeSoFar
-    let gap = strides[idx] div sizeSoFar
+    doAssert dim.stride mod sizeSoFar == 0,
+      "left_inverse: stride " & $dim.stride & " not divisible by " & $sizeSoFar
+    let gap = dim.stride div sizeSoFar
     # a unit gap marks no hole, the final coalesce would drop the shape-1 head
     if gap != 1:
-      result.add((gap, prevPrefix, idx))
-    sizeSoFar = strides[idx]
+      builder.append(IntCT(gap), IntCT(prevPrefix))
+    sizeSoFar = dim.stride
     prevIdx = idx
-    prevPrefix = prefixProd[idx]
+    prevPrefix = dim.prefix
   if prevIdx >= 0:
     # tail = the last stride-sorted dimension's own shape
-    result.add((shapes[prevIdx], prevPrefix, prevIdx))
-
-macro leftInverseEmit(sh, st: typed): untyped =
-  emitInverse(inverseFold(sh.getTypeInst(), st.getTypeInst(), sh, getGaps))
+    let dim = dims[prevIdx]
+    let shLeaf = if dim.shape == DynamicSentinel: dim.leaf else: IntCT(dim.shape)
+    builder.append(shLeaf, IntCT(dim.prefix))
+  result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
 
 func left_inverse*(layout: Layout): auto =
   ## Left inverse, Li(L(i)) == i for injective layouts.
@@ -745,7 +735,7 @@ func left_inverse*(layout: Layout): auto =
   ## - a coalesced Layout over the static-stride gaps
   ## - requires all static strides, compile-time assert
   let c = coalesce(layout)
-  leftInverseEmit(flatten(c.shape), flatten(c.stride))
+  leftInverseEmit(c.shape, c.stride)
 
 
 # ═══════════════════════════════════════════════════════════════

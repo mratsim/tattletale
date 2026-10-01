@@ -47,15 +47,3 @@ func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## - Int[64]                                   → @[64]
   for (_, ty) in t.tupleStream().leaves():
     result.add ty.getStaticInt()
-
-proc tupleLeaf*(e: NimNode; count, idx: int): NimNode {.compileTime.} =
-  ## idx-th leaf of a flat IntOrIntTuple value expression node.
-  ## Returns:
-  ## - bare node for a scalar flat value (count == 1)
-  ## - bracket access for a tuple value at the idx-th element
-  ## TODO:
-  ## principled API, the leaf-access family has no single home yet
-  if count == 1:
-    e
-  else:
-    newTree(nnkBracketExpr, e, newLit(idx))
