@@ -46,6 +46,7 @@
 
 {.experimental: "callOperator".}
 
+import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/tests/layouts_testutils
@@ -398,6 +399,105 @@ proc runCoalesceOneLeafTests =
     check r.stride, 0, Int[0]
   echo "    PASS"
 
+func stripGensymCounters(ast: string): string {.compileTime.} =
+  ## Strip the gensym counter suffixes the semmed AST carries: a decimal
+  ## run of 8+ digits right after an underscore that ends the identifier.
+  ##
+  ## Mangled base62 hash tails pass through byte for byte.
+  const digits = {'0' .. '9'}
+  result = newStringOfCap(ast.len)
+  var i = 0
+  while i < ast.len:
+    if ast[i] == '_':
+      var j = i + 1
+      while j < ast.len and ast[j] in digits:
+        inc j
+      if j - (i + 1) >= 8 and (j == ast.len or ast[j] notin {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}):
+        i = j
+        continue
+    result.add ast[i]
+    inc i
+
+macro astRepr(x: typed): string =
+  ## The semmed expansion of x as a string. An identity coalesce pastes
+  ## its input, so the expansion of `coalesce(X)` equals the expansion
+  ## of X itself; a rebuild carries extra lets and a make_layout call.
+  result = newLit(repr(x))
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 13. coalesce verbatim passthrough: identity folds paste
+#
+#  Identity fold: every original leaf passed through in order,
+#  flat profile, no drop/merge/marker.
+#
+#  - an identity fold re-pastes the layout expression itself
+#  - an identity site's emitted MSL is byte-identical to the same kernel
+#    with the coalesce call peeled off, no `make_layout` reconstruction
+#  - any restructure (merge, size-1 drop, preserveTrailing marker)
+#    keeps the coalesced emission
+# ═══════════════════════════════════════════════════════════════
+
+proc runCoalesceVerbatimPassthroughTests =
+  block:
+    ## static identity, no chain merges: the values and the Int[N]
+    ## folding stay correct through the paste
+    let r = coalesce(make_layout((2, 3, 4), (1, 8, 64)))
+    check r.shape, (2, 3, 4), (Int[2], Int[3], Int[4])
+    check r.stride, (1, 8, 64), (Int[1], Int[8], Int[64])
+  block:
+    ## static identity paste: `coalesce(L)` expands to L itself,
+    ## a rebuild would emit lets and a make_layout call
+    doAssert astRepr(coalesce(make_layout((2, 3, 4), (1, 8, 64)))) ==
+      astRepr(make_layout((2, 3, 4), (1, 8, 64)))
+  block:
+    ## runtime identity: a layout carried by a symbol pastes the symbol,
+    ## no field reads, no make_layout
+    let m = 4
+    let n = 8
+    let s = 2
+    let L = make_layout((m, n), (1, s))
+    doAssert astRepr(coalesce(L)) == astRepr(L)
+    doAssert astRepr(coalesce(make_layout((2, 3), (1, 4)))) ==
+      astRepr(make_layout((2, 3), (1, 4)))
+  block:
+    ## runtime identity values survive the paste
+    let m = 4
+    let n = 8
+    let s = 2
+    let r = coalesce(make_layout((m, n), (1, s)))
+    doAssert r.shape === (4, 8)
+    doAssert r.stride === (1, 2)
+    doAssert toIntVal(size(r)) == 32
+  block:
+    ## preserveTrailing identity, the trailing leaf is not size-1 so no
+    ## marker is appended: still a paste
+    doAssert astRepr(coalesce(make_layout((2, 3, 4), (1, 8, 64)), true)) ==
+      astRepr(make_layout((2, 3, 4), (1, 8, 64)))
+  block:
+    ## call-valued chain site, right_inverse + coalesce(compose(A, R)):
+    ## - the compose call expands once, coalesce pastes its result,
+    ##   identical to the peeled composition, with no evalOnce lets
+    ##   and no make_layout reconstruction
+    ## - the expansion carries macro-gensym'd temporaries, each
+    ##   expansion advances the global gensym counter independently,
+    ##   the comparison strips the `_<10-digit counter>` suffixes
+    ## - the raw equality checks above carry no such temporaries
+    let m = 4
+    let n = 8
+    let sd = 2
+    let ss = 16
+    let R = right_inverse(make_layout((int(m), int(n)), (1, int(ss))))
+    doAssert stripGensymCounters(astRepr(coalesce(compose(
+        make_layout((int(m), int(n)), (1, int(sd))), R)))) ==
+      stripGensymCounters(astRepr(compose(
+        make_layout((int(m), int(n)), (1, int(sd))), R)))
+  block:
+    ## a restructure never pastes: the merged fold keeps its emission
+    let r = coalesce(make_layout((2, 4), (1, 2)))
+    check r.shape, 8, Int[8]
+    check r.stride, 1, Int[1]
+  echo "    PASS"
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -424,6 +524,8 @@ proc runTests =
   runCoalescePreserveTrailingTests()
   echo "── Section 12. coalesce degenerate 1-leaf inputs ──"
   runCoalesceOneLeafTests()
+  echo "── Section 13. coalesce verbatim passthrough ──"
+  runCoalesceVerbatimPassthroughTests()
   echo "  All tests passed."
 
 when isMainModule:

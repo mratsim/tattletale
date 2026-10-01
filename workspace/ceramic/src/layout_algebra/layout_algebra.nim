@@ -35,17 +35,20 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce, merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceImpl(layoutShape, layoutStride: typed, preserveTrailing: static bool = false): untyped =
-
+macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool = false): untyped =
   var builder = TupleBuilderFlat.new(2)
   var chunkShape, chunkStride: NimNode
   var chunkShapeVal, chunkStrideVal: int
+  var chunkVerbatim = true
   # the trailing-leaf state feeds only the preserveTrailing marker emission
   var lastShapeVal, lastStrideVal: int
   var lastStride: NimNode
-  for (shapeEv, strideEv) in layoutShape.tupleStream().zip(layoutStride.tupleStream()):
+  for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
     if shapeEv.kind != kLeaf:
       continue
+    if shapeEv.depth > 1:
+      # a leaf below the first tuple level, the fold flattens nested profiles
+      builder.markNonVerbatim()
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
     if preserveTrailing:
@@ -53,6 +56,8 @@ macro coalesceImpl(layoutShape, layoutStride: typed, preserveTrailing: static bo
       lastStrideVal = strideVal
       lastStride = strideEv.leaf
     if shapeVal == 1:
+      # a dropped dimension is a stream restructure
+      builder.markNonVerbatim()
       continue
     if chunkShape.isNil:
       # a chain opens on the first live leaf
@@ -67,31 +72,34 @@ macro coalesceImpl(layoutShape, layoutStride: typed, preserveTrailing: static bo
       # the chain's span reaches this dimension's stride, merge frontward
       chunkShapeVal *= shapeVal
       chunkShape = IntCT(chunkShapeVal)
+      chunkVerbatim = false
       continue
     # the chain stops short of this dimension, flush and open the next chain
-    builder.append(chunkShape, chunkStride)
+    builder.append(chunkShape, chunkStride, verbatim = chunkVerbatim)
     chunkShape = shapeEv.leaf
     chunkShapeVal = shapeVal
     chunkStride = strideEv.leaf
     chunkStrideVal = strideVal
+    chunkVerbatim = true
 
   if chunkShape.isNil:
     # every leaf is size-1, a lone (1):(0) sentinel or the preserved marker
+    builder.markNonVerbatim()
     if preserveTrailing:
       builder.append(IntCT(DynamicSentinel), lastStride)
-      return builder.emitLayout().resultLayout
-    else:
-      return bindSym"make_layout".newCall(IntCT(1), newLit(0))
-    return
-
-  builder.append(chunkShape, chunkStride)
-  if preserveTrailing and lastShapeVal == 1 and not (
-      chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
-      lastStrideVal != DynamicSentinel and
-      chunkShapeVal * chunkStrideVal == lastStrideVal):
-    # the trailing size-1 marker survives a chain that stops short of it
-    builder.append(IntCT(DynamicSentinel), lastStride)
-  return builder.emitLayout().resultLayout
+  else:
+    builder.append(chunkShape, chunkStride, verbatim = chunkVerbatim)
+    if preserveTrailing and lastShapeVal == 1 and not (
+        chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
+        lastStrideVal != DynamicSentinel and
+        chunkShapeVal * chunkStrideVal == lastStrideVal):
+      # the trailing size-1 marker survives a chain that stops short of it
+      builder.append(IntCT(DynamicSentinel), lastStride)
+  let (node, verbatim) = builder.emitLayout()
+  if verbatim: # Reuse the original to avoid destructuring -> restructuring temporaries
+    result = originalLayout
+  else:
+    result = node
 
 macro coalesce*(layout: Layout; preserveTrailing: static bool = false): untyped =
   ## Merge contiguous dimensions.
@@ -109,10 +117,13 @@ macro coalesce*(layout: Layout; preserveTrailing: static bool = false): untyped 
   ##   (4, 1):(1, 0)  folds to (4):(1), the trailing broadcast drops,
   ##                  a chain reaching its stride 0 absorbs it
   ##   (4, 1):(1, 0)  with preserveTrailing stays (4, Int[DynamicSentinel]):(1, 0)
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
-  result = stmts
-  result.add bindSym"coalesceImpl".newCall(sh, st, newLit(preserveTrailing))
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  # The original layout when coalesce is a no-op,
+  # This avoids deconstruction -> reconstruction temporaries in the generated code
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"coalesceImpl".newCall(originalLayout, sh, st, newLit(preserveTrailing))
 
 # ═══════════════════════════════════════════════════════════════
 #  complement, fill stride gaps up to the cosize bound
