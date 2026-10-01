@@ -1069,7 +1069,12 @@ proc runRightInvExactValueTests =
     # result: (8,2):(1,192)
     let R = right_inverse(make_layout((8, 4, 6, 2), (1, 2, 4, 8)))
     doAssert R === ((8, 2), (1, 192)), "got " & $R
-  echo "  Exact-value [PY-E Table 5]: 10 cases OK"
+  block:
+    # Chained through coalesce, the intermediate materializes once via evalOnceAs
+    let L = make_layout((4, 8), (1, 4))
+    let R = right_inverse(coalesce(L))
+    doAssert R === (32, 1), "expected 32:1 got " & $R
+  echo "  Exact-value [PY-E Table 5]: 11 cases OK"
 
 proc runRightInvDynamicTests =
   ## [CUTE-IR] Dynamic shapes/strides
@@ -1164,7 +1169,12 @@ proc runLeftInvExactValueTests =
     # Broadcast unit stride: left_inverse(((2,2),(2,4)):((0,1),(0,2))) = (2,4):(2,8)
     let Li = left_inverse(make_layout(((2, 2), (2, 4)), ((0, 1), (0, 2))))
     doAssert Li === ((2, 4), (2, 8)), "expected (2,4):(2,8) got " & $Li
-  echo "  Exact-value [PY-E Table 6]: 9 cases OK"
+  block:
+    # Chained through coalesce, the intermediate materializes once via evalOnceAs
+    let L = make_layout((3, 7, 5), (5, 15, 1))
+    let Li = left_inverse(coalesce(L))
+    doAssert Li === ((5, 21), (21, 1)), "expected (5,21):(21,1) got " & $Li
+  echo "  Exact-value [PY-E Table 6]: 10 cases OK"
 
 
 proc runLeftInvTests =

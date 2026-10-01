@@ -119,6 +119,53 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
     (ctor.newCall(sh, st), shV and stV)
 
 # ═══════════════════════════════════════════════════════════════
+#  destructureLayout, layout AST -> (shape, stride) expressions
+# ═══════════════════════════════════════════════════════════════
+
+func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shape, strides: NimNode] =
+  ## Destructure a typed Layout into (shape, stride) tuple expressions,
+  ## without forcing a Layout materialization when the AST already
+  ## carries the base tuples:
+  ## - lvalue emits `layout.shape` / `layout.stride` field reads
+  ## - Layout object constructor, possibly wrapped in a StmtListExpr:
+  ##   strips it, the base tuples pass through as-is
+  ## - layout-valued call materializes once through evalOnceAs,
+  ##   the binding is appended to `resultStmt`
+  ##
+  ## Args:
+  ##   - resultStmt
+  ##     statement list extended with materialization bindings
+  ##   - layoutAst
+  ##     a typed Layout expression
+  ## Returns:
+  ##   - shape, carries the shape tuple expression of the destructured layout
+  ##   - strides, carries the stride tuple expression of the destructured layout
+  ## Precondition:
+  ##   - layoutAst semantically type-checks as a Layout
+  let typ = layoutAst.getTypeInst()
+  let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
+  doAssert layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout"),
+    "destructureLayout: expected a Layout, got " & typ.repr
+  let inner = if layoutAst.kind == nnkStmtListExpr: layoutAst[^1] else: layoutAst
+  if inner.kind == nnkObjConstr:
+    for field in inner:
+      if field.kind == nnkExprColonExpr:
+        if field[0].eqIdent("shape"):
+          result.shape = field[1]
+        elif field[0].eqIdent("stride"):
+          result.strides = field[1]
+    doAssert result.shape != nil and result.strides != nil,
+      "destructureLayout: Layout constructor without shape/stride fields"
+  elif layoutAst.kind in {nnkCall, nnkCommand} or inner.kind in {nnkCall, nnkCommand}:
+    let alias = ident("destructuredLayout")
+    resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
+    result.shape = alias.newDotExpr(ident"shape")
+    result.strides = alias.newDotExpr(ident"stride")
+  else:
+    result.shape = layoutAst.newDotExpr(ident"shape")
+    result.strides = layoutAst.newDotExpr(ident"stride")
+
+# ═══════════════════════════════════════════════════════════════
 #  compact_order
 # ═══════════════════════════════════════════════════════════════
 

@@ -675,12 +675,18 @@ macro rightInverseEmit(sh, st: typed): untyped =
       curr = dim.stride * dim.shape
   result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
 
-func right_inverse*(layout: Layout): auto =
+macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
   ## Returns:
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists
-  rightInverseEmit(layout.shape, layout.stride)
+  var stmts = newStmtList()
+  let (sh, st) = destructureLayout(stmts, layout)
+  template rightInverseDelegate(sh2, st2) =
+    ## Expands the inverse core on the destructured tuples at the use site.
+    rightInverseEmit(sh2, st2)
+  result = stmts
+  result.add getAst(rightInverseDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
 #  left_inverse, left inverse (injective layouts only)
@@ -729,13 +735,19 @@ macro leftInverseEmit(sh, st: typed): untyped =
     builder.append(shLeaf, IntCT(dim.prefix))
   result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
 
-func left_inverse*(layout: Layout): auto =
+macro left_inverse*(layout: typed): untyped =
   ## Left inverse, Li(L(i)) == i for injective layouts.
   ## Returns:
   ## - a coalesced Layout over the static-stride gaps
   ## - requires all static strides, compile-time assert
-  let c = coalesce(layout)
-  leftInverseEmit(c.shape, c.stride)
+  var stmts = newStmtList()
+  let (sh, st) = destructureLayout(stmts, layout)
+  template leftInverseDelegate(sh2, st2) =
+    ## Coalesce canonicalizes strides first, the chaining asserts require it.
+    evalOnceAs(coalescedLayout, coalesceBackward(sh2, st2))
+    leftInverseEmit(coalescedLayout.shape, coalescedLayout.stride)
+  result = stmts
+  result.add getAst(leftInverseDelegate(sh, st))
 
 
 # ═══════════════════════════════════════════════════════════════
