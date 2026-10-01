@@ -29,6 +29,8 @@ these roots:
 | onleaves-method     | an onLeaves(x) plain call or bare x.onLeaves, method call syntax x.onLeaves() is the required form            | counted  |
 | staticint-method    | a getStaticInt(x)/isStaticInt(x) plain call or bare property form, method call syntax x.getStaticInt()/x.isStaticInt() is the required form | counted  |
 | body-wrap           | a single-expression proc, func, or template body split across lines that fits one line                        | counted  |
+| semicolons          | a `;` on a Nim code line, split the statement or use comma-separated single-line params (base mode only)                                    | counted  |
+| closed-ir-tests     | a change under tests/codegen/ir, closed to additions, new tests go in tests/ir/optimizations (base mode only)                               | counted  |
 
 
 Module-scope exemptions, where a frag walk IS the tile implementation:
@@ -149,6 +151,11 @@ RULES = {
     "staticint-method": "a getStaticInt(x)/isStaticInt(x) plain call or bare "
                         "property form where method call syntax "
                         "x.getStaticInt()/x.isStaticInt() is the required form",
+    "semicolons": "a `;` on a Nim code line, split the statement or use "
+                  "comma-separated single-line params",
+    "closed-ir-tests": "a change under tests/codegen/ir, the directory is "
+                       "closed to new additions, tests/ir/optimizations is "
+                       "the place",
     "emitlayout-method": "an emitLayout(x) plain call or bare x.emitLayout "
                          "where method call syntax x.emitLayout() is the "
                          "required form",
@@ -1358,6 +1365,27 @@ def lint(paths, base=None):
                 findings.extend(file_findings)
             else:
                 findings.extend(fd for fd in file_findings if fd.line in added)
+            # base-mode-only rules: pre-existing tree stays out of scope
+            bcl = nim_block_comment_lines(text)
+            lines = text.splitlines()
+            targets = list(range(1, len(lines) + 1)) if added is None else sorted(added)
+            for no in targets:
+                if no in bcl:
+                    continue
+                stripped = lines[no - 1].lstrip()
+                if stripped.startswith("#"):
+                    continue
+                if ";" in lines[no - 1]:
+                    findings.append(Finding(
+                        f, no, "semicolons",
+                        "a `;` on a Nim code line, split the statement or "
+                        "use comma-separated single-line params"))
+            if targets and "tests/codegen/ir/" in _rel(f):
+                findings.append(Finding(
+                    f, min(targets), "closed-ir-tests",
+                    "a change under tests/codegen/ir, the directory is "
+                    "closed to new additions, tests/ir/optimizations is "
+                    "the place"))
         else:
             findings.extend(file_findings)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))

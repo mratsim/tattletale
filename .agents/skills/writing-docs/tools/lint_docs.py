@@ -28,6 +28,8 @@ Rule table (rule | trigger | severity):
 | table-separator      | a table with no |---| separator row after the header                                              | counted  |
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
 | table-cell-wall      | a table cell over 30 words                                                                        | counted  |
+| scratch-filename    | a changed file named with tmp, debug, or probe, scratch files are never checked in (base mode only)              | counted  |
+| extensionless-file  | a changed file with no extension, name the format or add one (base mode only)                                    | counted  |
 | table-alignment      | a table whose pipe separators do not line up (pad each cell to the column width)                  | counted  |
 | escape-noise         | an escape sequence used as a prose word                                                           | counted  |
 | narration            | temporal or history narration: currently, as of, once X lands                                     | counted  |
@@ -442,6 +444,10 @@ RULES = {
                              "a table cell over TABLE_CELL_MAX_WORDS words (split the cell into bullets or a diagram)"),
     "table-alignment": Rule("table-alignment", True,
                              "a table whose pipe separators do not line up (pad each cell to the column width)"),
+    "scratch-filename": Rule("scratch-filename", True,
+                             "a changed file named with tmp, debug, or probe, scratch files are never checked in"),
+    "extensionless-file": Rule("extensionless-file", True,
+                               "a changed file with no extension, name the format or add one"),
     "escape-noise": Rule("escape-noise", True, "an escape sequence used as a prose word"),
     "narration": Rule("narration", True,
                       "temporal or history narration: currently, as of, once X lands"),
@@ -2024,6 +2030,45 @@ def collect_files(paths):
     return out
 
 
+def changed_set_hygiene(base):
+    """Path rules over the whole changed set (staged and unstaged vs base).
+
+    Repo hygiene cannot ride the collected files: collect_files filters to
+    .nim/.py/.md, so an extensionless or scratch-named file would never
+    reach a per-file scan. These rules read paths, not text, and only run
+    in base mode so the pre-existing tree stays out of scope.
+    """
+    out = []
+    repo = _repo_root()
+    if repo is None:
+        return out
+    proc = subprocess.run(
+        ["git", "diff", "--name-status", base],
+        cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return out
+    for row in proc.stdout.splitlines():
+        parts = row.split("\t")
+        if len(parts) < 2:
+            continue
+        status, rel = parts[0], parts[-1]
+        if status.startswith("D"):
+            continue
+        f = Path(repo) / rel
+        name = rel.rsplit("/", 1)[-1].lower()
+        if any(w in rel.lower() for w in ("tmp", "debug", "probe")):
+            out.append(Finding(
+                f, 1, "scratch-filename",
+                "a changed file named with tmp, debug, or probe, "
+                "scratch files are never checked in"))
+        if "." not in name:
+            out.append(Finding(
+                f, 1, "extensionless-file",
+                "a changed file with no extension, name the format or "
+                "add one"))
+    return out
+
+
 def lint(paths, base=None):
     """Lints every collected file under paths, returning sorted findings.
 
@@ -2034,6 +2079,8 @@ def lint(paths, base=None):
     """
     findings = []
     added_lines_cache = {}
+    if base:
+        findings.extend(changed_set_hygiene(base))
     for f in collect_files(paths):
         if not f.is_file():
             # A path deleted by the change under review has no lines to scope to.
