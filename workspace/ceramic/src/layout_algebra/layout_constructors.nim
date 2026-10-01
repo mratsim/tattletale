@@ -108,15 +108,28 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
   ## if no transformation was applied to the stream.
   ## Otherwise the layout is reconstructed from elements.
   ##
-  ## An empty builder emits make_layout(1, 0)
+  ## An empty builder emits make_layout(1, 0).
   let (sh, shV) = tb.emit(0, emitScalarForSize1 = true)
   let (st, stV) = tb.emit(1, emitScalarForSize1 = true)
-  if sh.len == 0:
+  if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
     (bindSym"make_layout".newCall(IntCT(1), newLit(0)), shV and stV)
   elif ctor.isNil():
     (bindSym"make_layout".newCall(sh, st), shV and stV)
   else:
     (ctor.newCall(sh, st), shV and stV)
+
+proc appendDimension*(builder: var TupleBuilderNested;
+                      pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
+  ## Append a fold's pair set as one dimension slot.
+  if pairs.len == 1:
+    builder.append(pairs[0].shape, pairs[0].stride)
+    return
+  builder.append(TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true),
+                 TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true))
+  for p in pairs:
+    builder.append(p.shape, p.stride)
+  builder.append(TupleStreamEvent(depth: 0, kind: kClose, verbatim: true),
+                 TupleStreamEvent(depth: 0, kind: kClose, verbatim: true))
 
 # ═══════════════════════════════════════════════════════════════
 #  destructureLayout, layout AST -> (shape, stride) expressions
@@ -129,8 +142,9 @@ func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shap
   ## - lvalue emits `layout.shape` / `layout.stride` field reads
   ## - Layout object constructor, possibly wrapped in a StmtListExpr:
   ##   strips it, the base tuples pass through as-is
-  ## - layout-valued call materializes once through evalOnceAs,
-  ##   the binding is appended to `resultStmt`
+  ## - layout-valued call or a `typeof(make_layout(...))` alias-typed
+  ##   value materializes once through evalOnceAs, the binding is
+  ##   appended to `resultStmt`
   ##
   ## Args:
   ##   - resultStmt
@@ -144,7 +158,7 @@ func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shap
   ##   - layoutAst semantically type-checks as a Layout
   let typ = layoutAst.getTypeInst()
   let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
-  doAssert layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout"),
+  doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
     "destructureLayout: expected a Layout, got " & typ.repr
   let inner = if layoutAst.kind == nnkStmtListExpr: layoutAst[^1] else: layoutAst
   if inner.kind == nnkObjConstr:
@@ -154,9 +168,17 @@ func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shap
           result.shape = field[1]
         elif field[0].eqIdent("stride"):
           result.strides = field[1]
+    # the semchecked constructor fields wrap the base tuples
+    # in a hidden conversion, unwrap it.
+    if result.shape.kind == nnkHiddenSubConv: result.shape = result.shape[^1]
+    if result.strides.kind == nnkHiddenSubConv:
+      result.strides = result.strides[^1]
     doAssert result.shape != nil and result.strides != nil,
       "destructureLayout: Layout constructor without shape/stride fields"
-  elif layoutAst.kind in {nnkCall, nnkCommand} or inner.kind in {nnkCall, nnkCommand}:
+  elif layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
+      inner.kind in {nnkCall, nnkCommand}:
+    # A layout-valued call, or a value typed through
+    # a `typeof(make_layout(...))` alias symbol.
     let alias = ident("destructuredLayout")
     resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
     result.shape = alias.newDotExpr(ident"shape")

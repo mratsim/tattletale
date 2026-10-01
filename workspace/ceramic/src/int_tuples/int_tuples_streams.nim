@@ -182,7 +182,10 @@ func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
 
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
-  (tb.completed[id], tb.verbatim)
+  var node = tb.completed[id]
+  if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
+    node = node[0]
+  result = (node, tb.verbatim)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  onLeaves, consumer-side event ingest

@@ -5,7 +5,6 @@
 ##
 ## Compile-time-only ops of the module carry no rows
 ## - flatLeaves takes NimNode
-## - countLeaves folds to a literal
 ## - mapLeavesWith identity body returns t verbatim
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
@@ -17,7 +16,7 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# mapLeavesWith over a runtime leaf map, scaleBy call-site shape, divide-chain pair-tuple input, leaf read keeps the row
+# mapLeavesWith over a runtime leaf map, divide-chain pair-tuple input, leaf read keeps the row
 const mapLeavesMsl = metal:
 # tiles-allow measured kernel, the call site reads a tuple leaf raw
   proc mapLeavesKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =

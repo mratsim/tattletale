@@ -150,13 +150,6 @@ macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   ##   flatMapLeaves((2, 3), it * 10)       → (20, 30)
   flatMapLeavesImpl(t, body)
 
-macro countLeaves*(t: typed): untyped =
-  ## Number of leaves of the (possibly nested) IntOrIntTuple `t`.
-  var n = 0
-  for _ in t.tupleFlatten():
-    inc n
-  result = newLit(n)
-
 # ═══════════════════════════════════════════════════════════════════════
 #  concatFlat, the leaves of two tuples as one flat tuple
 # ═══════════════════════════════════════════════════════════════════════

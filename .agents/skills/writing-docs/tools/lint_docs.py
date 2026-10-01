@@ -12,21 +12,19 @@ Rule table (rule | trigger | severity):
 | rule-id              | trigger                                                                                           | severity |
 | -------------------- | ------------------------------------------------------------------------------------------------- | -------- |
 | banned-vocab         | a blocklist word (EXAMPLES.md, plus operator-extended entries)                                    | counted  |
-| the-opener           | a title line or heading opens with the article "The" (title position = air or separator above or below) | counted  |
-| the-fragment         | a noun phrase opening on the/The that carries no verb, as a sentence or comma segment                 | counted  |
+| the-opener           | a title line or heading opens with the article "The" (prose may open with The)                         | counted  |
 | semicolon            | a semicolon in prose                                                                              | counted  |
 | em-dash              | an em-dash or en-dash in prose                                                                    | counted  |
-| line-length          | a prose line over 180 characters                                                                  | counted  |
+| line-length          | a prose line over 140 characters                                                                  | counted  |
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| colon-inline         | a prose colon followed by prose on the same line while the next comment line carries prose          | counted  |
 | unit-split           | a line opens on a severed one-word continuation ("apply,")                                        | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
-| single-word-eol      | a 1-2 word stub under 10% of the cap, directly after a period- or comma-final prose line          | counted  |
+| single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
 | bullet-list-length   | a bullet list with 4 or more items                                                                | counted  |
-| bullet-item-length   | a single bullet item spanning 4 or more lines                                                     | counted  |
+| bullet-item-length   | a single bullet item spanning 5 or more lines                                                     | counted  |
 | table-separator      | a table with no |---| separator row after the header                                              | counted  |
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
 | table-cell-wall      | a table cell over 30 words                                                                        | counted  |
@@ -40,9 +38,8 @@ Rule table (rule | trigger | severity):
 | how-narration        | a doc narrates the how: "This function...", "we iterate", "make sure"                             | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
-| missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
-| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 180-char line          | counted  |
+| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -96,9 +93,8 @@ writing the fixed text back.
 | mechanical class            | transform                                                                                                        |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
-| single-word-eol             | fuse the stub into the severed line above, or give the phrase its full line                                |
+| single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
-| colon-inline                | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean, the next comment line being air exempts |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
@@ -117,10 +113,14 @@ import tokenize
 from collections import Counter
 from pathlib import Path
 
-PROSE_CAP = 180
-
+PROSE_CAP = 140
+SINGLE_WORD_EOL_PREV_MAX = 110
 WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
+# A ##-doc line indented this deep past the marker is worked-example or
+# diagram content, air under the wall and stub rules (prose wrap sits at
+# 2-3, nothing intentional is written that deep).
+DEEP_EXAMPLE_INDENT = 4
 # A table cell over this many words is a wall of prose in a cell,
 # split it into bullets or a diagram.
 TABLE_CELL_MAX_WORDS = 30
@@ -129,37 +129,12 @@ MODULE_HEADER_MAX_LINES = 8
 # spans at most 3 lines, a 4-item list is banned, longer bullet walls
 # belong in a table or diagram.
 BULLET_LIST_MAX_ITEMS = 3
-BULLET_ITEM_MAX_LINES = 3
+BULLET_ITEM_MAX_LINES = 4
 
 ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
 CONNECTIVE_EOL = {"with", "of", "for", "to", "in", "and", "or", "on", "at",
                   "by", "from", "as", "so", "then", "when"}
 ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "cf"}
-
-# Verb detection for the-fragment: auxiliaries count directly, an -s word
-# counts as a finite verb (third person or a plural noun, which is an
-# accepted false negative). -ed and -ing words read as participles inside
-# noun phrases and never count, so "the documented divergence" stays a
-# fragment.
-FRAGMENT_AUX = frozenset((
-    "is", "are", "was", "were", "be", "been", "being", "am",
-    "has", "have", "had", "does", "do", "did", "will", "would",
-    "shall", "should", "can", "could", "may", "might", "must", "not"))
-FRAGMENT_S_STOP = frozenset((
-    "this", "its", "as", "us", "plus", "minus", "less", "across",
-    "always", "perhaps", "status", "toward", "towards"))
-
-
-def _has_verb(seg):
-    """True when the segment carries a verblike token under the conservative
-    the-fragment heuristic."""
-    for tok in re.findall(r"[A-Za-z'-]+", seg):
-        tl = tok.lower().strip("'-")
-        if tl in FRAGMENT_AUX:
-            return True
-        if tl.endswith("s") and len(tl) > 2 and tl not in FRAGMENT_S_STOP:
-            return True
-    return False
 
 # Sentence starters that legitimately precede the bare word `newline`.
 # Any other Capitalized + `newline` adjacency is escape residue.
@@ -194,7 +169,7 @@ CONTRACT_MARKER_RE = re.compile(
     r"\b(?:contract|precondition|postcondition|invariants?|expected input|"
     r"input shapes|output shape|lifetime|data flow)\b", re.IGNORECASE)
 
-# Exported Nim declarations the missing-doc rule covers (conservative shapes).
+# Exported Nim callable declarations the structure rules read (conservative shapes).
 NIM_EXPORTED_CALLABLE_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter)\s+(\w+)\*(?:\s*\[|\s*\()")
 # Proc, func, and template definition lines whose name carries an Of suffix.
@@ -205,7 +180,7 @@ OF_SUFFIX_DECL_RE = re.compile(
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
 
-# The doc-above-type rule. The doc comment of a type lives inside
+# The doc-above-type rule. The house doc comment of a type lives inside
 # its body, above the fields it describes (the placement object fields
 # use), a ## block directly above the declaration does not attach that way.
 #
@@ -231,6 +206,7 @@ NARRATION = [
     (r"\bfor now\b", "temporal marker (state the invariant instead)"),
     (r"\bnow that\b", "temporal connective (state the resulting state instead)"),
     (r"\bno longer\b", "past-state narration (describe the code as it is now)"),
+    (r"\bused to\b", "past-state narration (describe the code as it is now)"),
     (r"\bwas (?:buggy|broken|wrong|failing|incorrect)\b",
      "past-state narration (state the invariant instead)"),
     (r"\broot cause\b", "bug postmortem label (state the invariant instead)"),
@@ -263,7 +239,7 @@ ARTIFACT = [
 
 # Narration of the how over the what (the how-narration rule, advisory).
 HOW_NARRATION = [
-    (r"^\s*This (?:function|method|class|procedure|proc|loop|test) ",
+    (r"^\s*This (?:function|method|class|module|procedure|proc|loop|test) ",
      "narrates the code instead of stating the contract"),
     (r"^\s*Here,? we\b", "narrates the author's walk-through"),
     (r"^\s*We (?:iterate|walk|loop|increment|start by|first)\b",
@@ -322,7 +298,7 @@ def _probe_exempt(line):
 BANNED = [
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
-     r"|\bno longer\b|\bas of \b",
+     r"|\bno longer\b|\bused to \b|\bas of \b",
      None, "historical and temporal prose is banned, state the present contract "
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
@@ -336,8 +312,6 @@ BANNED = [
     (r"\bride\b|\brides\b|\briding\b|\bridden\b|\brode\b", None,
      "use sit on, carry, or restate the mechanism"),
     (r"\bbite\b|\bbites\b", None, "use chunk, step, or case"),
-    (r"\bclosed[- ]form\b", None,
-     "use the direct (T):(d) divide, the direct formula, or per-dimension arithmetic"),
     (r"\bmissions?\b", None, "use the module's real name or path"),
     (r"\bdigests?\b",
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
@@ -439,36 +413,27 @@ RULES = {
     "banned-vocab": Rule("banned-vocab", True,
                          "a blocklist word (EXAMPLES.md, plus operator-extended entries)"),
     "the-opener": Rule("the-opener", True,
-                       "a title line or heading opens with the article \"The\" "
-                       "(title position = air or separator above or below; "
-                       "prose inside a paragraph may open with The)"),
-    "the-fragment": Rule("the-fragment", True,
-                         "a noun phrase opening on the/The that carries no verb, as a sentence or comma segment"),
+                       "a title line or heading opens with the article \"The\" (prose may open with The)"),
     "semicolon": Rule("semicolon", True, "a semicolon in prose"),
     "em-dash": Rule("em-dash", True, "an em-dash or en-dash in prose"),
-    "line-length": Rule("line-length", True, "a prose line over 180 characters"),
+    "line-length": Rule("line-length", True, "a prose line over 140 characters"),
     "article-eol": Rule("article-eol", True,
                         "a line ends on a dangling article or a stranded possessive"),
     "stray-fragment": Rule("stray-fragment", True,
                            "a line ends on a bare connective or a fragment after the period"),
     "colon-break": Rule("colon-break", True,
                         "a colon orphaned at line start or split from its lead phrase"),
-    "colon-inline": Rule("colon-inline", True,
-                         "a prose colon followed by prose on the same line "
-                         "while the next comment line carries prose"),
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "single-word-eol": Rule("single-word-eol", True,
-                            "a 1-2 word prose stub under 10% of the cap, "
-                            "directly after a period- or comma-final line, "
-                            "backticked-token-only lines are air"),
+                            "a 1-2 word stub line with reflow room on the previous line"),
     "doc-above-type": Rule("doc-above-type", True,
                            "a ## block sits directly above a type declaration"),
     "bullet-list-length": Rule("bullet-list-length", True,
                                "a bullet list with 4 or more items"),
     "bullet-item-length": Rule("bullet-item-length", True,
-                               "a single bullet item spanning 4 or more lines"),
+                               "a single bullet item spanning 5 or more lines"),
     "table-separator": Rule("table-separator", True,
                             "a table with no |---| separator row after the header"),
     "table-mispadding": Rule("table-mispadding", True,
@@ -494,15 +459,12 @@ RULES = {
                                  "a module header past 8 tight prose lines"),
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
-    # "missing-doc": Rule("missing-doc", True,
-    #                     "a public item with no doc comment (exported Nim proc or type, module-level Python def or class)"),
-    # Disabled per owner ruling: the missing-doc rule targeted older LLM models.
     "doc-above-proc": Rule("doc-above-proc", True,
-                           "a ## block directly above a proc or func declaration, the doc comment is the first body line"),
+                           "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
                              "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
     "sig-wrap": Rule("sig-wrap", True,
-                     "a proc or func signature wrapped across lines while the joined form fits a 180-char line"),
+                     "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,
                           "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
@@ -532,14 +494,18 @@ def is_diagram(text):
     """Returns True for a spatially-structured diagram line.
 
     A line is a diagram when it carries box-drawing characters, a mermaid
-    diagram token, or 2+ arrow markers. A single `-->` or `→` in prose is
-    an arrow for readability, not a diagram, so a line like
-    `s --> t = base(s) xor b` stays prose under the rules.
+    diagram token, 2+ arrow markers, or 2+ runs of 2+ spaces (aligned
+    columns, the worked-example shape). Prose rewrap collapses space runs
+    to single spaces, so aligned lines are never prose; a single `-->` or
+    `→` in single-spaced prose is an arrow for readability, not a diagram,
+    so a line like `s --> t = base(s) xor b` stays prose under the rules.
     """
     if any(ch in DIAGRAM_CHARS for ch in text):
         return True
     if (text.count("→") + text.count("←")
             + text.count("-->") + text.count("──") >= 2):
+        return True
+    if len(re.findall(r" {2,}", text)) >= 2:
         return True
     if re.match(r"^(?:graph|flowchart|sequenceDiagram|stateDiagram|erDiagram|"
                 r"classDiagram)\b", text.strip()):
@@ -996,12 +962,8 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
             warning=warning))
 
 
-def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
-               standalone=True, trailing=False):
-    """Runs the per-line rules over one prose line.
-
-    A trailing comment anchors to its code item: it is never a title
-    position, so the title rules stay off it."""
+def check_line(path, n, c, kind, is_nim, prev_text, findings):
+    """Runs the per-line rules over one prose line."""
     if not c:
         return
     bare = strip_backticks(c)
@@ -1010,43 +972,13 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
     # The title flag fires on a short colon-terminated line.
     # Every comma-separated title segment opens on a noun phrase,
     # including the lowercase article form.
-    if c.endswith(":") and not trailing:
+    if c.endswith(":"):
         segs = [s.strip() for s in bare.split(",") if s.strip()]
         if segs and all(len(s.split()) <= 8 for s in segs) and any(
                 s.split()[0].lower() == "the" for s in segs):
             findings.append(Finding(
                 path, n, "the-opener",
                 "title opens with the (open with a noun phrase)"))
-    # The article ban targets titles and subtitles: a line is a title
-    # position only when air or a separator sits above or below it, prose
-    # inside a paragraph block keeps its The opener legal.
-    lead = bare.lstrip("-*+ ")
-    words = lead.split()
-    if (not c.endswith(":") and standalone and not trailing and words
-            and words[0].lower() == "the"):
-        findings.append(Finding(
-            path, n, "the-opener",
-            "prose opens with the (open with a noun phrase)"))
-    if kind != "fence":
-        # A noun phrase opening on the/The is a fragment when it carries no
-        # verb. Sentence segments and comma segments both count. A first
-        # segment opening on the stays out, the-opener already covers that
-        # line. Verb detection is conservative: auxiliaries and -s words
-        # only, -ed and -ing words read as participles inside fragments and
-        # stay unverblike.
-        segs = re.split(r"[.!?](?:\s+|$)|,\s+", bare)
-        for k, seg in enumerate(segs):
-            seg = seg.strip("-*+ \"'()")
-            ws = seg.split()
-            if not ws or ws[0].lower() != "the":
-                continue
-            if k == 0 and words and words[0].lower() == "the":
-                continue
-            if _has_verb(seg):
-                continue
-            findings.append(Finding(
-                path, n, "the-fragment",
-                "noun phrase opening on the carries no verb: \"%s\"" % seg[:60]))
     if kind == "fence":
         # Fenced content is code-with-layout.
         # - the vocabulary rules apply
@@ -1074,23 +1006,6 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
                 path, n, "banned-vocab",
                 "banned vocabulary: '%s' (%s)" % (m.group(0), hint)))
         return
-    # A prose colon ends its line under the colon-inline rule.
-    # What it introduces goes on the next lines, never the same line.
-    # URLs keep their scheme colon.
-    # Math definition lines are exempt: a colon introducing a call or an
-    # equals-sign definition states math, not prose.
-    # A colon tail ending at air stays: the next comment line holds no
-    # prose words, so the inline enumeration closes the entry.
-    cm = re.search(r":\s+\S", bare)
-    if cm and "://" not in bare[:cm.start() + 2]:
-        tail = bare[cm.end():].lstrip()
-        if not re.match(r"[\w`][\w`\[\].]*\s*(\(|=)", tail):
-            nxt = next_text.get(n, "") if next_text else ""
-            if strip_backticks(nxt).split():
-                findings.append(Finding(
-                    path, n, "colon-inline",
-                    "a prose colon is followed by prose on the same line "
-                    "(move what it introduces to the next lines)"))
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
@@ -1155,7 +1070,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings, next_text=None,
             findings.append(Finding(
                 path, n, "stray-fragment",
                 "line ends on the bare connective `%s`" % tok))
-    m = re.search(r"(?<![.\d])(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?<!cf)\.\s+(\S+(?:\s+\S+)?)$", c)
+    m = re.search(r"(?<![.\d])\.\s+(\S+(?:\s+\S+)?)$", bare)
     if m:
         lead = m.group(1).split()[0].strip(".,;:()'\"*").lower()
         if lead not in ABBREVIATIONS and "`" not in m.group(1):
@@ -1549,7 +1464,7 @@ def check_doc_above_type(path, text, findings):
 
 
 SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func)\b")
-SIG_WRAP_MAX = 180
+SIG_WRAP_MAX = 140
 
 
 def nim_sig_wrap_checks(path, text, findings):
@@ -1704,8 +1619,7 @@ def nim_structure_checks(path, text, header_nos, findings):
     """Runs the Nim structure rules over the declarations, the shapes
     stay conservative single-line forms.
     - doc-above-proc bans the ## block above a proc or func declaration
-    - the doc comment of a proc or func is the first body line
-    - missing-doc plus missing-contract read the body doc block
+    - the house doc comment of a proc or func is the first body line
     - exported types are documented by a doc block above them or by the
       ## field docs inside the body, a ## block directly above the
       declaration is banned (doc-above-type)"""
@@ -1726,7 +1640,7 @@ def nim_structure_checks(path, text, header_nos, findings):
             if above_banned:
                 findings.append(Finding(
                     path, i + 1, "doc-above-proc",
-                    "## above the declaration: the doc comment is "
+                    "## above the declaration: the house doc comment is "
                     "the first body line"))
             # the declaration may span several lines, the body opens after
             # the signature terminates on its '=' or ':' line, mid-signature
@@ -1765,16 +1679,13 @@ def nim_structure_checks(path, text, header_nos, findings):
                     findings.append(Finding(
                         path, body + 1, "missing-contract",
                         "multi-line doc states no contract marker "
-                        "(add Args, Returns, Precondition)", warning=True))
-            else:
-                # missing-doc disabled per owner ruling (older LLM models)
-                pass
+                        "(add Args, Returns, Precondition, or bullet the contract)"))
             continue
         if re.match(r"^\s*(?:proc|func)\b", line):
             if above_banned:
                 findings.append(Finding(
                     path, i + 1, "doc-above-proc",
-                    "## above the declaration: the doc comment is "
+                    "## above the declaration: the house doc comment is "
                     "the first body line"))
             continue
         tm = NIM_EXPORTED_TYPE_RE.match(line)
@@ -1796,8 +1707,6 @@ def nim_structure_checks(path, text, header_nos, findings):
             j -= 1
             depth += 1
         if not doc_lines and not _type_has_field_docs(lines, i):
-            # missing-doc disabled per owner ruling (older LLM models)
-            pass
             continue
         prose = [(n, c) for n, c in reversed(doc_lines) if c and not structural(c)]
         if (len(prose) >= 3
@@ -1805,7 +1714,7 @@ def nim_structure_checks(path, text, header_nos, findings):
             findings.append(Finding(
                 path, prose[0][0], "missing-contract",
                 "multi-line doc states no contract marker "
-                "(add Args, Returns, Precondition)", warning=True))
+                "(add Args, Returns, Precondition, or bullet the contract)"))
 
 
 def py_structure_checks(path, tree, func_docs, findings):
@@ -1826,9 +1735,6 @@ def py_structure_checks(path, tree, func_docs, findings):
             continue
         if node.name.startswith("_") or node.name.startswith("test"):
             continue
-        if node.body[0].lineno not in documented:
-            # missing-doc disabled per owner ruling (older LLM models)
-            pass
     for start, contents in func_docs:
         prose = [c for c in contents if c and not structural(c)]
         if (len(prose) >= 3
@@ -1837,7 +1743,7 @@ def py_structure_checks(path, tree, func_docs, findings):
             findings.append(Finding(
                 path, start, "missing-contract",
                 "multi-line doc states no contract marker "
-                "(add Args, Returns, Precondition)", warning=True))
+                "(add Args, Returns, Precondition, or bullet the contract)"))
 
 
 def scan(path, text, findings):
@@ -1890,38 +1796,10 @@ def scan(path, text, findings):
                 pass
             py_structure_checks(path, tree, meta["func_docs"], findings)
 
+    prev_prose = None
     prev_text = {}
-    next_text = {}
     for n, c, kind, _, _ in entries:
         prev_text[n] = c
-    if is_nim:
-        # adjacency rides the raw lines, dropped bare-# air lines must count
-        raws = text.splitlines()
-        for e in entries:
-            n = e[0]
-            if n >= len(raws):
-                continue
-            s = raws[n].strip()
-            if s.startswith("#"):
-                content = s.lstrip("#").strip()
-                if content and not set(content) <= {"#", "-", "═", " "}:
-                    next_text[n] = content
-    else:
-        for i, e in enumerate(entries):
-            if i + 1 < len(entries):
-                next_text[e[0]] = entries[i + 1][1]
-
-    raws = text.splitlines()
-
-    def air_or_sep(raw):
-        s = raw.strip()
-        if not s:
-            return True
-        if s.startswith("#"):
-            core = s.lstrip("#").strip()
-            return bool(core) and set(core) <= {"#", "-", "═", "─", "━", " "}
-        return False
-
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
@@ -1930,14 +1808,11 @@ def scan(path, text, findings):
         check_missing_diagram(path, block, findings)
         first = next(((e[0], e[1], e[2]) for e in block if e[1] and e[2] != "heading"),
                      None)
+        blank_nos = {e[0] for e in block if not e[1]}
         run = []
         air_run = []
         prev_bullet = False
-        last_entry = None
         for n, c, kind, indent, trailing in block:
-            prev_entry, last_entry = last_entry, c
-            standalone = (n <= 1 or air_or_sep(raws[n - 2])) or \
-                (n >= len(raws) or air_or_sep(raws[n]))
             if kind == "heading":
                 if strip_backticks(c).split()[:1] == ["The"]:
                     findings.append(Finding(
@@ -1958,12 +1833,11 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
-                check_line(path, n, c, kind, is_nim, prev_text, findings,
-                           next_text, standalone, trailing)
+                check_line(path, n, c, kind, is_nim, prev_text, findings)
                 continue
-            check_line(path, n, c, kind, is_nim, prev_text, findings,
-                       next_text, standalone, trailing)
-            if structural(c):
+            check_line(path, n, c, kind, is_nim, prev_text, findings)
+            deep_example = block_is_doc and indent >= DEEP_EXAMPLE_INDENT
+            if structural(c) or deep_example:
                 flush_wall(path, run, findings)
                 run = []
             if block_is_doc or not is_nim:
@@ -1978,22 +1852,30 @@ def scan(path, text, findings):
                 if structural(c):
                     air_run.append((n, True))
                     prev_bullet = bool(BULLET_RE.match(c))
+                elif deep_example:
+                    air_run.append((n, True))
+                    prev_bullet = False
                 else:
                     continuation = indent > 0 and prev_bullet
                     air_run.append((n, continuation))
                     prev_bullet = continuation
-            if structural(c):
+            if structural(c) or deep_example:
                 continue
             wc = len(words(strip_backticks(c)))
-            if (0 < wc <= 2 and not c.endswith(":") and prev_entry is not None
-                    and words(strip_backticks(prev_entry))
-                    and prev_entry.rstrip().endswith((".", ","))
-                    and len(c.strip()) * 10 < PROSE_CAP):
+            # a stub carrying inline code or math is a deliberate formula
+            # line, not lazy wrapping; a capitalized stub without terminal
+            # punctuation above a blank line is a heading fragment
+            if (wc <= 2 and "`" not in c and not c.endswith(":")
+                    and not (c[0:1].isupper()
+                             and not c.endswith((".", ",", ";"))
+                             and (n + 1) in blank_nos)
+                    and prev_prose is not None
+                    and len(prev_prose[1]) < SINGLE_WORD_EOL_PREV_MAX):
                 findings.append(Finding(
                     path, n, "single-word-eol",
-                    "a %d-word stub follows a period- or comma-final line at "
-                    "%d%% of the cap, fuse it into the line above or pad "
-                    "the phrase" % (wc, len(c.strip()) * 100 // PROSE_CAP)))
+                    "line ends on a %d-word stub, the previous line had room "
+                    "to reflow" % wc))
+            prev_prose = (n, c)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 
@@ -2168,7 +2050,7 @@ def lint_text(text, filename):
 # Every other class needs judgment about what the prose should say.
 MECHANICAL_RULES = frozenset((
     "article-eol", "stray-fragment", "single-word-eol",
-    "unit-split", "colon-inline", "table-alignment",
+    "unit-split", "table-alignment",
 ))
 
 # wall-no-air joins the transform triggers for the one-sentence merge but
@@ -2196,7 +2078,8 @@ NOQA_RE = re.compile(r"\s*noqa\b")
 # A line opening on a severed `word,` continuation (the unit-split shape).
 _COMMA_LEAD_RE = re.compile(r"^[a-z]+,")
 
-# A lowercase single-word colon lead, the colon-break shape the rules keep with their lead phrase.
+# A lowercase single-word colon lead, the colon-break shape the house
+# rules keep with their lead phrase.
 _COLON_TOKEN_RE = re.compile(r"^\w{1,15}:")
 
 
@@ -2231,7 +2114,7 @@ def _tail_bad(body):
     elif tok:
         if tok in ARTICLE_EOL or tok.endswith("'s") or tok in CONNECTIVE_EOL:
             return True
-    m = re.search(r"(?<![.\d])(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?<!cf)\.\s+(\S+(?:\s+\S+)?)$", c)
+    m = re.search(r"(?<![.\d])\.\s+(\S+(?:\s+\S+)?)$", bare)
     if m:
         lead = m.group(1).split()[0].strip(".,;:()'\"*").lower()
         if lead not in ABBREVIATIONS and "`" not in m.group(1):
@@ -2583,13 +2466,7 @@ def _para_candidates(para, width, findings, wall_lines):
     mech = [f for f in findings
             if f.rule in MECHANICAL_RULES and span[0] <= f.line <= span[1]]
     cands = []
-    colon_lines = [f.line for f in mech if f.rule == "colon-inline"]
-    if colon_lines:
-        cand = _colon_split_texts(para, width, colon_lines[0])
-        if cand is not None:
-            cands.append(cand)
-    rewrap_rules = MECHANICAL_RULES - {"colon-inline"}
-    if any(f.rule in rewrap_rules for f in mech):
+    if any(f.rule in MECHANICAL_RULES for f in mech):
         cand = _rewrap_texts(para, width)
         if cand is not None:
             cands.append(cand)
@@ -2599,36 +2476,6 @@ def _para_candidates(para, width, findings, wall_lines):
         if cand is not None and len(cand) <= 3:
             cands.append(cand)
     return cands
-
-
-def _colon_split_texts(para, width, line_no):
-    """Builds the colon-split candidate for one colon-inline line.
-
-    Output:
-    - the paragraph's new body lines with the lead ending on its colon
-      and the tail rewrapped two spaces deeper
-    - None when the tail would form a stub line or the lead itself
-      overflows the width
-    """
-    rec = next((r for r in para if r.no == line_no), None)
-    if rec is None:
-        return None
-    m = _first_prose_colon(rec.text)
-    if m is None:
-        return None
-    head = rec.text[:m.start()].rstrip() + ":"
-    tail = rec.text[m.start() + 1:].strip()
-    if len(head) < 3 or len(head) > width or len(_prose_tokens(tail)) < 3:
-        return None
-    tail_lines = _wrap_tokens(_prose_tokens(tail),
-                              width - _FIX_INDENT_STEP, 0)
-    if tail_lines is None:
-        return None
-    pad = " " * _FIX_INDENT_STEP
-    k = para.index(rec)
-    return ([r.text for r in para[:k]] + [head]
-            + [pad + ln for ln in tail_lines]
-            + [r.text for r in para[k + 1:]])
 
 
 def _rewrap_texts(para, width):
@@ -2657,24 +2504,6 @@ def _first_prose_colon(text):
         if text[:m.start()].count("`") % 2 == 0:
             return m
     return None
-
-
-def _bullet_split_texts(rec, width):
-    """Builds the colon-split candidate for one bullet lead line, the lead ending on its colon,
-    the tail its continuation, None on the usual split guards."""
-    m = _first_prose_colon(rec.text)
-    if m is None:
-        return None
-    head = rec.text[:m.start()].rstrip() + ":"
-    tail = rec.text[m.start() + 1:].strip()
-    if len(head) < 3 or len(head) > width or len(_prose_tokens(tail)) < 3:
-        return None
-    tail_lines = _wrap_tokens(_prose_tokens(tail),
-                              width - _FIX_INDENT_STEP, 0)
-    if tail_lines is None:
-        return None
-    pad = " " * _FIX_INDENT_STEP
-    return [head] + [pad + ln for ln in tail_lines]
 
 
 def _para_width(path, para, width):
@@ -2780,70 +2609,6 @@ def _fix_round(path, text, width):
     before = Counter(f.rule for f in findings)
     wall_lines = {f.line for f in findings if f.rule == _MERGE_RULE}
     raws = text.split("\n")
-    for line_no in sorted(f.line for f in findings
-                          if f.rule == "colon-inline" and f.line in bullets):
-        rec = bullets[line_no]
-        texts = _bullet_split_texts(rec, _para_width(path, [rec], width))
-        if texts is None:
-            continue
-        if (sorted(_prose_tokens(rec.text))
-                != sorted(t for ln in texts for t in _prose_tokens(ln))):
-            continue
-        new_text = "\n".join(raws[:line_no - 1]
-                             + _emit_paragraph([rec], texts)
-                             + raws[line_no:])
-        if new_text == text:
-            continue
-        after = []
-        scan(path, new_text, after)
-        # Advisory rules never set the exit code, so only the counted
-        # rules hold a transform back.
-        counts_after = Counter(f.rule for f in after
-                               if RULES[f.rule].counted)
-        before_counted = Counter(f.rule for f in findings
-                                 if RULES[f.rule].counted)
-        if any(counts_after[r] > before_counted.get(r, 0)
-               for r in counts_after):
-            continue
-        mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-        if (sum(counts_after[r] for r in mech_keys)
-                < sum(before[r] for r in mech_keys)):
-            return new_text
-    for para in paras:
-        span = (para[0].no, para[-1].no)
-        for texts in _para_candidates(para, _para_width(path, para, width),
-                                      findings, wall_lines):
-            if (sorted(t for r in para for t in _prose_tokens(r.text))
-                    != sorted(t for ln in texts for t in _prose_tokens(ln))):
-                continue
-            new_raws = _emit_paragraph(para, texts)
-            new_text = "\n".join(raws[:span[0] - 1] + new_raws
-                                 + raws[span[1]:])
-            if new_text == text:
-                continue
-            after = []
-            scan(path, new_text, after)
-            counts_after = Counter(f.rule for f in after)
-            if any(counts_after[r] > before.get(r, 0) for r in counts_after):
-                continue
-            mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-            if (sum(counts_after[r] for r in mech_keys)
-                    < sum(before[r] for r in mech_keys)):
-                return new_text
-    table_fix = _fix_first_table_run(path, text)
-    if table_fix[0] is not None:
-        after = []
-        scan(path, table_fix[0], after)
-        counts_after = Counter(f.rule for f in after)
-        if any(counts_after[r] > before.get(r, 0) for r in counts_after):
-            return None
-        mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-        if (sum(counts_after[r] for r in mech_keys)
-                < sum(before[r] for r in mech_keys)):
-            return table_fix[0]
-    return None
-
-
 def fix_file(path, text):
     """Runs the mechanical autofix over one file's text.
 

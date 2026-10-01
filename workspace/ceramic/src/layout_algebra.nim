@@ -77,7 +77,6 @@ export layouts.takeDimensions
 export layouts.selectDimensions
 export layouts.replaceDimension
 export layouts.zipDimensions
-export layouts.mapDimensionsWith
 export layouts.transform_layout
 
 # crd2idx, idx2crd, slice, dice, X/Y markers, call operator.

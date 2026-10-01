@@ -14,7 +14,7 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# compose of two static rank-2 layouts, the composeImpl path
+# compose of two static rank-2 layouts
 const composeStaticMsl = metal:
   proc composeStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let a = make_layout((4, 4), (1, 4))
@@ -22,7 +22,7 @@ const composeStaticMsl = metal:
     let r = compose(a, b)
     C[0] = float32 toIntVal crd2idx(r, (1, 1))
 
-# compose of a static rank-2 layout with a nested layout, the composeDistribute path
+# compose of a static rank-2 layout with a nested layout
 const composeNestedMsl = metal:
   proc composeNestedKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let a = make_layout((8, 8), (1, 8))
@@ -30,7 +30,7 @@ const composeNestedMsl = metal:
     let r = compose(a, b)
     C[0] = float32 toIntVal crd2idx(r, ((1, 1), (1, 1)))
 
-# compose with a runtime rank-1 LHS, the b-strides scaleBy path
+# compose with a runtime rank-1 LHS
 const composeRank1Msl = metal:
   proc composeRank1Kernel(C: ptr UncheckedArray[float32]; M: int32) {.global.} =
     let a = make_layout(int(M), 2)

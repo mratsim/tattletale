@@ -391,7 +391,6 @@ macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =
   ##   longer than the layout is a compile-time error
   ##
   ## A zero-rank tiler maps every layout dimension through `body` alone.
-  ## mapDimensionsWith delegates through this form.
   ##
   ## Returns the layout rebuilt dimension by dimension.
   ##
@@ -456,17 +455,4 @@ macro transform_layout*(layout: typed; tiler: typed; body: untyped): untyped =
     emitCall[2] = nnkTupleConstr.newTree(ct.stride)
   result.add emitCall
 
-macro mapDimensionsWith*[L: Layout](arg: L; body: untyped): untyped =
-  ## Map each dimension of Layout `arg` through `body`.
-  ##
-  ## - `it_l` binds to the current dimension, a rank-1 Layout
-  ## - `body` evaluates to the replacement per dimension
-  ##
-  ## Returns the layout rebuilt dimension by dimension.
-  ##
-  ## CuTe: transform_layout(l, f)
-  template mapDimsDelegate(l, t, b) =
-    transform_layout(l, t):
-      b
-  result = getAst(mapDimsDelegate(arg, (), body))
 

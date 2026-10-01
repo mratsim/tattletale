@@ -33,18 +33,6 @@ template makeIntTuple*(t: IntOrIntTuple): auto =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  maps
-# ═══════════════════════════════════════════════════════════════
-
-template scaleBy*(t: IntOrIntTuple, scale: int): auto =
-  t.mapLeavesWith():
-    it * scale
-
-template scaleBy*(t: IntOrIntTuple, scale: Int): auto =
-  t.mapLeavesWith():
-    it * scale
-
-# ═══════════════════════════════════════════════════════════════
 #  prefix and suffix scans
 # ═══════════════════════════════════════════════════════════════
 

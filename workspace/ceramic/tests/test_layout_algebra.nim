@@ -1622,10 +1622,4 @@ block:
   let r = transform_layout(l, (1, 1)):
     make_layout(it_l.shape, it_l.stride * it_t)
   doAssert $r == "(Int[2], Int[4], Int[8]):(1, 2, Int[3])", $r
-block:
-  ## [cute] mapDimensionsWith, the one-operand arity
-  let l = make_layout((2, 4), (1, 2))
-  let r = mapDimensionsWith(l):
-    make_layout(it_l.shape, it_l.stride * 2)
-  doAssert $r == "(Int[2], Int[4]):(Int[2], Int[4])", $r
-echo "    transform_layout: 4 cases OK"
+echo "    transform_layout: 3 cases OK"

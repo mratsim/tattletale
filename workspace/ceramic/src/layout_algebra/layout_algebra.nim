@@ -275,157 +275,111 @@ func complement*(layout: Layout; cosizeBound: tuple): auto =
 #  compose, apply a layout through another
 # ═══════════════════════════════════════════════════════════════
 
-proc emitLet(body: NimNode; name: string; expr: NimNode): NimNode {.compileTime.} =
-  ## Bind `expr` to a fresh let symbol appended to `body`, return the symbol.
-  let sym = genSym(nskLet, name)
-  body.add nnkLetSection.newTree(
-    nnkIdentDefs.newTree(sym, newEmptyNode(), expr))
-  sym
+macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
+  ## Nested walk over coalesced LHS and the destructured RHS:
+  ## - level 1: zip walk over the RHS shape and stride
+  ## - level 2: one dimension of B at a time is walked through A's dimensions.
+  ##   Each A dimension takes as many B coordinates as its size,
+  ##   and emits them as a (shape, stride) pair.
+  ##   The leftover B (shape, strides) carry into the next A dimension.
+  ##
+  ##   A = (2,3):(2,1) composed with B = 6:(-1)
+  ##     A's 2:2  takes 2 B coords -> pair (2, -2);  3 left, step -1
+  ##     A's 3:1  takes 3 B coords -> pair (3, -1);  none left
+  ##     result (2,3):(-2,-1)
+  result = newStmtList()
 
-proc composeFold(lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode];
-                 remSh, remSt: NimNode; remShV, remStV: int): NimNode {.compileTime.} =
-  ## Composition fold over LHS dimensions as one flat let-chain:
-  ## - remaining shape and stride carry static values beside their nodes
-  ## - a static-1 next shape or remaining shape skips the dimension
-  ## - otherwise the clamped remainder accumulates one (shape, stride) pair
-  let R = lhsShLeaves.len
-  var remShN = remSh
-  var remStN = remSt
-  var shV = remShV
-  var stV = remStV
-  var accSh, accSt: seq[NimNode]
-  let body = newNimNode(nnkStmtList)
-  for k in 0 ..< R:
-    if k == R - 1:
-      let scaled = nnkInfix.newTree(ident"*", remStN, lhsStLeaves[k])
-      if accSh.len == 0:
-        return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(remShN)),
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(scaled))))
-      if shV == 1:
-        return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSh)),
-          bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSt))))
-      return nnkStmtListExpr.newTree(body, bindSym"make_layout".newCall(
-        bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSh & @[remShN])),
-        bindSym"unwrap".newCall(nnkTupleConstr.newTree(accSt & @[scaled]))))
-    let shVk = lhsShTys[k].getStaticInt()
-    let stVk = lhsStTys[k].getStaticInt()
-    let absRemV = if stV != DynamicSentinel: abs(stV) else: DynamicSentinel
-    let nextShV = if shVk != DynamicSentinel and absRemV != DynamicSentinel:
-      ceil_div(shVk, absRemV)
-    else:
-      DynamicSentinel
-    let currShape = lhsShLeaves[k]
-    let absRem = body.emitLet("absRem", bindSym"abs".newCall(remStN))
-    if nextShV != 1 and shV != 1:
-      let clampedV = if nextShV != DynamicSentinel and shV != DynamicSentinel:
-        min(nextShV, shV)
+  let (aShape, aStrides) = destructureLayout(result, aLayout)
+  let shapeLeaves = aShape.tupleFlatten()
+  let strideLeaves = aStrides.tupleFlatten()
+
+  # level 1: the zip walk over the RHS shape and stride trees
+  var builder = TupleBuilderNested.new(2)
+  for (shapeEv, strideEv) in bShape.tupleStream().zip(bStrides.tupleStream()):
+    if shapeEv.kind != kLeaf:
+      builder.append(shapeEv, strideEv)
+      continue
+    if strideEv.leafTy.getStaticInt() == 0:
+      # a stride-0 RHS dimension maps every coordinate to offset 0,
+      # the pair is the RHS dimension itself, the LHS is untouched
+      builder.append(shapeEv.leaf, strideEv.leaf)
+      continue
+    if shapeLeaves.len == 1:
+      # a 1-leaf profile consumes nothing, the strides multiply, no lets
+      builder.append(shapeEv.leaf, strideEv.leaf * strideLeaves[0].leaf)
+      continue
+    # level 2: fold this RHS leaf over the flat LHS profile
+    var pairs: seq[tuple[shape, stride: NimNode]]
+    var remShape = shapeEv.leaf
+    var remStride = strideEv.leaf
+    var remShapeV = shapeEv.leafTy.getStaticInt()
+    var remStrideV = strideEv.leafTy.getStaticInt()
+    let R = shapeLeaves.len
+    for k in 0 ..< R:
+      let shapeLeaf = shapeLeaves[k].leaf
+      let strideLeaf = strideLeaves[k].leaf
+      let shVk = shapeLeaves[k].leafTy.getStaticInt()
+      let stVk = strideLeaves[k].leafTy.getStaticInt()
+      if k == R - 1:
+        if pairs.len == 0 or remShapeV != 1:
+          # no LHS leaf was consumed, the RHS leaf passes through
+          pairs.add (shape: remShape, stride: remStride * strideLeaf)
+        break
+      let absRemV = if remStrideV != DynamicSentinel: abs(remStrideV)
+                    else: DynamicSentinel
+      let absRem = result.newLetAsgn("absRem", abs(remStride))
+      let clampedV = if absRemV != DynamicSentinel and shVk != DynamicSentinel and remShapeV != DynamicSentinel:
+        min(ceil_div(shVk, absRemV), remShapeV)
       else:
         DynamicSentinel
-      if clampedV != DynamicSentinel:
-        doAssert shV mod clampedV == 0,
-          "compose: shape " & $shV & " and consumed shape " & $clampedV & " are not divisible"
-      let clamped = body.emitLet("clampedShape", bindSym"min".newCall(
-        bindSym"ceil_div".newCall(currShape, absRem), remShN))
-      remShN = body.emitLet("remainingShape", nnkInfix.newTree(ident"div", remShN, clamped))
-      accSh.add clamped
-      accSt.add nnkInfix.newTree(ident"*", remStN, lhsStLeaves[k])
-      if clampedV != DynamicSentinel:
-        shV = shV div clampedV
-    remStN = body.emitLet("remainingStride", nnkInfix.newTree(
-      ident"*",
-      bindSym"ceil_div".newCall(absRem, currShape),
-      bindSym"sign".newCall(remStN)))
-    if absRemV != DynamicSentinel and shVk != DynamicSentinel and stV != DynamicSentinel:
-      stV = ceil_div(absRemV, shVk) * sign(stV)
+      let clamped = result.newLetAsgn("clampedShape", min(ceil_div(shapeLeaf, absRem), remShape))
+      if clampedV != 1 and remShapeV != 1:
+        # a leaf whose consumed shape folds to 1 contributes nothing
+        # dynamic leaves never fold to 1
+        pairs.add (shape: clamped, stride: remStride * strideLeaf)
+        let remShUpdate = remShape div clamped
+        remShape = result.newLetAsgn("remainingShape", remShUpdate)
+        if clampedV != DynamicSentinel:
+          remShapeV = remShapeV div clampedV
+      let remStUpdate = ceil_div(absRem, shapeLeaf) * sign(remStride)
+      remStride = result.newLetAsgn("remainingStride", remStUpdate)
+      if absRemV != DynamicSentinel and shVk != DynamicSentinel:
+        remStrideV = ceil_div(absRemV, shVk) * sign(remStrideV)
+    appendDimension(builder, pairs)
 
-macro composeImpl(remainingShape, remainingStride: typed; lhsShapes, lhsStrides: typed): untyped =
-  ## Fold over LHS dimensions with a 2-state accumulator, the remaining
-  ## shape and stride, emitting one (shape, stride) dimension pair per
-  ## unconsumed LHS dimension.
-  ##
-  ## Returns the composed layout as an untyped node.
+  result.add builder.emitLayout().resultLayout
 
-  let remSh0 = genSym(nskLet, "remainingShape")
-  let remSt0 = genSym(nskLet, "remainingStride")
-  let remStV0 = remainingStride.getTypeInst().getStaticInt()
-  let lets = nnkLetSection.newTree(
-    nnkIdentDefs.newTree(remSh0, newEmptyNode(), remainingShape),
-    nnkIdentDefs.newTree(remSt0, newEmptyNode(), remainingStride))
-  # static stride-0 RHS dimension, every coordinate maps to offset 0
-  if remStV0 == 0:
-    result = nnkStmtListExpr.newTree(
-      lets, bindSym"make_layout".newCall(remSh0, remSt0))
-  else:
-    var lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys: seq[NimNode]
-    for (leaf, ty) in lhsShapes.tupleFlatten():
-      lhsShLeaves.add leaf
-      lhsShTys.add ty
-    for (leaf, ty) in lhsStrides.tupleFlatten():
-      lhsStLeaves.add leaf
-      lhsStTys.add ty
-    result = nnkStmtListExpr.newTree(lets, composeFold(
-      lhsShLeaves, lhsStLeaves, lhsShTys, lhsStTys, remSh0, remSt0,
-      remainingShape.getTypeInst().getStaticInt(), remStV0))
-
-func composeDistribute(lhsShapes, lhsStrides: tuple; rhsShapes, rhsStrides: tuple): auto =
-  ## Layer RHS dimensions one by one over the full coalesced LHS via mapDimensionsWith.
-  ## Nested RHS dimensions recurse into composeDistribute.
-  ## Scalar dimensions go directly to composeImpl.
-  mapDimensionsWith(make_layout(rhsShapes, rhsStrides)):
-    when it_l.shape is tuple:
-      composeDistribute(lhsShapes, lhsStrides, it_l.shape, it_l.stride)
-    else:
-      composeImpl(it_l.shape, it_l.stride, lhsShapes, lhsStrides)
-
-
-func compose*[A, B: Layout](a: A, b: B): auto =
+macro compose*[A, B: Layout](a: A, b: B): untyped =
   ## Layout composition.
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
   ##
   ## Divisibility of the consumed shape is a caller precondition.
-  ## Static leaves assert at compile time.
   ## Runtime shapes are unchecked.
-  when a.shape isnot tuple:
-    when b.stride is tuple:
-      when countLeaves(b.shape) != rank(b.shape):
-        composeDistribute((a.shape,), (a.stride,), b.shape, b.stride)
-      else:
-        make_layout(b.shape, flatMapLeaves(b.stride, it * a.stride))
-    else:
-      make_layout(flatMapLeaves(b.shape, it), b.stride * a.stride)
-  elif b.shape isnot tuple:
-    # Coalesce the LHS first, preserving trailing stride-0 dimensions
-    let flatA = coalesce_preserve_trailing(a)
-    when flatA.shape isnot tuple:
-      # flatA is rank-1, the result strides scale by flatA.stride
-      make_layout(b.shape, b.stride.scaleBy(flatA.stride))
-    else:
-      composeImpl(b.shape, b.stride, flatA.shape, flatA.stride)
+  result = newStmtList()
+  let (aShape, aStrides) = result.destructureLayout(a)
+  let (bShape, bStrides) = result.destructureLayout(b)
+
+  template composeDelegateCoalesced(aShape2, aStrides2, bShape2, bStrides2) =
+    composeImpl(coalesceBackward(aShape2, aStrides2, true), bShape2, bStrides2)
+  template composeDelegatePlain(aShape2, aStrides2, bShape2, bStrides2) =
+    composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
+
+  let aShapeIsTuple = layoutTypeArgs(a).shapeTy.kind in {nnkTupleConstr, nnkTupleTy}
+  if aShapeIsTuple:
+    result.add getAst(composeDelegateCoalesced(aShape, aStrides, bShape, bStrides))
   else:
-    # Coalesce the LHS first, preserving trailing stride-0 dimensions
-    let flatA = coalesce_preserve_trailing(a)
-    when flatA.shape isnot tuple:
-      # flatA is rank-1, preserve B's nesting
-      make_layout(b.shape, b.stride.scaleBy(flatA.stride))
-    else:
-      composeDistribute(flatA.shape, flatA.stride, b.shape, b.stride)
+    result.add getAst(composeDelegatePlain(aShape, aStrides, bShape, bStrides))
+
 
 macro compose*(layout: Layout; tiler: tuple): untyped =
-  ## Compose with a tiler tuple, one tiler element per dimension.
+  ## Layout composition
   ##
-  ## Contract:
-  ## - dimension i composes with `tiler[i]`
-  ## - dimensions past the tiler length drop, CuTe and pycute agree
-  ## - a tiler longer than the layout is rejected at expansion
+  ## Returns a layout `R` such that `R(i) = A(B(i))` for all
+  ## `i` in `0 ..< cosize(B)`.
   ##
-  ## Tiler elements:
-  ## - a Layout composes by layout algebra
-  ## - an int/Int takes the dimension's first N positions
-  ## - `_` passes the dimension through whole
+  ## Divisibility of the consumed shape is a caller precondition.
   ##
   ## Example:
   ##   compose(make_layout((32, 8), (1, 32)), (16, _))

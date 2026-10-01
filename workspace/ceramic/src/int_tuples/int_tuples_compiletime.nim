@@ -54,6 +54,32 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
     DynamicSentinel
 
 # ═══════════════════════════════════════════════════════════════
+#  AST syntax sugar
+# ═══════════════════════════════════════════════════════════════
+
+func `*`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"*", a, b)
+
+func `div`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"div", a, b)
+
+func abs*(a: NimNode): NimNode {.compileTime.} =
+  bindSym"abs".newCall(a)
+
+func min*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"min".newCall(a, b)
+
+func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"ceil_div".newCall(a, b)
+
+func sign*(a: NimNode): NimNode {.compileTime.} =
+  bindSym"sign".newCall(a)
+
+proc newLetAsgn*(stmts: var NimNode; name: string; value: NimNode): NimNode {.compileTime.} =
+  result = genSym(nskLet, name)
+  stmts.add result.newLetStmt value
+
+# ═══════════════════════════════════════════════════════════════
 #  Constant foldable check
 # ═══════════════════════════════════════════════════════════════
 
