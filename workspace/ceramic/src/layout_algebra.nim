@@ -20,16 +20,6 @@
 ## | Inverses and analysis | `right_inverse`, `left_inverse`                                                |
 ## | Products              | `logical_product` through `tile_to_shape`                                      |
 ## | Pointer arithmetic    | `+%`                                                                           |
-##
-## Excluded names and their scope:
-##
-## | Excluded                                     | Scope                                   |
-## | -------------------------------------------- | --------------------------------------- |
-## | `getIndicesSortedByStride`                   | stride-sorted index permutation         |
-## | `complementImpl`                             | complement front-end over complementFlatImpl |
-## | `getMaxContiguous`, `getGaps`, `composeImpl` | inverse-chain and composition internals |
-## | `unwrap`                                     | macro helpers                           |
-## | `LayoutCT`                                   | macro helpers                           |
 
 import
   workspace/ceramic/src/int_tuples,

@@ -32,11 +32,6 @@ func tupleType*(n: NimNode): NimNode {.compileTime.} =
       t
   inner.getTypeImpl()
 
-func tupleTypeLen*(n: NimNode): int {.compileTime.} =
-  ## Length of the resolved tuple type node, callers guard with the tuple-kind check first.
-  let t = n.tupleType()
-  result = t.len
-
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
   ## Returns low(int) (DynamicSentinel) for non-static (dynamic int) elements.
