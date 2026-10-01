@@ -993,12 +993,11 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
         return
     # The title flag fires on a short colon-terminated line.
-    # Every comma-separated title segment opens on a noun phrase,
-    # including the lowercase article form.
+    # The title opens on a noun phrase, including the lowercase
+    # article form, comma segments after the opener are prose.
     if c.endswith(":"):
         segs = [s.strip() for s in bare.split(",") if s.strip()]
-        if segs and all(len(s.split()) <= 8 for s in segs) and any(
-                s.split()[0].lower() == "the" for s in segs):
+        if segs and all(len(s.split()) <= 8 for s in segs) and segs[0].split()[0].lower() == "the":
             findings.append(Finding(
                 path, n, "the-opener",
                 "title opens with the (open with a noun phrase)"))
