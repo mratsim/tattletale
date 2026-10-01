@@ -15,7 +15,7 @@
 ## | Construction          | `make_layout` and friends                                                      |
 ## | Views and selectors   | `dimension`, `groupDimensions`, `zipDimensions`                                               |
 ## | Indexing              | `crd2idx`, `idx2crd`, `slice`, `dice`, `X`/`Y`/`_`                             |
-## | Algebra               | `coalesce`, `filter_zeros`, `filter_inactive`, `complement`, `compose`         |
+## | Algebra               | `coalesce`, `complement`, `compose`                                            |
 ## | Partitioning          | `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `hier_unzip` |
 ## | Inverses and analysis | `right_inverse`, `left_inverse`                                                |
 ## | Products              | `logical_product` through `tile_to_shape`                                      |
@@ -66,7 +66,6 @@ export layout_constructors.make_fragment_like
 
 export layouts.dimension
 export layouts.isCompact
-export layouts.filter_zeros
 export layouts.padRight
 export layouts.padLeft
 export layouts.mapLeavesWith
@@ -85,17 +84,11 @@ export layouts.transform_layout
 export layout_indexing except hasUnderscoreImpl
 
 # ═══════════════════════════════════════════════════════════════
-#  Algebra: coalesce, filter, complement, compose
+#  Algebra: coalesce, complement, compose
 # ═══════════════════════════════════════════════════════════════
 
 ## Merge contiguous dimensions whose strides form a compact run.
 export layout_algebra.coalesce
-
-## Zero-out stride-0 dimensions, their shapes become Int[1].
-export layouts.filter_zeros
-
-## Drop inactive dimensions, size-1 shapes with stride 0.
-export layout_algebra.filter_inactive
 
 ## Complement of a layout, the stride-space layout covering
 ## every offset `layout` leaves unused.

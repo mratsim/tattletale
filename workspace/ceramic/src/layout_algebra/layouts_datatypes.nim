@@ -69,10 +69,13 @@ func cosize*(layout: Layout): auto =
         one)
     else:
       # Flat tuple: sum over elements
+      # a scalar stride broadcasts over the shape profile
+      let scalarStride = st.getTypeInst().kind != nnkTupleConstr
       result = one
       for i in 0 ..< shT.len:
         let s = newTree(nnkBracketExpr, sh, newLit(i))
-        let d = newTree(nnkBracketExpr, st, newLit(i))
+        let d = if scalarStride: st
+                else: newTree(nnkBracketExpr, st, newLit(i))
         let term = newCall(bindSym"*",
           newCall(bindSym"-", s, one),
           newCall(bindSym"abs", d))

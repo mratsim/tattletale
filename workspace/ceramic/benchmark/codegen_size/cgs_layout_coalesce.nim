@@ -28,13 +28,6 @@ const coalesceZerosMsl = metal:
     let r = coalesce(L)
     C[0] = float32 toIntVal crd2idx(r, 2)
 
-# filter_inactive, the coalesce(filter_zeros(...)) chain
-const filterInactiveMsl = metal:
-  proc filterInactiveKernel(C: ptr UncheckedArray[float32]) {.global.} =
-    let L = make_layout((4, 1), (1, 0))
-    let r = filter_inactive(L)
-    C[0] = float32 toIntVal crd2idx(r, 2)
-
 # coalesce of a runtime layout, the copy-chain pattern
 const coalesceDynMsl = metal:
   proc coalesceDynKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
@@ -47,5 +40,4 @@ const coalesceDynMsl = metal:
 cgsReport("cgs_layout_coalesce", [
   cgsReceipt("coalesceStaticKernel", coalesceStaticMsl),
   cgsReceipt("coalesceZerosKernel", coalesceZerosMsl),
-  cgsReceipt("filterInactiveKernel", filterInactiveMsl),
   cgsReceipt("coalesceDynKernel", coalesceDynMsl)])

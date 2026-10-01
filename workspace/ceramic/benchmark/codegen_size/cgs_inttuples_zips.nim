@@ -12,7 +12,7 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# zipLeavesWith over a stride/shape pair, filter_zeros body, static Int strides branch per type, runtime strides compare against 0
+# zipLeavesWith over a stride/shape pair, static Int strides branch per type, runtime strides compare against 0
 const zipLeavesMsl = metal:
 # tiles-allow measured kernel, the call site reads a tuple leaf raw
   proc zipLeavesKernel(C: ptr UncheckedArray[float32]; M, S: int32) {.global.} =

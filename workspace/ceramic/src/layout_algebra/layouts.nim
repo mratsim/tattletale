@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout transforms and selectors: dimension, filter_zeros, padRight/Left,
+## Layout transforms and selectors: dimension, padRight/Left,
 ## mapLeavesWith, zipDimensions, groupDimensions, upcast/downcast, etc.
 ##
 ## Re-exports `layouts_datatypes` (Layout type, predicates) and
@@ -44,50 +44,10 @@ func isCompact*(layout: Layout): bool =
   ## Does not coalesce first, size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
 
-func isCompact*(layout: static Layout): static bool =
+func isCompact*(layout: static Layout): static bool {.inline.} =
   ## True when strides match canonical column-major ordering.
   ## Does not coalesce first, size-1 dimensions may cause false negatives.
   layout === (layout.shape, col_major_strides(layout.shape))
-
-# ═══════════════════════════════════════════════════════════════
-#  filter_zeros, replace stride-0 shapes with Int[1]
-# ═══════════════════════════════════════════════════════════════
-
-template filter_zeros*(layout: Layout): auto =
-  ## Replace the shape of every stride-0 dimension with 1.
-  ##
-  ## Contract:
-  ## - nesting survives, shape profiles map leaf for leaf and stride
-  ##   tuples pass through verbatim
-  ## - a scalar stride broadcasts over the shape profile (CuTe repeat_like),
-  ##   both result profiles come out congruent, filter_inactive's coalesce
-  ##   call stays the one flattening point downstream
-  ## - a static Int[0] stride folds at compile time, a runtime stride
-  ##   compares against 0 at runtime where the shape leaf is runtime too,
-  ##   a static shape leaf passes through (it cannot shrink at runtime)
-  when layout.stride is tuple:
-    let sh = zipLeavesWith(layout.stride, layout.shape):
-      block:
-        when it_a is Int:
-          when it_a.V == 0: Int[1]() else: it_b
-        elif it_b is Int: it_b
-        else: (if it_a == 0: 1 else: it_b)
-    make_layout(sh, layout.stride)
-  else:
-    # scalar stride, broadcast over the shape profile
-    let sh = mapLeavesWith(layout.shape):
-      block:
-        when layout.stride is Int:
-          when layout.stride.V == 0: Int[1]() else: it
-        elif it is Int: it
-        else: (if layout.stride == 0: 1 else: it)
-    when sh is tuple:
-      # scalar strides fill to the shape profile
-      let st = mapLeavesWith(sh):
-        layout.stride
-      make_layout(sh, st)
-    else:
-      make_layout(sh, layout.stride)
 
 # ═══════════════════════════════════════════════════════════════
 #  Padding

@@ -19,6 +19,7 @@
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts {.all.}
 import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
@@ -503,87 +504,6 @@ proc runCosizeTests =
     doAssert d1 * cosize(l) === 4
   echo "  Cosize: 6 Python reference cases OK"
 
-# ═══════════════════════════════════════════════════════════════
-#  filter_zeros tests (ported from Python tensor-layouts test suite)
-#  Python's `filter` only removes stride-0 dimensions, which is
-#  exactly what filter_zeros → coalesce achieves.
-# ═══════════════════════════════════════════════════════════════
-
-proc runFilterZerosTests =
-  let d1 = 1
-  block:
-    let l = make_layout((64, 8, 8, 128), (8, 1, 0, 512))
-    let f = filter_zeros(l)
-    let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] === 64
-    doAssert d1 * fFlat[1] === 8
-    doAssert d1 * fFlat[2] === 1   # stride-0 dimension became size-1
-    doAssert d1 * fFlat[3] === 128
-
-  block:
-    let l = make_layout((3, 8, 8, 8), (16, 0, 0, 0))
-    let f = filter_zeros(l)
-    let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] === 3
-    doAssert d1 * fFlat[1] === 1  # stride-0 → size-1
-    doAssert d1 * fFlat[2] === 1
-    doAssert d1 * fFlat[3] === 1
-
-  block:
-    # nesting preserved, a stride-0 leaf's shape becomes 1 in place inside
-    # its nested dimension and the stride tuple passes through verbatim
-    let l = make_layout((2, (3, 4), 8), (1, (0, 2), 16))
-    let f = filter_zeros(l)
-    doAssert f.shape === (2, (1, 4), 8)
-    doAssert f.stride === (1, (0, 2), 16)
-
-  block:
-    # a scalar stride-0 under a nested shape collapses the nested shape
-    # to 1 at that leaf, the stride stays verbatim, and the coalesced
-    # result through filter_inactive is the flat (2, 8):(1, 16)
-    let l = make_layout((2, (3, 4), 8), (1, 0, 16))
-    let f = filter_zeros(l)
-    doAssert f.shape === (2, 1, 8)
-    doAssert f.stride === (1, 0, 16)
-    doAssert filter_inactive(l).shape === (2, 8)
-    doAssert filter_inactive(l).stride === (1, 16)
-
-  block:
-    # repeat_like edge, a scalar stride-0 over a nested shape fills 1s
-    # into the shape profile and the stride broadcasts to match, leaving
-    # a valid layout for cosize/coalesce/complement
-    let l = make_layout((8, 4), 0)
-    let f = filter_zeros(l)
-    doAssert f.shape === (1, 1)
-    doAssert f.stride === (0, 0)
-    doAssert cosize(f) === 1
-    doAssert filter_inactive(l).shape === 1
-    doAssert filter_inactive(l).stride === 0
-
-  block:
-    # a nonzero scalar stride keeps the shape, both sides fill to the profile
-    let l = make_layout((8, 4), 2)
-    let f = filter_zeros(l)
-    doAssert f.shape === (8, 4)
-    doAssert f.stride === (2, 2)
-
-  block:
-    # runtime stride leaves compare against 0 at runtime where the shape
-    # leaf is runtime too, zero shrinks the shape, nonzero keeps it
-    let s: int = 0
-    let n: int = 6
-    let m: int = 5
-    block:
-      let l = make_layout((n, m), (4, s))
-      let f = filter_zeros(l)
-      doAssert f.shape === (6, 1)
-      doAssert f.stride === (4, 0)
-    block:
-      let l = make_layout((n, m), (4, m))
-      let f = filter_zeros(l)
-      doAssert f.shape === (6, 5)
-      doAssert f.stride === (4, 5)
-  echo "  filter_zeros: 2 Python reference cases + 4 nesting/runtime cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  $ — stringify
@@ -1118,8 +1038,6 @@ proc runTests =
   runSizeTests()
   echo "--- Cosize ---"
   runCosizeTests()
-  echo "--- filter_zeros ---"
-  runFilterZerosTests()
   echo "--- Stringify ---"
   runStringifyTests()
   echo "--- Rank ---"

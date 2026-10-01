@@ -243,6 +243,130 @@ proc runNestedShapeIntegrationTests =
     doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
   echo "    PASS"
 
+#  Section 8. coalesce over a trailing size-1 dimension, the compose LHS path
+
+proc runCoalesceTrailingSizeOneTests =
+  ## A chain that reaches a trailing size-1 dimension's stride absorbs it,
+  ## a chain that stops short keeps the dynamic `Int[DynamicSentinel]`
+  ## marker and the marker must never enter the chain's arithmetic.
+  block:
+    ## (4,1):(1,4) ∘ 4:1: the (4,1) chain's span 4 reaches the trailing
+    ## dimension's stride 4, the size-1 dimension is absorbed
+    let r = compose(make_layout((4, 1), (1, 4)), make_layout(4, 1))
+    check r.shape, 4, Int[4]
+    check r.stride, 1, Int[1]
+  block:
+    ## (2,1):(1,3) ∘ 2:1: the (2,1) chain's span 2 falls short of stride 3,
+    ## the marker stays in the coalesced layout, the compose fold drops it
+    let r = compose(make_layout((2, 1), (1, 3)), make_layout(2, 1))
+    check r.shape, 2, Int[2]
+    check r.stride, 1, Int[1]
+  echo "    PASS"
+
+#  Section 9. complement skips inactive dimensions in its own walk
+
+proc runComplementInlineSkipTests =
+  ## The complement walk itself skips stride-0 and size-1 dimensions:
+  ## a stride-0 dimension maps every coordinate to offset 0 and a size-1
+  ## dimension covers a single offset, neither joins the gap-fill chain.
+  block:
+    ## dynamic shape, static stride-0 dimension: (n, m):(1, 0) behaves
+    ## as (n):(1), the complement is (ceil_div(64, n)):(n).
+    ## The stride-0 dimension's shape never enters the arithmetic
+    let n = 6
+    let m = 4
+    let r = complement(make_layout((n, m), (1, 0)), 64)
+    let rs = complement(make_layout((6, 4), (1, 0)), 64)
+    check rs.shape, 11, Int[11]
+    check rs.stride, 6, Int[6]
+    doAssert r.shape === rs.shape
+    doAssert r.stride === rs.stride
+  block:
+    ## scalar stride-0 broadcast over a dynamic shape profile: every
+    ## coordinate maps to offset 0, the complement is the full bound,
+    ## and the default bound (cosize = 1) collapses it to the (1):(1) mark
+    let n = 6
+    let m = 4
+    let r = complement(make_layout((n, m), 0), 32)
+    doAssert r.shape === 32
+    doAssert r.stride === 1
+    let rd = complement(make_layout((n, m), 0))
+    doAssert rd.shape === 1
+    doAssert rd.stride === 1
+  block:
+    ## static size-1 dimension under a dynamic shape: (1, n):(8, 3)
+    ## behaves as (n):(3), the complement is (3, ceil_div(32, 3n)):(1, 3n)
+    let n = 6
+    let r = complement(make_layout((1, n), (8, 3)), 32)
+    let rs = complement(make_layout((1, 6), (8, 3)), 32)
+    check rs.shape, (3, 2), (Int[3], Int[2])
+    check rs.stride, (1, 18), (Int[1], Int[18])
+    doAssert r.shape === rs.shape
+    doAssert r.stride === rs.stride
+  echo "    PASS"
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 10. coalesce over runtime layouts, double-eval safety
+# ═══════════════════════════════════════════════════════════════
+proc runCoalesceRuntimeLayoutTests =
+  # A runtime leaf is not visible at compile time: it never merges,
+  # it passes through with its own value between the static folds.
+  # The layout argument must be evaluated exactly once, a layout-valued
+  # call argument materializes through a single binding.
+  block:
+    var buildCount = 0
+    proc countedLayout(n, m: int): auto =
+      inc buildCount
+      make_layout((n, m), (1, n))
+    let r = coalesce(countedLayout(4, 8))
+    doAssert buildCount == 1,
+      "coalesce must evaluate a layout-valued argument exactly once"
+    doAssert r.shape === (4, 8)
+    doAssert r.stride === (1, 4)
+  block:
+    # a runtime scalar layout passes through unchanged
+    let n = 4
+    let s = 8
+    let r = coalesce(make_layout(n, s))
+    doAssert r.shape === 4
+    doAssert r.stride === 8
+    doAssert r(3) == 24
+  block:
+    # a runtime leaf blocks a merge the paired static layout performs,
+    # the static leaves around it still fold on their own values
+    let n = 2
+    let r = coalesce(make_layout((4, n, 8), (1, 4, 8)))
+    doAssert r.shape === (4, 2, 8)
+    doAssert r.stride === (1, 4, 8)
+    let rs = coalesce(make_layout((4, 2, 8), (1, 4, 8)))
+    check rs.shape, 64, Int[64]
+    check rs.stride, 1, Int[1]
+  echo "    PASS"
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 11. coalesce preserveTrailing, the marker survives the fold
+# ═══════════════════════════════════════════════════════════════
+proc runCoalescePreserveTrailingTests =
+  # With preserveTrailing the trailing size-1 dimension survives
+  # as an Int[DynamicSentinel] marker when the chain stops short of its stride,
+  # and is absorbed when the chain reaches it.
+  block:
+    ## the chain's span 2 stops short of stride 3, the marker stays
+    let r = coalesce(make_layout((2, 1), (1, 3)), true)
+    check r.shape, (2, DynamicSentinel), (Int[2], Int[DynamicSentinel])
+    check r.stride, (1, 3), (Int[1], Int[3])
+  block:
+    ## the chain's span 4 reaches stride 4, the size-1 dimension is absorbed
+    let r = coalesce(make_layout((4, 1), (1, 4)), true)
+    check r.shape, 4, Int[4]
+    check r.stride, 1, Int[1]
+  block:
+    ## every dimension is size-1, the whole layout collapses to the marker
+    let r = coalesce(make_layout((1, 1), (0, 0)), true)
+    check r.shape, DynamicSentinel, Int[DynamicSentinel]
+    check r.stride, 0, Int[0]
+  echo "    PASS"
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -259,6 +383,14 @@ proc runTests =
   runComposeZeroStrideTests()
   echo "── Section 7. Nested-shape indexing and Layout-tiler unzip ──"
   runNestedShapeIntegrationTests()
+  echo "── Section 8. coalesce over a trailing size-1 dimension ──"
+  runCoalesceTrailingSizeOneTests()
+  echo "── Section 9. complement skips inactive dimensions ──"
+  runComplementInlineSkipTests()
+  echo "── Section 10. coalesce over runtime layouts ──"
+  runCoalesceRuntimeLayoutTests()
+  echo "── Section 11. coalesce preserveTrailing marker ──"
+  runCoalescePreserveTrailingTests()
   echo "  All tests passed."
 
 when isMainModule:

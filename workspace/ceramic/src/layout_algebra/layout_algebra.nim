@@ -5,11 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout algebra: coalesce, filter_zeros, filter, sort.
+## Layout algebra: coalesce, complement, compose, divide, inverses, products.
 
 import std/macros
 import std/sequtils
-import std/algorithm
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
@@ -36,94 +35,113 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce, merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceBackward(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
-  var shLeaves, shTypes, stLeaves, stTypes: seq[NimNode]
-  for (leaf, ty) in layoutShape.tupleFlatten().reversed():
-    shLeaves.add leaf
-    shTypes.add ty
-  for (leaf, ty) in layoutStride.tupleFlatten().reversed():
-    stLeaves.add leaf
-    stTypes.add ty
-
-  if shLeaves.len == 1 and stLeaves.len == 1:
-    if isStaticOne(shTypes[0]):
+macro coalesceImpl(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
+  let shLeaves = layoutShape.tupleFlatten()
+  let stLeaves = layoutStride.tupleFlatten()
+  doAssert shLeaves.len == stLeaves.len,
+    "coalesce: shape and stride leaf counts differ"
+  if shLeaves.len == 1:
+    # 1-leaf early-out, a size-1 pair is the (1):(0) broadcast
+    if isStaticOne(shLeaves[0].leafTy):
       result = bindSym"make_layout".newCall(newLit(1), newLit(0))
     else:
-      result = bindSym"make_layout".newCall(shLeaves[0], stLeaves[0])
+      result = bindSym"make_layout".newCall(shLeaves[0].leaf, stLeaves[0].leaf)
     return
 
-  # chunks collect back-to-front while the walk merges frontward.
-  # head is the current front chunk, the emission walks the chunk list backward
-  type Chunk = tuple[shape, shapeTy, stride, strideTy: NimNode]
-  var chunks: seq[Chunk]
-  var head: Chunk = (shLeaves[0], shTypes[0], stLeaves[0], stTypes[0])
-  if preserveTrailing and isStaticOne(shTypes[0]):
-    head.shape = IntCT(low(int))
-    head.shapeTy = newNimNode(nnkBracketExpr).add(ident"Int", newLit(low(int)))
-
-  for k in 1 ..< shLeaves.len:
-    if isStaticOne(shTypes[k]):
+  var builder = TupleBuilderFlat.new(2)
+  var chunkShape, chunkStride: NimNode
+  var chunkShapeVal, chunkStrideVal: int
+  # the trailing-leaf state feeds only the preserveTrailing marker emission
+  var lastShapeVal, lastStrideVal: int
+  var lastStride: NimNode
+  for (shapeEv, strideEv) in layoutShape.tupleStream().zip(layoutStride.tupleStream()):
+    if shapeEv.kind != kLeaf:
       continue
-    if isStaticOne(head.shapeTy):
-      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
-    elif isStaticInt(shTypes[k]) and isStaticInt(stTypes[k]) and
-        isStaticInt(head.shapeTy) and isStaticInt(head.strideTy) and
-        shTypes[k].getStaticInt() * stTypes[k].getStaticInt() == head.strideTy.getStaticInt():
-      let mergedVal = shTypes[k].getStaticInt() * head.shapeTy.getStaticInt()
-      head = (IntCT(mergedVal),
-              newNimNode(nnkBracketExpr).add(ident"Int", newLit(mergedVal)),
-              stLeaves[k], stTypes[k])
+    let shapeVal = shapeEv.leafTy.getStaticInt()
+    let strideVal = strideEv.leafTy.getStaticInt()
+    if preserveTrailing:
+      lastShapeVal = shapeVal
+      lastStrideVal = strideVal
+      lastStride = strideEv.leaf
+    if shapeVal == 1:
+      continue
+    if chunkShape.isNil:
+      # a chain opens on the first live leaf
+      chunkShape = shapeEv.leaf
+      chunkShapeVal = shapeVal
+      chunkStride = strideEv.leaf
+      chunkStrideVal = strideVal
+      continue
+    if shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
+        chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
+        chunkShapeVal * chunkStrideVal == strideVal:
+      # the chain's span reaches this dimension's stride, merge frontward
+      chunkShapeVal *= shapeVal
+      chunkShape = IntCT(chunkShapeVal)
+      continue
+    # the chain stops short of this dimension, flush and open the next chain
+    builder.append(chunkShape, chunkStride)
+    chunkShape = shapeEv.leaf
+    chunkShapeVal = shapeVal
+    chunkStride = strideEv.leaf
+    chunkStrideVal = strideVal
+
+  if chunkShape.isNil:
+    # every leaf is size-1, a lone (1):(0) sentinel or the preserved marker
+    if preserveTrailing:
+      builder.append(IntCT(DynamicSentinel), lastStride)
+      return builder.emitLayout().resultLayout
     else:
-      chunks.add head
-      head = (shLeaves[k], shTypes[k], stLeaves[k], stTypes[k])
-  chunks.add head
-
-  if not preserveTrailing:
-    while chunks.len > 0 and isStaticOne(chunks[0].shapeTy):
-      discard chunks.pop()  # back chunks sit at the seq front
-
-  if chunks.len == 0:
-    result = bindSym"make_layout".newCall(IntCT(1), newLit(0))
+      return bindSym"make_layout".newCall(IntCT(1), newLit(0))
     return
 
-  var rShape = newNimNode(nnkTupleConstr)
-  var rStride = newNimNode(nnkTupleConstr)
-  for idx in countdown(chunks.len - 1, 0):
-    rShape.add chunks[idx].shape
-    rStride.add chunks[idx].stride
-  if rShape.len == 1:
-    rShape = rShape[0]
-    rStride = rStride[0]
+  builder.append(chunkShape, chunkStride)
+  if preserveTrailing and lastShapeVal == 1 and not (
+      chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
+      lastStrideVal != DynamicSentinel and
+      chunkShapeVal * chunkStrideVal == lastStrideVal):
+    # the trailing size-1 marker survives a chain that stops short of it
+    builder.append(IntCT(DynamicSentinel), lastStride)
+  return builder.emitLayout().resultLayout
 
-  result = bindSym"make_layout".newCall(rShape, rStride)
-
-func coalesce*(layout: Layout): auto {.inline, noInit.} =
+macro coalesce*(layout: Layout; preserveTrailing: static bool = false): untyped =
   ## Merge contiguous dimensions.
-  coalesceBackward(layout.shape, layout.stride)
-
-func coalesce_preserve_trailing(layout: Layout): auto {.inline, noInit.} =
-  ## Like `coalesce` but preserves trailing size-1 dimensions (e.g. stride-0 broadcasts).
-  coalesceBackward(layout.shape, layout.stride, preserveTrailing = true)
-
-# ═══════════════════════════════════════════════════════════════
-#  filter_inactive, remove stride-0 and size-1 dimensions
-# ═══════════════════════════════════════════════════════════════
-
-func filter_inactive*(layout: Layout): auto {.inline.} =
-  ## Remove stride-0 and size-1 dimensions
-  coalesce(filter_zeros(layout))
+  ## Merge a layout's flat (shape, stride) leaf pairs into contiguous chains,
+  ## one pure `make_layout` emission:
+  ## - size-1 dimensions drop, the frontmost one opens no chain
+  ## - a dimension joins the chain in front of it when the chain's span
+  ##   reaches the dimension's stride, the merged chain keeps the front
+  ##   dimension's own stride
+  ## - preserveTrailing keeps a trailing size-1 dimension as the dynamic
+  ##   `Int[DynamicSentinel]` marker
+  ##
+  ##   (2, 4):(1, 2)  folds to (8):(1), the (2,1) chain's span 2
+  ##                  reaches the second dimension's stride 2
+  ##   (4, 1):(1, 0)  folds to (4):(1), the trailing broadcast drops,
+  ##                  a chain reaching its stride 0 absorbs it
+  ##   (4, 1):(1, 0)  with preserveTrailing stays (4, Int[DynamicSentinel]):(1, 0)
+  var stmts = newStmtList()
+  let (sh, st) = stmts.destructureLayout(layout)
+  result = stmts
+  result.add bindSym"coalesceImpl".newCall(sh, st, newLit(preserveTrailing))
 
 # ═══════════════════════════════════════════════════════════════
 #  complement, fill stride gaps up to the cosize bound
 # ═══════════════════════════════════════════════════════════════
 
 proc complementFold(shNode, boundExpr: NimNode;
-                    strides: seq[int]): NimNode {.compileTime.} =
+                    shapeVals, strides: seq[int]): NimNode {.compileTime.} =
   ## Multi-dimension complement fold, one (gap, stride) pair per
   ## stride-sorted dimension plus the final gap up to the bound.
+  ## Stride-0 and size-1 dimensions are skipped: a stride-0 dimension
+  ## maps every coordinate to offset 0 and a size-1 dimension covers
+  ## a single offset, neither joins the gap-fill chain. The guards read
+  ## the static leaf values, a dynamic shape leaf never skips.
   var gapNodes, curNodes: seq[NimNode]
   var curNode = IntCT(1)
   for idx in getIndicesSortedByStride(strides):
+    if strides[idx] == 0 or shapeVals[idx] == 1:
+      continue
     let s = IntCT(strides[idx])
     gapNodes.add bindSym"max".newCall(
       IntCT(1), nnkInfix.newTree(ident"div", s, curNode))
@@ -132,16 +150,16 @@ proc complementFold(shNode, boundExpr: NimNode;
       ident"*", s, nnkBracketExpr.newTree(shNode, newLit(idx)))
   gapNodes.add bindSym"ceil_div".newCall(boundExpr, curNode)
   curNodes.add curNode
-  # coalesceBackward is a macro and folds when the call site expands
-  result = bindSym"coalesceBackward".newCall(
-    nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
+  # coalesce is a macro and folds when the call site expands
+  result = bindSym"coalesce".newCall(bindSym"make_layout".newCall(
+    nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
 
 macro complementFlatImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
   ##
   ## Contract:
-  ## - shape and stride args are flat, filter_zeros and coalesce fold
-  ##   before the call
+  ## - shape and stride args are flat
+  ## - stride-0 and size-1 pairs are skipped by the walk itself
 
   let boundExpr =
     if cosizeBound.getTypeInst().kind == nnkTupleConstr:
@@ -155,9 +173,9 @@ macro complementFlatImpl(sh, st, cosizeBound: typed): untyped =
       result = bindSym"make_layout".newCall(boundExpr, newLit(1))
     else:
       result = quote do:
-        coalesceBackward(
+        coalesce(make_layout(
           (max(Int[1](), `st`), ceil_div(`boundExpr`, `st` * `sh`)),
-          (1, `st` * `sh`))
+          (1, `st` * `sh`)))
   else:
     # Multi-dimension complement, all strides must be static Int leaves
     let shTyp = sh.getTypeInst()
@@ -170,11 +188,11 @@ macro complementFlatImpl(sh, st, cosizeBound: typed): untyped =
     for i in 0 ..< stTyp.len:
       doAssert stTyp[i].kind == nnkBracketExpr and $stTyp[i][0] == "Int",
         "complement: multi-dimension with dynamic strides not supported at index " & $i
-    result = complementFold(sh, boundExpr, toSeqStaticInts(stTyp))
+    result = complementFold(sh, boundExpr, toSeqStaticInts(shTyp), toSeqStaticInts(stTyp))
 
 proc filterInactiveValues(shapeVals, strideVals: seq[int]): tuple[shape, stride: seq[int]] {.compileTime.} =
-  ## filter_zeros + coalesce as one compile-time fold over flat static values,
-  ## coalesceBackward's chunk walk in value form, walked back-to-front:
+  ## The stride-0/size-1 skip as one compile-time fold over flat static values:
+  ## coalesce's chunk walk in value form, walked back-to-front.
   ## - a stride of 0 shrinks its shape to 1
   ## - size-1 shapes drop
   ## - a dimension whose span ends where the head's stride begins merges
@@ -198,25 +216,35 @@ proc filterInactiveValues(shapeVals, strideVals: seq[int]): tuple[shape, stride:
 
 macro complementImpl(lyt, cosizeBound: typed; defaultBound: static bool): untyped =
   ## complement's emission, dispatched on the layout's staticness:
-  ## - a fully static layout folds filter_zeros and coalesce to constant
-  ##   values at compile time and emits the complement over them alone, no
-  ##   runtime filter chain
-  ## - any other layout runs filter_inactive at runtime, complementFlatImpl folds
-  ##   gap arithmetic from the coalesced shape/stride
-  ## defaultBound swaps cosizeBound for cosize of the filtered layout.
+  ## - a fully static layout folds the stride-0/size-1 skip to constant
+  ##   values at compile time and emits the complement over them alone
+  ## - any other layout walks its raw flat shape/stride, the skip guards
+  ##   on the static leaves at macro time
+  ## defaultBound swaps cosizeBound for cosize(layout), cosize is
+  ## invariant under the skip.
   let (shTy, stTy) = layoutTypeArgs(lyt)
   let shVals = toSeqStaticInts(shTy)
   let stVals = toSeqStaticInts(stTy)
   if DynamicSentinel in shVals or DynamicSentinel in stVals:
-    # a runtime leaf, the bound is the caller's expression or cosize(f),
+    # a runtime leaf, the bound is the caller's expression or cosize(lyt),
     # plain idents in spliced subtrees resolve by name at the call site
-    let f = ident"f"
-    let bound = if defaultBound: bindSym"cosize".newCall(f) else: cosizeBound
-    result = nnkStmtListExpr.newTree(
-      nnkLetSection.newTree(nnkIdentDefs.newTree(
-        f, newEmptyNode(), bindSym"filter_inactive".newCall(lyt))),
-      bindSym"complementFlatImpl".newCall(
-        f.newDotExpr(ident"shape"), f.newDotExpr(ident"stride"), bound))
+    let bound = if defaultBound: bindSym"cosize".newCall(lyt) else: cosizeBound
+    if stTy.kind in {nnkTupleConstr, nnkTupleTy}:
+      result = bindSym"complementFlatImpl".newCall(
+        lyt.newDotExpr(ident"shape"), lyt.newDotExpr(ident"stride"), bound)
+    else:
+      # a scalar stride broadcasts over the shape profile (repeat_like),
+      # one stride leaf per shape position before the fold
+      let stLeaf = lyt.newDotExpr(ident"stride")
+      if shTy.kind in {nnkTupleConstr, nnkTupleTy}:
+        var stN = newNimNode(nnkTupleConstr)
+        for i in 0 ..< shVals.len:
+          stN.add stLeaf
+        result = bindSym"complementFlatImpl".newCall(
+          lyt.newDotExpr(ident"shape"), stN, bound)
+      else:
+        result = bindSym"complementFlatImpl".newCall(
+          lyt.newDotExpr(ident"shape"), stLeaf, bound)
   else:
     # scalar stride broadcasts over the shape profile (repeat_like)
     let pairedStrides =
@@ -255,8 +283,8 @@ macro complementImpl(lyt, cosizeBound: typed; defaultBound: static bool): untype
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
-  ## Filters inactive dimensions first, the filter folds at compile time
-  ## for fully static layouts.
+  ## Stride-0 and size-1 dimensions are skipped. For fully static layouts
+  ## the skip folds at compile time.
   complementImpl(layout, cosizeBound, false)
 
 func complement*(layout: Layout; cosizeBound: static int): auto =
@@ -264,7 +292,8 @@ func complement*(layout: Layout; cosizeBound: static int): auto =
   complement(layout, Int[cosizeBound]())
 
 func complement*(layout: Layout): auto =
-  ## Compute complement with default bound = cosize(filtered layout).
+  ## Compute complement with default bound = cosize(layout), cosize is
+  ## invariant under the stride-0/size-1 skip.
   complementImpl(layout, Int[1](), true)
 
 func complement*(layout: Layout; cosizeBound: tuple): auto =
@@ -385,7 +414,7 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   let (bShape, bStrides) = result.destructureLayout(b)
 
   template composeDelegateCoalesced(aShape2, aStrides2, bShape2, bStrides2) =
-    composeImpl(coalesceBackward(aShape2, aStrides2, true), bShape2, bStrides2)
+    composeImpl(coalesce(make_layout(aShape2, aStrides2), true), bShape2, bStrides2)
   template composeDelegatePlain(aShape2, aStrides2, bShape2, bStrides2) =
     composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
 
@@ -660,7 +689,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
       if dim.shape == DynamicSentinel:
         break
       curr = dim.stride * dim.shape
-  result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
+  result = bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
 
 macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
@@ -720,7 +749,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
     let dim = dims[prevIdx]
     let shLeaf = if dim.shape == DynamicSentinel: dim.leaf else: IntCT(dim.shape)
     builder.append(shLeaf, IntCT(dim.prefix))
-  result = builder.emitLayout(bindSym"coalesceBackward").resultLayout
+  result = bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
 
 macro left_inverse*(layout: typed): untyped =
   ## Left inverse, Li(L(i)) == i for injective layouts.
@@ -731,7 +760,7 @@ macro left_inverse*(layout: typed): untyped =
   let (sh, st) = destructureLayout(stmts, layout)
   template leftInverseDelegate(sh2, st2) =
     ## Coalesce canonicalizes strides first, the chaining asserts require it.
-    evalOnceAs(coalescedLayout, coalesceBackward(sh2, st2))
+    evalOnceAs(coalescedLayout, coalesce(make_layout(sh2, st2)))
     leftInverseImpl(coalescedLayout.shape, coalescedLayout.stride)
   result = stmts
   result.add getAst(leftInverseDelegate(sh, st))
