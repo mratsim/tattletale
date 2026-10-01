@@ -35,18 +35,7 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce, merge contiguous dimensions where stride matches
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceImpl(layoutShape, layoutStride: typed; preserveTrailing: static bool = false): untyped =
-  let shLeaves = layoutShape.tupleFlatten()
-  let stLeaves = layoutStride.tupleFlatten()
-  doAssert shLeaves.len == stLeaves.len,
-    "coalesce: shape and stride leaf counts differ"
-  if shLeaves.len == 1:
-    # 1-leaf early-out, a size-1 pair is the (1):(0) broadcast
-    if isStaticOne(shLeaves[0].leafTy):
-      result = bindSym"make_layout".newCall(newLit(1), newLit(0))
-    else:
-      result = bindSym"make_layout".newCall(shLeaves[0].leaf, stLeaves[0].leaf)
-    return
+macro coalesceImpl(layoutShape, layoutStride: typed, preserveTrailing: static bool = false): untyped =
 
   var builder = TupleBuilderFlat.new(2)
   var chunkShape, chunkStride: NimNode

@@ -367,6 +367,37 @@ proc runCoalescePreserveTrailingTests =
     check r.stride, 0, Int[0]
   echo "    PASS"
 
+# ═══════════════════════════════════════════════════════════════
+#  Section 12. coalesce degenerate 1-leaf inputs fold without an early-out
+# ═══════════════════════════════════════════════════════════════
+proc runCoalesceOneLeafTests =
+  # These cases match what a pre-flight 1-leaf early-out would emit.
+  # A lone non-one leaf flushes as one chunk. An empty-builder tail
+  # collapses an all-size-1 layout, one leaf or many, to the (1):(0)
+  # sentinel. No pre-flight early-out exists, the fold itself covers
+  # every degenerate shape.
+  block:
+    ## the lone leaf opens and flushes one chunk, identity result
+    let r = coalesce(make_layout(64, 1))
+    check r.shape, 64, Int[64]
+    check r.stride, 1, Int[1]
+  block:
+    ## a lone size-1 leaf is skipped, the empty tail is the sentinel
+    let r = coalesce(make_layout(1, 0))
+    check r.shape, 1, Int[1]
+    check r.stride, 0, Int[0]
+  block:
+    ## a lone size-1 leaf with a nonzero stride is skipped the same way
+    let r = coalesce(make_layout(1, 4))
+    check r.shape, 1, Int[1]
+    check r.stride, 0, Int[0]
+  block:
+    ## every leaf is size-1, no chunk ever opens, the sentinel again
+    let r = coalesce(make_layout((1, 1), (0, 0)))
+    check r.shape, 1, Int[1]
+    check r.stride, 0, Int[0]
+  echo "    PASS"
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -391,6 +422,8 @@ proc runTests =
   runCoalesceRuntimeLayoutTests()
   echo "── Section 11. coalesce preserveTrailing marker ──"
   runCoalescePreserveTrailingTests()
+  echo "── Section 12. coalesce degenerate 1-leaf inputs ──"
+  runCoalesceOneLeafTests()
   echo "  All tests passed."
 
 when isMainModule:
