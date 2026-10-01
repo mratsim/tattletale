@@ -205,7 +205,7 @@ OF_SUFFIX_DECL_RE = re.compile(
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
 
-# The doc-above-type rule. The house doc comment of a type lives inside
+# The doc-above-type rule. The doc comment of a type lives inside
 # its body, above the fields it describes (the placement object fields
 # use), a ## block directly above the declaration does not attach that way.
 #
@@ -498,7 +498,7 @@ RULES = {
     #                     "a public item with no doc comment (exported Nim proc or type, module-level Python def or class)"),
     # Disabled per owner ruling: the missing-doc rule targeted older LLM models.
     "doc-above-proc": Rule("doc-above-proc", True,
-                           "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
+                           "a ## block directly above a proc or func declaration, the doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
                              "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
     "sig-wrap": Rule("sig-wrap", True,
@@ -1704,7 +1704,7 @@ def nim_structure_checks(path, text, header_nos, findings):
     """Runs the Nim structure rules over the declarations, the shapes
     stay conservative single-line forms.
     - doc-above-proc bans the ## block above a proc or func declaration
-    - the house doc comment of a proc or func is the first body line
+    - the doc comment of a proc or func is the first body line
     - missing-doc plus missing-contract read the body doc block
     - exported types are documented by a doc block above them or by the
       ## field docs inside the body, a ## block directly above the
@@ -1726,7 +1726,7 @@ def nim_structure_checks(path, text, header_nos, findings):
             if above_banned:
                 findings.append(Finding(
                     path, i + 1, "doc-above-proc",
-                    "## above the declaration: the house doc comment is "
+                    "## above the declaration: the doc comment is "
                     "the first body line"))
             # the declaration may span several lines, the body opens after
             # the signature terminates on its '=' or ':' line, mid-signature
@@ -1774,7 +1774,7 @@ def nim_structure_checks(path, text, header_nos, findings):
             if above_banned:
                 findings.append(Finding(
                     path, i + 1, "doc-above-proc",
-                    "## above the declaration: the house doc comment is "
+                    "## above the declaration: the doc comment is "
                     "the first body line"))
             continue
         tm = NIM_EXPORTED_TYPE_RE.match(line)
@@ -2196,8 +2196,7 @@ NOQA_RE = re.compile(r"\s*noqa\b")
 # A line opening on a severed `word,` continuation (the unit-split shape).
 _COMMA_LEAD_RE = re.compile(r"^[a-z]+,")
 
-# A lowercase single-word colon lead, the colon-break shape the house
-# rules keep with their lead phrase.
+# A lowercase single-word colon lead, the colon-break shape the rules keep with their lead phrase.
 _COLON_TOKEN_RE = re.compile(r"^\w{1,15}:")
 
 

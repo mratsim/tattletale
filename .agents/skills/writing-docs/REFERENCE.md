@@ -236,7 +236,7 @@ This is the pattern for stateful structures with invisible invariants:
 ## Canonical references
 
 When in doubt, match these files exactly. They are the operator's definition
-of the house style:
+of the required style:
 
 1. `workspace/libtorch/src/tensors_nn.nim`, the SDPA and nn functional API
    with tensor op docs, the shape contracts, backend tables, compact one-liners

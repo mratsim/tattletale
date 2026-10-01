@@ -9,23 +9,25 @@ these roots:
 - workspace/positron/src/mega_kernels/
 - workspace/ceramic/src/
 
-| rule-id           | trigger                                                                                          | severity |
-| ----------------- | ------------------------------------------------------------------------------------------------ | -------- |
-| frag-walk         | a `{.device.}`/`{.global.}` proc body reads or writes `.frags[..][..].frag[..]` without a marker | counted  |
-| tile-op-miss      | a frag assignment whose right side is single-frag arithmetic expressible as existing tile ops    | counted  |
-| lane-cell         | manual `crd2idx` + `cell mod/div` lane-to-cell decomposition outside the tile_algebra primitives | counted  |
-| scalar-extract    | raw `.data[0]` scalar extraction from a row vector outside the tile_algebra primitives           | counted  |
-| magic-dim         | a bare 8/16/32/64/128/256 literal in register-tile dims or index arithmetic                      | counted  |
-| raw-emit          | a `{.emit:}` block spelling a Crucible builtin (threadgroup_barrier) by hand                     | counted  |
-| math-const        | a float literal that bitwise matches a shared math_consts value                                  | counted  |
-| kernel-doc-shape  | an exported `{.device.}`/`{.global.}` kernel with no SDPA-form doc block                         | counted  |
-| hash-above-proc   | a `#` comment sits immediately above a proc, func, or template definition                        | counted  |
-| divider-space     | a section divider (`# ─── ... ───`) without a blank line before or after it                      | counted  |
-| one-liner         | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review | advisory |
-| explicit-generics | a call site spells generic arguments the compiler infers from the value arguments                | counted  |
-| newcall-method    | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the house form      | counted  |
-| tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the house form | counted  |
-| body-wrap         | a single-expression proc, func, or template body split across lines that fits one line           | counted  |
+| rule-id             | trigger                                                                                                       | severity |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- | -------- |
+| frag-walk           | a `{.device.}`/`{.global.}` proc body reads or writes `.frags[..][..].frag[..]` without a marker              | counted  |
+| tile-op-miss        | a frag assignment whose right side is single-frag arithmetic expressible as existing tile ops                 | counted  |
+| lane-cell           | manual `crd2idx` + `cell mod/div` lane-to-cell decomposition outside the tile_algebra primitives              | counted  |
+| scalar-extract      | raw `.data[0]` scalar extraction from a row vector outside the tile_algebra primitives                        | counted  |
+| magic-dim           | a bare 8/16/32/64/128/256 literal in register-tile dims or index arithmetic                                   | counted  |
+| raw-emit            | a `{.emit:}` block spelling a Crucible builtin (threadgroup_barrier) by hand                                  | counted  |
+| math-const          | a float literal that bitwise matches a shared math_consts value                                               | counted  |
+| kernel-doc-shape    | an exported `{.device.}`/`{.global.}` kernel with no SDPA-form doc block                                      | counted  |
+| hash-above-proc     | a `#` comment sits immediately above a proc, func, or template definition                                     | counted  |
+| divider-space       | a section divider (`# ─── ... ───`) without a blank line before or after it                                   | counted  |
+| one-liner           | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review              | advisory |
+| explicit-generics   | a call site spells generic arguments the compiler infers from the value arguments                             | counted  |
+| newcall-method      | a newCall(bindSym"f", x, ...) meta-call where method call syntax x.f(...) is the required form                | counted  |
+| tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the required form | counted  |
+| tuplestream-method  | a tupleStream(x) plain call or bare x.tupleStream, method call syntax x.tupleStream() is the required form    | counted  |
+| onleaves-method     | an onLeaves(x) plain call or bare x.onLeaves, method call syntax x.onLeaves() is the required form            | counted  |
+| body-wrap           | a single-expression proc, func, or template body split across lines that fits one line                        | counted  |
 
 
 Module-scope exemptions, where a frag walk IS the tile implementation:
@@ -133,10 +135,16 @@ RULES = {
     "explicit-generics": "a call site spells generic arguments the compiler "
                          "infers from the value arguments",
     "newcall-method": "a newCall(bindSym\"f\", x, ...) meta-call where method "
-                      "call syntax x.f(...) is the house form",
+                      "call syntax x.f(...) is the required form",
     "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
                            "where method call syntax x.tupleFlatten() is the "
-                           "house form",
+                           "required form",
+    "tuplestream-method": "a tupleStream(x) plain call or bare x.tupleStream "
+                          "where method call syntax x.tupleStream() is the "
+                          "required form",
+    "onleaves-method": "an onLeaves(x) plain call or bare x.onLeaves "
+                       "where method call syntax x.onLeaves() is the "
+                       "required form",
     "body-wrap": "a single-expression callable body is split across lines "
                  "while the joined form fits one line",
 }
@@ -148,7 +156,7 @@ NEWCALL_METHOD_EXEMPT = frozenset((
     "is", "isnot", "of",
     # evalOnceAs is an alias-first binding macro. The method form x.f(y)
     # sems the receiver x, but x is the name being bound and stays
-    # unresolvable by construction, so the plain call is the house form.
+    # unresolvable by construction, so the plain call stays legal.
     "evalOnceAs"))
 NEWCALL_METHOD_RE = re.compile(
     r"\bnewCall\s*\(\s*bindSym\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']"
@@ -163,6 +171,8 @@ TUPLEFLATTEN_CALL_RE = re.compile(r"(?<![.\w])tupleFlatten\s*\(")
 TUPLEFLATTEN_BARE_RE = re.compile(r"\.\s*tupleFlatten(?!\s*[(\*])")
 TUPLESTREAM_CALL_RE = re.compile(r"(?<![.\w])tupleStream\s*\(")
 TUPLESTREAM_BARE_RE = re.compile(r"\.\s*tupleStream(?!\s*[(\*])")
+ONLEAVES_CALL_RE = re.compile(r"(?<![.\w])onLeaves\s*\(")
+ONLEAVES_BARE_RE = re.compile(r"\.\s*onLeaves(?!\s*[(\*])")
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -1046,6 +1056,16 @@ def scan_newcall_method(path, lines, findings):
                 path, i + 1, "tuplestream-method",
                 "tupleStream reads without call parens here, write "
                 "x.tupleStream()"))
+        if ONLEAVES_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "onleaves-method",
+                "onLeaves reads as a plain call here, write "
+                "x.onLeaves()"))
+        elif ONLEAVES_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "onleaves-method",
+                "onLeaves reads without call parens here, write "
+                "x.onLeaves()"))
 
 
 BODY_WRAP_MAX = 180

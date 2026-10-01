@@ -170,6 +170,17 @@ func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[r
   (tb.completed[id], tb.verbatim)
 
 # ═══════════════════════════════════════════════════════════════════════
+#  onLeaves, consumer-side event ingest
+# ═══════════════════════════════════════════════════════════════════════
+
+template onLeaves*(event: TupleStreamEvent, body: untyped): untyped =
+  case event.kind
+  of kOpen, kClose:
+    builder.append(event)
+  of kLeaf:
+    body
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Sinks
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -215,8 +226,8 @@ iterator items*(z: var TupleZip): tuple[a, b: TupleStreamEvent] =
 # ═══════════════════════════════════════════════════════════════════════
 
 func hasType*(x: NimNode; t: static string): bool =
-  ## Type equality in macro, resolves through aliases.
-  ## This cannot handle generics.
+  ## Type equality in macro. Resolves through aliases.
+  ## This does not handle generic matches (i.e. Int[4].hasType"Int")
   ##
   ## Example
   ##   x.hasType"int"
