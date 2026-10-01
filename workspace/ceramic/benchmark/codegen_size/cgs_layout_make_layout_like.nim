@@ -2,8 +2,8 @@
 ##
 ## make_layout_like is the shape-preserving stride compaction constructor (the CuTe factored form).
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor, one row per kernel:
-## - floorLayoutLike = the like input, one runtime layout construction consumed by size, no like call
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline, one row per kernel:
+## - baselineOverheadKernel = the like input, one runtime layout construction consumed by size, no like call
 ## - makeLayoutLikeDynStride pairs it directly, makeLayoutLikeCompact pairs it over a static input
 ##   ((2, 3):(2, 1)), its Marginal column mixes that input difference
 ##
@@ -17,8 +17,8 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # like input, one runtime layout construction consumed by size, no like call
-const floorLayoutLikeMsl = metal:
-  proc floorLayoutLikeKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
+const baselineOverheadMsl = metal:
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, int(S)))
     C[0] = float32 toIntVal size(L)
 
@@ -39,6 +39,6 @@ const makeLayoutLikeDynStrideMsl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_make_layout_like", [
-  cgsReceipt("floorLayoutLikeKernel", floorLayoutLikeMsl),
-  cgsReceipt("makeLayoutLikeCompactKernel", makeLayoutLikeCompactMsl, floorLayoutLikeMsl.len),
-  cgsReceipt("makeLayoutLikeDynStrideKernel", makeLayoutLikeDynStrideMsl, floorLayoutLikeMsl.len)])
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("makeLayoutLikeCompactKernel", makeLayoutLikeCompactMsl, baselineOverheadMsl.len),
+  cgsReceipt("makeLayoutLikeDynStrideKernel", makeLayoutLikeDynStrideMsl, baselineOverheadMsl.len)])

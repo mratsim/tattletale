@@ -1,8 +1,8 @@
 ## Codesize ledger, product family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor, one row per kernel:
-## - floorProduct = the product input, one runtime block layout plus a static tiler, consumed by size, no product call
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline, one row per kernel:
+## - baselineOverheadKernel = the product input, one runtime block layout plus a static tiler, consumed by size, no product call
 ## - tiledProduct/flatProduct pair it directly, logicalProductComp pairs it over a different input
 ##   ((M,N):(1,16), tiler (16, 16)), its Marginal column mixes that input difference
 ##
@@ -17,8 +17,8 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # product input, one runtime block layout plus a static tiler, consumed by size, no product call
-const floorProductMsl = metal:
-  proc floorProductKernel(C: ptr UncheckedArray[float32]; M: int32) {.global.} =
+const baselineOverheadMsl = metal:
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M: int32) {.global.} =
     let blk = make_layout((int(M), 4), (1, 4))
     let tiler = make_layout((2, 2))
     C[0] = float32 toIntVal size(blk)
@@ -47,7 +47,7 @@ const logicalProductCompMsl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_products", [
-  cgsReceipt("floorProductKernel", floorProductMsl),
-  cgsReceipt("tiledProductKernel", tiledProductMsl, floorProductMsl.len),
-  cgsReceipt("flatProductKernel", flatProductMsl, floorProductMsl.len),
-  cgsReceipt("logicalProductCompKernel", logicalProductCompMsl, floorProductMsl.len)])
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("tiledProductKernel", tiledProductMsl, baselineOverheadMsl.len),
+  cgsReceipt("flatProductKernel", flatProductMsl, baselineOverheadMsl.len),
+  cgsReceipt("logicalProductCompKernel", logicalProductCompMsl, baselineOverheadMsl.len)])

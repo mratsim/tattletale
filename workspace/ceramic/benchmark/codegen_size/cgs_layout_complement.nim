@@ -1,8 +1,8 @@
 ## Codesize ledger, complement family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor.
-## No floor pairs exist in this family, the Marginal column prints `-` throughout.
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline.
+## No baseline pairs exist in this family, the Marginal column prints `-` throughout.
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##

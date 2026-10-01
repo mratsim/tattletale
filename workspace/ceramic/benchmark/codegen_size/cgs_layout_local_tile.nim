@@ -1,9 +1,9 @@
 ## Codesize ledger, local_tile family.
 ##
 ## Every kernel compiles one call site to Metal Shading Language, cgsReport renders
-## cost of 1 call plus the marginal over the paired floor, one row per family member:
-## - floorRank2/floorGlView = the tile-read floors, one element read each, no tile machinery,
-##   floorRank2 holds a dynamic rank-2 view, floorGlView holds a rank-4 global-data view
+## cost of 1 call plus the marginal over the paired baseline, one row per family member:
+## - baselineOverheadRank2/baselineOverheadGlView = the tile-read baselines, one element read each, no tile machinery,
+##   baselineOverheadRank2 holds a dynamic rank-2 view, baselineOverheadGlView holds a rank-4 global-data view
 ## - seven family rows cover the partition selectors, every selector runs on the dynamic rank-2 fallback
 ## - local_tile_dyn alone runs on a rank-4 global-data view, twoTile measures the 2nd-call marginal,
 ##   dynFormula is the rank-2 inline of the local_tile_dyn body
@@ -18,17 +18,17 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra/tiles
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# ── floors, no tile machinery ──
+# ── baselines, no tile machinery ──
 
 # dynamic rank-2 view, one element read
-const floorRank2Msl = metal:
-  proc floorRank2Kernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
+const baselineOverheadRank2Msl = metal:
+  proc baselineOverheadRank2Kernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
     let p = make_view(C, (int M, int N), (1, int S))
     C[0] = float32 p[int R0, int C0]
 
 # rank-4 global-data view, one 4-coord element read, measures the no-tiler baseline
-const floorGlViewMsl = metal:
-  proc floorGlViewKernel(C: ptr UncheckedArray[float32]; B, D, M, N, R0, C0: int32) {.global.} =
+const baselineOverheadGlViewMsl = metal:
+  proc baselineOverheadGlViewKernel(C: ptr UncheckedArray[float32]; B, D, M, N, R0, C0: int32) {.global.} =
     let gl = gd(C, B, D, M, N)
     C[0] = float32 gl[0, 0, int R0, int C0]
 
@@ -109,7 +109,7 @@ const twoTileMsl = metal:
 # same input and read as the selector kernels
 
 const dynFormulaMsl = metal:
-# tiles-allow measured kernel, the formula floor needs the bare 16 tile dim and the .data[0] base read
+# tiles-allow measured kernel, the formula baseline needs the bare 16 tile dim and the .data[0] base read
   proc dynFormulaKernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
     let p = make_view(C, (int M, int N), (1, int S))
     let base = int R0 * 1 * 16 + int C0 * int S * 16
@@ -117,19 +117,19 @@ const dynFormulaMsl = metal:
     C[0] = float32 t[int R0, int C0]
 
 # ── kernel rows ──
-# Marginal = cost minus floor, computed inside cgsReport, one floor per row:
-# - selector rows, dynFormula and the static row sit on floorRank2
-# - localTileDyn sits on floorGlView
+# Marginal = cost minus baseline, computed inside cgsReport, one baseline per row:
+# - selector rows, dynFormula and the static row sit on baselineOverheadRank2
+# - localTileDyn sits on baselineOverheadGlView
 # - twoTile pairs the localTile2arg row, its Marginal column is the 2nd-call cost
 cgsReport("cgs_layout_local_tile", [
-  cgsReceipt("floorRank2Kernel", floorRank2Msl),
-  cgsReceipt("floorGlViewKernel", floorGlViewMsl),
-  cgsReceipt("localTileDynKernel", localTileDynMsl, floorGlViewMsl.len),
-  cgsReceipt("innerPartitionKernel", innerPartitionMsl, floorRank2Msl.len),
-  cgsReceipt("outerPartitionKernel", outerPartitionMsl, floorRank2Msl.len),
-  cgsReceipt("localTile2argKernel", localTile2argMsl, floorRank2Msl.len),
-  cgsReceipt("localTile4argKernel", localTile4argMsl, floorRank2Msl.len),
-  cgsReceipt("localPartitionKernel", localPartitionMsl, floorRank2Msl.len),
-  cgsReceipt("localTileStaticKernel", localTileStaticMsl, floorRank2Msl.len),
+  cgsReceipt("baselineOverheadRank2Kernel", baselineOverheadRank2Msl),
+  cgsReceipt("baselineOverheadGlViewKernel", baselineOverheadGlViewMsl),
+  cgsReceipt("localTileDynKernel", localTileDynMsl, baselineOverheadGlViewMsl.len),
+  cgsReceipt("innerPartitionKernel", innerPartitionMsl, baselineOverheadRank2Msl.len),
+  cgsReceipt("outerPartitionKernel", outerPartitionMsl, baselineOverheadRank2Msl.len),
+  cgsReceipt("localTile2argKernel", localTile2argMsl, baselineOverheadRank2Msl.len),
+  cgsReceipt("localTile4argKernel", localTile4argMsl, baselineOverheadRank2Msl.len),
+  cgsReceipt("localPartitionKernel", localPartitionMsl, baselineOverheadRank2Msl.len),
+  cgsReceipt("localTileStaticKernel", localTileStaticMsl, baselineOverheadRank2Msl.len),
   cgsReceipt("twoTileKernel", twoTileMsl, localTile2argMsl.len),
-  cgsReceipt("dynFormulaKernel", dynFormulaMsl, floorRank2Msl.len)])
+  cgsReceipt("dynFormulaKernel", dynFormulaMsl, baselineOverheadRank2Msl.len)])

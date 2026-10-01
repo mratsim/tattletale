@@ -1,7 +1,7 @@
 ## Codesize ledger, layout inverse family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
-## floorInverseKernel is the floor, a dynamic shape rank-2 layout with static strides consumed by size, inverse rows pair it.
+## baselineOverheadKernel is the baseline, a dynamic shape rank-2 layout with static strides consumed by size, inverse rows pair it.
 ##
 ## right_inverse and left_inverse are the public entries, the copyFrom chain calls right_inverse, emitInverse and inverseFold
 ## are compile-time and those rows measure them.
@@ -19,13 +19,13 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# isolation floor, a dynamic shape rank-2 layout with static strides consumed by size, no inverse call
-const floorInverseMsl = metal:
-  proc floorInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
+# isolation baseline, a dynamic shape rank-2 layout with static strides consumed by size, no inverse call
+const baselineOverheadMsl = metal:
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, 16))
     C[0] = float32 toIntVal size(L)
 
-# right_inverse over the floor input, copyFrom quasi-inverse call-site shape
+# right_inverse over the baseline input, copyFrom quasi-inverse call-site shape
 const rightInverseMsl = metal:
   proc rightInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, 16))
@@ -56,8 +56,8 @@ const leftInverseMsl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_inverses", [
-  cgsReceipt("floorInverseKernel", floorInverseMsl),
-  cgsReceipt("rightInverseKernel", rightInverseMsl, floorInverseMsl.len),
-  cgsReceipt("rightInverseDynStrideKernel", rightInverseDynStrideMsl, floorInverseMsl.len),
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("rightInverseKernel", rightInverseMsl, baselineOverheadMsl.len),
+  cgsReceipt("rightInverseDynStrideKernel", rightInverseDynStrideMsl, baselineOverheadMsl.len),
   cgsReceipt("rightInverseStaticKernel", rightInverseStaticMsl),
-  cgsReceipt("leftInverseKernel", leftInverseMsl, floorInverseMsl.len)])
+  cgsReceipt("leftInverseKernel", leftInverseMsl, baselineOverheadMsl.len)])

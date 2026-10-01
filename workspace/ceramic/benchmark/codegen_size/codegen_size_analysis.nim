@@ -75,22 +75,22 @@ type
     paretoLines*: int           ## lines of that set
     paretoPct*: float           ## that set's share of totalLines, percent
 
-  CgsReceipt* = tuple[name: string, msl: string, floor: int]
-    ## One measured kernel row (name, msl, floor) for cgsReport.
+  CgsReceipt* = tuple[name: string, msl: string, baseline: int]
+    ## One measured kernel row (name, msl, baseline) for cgsReport.
     ##
-    ## floor is the paired floor in bytes for the Marginal column, cgsNoFloor
-    ## prints `-`, a floor may reference a prior row's MSL length.
+    ## baseline is the paired baseline in bytes for the Marginal column, cgsNoBaseline
+    ## prints `-`, a baseline may reference a prior row's MSL length.
     ## A 2-call row pairs its 1-call sibling that way.
 
-const cgsNoFloor* = -1
-  ## Floor value of a kernel with no paired floor, the Marginal column prints
+const cgsNoBaseline* = -1
+  ## Baseline value of a kernel with no paired baseline, the Marginal column prints
   ## `-` for such a row.
 
-proc cgsReceipt*(name, msl: string, floor: int = cgsNoFloor): CgsReceipt =
-  ## Builds one kernel row for cgsReport, floor defaults to cgsNoFloor.
+proc cgsReceipt*(name, msl: string, baseline: int = cgsNoBaseline): CgsReceipt =
+  ## Builds one kernel row for cgsReport, baseline defaults to cgsNoBaseline.
   result.name = name
   result.msl = msl
-  result.floor = floor
+  result.baseline = baseline
 
 const identStart = {'A'..'Z', 'a'..'z', '_'}
   ## Characters that may open a Metal identifier.
@@ -589,7 +589,7 @@ proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
   ##
   ## Contract:
   ## - renders one row per kernel, Name, Cost of 1 call, Marginal, totals row
-  ## - Marginal is the kernel cost minus its paired floor, `-` for cgsNoFloor
+  ## - Marginal is the kernel cost minus its paired baseline, `-` for cgsNoBaseline
   ## - appends runner stats totals, function LOC buckets, overload groups,
   ##   per-kernel attribution, one pareto line per kernel, and the caveats
   ##
@@ -623,12 +623,12 @@ proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
   echo lineSep
   var totalCost = 0
   var totalMarginal = 0
-  for (name, msl, floor) in receipts:
+  for (name, msl, baseline) in receipts:
     let cost = msl.len
     var marginal = "-"
-    if floor != cgsNoFloor:
-      marginal = $(cost - floor)
-      totalMarginal += cost - floor
+    if baseline != cgsNoBaseline:
+      marginal = $(cost - baseline)
+      totalMarginal += cost - baseline
     var row = "|" & name.alignLeft(nameW) & "|" & ($cost).align(costW) & "|" &
       marginal.align(margW) & "|"
     when hasDump:

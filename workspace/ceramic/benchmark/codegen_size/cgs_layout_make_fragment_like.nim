@@ -2,8 +2,8 @@
 ##
 ## make_fragment_like is the fragment/rest-path constructor through the tiled_product chain (the CuTe composition).
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor, one row per kernel:
-## - floorFragmentLike = the fragment input, one static V-block layout construction consumed by size, no like call
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline, one row per kernel:
+## - baselineOverheadKernel = the fragment input, one static V-block layout construction consumed by size, no like call
 ## - makeFragmentLikeV pairs it directly, makeFragmentLikeBroadcast pairs it over a broadcast input
 ##   ((4, 8):(0, 1)), its Marginal column mixes that input difference
 ##
@@ -17,8 +17,8 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # fragment input, one static V-block layout construction consumed by size, no like call
-const floorFragmentLikeMsl = metal:
-  proc floorFragmentLikeKernel(C: ptr UncheckedArray[float32]) {.global.} =
+const baselineOverheadMsl = metal:
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout(((16, 2), 16), ((1, 16), 4))
     C[0] = float32 toIntVal size(L)
 
@@ -39,6 +39,6 @@ const makeFragmentLikeBroadcastMsl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_make_fragment_like", [
-  cgsReceipt("floorFragmentLikeKernel", floorFragmentLikeMsl),
-  cgsReceipt("makeFragmentLikeVKernel", makeFragmentLikeVMsl, floorFragmentLikeMsl.len),
-  cgsReceipt("makeFragmentLikeBroadcastKernel", makeFragmentLikeBroadcastMsl, floorFragmentLikeMsl.len)])
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("makeFragmentLikeVKernel", makeFragmentLikeVMsl, baselineOverheadMsl.len),
+  cgsReceipt("makeFragmentLikeBroadcastKernel", makeFragmentLikeBroadcastMsl, baselineOverheadMsl.len)])

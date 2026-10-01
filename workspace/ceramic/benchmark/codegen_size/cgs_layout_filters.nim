@@ -1,7 +1,7 @@
 ## Codesize ledger, layout filter family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend, one row per kernel.
-## floorFilterKernel is the floor, a dynamic rank-2 layout with one stride-0 dimension consumed by size, filter rows pair it.
+## baselineOverheadKernel is the baseline, a dynamic rank-2 layout with one stride-0 dimension consumed by size, filter rows pair it.
 ##
 ## filter_zeros over the fully static input still emits the Int-object shape walk, its row stands alone.
 ##
@@ -16,10 +16,10 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# isolation floor, a dynamic rank-2 layout with one stride-0 dimension
+# isolation baseline, a dynamic rank-2 layout with one stride-0 dimension
 # consumed by size, no filter call
-const floorFilterMsl = metal:
-  proc floorFilterKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
+const baselineOverheadMsl = metal:
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, Int[0]()))
     C[0] = float32 toIntVal size(L)
 
@@ -49,7 +49,7 @@ const filterInactiveDynMsl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_filters", [
-  cgsReceipt("floorFilterKernel", floorFilterMsl),
-  cgsReceipt("filterZerosDynKernel", filterZerosDynMsl, floorFilterMsl.len),
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("filterZerosDynKernel", filterZerosDynMsl, baselineOverheadMsl.len),
   cgsReceipt("filterZerosStaticKernel", filterZerosStaticMsl),
-  cgsReceipt("filterInactiveDynKernel", filterInactiveDynMsl, floorFilterMsl.len)])
+  cgsReceipt("filterInactiveDynKernel", filterInactiveDynMsl, baselineOverheadMsl.len)])

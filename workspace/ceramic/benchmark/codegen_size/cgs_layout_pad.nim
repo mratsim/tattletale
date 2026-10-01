@@ -2,7 +2,7 @@
 ## against the concat-composed recursion candidate over the real call sites.
 ##
 ## Every kernel compiles one call site to Metal Shading Language, one row per kernel.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor:
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline:
 ## - each candidate row pairs its current-form sibling, the Marginal column shows the candidate delta over that form
 ## - R-suffixed templates = the candidate form, pad to rank through concat plus make_layout recursion, no LayoutCT
 ## - unsuffixed names = the current src, candidate value parity lives in tests/test_layout_algebra.nim (pad candidate parity section)

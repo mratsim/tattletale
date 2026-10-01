@@ -1,11 +1,11 @@
 ## Codesize ledger, divide family.
 ##
 ## Every kernel compiles one real call site to Metal Shading Language with the crucible metal backend.
-## cgsReport renders cost of 1 call plus the marginal over the paired floor, one row per kernel:
-## - floorRank2 = the isolation floor, a dynamic rank-2 layout with one direct coord read, every rank-2 row pairs it
+## cgsReport renders cost of 1 call plus the marginal over the paired baseline, one row per kernel:
+## - baselineOverheadKernel = the isolation baseline, a dynamic rank-2 layout with one direct coord read, every rank-2 row pairs it
 ## - zippedDivideOnly/logicalDivideOnly = the divide chains in isolation on that input, no view, no read
 ## - call-site rows cover logical_divide with a Layout tiler and zipped_divide over tuple, Layout,
-##   and rank-4 tiler inputs, the rank-4 row has no matching floor and prints `-`
+##   and rank-4 tiler inputs, the rank-4 row has no matching baseline and prints `-`
 ##
 ## Run from the tattletale/ dir, plain release protocol, usage in benchmark/codegen_size/README.md.
 ##
@@ -16,10 +16,10 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
-# isolation floor, a dynamic rank-2 layout with one direct coord read, no divide chain
-const floorRank2Msl = metal:
+# isolation baseline, a dynamic rank-2 layout with one direct coord read, no divide chain
+const baselineOverheadMsl = metal:
 # tiles-allow measured kernel, the call site needs raw crd2idx
-  proc floorRank2Kernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
+  proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
     let L = make_layout((int M, int N), (1, int S))
     C[0] = float32(crd2idx(L, (3, 2)))
 
@@ -71,10 +71,10 @@ const zippedDivideRank4Msl = metal:
 # ── kernel rows ──
 
 cgsReport("cgs_layout_divides", [
-  cgsReceipt("floorRank2Kernel", floorRank2Msl),
-  cgsReceipt("zippedDivideOnlyKernel", zippedDivideOnlyMsl, floorRank2Msl.len),
-  cgsReceipt("logicalDivideOnlyKernel", logicalDivideOnlyMsl, floorRank2Msl.len),
-  cgsReceipt("logicalDivideCompKernel", logicalDivideCompMsl, floorRank2Msl.len),
-  cgsReceipt("zippedDivideTupleKernel", zippedDivideTupleMsl, floorRank2Msl.len),
-  cgsReceipt("zippedDivideLayoutKernel", zippedDivideLayoutMsl, floorRank2Msl.len),
+  cgsReceipt("baselineOverheadKernel", baselineOverheadMsl),
+  cgsReceipt("zippedDivideOnlyKernel", zippedDivideOnlyMsl, baselineOverheadMsl.len),
+  cgsReceipt("logicalDivideOnlyKernel", logicalDivideOnlyMsl, baselineOverheadMsl.len),
+  cgsReceipt("logicalDivideCompKernel", logicalDivideCompMsl, baselineOverheadMsl.len),
+  cgsReceipt("zippedDivideTupleKernel", zippedDivideTupleMsl, baselineOverheadMsl.len),
+  cgsReceipt("zippedDivideLayoutKernel", zippedDivideLayoutMsl, baselineOverheadMsl.len),
   cgsReceipt("zippedDivideRank4Kernel", zippedDivideRank4Msl)])
