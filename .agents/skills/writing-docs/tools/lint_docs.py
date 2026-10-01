@@ -623,6 +623,21 @@ def _render_aligned_row(prefix, cells, widths):
     return prefix + "| " + " | ".join(parts) + " |"
 
 
+ARROW_RE = re.compile(r"→|←|↔|⇒|⟶|⟵|─▶|═▶|━▶")
+
+
+def is_math(c):
+    """An equation or dataflow line. An arrow marks it outright;
+    otherwise a single = sign with at most two prose words. Math
+    needs no inline code markers; a formula is not a prose sentence."""
+    if ARROW_RE.search(c) is not None:
+        return True
+    if c.count("=") != 1 or "<=" in c or ">=" in c:
+        return False
+    prose = [w for w in words(strip_backticks(c)) if len(w) > 2]
+    return len(prose) <= 2
+
+
 def is_url_line(text):
     """Returns True for lines carrying a URL (always exempt)."""
     return bool(re.search(r"https?://|\bwww\.", text))
@@ -873,7 +888,9 @@ def md_prose_lines(text):
         if s.startswith("<!--") or s.startswith("<div"):
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", s)
-        if m:
+        if m and not fence:
+            # inside a fence the # prefix is code (a quoted nim doc
+            # comment), never a markdown heading
             out.append((n + 1, m.group(2).strip(), "heading", 0, False))
             continue
         out.append((n + 1, s, "fence" if fence else "prose",
@@ -967,7 +984,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
     if not c:
         return
     bare = strip_backticks(c)
-    if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c):
+    if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
         return
     # The title flag fires on a short colon-terminated line.
     # Every comma-separated title segment opens on a noun phrase,

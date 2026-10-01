@@ -350,13 +350,36 @@ macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
   result.add builder.emitLayout().resultLayout
 
 macro compose*[A, B: Layout](a: A, b: B): untyped =
-  ## Layout composition.
+  ## Layout composition, `A ∘ B`.
+  ##
+  ## Say `A` is a layout, the element order of a tensor,
+  ## and `B` an access pattern, say take every second element.
+  ## 
+  ## Composition applies the pattern on the layout.
+  ##
+  ## The result is itself a layout, so patterns defined once
+  ## work on any tensor, without spelling out the resulting
+  ## indexing by hand.
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
-  ##
   ## Divisibility of the consumed shape is a caller precondition.
   ## Runtime shapes are unchecked.
+  ##
+  ##    domain  ──── B ────▶  A's domain  ──── A ────▶  values
+  ##    domain  ══════════════ R ════════════════════▶  values
+  ##
+  ## With B = (5, 4):(4, 1) and A = 20:2, R = (5, 4):(8, 2):
+  ##
+  ##    B(i) = 4·(i mod 5) + i div 5
+  ##    A(B(i)) = 2·B(i)
+  ##    R(i) = 8·(i mod 5) + 2·(i div 5)
+  ##
+  ## Examples:
+  ##
+  ##    (20, 2)       ∘ (5, 4):(4, 1) → (5, 4):(8, 2)
+  ##
+  ##    (6, 2):(8, 2) ∘ (4, 3):(3, 1) → ((2, 2), 3):((24, 2), 8)
   result = newStmtList()
   let (aShape, aStrides) = result.destructureLayout(a)
   let (bShape, bStrides) = result.destructureLayout(b)

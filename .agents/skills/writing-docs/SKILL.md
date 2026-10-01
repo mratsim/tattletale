@@ -117,6 +117,6 @@ The final test applies to every sentence, if understanding it requires
 
 ## Advanced features
 
-- Per-domain patterns (module headers, SME2 kernels, tensor ops, transformer layers, stateful modules + Lean)
+- Per-domain patterns (module headers, SME2 kernels, tensor ops, transformer layers, layout-algebra API narration, stateful modules + Lean)
 - Format rules, canonical references, and the full self-check live in [REFERENCE.md](REFERENCE.md)
 - The banned-vocabulary replacement table and before/after examples live in [EXAMPLES.md](EXAMPLES.md)
