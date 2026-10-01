@@ -354,7 +354,7 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   ##
   ## Say `A` is a layout, the element order of a tensor,
   ## and `B` an access pattern, say take every second element.
-  ## 
+  ##
   ## Composition applies the pattern on the layout.
   ##
   ## The result is itself a layout, so patterns defined once
@@ -415,32 +415,42 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
     tilerRank = tiler.getTypeInst().len
   doAssert tilerRank <= R,
     "compose: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
-  if tilerRank < R:
-    template dropT(l, t) =
-      ## Dimensions past the tiler length drop, slice them off first,
-      ## transform_layout passes leftovers through otherwise.
-      transform_layout(takeDimensions(l, 0, t.rank()), t):
-        when it_t is X:
-          it_l
-        elif it_t is (int or Int):
-          compose(it_l, make_layout(it_t))
-        else:
-          compose(it_l, it_t)
-    result = getAst(dropT(layout, tiler))
+  result = newStmtList()
+  let (aShape, aStrides) = result.destructureLayout(layout)
+  template composeTilerDim(aS2, aSt2, bElem) =
+    composeImpl(make_layout(aS2, aSt2), bElem.shape, bElem.stride)
+  var shapes: seq[NimNode]
+  var strides: seq[NimNode]
+  for k in 0 ..< tilerRank:
+    # bracket nodes, aShape[k] would index the NimNode's children
+    let aShapeK = if shTy.kind == nnkTupleConstr:
+                    nnkBracketExpr.newTree(aShape, newLit k)
+                  else:
+                    aShape
+    let aStrideK = if shTy.kind == nnkTupleConstr:
+                     nnkBracketExpr.newTree(aStrides, newLit k)
+                   else:
+                     aStrides
+    let tilerTy = tiler.getTypeInst()[k]
+    if tilerTy.eqIdent("X"):
+      # the profiler mark passes the dimension through whole
+      shapes.add aShapeK
+      strides.add aStrideK
+    elif tilerTy.kind == nnkBracketExpr and tilerTy[0].eqIdent("Layout"):
+      # a layout tiler element composes the dimension once
+      let dk = result.newLetAsgn("composedDim",
+        getAst(composeTilerDim(aShapeK, aStrideK, tiler[k])))
+      shapes.add dk.newDotExpr(ident"shape")
+      strides.add dk.newDotExpr(ident"stride")
+    else:
+      # an int tiler element composes the dimension with (N):(1),
+      # the first N positions: the pair is (N, the dimension's stride)
+      shapes.add tiler[k]
+      strides.add aStrideK
+  if shapes.len == 1:
+    result.add bindSym"make_layout".newCall(shapes[0], strides[0])
   else:
-    template keepT(l, t) =
-      ## Full-rank tiler, every dimension is hit.
-      transform_layout(l, t):
-        when it_t is X:
-          it_l
-        elif it_t is (int or Int):
-          compose(it_l, make_layout(it_t))
-        else:
-          compose(it_l, it_t)
-    result = getAst(keepT(layout, tiler))
-  if tilerRank == 1:
-    # a rank-1 tiler rebuilds flat in CuTe and pycute, unwrap the 1-tuple
-    result = newCall(nnkDotExpr.newTree(result, bindSym"dimension"), newLit 0)
+    result.add bindSym"make_layout".newCall(nnkPar.newTree(shapes), nnkPar.newTree(strides))
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide, tile a layout into (tile, rest)

@@ -46,10 +46,34 @@ const composeDynMsl = metal:
     let r = compose(a, b)
     C[0] = float32 toIntVal crd2idx(r, (1, 1))
 
+# compose of a static layout with an int tuple tiler, the zipped_divide call-site pattern
+const composeTilerMsl = metal:
+  proc composeTilerKernel(C: ptr UncheckedArray[float32]) {.global.} =
+    let a = make_layout((32, 8), (1, 32))
+    let r = compose(a, (16, 2))
+    C[0] = float32 toIntVal crd2idx(r, (1, 1))
+
+# compose with a profiler-mark tiler, the local_tile/partition call-site pattern
+const composeTilerProfMsl = metal:
+  proc composeTilerProfKernel(C: ptr UncheckedArray[float32]) {.global.} =
+    let a = make_layout((4, 8, 2), (1, 4, 32))
+    let r = compose(a, (2, _, _))
+    C[0] = float32 toIntVal crd2idx(r, (1, 1, 1))
+
+# compose with a layout-atom tiler element, the thrfrg call-site pattern
+const composeTilerAtomMsl = metal:
+  proc composeTilerAtomKernel(C: ptr UncheckedArray[float32]) {.global.} =
+    let a = make_layout((16, 8), (1, 16))
+    let r = compose(a, (make_layout((2, 4), (1, 4)), _))
+    C[0] = float32 toIntVal crd2idx(r, ((1, 1), 1))
+
 # ── kernel rows ──
 
 cgsReport("cgs_layout_compose", [
   cgsReceipt("composeStaticKernel", composeStaticMsl),
   cgsReceipt("composeNestedKernel", composeNestedMsl),
   cgsReceipt("composeRank1Kernel", composeRank1Msl),
-  cgsReceipt("composeDynKernel", composeDynMsl)])
+  cgsReceipt("composeDynKernel", composeDynMsl),
+  cgsReceipt("composeTilerKernel", composeTilerMsl),
+  cgsReceipt("composeTilerProfKernel", composeTilerProfMsl),
+  cgsReceipt("composeTilerAtomKernel", composeTilerAtomMsl)])
