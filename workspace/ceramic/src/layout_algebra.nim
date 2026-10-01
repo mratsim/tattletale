@@ -26,7 +26,7 @@
 ## | Excluded                                     | Scope                                   |
 ## | -------------------------------------------- | --------------------------------------- |
 ## | `getIndicesSortedByStride`                   | stride-sorted index permutation         |
-## | `complementImpl`                             | complement dispatch and emission        |
+## | `complementImpl`                             | complement front-end over complementFlatImpl |
 ## | `getMaxContiguous`, `getGaps`, `composeImpl` | inverse-chain and composition internals |
 ## | `unwrap`                                     | macro helpers                           |
 ## | `LayoutCT`                                   | macro helpers                           |

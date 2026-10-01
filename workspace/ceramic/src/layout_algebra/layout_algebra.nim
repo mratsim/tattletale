@@ -136,7 +136,7 @@ proc complementFold(shNode, boundExpr: NimNode;
   result = bindSym"coalesceBackward".newCall(
     nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
 
-macro complementImpl(sh, st, cosizeBound: typed): untyped =
+macro complementFlatImpl(sh, st, cosizeBound: typed): untyped =
   ## Dispatch to scalar or multi-dimension complement.
   ##
   ## Contract:
@@ -196,12 +196,12 @@ proc filterInactiveValues(shapeVals, strideVals: seq[int]): tuple[shape, stride:
       result.shape.insert(shI, 0)
       result.stride.insert(stI, 0)
 
-macro complementEmit(lyt, cosizeBound: typed; defaultBound: static bool): untyped =
+macro complementImpl(lyt, cosizeBound: typed; defaultBound: static bool): untyped =
   ## complement's emission, dispatched on the layout's staticness:
   ## - a fully static layout folds filter_zeros and coalesce to constant
   ##   values at compile time and emits the complement over them alone, no
   ##   runtime filter chain
-  ## - any other layout runs filter_inactive at runtime, complementImpl folds
+  ## - any other layout runs filter_inactive at runtime, complementFlatImpl folds
   ##   gap arithmetic from the coalesced shape/stride
   ## defaultBound swaps cosizeBound for cosize of the filtered layout.
   let (shTy, stTy) = layoutTypeArgs(lyt)
@@ -215,7 +215,7 @@ macro complementEmit(lyt, cosizeBound: typed; defaultBound: static bool): untype
     result = nnkStmtListExpr.newTree(
       nnkLetSection.newTree(nnkIdentDefs.newTree(
         f, newEmptyNode(), bindSym"filter_inactive".newCall(lyt))),
-      bindSym"complementImpl".newCall(
+      bindSym"complementFlatImpl".newCall(
         f.newDotExpr(ident"shape"), f.newDotExpr(ident"stride"), bound))
   else:
     # scalar stride broadcasts over the shape profile (repeat_like)
@@ -251,13 +251,13 @@ macro complementEmit(lyt, cosizeBound: typed; defaultBound: static bool): untype
       if shN.len == 1:
         shN = shN[0]
         stN = stN[0]
-      result = bindSym"complementImpl".newCall(shN, stN, bound)
+      result = bindSym"complementFlatImpl".newCall(shN, stN, bound)
 
 func complement*(layout: Layout; cosizeBound: Int or int): auto =
   ## Complement of the layout, filling stride gaps up to cosizeBound.
   ## Filters inactive dimensions first, the filter folds at compile time
   ## for fully static layouts.
-  complementEmit(layout, cosizeBound, false)
+  complementImpl(layout, cosizeBound, false)
 
 func complement*(layout: Layout; cosizeBound: static int): auto =
   ## Compile-time int overload.
@@ -265,11 +265,11 @@ func complement*(layout: Layout; cosizeBound: static int): auto =
 
 func complement*(layout: Layout): auto =
   ## Compute complement with default bound = cosize(filtered layout).
-  complementEmit(layout, Int[1](), true)
+  complementImpl(layout, Int[1](), true)
 
 func complement*(layout: Layout; cosizeBound: tuple): auto =
   ## Compute complement with a shape-tuple bound (size converted to product).
-  complementEmit(layout, cosizeBound, false)
+  complementImpl(layout, cosizeBound, false)
 
 # ═══════════════════════════════════════════════════════════════
 #  compose, apply a layout through another
@@ -634,7 +634,7 @@ template flat_divide*(layout: Layout; tiler: auto): auto =
 #  right_inverse, quasi-inverse sorted by stride
 # ═══════════════════════════════════════════════════════════════
 
-macro rightInverseEmit(sh, st: typed): untyped =
+macro rightInverseImpl(sh, st: typed): untyped =
   ## right_inverse core, emits coalesced contiguous chains in stride order:
   ## - a dimension joins when its stride equals the chain span
   ## - a dynamic shape ends the chain and keeps its own value node
@@ -671,7 +671,7 @@ macro right_inverse*(layout: typed): untyped =
   let (sh, st) = destructureLayout(stmts, layout)
   template rightInverseDelegate(sh2, st2) =
     ## Expands the inverse core on the destructured tuples at the use site.
-    rightInverseEmit(sh2, st2)
+    rightInverseImpl(sh2, st2)
   result = stmts
   result.add getAst(rightInverseDelegate(sh, st))
 
@@ -679,7 +679,7 @@ macro right_inverse*(layout: typed): untyped =
 #  left_inverse, left inverse (injective layouts only)
 # ═══════════════════════════════════════════════════════════════
 
-macro leftInverseEmit(sh, st: typed): untyped =
+macro leftInverseImpl(sh, st: typed): untyped =
   ## Left-inverse dimensions built from stride ratios:
   ##
   ##   result_shape[i]  = stride / size_so_far
@@ -732,7 +732,7 @@ macro left_inverse*(layout: typed): untyped =
   template leftInverseDelegate(sh2, st2) =
     ## Coalesce canonicalizes strides first, the chaining asserts require it.
     evalOnceAs(coalescedLayout, coalesceBackward(sh2, st2))
-    leftInverseEmit(coalescedLayout.shape, coalescedLayout.stride)
+    leftInverseImpl(coalescedLayout.shape, coalescedLayout.stride)
   result = stmts
   result.add getAst(leftInverseDelegate(sh, st))
 
