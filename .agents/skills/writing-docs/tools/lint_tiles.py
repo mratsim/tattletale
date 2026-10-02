@@ -9,20 +9,29 @@ these roots:
 - workspace/positron/src/mega_kernels/
 - workspace/ceramic/src/
 
-| rule-id           | trigger                                                                                          | severity |
-| ----------------- | ------------------------------------------------------------------------------------------------ | -------- |
-| frag-walk         | a `{.device.}`/`{.global.}` proc body reads or writes `.frags[..][..].frag[..]` without a marker | counted  |
-| tile-op-miss      | a frag assignment whose right side is single-frag arithmetic expressible as existing tile ops    | counted  |
-| lane-cell         | manual `crd2idx` + `cell mod/div` lane-to-cell decomposition outside the tile_algebra primitives | counted  |
-| scalar-extract    | raw `.data[0]` scalar extraction from a row vector outside the tile_algebra primitives           | counted  |
-| magic-dim         | a bare 8/16/32/64/128/256 literal in register-tile dims or index arithmetic                      | counted  |
-| raw-emit          | a `{.emit:}` block spelling a Crucible builtin (threadgroup_barrier) by hand                     | counted  |
-| math-const        | a float literal that bitwise matches a shared math_consts value                                  | counted  |
-| kernel-doc-shape  | an exported `{.device.}`/`{.global.}` kernel with no SDPA-form doc block                         | counted  |
-| hash-above-proc   | a `#` comment sits immediately above a proc, func, or template definition                        | counted  |
-| divider-space     | a section divider (`# ─── ... ───`) without a blank line before or after it                      | counted  |
-| one-liner         | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review | advisory |
-| explicit-generics | a call site spells generic arguments the compiler infers from the value arguments                | counted  |
+| rule-id             | trigger                                                                                                       | severity |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- | -------- |
+| frag-walk           | a `{.device.}`/`{.global.}` proc body reads or writes `.frags[..][..].frag[..]` without a marker              | counted  |
+| tile-op-miss        | a frag assignment whose right side is single-frag arithmetic expressible as existing tile ops                 | counted  |
+| lane-cell           | manual `crd2idx` + `cell mod/div` lane-to-cell decomposition outside the tile_algebra primitives              | counted  |
+| scalar-extract      | raw `.data[0]` scalar extraction from a row vector outside the tile_algebra primitives                        | counted  |
+| magic-dim           | a bare 8/16/32/64/128/256 literal in register-tile dims or index arithmetic                                   | counted  |
+| raw-emit            | a `{.emit:}` block spelling a Crucible builtin (threadgroup_barrier) by hand                                  | counted  |
+| math-const          | a float literal that bitwise matches a shared math_consts value                                               | counted  |
+| kernel-doc-shape    | an exported `{.device.}`/`{.global.}` kernel with no SDPA-form doc block                                      | counted  |
+| hash-above-proc     | a `#` comment sits immediately above a proc, func, or template definition                                     | counted  |
+| divider-space       | a section divider (`# ─── ... ───`) without a blank line before or after it                                   | counted  |
+| one-liner           | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review              | advisory |
+| explicit-generics   | a call site spells generic arguments the compiler infers from the value arguments                             | counted  |
+| newcall-method      | a newCall(x, ...) plain call, method call syntax x.newCall(...) is the required form (constructed nnk callees exempt)                       | counted  |
+| tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the required form | counted  |
+| tuplestream-method  | a tupleStream(x) plain call or bare x.tupleStream, method call syntax x.tupleStream() is the required form    | counted  |
+| onleaves-method     | an onLeaves(x) plain call or bare x.onLeaves, method call syntax x.onLeaves() is the required form            | counted  |
+| staticint-method    | a getStaticInt(x)/isStaticInt(x) plain call or bare property form, method call syntax x.getStaticInt()/x.isStaticInt() is the required form | counted  |
+| body-wrap           | a single-expression proc, func, or template body split across lines that fits one line                        | counted  |
+| semicolons          | a `;` on a Nim code line, split the statement or use comma-separated single-line params (base mode only)                                    | counted  |
+| closed-ir-tests     | a change under tests/codegen/ir, closed to additions, new tests go in tests/ir/optimizations (base mode only)                               | counted  |
+
 
 Module-scope exemptions, where a frag walk IS the tile implementation:
 
@@ -36,6 +45,21 @@ Exemption behavior:
 - lane-cell and magic-dim still run there
 - only tile_algebra silences lane-cell, the lane-to-cell decomposition
   belongs in that module
+
+Decl-name T-suffix ban (decl-t-suffix):
+
+- camelCaseT and PascalCaseT names are banned across proc, func, template, macro, iterator, converter and type declarations
+- setT and listT carry the ban, renaming is the fix, one finding per declaration with no marker exemption
+- a capital before the trailing T keeps the CT marker allowed, short names and bracketed generic parameter lists stay out
+
+Blessed rank for tuple length (tuplelen-rank):
+
+- tupleLen is banned outside int_tuples_datatypes.nim, blessed rank overloads
+  live there and own the int-or-Int branch (1 for int and Int, tupleLen otherwise)
+- rank reads as a method call on the value, write x.rank(), one finding
+  per touched line for bare rank(...), rank(typeof(...)), typeof(...).rank,
+  a bare .rank without call parens
+- a `# rank-allow <what>` marker on the line or the line above exempts one call
 
 Allowlist marker, proc scope:
 
@@ -113,7 +137,63 @@ RULES = {
                  "is named at review, never a violation",
     "explicit-generics": "a call site spells generic arguments the compiler "
                          "infers from the value arguments",
+    "newcall-method": "a newCall(x, ...) plain call, method "
+                      "call syntax x.newCall(...) is the required form",
+
+    "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
+                           "where method call syntax x.tupleFlatten() is the "
+                           "required form",
+    "tuplestream-method": "a tupleStream(x) plain call or bare x.tupleStream "
+                          "where method call syntax x.tupleStream() is the "
+                          "required form",
+    "onleaves-method": "an onLeaves(x) plain call or bare x.onLeaves "
+                       "where method call syntax x.onLeaves() is the "
+                       "required form",
+    "staticint-method": "a getStaticInt(x)/isStaticInt(x) plain call or bare "
+                        "property form where method call syntax "
+                        "x.getStaticInt()/x.isStaticInt() is the required form",
+    "semicolons": "a `;` on a Nim code line, split the statement or use "
+                  "comma-separated single-line params",
+    "closed-ir-tests": "a change under tests/codegen/ir, the directory is "
+                       "closed to new additions, tests/ir/optimizations is "
+                       "the place",
+    "emitlayout-method": "an emitLayout(x) plain call or bare x.emitLayout "
+                         "where method call syntax x.emitLayout() is the "
+                         "required form",
+    "body-wrap": "a single-expression callable body is split across lines "
+                 "while the joined form fits one line",
 }
+
+# Names that never take method call syntax.
+# Nim infix keywords read infix, constructors spell make_* functional.
+NEWCALL_METHOD_EXEMPT = frozenset((
+    "mod", "div", "shl", "shr", "and", "or", "xor", "not", "in", "notin",
+    "is", "isnot", "of",
+    # evalOnceAs is an alias-first binding macro. The method form x.f(y)
+    # sems the receiver x, but x is the name being bound and stays
+    # unresolvable by construction, so the plain call stays legal.
+    "evalOnceAs"))
+NEWCALL_METHOD_RE = re.compile(
+    r"(?<![.\w])newCall\s*\(")
+NEWCALL_CALLEE_NAME_RE = re.compile(
+    r"(bindSym|bindsym|ident)\s*(?:\(\s*)?[\"']([A-Za-z_]\w*)[\"']")
+
+# tupleFlatten always reads as a method call with parens, x.tupleFlatten().
+# Violations:
+# - plain call `tupleFlatten(x)`
+# - bare property form `x.tupleFlatten`, parens missing
+# - decl header stays out, the exported marker `*` sits before the paren there
+TUPLEFLATTEN_CALL_RE = re.compile(r"(?<![.\w])tupleFlatten\s*\(")
+TUPLEFLATTEN_BARE_RE = re.compile(r"\.\s*tupleFlatten(?!\s*\()")
+TUPLESTREAM_CALL_RE = re.compile(r"(?<![.\w])tupleStream\s*\(")
+TUPLESTREAM_BARE_RE = re.compile(r"\.\s*tupleStream(?!\s*\()")
+ONLEAVES_CALL_RE = re.compile(r"(?<![.\w])onLeaves\s*\(")
+ONLEAVES_BARE_RE = re.compile(r"\.\s*onLeaves(?!\s*\()")
+EMITLAYOUT_CALL_RE = re.compile(r"(?<![.\w])emitLayout\s*\(")
+EMITLAYOUT_BARE_RE = re.compile(r"\.\s*emitLayout(?!\s*\()")
+STATICINT_NAMES = ("getStaticInt", "isStaticInt")
+STATICINT_CALL_RES = {n: re.compile(r"(?<![.\w])%s\s*\(" % n) for n in STATICINT_NAMES}
+STATICINT_BARE_RES = {n: re.compile(r"\.\s*%s(?!\s*[(\*])" % n) for n in STATICINT_NAMES}
 
 # Callable declarations the new structural rules read. The tile rules stay
 # scoped to these forms, macros and iterators keep their own conventions.
@@ -208,6 +288,13 @@ def _strip_comment(raw):
     if m:
         raw = raw[:m.start()]
     return raw.rstrip(), False
+
+
+def _blank_nim_strings(code):
+    """The code text with string and char literal contents blanked, offsets
+    preserved; a `;` inside a literal separates no statements."""
+    out = re.sub(r'"(?:\\.|[^"\\])*"', lambda m: " " * len(m.group(0)), code)
+    return re.sub(r"'(?:\\.|[^'\\])'", lambda m: " " * len(m.group(0)), out)
 
 
 def device_procs(lines):
@@ -446,8 +533,14 @@ def scan_lane_cell(path, codes, findings, allowed=False):
                 "the tile_algebra `rowScalar` accessor"))
 
 
-def scan_magic_dim(path, code, no, findings):
-    """Runs magic-dim over one device proc body line."""
+def scan_magic_dim(path, code, no, findings, allowed=False):
+    """Runs magic-dim over one device proc body line.
+
+    - a proc carrying its own allowlist marker stays quiet, the marker names
+      its dim and the pending primitive
+    """
+    if allowed:
+        return
     stripped = code.strip()
     if CONST_DEF_RE.match(code):
         return
@@ -611,6 +704,142 @@ def scan_doc_shape(path, proc, lines, findings, exempt_file):
             "parameter comments"))
 
 
+DECL_T_SUFFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*T$")
+TYPE_SUFFIX_RE = re.compile(
+    r"^\s*(?:type\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b"
+    r"|([A-Za-z_][A-Za-z0-9_]*)\s*\*?\s*=\s*"
+    r"(?:object|ref|distinct|enum|tuple|concept)\b)")
+TUPLELEN_RE = re.compile(r"\btupleLen\s*\(")
+RANK_CALL_RE = re.compile(r"(?<![\w.\"'`])rank\s*\(")
+RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
+TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
+RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
+BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
+                     "int_tuples_datatypes.nim")
+
+
+def _t_suffix_banned(name):
+    """True when a declaration name carries the banned trailing-T suffix.
+
+    Contract:
+
+    - camelCaseT and PascalCaseT carry the ban with a lowercase letter or digit before the T
+    - a capital before the T keeps the CT marker allowed, names under three characters stay out
+    """
+    if not DECL_T_SUFFIX_RE.match(name) or len(name) < 3:
+        return False
+    # a capital before the trailing T marks a suffix group and stays
+    # allowed (the compile-time marker CT, LayoutCT, IntCT)
+    return name[-2].islower() or name[-2].isdigit() or name[-2] == "_"
+
+
+def scan_decl_t_suffix(path, ds, lines, findings):
+    """Flags declarations whose name ends in the T suffix.
+
+    Contract:
+
+    - camelCaseT and PascalCaseT declarations each carry one finding, renaming is the fix with no marker exemption
+    - setT and listT carry the ban
+    - a capital before the trailing T keeps the CT marker allowed, short names and bracketed generic parameter lists sit outside the ban
+    """
+    local = []
+    for d in ds:
+        name = d["name"]
+        if name and _t_suffix_banned(name):
+            local.append(Finding(
+                path, d["start"], "decl-t-suffix",
+                "%s %s ends in the T suffix, that naming convention is "
+                "banned, rename without the trailing T" % (d["kind"], name)))
+    for i, raw in enumerate(lines):
+        code, _c = _strip_comment(raw)
+        tm = TYPE_SUFFIX_RE.match(code)
+        if tm:
+            name = tm.group(1) or tm.group(2)
+            if _t_suffix_banned(name):
+                local.append(Finding(
+                    path, i + 1, "decl-t-suffix",
+                    "type %s ends in the T suffix, that naming convention "
+                    "is banned, rename without the trailing T" % name))
+            continue
+        if re.match(r"^\s*type\s*$", code):
+            # bare `type` opens a block, the members carry the names
+            base_indent = len(raw) - len(raw.lstrip())
+            j = i + 1
+            while j < len(lines):
+                member, _c2 = _strip_comment(lines[j])
+                if not member.strip():
+                    # blank and comment lines stay in the block, only a
+                    # dedent past the block indent ends the member scan
+                    j += 1
+                    continue
+                m_indent = len(lines[j]) - len(lines[j].lstrip())
+                if m_indent <= base_indent:
+                    break
+                mm = re.match(r"\s*\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b", member)
+                if mm:
+                    name = mm.group(1)
+                    if _t_suffix_banned(name):
+                        local.append(Finding(
+                            path, j + 1, "decl-t-suffix",
+                            "type %s ends in the T suffix, that naming "
+                            "convention is banned, rename without the "
+                            "trailing T" % name))
+                j += 1
+    seen = set()
+    for f in local:
+        if (f.line, f.reason) not in seen:
+            seen.add((f.line, f.reason))
+            findings.append(f)
+
+
+def scan_tuplelen_rank(path, lines, blocked, findings):
+    """Flags tupleLen calls outside the blessed rank definitions.
+
+    Contract:
+
+    - int_tuples_datatypes.nim hosts the blessed rank overloads and keeps
+      its exemption, every other tupleLen call site routes through rank
+    - rank call sites read as method calls (x.rank()), bare rank(...),
+      rank(typeof(...)), typeof(...).rank, and bare .rank carry one finding
+      per touched line
+    - a `# rank-allow <what>` marker on the line or the line above exempts one call
+    - block-comment lines and callable declaration headers carry no
+      call sites, neither reads
+    """
+    if _rel(path).endswith(BLESSED_RANK_FILE):
+        return
+    for i, raw in enumerate(lines):
+        if (i + 1) in blocked:
+            continue
+        code, _c = _strip_comment(raw)
+        if CALLABLE_HEAD_RE.match(code):
+            continue
+        prev = lines[i - 1] if i > 0 else ""
+        allowed = "rank-allow" in raw or "rank-allow" in prev
+        if TUPLELEN_RE.search(code) and not allowed:
+            findings.append(Finding(
+                path, i + 1, "tuplelen-rank",
+                "tupleLen call outside the blessed rank definitions, route "
+                "through rank or mark # rank-allow"))
+        if allowed:
+            continue
+        if RANK_TYPEOF_RE.search(code) or TYPEOF_RANK_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-typeof-ban",
+                "rank through typeof, call the value method directly "
+                "(x.rank()) or mark # rank-allow"))
+        elif RANK_BARE_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-parens",
+                "rank reads without call parens, write x.rank() or "
+                "mark # rank-allow"))
+        elif RANK_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "rank-call-syntax",
+                "rank reads as a method call here, write x.rank() or "
+                "mark # rank-allow"))
+
+
 def load_builtins():
     """Reads the Crucible builtin names from builtins_catalog.nim.
 
@@ -735,10 +964,12 @@ def decls(lines):
                 value_text = pm.group(1)
         # the body count reads the code lines between the terminator and the dedent
         body_count = 0
+        body_lines = []
         if eq_line is not None:
             rest = _strip_comment(lines[eq_line - 1][eq_col + 1:])[0]
             if rest.strip():
                 body_count += 1
+                body_lines.append(eq_line)
             k = eq_line
             while k < n:
                 line = lines[k]
@@ -750,11 +981,12 @@ def decls(lines):
                 code, comment_only = _strip_comment(line)
                 if code.strip():
                     body_count += 1
+                    body_lines.append(k + 1)
                 k += 1
         out.append({"name": name, "kind": kind, "start": i + 1,
-                    "eq_line": eq_line, "indent": indent,
+                    "eq_line": eq_line, "eq_col": eq_col, "indent": indent,
                     "generics": generics, "value_text": value_text,
-                    "body": body_count})
+                    "body": body_count, "body_lines": body_lines})
         i = max(i + 1, eq_line or i + 1)
     return out
 
@@ -821,6 +1053,202 @@ def scan_hash_above_proc(path, lines, blocked, findings):
                 path, first_div, "divider-space",
                 "a section divider keeps a blank line before and after it"))
         i += 1
+
+
+def scan_newcall_method(path, lines, blocked, findings):
+    """Flags call sites that read better as method call syntax.
+
+    Contract:
+    - fires once per call site, on the line carrying the callee
+    - names stay exempt when they are Nim infix keywords (mod, div, and, ...)
+      that only read infix, or make_* constructors that are functional
+    - block-comment lines and callable declaration headers carry no
+      call sites, neither reads
+    """
+
+    for i, line in enumerate(lines):
+        if (i + 1) in blocked:
+            continue
+        code, comment_only = _strip_comment(line)
+        if comment_only or CALLABLE_HEAD_RE.match(code):
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        m = NEWCALL_METHOD_RE.search(line)
+        if m is not None:
+            # first argument after the open paren decides the form:
+            # - an nnk* constructed callee builds the method call content
+            #   itself (e.newTree(..) as callee), method syntax is meaningless
+            # - a bindSym-named callee applies the full name exemptions:
+            #   make_* functional constructors stay plain calls
+            # - an ident-named callee gets only the infix exemptions,
+            #   ident-named newCall stays a violation (owner ruling)
+            # - anything else, a node variable or a runtime-built ident,
+            #   converts to receiver.newCall(args) directly
+            rest = line[m.end():].lstrip()
+            nm = None
+            if not rest.startswith("nnk"):
+                nm = NEWCALL_CALLEE_NAME_RE.match(rest)
+            if nm is None and not rest.startswith("nnk"):
+                # a node variable or a runtime-built ident, no literal name
+                findings.append(Finding(
+                    path, i + 1, "newcall-method",
+                    "newCall reads as a plain call here, write "
+                    "x.newCall(...) method call syntax"))
+            elif nm is not None:
+                kind, name = nm.group(1), nm.group(2)
+                functional = kind.lower() == "bindsym" and name.startswith("make")
+                if not (name in NEWCALL_METHOD_EXEMPT or functional):
+                    findings.append(Finding(
+                        path, i + 1, "newcall-method",
+                        "newCall builds %s(x, ...) where x.%s(...) is the method "
+                        "call form" % (name, name)))
+        if TUPLEFLATTEN_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tupleflatten-method",
+                "tupleFlatten reads as a plain call here, write "
+                "x.tupleFlatten()"))
+        elif TUPLEFLATTEN_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tupleflatten-method",
+                "tupleFlatten reads without call parens here, write "
+                "x.tupleFlatten()"))
+        if TUPLESTREAM_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tuplestream-method",
+                "tupleStream reads as a plain call here, write "
+                "x.tupleStream()"))
+        elif TUPLESTREAM_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "tuplestream-method",
+                "tupleStream reads without call parens here, write "
+                "x.tupleStream()"))
+        if ONLEAVES_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "onleaves-method",
+                "onLeaves reads as a plain call here, write "
+                "x.onLeaves()"))
+        elif ONLEAVES_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "onleaves-method",
+                "onLeaves reads without call parens here, write "
+                "x.onLeaves()"))
+        for static_name, static_call_re in STATICINT_CALL_RES.items():
+            if static_call_re.search(line):
+                findings.append(Finding(
+                    path, i + 1, "staticint-method",
+                    "%s reads as a plain call here, write x.%s()" %
+                    (static_name, static_name)))
+            elif STATICINT_BARE_RES[static_name].search(line):
+                findings.append(Finding(
+                    path, i + 1, "staticint-method",
+                    "%s reads without call parens here, write x.%s()" %
+                    (static_name, static_name)))
+        if EMITLAYOUT_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "emitlayout-method",
+                "emitLayout reads as a plain call here, write "
+                "x.emitLayout()"))
+        elif EMITLAYOUT_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "emitlayout-method",
+                "emitLayout reads without call parens here, write "
+                "x.emitLayout()"))
+
+
+BODY_WRAP_MAX = 180
+
+# Bodies starting a statement stay out of the join, the expression join is
+# only safe for one expression.
+BODY_STMT_HEAD_RE = re.compile(
+    r"^(?:let |var |const |if |elif |when |else\b|for |while |case |of "
+    r"|return |discard |yield |block |try |raise |echo |asm |static |"
+    r"defer |mixin |bind |import |include |from |importas )")
+
+# A line ending or starting on one of these continues the same expression,
+# the line break is not a statement boundary.
+BODY_CONT_END_CHARS = set("+-*/%<>=&|@?$~^,\\([{")
+BODY_CONT_START_CHARS = set("+-*/%<>=&|@?$~^.)]}")
+# Word operators cannot open a statement, a line opening on one continues the expression above it.
+BODY_CONT_START_WORDS = frozenset(
+    ("div", "mod", "shl", "shr", "and", "or", "xor", "in", "notin",
+     "is", "isnot", "as"))
+
+
+def _body_bracket_delta(s):
+    """Returns the net opening-bracket count of one code line."""
+    d = 0
+    for ch in s:
+        if ch in "([{":
+            d += 1
+        elif ch in ")]}":
+            d -= 1
+    return d
+
+
+def scan_body_wrap(path, lines, ds, blocked, findings):
+    """Flags a single-expression body split across lines that fits one line.
+
+    Contract:
+    - joins the body's code lines with single spaces, fires at the header
+      line while the joined form fits BODY_WRAP_MAX
+    - legal bodies: statements (let, if, when, for, ...), colon blocks,
+      blank lines, comments, spanning string literals, over-budget bodies
+    - bracket-depth tracking allows one statement boundary total, a line
+      break on an operator or inside open brackets counts as continuation
+    """
+    for d in ds:
+        if d["name"] is None or d["kind"] not in RULE_KINDS:
+            continue
+        body = d["body_lines"]
+        if d["eq_line"] is None or len(body) < 2:
+            continue
+        if any(no in blocked for no in body):
+            continue
+        if any(not lines[k].strip() or '"""' in lines[k]
+               for k in range(body[0] - 1, body[-1])):
+            continue
+        parts = []
+        broken = False
+        depth = 0
+        for no in body:
+            raw = lines[no - 1]
+            if no == d["eq_line"]:
+                raw = raw[d["eq_col"] + 1:]
+            code, comment_only = _strip_comment(raw)
+            if comment_only or code.strip() == "" or code.strip() != raw.strip():
+                broken = True
+                break
+            seg = code.strip()
+            if depth == 0 and BODY_STMT_HEAD_RE.match(seg):
+                broken = True
+                break
+            if code.rstrip().endswith(":"):
+                broken = True
+                break
+            parts.append(seg)
+            depth += _body_bracket_delta(seg)
+        if broken:
+            continue
+        depth, boundaries = 0, 0
+        for k, p in enumerate(parts):
+            depth += _body_bracket_delta(p)
+            if k + 1 == len(parts):
+                break
+            ends_cont = p[-1] in BODY_CONT_END_CHARS
+            starts_cont = (parts[k + 1][0] in BODY_CONT_START_CHARS
+                           or parts[k + 1].split()[0] in BODY_CONT_START_WORDS)
+            if depth <= 0 and not ends_cont and not starts_cont:
+                boundaries += 1
+        if boundaries == 0 and depth == 0:
+            joined = " ".join(p for seg in parts for p in seg.split())
+            if len(joined) <= BODY_WRAP_MAX:
+                findings.append(Finding(
+                    path, d["start"], "body-wrap",
+                    "the body of %s %s fits one %d-char line (%d joined), "
+                    "do not wrap" % (d["kind"], d["name"], BODY_WRAP_MAX,
+                                     len(joined))))
 
 
 def scan_one_liner(path, ds, findings):
@@ -926,17 +1354,21 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
     if generic_map is None:
         generic_map = build_generic_map([(path, lines)])
     scan_hash_above_proc(path, lines, blocked, findings)
+    scan_newcall_method(path, lines, blocked, findings)
+    scan_body_wrap(path, lines, ds, blocked, findings)
     scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
+    scan_decl_t_suffix(path, ds, lines, findings)
+    scan_tuplelen_rank(path, lines, blocked, findings)
     for proc in procs:
         if not proc["device"]:
             continue
         scan_frag_rules(path, proc, lines, findings, exempt_file)
         scan_doc_shape(path, proc, lines, findings, exempt_file)
         codes = [(no, c) for no, c in proc["body"]]
+        allowed = _allowlisted_proc(proc, lines)
         if not lane_exempt:
-            scan_lane_cell(path, codes, findings,
-                           _allowlisted_proc(proc, lines))
+            scan_lane_cell(path, codes, findings, allowed)
         for no, code in codes:
             if code is None:
                 continue
@@ -944,7 +1376,7 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
                 scan_raw_emit(path, code[len("EMIT:"):], no, findings,
                               builtins)
                 continue
-            scan_magic_dim(path, code, no, findings)
+            scan_magic_dim(path, code, no, findings, allowed)
             scan_math_const(path, code, no, findings, consts)
 
 
@@ -982,6 +1414,27 @@ def lint(paths, base=None):
                 findings.extend(file_findings)
             else:
                 findings.extend(fd for fd in file_findings if fd.line in added)
+            # base-mode-only rules: pre-existing tree stays out of scope
+            bcl = nim_block_comment_lines(text)
+            lines = text.splitlines()
+            targets = list(range(1, len(lines) + 1)) if added is None else sorted(added)
+            for no in targets:
+                if no in bcl:
+                    continue
+                code, comment_only = _strip_comment(lines[no - 1])
+                if comment_only:
+                    continue
+                if ";" in _blank_nim_strings(code):
+                    findings.append(Finding(
+                        f, no, "semicolons",
+                        "a `;` on a Nim code line, split the statement or "
+                        "use comma-separated single-line params"))
+            if targets and "tests/codegen/ir/" in _rel(f):
+                findings.append(Finding(
+                    f, min(targets), "closed-ir-tests",
+                    "a change under tests/codegen/ir, the directory is "
+                    "closed to new additions, tests/ir/optimizations is "
+                    "the place"))
         else:
             findings.extend(file_findings)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))

@@ -1,0 +1,4 @@
+# Codegen-size Metal dumps (-d:TTT_CgsDump), the directory stays via .gitkeep
+# ----------------------------------------------------------------------------------------
+benchmark/codegen_size/dumps/*
+!benchmark/codegen_size/dumps/.gitkeep

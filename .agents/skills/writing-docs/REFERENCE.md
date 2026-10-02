@@ -165,6 +165,59 @@ The dispatch proc carries the same kernel contract plus the asm kernel per tile 
    `input_ids vs position_ids` gets a section stating what each is,
    when they coincide, and when they diverge.
 
+## Layout algebra: API narration (layout_algebra.nim, compose)
+
+The `compose` docstring (layout_algebra.nim) models
+**API narration**: use case, contract, diagram, math, identities.
+
+1. **Plain-speech narration opens the doc**, 3 lines per paragraph,
+   the formal contract after.
+
+   ```text
+   ## Say `A` is a layout, the element order of a tensor,
+   ## and `B` an access pattern, say take every second element.
+   ## Composition applies the pattern on the layout.
+   ##
+   ## The result is itself a layout, so patterns defined once
+   ## work on any tensor, without spelling out the resulting
+   ## indexing by hand.
+   ##
+   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
+   ## `i` in `0 ..< cosize(B)`.
+   ## Divisibility of the consumed shape is a caller precondition.
+   ## Runtime shapes are unchecked.
+   ```
+
+2. **Diagrams separate the maps from the composition.** Each input
+   map is a single box-drawing line, the composition a double line.
+   Equation lines (one `=`, few prose words) and arrow lines
+   read as math without inline code markers:
+
+   ```text
+   ##    domain  ──── B ────▶  A's domain  ──── A ────▶  values
+   ##    domain  ══════════════ R ════════════════════▶  values
+   ##
+   ##    B(i) = 4·(i mod 5) + i div 5
+   ##    A(B(i)) = 2·B(i)
+   ##    R(i) = 8·(i mod 5) + 2·(i div 5)
+   ```
+
+3. **Examples are identities, verified.** Each carries an expression
+   and its result after `# →`. A test or the implementation verifies it.
+
+   ```text
+   ## Examples:
+   ##    compose(make_layout(20, 2), make_layout((5, 4), (4, 1)))
+   ##    # → (5, 4):(8, 2)
+   ```
+
+The audience is the API user, `##` docs stay on correct use,
+never the maintainer mechanics.
+
+Narration obeys Write Without Hidden Context: the use case stands alone,
+no history, no reference names. The comprehension floor is
+a CS undergraduate.
+
 ## Stateful modules and Lean (kvcache.nim + kvcache.lean)
 
 The Nim/Lean pair documents the same design twice, each side pointing at the other.
@@ -236,7 +289,7 @@ This is the pattern for stateful structures with invisible invariants:
 ## Canonical references
 
 When in doubt, match these files exactly. They are the operator's definition
-of the house style:
+of the required style:
 
 1. `workspace/libtorch/src/tensors_nn.nim`, the SDPA and nn functional API
    with tensor op docs, the shape contracts, backend tables, compact one-liners

@@ -74,6 +74,7 @@ From actual slop seen in this repo:
 
 | Sloppy (banned) | House style |
 |---|---|
+| "the closed form emits per dimension" | "the direct (T):(d) divide emits per dimension" |
 | "pinned by the probe's host mirror" | "verified against the host reference" |
 | "probe gates cb2 with that deviation class" | "cb2 matches the CUDA-faithful rounding to within a few fp16 ulps" |
 | "Missions 02/03 import this module" | "The ex02a microkernel examples import this module" |
