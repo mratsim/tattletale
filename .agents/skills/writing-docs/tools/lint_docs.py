@@ -122,7 +122,9 @@ WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
 # A ##-doc line indented this deep past the marker is worked-example or
 # diagram content, air under the wall and stub rules (prose wrap sits at
-# 2-3, nothing intentional is written that deep).
+# 2-3, nothing intentional is written that deep). An `Example:` or
+# `Usage:` line puts every following doc line in the same paragraph into
+# example content, code and result comments indented shallow stay air.
 DEEP_EXAMPLE_INDENT = 4
 # A table cell over this many words is a wall of prose in a cell,
 # split it into bullets or a diagram.
@@ -1868,6 +1870,7 @@ def scan(path, text, findings):
         run = []
         air_run = []
         prev_bullet = False
+        in_example = False
         for n, c, kind, indent, trailing in block:
             if kind == "heading":
                 if strip_backticks(c).split()[:1] == ["The"]:
@@ -1877,6 +1880,7 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
+                in_example = False
                 prev_prose = None
                 continue
             if not c:
@@ -1886,7 +1890,10 @@ def scan(path, text, findings):
                 # a blank line is a reflow boundary, the stub check must
                 # not reach across it for a reflowable predecessor
                 prev_prose = None
+                in_example = False
                 continue
+            if c in ("Example:", "Usage:"):
+                in_example = True
             if kind == "fence":
                 # Fenced lines never join prose runs.
         # The structure rules see code layout they cannot judge.
@@ -1896,7 +1903,8 @@ def scan(path, text, findings):
                 check_line(path, n, c, kind, is_nim, prev_text, findings)
                 continue
             check_line(path, n, c, kind, is_nim, prev_text, findings)
-            deep_example = block_is_doc and indent >= DEEP_EXAMPLE_INDENT
+            deep_example = block_is_doc and (indent >= DEEP_EXAMPLE_INDENT
+                                             or in_example)
             if structural(c) or deep_example:
                 flush_wall(path, run, findings)
                 run = []

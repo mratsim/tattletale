@@ -188,13 +188,11 @@ type
     accums: seq[seq[NimNode]]
     completed: seq[NimNode]
     verbatim: bool = true
-    collapseSingletons: bool = false
 
-func new*(T: type TupleBuilderNested, numTuples = 1, collapseSingletons = false): T =
+func new*(T: type TupleBuilderNested, numTuples = 1): T =
   result.accums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
   result.verbatim = true
-  result.collapseSingletons = collapseSingletons
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
@@ -216,8 +214,6 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
         if tb.accums[i].len == 0:
           tb.completed[i] = nnkTupleConstr.newTree()
       else:
-        if tb.collapseSingletons and node.len == 1:
-          node = node[0]
         if tb.accums[i].len == 0:
           tb.completed[i] = node
         else:
@@ -306,7 +302,7 @@ iterator items*(z: TupleZip): tuple[a, b: TupleStreamEvent] =
 #  Filters
 # ═══════════════════════════════════════════════════════════════════════
 
-func hasType*(x: NimNode; t: static string): bool =
+func hasType*(x: NimNode, t: static string): bool =
   ## Type equality in macro. Resolves through aliases.
   ## This does not handle generic matches (i.e. Int[4].hasType"Int")
   ##
