@@ -107,29 +107,31 @@ block:
 
 echo "  [OK] idx2crd: roundtrip"
 
-block:
-  # L1 cache residency test: 24 "warps" of 8 elements
-  let L = make_layout((3, 8), (1, 3))
-  for i in 0 ..< 24:
-    let crd = idx2crd(L, i)
-    let idx = crd2idx(L, crd)
-    doAssert idx == i
+proc runIdx2crdAbsorbTests =
+  block:
+    # L1 cache residency test: 24 "warps" of 8 elements
+    let L = make_layout((3, 8), (1, 3))
+    for i in 0 ..< 24:
+      let crd = idx2crd(L, i)
+      let idx = crd2idx(L, crd)
+      doAssert idx == i
 
-echo "  [OK] idx2crd: 24 elements roundtrip"
+  echo "  [OK] idx2crd: 24 elements roundtrip"
+  block:
+    # pycute alignment, the quotient runs unmod'd at the most-significant leaf,
+    # and the excess accumulates there without wrapping, per pycute's idx2crd.
+    # CuTe C++ mods every leaf and wraps, so the case below diverges
+    # from CuTe C++ on purpose.
+    let L = make_layout((4, 8), (1, 4))
+    doAssert idx2crd(L, 100) === (0, 25)
+    # for a non-compact layout the most-significant leaf = the largest
+    # stride (16 here), not the positional last, so (1, 7) below stays (1, 7)
+    let n = make_layout((4, 8), (16, 1))
+    doAssert idx2crd(n, 31) === (1, 7)
 
-block:
-  # pycute alignment, the quotient runs unmod'd at the most-significant leaf,
-  # and the excess accumulates there without wrapping, per pycute's idx2crd.
-  # CuTe C++ mods every leaf and wraps, so the case below diverges
-  # from CuTe C++ on purpose.
-  let L = make_layout((4, 8), (1, 4))
-  doAssert idx2crd(L, 100) === (0, 25)
-  # for a non-compact layout the most-significant leaf = the largest
-  # stride (16 here), not the positional last, so (1, 7) below stays (1, 7)
-  let n = make_layout((4, 8), (16, 1))
-  doAssert idx2crd(n, 31) === (1, 7)
+  echo "  [OK] idx2crd: pycute absorb"
 
-echo "  [OK] idx2crd: pycute absorb"
+runIdx2crdAbsorbTests()
 
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd(shape, idx) — shape-based (valid for non-compact shapes)

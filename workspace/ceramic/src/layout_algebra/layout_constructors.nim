@@ -180,9 +180,10 @@ macro make_layout_like*(layout: Layout): untyped =
     error "make_layout_like: shape/stride rank mismatch"
 
   let strides = compactLikeStrides(shVals, stVals)
-  # Rank-1 compaction stays a 1-tuple so the like of a rank-1 layout
-  # keeps the same shape and stride tuple rank.
-  let outSt = if strides.len == 1:
+  # Stride rank matches the input's shape rank:
+  #   a 1-tuple shape keeps a 1-tuple stride,
+  #   a scalar shape keeps a scalar stride.
+  let outSt = if strides.len == 1 and shTyp.kind == nnkTupleConstr:
                 nnkTupleConstr.newTree(newLit(strides[0]))
               else:
                 litTuple(strides)

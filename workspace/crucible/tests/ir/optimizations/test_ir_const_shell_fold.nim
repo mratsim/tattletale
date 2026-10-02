@@ -9,6 +9,7 @@
 ##
 ## - in the IR, a zero-arg constant-returning function is gone after the pipeline, no definition and no call left
 ## - in the IR, a dynamic (parameter-consuming) function shell survives
+## - in the IR, a shell with an effectful initializer or a foreign write survives
 ## - in Metal emission, constants replace the calls, scalar and struct constructor alike, with no shell emitted
 ##
 ## The IR checks run inside a `runAndSummarize` macro (the function tables live on the compiler-run GpuContext, never reaching runtime).
@@ -119,6 +120,67 @@ block:
     "the struct-constant shell must not be emitted, got:\n" & mslPair
   doAssert mslPair.contains("16") and mslPair.contains("17"),
     "the struct constants must appear at the construction site"
+
+# ── 5. IR: an effectful initializer disqualifies the shell ──
+# A binding initializer with a call is not constant. Folding the shell
+# would delete the call with the definition.
+var gCounter: int32 = 0
+
+proc counterBump(): int32 =
+  gCounter = gCounter + 1
+  return 7
+
+proc candidateEffectfulInit(): int32 =
+  let t = counterBump()
+  return 16
+
+static:
+  let summary = runAndSummarize:
+    proc effectInitKernel(C: ptr UncheckedArray[int32]) {.global.} =
+      C[0] = candidateEffectfulInit()
+
+  doAssert summary.count("CALL counterBump") == 1,
+    "the effectful call must survive the pass, got:\n" & summary
+  doAssert summary.count("CALL candidateEffectfulInit") == 1,
+    "the effectfully-initialized shell must not fold, got:\n" & summary
+
+# ── 6. IR: an assignment outside the body's locals disqualifies the shell ──
+# A write to a global or a by-ref parameter is not a binding. Folding the shell
+# would delete the write with the definition.
+proc candidateWritesGlobal(): int32 =
+  gCounter = 5
+  return 16
+
+static:
+  let summary = runAndSummarize:
+    proc globalWriteKernel(C: ptr UncheckedArray[int32]) {.global.} =
+      C[0] = candidateWritesGlobal()
+
+  doAssert summary.count("CALL candidateWritesGlobal") == 1,
+    "the foreign-writing shell must not fold, got:\n" & summary
+  doAssert summary.count("FN candidateWritesGlobal") == 1,
+    "the foreign-writing shell definition must survive, got:\n" & summary
+
+# ── 7. IR: a folded call keeps its side-effecting arguments ──
+# A folded function whose parameter the body never reads takes no
+# argument value. Substituting the constant would still delete any
+# argument expression, so a call with effectful arguments must survive.
+proc effectReturn(): int32 =
+  gCounter = gCounter + 1
+  return 7
+
+func unreadParamFn(x: int32): int32 =
+  return 9
+
+static:
+  let summary = runAndSummarize:
+    proc unreadArgKernel(C: ptr UncheckedArray[int32]) {.global.} =
+      C[0] = unreadParamFn(effectReturn())
+
+  doAssert summary.count("CALL effectReturn") == 1,
+    "the side-effecting argument call must survive, got:\n" & summary
+  doAssert summary.count("CALL unreadParamFn") == 1,
+    "the shell must not fold when an argument would be lost, got:\n" & summary
 
 echo ""
 echo "  All constant-shell elimination tests passed."

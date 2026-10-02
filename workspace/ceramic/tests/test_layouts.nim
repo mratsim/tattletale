@@ -1051,6 +1051,7 @@ proc runTests =
   echo "--- NCHW ---"
   runNCHWTests()
   echo "--- zipDimensions ---"
+  runZipTests()
 
   echo "--- groupDimensions ---"
   block:

@@ -582,6 +582,86 @@ proc runZippedGatherTests =
       "sub-tuple collapse: " & $zipped_divide(L, (2, (4,)))
   echo "    zipped gather rewrite: 5 cases OK"
 
+
+#  Section 16. right_inverse / left_inverse over a runtime shape leaf.
+#
+#  A runtime shape leaf makes the stride prefix runtime: dimensions
+#  after it in original order carry the prefix as a runtime expression.
+#  A runtime layout must match the identical layout spelled with constants.
+#  ═══════════════════════════════════════════════════════════════
+
+proc runInverseDynamicShapeTests =
+  block:
+    ## runtime shape = static counterpart, the dynamic-shape dimension
+    ## precedes a smaller-stride dimension in original order
+    let n = 5
+    let r = right_inverse(make_layout((n, 4), (4, 1)))
+    check r.shape, (4, n), (Int[4], int)
+    doAssert r.stride[0] === n, "right_inverse stride: " & $r.stride
+    doAssert r.stride[1] === 1, "right_inverse stride: " & $r.stride
+    let rs = right_inverse(make_layout((5, 4), (4, 1)))
+    doAssert r === rs, "right_inverse runtime shape: " & $r & " != " & $rs
+  block:
+    let n = 5
+    let r = left_inverse(make_layout((n, 4), (4, 1)))
+    doAssert r.stride[0] === n, "left_inverse stride: " & $r.stride
+    let rs = left_inverse(make_layout((5, 4), (4, 1)))
+    doAssert r === rs, "left_inverse runtime shape: " & $r & " != " & $rs
+
+  echo "    inverse dynamic-shape fixture: 2 guarded cases OK"
+
+
+
+#  Section 17. compose with a symbol-bound tiler.
+#
+#  A tiler bound to a symbol is not readable by child index at macro
+#  time. The tiler binds once to a fresh let and the loop reads every
+#  element by index, literal and symbol-bound tiler nodes alike.
+#  ═══════════════════════════════════════════════════════════════
+
+proc runComposeSymbolTilerTests =
+  block:
+    ## int tiler: the symbol-bound tuple matches the literal tuple
+    let t = (16, 2)
+    let lit = compose(make_layout((32, 8), (1, 32)), (16, 2))
+    let viaSym = compose(make_layout((32, 8), (1, 32)), t)
+    doAssert viaSym === lit, "int tiler: " & $viaSym & " != " & $lit
+  block:
+    ## Layout tiler element: the symbol-bound tuple matches the literal form
+    let t = (make_layout(16, 1), 2)
+    let lit = compose(make_layout((32, 8), (1, 32)), (make_layout(16, 1), 2))
+    let viaSym = compose(make_layout((32, 8), (1, 32)), t)
+    doAssert viaSym === lit, "layout tiler: " & $viaSym & " != " & $lit
+
+  echo "    compose symbol-tiler fixture: 2 guarded cases OK"
+
+
+
+#  Section 18. make_layout_like over a scalar shape.
+#
+#  A scalar-shape layout keeps a scalar stride, the like of a scalar
+#  shape must stay scalar so make_tensor_like's strict === holds.
+#  A rank-1 layout keeps its 1-tuple stride, the 1-tuple case is locked.
+#  ═══════════════════════════════════════════════════════════════
+
+proc runMakeLayoutLikeScalarShapeTests =
+  block:
+    ## scalar shape = scalar stride, rank-1 keeps the 1-tuple stride
+    let like1 = make_layout_like(make_layout(4, 1))
+    doAssert like1 === make_layout(4, 1), "scalar shape: " & $like1
+    doAssert typeof(like1.stride) is typeof(make_layout(4, 1).stride),
+      "make_layout_like: scalar-shape stride must stay a scalar, got " & $(typeof(like1.stride))
+  block:
+    ## the fragment path: the like of a scalar-shape takeDimensions extract
+    let td = takeDimensions(make_layout((4, 8), (1, 4)), 1, 2)
+    let likeT = make_layout_like(td)
+    doAssert likeT === make_layout(8, 1), "scalar extract: " & $likeT
+    doAssert typeof(likeT.stride) is typeof(make_layout(8, 1).stride),
+      "make_layout_like: scalar-extract stride must stay a scalar, got " & $(typeof(likeT.stride))
+
+  echo "    make_layout_like scalar-shape fixture: 2 guarded cases OK"
+
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -614,6 +694,12 @@ proc runTests =
   runDivideTupleTilerTests()
   echo "── Section 15. hier_unzip zipped gather stream rewrite ──"
   runZippedGatherTests()
+  echo "── Section 16. inverse strides after a runtime shape leaf ──"
+  runInverseDynamicShapeTests()
+  echo "── Section 17. compose with a symbol-bound tiler ──"
+  runComposeSymbolTilerTests()
+  echo "── Section 18. make_layout_like over a scalar shape ──"
+  runMakeLayoutLikeScalarShapeTests()
   echo "  All tests passed."
 
 when isMainModule:

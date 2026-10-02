@@ -219,7 +219,7 @@ proc foldMaxMinToBuiltins*(ctx: var GpuContext) =
 # Constant-shell elimination
 # ═══════════════════════════════════════════════════════════════════
 
-proc scanConstBindings(stmts: seq[GpuAst], binding: var Table[string, GpuAst], returns: var seq[GpuAst]): bool =
+proc scanConstBindings(stmts: seq[GpuAst], bodyLocals: var HashSet[string], binding: var Table[string, GpuAst], returns: var seq[GpuAst]): bool =
   ## Collects the single-assignment local bindings of a candidate body.
   ##
   ## Returns:
@@ -234,6 +234,7 @@ proc scanConstBindings(stmts: seq[GpuAst], binding: var Table[string, GpuAst], r
   ## since calls and control statements are among them.
   ## - any local bound twice
   ## - any assignment whose target is not a plain identifier
+  ## - any assignment whose target is not a local declared in this body
   for s in stmts:
     case s.kind
     of gpuComment, gpuDiscard:
@@ -242,19 +243,22 @@ proc scanConstBindings(stmts: seq[GpuAst], binding: var Table[string, GpuAst], r
       let name = s.vName.symbol.name
       if name in binding:
         return false
+      bodyLocals.incl name
       if s.vInit.kind != gpuDiscard:
         binding[name] = s.vInit
     of gpuAssign:
       if s.aLeft.kind != gpuIdent:
         return false
       let name = s.aLeft.symbol.name
+      if name notin bodyLocals:
+        return false
       if name in binding:
         return false
       binding[name] = s.aRight
     of gpuBlock:
       if s.isExpr:
         return false
-      if not scanConstBindings(s.statements, binding, returns):
+      if not scanConstBindings(s.statements, bodyLocals, binding, returns):
         return false
     of gpuReturn:
       returns.add s.rValue
@@ -338,10 +342,16 @@ proc foldedConstant(fn: GpuAst): GpuAst =
     return nil
   var binding = initTable[string, GpuAst]()
   var returns: seq[GpuAst] = @[]
-  if not scanConstBindings(fn.pBody.statements, binding, returns):
+  var bodyLocals = initHashSet[string]()
+  if not scanConstBindings(fn.pBody.statements, bodyLocals, binding, returns):
     return nil
   if returns.len != 1:
     return nil
+  # every binding feeds the return chain, one that is not constant
+  # disqualifies the body: the fold would delete it with the definition
+  for v in binding.values:
+    if resolveConstant(v, binding).isNil:
+      return nil
   result = resolveConstant(returns[0], binding)
 
 proc calleeParams(ctx: GpuContext; callee: GpuAst): seq[GpuParam] =
@@ -360,6 +370,10 @@ proc calleeParams(ctx: GpuContext; callee: GpuAst): seq[GpuParam] =
 proc substituteConstShells(ctx: GpuContext, n: var GpuAst, folds: Table[string, GpuAst]) =
   ## Replaces every call to a folded constant function with the constant.
   ##
+  ## The call is kept whole when an argument is not a literal or identifier,
+  ## the folded body reads no parameter, so the constant loses the argument
+  ## and its effects.
+  ##
   ## Arguments bound to reference parameters are left intact.
   ## A substituted constant is not an lvalue, and reference parameters
   ## reject temporaries, so only the non-lvalue risk is avoided.
@@ -369,8 +383,14 @@ proc substituteConstShells(ctx: GpuContext, n: var GpuAst, folds: Table[string, 
   of gpuCall:
     let iSym = n.cName.symbol.iSym
     if iSym in folds:
-      n = folds[iSym].clone()
-      return
+      var argsSubstitutable = true
+      for a in n.cArgs:
+        if a.kind notin {gpuLit, gpuIdent}:
+          argsSubstitutable = false
+          break
+      if argsSubstitutable:
+        n = folds[iSym].clone()
+        return
     let params = ctx.calleeParams(n.cName)
     for i in 0 ..< n.cArgs.len:
       if i < params.len and params[i].passByRef:

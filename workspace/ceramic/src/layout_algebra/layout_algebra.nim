@@ -466,7 +466,7 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
     elif elemTy.kind == nnkBracketExpr and elemTy[0].eqIdent("Layout"):
       # a layout tiler element composes the dimension once
       let dk = result.newLetAsgn("composedDim",
-        getAst(composeTilerDim(aShapeK, aStrideK, tiler[k])))
+        getAst(composeTilerDim(aShapeK, aStrideK, tiler.getTupleIndex(k))))
       shapes.add dk.newDotExpr(ident"shape")
       strides.add dk.newDotExpr(ident"stride")
     elif elemTy.isTupleTy():
@@ -474,13 +474,13 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
       # guards hold at every level of that recursion
       let dk = result.newLetAsgn("composedDim",
         ident"compose".newCall(ident"make_layout".newCall(aShapeK, aStrideK),
-                               tiler[k]))
+                               tiler.getTupleIndex(k)))
       shapes.add dk.newDotExpr(ident"shape")
       strides.add dk.newDotExpr(ident"stride")
     else:
       # an int tiler element composes the dimension with (N):(1),
       # the first N positions: the pair is (N, the dimension's stride)
-      shapes.add tiler[k]
+      shapes.add tiler.getTupleIndex(k)
       strides.add aStrideK
 
   if shapes.len == 1:
@@ -664,25 +664,43 @@ macro rightInverseImpl(sh, st: typed): untyped =
   ## right_inverse core, emits coalesced contiguous chains in stride order:
   ## - a dimension joins when its stride equals the chain span
   ## - a dynamic shape ends the chain and keeps its own value node
+  ## - the chain stride is the product of the shapes before the dimension,
+  ##   a runtime prefix expression once a dynamic leaf precedes it
   ## - an empty chain collapses to the empty layout (1, 0)
-  var dims: seq[tuple[stride, shape, prefix: int, leaf: NimNode]]
+  var dims: seq[tuple[stride, shape, prefix: int, prefixNode: NimNode, leaf: NimNode]]
   var prefix = 1
+  # prefixNode carries the prefix as an expression once it turns runtime,
+  # so a stride after a dynamic leaf can still be emitted
+  var prefixNode: NimNode = nil
   for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
     if shEv.kind != kLeaf:
       continue
     let shape = shEv.leafTy.getStaticInt()
-    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, shEv.leaf)
-    # past a dynamic shape the prefix is unknown, no sentinel arithmetic
-    prefix = if shape == DynamicSentinel: DynamicSentinel
-             else: prefix * shape
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf)
+    let factor = if shape == DynamicSentinel: shEv.leaf
+                 else: IntCT(shape)
+    if shape == DynamicSentinel:
+      # past a dynamic shape the prefix is unknown, no sentinel arithmetic
+      prefix = DynamicSentinel
+      prefixNode = if prefixNode.isNil: factor
+                   else: prefixNode * factor
+    else:
+      if prefixNode != nil:
+        # the prefix stays runtime after a dynamic leaf, fold the factor into the prefix
+        prefixNode = prefixNode * factor
+      if prefix != DynamicSentinel:
+        prefix = prefix * shape
 
   var builder = TupleBuilderFlat.new(2)
   var curr = 1
   for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
     let dim = dims[idx]
     if dim.stride == curr:
-      let shLeaf = if dim.shape == DynamicSentinel: dim.leaf else: IntCT(dim.shape)
-      builder.append(shLeaf, IntCT(dim.prefix))
+      let shLeaf = if dim.shape == DynamicSentinel: dim.leaf
+                   else: IntCT(dim.shape)
+      let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
+                   else: IntCT(dim.prefix)
+      builder.append(shLeaf, stLeaf)
       if dim.shape == DynamicSentinel:
         break
       curr = dim.stride * dim.shape
@@ -712,20 +730,35 @@ macro leftInverseImpl(sh, st: typed): untyped =
   ##   result_stride[i] = shape prefix of the previous stride-sorted dimension
   ##
   ## All strides must be static (compile-time assert).
-  var dims: seq[tuple[stride, shape, prefix: int, leaf: NimNode]]
+  var dims: seq[tuple[stride, shape, prefix: int, prefixNode: NimNode, leaf: NimNode]]
   var prefix = 1
+  # prefixNode carries the prefix as an expression once it turns runtime,
+  # so a stride after a dynamic leaf can still be emitted
+  var prefixNode: NimNode = nil
   for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
     if shEv.kind != kLeaf:
       continue
     let shape = shEv.leafTy.getStaticInt()
-    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, shEv.leaf)
-    # past a dynamic shape the prefix is unknown, no sentinel arithmetic
-    prefix = if shape == DynamicSentinel: DynamicSentinel else: prefix * shape
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf)
+    let factor = if shape == DynamicSentinel: shEv.leaf
+                 else: IntCT(shape)
+    if shape == DynamicSentinel:
+      # past a dynamic shape the prefix is unknown, no sentinel arithmetic
+      prefix = DynamicSentinel
+      prefixNode = if prefixNode.isNil: factor
+                   else: prefixNode * factor
+    else:
+      if prefixNode != nil:
+        # the prefix stays runtime after a dynamic leaf, fold the factor into the prefix
+        prefixNode = prefixNode * factor
+      if prefix != DynamicSentinel:
+        prefix = prefix * shape
 
   var builder = TupleBuilderFlat.new(2)
   var sizeSoFar = 1
   var prevIdx = -1
   var prevPrefix = 0
+  var prevPrefixNode: NimNode = nil
   for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
     let dim = dims[idx]
     if dim.stride == 0:
@@ -737,15 +770,21 @@ macro leftInverseImpl(sh, st: typed): untyped =
     let gap = dim.stride div sizeSoFar
     # a unit gap marks no hole, the final coalesce would drop the shape-1 head
     if gap != 1:
-      builder.append(IntCT(gap), IntCT(prevPrefix))
+      let prevStLeaf = if prevPrefix == DynamicSentinel: prevPrefixNode
+                       else: IntCT(prevPrefix)
+      builder.append(IntCT(gap), prevStLeaf)
     sizeSoFar = dim.stride
     prevIdx = idx
     prevPrefix = dim.prefix
+    prevPrefixNode = dim.prefixNode
   if prevIdx >= 0:
     # tail = the last stride-sorted dimension's own shape
     let dim = dims[prevIdx]
-    let shLeaf = if dim.shape == DynamicSentinel: dim.leaf else: IntCT(dim.shape)
-    builder.append(shLeaf, IntCT(dim.prefix))
+    let shLeaf = if dim.shape == DynamicSentinel: dim.leaf
+                 else: IntCT(dim.shape)
+    let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
+                 else: IntCT(dim.prefix)
+    builder.append(shLeaf, stLeaf)
   result = bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
 
 macro left_inverse*(layout: typed): untyped =
