@@ -79,13 +79,9 @@ template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
       crd2idxRecur(coord, shape, stride, i + 1)
 
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Recursive over shape: each top-level dimension is dispatched on
-  ## its own (coord element, shape dimension, stride dimension).
-  block:
-    evalOnceAs(P, makeIntTuple(coord))
-    evalOnceAs(S, makeIntTuple(shape))
-    evalOnceAs(D, makeIntTuple(stride))
-    crd2idxRecur(P(), S(), D(), 0)
+  ## Recursive over shape, dispatching each top-level dimension's
+  ## (coord element, shape dimension, stride dimension) triple.
+  crd2idxRecur(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)
 
 macro foldDim*(co, sh, st: typed; i: static int): auto =
   ## Args:
@@ -117,6 +113,4 @@ macro foldDim*(co, sh, st: typed; i: static int): auto =
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape dimensions with strides.
-  block:
-    evalOnceAs(P, makeIntTuple(coord))
-    foldDim(P, makeIntTuple(shape), makeIntTuple(stride), 0)
+  foldDim(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)

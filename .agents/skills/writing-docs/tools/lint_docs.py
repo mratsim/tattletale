@@ -119,7 +119,7 @@ from pathlib import Path
 PROSE_CAP = 140
 SINGLE_WORD_EOL_PREV_MAX = 110
 WALL_OF_TEXT_LINES = 10
-WALL_NO_AIR_LINES = 4
+WALL_NO_AIR_LINES = 5
 # A ##-doc line indented this deep past the marker is worked-example or
 # diagram content, air under the wall and stub rules (prose wrap sits at
 # 2-3, nothing intentional is written that deep). An `Example:` or
