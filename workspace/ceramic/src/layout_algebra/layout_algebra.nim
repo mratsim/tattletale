@@ -720,38 +720,62 @@ macro flat_product*(blk: Layout, tiler: typed): untyped =
       nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 1))
 
 # ═══════════════════════════════════════════════════════════════
-#  blocked_product
+#  blocked_product / raked_product
 # ═══════════════════════════════════════════════════════════════
 
-func blocked_product*[A, B: Layout](blk: A, tiler: B): auto =
+macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
+  result = newStmtList()
+  let (prodShape, prodStride) = result.destructureLayout(unwrapStmtListExpr(prodCtor))
+  let firstShape = getTupleIndex(prodShape, if raked: 1 else: 0)
+  let secondShape = getTupleIndex(prodShape, if raked: 0 else: 1)
+  let firstStride = getTupleIndex(prodStride, if raked: 1 else: 0)
+  let secondStride = getTupleIndex(prodStride, if raked: 0 else: 1)
+  var firstShapeStream = firstShape.tupleDimsStream()
+  var secondShapeStream = secondShape.tupleDimsStream()
+  var firstStrideStream = firstStride.tupleDimsStream()
+  var secondStrideStream = secondStride.tupleDimsStream()
+  var builder = TupleBuilderNested.new(2)
+  builder.append(TupleStreamEvent(path: @[], kind: kOpen, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kOpen, verbatim: true))
+  while not firstShapeStream.done():
+    let firstShapeEvent = firstShapeStream.next()
+    let secondShapeEvent = secondShapeStream.next()
+    let firstStrideEvent = firstStrideStream.next()
+    let secondStrideEvent = secondStrideStream.next()
+    builder.append(nnkPar.newTree(firstShapeEvent.leaf, secondShapeEvent.leaf),
+                   nnkPar.newTree(firstStrideEvent.leaf, secondStrideEvent.leaf))
+  builder.append(TupleStreamEvent(path: @[], kind: kClose, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kClose, verbatim: true))
+  result.add builder.emitLayout().resultLayout
+
+macro productPairZipDelegate[A, B: Layout](blk: A, tiler: B, raked: static bool): untyped =
+  let rakedLit = newLit(raked)
+  result = quote do:
+    block:
+      const rankMax = max(`blk`.rank(), `tiler`.rank())
+      productPairZipImpl(
+        logical_product(padRight(`blk`, rankMax), padRight(`tiler`, rankMax)),
+        `rakedLit`)
+
+macro blocked_product*[A, B: Layout](blk: A, tiler: B): untyped =
   ## Repeat block over tiler grid, each block contiguous.
   ## Returns:
   ## - ((BLK_A, TILER_A), (BLK_B, TILER_B), ...), each block contiguous
   ##
   ## Say each tile copy must stay contiguous, one whole tile before
   ## the grid steps to the next.
-  const mxR = max(blk.rank(), tiler.rank())
-  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = dimension(lp, 0)
-  let m1 = dimension(lp, 1)
-  zipDimensions(m0, m1)
+  quote do:
+    productPairZipDelegate(`blk`, `tiler`, false)
 
-# ═══════════════════════════════════════════════════════════════
-#  raked_product
-# ═══════════════════════════════════════════════════════════════
-
-func raked_product*[A, B: Layout](blk: A, tiler: B): auto =
+macro raked_product*[A, B: Layout](blk: A, tiler: B): untyped =
   ## Repeat block over tiler grid, blocks interleaved.
   ## Returns:
   ## - ((TILER_A, BLK_A), (TILER_B, BLK_B), ...), blocks interleaved
   ##
   ## Say the tile's elements must spread across grid slots instead,
   ## a cyclic fill over the grid.
-  const mxR = max(blk.rank(), tiler.rank())
-  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = dimension(lp, 0)
-  let m1 = dimension(lp, 1)
-  zipDimensions(m1, m0)
+  quote do:
+    productPairZipDelegate(`blk`, `tiler`, true)
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape

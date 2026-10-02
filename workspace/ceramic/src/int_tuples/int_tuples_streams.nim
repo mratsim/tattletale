@@ -38,7 +38,7 @@ type
 func depth*(ev: TupleStreamEvent): int {.inline.} =
   result = ev.path.len
 
-func unwrapStmtListExpr(node: NimNode): NimNode =
+func unwrapStmtListExpr*(node: NimNode): NimNode =
   if node.kind == nnkStmtListExpr:
     node[^1]
   else: node
