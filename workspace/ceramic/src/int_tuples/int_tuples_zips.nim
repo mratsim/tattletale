@@ -16,10 +16,15 @@ import workspace/ceramic/src/macros/replace_nodes
 #  zipDimensionsWith, zip the top-level elements with a binary op
 # ═══════════════════════════════════════════════════════════════
 
-macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
+macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A, b: B, body: untyped): untyped =
   ## Zip top-level elements of tuples `a` and `b` pairwise via `body` (does NOT recurse into nested tuples).
   ## `it_a` / `it_b` bind to corresponding elements.
   ## Leftover elements from the longer tuple are appended unchanged.
+  ##
+  ## Contract:
+  ## - the zip is top-level only, a nested tuple element is one element,
+  ##   the body sees it whole
+  ## - ranks may differ, the longer tuple's tail passes through unchanged
   ##
   ## Example:
   ##   zipWith((2, 4), (10, 20)): it_a + it_b  →  (12, 24)
@@ -55,7 +60,12 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   ## Inside `body`, `it` is a 2-tuple `(leaf_a, leaf_b)`.
   ## Use `it_a` for the leaf from `a` and `it_b` for the leaf from `b`.
   ##
-  ## runnableExamples:
+  ## Contract:
+  ## - `a` and `b` have the same structure, one leaf pair at a time,
+  ##   recursion-free, no runtime `let` in the emitted code
+  ## - scalar inputs unwrap, the result is the mapped scalar
+  ##
+  ## Example:
   ##   let r = zipLeavesWith((10, 10), (3, 2)): it_a - it_b
   ##   doAssert r == (7, 8)
   ##   let r2 = zipLeavesWith(((1, 2), 3), ((4, 5), 6)): it_a - it_b
@@ -65,8 +75,12 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   var aStream = a.tupleStream()
   var bStream = b.tupleStream()
   while not aStream.done():
+    if bStream.done():
+      error "zipLeavesWith: `b` has fewer elements than `a`", b
     let aEvent = aStream.next()
     let bEvent = bStream.next()
+    if aEvent.kind != bEvent.kind:
+      error "zipLeavesWith: `a` and `b` have different tuple structures", b
     case aEvent.kind
     of kLeaf:
       let mapped = body.replaceNodes(
@@ -75,5 +89,7 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
       builder.append(mapped, verbatim = false)
     else:
       builder.append(aEvent)
+  if not bStream.done():
+    error "zipLeavesWith: `b` has more elements than `a`", b
   let (resultTuple, _) = builder.emit(0, emitScalarForSize1 = not inputTuple)
   result = newStmtList(resultTuple)

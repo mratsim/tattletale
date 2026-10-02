@@ -57,7 +57,7 @@ const sliceMsl = metal:
   proc sliceKernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
     let p = make_view(C, (int M, int N), (1, int S))
     let s = slice(p, (int R0, _))
-    C[0] = float32 s(0, int C0)
+    C[0] = float32 s(int C0)
 
 # ── displace ──
 

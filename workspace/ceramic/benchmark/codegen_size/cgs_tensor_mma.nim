@@ -75,7 +75,7 @@ const makeFragmentAMsl = metal:
     let thr = tma.get_slice(int TID)
     let av = tma.partition_A(thr, p)
     var aFrag = make_fragment_A(tma.atom, av)
-    aFrag[0] = 1.5'f32
+    aFrag[0] = av.data[0]
     C[0] = float32 aFrag[0]
 
 # ── cStoreMask: the C-store predication mask ──
