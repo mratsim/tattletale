@@ -680,6 +680,11 @@ def words(text):
     return [w for w in re.split(r"\s+", text.strip()) if w]
 
 
+def pseudo_code(text):
+    """Returns True for elided pseudo-code, dots inside (...) [...] <...>."""
+    return bool(re.search(r"[(\[][^)\]]*\.\.\.[)\]]|<[^>]*\.\.\.", text))
+
+
 def code_like(text):
     """Returns True for embedded code-sample lines (exempt from prose rules)."""
     return bool(CODEISH.match(text))
@@ -1845,9 +1850,15 @@ def scan(path, text, findings):
     prev_text = {}
     for n, c, kind, _, _ in entries:
         prev_text[n] = c
+    prev_block_kinds = None
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
+        # a doc block and a code-comment block are not one paragraph,
+        # the stub check must not reflow across the kind boundary
+        if kinds != prev_block_kinds:
+            prev_prose = None
+        prev_block_kinds = kinds
         check_bullets(path, block, findings)
         check_tables(path, block, findings)
         check_missing_diagram(path, block, findings)
@@ -1866,11 +1877,15 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
+                prev_prose = None
                 continue
             if not c:
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
+                # a blank line is a reflow boundary, the stub check must
+                # not reach across it for a reflowable predecessor
+                prev_prose = None
                 continue
             if kind == "fence":
                 # Fenced lines never join prose runs.
@@ -1911,6 +1926,7 @@ def scan(path, text, findings):
             # line, not lazy wrapping; a capitalized stub without terminal
             # punctuation above a blank line is a heading fragment
             if (wc <= 2 and "`" not in c and not c.endswith(":")
+                    and not pseudo_code(c)
                     and not (c[0:1].isupper()
                              and not c.endswith((".", ",", ";"))
                              and (n + 1) in blank_nos)

@@ -662,6 +662,26 @@ proc runMakeLayoutLikeScalarShapeTests =
   echo "    make_layout_like scalar-shape fixture: 2 guarded cases OK"
 
 
+#  Section 19. product macros: spec values
+#
+#  logical_product is an AST-emitting macro, hier_unzip passes it
+#  as the splitter. Guards, the macro must produce the spec
+#  values on every input kind.
+#  ═══════════════════════════════════════════════════════════════
+
+proc runProductMacroTests =
+  block:
+    ## static inputs, expected values from the pycute example
+    let blk = make_layout((2, 2), (4, 1))
+    let tiler = make_layout(6, 1)
+    check(logical_product(blk, tiler), (((2, 2), (2, 3)), ((4, 1), (2, 8))), Layout)
+    let L = make_layout((Int[8](), 4), (1, 4))
+    check(logical_product(L, make_layout((2, 2))),
+      (((Int[8](), 4), (2, 2)), ((1, 4), (16, 32))), Layout)
+
+  echo "    product macro counterpart: 2 guarded cases OK"
+
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -700,6 +720,8 @@ proc runTests =
   runComposeSymbolTilerTests()
   echo "── Section 18. make_layout_like over a scalar shape ──"
   runMakeLayoutLikeScalarShapeTests()
+  echo "── Section 19. product macros: spec twins, composed emission ──"
+  runProductMacroTests()
   echo "  All tests passed."
 
 when isMainModule:

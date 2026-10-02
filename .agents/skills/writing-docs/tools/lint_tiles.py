@@ -1257,11 +1257,13 @@ def scan_one_liner(path, ds, findings):
     Contract:
     - the advisory names the wrapper, it never blocks
     - a single-line body is a shape the review reads, not a defeat
+    - module-global declarations only, a nested callable sits beside
+      its call site, the entry stays evident without a doc
     """
     for d in ds:
         if d["name"] is None or d["kind"] not in RULE_KINDS:
             continue
-        if d["eq_line"] is not None and d["body"] == 1:
+        if d["indent"] == 0 and d["eq_line"] is not None and d["body"] == 1:
             findings.append(Finding(
                 path, d["start"], "one-liner",
                 "the body of %s %s is a single line, name the wrapper shape "

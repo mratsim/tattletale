@@ -266,19 +266,17 @@ macro complement*(layout: Layout): untyped =
   ##    4:2                     → (2, 1):(1, 8)
   ##    4:2 with 16             → (2, 2):(1, 8)
   ##    (2, 2):(1, 4) with 16   → (2, 2):(2, 8)
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
 
-  let originalLayout = if stmts.len == 0: layout else: stmts[^1][1]
-  result = stmts
+  let originalLayout = if result.len == 0: layout else: result[^1][1]
   result.add bindSym"complementImpl".newCall(
     sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
-  result = stmts
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
   result.add bindSym"complementImpl".newCall(
     sh, st,
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(cosizeBound))),
@@ -293,9 +291,8 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
       nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", cosizeBound))
     else:
       cosizeBound
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
-  result = stmts
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
   result.add bindSym"complementImpl".newCall(sh, st, bound, newLit(false))
 
 # ═══════════════════════════════════════════════════════════════
@@ -541,10 +538,9 @@ macro logical_divide*[A, B: Layout](layout: A, tiler: B): untyped =
   ##
   ##    logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
   ##    # → ((2, 2), (2, 3)):((4, 1), (2, 8))
-  var stmts = newStmtList()
-  let (shA, stA) = stmts.destructureLayout(layout)
-  let (shB, stB) = stmts.destructureLayout(tiler)
-  result = stmts
+  result = newStmtList()
+  let (shA, stA) = result.destructureLayout(layout)
+  let (shB, stB) = result.destructureLayout(tiler)
   result.add getAst(divideFormula(shA, stA, shB, stB))
 
 macro logical_divide*[L: Layout](layout: L, tiler: int): untyped =
@@ -558,9 +554,8 @@ macro logical_divide*[L: Layout, V: static int](layout: L, tiler: Int[V]): untyp
 
 macro logical_divide*[L: Layout](layout: L, tiler: static int): untyped =
   ## Logical divide by a static int tiler
-  var stmts = newStmtList()
-  let (shA, stA) = stmts.destructureLayout(layout)
-  result = stmts
+  result = newStmtList()
+  let (shA, stA) = result.destructureLayout(layout)
   result.add getAst(divideFormula(shA, stA,
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(tiler))),
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(1)))))
@@ -615,11 +610,10 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result = newStmtList()
     result.add layout
   else:
-    var stmts = newStmtList()
-    let (sh, st) = stmts.destructureLayout(layout)
+    result = newStmtList()
+    let (sh, st) = result.destructureLayout(layout)
     template divideTupleDelegate(sh2, st2, tiler2) =
       divideTupleImpl(sh2, st2, tiler2)
-    result = stmts
     result.add getAst(divideTupleDelegate(sh, st, tiler))
 
 func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
@@ -711,12 +705,11 @@ macro right_inverse*(layout: typed): untyped =
   ## Returns:
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists
-  var stmts = newStmtList()
-  let (sh, st) = destructureLayout(stmts, layout)
+  result = newStmtList()
+  let (sh, st) = destructureLayout(result, layout)
   template rightInverseDelegate(sh2, st2) =
     ## Expands the inverse core on the destructured tuples at the use site.
     rightInverseImpl(sh2, st2)
-  result = stmts
   result.add getAst(rightInverseDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
@@ -792,13 +785,12 @@ macro left_inverse*(layout: typed): untyped =
   ## Returns:
   ## - a coalesced Layout over the static-stride gaps
   ## - requires all static strides, compile-time assert
-  var stmts = newStmtList()
-  let (sh, st) = destructureLayout(stmts, layout)
+  result = newStmtList()
+  let (sh, st) = destructureLayout(result, layout)
   template leftInverseDelegate(sh2, st2) =
     ## Coalesce canonicalizes strides first, the chaining asserts require it.
     evalOnceAs(coalescedLayout, coalesce(make_layout(sh2, st2)))
     leftInverseImpl(coalescedLayout.shape, coalescedLayout.stride)
-  result = stmts
   result.add getAst(leftInverseDelegate(sh, st))
 
 
@@ -806,25 +798,84 @@ macro left_inverse*(layout: typed): untyped =
 #  logical_product, reproduce a block over a tiler
 # ═══════════════════════════════════════════════════════════════
 
-func logical_product*[A, B: Layout](a: A; tiler: B): auto =
-  ## Reproduce block over tiler: rank-2 result ((BLOCK), (TILE)).
-  ## Inverse of logical_divide.
-  let rest = compose(complement(a, size(a) * cosize(tiler)), tiler)
-  make_layout((a.shape, rest.shape), (a.stride, rest.stride))
+macro logicalProductFinish(a, rest: typed): untyped =
+  result = newStmtList()
+  # rest evaluates to a Layout constructor nested under statement lists,
+  var grid = rest
+  while grid.kind == nnkStmtListExpr:
+    for i in 0 ..< grid.len - 1:
+      result.add(grid[i])
+    grid = grid[^1]
+  let (aShape, aStrides) = result.destructureLayout(a)
+  let (rShape, rStrides) = result.destructureLayout(grid)
+  result.add bindSym"make_layout".newCall(
+    nnkTupleConstr.newTree(aShape, rShape),
+    nnkTupleConstr.newTree(aStrides, rStrides)
+  )
 
-
-func nested_product*[A, B: Layout](a: A; b: B): auto =
-  ## Categorical product of two layouts, preserving each argument's dimension grouping.
+macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
+  ## Logical product, `a x tiler = (a, a* ∘ tiler)`.
   ##
-  ## Given:
-  ##   A: (a0, a1, ...):(sa0, sa1, ...)
-  ##   B: (b0, b1, ...):(sb0, sb1, ...)
-  ## Returns:
-  ##   ((a0, a1, ...), (b0, b1, ...)) : ((sa0, sa1, ...), (sb0, sb1, ...))
-  make_layout((a.shape, b.shape), (a.stride, b.stride))
+  ## Reproduce the block `a` over the grid the tiler describes:
+  ## - a copy of `a` (dimension 0) lands at every position the tiler's
+  ##   offset map selects
+  ## - the copy positions are numbered by `a`'s complement composed
+  ##   with the tiler (dimension 1)
+  ##
+  ## Returns a rank-2 layout `R` such that `R(t, i) = a(t) + a*(tiler(i))`:
+  ## - dimension 0 is the block itself, `R[0] == a`
+  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * cosize(tiler)) ∘ tiler`
+  ## - `size(R) == size(a) * size(tiler)`
+  ##
+  ## Inverse of logical_divide: the divide factors `a` into tiles
+  ## `a ∘ (tiler, complement(tiler, size(a)))`, the product reassembles
+  ## from the block and the copy grid.
+  ##
+  ##    domain ──── a ════════▶  block positions    (dim 0)
+  ##    domain ──── a* ∘ tiler ─▶  copy numbers     (dim 1)
+  ##    domain ════════════ R ════════════▶  (block, copy)
+  ##
+  ## Examples:
+  ##
+  ##    logical_product(make_layout((2, 2), (4, 1)), make_layout(6, 1))
+  ##    → ((2, 2), (2, 3)):((4, 1), (2, 8))
+  ##
+  ##    logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
+  ##    → ((2, 2), (3, 4)):((1, 2), (16, 4))
+  ##
+  ## Copy-grid semantics:
+  ## - the complement extends to the bound `size(a) * cosize(tiler)`, the span one contiguous copy grid covers
+  ## - a divisible block stride chain gives distinct, non-overlapping copy slots, one per tiler position
+  ## - an under-filling block keeps the largest ordered, disjoint copy grid that fits
 
+  # Implementation note
+  #
+  #   For direct AST->AST transformation of constructors we need to manipulate the AST *produced* by compose(complement(...), tiler)
+  #   In this macro we can only see the macro call AST so we need to defer to another macro
+  #   so that compose(complement(...), tiler) have the time to do their own AST->AST constructor transformation
+  #
+  #   Now one tricky part of this is that using an AST node or a template input in multiple plice will paste it verbatim
+  #   if it's used 3 times like below, `a` expression will be evaluated 3 times. This is problematic if the expression has side-effects like 'echo "launch_missiles"'.
+  #
+  #   In our case, layouts are pure and only involve integer arithmetic.
+  #   Furthermore, I argue that compared to the alternative (assigning expressions to temporaties)
+  #   an integer expression is significantly more compiler-friendly as they can be:
+  #   - constant-folded (done by nim compiler)
+  #   - terms can be reorder, say we receive (2 * (3 * (dynamic_value * (5 * 6))))
+  #     with temporaries dynamic_value would be an optimization barrier, so we would have `6 * dynamic_value * 30` with a naive compiler,
+  #     while we would have 180 * dynamic_value with a expression with more certainty as it's easier for the compiler to reorder integers
+  #   - compilers can do common sub-expression elimination more easily when only integers are dumped into an expression
+  #
+  #   This is particularly relevant for Vulkan and WebGPU backends which might not have
+  #   optimizers as thorough as LLVM's.
 
-# ── zipped_product / tiled_product / flat_product ──
+  template logicalProductDelegate(a_layout, tiler_layout) =
+    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * cosize(tiler_layout)), tiler_layout))
+  result = getAst(logicalProductDelegate(a, tiler))
+
+# ═══════════════════════════════════════════════════════════════
+#  zipped_product, tiled_product, flat_product
+# ═══════════════════════════════════════════════════════════════
 
 template zipped_product*(blk: Layout; tiler: auto): auto =
   ## Reproduce block over tiler, zipped into rank-2 result.
