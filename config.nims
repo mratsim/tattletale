@@ -572,7 +572,8 @@ task ceramic_cgs, "Run the ceramic codegen-size runners (runner=<name> picks one
   withDir(ProjectRoot):
     for filepath in listFiles(CgsBenchDir):
       let filename = filepath.extractFilename()
-      if filename.startsWith("cgs_layout_") and filename.endsWith(".nim") and
+      if (filename.startsWith("cgs_layout_") or filename.startsWith("cgs_tensor_")) and
+          filename.endsWith(".nim") and
           (runner.len == 0 or filename == runner & ".nim"):
         runCmd(cgsCmd(filename, dumpArg == "true"))
 
