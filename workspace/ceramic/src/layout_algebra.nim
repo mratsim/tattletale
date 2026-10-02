@@ -42,7 +42,6 @@ export layouts_datatypes
 
 # ═══════════════════════════════════════════════════════════════
 #  Construction, the constructors only
-#  (the LayoutCT emitter machinery is not part of the surface)
 # ═══════════════════════════════════════════════════════════════
 
 export layout_constructors.col_major_strides

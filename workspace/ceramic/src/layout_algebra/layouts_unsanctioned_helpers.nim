@@ -15,20 +15,6 @@
 import std/macros
 import workspace/ceramic/src/int_tuples
 
-proc shapeRank*(shTyp: NimNode): int {.compileTime.} =
-  ## Rank of a layout given its shape type node, tuple constr = element count, scalar = 1.
-  if shTyp.kind == nnkTupleConstr:
-    shTyp.len
-  else:
-    1
-
-proc dimCount*(ty: NimNode): int {.compileTime.} =
-  ## Top-level dimension count of a shape or layout type node.
-  if ty.isTupleTy():
-    ty.len
-  else:
-    1
-
 # ═══════════════════════════════════════════════════════════════
 #  layoutTypeArgs, layout dimensions+types extraction
 # ═══════════════════════════════════════════════════════════════

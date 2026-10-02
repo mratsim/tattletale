@@ -10,31 +10,6 @@ import workspace/ceramic/src/int_tuples
 import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
-#  LayoutCT, compile-time Layout accumulator for macros
-# ═══════════════════════════════════════════════════════════════
-
-type LayoutCT* = object
-  shape*, stride*: seq[NimNode]
-
-proc append*(ct: var LayoutCT, sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh
-  ct.stride.add st
-
-func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated dimensions (no coalesce).
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  var outSh = newNimNode(nnkPar)
-  var outSt = newNimNode(nnkPar)
-  for i in 0 ..< ct.shape.len:
-    outSh.add ct.shape[i]
-    outSt.add ct.stride[i]
-  if ct.shape.len == 0:
-    result = ident"make_layout".newCall(newLit(1), newLit(0))
-  else:
-    result = ident"make_layout".newCall(outSh, outSt)
-
-# ═══════════════════════════════════════════════════════════════
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
