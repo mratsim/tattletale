@@ -6,7 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
+import ./int_tuples_compiletime
 import ./int_tuples_datatypes
+import ./int_tuples_streams
 import ./int_tuples_transforms
 import workspace/ceramic/src/macros/replace_nodes
 
@@ -48,24 +50,7 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
 #  zipLeavesWith, element-wise binary op for equal-structure tuples
 # ═══════════════════════════════════════════════════════════════
 
-template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
-  ## Internal: walk tuple from index `idx`, recurse into nested tuples.
-  when idx < a.rank():
-    when a[idx] is tuple:
-      concat((zipLeavesRecur(a[idx], b[idx], 0, body),),
-             zipLeavesRecur(a, b, idx + 1, body))
-    else:
-      block:
-        let it_a {.inject.} = a[idx]
-        let it_b {.inject.} = b[idx]
-        when idx == a.rank() - 1:
-          (body,)
-        else:
-          concat((body,), zipLeavesRecur(a, b, idx + 1, body))
-  else:
-    ()
-
-template zipLeavesWith*(a, b: typed; body: untyped): untyped =
+macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   ## Apply `body` to corresponding leaf pairs of equal-structure tuples.
   ## Inside `body`, `it` is a 2-tuple `(leaf_a, leaf_b)`.
   ## Use `it_a` for the leaf from `a` and `it_b` for the leaf from `b`.
@@ -75,9 +60,20 @@ template zipLeavesWith*(a, b: typed; body: untyped): untyped =
   ##   doAssert r == (7, 8)
   ##   let r2 = zipLeavesWith(((1, 2), 3), ((4, 5), 6)): it_a - it_b
   ##   doAssert r2 == ((-3, -3), -3)
-  when a is tuple:
-    zipLeavesRecur(a, b, 0, body)
-  else:
-    let it_a = a
-    let it_b = b
-    body
+  var inputTuple = a.getTypeInst().isTupleTy()
+  var builder = TupleBuilderNested.new(1)
+  var aStream = a.tupleStream()
+  var bStream = b.tupleStream()
+  while not aStream.done():
+    let aEvent = aStream.next()
+    let bEvent = bStream.next()
+    case aEvent.kind
+    of kLeaf:
+      let mapped = body.replaceNodes(
+        ("it_a", aEvent.leaf), ("it_b", bEvent.leaf),
+        ("it", nnkPar.newTree(aEvent.leaf, bEvent.leaf)))
+      builder.append(mapped, verbatim = false)
+    else:
+      builder.append(aEvent)
+  let (resultTuple, _) = builder.emit(0, emitScalarForSize1 = not inputTuple)
+  result = newStmtList(resultTuple)
