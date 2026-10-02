@@ -1,6 +1,6 @@
 ---
 name: writing-docs
-description: "Repository documentation contract for the Tattletale monorepo: the house style for doc comments, module headers, inline comments, and any committed prose (what-over-how, contracts over narration, banned-vocabulary blocklist, format rules, eight canonical reference files). Use when writing or updating doc comments, module headers, inline comments, or any prose in this repo, or when de-sloping existing comments."
+description: "Repository documentation contract for the Tattletale monorepo: the required style for doc comments, module headers, inline comments, and any committed prose (what-over-how, contracts over narration, banned-vocabulary blocklist, format rules, eight canonical reference files). Use when writing or updating doc comments, module headers, inline comments, or any prose in this repo, or when de-sloping existing comments."
 license: MIT
 compatibility: opencode
 metadata:
@@ -15,8 +15,11 @@ metadata:
 This skill is the repository documentation contract.
 It distills the eight canonical files' style (REFERENCE.md) plus the Write
 Without Hidden Context framing below into one enforceable standard.
-- the reader is a developer who just cloned the repo
-- the reader carries no history, no pipeline labels, no campaign vocabulary
+- readers are developers who just cloned the repo, carrying no history,
+  no pipeline labels, no campaign vocabulary
+- a CS undergraduate is the comprehension floor
+- terse writing scales with the concept's complexity:
+  no hidden context, flourish, mannerism, unexplained jargon, or lawyer or defensive speech
 
 ## When to use me
 
@@ -29,7 +32,8 @@ kernel docs, Lean comments, test file headers, and commit messages.
 ## Golden rules
 
 1. **Think who is your audience.** A *user* gets `##` docs on correct use, never a drowning in how it is done.
-2. **Think who is your audience, part two.** A *maintainer* gets `#` comments in industry-standard jargon.
+2. **Think who is your audience, part two.** A *maintainer* gets
+   `#` comments in industry-standard jargon. A CS undergraduate is the comprehension floor.
 3. **Write without hidden context.** Rewrite any sentence a repo puller cannot understand.
 4. **A wall of text is hostile.** Prefer diagrams for lifecycles, dataflow, and multidimensional structures.
 5. **A wall of text is hostile, part two.** Prefer bullet points for contracts.
@@ -52,6 +56,7 @@ Applies to all repository prose.
 Everything must make sense to a technically capable reader.
 The reader has the repository.
 The reader carries none of the conversation or development history.
+A CS undergraduate is the comprehension floor.
 
 - Describe the system as it exists with purpose, behavior, invariants, interfaces, evidence, and limits.
 - Never narrate the journey.
@@ -98,7 +103,7 @@ The final test applies to every sentence, if understanding it requires
 25. **Banned vocabulary, the scope.** The blocklist binds this skill's own files too.
 26. **Banned vocabulary, the single exception.** EXAMPLES.md quotes banned forms as teaching material.
 27. **Format rules.** Parentheses stay whole, no `;` and no em-dashes in prose, lines break at phrase boundaries.
-28. **Format rules, the cap.** 140 chars per prose line, bullets for enumerations.
+28. **Format rules, the cap.** 180 chars per prose line, bullets for enumerations.
 29. **Format rules, the colon.** A prose colon ends its line, what it introduces goes on the next lines.
 30. **Format rules, the severed unit.** No line opens on a severed one-word continuation ("apply,").
 31. **Format rules, the reference.** Details in [REFERENCE.md](REFERENCE.md).
@@ -112,6 +117,6 @@ The final test applies to every sentence, if understanding it requires
 
 ## Advanced features
 
-- Per-domain patterns (module headers, SME2 kernels, tensor ops, transformer layers, stateful modules + Lean)
+- Per-domain patterns (module headers, SME2 kernels, tensor ops, transformer layers, layout-algebra API narration, stateful modules + Lean)
 - Format rules, canonical references, and the full self-check live in [REFERENCE.md](REFERENCE.md)
 - The banned-vocabulary replacement table and before/after examples live in [EXAMPLES.md](EXAMPLES.md)

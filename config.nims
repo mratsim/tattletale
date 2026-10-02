@@ -534,6 +534,48 @@ task test_ceramic, "Test workspace/ceramic":
     for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
       runCmd(cmd)
 
+# Ceramic codegen-size runners (CGS)
+# --------------------------------------------------
+# One place owns the measured protocol flags: plain C backend, -d:release,
+# one shared outdir and nimcache. Runner file headers and the benchmark
+# README point here instead of restating the command, so the protocol
+# cannot drift per runner.
+# `nim ceramic_cgs` runs every runner, `runner=<name>` runs one,
+# `dump=true` adds -d:TTT_CgsDump, the MSL and JSON dump writes.
+# Run from tattletale/: the runners resolve their source paths and the
+# default dump dir relative to the working directory.
+
+const CgsBenchDir = "workspace/ceramic/benchmark/codegen_size"
+
+proc cgsCmd(filename: string; dump: bool): string =
+  "nim c -r --hints:off --warnings:off -d:release" &
+    (if dump: " -d:TTT_CgsDump" else: "") &
+    " --outdir:build/cgs --nimcache:nimcache/cgs " & CgsBenchDir / filename
+
+proc cgsArg(name: string): string =
+  ## Value of a `key=value` command-line argument, empty when absent.
+  for i in 2 .. paramCount():
+    let p = paramStr(i)
+    if p.startsWith(name & "="):
+      return p[(name.len + 1) .. ^1]
+  ""
+
+task ceramic_cgs, "Run the ceramic codegen-size runners (runner=<name> picks one, dump=true adds -d:TTT_CgsDump)":
+  let runner = cgsArg("runner")
+  let dumpArg = cgsArg("dump")
+  if dumpArg.len > 0 and dumpArg != "true":
+    echo "dump= takes only true"
+    quit(1)
+  if runner.len > 0 and not fileExists(CgsBenchDir / runner & ".nim"):
+    echo "unknown runner: " & runner
+    quit(1)
+  withDir(ProjectRoot):
+    for filepath in listFiles(CgsBenchDir):
+      let filename = filepath.extractFilename()
+      if filename.startsWith("cgs_layout_") and filename.endsWith(".nim") and
+          (runner.len == 0 or filename == runner & ".nim"):
+        runCmd(cgsCmd(filename, dumpArg == "true"))
+
 task test_positron_properties, "Test workspace/positron property suites":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/positron/tests/properties"):

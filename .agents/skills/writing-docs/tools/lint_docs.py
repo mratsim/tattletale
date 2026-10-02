@@ -19,16 +19,17 @@ Rule table (rule | trigger | severity):
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| colon-inline         | a prose colon followed by prose on the same line                                                  | counted  |
 | unit-split           | a line opens on a severed one-word continuation ("apply,")                                        | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
-| bullet-list-length   | a bullet list with 4 or more items                                                                | counted  |
-| bullet-item-length   | a single bullet item spanning 4 or more lines                                                     | counted  |
+| bullet-list-length   | a bullet list with 5 or more items                                                                | counted  |
+| bullet-item-length   | a single bullet item spanning 5 or more lines                                                     | counted  |
 | table-separator      | a table with no |---| separator row after the header                                              | counted  |
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
 | table-cell-wall      | a table cell over 30 words                                                                        | counted  |
+| scratch-filename    | a changed file named with tmp, debug, or probe, scratch files are never checked in (base mode only)              | counted  |
+| extensionless-file  | a changed file with no extension, name the format or add one (base mode only)                                    | counted  |
 | table-alignment      | a table whose pipe separators do not line up (pad each cell to the column width)                  | counted  |
 | escape-noise         | an escape sequence used as a prose word                                                           | counted  |
 | narration            | temporal or history narration: currently, as of, once X lands                                     | counted  |
@@ -39,7 +40,6 @@ Rule table (rule | trigger | severity):
 | how-narration        | a doc narrates the how: "This function...", "we iterate", "make sure"                             | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
-| missing-doc          | a public item with no doc comment (exported Nim proc or type, module-level Python def or class)   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
 | sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
@@ -97,7 +97,6 @@ writing the fixed text back.
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
-| colon-inline                | break after the colon, the continuation indented two spaces under the lead, only when the tail rewraps clean     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
@@ -120,15 +119,19 @@ PROSE_CAP = 140
 SINGLE_WORD_EOL_PREV_MAX = 110
 WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
+# A ##-doc line indented this deep past the marker is worked-example or
+# diagram content, air under the wall and stub rules (prose wrap sits at
+# 2-3, nothing intentional is written that deep).
+DEEP_EXAMPLE_INDENT = 4
 # A table cell over this many words is a wall of prose in a cell,
 # split it into bullets or a diagram.
 TABLE_CELL_MAX_WORDS = 30
 MODULE_HEADER_MAX_LINES = 8
-# Bullet-shape caps. A bullet list holds at most 3 items and one item
-# spans at most 3 lines, a 4-item list is banned, longer bullet walls
+# Bullet-shape caps. A bullet list holds at most 4 items and one item
+# spans at most 3 lines, a 5-item list is banned, longer bullet walls
 # belong in a table or diagram.
-BULLET_LIST_MAX_ITEMS = 3
-BULLET_ITEM_MAX_LINES = 3
+BULLET_LIST_MAX_ITEMS = 4
+BULLET_ITEM_MAX_LINES = 4
 
 ARTICLE_EOL = {"the", "a", "an", "this", "that", "its", "their", "both", "own"}
 CONNECTIVE_EOL = {"with", "of", "for", "to", "in", "and", "or", "on", "at",
@@ -168,7 +171,7 @@ CONTRACT_MARKER_RE = re.compile(
     r"\b(?:contract|precondition|postcondition|invariants?|expected input|"
     r"input shapes|output shape|lifetime|data flow)\b", re.IGNORECASE)
 
-# Exported Nim declarations the missing-doc rule covers (conservative shapes).
+# Exported Nim callable declarations the structure rules read (conservative shapes).
 NIM_EXPORTED_CALLABLE_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter)\s+(\w+)\*(?:\s*\[|\s*\()")
 # Proc, func, and template definition lines whose name carries an Of suffix.
@@ -422,8 +425,6 @@ RULES = {
                            "a line ends on a bare connective or a fragment after the period"),
     "colon-break": Rule("colon-break", True,
                         "a colon orphaned at line start or split from its lead phrase"),
-    "colon-inline": Rule("colon-inline", True,
-                         "a prose colon followed by prose on the same line"),
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
@@ -434,7 +435,7 @@ RULES = {
     "bullet-list-length": Rule("bullet-list-length", True,
                                "a bullet list with 4 or more items"),
     "bullet-item-length": Rule("bullet-item-length", True,
-                               "a single bullet item spanning 4 or more lines"),
+                               "a single bullet item spanning 5 or more lines"),
     "table-separator": Rule("table-separator", True,
                             "a table with no |---| separator row after the header"),
     "table-mispadding": Rule("table-mispadding", True,
@@ -443,6 +444,10 @@ RULES = {
                              "a table cell over TABLE_CELL_MAX_WORDS words (split the cell into bullets or a diagram)"),
     "table-alignment": Rule("table-alignment", True,
                              "a table whose pipe separators do not line up (pad each cell to the column width)"),
+    "scratch-filename": Rule("scratch-filename", True,
+                             "a changed file named with tmp, debug, or probe, scratch files are never checked in"),
+    "extensionless-file": Rule("extensionless-file", True,
+                               "a changed file with no extension, name the format or add one"),
     "escape-noise": Rule("escape-noise", True, "an escape sequence used as a prose word"),
     "narration": Rule("narration", True,
                       "temporal or history narration: currently, as of, once X lands"),
@@ -460,8 +465,6 @@ RULES = {
                                  "a module header past 8 tight prose lines"),
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
-    "missing-doc": Rule("missing-doc", True,
-                        "a public item with no doc comment (exported Nim proc or type, module-level Python def or class)"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -497,14 +500,18 @@ def is_diagram(text):
     """Returns True for a spatially-structured diagram line.
 
     A line is a diagram when it carries box-drawing characters, a mermaid
-    diagram token, or 2+ arrow markers. A single `-->` or `→` in prose is
-    an arrow for readability, not a diagram, so a line like
-    `s --> t = base(s) xor b` stays prose under the rules.
+    diagram token, 2+ arrow markers, or 2+ runs of 2+ spaces (aligned
+    columns, the worked-example shape). Prose rewrap collapses space runs
+    to single spaces, so aligned lines are never prose; a single `-->` or
+    `→` in single-spaced prose is an arrow for readability, not a diagram,
+    so a line like `s --> t = base(s) xor b` stays prose under the rules.
     """
     if any(ch in DIAGRAM_CHARS for ch in text):
         return True
     if (text.count("→") + text.count("←")
             + text.count("-->") + text.count("──") >= 2):
+        return True
+    if len(re.findall(r" {2,}", text)) >= 2:
         return True
     if re.match(r"^(?:graph|flowchart|sequenceDiagram|stateDiagram|erDiagram|"
                 r"classDiagram)\b", text.strip()):
@@ -620,6 +627,29 @@ def _render_aligned_row(prefix, cells, widths):
         else:
             parts.append(cell.ljust(widths[idx]))
     return prefix + "| " + " | ".join(parts) + " |"
+
+
+ARROW_RE = re.compile(r"→|←|↔|⇒|⟶|⟵|─▶|═▶|━▶")
+
+
+def is_math(c):
+    """An equation or dataflow line. An arrow marks it outright,
+    unless the text before the arrow reads as a sentence (a narration
+    opener or sentence punctuation), that stays prose; otherwise a
+    single = sign with at most two prose words. Math needs no inline
+    code markers; a formula is not a prose sentence."""
+    if ARROW_RE.search(c) is not None:
+        head = c[:ARROW_RE.search(c).start()]
+        for pat, _hint in NARRATION:
+            if re.search(pat, head, re.IGNORECASE) is not None:
+                return False
+        if head.rstrip().endswith((".", "!", "?")):
+            return False
+        return True
+    if c.count("=") != 1 or "<=" in c or ">=" in c:
+        return False
+    prose = [w for w in words(strip_backticks(c)) if len(w) > 2]
+    return len(prose) <= 2
 
 
 def is_url_line(text):
@@ -872,7 +902,9 @@ def md_prose_lines(text):
         if s.startswith("<!--") or s.startswith("<div"):
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", s)
-        if m:
+        if m and not fence:
+            # inside a fence the # prefix is code (a quoted nim doc
+            # comment), never a markdown heading
             out.append((n + 1, m.group(2).strip(), "heading", 0, False))
             continue
         out.append((n + 1, s, "fence" if fence else "prose",
@@ -966,15 +998,14 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
     if not c:
         return
     bare = strip_backticks(c)
-    if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c):
+    if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
         return
     # The title flag fires on a short colon-terminated line.
-    # Every comma-separated title segment opens on a noun phrase,
-    # including the lowercase article form.
+    # The title opens on a noun phrase, including the lowercase
+    # article form, comma segments after the opener are prose.
     if c.endswith(":"):
         segs = [s.strip() for s in bare.split(",") if s.strip()]
-        if segs and all(len(s.split()) <= 8 for s in segs) and any(
-                s.split()[0].lower() == "the" for s in segs):
+        if segs and all(len(s.split()) <= 8 for s in segs) and segs[0].split()[0].lower() == "the":
             findings.append(Finding(
                 path, n, "the-opener",
                 "title opens with the (open with a noun phrase)"))
@@ -1005,15 +1036,6 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
                 path, n, "banned-vocab",
                 "banned vocabulary: '%s' (%s)" % (m.group(0), hint)))
         return
-    # A prose colon ends its line under the colon-inline rule.
-    # What it introduces goes on the next lines, never the same line.
-    # URLs keep their scheme colon.
-    cm = re.search(r":\s+\S", bare)
-    if cm and "://" not in bare[:cm.start() + 2]:
-        findings.append(Finding(
-            path, n, "colon-inline",
-            "a prose colon is followed by prose on the same line "
-            "(move what it introduces to the next lines)"))
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
@@ -1126,8 +1148,8 @@ def _bullet_continuation(entry, lead_indent):
 def check_bullets(path, block, findings):
     """Fires the bullet-shape rules over one block of prose entries.
 
-    Threshold contract, a bullet list holds at most 3 items and one item
-    spans at most 3 lines, a 4-item list is banned. Longer bullet walls
+    Threshold contract, a bullet list holds at most 4 items and one item
+    spans at most 3 lines, a 5-item list is banned. Longer bullet walls
     belong in a diagram, a table, or split lists.
 
     A list is a maximal run of entries where every member is a bullet
@@ -1628,7 +1650,6 @@ def nim_structure_checks(path, text, header_nos, findings):
     stay conservative single-line forms.
     - doc-above-proc bans the ## block above a proc or func declaration
     - the house doc comment of a proc or func is the first body line
-    - missing-doc plus missing-contract read the body doc block
     - exported types are documented by a doc block above them or by the
       ## field docs inside the body, a ## block directly above the
       declaration is banned (doc-above-type)"""
@@ -1689,11 +1710,6 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, body + 1, "missing-contract",
                         "multi-line doc states no contract marker "
                         "(add Args, Returns, Precondition, or bullet the contract)"))
-            else:
-                findings.append(Finding(
-                    path, i + 1, "missing-doc",
-                    "exported %s carries no doc comment, the doc comment is "
-                    "the first body line" % m.group(1)))
             continue
         if re.match(r"^\s*(?:proc|func)\b", line):
             if above_banned:
@@ -1721,9 +1737,6 @@ def nim_structure_checks(path, text, header_nos, findings):
             j -= 1
             depth += 1
         if not doc_lines and not _type_has_field_docs(lines, i):
-            findings.append(Finding(
-                path, i + 1, "missing-doc",
-                "exported %s carries no doc comment" % tm.group(1)))
             continue
         prose = [(n, c) for n, c in reversed(doc_lines) if c and not structural(c)]
         if (len(prose) >= 3
@@ -1752,10 +1765,6 @@ def py_structure_checks(path, tree, func_docs, findings):
             continue
         if node.name.startswith("_") or node.name.startswith("test"):
             continue
-        if node.body[0].lineno not in documented:
-            findings.append(Finding(
-                path, node.lineno, "missing-doc",
-                "public %s carries no docstring" % node.name))
     for start, contents in func_docs:
         prose = [c for c in contents if c and not structural(c)]
         if (len(prose) >= 3
@@ -1829,6 +1838,7 @@ def scan(path, text, findings):
         check_missing_diagram(path, block, findings)
         first = next(((e[0], e[1], e[2]) for e in block if e[1] and e[2] != "heading"),
                      None)
+        blank_nos = {e[0] for e in block if not e[1]}
         run = []
         air_run = []
         prev_bullet = False
@@ -1856,7 +1866,8 @@ def scan(path, text, findings):
                 check_line(path, n, c, kind, is_nim, prev_text, findings)
                 continue
             check_line(path, n, c, kind, is_nim, prev_text, findings)
-            if structural(c):
+            deep_example = block_is_doc and indent >= DEEP_EXAMPLE_INDENT
+            if structural(c) or deep_example:
                 flush_wall(path, run, findings)
                 run = []
             if block_is_doc or not is_nim:
@@ -1871,14 +1882,24 @@ def scan(path, text, findings):
                 if structural(c):
                     air_run.append((n, True))
                     prev_bullet = bool(BULLET_RE.match(c))
+                elif deep_example:
+                    air_run.append((n, True))
+                    prev_bullet = False
                 else:
                     continuation = indent > 0 and prev_bullet
                     air_run.append((n, continuation))
                     prev_bullet = continuation
-            if structural(c):
+            if structural(c) or deep_example:
                 continue
             wc = len(words(strip_backticks(c)))
-            if (wc <= 2 and not c.endswith(":") and prev_prose is not None
+            # a stub carrying inline code or math is a deliberate formula
+            # line, not lazy wrapping; a capitalized stub without terminal
+            # punctuation above a blank line is a heading fragment
+            if (wc <= 2 and "`" not in c and not c.endswith(":")
+                    and not (c[0:1].isupper()
+                             and not c.endswith((".", ",", ";"))
+                             and (n + 1) in blank_nos)
+                    and prev_prose is not None
                     and len(prev_prose[1]) < SINGLE_WORD_EOL_PREV_MAX):
                 findings.append(Finding(
                     path, n, "single-word-eol",
@@ -2016,6 +2037,45 @@ def collect_files(paths):
     return out
 
 
+def changed_set_hygiene(base):
+    """Path rules over the whole changed set (staged and unstaged vs base).
+
+    Repo hygiene cannot ride the collected files: collect_files filters to
+    .nim/.py/.md, so an extensionless or scratch-named file would never
+    reach a per-file scan. These rules read paths, not text, and only run
+    in base mode so the pre-existing tree stays out of scope.
+    """
+    out = []
+    repo = _repo_root()
+    if repo is None:
+        return out
+    proc = subprocess.run(
+        ["git", "diff", "--name-status", base],
+        cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return out
+    for row in proc.stdout.splitlines():
+        parts = row.split("\t")
+        if len(parts) < 2:
+            continue
+        status, rel = parts[0], parts[-1]
+        if status.startswith("D"):
+            continue
+        f = Path(repo) / rel
+        name = rel.rsplit("/", 1)[-1].lower()
+        if any(w in name for w in ("tmp", "debug", "probe")):
+            out.append(Finding(
+                f, 1, "scratch-filename",
+                "a changed file named with tmp, debug, or probe, "
+                "scratch files are never checked in"))
+        if "." not in name:
+            out.append(Finding(
+                f, 1, "extensionless-file",
+                "a changed file with no extension, name the format or "
+                "add one"))
+    return out
+
+
 def lint(paths, base=None):
     """Lints every collected file under paths, returning sorted findings.
 
@@ -2026,6 +2086,8 @@ def lint(paths, base=None):
     """
     findings = []
     added_lines_cache = {}
+    if base:
+        findings.extend(changed_set_hygiene(base))
     for f in collect_files(paths):
         if not f.is_file():
             # A path deleted by the change under review has no lines to scope to.
@@ -2059,7 +2121,7 @@ def lint_text(text, filename):
 # Every other class needs judgment about what the prose should say.
 MECHANICAL_RULES = frozenset((
     "article-eol", "stray-fragment", "single-word-eol",
-    "unit-split", "colon-inline", "table-alignment",
+    "unit-split", "table-alignment",
 ))
 
 # wall-no-air joins the transform triggers for the one-sentence merge but
@@ -2475,13 +2537,7 @@ def _para_candidates(para, width, findings, wall_lines):
     mech = [f for f in findings
             if f.rule in MECHANICAL_RULES and span[0] <= f.line <= span[1]]
     cands = []
-    colon_lines = [f.line for f in mech if f.rule == "colon-inline"]
-    if colon_lines:
-        cand = _colon_split_texts(para, width, colon_lines[0])
-        if cand is not None:
-            cands.append(cand)
-    rewrap_rules = MECHANICAL_RULES - {"colon-inline"}
-    if any(f.rule in rewrap_rules for f in mech):
+    if any(f.rule in MECHANICAL_RULES for f in mech):
         cand = _rewrap_texts(para, width)
         if cand is not None:
             cands.append(cand)
@@ -2491,36 +2547,6 @@ def _para_candidates(para, width, findings, wall_lines):
         if cand is not None and len(cand) <= 3:
             cands.append(cand)
     return cands
-
-
-def _colon_split_texts(para, width, line_no):
-    """Builds the colon-split candidate for one colon-inline line.
-
-    Output:
-    - the paragraph's new body lines with the lead ending on its colon
-      and the tail rewrapped two spaces deeper
-    - None when the tail would form a stub line or the lead itself
-      overflows the width
-    """
-    rec = next((r for r in para if r.no == line_no), None)
-    if rec is None:
-        return None
-    m = _first_prose_colon(rec.text)
-    if m is None:
-        return None
-    head = rec.text[:m.start()].rstrip() + ":"
-    tail = rec.text[m.start() + 1:].strip()
-    if len(head) < 3 or len(head) > width or len(_prose_tokens(tail)) < 3:
-        return None
-    tail_lines = _wrap_tokens(_prose_tokens(tail),
-                              width - _FIX_INDENT_STEP, 0)
-    if tail_lines is None:
-        return None
-    pad = " " * _FIX_INDENT_STEP
-    k = para.index(rec)
-    return ([r.text for r in para[:k]] + [head]
-            + [pad + ln for ln in tail_lines]
-            + [r.text for r in para[k + 1:]])
 
 
 def _rewrap_texts(para, width):
@@ -2549,24 +2575,6 @@ def _first_prose_colon(text):
         if text[:m.start()].count("`") % 2 == 0:
             return m
     return None
-
-
-def _bullet_split_texts(rec, width):
-    """Builds the colon-split candidate for one bullet lead line, the lead ending on its colon,
-    the tail its continuation, None on the usual split guards."""
-    m = _first_prose_colon(rec.text)
-    if m is None:
-        return None
-    head = rec.text[:m.start()].rstrip() + ":"
-    tail = rec.text[m.start() + 1:].strip()
-    if len(head) < 3 or len(head) > width or len(_prose_tokens(tail)) < 3:
-        return None
-    tail_lines = _wrap_tokens(_prose_tokens(tail),
-                              width - _FIX_INDENT_STEP, 0)
-    if tail_lines is None:
-        return None
-    pad = " " * _FIX_INDENT_STEP
-    return [head] + [pad + ln for ln in tail_lines]
 
 
 def _para_width(path, para, width):
@@ -2672,70 +2680,6 @@ def _fix_round(path, text, width):
     before = Counter(f.rule for f in findings)
     wall_lines = {f.line for f in findings if f.rule == _MERGE_RULE}
     raws = text.split("\n")
-    for line_no in sorted(f.line for f in findings
-                          if f.rule == "colon-inline" and f.line in bullets):
-        rec = bullets[line_no]
-        texts = _bullet_split_texts(rec, _para_width(path, [rec], width))
-        if texts is None:
-            continue
-        if (sorted(_prose_tokens(rec.text))
-                != sorted(t for ln in texts for t in _prose_tokens(ln))):
-            continue
-        new_text = "\n".join(raws[:line_no - 1]
-                             + _emit_paragraph([rec], texts)
-                             + raws[line_no:])
-        if new_text == text:
-            continue
-        after = []
-        scan(path, new_text, after)
-        # Advisory rules never set the exit code, so only the counted
-        # rules hold a transform back.
-        counts_after = Counter(f.rule for f in after
-                               if RULES[f.rule].counted)
-        before_counted = Counter(f.rule for f in findings
-                                 if RULES[f.rule].counted)
-        if any(counts_after[r] > before_counted.get(r, 0)
-               for r in counts_after):
-            continue
-        mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-        if (sum(counts_after[r] for r in mech_keys)
-                < sum(before[r] for r in mech_keys)):
-            return new_text
-    for para in paras:
-        span = (para[0].no, para[-1].no)
-        for texts in _para_candidates(para, _para_width(path, para, width),
-                                      findings, wall_lines):
-            if (sorted(t for r in para for t in _prose_tokens(r.text))
-                    != sorted(t for ln in texts for t in _prose_tokens(ln))):
-                continue
-            new_raws = _emit_paragraph(para, texts)
-            new_text = "\n".join(raws[:span[0] - 1] + new_raws
-                                 + raws[span[1]:])
-            if new_text == text:
-                continue
-            after = []
-            scan(path, new_text, after)
-            counts_after = Counter(f.rule for f in after)
-            if any(counts_after[r] > before.get(r, 0) for r in counts_after):
-                continue
-            mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-            if (sum(counts_after[r] for r in mech_keys)
-                    < sum(before[r] for r in mech_keys)):
-                return new_text
-    table_fix = _fix_first_table_run(path, text)
-    if table_fix[0] is not None:
-        after = []
-        scan(path, table_fix[0], after)
-        counts_after = Counter(f.rule for f in after)
-        if any(counts_after[r] > before.get(r, 0) for r in counts_after):
-            return None
-        mech_keys = MECHANICAL_RULES | {_MERGE_RULE}
-        if (sum(counts_after[r] for r in mech_keys)
-                < sum(before[r] for r in mech_keys)):
-            return table_fix[0]
-    return None
-
-
 def fix_file(path, text):
     """Runs the mechanical autofix over one file's text.
 
