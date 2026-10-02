@@ -286,6 +286,7 @@ proc streamDims(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: in
 macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
   ## Wrap outer dimensions `[B, E)` into one nested sub-tuple, pass the rest whole.
   let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert B >= 0, "groupDimensions: B must be a valid dimension index"
   let endIdx = min(E, dimCount)
   if B == 0 and endIdx == dimCount:
     result = originalLayout
@@ -321,6 +322,7 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
 macro takeDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
   ## Append the outer dimensions `[B, E)` whole into the extracted layout.
   let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
   if B <= 0 and E >= dimCount:
     result = originalLayout
     return

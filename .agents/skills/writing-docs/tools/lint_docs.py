@@ -1932,19 +1932,23 @@ def scan(path, text, findings):
             wc = len(words(strip_backticks(c)))
             # a stub carrying inline code or math is a deliberate formula
             # line, not lazy wrapping; a capitalized stub without terminal
-            # punctuation above a blank line is a heading fragment
+            # punctuation above a blank line is a heading fragment.
+            # the predecessor must be the previous source line of the
+            # same kind, a block boundary or a kind switch breaks reflow
             if (wc <= 2 and "`" not in c and not c.endswith(":")
                     and not pseudo_code(c)
                     and not (c[0:1].isupper()
                              and not c.endswith((".", ",", ";"))
                              and (n + 1) in blank_nos)
                     and prev_prose is not None
+                    and prev_prose[0] + 1 == n
+                    and prev_prose[2] == kind
                     and len(prev_prose[1]) < SINGLE_WORD_EOL_PREV_MAX):
                 findings.append(Finding(
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
-            prev_prose = (n, c)
+            prev_prose = (n, c, kind)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 

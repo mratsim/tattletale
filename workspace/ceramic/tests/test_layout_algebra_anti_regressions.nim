@@ -120,8 +120,7 @@ proc runCoalesceConstantFixtureTests =
 proc runComplementFixtureTests =
   # Guarded cases — complement with a compile-time bound must produce
   # the coalesced result: the rem dimension (ceil_div(460, 512) = 1) is
-  # statically 1, so coalesce's trailing size-1 discard removes it; a
-  # lone size-1 result is the library's (1):(0) sentinel.
+  # statically 1, so coalesce's trailing size-1 discard removes it.
   block:
     let r = complement(make_layout((2, 2), (1, 4)), 16)
     check r.shape, (2, 2), (Int[2], Int[2])
