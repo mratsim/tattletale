@@ -771,7 +771,7 @@ template tile_to_shape*(blk: Layout, target_shape: typed, ord_shape: static Stri
   ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
   ##   # block (2,3) repeated to fill (6,12) in 3 columns:
   ##   # ((2,3),3):((1,2),6)
-  const R = target_shape.rank()
+  const R = static(target_shape.rank())
   block:
     evalOnceAs(bk, blk)
     evalOnceAs(ts, target_shape)

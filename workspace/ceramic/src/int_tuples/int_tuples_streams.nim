@@ -171,6 +171,12 @@ func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
 func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], verbatim: bool) =
   tb.appendImpl(leafValues, isVerbatim = verbatim)
 
+func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
+  doAssert tb.accums.len == batches.len
+  tb.verbatim = false
+  for i, batch in batches:
+    tb.accums[i] = batch & tb.accums[i]
+
 func markNonVerbatim*(tb: var TupleBuilderFlat) =
   tb.verbatim = false
 

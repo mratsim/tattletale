@@ -56,51 +56,60 @@ func isCompact*(layout: static Layout): static bool {.inline.} =
 # ═══════════════════════════════════════════════════════════════
 
 
+macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
+  ## Pass every outer dimension through whole, append `(1, 0)` pads after.
+  var builder = TupleBuilderFlat.new(2)
+  var dimCount = 0
+  for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    inc dimCount
+  if dimCount >= rank:
+    result = originalLayout
+    return
+  for i in dimCount ..< rank:
+    builder.append(IntCT(1), IntCT(0))
+  let (node, verbatim) = builder.emitLayout()
+  if verbatim:
+    result = originalLayout
+  else:
+    result = node
+
 macro padRight*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by padding with identity dimensions (1, 0).
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"padRightImpl".newCall(originalLayout, sh, st, newLit(rank))
 
-  if curRank >= rank:
-    result = layout
+macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
+  ## Prepend `(1, 0)` pads, pass every outer dimension through whole after them.
+  var builder = TupleBuilderFlat.new(2)
+  var dimCount = 0
+  for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    inc dimCount
+  if dimCount >= rank:
+    result = originalLayout
     return
-
-  var ct = LayoutCT()
-  if shTyp.kind == nnkTupleConstr:
-    for i in 0 ..< shTyp.len:
-      ct.shape.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i)
-      ct.stride.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i)
+  var padShape, padStride: seq[NimNode]
+  for i in dimCount ..< rank:
+    padShape.add IntCT(1)
+    padStride.add IntCT(0)
+  builder.prependBatch(padShape, padStride)
+  let (node, verbatim) = builder.emitLayout()
+  if verbatim:
+    result = originalLayout
   else:
-    ct.shape.add newTree(nnkDotExpr, layout, ident"shape")
-    ct.stride.add newTree(nnkDotExpr, layout, ident"stride")
-  for i in curRank ..< rank:
-    ct.shape.add IntCT(1)
-    ct.stride.add IntCT(0)
-  result = ct.emit()
-
-
+    result = node
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity dimensions (1, 0).
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
-
-  if curRank >= rank:
-    result = layout
-    return
-
-  var ct = LayoutCT()
-  for i in 0 ..< (rank - curRank):
-    ct.shape.add IntCT(1)
-    ct.stride.add IntCT(0)
-  if shTyp.kind == nnkTupleConstr:
-    for i in 0 ..< shTyp.len:
-      ct.shape.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i)
-      ct.stride.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i)
-  else:
-    ct.shape.add nnkDotExpr.newTree(layout, ident"shape")
-    ct.stride.add nnkDotExpr.newTree(layout, ident"stride")
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"padLeftImpl".newCall(originalLayout, sh, st, newLit(rank))
 
 # ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith, apply body to each leaf (shape, stride) pair
