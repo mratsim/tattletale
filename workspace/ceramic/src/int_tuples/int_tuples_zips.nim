@@ -8,9 +8,10 @@
 import std/macros, std/typetraits
 import ./int_tuples_datatypes
 import ./int_tuples_transforms
+import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
-#  zipDimensionsWith — zip tuple top-level with `op`
+#  zipDimensionsWith, zip the top-level elements with a binary op
 # ═══════════════════════════════════════════════════════════════
 
 macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
@@ -28,23 +29,13 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
   let rMin = min(RA, RB)
   let rMax = max(RA, RB)
 
-  proc subst(x: NimNode; i: int; la, lb: NimNode): NimNode =
-    if x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_a"):
-      result = nnkBracketExpr.newTree(la, newLit(i))
-    elif x.kind in {nnkIdent, nnkSym} and x.eqIdent("it_b"):
-      result = nnkBracketExpr.newTree(lb, newLit(i))
-    else:
-      result = x.copyNimTree()
-      for j in 0 ..< x.len:
-        result[j] = subst(x[j], i, la, lb)
-
   result = newStmtList()
   var items: seq[NimNode]
   for i in 0 ..< rMax:
     let name = ident("__zw" & $i)
     if i < rMin:
       items.add name
-      result.add newLetStmt(name, subst(body, i, a, b))
+      result.add newLetStmt(name, body.replaceNodesAt(("it_a", a), ("it_b", b), i))
     elif i < RA:
       items.add nnkBracketExpr.newTree(a, newLit(i))
     else:
@@ -53,13 +44,13 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
   # Multi-item: construct a tuple like nnkTupleConstr.
   result.add nnkPar.newTree(items)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  zipLeavesWith — element-wise binary op for equal-structure tuples
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  zipLeavesWith, element-wise binary op for equal-structure tuples
+# ═══════════════════════════════════════════════════════════════
 
 template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
   ## Internal: walk tuple from index `idx`, recurse into nested tuples.
-  when idx < tupleLen(typeof(a)):
+  when idx < a.rank():
     when a[idx] is tuple:
       concat((zipLeavesRecur(a[idx], b[idx], 0, body),),
              zipLeavesRecur(a, b, idx + 1, body))
@@ -67,7 +58,7 @@ template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
       block:
         let it_a {.inject.} = a[idx]
         let it_b {.inject.} = b[idx]
-        when idx == tupleLen(typeof(a)) - 1:
+        when idx == a.rank() - 1:
           (body,)
         else:
           concat((body,), zipLeavesRecur(a, b, idx + 1, body))
@@ -90,75 +81,3 @@ template zipLeavesWith*(a, b: typed; body: untyped): untyped =
     let it_a = a
     let it_b = b
     body
-
-# ═══════════════════════════════════════════════════════════════
-#  foldZipWith — fold(zipWith(`op`(it_a, it_b)))
-# ═══════════════════════════════════════════════════════════════
-
-template foldZipWith_recurse*(idx: static int; a, b: tuple; state: typed; body: untyped): auto =
-  static: doAssert tupleLen(a) == tupleLen(b), "foldZipWith: tuples must have same rank"
-  const N = tupleLen(a)
-  let field = foldZipWith(a[idx], b[idx], state, body)
-  when idx == N - 1:
-    field
-  else:
-    foldZipWith_recurse(idx + 1, a, b, field, body)
-
-template foldZipWith*(a, b: typed; startingAcc: typed; body: untyped): auto =
-  ## Fold over paired leaves of a and b.
-  ## Injects `acc`, `it_a`, `it_b`.
-  when typeof(a) is tuple and typeof(b) is tuple:
-    foldZipWith_recurse(0, a, b, startingAcc, body)
-  else:
-    block:
-      let acc {.inject.} = startingAcc
-      let it_a {.inject.} = a
-      let it_b {.inject.} = b
-      body
-
-# ═══════════════════════════════════════════════════════════════
-#  zip2_by — guided zip for rank-2 tuples
-# ═══════════════════════════════════════════════════════════════
-
-template zip2_by*(t: tuple; guide: int): auto =
-  ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp
-  ## Terminal guide: t must be a pair, returned as-is.
-  t
-
-template zip2_by*[V: static int](t: tuple; guide: Int[V]): auto =
-  ## Terminal Int[N] guide.
-  t
-
-macro zip2_by_impl(t, guide: typed): untyped =
-  let guideTyp = guide.getTypeInst()
-  let guideLen = guideTyp.len
-  let tLen = t.getTypeInst().len
-  var firstParts = newNimNode(nnkTupleConstr)
-  var secondParts = newNimNode(nnkTupleConstr)
-  for i in 0 ..< guideLen:
-    let ti = nnkBracketExpr.newTree(t, newLit(i))
-    let gi = nnkBracketExpr.newTree(guide, newLit(i))
-    if guideTyp[i].kind == nnkTupleConstr:
-      let splitPair = newCall(bindSym"zip2_by_impl", ti, gi)
-      firstParts.add nnkBracketExpr.newTree(splitPair, newLit(0))
-      secondParts.add nnkBracketExpr.newTree(splitPair, newLit(1))
-    else:
-      firstParts.add nnkBracketExpr.newTree(ti, newLit(0))
-      secondParts.add nnkBracketExpr.newTree(ti, newLit(1))
-  for i in guideLen ..< tLen:
-    secondParts.add nnkBracketExpr.newTree(t, newLit(i))
-  result = nnkTupleConstr.newTree(firstParts, secondParts)
-
-func zip2_by*[T: tuple, G: tuple](t: T; guide: G): auto {.inline, noInit.} =
-  ## Guided zip: split flat tuple `t` into (first_parts, second_parts).
-  ##
-  ## For each i where guide[i] is a tuple: recurse zip2_by(t[i], guide[i]).
-  ## For each i where guide[i] is scalar: t[i] must be a pair; its two
-  ##   elements go to first_parts and second_parts respectively.
-  ## Extra elements of t (beyond guide length) append to second_parts.
-  ##
-  ## Result: (first_parts_tuple, second_parts_tuple) — rank-2.
-  ##
-  ## CuTe: zip2_by(t, guide) — tuple_algorithms.hpp line ~739
-  ## Used by tile_unzip → zipped_divide/zipped_product.
-  zip2_by_impl(t, guide)

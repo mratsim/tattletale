@@ -9,6 +9,7 @@
 ## prefix_scanIt, suffix_scanIt, prefix_product, suffix_product.
 
 import std/macros
+import std/algorithm
 import workspace/ceramic/src/int_tuples {.all.}
 
 # ═══════════════════════════════════════════════════════════════
@@ -359,19 +360,19 @@ proc runFlatIterTests* =
   ## Order, reverse order and leaf types of the leaf streams over typed expressions.
   macro leafReprs(e: typed): untyped =
     var reprs: seq[string]
-    for (lf, _) in flatLeaves(e):
+    for (lf, _) in e.tupleFlatten():
       reprs.add lf.repr
     result = newLit(reprs)
 
   macro leafTypeReprs(e: typed): untyped =
     var reprs: seq[string]
-    for (_, ty) in flatLeaves(e):
+    for (_, ty) in e.tupleFlatten():
       reprs.add ty.repr
     result = newLit(reprs)
 
   macro leafReprsRev(e: typed): untyped =
     var reprs: seq[string]
-    for (lf, _) in flatLeavesRev(e):
+    for (lf, _) in e.tupleFlatten().reversed():
       reprs.add lf.repr
     result = newLit(reprs)
 
@@ -460,73 +461,6 @@ proc runMixedStaticDynamicTests =
   echo "  Mixed static/dynamic: 2 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  zip2_by — guided zip for rank-2 tuples
-# ═══════════════════════════════════════════════════════════════
-
-proc runZip2ByTests =
-  block:
-    ## Terminal guide — pair pass-through
-    const t = (Int[2](), Int[3]())
-    const guide = 99
-    let r = zip2_by(t, guide)
-    doAssert r === (Int[2](), Int[3]())
-  block:
-    ## Tuple guide with 2 terminals — basic split
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()))
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    doAssert r === ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-  block:
-    ## Nested guide — guide = (X, (X, X))
-    let t = ((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]())))
-    let guide = (1, (2, 3))
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
-    doAssert r === expected
-  block:
-    ## Guide shorter than t — trailing goes to group 1
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[6]())
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[6]()))
-    doAssert r === expected
-  block:
-    ## Guide matches t exactly — no trailing
-    let t = ((Int[2](), Int[3]()), (Int[4](), Int[5]()))
-    let guide = (1, 2)
-    let r = zip2_by(t, guide)
-    let expected = ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-    doAssert r === expected
-  block:
-    ## MoYe.jl tuple_alg test: chars as stand-ins for Int[N]
-    let t = ((1, 10), ((2, 20), (3, 30)), 100)
-    let guide = (0, (0, 0))
-    let r = zip2_by(t, guide)
-    let expected = ((1, (2, 3)), (10, (20, 30), 100))
-    doAssert r === expected, "got " & $r & " expected " & $expected
-  block:
-    ## Rank-1 input (single pair)
-    const t = (Int[2](), Int[3]())
-    const guide = 0  # terminal
-    let r = zip2_by(t, guide)
-    doAssert r === (Int[2](), Int[3]())
-  # ── zip2_by doc examples ──
-  block:
-    # Flat scalar guide: each t[i] is a pair, split pair-wise
-    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]())), (1, 2)) ===
-      ((Int[2](), Int[4]()), (Int[3](), Int[5]()))
-  block:
-    # Mixed guide: scalar splits a pair, tuple recurses into sub-tuple
-    doAssert zip2_by(((Int[2](), Int[3]()), ((Int[4](), Int[5]()), (Int[6](), Int[7]()))), (1, (2, 3))) ===
-      ((Int[2](), (Int[4](), Int[6]())), (Int[3](), (Int[5](), Int[7]())))
-  block:
-    # Guide shorter than t — trailing appended to group 1
-    doAssert zip2_by(((Int[2](), Int[3]()), (Int[4](), Int[5]()), Int[99]()), (1, 2)) ===
-      ((Int[2](), Int[4]()), (Int[3](), Int[5](), Int[99]()))
-
-  echo "  zip2_by: 10 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  mapDimensionsWith / zipDimensionsWith
 # ═══════════════════════════════════════════════════════════════
 
@@ -609,131 +543,6 @@ proc runMapLeavesWithPlainIntTests =
     let r = mapLeavesWith(add(v, 4), it * 10)
     doAssert r === 70
   echo "  mapLeavesWith (plain int): 6 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  filterZipWith — tuple zip + conditional concat
-# ═══════════════════════════════════════════════════════════════
-
-type
-  X* = object  ## keep/slice marker
-  Y* = object  ## drop/dice marker
-  Z* = object  ## another marker
-  W* = object  ## yet another marker
-
-proc runFilterZipWithTests =
-  # ── type-based filtering ──
-  block:  # keep X-marked dims, drop Y-marked
-    const r = filterZipWith((X, Y), (3, 4)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (3,)
-  block:  # keep Y-marked dims, drop X-marked
-    const r = filterZipWith((X, Y), (3, 4)):
-      (when it_a is X: () else: (it_b,))
-    doAssert r === (4,)
-  block:  # only keep Y-marked, drop everything else
-    const r = filterZipWith((X, Y, Z), (1, 2, 3)):
-      (when it_a is Y: (it_b,) else: ())
-    doAssert r === (2,)
-  block:  # multiple markers - keep X and Z, drop Y and W
-    const r = filterZipWith((X, Y, Z, W), (10, 20, 30, 40)):
-      (when it_a is X or it_a is Z: (it_b,) else: ())
-    doAssert r === (10, 30)
-
-  # ── value-based filtering ──
-  block:  # keep only even values from coord
-    const r = filterZipWith((1, 2, 3, 4), (10, 20, 30, 40)):
-      (when (it_a mod 2) == 0: (it_b,) else: ())
-    doAssert r === (20, 40)
-  block:  # keep only elements where coord > target
-    const r = filterZipWith((10, 5), (5, 10)):
-      (when it_a > it_b: (it_b,) else: ())
-    doAssert r === (5,)
-  block:  # keep elements that satisfy a static predicate
-    const r = filterZipWith((1, -2, 3, -4), (5, 6, 7, 8)):
-      (when it_a > 0: (it_b,) else: ())
-    doAssert r === (5, 7)
-
-  # ── structural: nested tuples ──
-  block:  # nested: keep sub-elements where inner coord matches
-    const r = filterZipWith(((X, Y), X), ((2, 3), 4)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (2, 4)
-  block:  # nested: keep all
-    const r = filterZipWith(((X, X), X), ((2, 3), 4)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (2, 3, 4)
-  block:  # deeply nested
-    const r = filterZipWith(((X, (Y, X)), X), (((1, 2), (3, 4)), 5)):
-      (when it_a is X: (it_b,) else: ())
-    echo "  deeply nested: ", r
-
-  # ── scalar coord ──
-  block:  # scalar keep
-    const r = filterZipWith(X, 42):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (42,)
-  block:  # scalar drop
-    const r = filterZipWith(0, 42):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === ()
-  block:  # scalar keep with value test
-    const r = filterZipWith(7, 42):
-      (when it_a > 5: (it_b,) else: ())
-    doAssert r === (42,)
-  block:  # scalar drop with value test
-    const r = filterZipWith(3, 42):
-      (when it_a > 5: (it_b,) else: ())
-    doAssert r === ()
-
-  # ── all-keep vs all-drop ──
-  block:  # keep all (X everywhere)
-    const r = filterZipWith((X, X, X), (1, 2, 3)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (1, 2, 3)
-  block:  # drop all (no X)
-    const r = filterZipWith((0, 1, 2), (1, 2, 3)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === ()
-
-  # ── empty tuple ──
-  block:
-    const r = filterZipWith((), ()):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === ()
-
-  # ── transform on keep ──
-  block:  # keep and double the value
-    const r = filterZipWith((X, Y, X), (3, 4, 5)):
-      (when it_a is X: (it_b * 2,) else: ())
-    doAssert r === (6, 10)
-  block:  # keep and convert type
-    const r = filterZipWith((X, Y), (3, 4)):
-      (when it_a is X: ("val:" & $it_b,) else: ())
-    doAssert r == ("val:3",)
-
-  # ── via const/type indirection ──
-  block:  # const values
-    const Vals = (10, 20, 30)
-    const r = filterZipWith((X, X, Y), Vals):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (10, 20)
-  block:  # type alias for markers
-    const Sel = (X(), Y())
-    const r = filterZipWith(Sel, (3, 4)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (3,)
-  block:  # const values + type markers
-    const MK = (X(), Y(), X())
-    const V = (1, 2, 3)
-    const r = filterZipWith(MK, V):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (1, 3)
-  block:  # type alias
-    type Sel = (X, Y)
-    const r = filterZipWith(Sel, (3, 4)):
-      (when it_a is X: (it_b,) else: ())
-    doAssert r === (3,)
-  echo "  filterZipWith: 29 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  select macro
@@ -862,10 +671,8 @@ proc runTests* =
   runFlatIterTests()
   runFlattenConcatTests()
   runMixedStaticDynamicTests()
-  runZip2ByTests()
   runMapZipWithTests()
   runMapLeavesWithPlainIntTests()
-  runFilterZipWithTests()
   runSelectTests()
   echo "ALL INT_TUPLES TESTS PASSED"
 

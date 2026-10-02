@@ -9,15 +9,11 @@ import std/macros
 import ./int_tuples_datatypes
 
 const DynamicSentinel* = low(int)
-  ## Sentinel value used throughout the library to mark a shape
-  ## or stride as "unknown at compile time" (dynamic/runtime int).
-  ## Returned by `toSeqStaticInts` for non-`Int[N]` elements.
-  ## Code processing compile-time-known shape/stride arrays should
-  ## compare against this sentinel rather than 0, to avoid confusion
-  ## with a stride of literal 0 (Int[0], broadcasting).
+  ## Sentinel value used throughout the library to mark "unknown at compile time" (dynamic/runtime int).
+  ## 0-stride instead can be confused with a broadcasted dimension.
 
 # ═══════════════════════════════════════════════════════════════
-#  isConst — compile-time detection (runtime via proc dispatch)
+#  isConst, compile-time detection with a runtime dispatch
 # ═══════════════════════════════════════════════════════════════
 
 template isConst*(a: static int): bool = true
@@ -28,10 +24,8 @@ template isConst*(a: static tuple): bool = true
 template isConst*(a: tuple): bool = false
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] compile-time helpers (for macros)
+#  Int[N] compile-time helpers for macros
 # ═══════════════════════════════════════════════════════════════
-
-# TODO rationalize this section as there are duplicate use cases
 
 func IntCT*(val: int): NimNode {.compileTime.} =
   ## Shorthand: Int[val]() AST node.
@@ -46,89 +40,96 @@ func isStaticOne*(t: NimNode): bool {.compileTime.} =
   (t.kind == nnkIntLit and t.intVal == 1)
 
 func getStaticInt*(t: NimNode): int {.compileTime.} =
-  if t.kind == nnkBracketExpr and $t[0] == "Int": int(t[1].intVal)
-  elif t.kind == nnkIntLit: int(t.intVal)
-  else: error("getStaticInt on non-static: " & t.repr)
+  ## Static Int value of a node, DynamicSentinel when the node carries
+  ## no static Int (not a literal, not an Int[V] type or construction).
+  case t.kind
+  of nnkIntLit, nnkUIntLit:
+    int(t.intVal)
+  of nnkCall, nnkBracketExpr:
+    if t.len >= 1 and $t[0] == "Int" and t[1].kind == nnkIntLit:
+      int(t[1].intVal)
+    else:
+      DynamicSentinel
+  else:
+    DynamicSentinel
 
-#  Compile-time type helpers for the recursive macro
-# --------------------------------------------------
+# ═══════════════════════════════════════════════════════════════
+#  AST syntax sugar
+# ═══════════════════════════════════════════════════════════════
 
-func isIntType(x: NimNode): bool {.compileTime.} =
-  ## True if `x` is typed as plain `int`.
-  sameType(x, bindSym"int")
+func isTupleTy*(t: NimNode): bool {.compileTime.} =
+  t.kind in {nnkTupleConstr, nnkTupleTy}
 
-func isTupleType*(x: NimNode): bool {.compileTime.} =
-  ## True if `x` is typed as a tuple type.
-  x.getTypeImpl().kind == nnkTupleConstr
+func `*`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"*", a, b)
 
-func isStaticIntType(x: NimNode): bool {.compileTime.} =
-  ## True if `x` is typed as `Int[N]`.
-  let t = x.getTypeInst()
-  t.kind == nnkBracketExpr and $t[0] == "Int"
+func `div`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"div", a, b)
 
+func abs*(a: NimNode): NimNode {.compileTime.} =
+  bindSym"abs".newCall(a)
+
+func min*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"min".newCall(a, b)
+
+func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"ceil_div".newCall(a, b)
+
+func sign*(a: NimNode): NimNode {.compileTime.} =
+  bindSym"sign".newCall(a)
+
+proc newLetAsgn*(stmts: var NimNode; name: string; value: NimNode): NimNode {.compileTime.} =
+  result = genSym(nskLet, name)
+  stmts.add result.newLetStmt value
+
+# ═══════════════════════════════════════════════════════════════
 #  Constant foldable check
-# --------------------------------------------------
+# ═══════════════════════════════════════════════════════════════
 
 func isCompileTime*(node: NimNode): bool {.compileTime.} =
   ## True if `node` is a compile-time known integer expression.
-  ##
-  ## Branch analysis:
-  ##
-  ## `nnkIntLit`
-  ##   Matches literal integers: `1`, `16`, `1024`.
-  ##   These are always compile-time values.
-  ##   Example: `tiler[0]` when tiler is `(1, nr)` → the `1` is an nnkIntLit.
-  ##
-  ## `Int[N]` (via getTypeInst)
-  ##   Matches expressions whose type is `Int[V]` for some static V.
-  ##   Example: `Int[16]()` — type `Int[16]` — known at compile time.
-  ##   The output of `prefix_product((Int[1], Int[16]))` is `(Int[1], Int[1])` —
-  ##   each element has type `Int[1]`, so this branch catches them.
-  ##
-  ## all-args-CT call
-  ##   Matches function/macro calls where EVERY argument passes
-  ##   `isCompileTime` recursively. Index 0 (the callee) is skipped.
-  ##   Examples: `max(1, Int[1]())`, `ceil_div(1024, 16)`.
-  ##   This handles expressions like `1 + 2` (infix is a call).
-  ##
-  ## `nnkSym` → `nnkConstSection`
-  ##   Matches identifiers (symbols) that resolve to a `const` definition.
-  ##   Example: `const nr = 16; ... nr ...` — the reference `nr` is a sym
-  ##   whose `getImpl()` returns a `nnkConstSection`.
-  ##   Non-const syms (runtime `let` bindings, function parameters) fall through.
-  ##
-  ## `false` (default)
-  ##   Everything else — runtime variables, function calls with runtime args.
-  ##   Examples: `let kc = computeKc(); ... kc ...`, `someRuntimeFn(x)`.
-  # Note: unfortunately this is very hard to get right.
+  #
+  # Branch analysis:
+  #
+  # `nnkIntLit`
+  #   Matches literal integers: `1`, `16`, `1024`.
+  #
+  # `Int[N]`
+  #
+  # all-args-CT call
+  #   Matches function/macro calls where EVERY argument passes `isCompileTime` recursively.
+  #   This handles expressions like `1 + 2` (infix is a call).
+  #
+  # `nnkSym` → `nnkConstSection`
+  #   Matches identifiers (symbols) that resolve to a `const` definition.
+  #
+  # `false` (default)
+  #   Everything else
+  #
+  # Note: unfortunately this is very hard to get right and it is still incomplete
   if node.kind in nnkLiterals:
     return true
-  # Symbol: resolve to const section — do this before structural recursion
-  # since getTypeInst on a const symbol returns the TYPE which can look like a
-  # data constructor (e.g. nnkBracketExpr tuple type), causing spurious recursion.
   if node.kind == nnkSym:
     let impl = node.getImpl()
     return impl.kind == nnkConstSection
-  # Empty / None: trivially CT (no-op)
   if node.kind in {nnkEmpty, nnkNone}:
+    # Empty / None: trivially CT (no-op)
     return true
-  # Ident / AccQuoted: unresolved names (e.g. macro-injected it_sh, it_st) — never CT
   if node.kind in {nnkIdent, nnkAccQuoted}:
+    # Ident / AccQuoted: unresolved names (e.g. macro-injected it_sh, it_st)
     return false
-  # Postfix / Prefix: declaration modifiers (e.g. `{.inject.} it`) —
-  # child 0 is a pragma annotation, child 1 (last) is the actual identifier
   if node.kind == nnkPostfix and node.len >= 1:
+    # Postfix / Prefix: declaration modifiers (e.g. `{.inject.} it`)
     return isCompileTime(node[^1])
   if node.kind == nnkPrefix and node.len > 0:
     for i in 0 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  # BindStmt: compile-time directive (e.g. `bind makeIntTupleLeaf`) — always CT
   if node.kind == nnkBindStmt:
     return true
-  # ExprColonExpr (a: 7 inside named tuples): only the value (child 1) matters
   if node.kind == nnkExprColonExpr:
+    # ExprColonExpr (a: 7 inside named tuples): only the value (child 1) matters
     return isCompileTime(node[1])
   if node.kind in {nnkCall, nnkHiddenCallConv}:
     if node.len == 1:
@@ -139,38 +140,36 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
         if not isCompileTime(node[i]):
           return false
     return true
-  # DotExpr: only check the base (child 0), field name (child 1) is an identifier
   if node.kind == nnkDotExpr and node.len >= 1:
+    # DotExpr: only check the base (child 0), field name (child 1) is an identifier
     return isCompileTime(node[0])
-  # BlockExpr: child 0 is a label/nil, check body from index 1
   if node.kind == nnkBlockExpr and node.len > 1:
+    # BlockExpr: child 0 is a label/nil, check body from index 1
     for i in 1 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  # StmtList / StmtListExpr: all children are statements to check
   if node.kind in {nnkStmtList, nnkStmtListExpr} and node.len > 0:
     for i in 0 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  # IdentDefs: a single binding (ident, type, value) inside LetSection/VarSection
   if node.kind == nnkIdentDefs and node.len > 0:
+    # IdentDefs: a single binding (ident, type, value) inside LetSection/VarSection
     for i in 0 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  # LetSection / VarSection / ConstSection: recurse into binding children
-  if node.kind in {nnkLetSection, nnkVarSection, nnkConstSection} and node.len > 0:
+  if node.kind in {nnkLetSection, nnkVarSection, nnkConstSection} and node.len > 0: # LetSection / VarSection / ConstSection: recurse into binding children
     for i in 0 ..< node.len:
       if not isCompileTime(node[i]):
         return false
     return true
-  # Asgn: assignment (a = b) — check the value (child 1)
   if node.kind in {nnkAsgn, nnkFastAsgn} and node.len > 1:
+    # Asgn: assignment (a = b), check the value
     return isCompileTime(node[1])
-  # Tuple / bracket constructors: all children are values
   if node.kind in {nnkBracketExpr, nnkPar, nnkTupleConstr} and node.len > 0:
+    # Tuple / bracket constructors
     for i in 0 ..< node.len:
       if not isCompileTime(node[i]):
         return false
@@ -178,52 +177,9 @@ func isCompileTime*(node: NimNode): bool {.compileTime.} =
   false
 
 # ═══════════════════════════════════════════════════════════════
-#  Compile-time seq[int]
+#  evalOnceAs
 # ═══════════════════════════════════════════════════════════════
 
-func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
-  ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
-  ## Returns low(int) (DynamicSentinel) for non-static (dynamic int) elements. Handles:
-  ##   ((Int[1], Int[16]), (Int[512], Int[64]))  → @[1, 16, 512, 64]
-  ##   ((int, int), (int, int))                  → @[DynamicSentinel, DynamicSentinel, ...]
-  ##   Int[64]                                   → @[64]
-  if t.kind == nnkBracketExpr and $t[0] == "Int":
-    # Single Int[N] (scalar type, not tuple)
-    result.add int(t[1].intVal)
-  elif t.kind == nnkTupleConstr or t.kind == nnkTupleTy:
-    # Recurse into tuple elements
-    for i in 0 ..< t.len:
-      result.add toSeqStaticInts(t[i])
-  else:
-    # Dynamic int (or other) — mark as unknown (low(int))
-    result.add low(int)
-
-func prefixProduct*(vals: seq[int]): seq[int] {.compileTime.} =
-  ## Prefix product of a flat seq (DynamicSentinel treated as 1 for scan,
-  ## but produce DynamicSentinel in output to mark unknown positions).
-  result = @[1]
-  for i in 0 ..< vals.len:
-    if vals[i] != DynamicSentinel:
-      result.add result[^1] * vals[i]
-    else:
-      result.add DynamicSentinel
-
-# ═══════════════════════════════════════════════════════════════
-#  evalOnceAs — evaluate at most once, preserve Int[N] for CT exprs
-# ═══════════════════════════════════════════════════════════════
-#
-#  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-#
-#     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-#     when two inline evalOnceAs-using template calls appear as
-#     arguments to a generic proc — both get the first argument's
-#     concrete type. The `block:` forces independent per-expansion
-#     scope, working around this Nim compiler limitation.
-#
-#     See: test_evalonceas_procarg.nim, layouts.nim:make_layout
-#
-
-#
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`
   ## Ensuring it is evaluated only once if it is a `rvalue`
@@ -231,16 +187,9 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`c
   ##
   ## Constant expressions are constant-folded
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
 
-  # Generate the following with `genSym` alias to avoid collisions
-  #
   # template `alias`(): untyped =
   #   expression
   result = newProc(
@@ -257,13 +206,9 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
   ##
   ## Constant expressions are constant-folded
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
+  ##     See the section comment at the top of this file.
 
   # const evalOnceCT_staticInt = expression
   # template `alias`(): untyped =
@@ -272,8 +217,8 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
   let evalOnceCT_staticInt = genSym(nskConst, "evalOnceCT_staticInt")
 
   # The expression may be a `let` binding which would lead to "cannot evaluate at compile-time"
-  # So we rebuild a constant from the type. As a side-benefit, the C++ compiler should
-  # dead-code eliminate the unused `let` expression.
+  # So we rebuild a constant from the type.
+  # As a side-benefit, the C++ compiler should dead-code eliminate the unused `let` expression.
   result.add newConstStmt(evalOnceCT_staticInt, IntCT(V))
   result.add newProc(
     name = genSym(nskTemplate, $alias),
@@ -289,13 +234,9 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ##
   ## Constant expressions are constant-folded.
   ##
-  ##  ⚠  All usage of evalOnceAs MUST be wrapped in a `block:` scope.
-  ##
-  ##     Without `block:`, Nim's type inference unifies [A, B: SomeType]
-  ##     when two inline evalOnceAs-using template calls appear as
-  ##     arguments to a generic proc — both get the first argument's
-  ##     concrete type. The `block:` forces independent per-expansion
-  ##     scope, working around this Nim compiler limitation.
+  ##  ⚠  Wrap every use inside a template body in a `block:`.
+  ##     Standalone statements in a func body need no `block:`.
+  ##     See the section comment at the top of this file.
 
   # Uses a generated `when expression is static:` to choose
   # between `const` (compile-time) and `let` (runtime) storage.

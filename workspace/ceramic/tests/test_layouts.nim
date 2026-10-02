@@ -19,6 +19,7 @@
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts {.all.}
 import workspace/ceramic/tests/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
@@ -433,22 +434,20 @@ proc runSizeTests =
 #  ⚠ Known discrepancies between implementations of cosize on
 #  COMPOSED layouts (make_layout(l1, l2)):
 #
-#   1. CuTe C++ — uses hierarchical (nested) cosize. For a composed
-#      layout Layout<A,B>, cosize ≈ cosize(A) * cosize(B) effectively,
-#      which is incorrect when the outer layout has non-trivial stride.
+#   1. CuTe C++ uses hierarchical (nested) cosize. For a composed
+#      layout Layout<A,B>, cosize = cosize(A) * cosize(B) effectively,
+#      incorrect when the outer layout carries non-trivial stride.
 #
-#   2. Meta tensor-layouts (Python) — enumerates ALL offsets to compute
-#      max(L(i)) + 1.  This is O(size(L)) but is the only correct
-#      definition for composed layouts.  CuTe's cosize(ComposedLayout)
-#      bug is explicitly documented in the Python source.
+#   2. Meta tensor-layouts (Python) enumerates all offsets to compute
+#      max(L(i)) + 1 in O(size(L)) and covers composed layouts correctly.
+#      CuTe documents the ComposedLayout cosize bug.
 #
-#   3. Our Nim (flat affine) — uses the closed-form
+#   3. Our Nim (flat affine) uses the direct formula
 #      1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
 #      matches Python's affine fast-path and CuTe's rank-1 cosize.
-#      We DO NOT support ComposedLayout / Swizzle — our layouts are
-#      always flat/affine, so the sum formula is correct.
 #
-#  Example cosize values for composed layouts:
+#      ComposedLayout / Swizzle sit unsupported, the layouts stay flat
+#      affine and the sum formula is correct for that class.
 #
 #   Layout                    Affine sum   Cute hier   Python enum (correct)
 #   ───────────────────────   ──────────   ──────────   ─────────────────────
@@ -505,32 +504,6 @@ proc runCosizeTests =
     doAssert d1 * cosize(l) === 4
   echo "  Cosize: 6 Python reference cases OK"
 
-# ═══════════════════════════════════════════════════════════════
-#  filter_zeros tests (ported from Python tensor-layouts test suite)
-#  Python's `filter` only removes stride-0 dimensions, which is
-#  exactly what filter_zeros → coalesce achieves.
-# ═══════════════════════════════════════════════════════════════
-
-proc runFilterZerosTests =
-  let d1 = 1
-  block:
-    let l = make_layout((64, 8, 8, 128), (8, 1, 0, 512))
-    let f = filter_zeros(l)
-    let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] === 64
-    doAssert d1 * fFlat[1] === 8
-    doAssert d1 * fFlat[2] === 1   # stride-0 dimension became size-1
-    doAssert d1 * fFlat[3] === 128
-
-  block:
-    let l = make_layout((3, 8, 8, 8), (16, 0, 0, 0))
-    let f = filter_zeros(l)
-    let fFlat = flatten(f.shape)
-    doAssert d1 * fFlat[0] === 3
-    doAssert d1 * fFlat[1] === 1  # stride-0 → size-1
-    doAssert d1 * fFlat[2] === 1
-    doAssert d1 * fFlat[3] === 1
-  echo "  filter_zeros: 2 Python reference cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  $ — stringify
@@ -1065,8 +1038,6 @@ proc runTests =
   runSizeTests()
   echo "--- Cosize ---"
   runCosizeTests()
-  echo "--- filter_zeros ---"
-  runFilterZerosTests()
   echo "--- Stringify ---"
   runStringifyTests()
   echo "--- Rank ---"
@@ -1080,46 +1051,6 @@ proc runTests =
   echo "--- NCHW ---"
   runNCHWTests()
   echo "--- zipDimensions ---"
-  echo "--- mapDimensionsWith/zipDimensionsWith ---"
-  block:
-    # map: double each dimension's stride
-    let a = make_layout((2, 4), (1, 2))
-    let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride * 2)
-    doAssert r.shape === (2, 4) and r.stride === (2, 4)
-  block:
-    # map over single-dimension layout
-    let a = make_layout(3, 5)
-    let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride * 10)
-    doAssert r.shape === 3 and r.stride === 50
-  block:
-    # map over hierarchical layout: scale each dimension's stride
-    let a = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = mapDimensionsWith(a):
-      make_layout(it.shape, it.stride.scaleBy(2))
-    doAssert r.shape === ((2,2),(2,8))
-    doAssert r.stride === ((2,8),(4,16))
-  block:
-    # zipWith: pairwise — take stride from it_b (rightover writes over)
-    let a = make_layout((2, 4), (1, 2))
-    let b = make_layout((3, 5), (10, 20))
-    let r = zipDimensionsWith(a, b):
-      make_layout(it_a.shape, it_b.stride)
-    doAssert r.shape === (2, 4) and r.stride === (10, 20)
-  block:
-    # zipWith: a shorter (leftover b appended)
-    let a = make_layout((2,), (1,))
-    let b = make_layout(((2,2),(2,8)), ((1,4),(2,8)))
-    let r = zipDimensionsWith(a, b):
-      make_layout(it_a.shape, it_b.stride)
-    doAssert rank(r) == 2
-    # dimension 0 = zip result: shape from a, stride from b dimension 0
-    doAssert dimension(r, 0).shape === 2
-    doAssert dimension(r, 0).stride === (1, 4)
-    # dimension 1 = leftover from b (unchanged)
-    doAssert dimension(r, 1).shape === (2, 8)
-  echo "  5 checks OK"
 
   echo "--- groupDimensions ---"
   block:

@@ -5,7 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/ceramic/src/int_tuples/int_tuples_filters
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples/int_tuples_datatypes
 import workspace/ceramic/src/int_tuples/int_tuples_compiletime
@@ -13,53 +12,28 @@ import workspace/ceramic/src/int_tuples/int_tuples_folds
 import workspace/ceramic/src/int_tuples/int_tuples_maps
 import workspace/ceramic/src/int_tuples/int_tuples_transforms
 import workspace/ceramic/src/int_tuples/int_tuples_zips
+import workspace/ceramic/src/int_tuples/int_tuples_streams
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 
 export int_tuples_datatypes
-export int_tuples_filters
 export int_tuples_compiletime
 export int_tuples_folds
 export int_tuples_maps
 export int_tuples_transforms
 export int_tuples_zips
-
-# ═══════════════════════════════════════════════════════════════
-#  makeIntTuple — wrap static ints / Int literals in Int[N]
-# ═══════════════════════════════════════════════════════════════
-
-#  Leaf procs — dispatch on exact type
-
-template makeIntTupleLeaf*(leaf: int): int =
-  leaf
-
-template makeIntTupleLeaf*(leaf: static int): auto =
-  Int[leaf]()
-
-template makeIntTupleLeaf*[V: static int](x: Int[V]): Int[V] =
-  x
+export int_tuples_streams
+export int_tuples_unsanctioned_helpers
 
 template makeIntTuple*(t: IntOrIntTuple): auto =
-  ## Convert all `int` leaves in `t` (at any nesting depth) to `Int[N]()`.
-  runnableExamples:
-    let t = makeIntTuple((3, 4))
-    doAssert t is (Int[3], Int[4])
+  mapLeavesWith(t):
+    when it is static int:
+      Int[it]()
+    else:
+      it
 
-  mixin makeIntTupleLeaf # Keep symbol open for X / Y markers defined in layout_indexing
-  mapLeavesWith(t, makeIntTupleLeaf(it))
-
-# ═══════════════════════════════════════════════════════════════
-#  Maps
-# ═══════════════════════════════════════════════════════════════
-
-template scaleBy*(t: IntOrIntTuple, scale: int): auto =
-  t.mapLeavesWith():
-    it * scale
-
-template scaleBy*(t: IntOrIntTuple, scale: Int): auto =
-  t.mapLeavesWith():
-    it * scale
 
 # ═══════════════════════════════════════════════════════════════
-#  Prefix / suffix scans
+#  prefix and suffix scans
 # ═══════════════════════════════════════════════════════════════
 
 template prefix_product*(shape: IntOrIntTuple): untyped =
@@ -95,7 +69,7 @@ template suffix_product*(shape: IntOrIntTuple): untyped =
   suffix_scanIt(shape, Int[1](), acc * it)
 
 # ═══════════════════════════════════════════════════════════════
-#  Reductions
+#  reductions
 # ═══════════════════════════════════════════════════════════════
 
 func product*(t: IntOrIntTuple): auto =
@@ -111,7 +85,7 @@ func min*(t: IntOrIntTuple): auto =
   fold(t, Int[high(int)](), min(acc, it))
 
 # ═══════════════════════════════════════════════════════════════
-#  product_each — product of each top-level tuple element
+#  product_each, product of each top-level tuple element
 # ═══════════════════════════════════════════════════════════════
 
 func product_each*(t: IntOrIntTuple): auto =

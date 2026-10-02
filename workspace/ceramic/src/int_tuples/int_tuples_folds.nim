@@ -10,10 +10,10 @@ import ./int_tuples_datatypes
 import ./int_tuples_transforms
 
 # ═══════════════════════════════════════════════════════════════
-#  fold — left-fold reduction with Int[N] support
+#  fold, left-fold reduction with Int[N] support
 # ═══════════════════════════════════════════════════════════════
 #
-#  Adapted from the pattern in int_tuples.nim.bak:
+#  The fold pattern adapts to scalar and Int[N] elements:
 #    - Scalar `int` → inject `acc`, `it`, evaluate body
 #    - Scalar `Int[N]` → inject `acc`, `it` (Int[V] → int via * overloads)
 #    - Tuple → recurse over fields via `for f in fields(t)`
@@ -30,7 +30,7 @@ import ./int_tuples_transforms
 
 template fold_recurse*(idx: static int; t: tuple; state: typed; body: untyped): auto =
   let field = fold(t[idx], state, body)
-  when idx == tupleLen(t) - 1:
+  when idx == t.rank() - 1:
     field
   else:
     fold_recurse(idx + 1, t, field, body)
@@ -45,13 +45,13 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
       let it {.inject.} = t
       body
   else:  # tuple
-    when rank(t) == 0:
+    when t.rank() == 0:
       startingAcc
     else:
       fold_recurse(0, t, startingAcc, body)
 
 # ═══════════════════════════════════════════════════════════════
-#  prefix_scanIt / suffix_scanIt - scans while preserving constness
+#  prefix_scanIt and suffix_scanIt, scans preserving constness
 # ═══════════════════════════════════════════════════════════════
 #
 #  Recursive template block + concat for type-correct tuple building.
@@ -62,7 +62,7 @@ template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
 template tail_accumulator(strides, shape: IntOrIntTuple; body: untyped): auto =
   ## Final accumulator after prefix_scan: walks last-elem chain to the leaf.
   ## Applies body(acc, it) at each level.
-  const L = rank(typeof(shape)) - 1
+  const L = shape.rank() - 1
   when shape[L] is int or shape[L] is Int:
     block:
       let acc {.inject.} = strides[L]
@@ -92,7 +92,7 @@ template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: u
     let it = t[idx]
     let acc = state
     let subStrides = prefix_scanIt(it, acc, body)
-    const L = tupleLen(typeof(it)) - 1
+    const L = it.rank() - 1
     let newState =
       when it[L] is int or it[L] is Int:
         block:
@@ -101,7 +101,7 @@ template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: u
           body
       else:
         tail_accumulator(subStrides[L], it[L], body)
-    when idx == tupleLen(t) - 1:
+    when idx == t.rank() - 1:
       (subStrides,)
     else:
       concat((subStrides,), prefix_scanIt_recurse(idx + 1, t, newState, body))
@@ -110,7 +110,7 @@ template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: u
       let it {.inject.} = t[idx]
       let acc {.inject.} = state
       let newState = body
-      when idx == tupleLen(t) - 1:
+      when idx == t.rank() - 1:
         (acc,)
       else:
         concat((acc,), prefix_scanIt_recurse(idx + 1, t, newState, body))
@@ -159,4 +159,4 @@ template suffix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
   when t is int or t is Int:
     startingAcc
   else:
-    suffix_scanIt_recurse(rank(t) - 1, t, startingAcc, body)
+    suffix_scanIt_recurse(t.rank() - 1, t, startingAcc, body)

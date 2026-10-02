@@ -5,17 +5,14 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout construction primitives: make_layout, col_major_strides, LayoutCT.
-##
-## These primitives construct Layout values from shapes and strides.
-## The `Layout` type itself lives in `layouts_datatypes.nim`.
-
 import std/macros
 import workspace/ceramic/src/int_tuples
 import ./layouts_datatypes
+import ./layout_compiletime
+import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
-#  col_major_strides — canonical column-major strides
+#  col_major_strides, canonical column-major strides
 # ═══════════════════════════════════════════════════════════════
 
 func col_major_strides*(shape: IntOrIntTuple): auto =
@@ -24,12 +21,11 @@ func col_major_strides*(shape: IntOrIntTuple): auto =
   prefix_product(shape)
 
 # ═══════════════════════════════════════════════════════════════
-#  make_layout — construct Layout values
+#  make_layout
 # ═══════════════════════════════════════════════════════════════
 
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   ## Create a compact Layout from a shape, computing strides automatically.
-  ## Encode compile-time integers into a Int[V] type for constant folding
   block:
     evalOnceAs(convShape, makeIntTuple(shapeArg))
     when order == LayoutLeft:
@@ -47,44 +43,18 @@ template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = Layou
 
 template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
   ## Make a Layout from explicit shape and stride.
-  ## Encode compile-time integers into a Int[V] type for constant folding
-  ## NOTE: inline makeIntTuple to avoid C++ temp-name collision
   Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
     shape: makeIntTuple(shapeArg),
     stride: makeIntTuple(strideArg)
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  LayoutCT — compile-time Layout accumulator for macros
+#  compact_order
 # ═══════════════════════════════════════════════════════════════
-
-type LayoutCT* = object
-  shape*, stride*: seq[NimNode]
-
-proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh
-  ct.stride.add st
-
-func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated dimensions (no coalesce).
-  ## This auto-constant-folds expressions that can be computed at compile-time.
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  var outSh = newNimNode(nnkPar)
-  var outSt = newNimNode(nnkPar)
-  for i in 0 ..< ct.shape.len:
-    outSh.add ct.shape[i]; outSt.add ct.stride[i]
-  if ct.shape.len == 0:
-    result = newCall(bindSym"make_layout", newLit(1), newLit(0))
-  else:
-    result = newCall(bindSym"make_layout", outSh, outSt)
-
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
   ## Compute stride for each dimension m as product of shapes of dimensions
   ## whose order value is smaller than order[m].
-  ## For each dimension m: stride_start[m] = product of shapes of dimensions
-  ## whose order value < order[m].
   let n = shVals.len
   result = newSeq[int](n)
   for m in 0 ..< n:
@@ -95,10 +65,8 @@ proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.
     result[m] = strideStart
 
 proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Resolve dynamic order entries to unique values
-  ## larger than any static order value, preserving their relative position.
-  ## finds max STATIC order value, replaces dynamic entries (sentinel)
-  ## with unique values > max_static, preserving their relative position.
+  ## Resolve dynamic order entries to unique values larger than any static
+  ## order value, preserving their relative position.
   let n = ordVals.len
   var maxStatic = -1
   for v in ordVals:
@@ -113,50 +81,21 @@ proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.
     else:
       result[i] = ordVals[i]
 
-# ── AST-level helpers (compile-time value extraction) ──
-
-proc flattenAst(n: NimNode): seq[NimNode] {.compileTime.} =
-  case n.kind
-  of nnkIntLit, nnkUIntLit:
-    result.add n
-  of nnkCall, nnkBracketExpr:
-    if n.len >= 1 and $n[0] == "Int" and n[1].kind == nnkIntLit:
-      result.add n  # Int[N]()
+proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
+  ## Strides of the compact layout preserving an (shape, stride) pair's element-access order.
+  ## - stride-0 dimensions collapse to shape 1 and keep stride 0
+  ## - dynamic strides take the slowest free positions
+  ## - remaining strides scale by `scale`, the number of positions before them, 1 when none
+  var fsh = sh
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      fsh[i] = 1
+  result = compactOrderStridesImpl(fsh, compactOrderDynamicSubstitution(st))
+  for i in 0 ..< sh.len:
+    if st[i] == 0:
+      result[i] = 0
     else:
-      discard
-  of nnkPar, nnkTupleConstr, nnkArgList:
-    for child in n:
-      for leaf in flattenAst(child):
-        result.add leaf
-  else:
-    discard
-
-proc leafIntVal(n: NimNode): int {.compileTime.} =
-  case n.kind
-  of nnkIntLit, nnkUIntLit:
-    n.intVal
-  of nnkCall, nnkBracketExpr:
-    if n.len >= 1 and $n[0] == "Int" and n[1].kind == nnkIntLit:
-      n[1].intVal
-    else:
-      DynamicSentinel
-  else:
-    DynamicSentinel
-
-proc flattenType(t: NimNode): seq[NimNode] {.compileTime.} =
-  case t.kind
-  of nnkTupleConstr:
-    for child in t:
-      for leaf in flattenType(child):
-        result.add leaf
-  else:
-    result.add t
-
-proc typeIntVal(t: NimNode): int {.compileTime.} =
-  if t.kind == nnkBracketExpr and $t[0] == "Int" and t[1].kind == nnkIntLit:
-    t[1].intVal
-  else:
-    DynamicSentinel
+      result[i] *= scale
 
 macro compact_order*(shape, order): untyped =
   ## Produce compact strides for a given dimension permutation.
@@ -166,16 +105,18 @@ macro compact_order*(shape, order): untyped =
   ## Returns a tuple of strides where the dimension with `order[i] = 0` gets
   ## stride 1, the next gets stride = shape[fastest], and so on.
   ##
-  ## Example — 2D permutations:
+  ## Example, 2D permutations:
   ##   compact_order((2,3), (0,1))  → (1, 2)   # col-major (dimension 0 fastest)
   ##   compact_order((2,3), (1,0))  → (3, 1)   # row-major (dimension 1 fastest)
   ##
-  ## Example — 3D custom permutation:
+  ## Example, 3D custom permutation:
+  ##
   ##   compact_order((2,3,4), (0,2,1))
-  ##   # dimension 0 fastest → stride 1
-  ##   # dimension 2 next    → stride 1*2   = 2
-  ##   # dimension 1 slowest → stride 1*2*4 = 8
-  ##   # result: (1, 8, 2)
+  ##
+  ## - dimension 0 fastest → stride 1
+  ## - dimension 2 next → stride 1*2 = 2
+  ## - dimension 1 slowest → stride 1*2*4 = 8
+  ##   and the result is (1, 8, 2)
 
   let shLeaves = flattenAst(shape)
   let ordLeaves = flattenAst(order)
@@ -189,10 +130,10 @@ macro compact_order*(shape, order): untyped =
   var ordVals = newSeq[int](n)
 
   for i in 0 ..< n:
-    shVals[i] = leafIntVal(shLeaves[i])
-    ordVals[i] = leafIntVal(ordLeaves[i])
+    shVals[i] = shLeaves[i].getStaticInt()
+    ordVals[i] = ordLeaves[i].getStaticInt()
 
-  # Apply CuTe max-order-substitution for dynamic entries
+  # Apply max-order substitution for dynamic entries
   let resolvedOrder = compactOrderDynamicSubstitution(ordVals)
 
   # Compute strides
@@ -206,266 +147,70 @@ macro compact_order*(shape, order): untyped =
     for s in strides:
       result.add newLit(s)
 
+# ═══════════════════════════════════════════════════════════════
+#  make_layout_like
+# ═══════════════════════════════════════════════════════════════
+
 macro make_layout_like*(layout: Layout): untyped =
   ## Create a compact layout with the same shape and element-access order.
   ##
-  ## Given a layout (possibly with non-compact strides), produces a new
-  ## layout with compact strides that accesses elements in the same
-  ## logical order. The input's stride values signal the desired ordering
-  ## — the dimension with the smallest stride gets stride 1 in the output,
-  ## the next gets stride = product of faster dimensions' shapes, etc.
+  ## Produce a compact layout that accesses elements in the same logical
+  ## order as the input, compaction order comes from the input strides.
   ## Broadcast dimensions (statically Int[0]) keep stride 0.
   ##
-  ## Example — non-compact (2,1) gives compact row-major (3,1):
-  ##   make_layout_like(make_layout((2,3), (2,1)))  → (2,3):(3,1)
+  ## Example, non-compact (2,1) gives compact row-major (3,1):
+  ##
+  ##   make_layout_like(make_layout((2,3), (2,1)))  # → (2,3):(3,1)
   ##   # dimension 1 has the smaller stride (1), so it becomes fastest
-  ##   # dimension 0 stride becomes shape[1] = 3
+  ##   # and dimension 0 gets stride shape[1] = 3
   ##
-  ## Example — broadcast dimension preserved:
-  ##   make_layout_like(make_layout((2,3), (0,1)))  → (2,3):(0,1)
+  ## Example, broadcast dimension preserved:
+  ##   make_layout_like(make_layout((2,3), (0,1)))  # → (2,3):(0,1)
   ##
-  ## Example — 3D reordering:
-  ##   make_layout_like(make_layout((2,3,4), (3,6,1)))  → (2,3,4):(4,8,1)
-  ##   # dimension 2 (stride 1) fastest  → stride 1
-  ##   # dimension 0 (stride 3) middle   → stride 1*4   = 4
-  ##   # dimension 1 (stride 6) slowest  → stride 1*4*2 = 8
+  ## Example, 3D reordering, (2,3,4):(3,6,1) gives (2,3,4):(4,8,1):
+  ## - dimension 2 (stride 1) fastest → stride 1
+  ## - dimension 0 (stride 3) middle → stride 1*4 = 4
+  ## - dimension 1 (stride 6) slowest → stride 1*4*2 = 8
 
-  # Shape/stride TYPE extraction with aliased-type support.
-  # layoutTypeArgs alone is not enough here: its aliased branch returns
-  # the RAW literal arg types (plain int tuples) — fine for structure-
-  # only consumers (compose, padRight) but wrong for typeIntVal, which
-  # needs the makeIntTuple'd Int[N] leaves. Recover the make_layout
-  # OUTPUT type (Int[N]-ified) from the alias's typedef RHS instead;
-  # in this macro's context the RHS is always typed (const or typedef).
-  let lTyp = layout.getTypeInst()
-  var shTyp, stTyp: NimNode
-  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
-    shTyp = lTyp[1]
-    stTyp = lTyp[2]
-  elif lTyp.kind == nnkSym:
-    # Aliased layout type (module-scope `typeof(make_layout(...))`).
-    # getTypeInst normalizes back to the alias symbol; getTypeImpl yields
-    # the full Layout object definition with makeIntTuple'd Int[N] args.
-    let objTy = lTyp.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          shTyp = field[2]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          stTyp = field[2]
-      if shTyp == nil or stTyp == nil:
-        error "make_layout_like: Layout object type missing shape/stride fields"
-    else:
-      error "make_layout_like: aliased layout did not yield an object type"
-  else:
-    error "make_layout_like: compile-time Layout expression required"
+  let (shTyp, stTyp) = layoutTypeArgs(layout)
+  let shVals = typeIntVals(shTyp)
+  let stVals = typeIntVals(stTyp)
 
-  let shLeaves = flattenType(shTyp)
-  let stLeaves = flattenType(stTyp)
-  let n = shLeaves.len
-
-  if stLeaves.len != n:
+  if shVals.len != stVals.len:
     error "make_layout_like: shape/stride rank mismatch"
 
-  var shVals = newSeq[int](n)
-  var stVals = newSeq[int](n)
-
-  for i in 0 ..< n:
-    shVals[i] = typeIntVal(shLeaves[i])
-    stVals[i] = typeIntVal(stLeaves[i])
-
-  # Step 1: filter_zeros — replace stride-0 shapes with 1
-  var fsh = shVals
-  for i in 0 ..< n:
-    if stVals[i] != DynamicSentinel and stVals[i] == 0:
-      fsh[i] = 1
-
-  # Step 2: apply CuTe max-order-substitution for dynamic strides
-  let resolvedOrder = compactOrderDynamicSubstitution(stVals)
-
-  # Step 3: compact_order(filtered_shape, resolved_order)
-  var strides = compactOrderStridesImpl(fsh, resolvedOrder)
-
-  # Step 4: restore broadcast strides
-  for i in 0 ..< n:
-    if stVals[i] != DynamicSentinel and stVals[i] == 0:
-      strides[i] = 0
-
-  # Emit result
-  var strideTuple = nnkTupleConstr.newTree()
-  for s in strides:
-    strideTuple.add newLit(s)
-
+  let strides = compactLikeStrides(shVals, stVals)
+  # Rank-1 compaction stays a 1-tuple so the like of a rank-1 layout
+  # keeps the same shape and stride tuple rank.
+  let outSt = if strides.len == 1:
+                nnkTupleConstr.newTree(newLit(strides[0]))
+              else:
+                litTuple(strides)
   result = quote do:
-    make_layout(`layout`.shape, `strideTuple`)
+    make_layout(`layout`.shape, `outSt`)
 
-macro make_fragment_like*(layout: Layout; vShape: typed): untyped =
-  ## Build a fragment layout from a partition view: the V leaves (the
-  ## register-enumeration dimensions, the first `flattenType(typeof(vShape))`
-  ## leaves of the shape) flatten to a single `(VA,):(1|0,)` dimension — stride-1
-  ## (hardware register order), stride-0 kept for broadcast V — regardless
-  ## of the operand's strides. The remaining leaves keep the view's order,
-  ## compacted by stride value (CuTe make_ordered_layout) and scaled after
-  ## the V registers so the rest block does not collide with them.
+# ═══════════════════════════════════════════════════════════════
+#  make_fragment_like
+# ═══════════════════════════════════════════════════════════════
+
+template make_fragment_like*(layout: Layout): auto =
+  ## Register-buffer layout for a partition view.
   ##
-  ## This is CuTe's make_fragment_like (layout.hpp). The point of the
-  ## function: make_layout_like compacts by stride value across all dimensions,
-  ## so a row-major operand view would reorder the V dimensions away from the
-  ## mma hardware register order (a1/a2 swap). make_fragment_like pins the
-  ## V dimensions to the hardware V enumeration regardless of the operand
-  ## strides, and only the remaining dimensions follow the view's order.
+  ## Contract:
+  ## - dimension 0 = the registers each thread owns, packed dense col-major (stride-1 chain)
+  ## - broadcast registers (cosize 1, all strides 0) keep the zero strides verbatim
+  ## - dimensions 1.. keep the view's stride order, compacted, scaled after the registers,
+  ##   same size and flat access order as the view so view and fragment copies match
   ##
-  ## vShape: the atom's V shape value (getLayoutA().shape[1]). Its flat
-  ## leaf count tells the macro how many leading leaves are V — tattletale
-  ## partitions flatten the atom's (T,V) V part into consecutive dimensions, so
-  ## the boundary must be stated (CuTe's make_fragment_like needs no such
-  ## argument because its V dimension is a single nested dimension-0).
-  ##
-  ## The output keeps the input's leaf structure, so the fragment is
-  ## coordinate-compatible with the partition view (same shape, copyFrom
-  ## flat-index alignment preserved). The V block is flattened (CuTe keeps
-  ## the nested structure) because gemm_atom reads the fragment data
-  ## array in flat V-enumeration order — the flat enumeration is identical
-  ## to the nested col-major one (v = v0 + V0·v1 + …), so copyFrom's
-  ## coordinate alignment is unaffected.
-  ##
-  ## Examples:
-  ##   (V0,V1,RepeatM,RepeatK) view  →  V flattened stride-1, remainder compact
-  ##   row-major operand          →  same V order (make_layout_like would
-  ##     reorder V after a fast rest dimension and scramble the registers)
-  ##   broadcast V (stride-0)     →  (VA,):(0,)
-  # Shape/stride type extraction with aliased-type support — same
-  # getTypeInst → nnkObjectTy path as make_layout_like (layoutTypeArgs'
-  # aliased branch returns raw literal arg types, wrong for typeIntVal).
-  let lTyp = layout.getTypeInst()
-  var shTyp, stTyp: NimNode
-  if lTyp.kind == nnkBracketExpr and $lTyp[0] == "Layout":
-    shTyp = lTyp[1]
-    stTyp = lTyp[2]
-  elif lTyp.kind == nnkSym:
-    let objTy = lTyp.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          shTyp = field[2]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          stTyp = field[2]
-      if shTyp == nil or stTyp == nil:
-        error "make_fragment_like: Layout object type missing shape/stride fields"
+  ## Precondition, static shape and stride, the register part compact col-major or all-zero
+  block:
+    evalOnceAs(lyt, layout)
+    when rank(lyt) == 1:
+      make_layout(lyt.shape)
     else:
-      error "make_fragment_like: aliased layout did not yield an object type"
-  else:
-    error "make_fragment_like: compile-time Layout expression required"
-
-  let shLeaves = flattenType(shTyp)
-  let stLeaves = flattenType(stTyp)
-  let n = shLeaves.len
-
-  if stLeaves.len != n:
-    error "make_fragment_like: shape/stride rank mismatch"
-
-  for i in 0 ..< n:
-    if typeIntVal(shLeaves[i]) == DynamicSentinel:
-      error "make_fragment_like: dynamic shapes unsupported — static layout required"
-
-  if n == 1:
-    # CuTe: rank-1 → plain compact (stride-1); broadcast (stride-0) keeps
-    # stride-0. Note: emit as Int[N]() — a single-element tuple literal
-    # (4,) flattens to the scalar 4 in typed argument position, breaking
-    # makeIntTuple.
-    let shNode = newLit(typeIntVal(shLeaves[0]))
-    if typeIntVal(stLeaves[0]) == 0:
-      result = quote do:
-        make_layout(Int[`shNode`](), Int[0]())
-    else:
-      result = quote do:
-        make_layout(Int[`shNode`]())
-    return
-
-  # ── V part: first vLeafCount leaves — flattened to (VA,):(1|0,) ──
-  # vShape is the V shape value (e.g. getLayoutA().shape[1]) — its static
-  # type tells the macro how many leading leaves are V. The argument is
-  # `typed`: only its static type is read, the macro expands at compile
-  # time, so crucible only ever sees the emitted layout.
-  let vShapeTy = vShape.getTypeInst()
-  let vShapeInner = if vShapeTy.kind == nnkBracketExpr and $vShapeTy[0] == "typeDesc":
-                      vShapeTy[1]
-                    else:
-                      vShapeTy
-  let vLeafCount = flattenType(vShapeInner).len
-  doAssert vLeafCount >= 1 and vLeafCount <= n,
-    "make_fragment_like: V leaf count (" & $vLeafCount & ") out of range for rank " & $n
-  var vShapeVals = newSeq[int](vLeafCount)
-  var vStrideVals = newSeq[int](vLeafCount)
-  var va = 1
-  var vAllZero = true
-  var vAllNonZero = true
-  for i in 0 ..< vLeafCount:
-    vShapeVals[i] = typeIntVal(shLeaves[i])
-    vStrideVals[i] = typeIntVal(stLeaves[i])
-    va *= vShapeVals[i]
-    if vStrideVals[i] == 0:
-      vAllNonZero = false
-    else:
-      vAllZero = false
-  # vShape value check: the vShape argument's leaf values must match the
-  # layout's leading V leaves — a wrong-but-in-range vShape (e.g. a sibling
-  # operand's V shape) would otherwise silently misbuild the fragment.
-  let vShapeLeafTys = flattenType(vShapeInner)
-  for i in 0 ..< vLeafCount:
-    let vsv = typeIntVal(vShapeLeafTys[i])
-    if vsv != DynamicSentinel:
-      doAssert vsv == vShapeVals[i],
-        "make_fragment_like: vShape leaf " & $i & " value " & $vsv &
-        " != layout V leaf " & $vShapeVals[i]
-  doAssert vAllZero or vAllNonZero,
-    "make_fragment_like: mixed broadcast/non-broadcast V leaves unsupported —" &
-    " a flattened (VA,):(1,) V block cannot represent a partially broadcast" &
-    " register group without stride collisions"
-  let vStride = if vAllZero: 0 else: 1
-  # V cosize (broadcast shapes count 1) — scales the rest strides so the
-  # rest block starts after the V registers (no stride collision).
-  var vCosize = 1
-  for i in 0 ..< vLeafCount:
-    if vStrideVals[i] != 0:
-      vCosize *= vShapeVals[i]
-
-  # ── remaining leaves: compact by stride value (CuTe make_ordered_layout) ──
-  var rsh = newSeq[int](n - vLeafCount)
-  var rst = newSeq[int](n - vLeafCount)
-  for i in vLeafCount ..< n:
-    rsh[i - vLeafCount] = typeIntVal(shLeaves[i])
-    rst[i - vLeafCount] = typeIntVal(stLeaves[i])
-
-  # Step 1: filter_zeros — replace stride-0 shapes with 1
-  var fsh = rsh
-  for i in 0 ..< rsh.len:
-    if rst[i] != DynamicSentinel and rst[i] == 0:
-      fsh[i] = 1
-
-  # Step 2: CuTe max-order-substitution for dynamic strides
-  let resolvedOrder = compactOrderDynamicSubstitution(rst)
-
-  # Step 3: compact_order(filtered_shape, resolved_order)
-  var restStrides = compactOrderStridesImpl(fsh, resolvedOrder)
-
-  # Step 4: restore broadcast strides; scale the rest after the V registers
-  for i in 0 ..< rsh.len:
-    if rst[i] != DynamicSentinel and rst[i] == 0:
-      restStrides[i] = 0
-    else:
-      restStrides[i] *= vCosize
-
-  # ── emit: (VA, rest…) : (1|0, restStrides…) — V flattened to one dimension ──
-  var outSh = nnkTupleConstr.newTree()
-  outSh.add newLit(va)
-  for i in vLeafCount ..< n:
-    outSh.add newLit(typeIntVal(shLeaves[i]))
-
-  var outSt = nnkTupleConstr.newTree()
-  outSt.add newLit(vStride)
-  for s in restStrides:
-    outSt.add newLit(s)
-
-  result = quote do:
-    make_layout(`outSh`, `outSt`)
+      evalOnceAs(v, dimension(lyt, 0))
+      evalOnceAs(rest, takeDimensions(lyt, 1, rank(lyt)))
+      when cosize(typeof(v)) == 1:
+        tiled_product(v, make_layout_like(rest))
+      else:
+        tiled_product(make_layout(v.shape), make_layout_like(rest))

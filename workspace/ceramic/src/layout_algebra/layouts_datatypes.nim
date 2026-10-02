@@ -6,12 +6,6 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Layout data types: Layout[Sh, St], basic accessors, and type-level predicates.
-##
-## Reference:
-##   - CuTe C++: layout.hpp
-##
-## This file contains only the core types and operations that do NOT require
-## `make_layout`. Construction primitives live in `layout_constructors.nim`.
 
 import std/macros
 import std/typetraits
@@ -19,7 +13,7 @@ import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/int_tuples
 
 # ═══════════════════════════════════════════════════════════════
-#  Layout[Sh, St] — typed shape + stride pair
+#  Layout[Sh, St], typed shape + stride pair
 # ═══════════════════════════════════════════════════════════════
 
 type Layout*[Sh, St] = object
@@ -58,62 +52,11 @@ func size*(layout: Layout): auto =
   fold(flatten(layout.shape), Int[1](), acc * it)
 
 # ═══════════════════════════════════════════════════════════════
-#  cosize — max offset + 1 of a layout
+#  cosize, max offset + 1 of a layout
 # ═══════════════════════════════════════════════════════════════
-
-#  CuTe: cosize(L) = size(coshape(L))
-#  coshape[i] = (sh[i]-1)*|st[i]| + 1, then size(product).
-#  For a compact layout: cosize = size = product(shape).
-#  For a gapped layout: cosize > size.
-#
-#  Returns Int[N] when all-static, int otherwise.
-
-#  ⚠ Known discrepancies between implementations of cosize on
-#  COMPOSED layouts (make_layout(l1, l2)):
-#
-#  1. CuTe C++ — uses hierarchical (nested) cosize. For a composed
-#     layout Layout<A,B>, cosize ≈ cosize(A) * cosize(B) effectively,
-#     which is incorrect when the outer layout has non-trivial stride.
-#
-#  2. Meta tensor-layouts (Python) — enumerates ALL offsets to compute
-#     max(L(i)) + 1.  This is O(size(L)) but is the only correct
-#     definition for composed layouts.  CuTe's cosize(ComposedLayout)
-#     bug is explicitly documented in the Python source:
-#       "CuTe C++'s cosize(ComposedLayout) = cosize(layout_b()) is
-#        wrong (it ignores the outer and the offset)."
-#
-#  3. Our Nim (flat affine) — uses the closed-form
-#     1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
-#     matches Python's affine fast-path and CuTe's rank-1 cosize.
-#     We DO NOT support ComposedLayout / Swizzle — our layouts are
-#     always flat/affine, so the sum formula is correct.
-#
-#  Example cosize values for composed layouts:
-#
-#   Layout                    Affine sum   Cute hier   Python enum (correct)
-#   ───────────────────────   ──────────   ──────────   ─────────────────────
-#   make_layout(4:1,          (4-1)*1 +    cosize(4:1)  enumerate:
-#               (2,2):(1,2))   (2-1)*1 +    ×             0+0=0, 2+0=2,
-#                              (2-1)*2 +    cosize(       4+0=4, 6+0=6,
-#                              1 = 6        (2,2):(1,2)   0+1=1, 2+1=3,
-#                                          = 4 * 4 = 16   4+1=5, 6+1=7,
-#                                                           0+2=2, ...
-#                                                           → max=9, cosize=10
-#
-#   The sum formula (ours and Python's affine) gives cosize=6,
-#   CuTe hierarchical product gives 16, Python enumeration gives 10.
-#   All three disagree.  CuTe's product is WRONG per the Python docs;
-#   enumeration is the only universally correct method.
-#
-#  For our pure affine layouts the sum formula IS correct —
-#  we never create ComposedLayout.  The complement post-condition
-#  check (1) from CuTe test_complement cannot be replicated without
-#  either hierarchical product (wrong) or enumeration (expensive),
-#  so we only check "doesn't crash" for complement.
 
 func cosize*(layout: Layout): auto =
   ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
-  ## CuTe: cosize(L) = size(coshape(L)).
   macro cosizeFlat(sh, st: typed): untyped =
     let shT = sh.getTypeInst()
     let one = IntCT(1)
@@ -126,10 +69,13 @@ func cosize*(layout: Layout): auto =
         one)
     else:
       # Flat tuple: sum over elements
+      # a scalar stride broadcasts over the shape profile
+      let scalarStride = st.getTypeInst().kind != nnkTupleConstr
       result = one
       for i in 0 ..< shT.len:
         let s = newTree(nnkBracketExpr, sh, newLit(i))
-        let d = newTree(nnkBracketExpr, st, newLit(i))
+        let d = if scalarStride: st
+                else: newTree(nnkBracketExpr, st, newLit(i))
         let term = newCall(bindSym"*",
           newCall(bindSym"-", s, one),
           newCall(bindSym"abs", d))
@@ -137,88 +83,61 @@ func cosize*(layout: Layout): auto =
   cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
 func cosize*[A, B](_: typedesc[Layout[A, B]]): static int =
-  ## Compile-time cosize from Layout type alone.
-  ## Requires static shape/stride (all Int[N], no runtime int).
-  ## Dynamic layouts produce a compile error — matching CuTe's
-  ## `static_assert("Dynamic owning tensors not supported")`.
+  ## Compile-time cosize from the Layout type alone.
+  ## Precondition, the shape and stride are all-static Int[N] leaves.
+  ## Dynamic layouts produce a compile error.
   var tmp {.noInit.}: Layout[A, B]
   cosize(tmp).toIntVal()
 
 # ═══════════════════════════════════════════════════════════════
-#  StrideOrder — layout-left (col-major) / layout-right (row-major)
+#  StrideOrder, layout-left (col-major) or layout-right (row-major)
 # ═══════════════════════════════════════════════════════════════
 
 type StrideOrder* = enum
   LayoutLeft
-    ## Leftmost dimension is contiguous (stride 1).
-    ##
-    ## `LayoutLeft` means the **first** (index 0) dimension of the shape tuple
-    ## has stride 1. This is CuTe's **column-major** convention when
-    ## the first dimension represents rows and the second columns.
-    ##
-    ## The name refers to which end of the shape tuple gets stride 1:
-    ## the "left" (first / index 0) element. Equivalent to `prefix_product`.
+    ## Leftmost dimension is contiguous (stride 1), equivalent to prefix_product.
     ##
     ## Example:
     ##   make_layout((M, N), LayoutLeft) -> (M, N) : (1, M)
     ##   make_layout((3, 4, 5), LayoutLeft) -> (3, 4, 5) : (1, 3, 12)
 
   LayoutRight
-    ## Rightmost dimension is contiguous (stride 1).
-    ##
-    ## `LayoutRight` means the **last** (highest-index) dimension of the shape
-    ## tuple has stride 1. This is CuTe's **row-major** convention when
-    ## the first dimension represents rows and the second columns.
-    ##
-    ## The name refers to which end of the shape tuple gets stride 1:
-    ## the "right" (last / highest-index) element. Equivalent to `suffix_product`.
+    ## Rightmost dimension is contiguous (stride 1), equivalent to suffix_product.
     ##
     ## Example:
     ##   make_layout((M, N), LayoutRight) -> (M, N) : (N, 1)
     ##   make_layout((3, 4, 5), LayoutRight) -> (3, 4, 5) : (20, 5, 1)
 
 # ═══════════════════════════════════════════════════════════════
-#  Shape-structure predicates (operate on IntOrIntTuple)
+#  shape-structure predicates over IntOrIntTuple
 # ═══════════════════════════════════════════════════════════════
-
-#  Reference:
-#    - CuTe C++: layout_algebra.hpp (compatible, congruent)
-#    - Meta tensor-layouts: core.py type predicates
 
 template congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if `a` and `b` have the same hierarchical rank structure.
-  ##
-  ## CuTe: `repeat_like(shape(a), _0{})` same type as `repeat_like(shape(b), _0{}})
   ## Returns a bool typedesc, usable in both `static` and runtime contexts.
-  when a is (int or Int):
-    when b is (int or Int):
-      true
-    else:
+  when a is (int or Int) or b is (int or Int):
+    a is (int or Int) and b is (int or Int)
+  elif a is tuple and b is tuple:
+    when rank(a) != rank(b):
       false
-  elif a is tuple:
-    when b is tuple:
-      when rank(a) != rank(b):
-        false
-      else:
-        block:
-          var ok = true
-          staticFor i, 0, rank(a):
-            if not congruent(a[i], b[i]):
-              ok = false
-          ok
     else:
-      false
+      block:
+        var ok = true
+        staticFor i, 0, rank(a):
+          if not congruent(a[i], b[i]):
+            ok = false
+        ok
   else:
     false
 
 func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if A's nesting is contained in B's structure.
   ## Scalar matches anything; tuple must have at least as much structure.
-  when a is int or a is Int:
+  when a is (int or Int):
     true
-  elif b is int or b is Int:
+  elif b is (int or Int):
     false
-  else:
+  elif a is tuple and b is tuple:
     when rank(a) != rank(b):
       false
     else:
@@ -228,6 +147,8 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
           if not weakly_congruent(a[i], b[i]):
             ok = false
         ok
+  else:
+    false
 
 func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
   ## Find consecutive dimensions in `a` from `aStartIdx` whose product equals `b`.

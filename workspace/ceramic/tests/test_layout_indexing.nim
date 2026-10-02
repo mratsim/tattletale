@@ -117,6 +117,20 @@ block:
 
 echo "  [OK] idx2crd: 24 elements roundtrip"
 
+block:
+  # pycute alignment, the quotient runs unmod'd at the most-significant leaf,
+  # and the excess accumulates there without wrapping, per pycute's idx2crd.
+  # CuTe C++ mods every leaf and wraps, so the case below diverges
+  # from CuTe C++ on purpose.
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd(L, 100) === (0, 25)
+  # for a non-compact layout the most-significant leaf = the largest
+  # stride (16 here), not the positional last, so (1, 7) below stays (1, 7)
+  let n = make_layout((4, 8), (16, 1))
+  doAssert idx2crd(n, 31) === (1, 7)
+
+echo "  [OK] idx2crd: pycute absorb"
+
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd(shape, idx) — shape-based (valid for non-compact shapes)
 # ═══════════════════════════════════════════════════════════════
@@ -127,6 +141,12 @@ block:
   doAssert idx2crd((4, 8), 5) === (1, 1)
   doAssert idx2crd((2, 2), 3) === (1, 1)
   doAssert idx2crd(2, 1) === 1
+  # a scalar shape is the degenerate case of the absorb rule, so the coordinate equals the index itself
+  doAssert idx2crd(1, 5) === 5
+  # out of bounds, the last flat leaf absorbs the excess, so the result
+  # does not wrap
+  doAssert idx2crd((3, 7, 2), 42) === (0, 0, 2)
+  doAssert idx2crd(((4, 8), (2, 2)), 1000) === ((0, 2), (1, 15))
   # nested shape: recursive per-dimension split
   doAssert idx2crd(((4, 8), (2, 2)), 31) === ((3, 7), (0, 0))
   # roundtrip with crd2idx over the shape (compact basis)
@@ -215,7 +235,7 @@ block:
 block:
   let shape = (3, 4)
   let strides = (1, 3)
-  var wheel = initCoordWheel(CoordWheel[2], shape)
+  var wheel = initCoordWheel(CoordWheel[2])
   var expectedIdx = 0
   for _ in 0 ..< 12:
     let off = wheel.coordOffset(strides)
@@ -234,7 +254,7 @@ echo "  [OK] CoordWheel: 2D iteration"
 block:
   let shape = (2, 3, 4)
   let strides = (1, 2, 6)
-  var wheel = initCoordWheel(CoordWheel[3], shape)
+  var wheel = initCoordWheel(CoordWheel[3])
   # Expected: coord (0,0,0)→(1,0,0)→(0,1,0)→(1,1,0)→(0,2,0)→...
   var expected: array[3, int]
   for idx in 0 ..< 24:
@@ -262,7 +282,7 @@ echo "  [OK] CoordWheel: 3D iteration"
 block:
   let shape = (1,)
   let strides = (1,)
-  var wheel = initCoordWheel(CoordWheel[1], shape)
+  var wheel = initCoordWheel(CoordWheel[1])
   doAssert wheel.coordOffset(strides) == 0
   wheel.incr(shape)
   # After one incr: coord goes (0) → (0) because 1-1 == 0, so it resets to 0
@@ -280,8 +300,8 @@ block:
   let shape = (3, 4)
   let rightStrides = (1, 3)
   let leftStrides = (4, 1)
-  var wR = initCoordWheel(CoordWheel[2], shape)
-  var wL = initCoordWheel(CoordWheel[2], shape)
+  var wR = initCoordWheel(CoordWheel[2])
+  var wL = initCoordWheel(CoordWheel[2])
   for r in 0 ..< 3:
     for c in 0 ..< 4:
       let offR = wR.coordOffset(rightStrides)

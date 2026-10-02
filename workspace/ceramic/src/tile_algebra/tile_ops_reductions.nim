@@ -20,7 +20,7 @@ type ReductionTree* = tuple
   steps: int
   mask: int
 
-func getReductionTree*(A: static MmaAtom): ReductionTree =
+func getReductionTree*(A: static MmaAtom): ReductionTree {.inline.} =
   ## The row-reduction shuffle tree (deltas, step count, leader mask)
   ## derived from the atom's fragment-column lane coefficients.
   when A.getThreadCount() == 1:

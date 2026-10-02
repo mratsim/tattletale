@@ -9,36 +9,14 @@
 ##
 ## These are the raw computation functions (no Layout imports).
 ## They operate on shape/stride tuples and scalars.
-##
-## The public `crd2idx(layout, coord)` and `layout()`/`idx2crd` wrappers
-## live in `layouts.nim` (they import this file).
-##
-## ── PERFORMANCE WARNING ──
-## ALL crd2idx overloads in this file MUST be `template`, NOT `func`.
-##
-## Reason: a non-`{.inline.}` `func` lands in a separate C++ compilation unit
-## (its own .cpp file), which prevents cross-module inlining at the C++ level.
-## Even `{.inline.}` generates a standalone C++ function definition that the
-## C++ inliner must process — and when arguments involve `Int` types
-## (which become C structs in Nim's C++ backend), the struct-wrapped
-## parameters add complexity that hinders optimization.
-##
-## A `template` produces zero C++ function definitions. The expression
-## appears directly at the call site, giving the cleanest C++ output:
-## bare arithmetic like `i * 16 + j * 1` with no struct wrappers around
-## the Int[V] stride values.
-##
-## History: commit b93bb95 ('Recover 20GFlops on layout algebra CPU GEMM')
-## changed crd2idx from func→template, recovering ~12× on flat-index copies
-## (6ms → 0.5ms for 524k B-packing elements). The nested `toIntVal` and
-## `Int[V] × int` operators must also be templates (see int_tuples_datatypes).
-## ─────────────────────────
 
 import std/[macros, typetraits]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/static_for
 
-#  Markers for slice and dice
+
+# ═══════════════════════════════════════════════════════════════
+#  slice and dice markers
 # ═══════════════════════════════════════════════════════════════
 
 type
@@ -55,14 +33,11 @@ template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
 template `*`*(s: int; c: X): Int[0] = Int[0]()
 template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
 
-template makeIntTupleLeaf*(leaf: X): X =
-  leaf
-
 template mapLeavesWith*(singleton: X, body: untyped): X =
   singleton
 
 # ═══════════════════════════════════════════════════════════════
-#  Scalar overloads
+#  scalar overloads
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idx*(coord, shape: int): int = coord
@@ -75,13 +50,11 @@ template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): auto =
 template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
 
 # ═══════════════════════════════════════════════════════════════
-#  Tuple overloads
+#  tuple overloads
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idxDimension*(coord, shape, stride: typed): auto =
   ## Per-dimension crd2idx anchored on the shape dimension structure.
-  ##
-  ## PERF: Must stay template (not func). See crd2idx tuple overload.
   when coord is X:
     # X markers contribute 0 at any nesting level
     Int[0]()
@@ -99,8 +72,6 @@ template crd2idxDimension*(coord, shape, stride: typed): auto =
 
 template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
   ## Sum the per-dimension contributions of a tuple coord over the shape.
-  ##
-  ## PERF: Must stay template (not func). See crd2idx tuple overload.
   when i == rank(shape) - 1:
     crd2idxDimension(coord[i], shape[i], stride[i])
   else:
@@ -110,11 +81,6 @@ template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
 template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
   ## Recursive over shape: each top-level dimension is dispatched on
   ## its own (coord element, shape dimension, stride dimension).
-  ##
-  ## PERF: Must stay template (not func). The per-dimension arithmetic
-  ## delegates to the Int[V] times int operator overloads, which
-  ## are ALSO templates (see genBinOp in int_tuples_datatypes.nim).
-  ## A func chain here would prevent C++ inlining.
   block:
     evalOnceAs(P, makeIntTuple(coord))
     evalOnceAs(S, makeIntTuple(shape))
@@ -128,13 +94,11 @@ macro foldDim*(co, sh, st: typed; i: static int): auto =
   ## - `i`, the first component to accumulate
   ## Returns one nested expression summing per-component contributions
   ##   `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
-  ## Typed templates cannot self-recurse at instantiation so the macro
-  ## unrolls the fold directly.
   block:
     var shLeaves, stLeaves: seq[NimNode]
-    for (leaf, _) in flatLeaves(sh):
+    for (leaf, _) in sh.tupleFlatten():
       shLeaves.add leaf
-    for (leaf, _) in flatLeaves(st):
+    for (leaf, _) in st.tupleFlatten():
       stLeaves.add leaf
     let r = shLeaves.len
     if stLeaves.len != r:
@@ -153,8 +117,6 @@ macro foldDim*(co, sh, st: typed; i: static int): auto =
 
 template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
   ## Decompose coord across shape dimensions with strides.
-  ##
-  ## PERF. Must stay template.
   block:
     evalOnceAs(P, makeIntTuple(coord))
     foldDim(P, makeIntTuple(shape), makeIntTuple(stride), 0)

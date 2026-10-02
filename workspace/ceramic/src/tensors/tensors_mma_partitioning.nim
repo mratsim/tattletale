@@ -337,7 +337,7 @@ template make_fragment_A*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutA().shape[1]))
+    make_tensor(T, make_fragment_like(t.layout))
 
 template make_fragment_B*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
@@ -348,7 +348,7 @@ template make_fragment_B*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, true]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutB().shape[1]))
+    make_tensor(T, make_fragment_like(t.layout))
 
 template make_fragment_C*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
@@ -360,4 +360,4 @@ template make_fragment_C*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout, mma.getLayoutC().shape[1]))
+    make_tensor(T, make_fragment_like(t.layout))
