@@ -143,6 +143,25 @@ func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
   if stDims.len != shDims.len and stDims.len != 1:
     error "complement: expected one stride per shape dimension, got " &
       $stDims.len & " strides for " & $shDims.len & " shape dimensions"
+  # Injectivity: strides must cover the range
+  # We can only check static strides as it's not possible to assert at runtime on a GPU
+  var span = 1
+  var spanTrusted = true
+  var walkStrides: seq[int]
+  for i in 0 ..< shDims.len:
+    walkStrides.add (if stDims.len == 1: stDims[0].stride else: stDims[i].stride)
+  if DynamicSentinel notin walkStrides:
+    for idx in getIndicesSortedByStride(walkStrides):
+      let (stride, shape) = (walkStrides[idx], shDims[idx].shape)
+      if stride == 0 or shape == 1:
+        continue
+      if spanTrusted and stride < span:
+        error "complement: non-injective layout, stride " & $stride &
+          " overlaps the covered span " & $span
+      if shape == DynamicSentinel:
+        spanTrusted = false
+      else:
+        span *= shape
   if DynamicSentinel notin shDims.mapIt(it.shape) and
       DynamicSentinel notin stDims.mapIt(it.stride):
     return crStatic
@@ -158,11 +177,13 @@ func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
       error "complement: non-flat shape at index " & $i
   crDynMulti
 
-func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, defaultBound: bool): NimNode =
+func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, boundStatic: int, defaultBound: bool): NimNode =
   var gapNodes, curNodes: seq[NimNode]
   var curNode = IntCT(1)
   var b = 1
   var allSkipped = true
+  var accSpan = 1
+  var fullCoverage = true
   for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
     let dim = dims[idx]
     if dim.stride == 0 or dim.shape == 1:
@@ -174,12 +195,16 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
     gapNodes.add bindSym"max".newCall(
       IntCT(1), nnkInfix.newTree(ident"div", s, curNode))
     curNodes.add curNode
-    curNode =
-      if dim.shape == DynamicSentinel:
-        # past a dynamic shape leaf the frontier is runtime arithmetic
-        s * dim.leaf
-      else:
-        IntCT(dim.stride * dim.shape)
+    if dim.shape == DynamicSentinel:
+      # past a dynamic shape leaf the frontier is runtime arithmetic
+      fullCoverage = false
+      curNode = s * dim.leaf
+    else:
+      if dim.stride != accSpan:
+        fullCoverage = false
+      curNode = IntCT(dim.stride * dim.shape)
+      # the covered span grows by the shape when the stride closes on it
+      accSpan *= dim.shape
     if defaultBound:
       # cosize over the live leaves, invariant under the skip
       b += (dim.shape - 1) * abs(dim.stride)
@@ -188,6 +213,11 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
     # every leaf skipped, the complement collapses to (bound):(1)
     return bindSym"make_layout".newCall(
       (if defaultBound: IntCT(b) else: bound), newLit(1))
+  let boundVal = if defaultBound: b else: boundStatic
+  if fullCoverage and boundVal != DynamicSentinel and boundVal <= accSpan:
+    # the layout already covers the bound, no gaps to fill, the complement
+    # is a lone (1):(coverage) dimension
+    return bindSym"make_layout".newCall(IntCT(1), IntCT(accSpan))
   curNodes.add curNode
   gapNodes.add bindSym"ceil_div".newCall(
     (if defaultBound: IntCT(b) else: bound), curNode)
@@ -211,6 +241,9 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
     else:
       bound
   let boundDyn = if defaultBound: bound else: boundExpr
+  let boundStatic =
+    if defaultBound: DynamicSentinel
+    else: bound.getTypeInst().getStaticInt()
 
   # one stride leaf broadcasts over the shape
   var dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]]
@@ -220,10 +253,10 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
 
   case complementRegime(shDims, stDims)
   of crStatic:
-    result = complementFold(dims, boundExpr, defaultBound)
+    result = complementFold(dims, boundExpr, boundStatic, defaultBound)
   of crDynMulti:
     # the fold emits runtime arithmetic for dynamic shape leaves
-    result = complementFold(dims, boundDyn, defaultBound = false)
+    result = complementFold(dims, boundDyn, DynamicSentinel, defaultBound = false)
   of crDynRank1Zero:
     # a static zero stride, every coordinate maps to offset 0
     result = bindSym"make_layout".newCall(boundDyn, newLit(1))
@@ -549,17 +582,9 @@ macro logical_divide*[L: Layout](layout: L, tiler: int): untyped =
   getAst(divideRank1(layout, tiler))
 
 macro logical_divide*[L: Layout, V: static int](layout: L, tiler: Int[V]): untyped =
-  ## Logical divide by a static int tiler, see the Layout
-  ## overload for the contract.
+  ## Logical divide by a static int tiler, see the int overload
   getAst(divideRank1(layout, tiler))
 
-macro logical_divide*[L: Layout](layout: L, tiler: static int): untyped =
-  ## Logical divide by a static int tiler
-  result = newStmtList()
-  let (shA, stA) = result.destructureLayout(layout)
-  result.add getAst(divideFormula(shA, stA,
-    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(tiler))),
-    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(1)))))
 
 macro divideTupleImpl(sh, st, tiler: typed): untyped =
   ## Per-dimension divide over the destructured layout.

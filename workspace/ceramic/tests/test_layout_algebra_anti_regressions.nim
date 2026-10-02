@@ -36,9 +36,7 @@
 ## Section 3 — complement, multi-dimension layout + compile-time bound:
 ##   complement with a compile-time bound must produce the coalesced
 ##   result: a statically-1 remainder dimension is dropped by coalesce's
-##   trailing size-1 discard, and a lone size-1 result is the library's
-##   (1):(0) sentinel. Both coalesced values cross-checked against CuTe
-##   host-side output.
+##   trailing size-1 discard.
 ##
 ## Section 4 — complement with a runtime shape must produce the same
 ##   layout as the identical layout spelled with constants.
@@ -135,7 +133,7 @@ proc runComplementFixtureTests =
   block:
     let r = complement(make_layout((2, (3, 4)), (3, (1, 6))))
     check r.shape, 1, Int[1]
-    check r.stride, 0, Int[0]
+    check r.stride, 24, Int[24]
 
   echo "    complement fixture: 3 guarded cases OK"
 
@@ -215,16 +213,17 @@ proc runComposeZeroStrideTests =
     check(compose(lhs, make_layout(1, 0)), make_layout(1, 0), Layout)
 
   block:
-    ## The (1):(0) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
+    ## The (1):(3) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
     ## This is the pipeline consumed by max_alignment (k_layout_copy_gpu),
     ## CuTe formula gcd(size<0>, stride<1>).
     ##
     ## size<0> = the sorted-by-stride contiguous run = 6.
-    ## The filler's stride<1> is 0 (every coordinate maps to offset 0), and gcd(6, 0) = 6.
+    ## The filler's stride<1> is 3 (the filler sits past the 6 covered offsets),
+    ## and gcd(6, 3) = 3.
     let lhs = make_layout((2, 3), (3, 1))
     let permuted = logical_divide(lhs, right_inverse(lhs))
     check(toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int)
-    check(permuted.stride[1], Int[0](), Int[0])
+    check(permuted.stride[1], Int[3](), Int[3])
 
 #  Section 7. Nested-shape indexing and Layout-tiler unzip
 
@@ -675,11 +674,37 @@ proc runProductMacroTests =
     let blk = make_layout((2, 2), (4, 1))
     let tiler = make_layout(6, 1)
     check(logical_product(blk, tiler), (((2, 2), (2, 3)), ((4, 1), (2, 8))), Layout)
-    let L = make_layout((Int[8](), 4), (1, 4))
+    let L = make_layout((Int[8](), 2), (1, 8))
     check(logical_product(L, make_layout((2, 2))),
-      (((Int[8](), 4), (2, 2)), ((1, 4), (16, 32))), Layout)
+      (((Int[8](), 2), (2, 2)), ((1, 8), (16, 32))), Layout)
 
   echo "    product macro counterpart: 2 guarded cases OK"
+
+
+# ═════════════════════════════════════════════════════════════
+#  Section 20. complement full coverage: a layout that already covers
+#  the bound has no gaps, the complement is the lone (1):(coverage)
+#  dimension. complement(4:1, 4) = 1:4, complement((4,2), 8) = 1:8.
+#  A layout that maps two coordinates to one offset has no unique
+#  ordered complement, the complement of such a layout is a compile-time error.
+# ═════════════════════════════════════════════════════════════
+
+proc runComplementFullCoverageTests =
+  block:
+    let r = complement(make_layout(4, 1), 4)
+    check r.shape, 1, Int[1]
+    check r.stride, 4, Int[4]
+  block:
+    let r = complement(make_layout((4, 2)), 8)
+    check r.shape, 1, Int[1]
+    check r.stride, 8, Int[8]
+  block:
+    ## The remainder of (2,2):(1,4) over 8, the free offsets {2,3,6,7}
+    let r = complement(make_layout((2, 2), (1, 4)), 8)
+    check r.shape, 2, Int[2]
+    check r.stride, 2, Int[2]
+
+  echo "    complement full-coverage fixture: 3 guarded cases OK"
 
 
 proc runTests =
@@ -722,6 +747,8 @@ proc runTests =
   runMakeLayoutLikeScalarShapeTests()
   echo "── Section 19. product macros: spec twins, composed emission ──"
   runProductMacroTests()
+  echo "── Section 20. complement full coverage ──"
+  runComplementFullCoverageTests()
   echo "  All tests passed."
 
 when isMainModule:

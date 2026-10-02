@@ -472,17 +472,15 @@ proc runComplementExactValueTests =
     doAssert r.shape === (4, 2)
     doAssert r.stride === (1, 16)
 
-  # Fully-folded corner, the size-1 sentinel (1):(0)
-  # when gap and rem both fold to 1
+  # Full coverage, the complement is the lone (1):(coverage) dimension
   block:
     let r = complement(make_layout(2, 1), 2)
     doAssert r.shape === 1
-    doAssert r.stride === 0
+    doAssert r.stride === 2
 
-  # Overlapping strides, the second gap clamps to 1
-  # (stride below the accumulated span), only the remainder dimension survives
+  # Strides covering the range without gaps
   block:
-    let r = complement(make_layout((2, 2), (1, 1)))
+    let r = complement(make_layout((2, 2), (1, 4)), 8)
     doAssert r.shape === 2
     doAssert r.stride === 2
 
@@ -1221,7 +1219,7 @@ proc runLogicalProductTrivialTests =
 proc runLogicalProductMultiTests =
   ## [CUTE-LP] Multi-dimension layouts
   chkLogicalProduct(make_layout((3,)), make_layout((2, 4)))
-  chkLogicalProduct(make_layout((8, (2, 2)), (1, (2, 4))), make_layout(4, 2))
+  chkLogicalProduct(make_layout((8, (2, 2)), (1, (8, 16))), make_layout(4, 2))
   chkLogicalProduct(make_layout((2, 2)), make_layout((3, 3), (3, 1)))
   chkLogicalProduct(make_layout(3, 32), make_layout((8, 8)))
   chkLogicalProduct(make_layout(3, 32), make_layout((8, 8), (8, 1)))
@@ -1594,8 +1592,8 @@ proc runTileToShapeTests: void =
     doAssert size(r) === 32
     doAssert rank(r) === 2
   block:
-    ## [oracle_nv] Size preserved: (3,5):(1,1) → (12,15)
-    let r = tile_to_shape(make_layout((3, 5), (1, 1)), (12, 15))
+    ## Size preserved: (3,5):(1,5) → (12,15)
+    let r = tile_to_shape(make_layout((3, 5), (1, 5)), (12, 15))
     doAssert size(r) === 180
     doAssert rank(r) === 2
   block:
