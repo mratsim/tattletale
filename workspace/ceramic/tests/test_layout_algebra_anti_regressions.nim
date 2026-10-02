@@ -544,6 +544,44 @@ proc runDivideTupleTilerTests =
       doAssert not compiles(logical_divide(make_layout((2, 4), (1, 2)), (4, 4, 2)))
   echo "    divide tuple-tiler rewrite: 5 cases OK"
 
+#  Section 15. hier_unzip zipped gather over the stream walk.
+#
+#  One tiler element per layout dimension, the splitter call per terminal
+#  element binds once, the four shape/stride projections read the binding.
+#  A single-element gather collapses to a scalar,
+#  so a 1-element tiler and a 1-element sub-tiler carry no tuple wrapper
+#  and a leftover dimension splices verbatim into the rest part.
+#  ═══════════════════════════════════════════════════════════════
+
+proc runZippedGatherTests =
+  block:
+    ## int vs 1-element tuple tiler agree on a rank-1 layout
+    let L = make_layout(6, 1)
+    doAssert zipped_divide(L, 2) === zipped_divide(L, (2,)),
+      "scalar tiler guard: " & $zipped_divide(L, (2,))
+  block:
+    ## 1-element tiler: the tile part collapses to a scalar, the leftover
+    ## dimension splices verbatim into the rest part
+    let zd = zipped_divide(make_layout((4, 8), (1, 4)), (2,))
+    doAssert zd === ((2, (2, 8)), (1, (2, 4))), "1-element tiler: " & $zd
+  block:
+    ## empty tiler: nothing divides, every dimension gathers into the rest
+    ## part behind an empty tile part
+    let z = zipped_divide(make_layout((10, 8), (2, 1)), ())
+    doAssert z === make_layout(((), (10, 8)), ((), (2, 1))), "empty tiler: " & $z
+  block:
+    ## sub-tuple tiler element recurses, the gathered pair contributes one
+    ## element per part, the nesting mirrors the tiler
+    let r = zipped_divide(make_layout((8, (4, 2)), (16, (1, 2))), (2, (4, 2)))
+    doAssert r === (((2, (4, 2)), (4, (1, 1))), ((16, (1, 2)), (32, (4, 4)))),
+      "sub-tuple tiler: " & $r
+  block:
+    ## a 1-element sub-tiler collapses like the flat tiler
+    let L = make_layout((4, 8), (1, 4))
+    doAssert zipped_divide(L, (2, (4,))) === zipped_divide(L, (2, 4)),
+      "sub-tuple collapse: " & $zipped_divide(L, (2, (4,)))
+  echo "    zipped gather rewrite: 5 cases OK"
+
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
@@ -574,6 +612,8 @@ proc runTests =
   runCoalesceVerbatimPassthroughTests()
   echo "── Section 14. divide tuple-tiler stream rewrite ──"
   runDivideTupleTilerTests()
+  echo "── Section 15. hier_unzip zipped gather stream rewrite ──"
+  runZippedGatherTests()
   echo "  All tests passed."
 
 when isMainModule:

@@ -814,7 +814,13 @@ proc runComposeTilerTests =
   # a tiler longer than the layout is a compile-time error
   static:
     doAssert not compiles(compose(make_layout(4, 1), (2, 3)))
-  echo "    9/9"
+  # a 1-element tiler keeps its 1-tuple structure, pycute (2,):(1,)
+  doAssert compose(make_layout((4, 8), (1, 4)), (2,)) === ((2,), (1,))
+  # a sub-tuple tiler element on a scalar dimension is a rank error,
+  # pycute "Rank mismatch: composition(8:4, (2, 2))"
+  static:
+    doAssert not compiles(compose(make_layout((4, 8), (1, 4)), (2, (2, 2))))
+  echo "    11/11"
 
 proc runComposeSwizzleTests =
   echo "    Swizzle [CUTE-CM #55-56]:"

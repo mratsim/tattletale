@@ -27,13 +27,16 @@ type
     ## Tracks modification so an identity stream for a tuple `t` = (11, 22, 33)
     ## can return `t` directly.
     ## Otherwise return tuple would be (t[0], t[1], t[2)), leading to unnecessary temporaries
-    depth*: int
     verbatim*: bool #
+    path*: seq[int] # index chain root -> here, a top-level leaf = @[i]
     case kind*: TupleStreamEventKind
     of kLeaf:
       leaf*, leafTy*: NimNode
     else:
       discard
+
+func depth*(ev: TupleStreamEvent): int {.inline.} =
+  result = ev.path.len
 
 func unwrapStmtListExpr(node: NimNode): NimNode =
   if node.kind == nnkStmtListExpr:
@@ -54,7 +57,7 @@ func getTupleIndex*(node: NimNode, idx: int): NimNode =
 
 type
   TupleStream* = object
-    stack: seq[tuple[elem, ty: NimNode, idx, depth: int]]
+    stack: seq[tuple[elem, ty: NimNode, idx, depth: int, path: seq[int]]]
     hasPending: bool
     pending: TupleStreamEvent
     shallow: bool
@@ -63,11 +66,11 @@ func tupleStream*(s: NimNode): TupleStream =
   let ev = unwrapStmtListExpr(s)
   let ty = s.getTypeInst()
   if ty.isTupleTy():
-    result.stack.add (ev, ty, 0, 0)
-    result.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
+    result.stack.add (ev, ty, 0, 0, @[])
+    result.pending = TupleStreamEvent(path: @[], kind: kOpen, verbatim: true)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
-    result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0)
-    result.pending = TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true)
+    result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0, @[])
+    result.pending = TupleStreamEvent(path: @[], kind: kOpen, verbatim: true)
   result.hasPending = true
 
 func tupleDimsStream*(s: NimNode): TupleStream =
@@ -83,13 +86,13 @@ func tupleDimsStream*(s: NimNode): TupleStream =
   if ty.isTupleTy():
     if ty.len != 0:
       # idx starts at 1, the first leaf is already the pending event
-      result.stack.add (ev, ty, 1, 0)
-      result.pending = TupleStreamEvent(depth: 1, kind: kLeaf, leaf: getTupleIndex(ev, 0), leafTy: ty[0], verbatim: true)
+      result.stack.add (ev, ty, 1, 0, @[])
+      result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: getTupleIndex(ev, 0), leafTy: ty[0], verbatim: true)
       result.hasPending = true
     # an empty tuple yields no events
   else:
     # scalars wrap in a size-1 tuple, the single leaf is the whole
-    result.pending = TupleStreamEvent(depth: 1, kind: kLeaf, leaf: ev, leafTy: ty, verbatim: true)
+    result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: ev, leafTy: ty, verbatim: true)
     result.hasPending = true
 
 func done*(s: var TupleStream): bool =
@@ -105,23 +108,25 @@ func next*(s: var TupleStream): TupleStreamEvent =
     if f.idx < f.ty.len:
       let childE = getTupleIndex(f.elem, f.idx)
       let childT = f.ty[f.idx]
+      let childPath = f.path & f.idx
       inc s.stack[^1].idx
       if s.shallow:
         # a shallow stream yields the whole sub-tuple element as one leaf
-        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
+        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
       elif childT.isTupleTy():
-        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kOpen, verbatim: true)
-        s.stack.add (childE, childT, 0, f.depth + 1)
+        s.pending = TupleStreamEvent(path: childPath, kind: kOpen, verbatim: true)
+        s.stack.add (childE, childT, 0, f.depth + 1, childPath)
       else:
-        s.pending = TupleStreamEvent(depth: f.depth + 1, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
+        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
     else:
       let depth = f.depth
+      let path = f.path
       discard s.stack.pop()
       if s.shallow:
         # the shallow walk opens and closes on the leaves, no root wrapper
         s.hasPending = false
       else:
-        s.pending = TupleStreamEvent(depth: depth, kind: kClose, verbatim: true)
+        s.pending = TupleStreamEvent(path: path, kind: kClose, verbatim: true)
         s.hasPending = true
 
 iterator items*(s: TupleStream): TupleStreamEvent =

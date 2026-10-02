@@ -94,12 +94,12 @@ proc appendDimension*(builder: var TupleBuilderNested;
   if pairs.len == 1:
     builder.append(pairs[0].shape, pairs[0].stride)
     return
-  builder.append(TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true),
-                 TupleStreamEvent(depth: 0, kind: kOpen, verbatim: true))
+  builder.append(TupleStreamEvent(path: @[], kind: kOpen, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kOpen, verbatim: true))
   for p in pairs:
     builder.append(p.shape, p.stride)
-  builder.append(TupleStreamEvent(depth: 0, kind: kClose, verbatim: true),
-                 TupleStreamEvent(depth: 0, kind: kClose, verbatim: true))
+  builder.append(TupleStreamEvent(path: @[], kind: kClose, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kClose, verbatim: true))
 
 # ═══════════════════════════════════════════════════════════════
 #  destructureLayout, layout AST -> (shape, stride) expressions
@@ -156,3 +156,99 @@ func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shap
   else:
     result.shape = layoutAst.newDotExpr(ident"shape")
     result.strides = layoutAst.newDotExpr(ident"stride")
+
+# ═══════════════════════════════════════════════════════════════
+#  hier_unzip, split a layout dimension by dimension, gather tiles and rest
+# ═══════════════════════════════════════════════════════════════
+
+macro hier_unzip*(splitter: untyped, layout: typed, tiler: typed): untyped =
+  ## Split `layout` by `tiler` through `splitter` and gather the parts into one rank-2 Layout:
+  ## - dimension 0 carries the tile parts of every tiler element
+  ## - dimension 1 carries the rest parts plus the leftover dimensions, PyCute hier_unzip chain semantics
+  ## - a scalar (int, Int) or Layout tiler becomes `splitter(layout, tiler)` verbatim, a sub-tuple tiler element recurses
+  ## Usage:
+  ##   let r = hier_unzip(logical_divide, make_layout((4, 8), (1, 4)), (2, 4))
+  ##   doAssert r === (((2, 4), (2, 2)), ((1, 4), (2, 16)))
+  let splitterNode = splitter
+  proc dimensionCall(e: NimNode, idx: int): NimNode =
+    ## `e.dimension(idx)` as a method-call node.
+    let dim = ident"dimension"
+    result = newCall(nnkDotExpr.newTree(e, dim), newLit(idx))
+  proc fieldElem(e: NimNode, f: string, idx: int): NimNode =
+    ## Element `idx` of field `f` on `e`.
+    let fld = nnkDotExpr.newTree(e, ident(f))
+    result = nnkBracketExpr.newTree(fld, newLit(idx))
+  proc unwrap(e0: NimNode): NimNode =
+    ## Typed macro parameters of macro call arguments arrive wrapped in a statement list. The value is the last child.
+    result = e0
+    if e0.kind == nnkStmtListExpr:
+      result = e0[^1]
+
+  let layoutShapeTy = layoutTypeArgs(layout).shapeTy
+  let R = dimCount(layoutShapeTy)
+  let tlrTy = unwrap(tiler).getTypeInst()
+  if tlrTy.kind notin {nnkTupleTy, nnkTupleConstr}:
+    return splitterNode.newCall(layout, tiler)
+  let tilerRank = tlrTy.len
+  doAssert tilerRank <= R,
+    "hier_unzip: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
+
+  var stmts = newStmtList()
+  var bindingCount = 0
+  proc freshAlias(): NimNode {.compileTime.} =
+    inc bindingCount
+    ident("huzSplit" & $bindingCount)
+
+  type Parts = tuple[fsh, fst, ssh, sst: seq[NimNode]]
+
+  proc walk(e, eShapeTy, tval, ty: NimNode, needBinding: static bool): Parts {.compileTime.} =
+    ## Split the layout dimension `e` by the tiler element of type `ty`.
+    ## `eShapeTy` carries the element type of `e`, `tval` carries the tiler value expression.
+    ## - a leaf, a scalar or Layout sub-tiler, emits one `splitter` call
+    ## - a sub-tuple tiler emits one `splitter` call per sub-element and binds the gathered rank-2 result once
+    ## Returns the shape and stride of the first and second gathered dimensions,
+    ## one element per sub-dimension plus one per leftover layout dimension.
+    ## `needBinding` false at the top level, there the gathered parts form the final Layout directly.
+    if ty.kind in {nnkTupleTy, nnkTupleConstr}:
+      doAssert ty.len <= dimCount(eShapeTy),
+        "hier_unzip: tiler has more dimensions (" & $ty.len &
+        ") than the layout dimension (" & $dimCount(eShapeTy) & ")"
+      for j in 0 ..< ty.len:
+        let child = walk(dimensionCall(e, j), eShapeTy[j],
+                         nnkBracketExpr.newTree(tval, newLit(j)), ty[j], true)
+        result.fsh.add child.fsh
+        result.fst.add child.fst
+        result.ssh.add child.ssh
+        result.sst.add child.sst
+      for j in ty.len ..< dimCount(eShapeTy):
+        result.ssh.add fieldElem(e, "shape", j)
+        result.sst.add fieldElem(e, "stride", j)
+      when needBinding:
+        let nodeR = freshAlias()
+        stmts.add newCall(bindSym"evalOnceAs", nodeR,
+          bindSym"make_layout".newCall(
+            nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fsh),
+                                   nnkTupleConstr.newTree(result.ssh)),
+            nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fst),
+                                   nnkTupleConstr.newTree(result.sst))))
+        result.fsh = @[fieldElem(nodeR, "shape", 0)]
+        result.fst = @[fieldElem(nodeR, "stride", 0)]
+        result.ssh = @[fieldElem(nodeR, "shape", 1)]
+        result.sst = @[fieldElem(nodeR, "stride", 1)]
+    else:
+      let leafR = freshAlias()
+      stmts.add bindSym"evalOnceAs".newCall(leafR,
+        splitterNode.newCall(e, tval))
+      result.fsh = @[fieldElem(leafR, "shape", 0)]
+      result.fst = @[fieldElem(leafR, "stride", 0)]
+      result.ssh = @[fieldElem(leafR, "shape", 1)]
+      result.sst = @[fieldElem(leafR, "stride", 1)]
+
+  let top = walk(ident"huzLyt", layoutShapeTy, ident"huzTlr", tlrTy, false)
+  stmts.insert(0, newCall(bindSym"evalOnceAs", ident"huzLyt", layout))
+  stmts.insert(1, nnkLetSection.newTree(
+    nnkIdentDefs.newTree(ident"huzTlr", newEmptyNode(), tiler)))
+  stmts.add bindSym"make_layout".newCall(
+    nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fsh), nnkTupleConstr.newTree(top.ssh)),
+    nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fst), nnkTupleConstr.newTree(top.sst)))
+  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)

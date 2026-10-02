@@ -25,6 +25,7 @@ import
   workspace/ceramic/src/int_tuples,
   workspace/ceramic/src/layout_algebra/layouts_datatypes,
   workspace/ceramic/src/layout_algebra/layout_constructors,
+  workspace/ceramic/src/layout_algebra/layout_compiletime,
   workspace/ceramic/src/layout_algebra/layouts,
   workspace/ceramic/src/layout_algebra/layout_indexing,
   workspace/ceramic/src/layout_algebra/layout_algebra
@@ -103,9 +104,6 @@ export layout_algebra.tiled_divide
 
 ## logical_divide with the rest dimensions flattened per dimension.
 export layout_algebra.flat_divide
-
-## logical_divide with tile and rest unzipped afterwards.
-export layout_algebra.hier_unzip
 
 # ═══════════════════════════════════════════════════════════════
 #  Inverses and common-layout analysis
