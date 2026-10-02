@@ -34,7 +34,7 @@ template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
       make_view(t.data[0].addr +% toIntVal(offset), sub)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
-    # and so does not accept assignment.
+    # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
     let pos = block:
@@ -51,7 +51,7 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
       make_view(tv.data +% toIntVal(offset), sub)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
-    # and so does not accept assignment.
+    # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
     let pos = block:

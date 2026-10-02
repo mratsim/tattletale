@@ -1119,9 +1119,15 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
             findings.append(
                 Finding(path, n, "article-eol", "line ends on a stranded possessive"))
         elif tok in CONNECTIVE_EOL:
-            findings.append(Finding(
-                path, n, "stray-fragment",
-                "line ends on the bare connective `%s`" % tok))
+            # A preposition following a passive participle is a verb tail,
+            # not a dangling connective: "assigned to", "computed with".
+            pw = (re.sub(r"XcodeX\s*$", "", endtxt.rstrip()).rstrip()
+                  if endtxt else bare).split()
+            pw = pw[-2] if len(pw) >= 2 else ""
+            if not re.search(r"\w+ed$", pw):
+                findings.append(Finding(
+                    path, n, "stray-fragment",
+                    "line ends on the bare connective `%s`" % tok))
     m = re.search(r"(?<![.\d])\.\s+(\S+(?:\s+\S+)?)$", bare)
     if m:
         lead = m.group(1).split()[0].strip(".,;:()'\"*").lower()
