@@ -903,7 +903,7 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
       divideTupleImpl(sh2, st2, tiler2)
     result.add getAst(divideTupleDelegate(sh, st, tiler))
 
-func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT, tiler: TilerT): auto {.inline.} =
+template zipped_divide*(layout: Layout, tiler: auto): auto =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
   ##
   ## Say a kernel level needs the tile and the rest at once, one
