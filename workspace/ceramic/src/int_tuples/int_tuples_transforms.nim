@@ -10,7 +10,7 @@ import ./int_tuples_datatypes
 import ./int_tuples_maps {.all.}
 
 # ═══════════════════════════════════════════════════════════════
-#  flatten — recursively collect leaf elements of a tuple
+#  flatten, recursively collect the leaf elements of a tuple
 # ═══════════════════════════════════════════════════════════════
 
 func flatten*(t: IntOrIntTuple): auto {.inline, noInit.}=
@@ -43,10 +43,10 @@ func unwrap*(t: tuple): auto {.inline.} =
     t
 
 # ═══════════════════════════════════════════════════════════════
-#  concat — concatenate two tuples or a scalar and a tuple
+#  concat, concatenate two tuples or a scalar and a tuple
 # ═══════════════════════════════════════════════════════════════
 #
-#  CuTe: `append(t, x)` / `prepend(t, x)` — concat is the unified version.
+#  CuTe unifies `append` and `prepend` into this `concat`.
 #  Replaces both append and prepend via overloads.
 #
 #  Overloads:
@@ -126,16 +126,15 @@ proc concat*[V: static int](a: tuple; b: Int[V]): auto {.inline, noInit.} =
     result.add bNode
   concatImpl()
 
-proc concat*(a, b: tuple): auto {.inline, noInit.} =
-  macro concatImpl(): untyped =
-    let aNode = bindSym"a"; let bNode = bindSym"b"
-    let aType = aNode.getTypeImpl(); let bType = bNode.getTypeImpl()
-    result = newNimNode(nnkTupleConstr)
-    for idx in 0 ..< aType.len:
-      result.add newTree(nnkBracketExpr, aNode, newLit(idx))
-    for idx in 0 ..< bType.len:
-      result.add newTree(nnkBracketExpr, bNode, newLit(idx))
-  concatImpl()
+macro concat*(a, b: tuple): untyped =
+  ## tuple + tuple, flattened element-wise tuple constructor, emission-time
+  let aType = a.getTypeImpl()
+  let bType = b.getTypeImpl()
+  result = newNimNode(nnkTupleConstr)
+  for idx in 0 ..< aType.len:
+    result.add newTree(nnkBracketExpr, a, newLit(idx))
+  for idx in 0 ..< bType.len:
+    result.add newTree(nnkBracketExpr, b, newLit(idx))
 
 proc concat*(a, b: int): auto {.inline, noInit.} =
   ## int + int → (int, int) tuple
@@ -212,7 +211,7 @@ proc concat*[V: static int](a: static int; b: Int[V]): static auto {.inline, noI
   concatImpl()
 
 # ═══════════════════════════════════════════════════════════════
-#  select — extract multiple elements from a tuple at compile-time indices
+#  select, extract multiple elements at compile-time indices
 # ═══════════════════════════════════════════════════════════════
 
 macro select*(t: IntOrIntTuple; indices: varargs[int]{lit|`const`}): untyped =

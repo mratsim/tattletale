@@ -8,9 +8,9 @@
 ## CPU-optimized indexing: wheel-winding iteration (no divmod).
 ##
 ## Provides:
-##   - CoordWheel[Rank] — iterate all logical positions of a layout
-##     without divmod (O(1) amortized per step via carry-chain).
-##   - crd2idx_cpu / idx2crd_cpu — wrappers for useGpuIndexing dispatch.
+##   - CoordWheel[Rank], iterate all logical positions of a layout
+##     without divmod, O(1) amortized per step via carry-chain
+##   - crd2idx_cpu / idx2crd_cpu, wrappers for useGpuIndexing dispatch
 ##
 ## For random-access idx2crd (single flat index → coordinate), there is
 ## no way around divmod. The wheel-winding only benefits sequential
@@ -26,9 +26,10 @@
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layout_compiletime
 
 # ═══════════════════════════════════════════════════════════════
-#  CoordWheel — iterate logical positions without divmod
+#  CoordWheel, iterate logical positions without divmod
 # ═══════════════════════════════════════════════════════════════
 
 type CoordWheel*[Rank: static int] = object
@@ -37,58 +38,33 @@ type CoordWheel*[Rank: static int] = object
   ## `incr` advances by one position via carry-chain (no divmod).
   coord*: array[Rank, int]
 
-func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]; shape: auto): CoordWheel[Rank] =
-  ## Initialize wheel at (0, 0, ..., 0).
-  discard
-  CoordWheel[Rank](coord: default(array[Rank, int]))
-
 func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
+  ## Wheel at (0, 0, ..., 0), the first logical position.
   CoordWheel[Rank](coord: default(array[Rank, int]))
 
 import workspace/ceramic/src/macros/static_for
 func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
-  ## Advance coordinate by one logical position (carry-chain).
-  ## Innermost dim (dim-0) is fastest-changing, so carry chain starts from dim-0.
-  ## Tuples need staticFor (compile-time index), arrays support runtime.
-  when shape is tuple:
-    staticFor k, 0, Rank:
-      if wheel.coord[k] < int(shape[k]) - 1:
-        wheel.coord[k] += 1
-        return
-      else:
-        wheel.coord[k] = 0
-  else:
-    for k in 0 ..< Rank:
-      if wheel.coord[k] < int(shape[k]) - 1:
-        wheel.coord[k] += 1
-        return
-      else:
-        wheel.coord[k] = 0
+  ## Advance the coordinate by one logical position (carry-chain).
+  ##
+  ## - in-range carry, the coordinate never reaches the shape
+  ## - dim-0 is fastest-changing
+  ##
+  ## staticFor unrolls the walk, indexing tuples and arrays alike.
+  staticFor k, 0, Rank:
+    if wheel.coord[k] < int(shape[k]) - 1:
+      wheel.coord[k] += 1
+      return
+    else:
+      wheel.coord[k] = 0
 
-import workspace/ceramic/src/macros/static_for
 func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int =
-  ## Compute linear offset = sum(coord[i] * stride[i]).
-  ## Pure multiply-add, no divmod.
-  ## Tuples need compile-time index (staticFor), arrays support runtime.
-  when strides is tuple:
-    staticFor i, 0, Rank:
-      result += wheel.coord[i] * int(strides[i])
-  else:
-    for i in 0 ..< Rank:
-      result += wheel.coord[i] * int(strides[i])
+  ## Linear offset = sum(coord[i] * stride[i]), pure multiply-add.
+  staticFor i, 0, Rank:
+    result += wheel.coord[i] * int(strides[i])
 
 # ═══════════════════════════════════════════════════════════════
-#  CPU wrappers (for useGpuIndexing dispatch)
+#  CPU wrappers, dispatch targets for useGpuIndexing
 # ═══════════════════════════════════════════════════════════════
-#
-#  These delegate to the layout_indexing_gpu 3-arg functions for
-#  tuple-coord crd2idx (which is already multiply-add, no divmod).
-#  They exist so callers can do a uniform `crd2idx_cpu` call
-#  regardless of whether the underlying impl differs.
-#
-#  Note: layouts.nim defines the main `crd2idx(layout, coord)`
-#  dispatch with `useGpuIndexing` parameter. The `_cpu` suffix
-#  here is for code that explicitly wants CPU-optimized semantics.
 
 import ./layout_indexing_gpu
 import std/macros
@@ -112,8 +88,8 @@ macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
   else:
     var parts: seq[NimNode] = @[]
     for i in 0 ..< shT.len:
-      let s = newCall(bindSym"[]", st, newLit(i))
-      let shI = newCall(bindSym"[]", sh, newLit(i))
+      let s = bindSym"[]".newCall(st, newLit(i))
+      let shI = bindSym"[]".newCall(sh, newLit(i))
       parts.add newCall(bindSym"mod",
         newCall(bindSym"div", idx, s), shI)
     result = nnkPar.newTree(parts)

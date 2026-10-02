@@ -39,6 +39,7 @@ proc runComposeMultiDimensionTests: void
 proc runComposeDynamicTests: void
 proc runComposeRemainderTests: void
 proc runComposeNestedTests: void
+proc runComposeTilerTests: void
 proc runComposeSwizzleTests: void
 proc runComposeEStrideTests: void
 proc runComposeNegStrideTests: void
@@ -57,11 +58,12 @@ proc runLogicalProductTests: void
 
 proc runBlockedProductTests: void
 proc runRakedProductTests: void
+proc runPadCandidateParityTests: void
 proc runZippedProductTests: void
 proc runTiledProductTests: void
 proc runFlatProductTests: void
 proc runTileToShapeTests: void
-proc runTileUnzipTests: void
+proc runZippedDivideRank1Tests: void
 proc runTests =
   echo "\n── Coalesce [CUTE-C]: 20 cases ──"
   runCoalesceTests()
@@ -72,7 +74,7 @@ proc runTests =
   runComplementMultiDimensionStaticTests()
   runComplementDynamicTests()
   runComplementDisjointnessTests()
-  echo "\n--- Anti-regression: crd2idx + tile_unzip ---"
+  echo "\n--- Anti-regression: crd2idx + zipped_divide ---"
   echo "\n── Composition [CUTE-CM] ──"
   runComposeExactValueTests()
   runComposeSimpleTests()
@@ -80,6 +82,7 @@ proc runTests =
   runComposeDynamicTests()
   runComposeRemainderTests()
   runComposeNestedTests()
+  runComposeTilerTests()
   runComposeSwizzleTests()
   runComposeEStrideTests()
   runComposeNegStrideTests()
@@ -94,11 +97,12 @@ proc runTests =
   echo "\n── Product variants [MOYE] ──"
   runBlockedProductTests()
   runRakedProductTests()
+  runPadCandidateParityTests()
   runZippedProductTests()
   runTiledProductTests()
   runFlatProductTests()
-  echo "\n── tile_unzip [CUTE] ──"
-  runTileUnzipTests()
+  echo "\n── zipped_divide rank-1 [CUTE] ──"
+  runZippedDivideRank1Tests()
   echo "\n── tile_to_shape [CUTE] ──"
   runTileToShapeTests()
   echo "\nALL TESTS PASSED"
@@ -467,7 +471,30 @@ proc runComplementExactValueTests =
     let r = complement(make_layout(4, 4), 32)
     doAssert r.shape === (4, 2)
     doAssert r.stride === (1, 16)
-  echo "  Exact-value: 10 Python assertions OK"
+
+  # Fully-folded corner, the size-1 sentinel (1):(0)
+  # when gap and rem both fold to 1
+  block:
+    let r = complement(make_layout(2, 1), 2)
+    doAssert r.shape === 1
+    doAssert r.stride === 0
+
+  # Overlapping strides, the second gap clamps to 1
+  # (stride below the accumulated span), only the remainder dimension survives
+  block:
+    let r = complement(make_layout((2, 2), (1, 1)))
+    doAssert r.shape === 2
+    doAssert r.stride === 2
+
+  # Broadcast layout, a scalar stride-0 over a nested shape collapses to (bound):(1)
+  block:
+    let r = complement(make_layout((8, 4), 0), 32)
+    doAssert r.shape === 32
+    doAssert r.stride === 1
+    let rDefault = complement(make_layout((8, 4), 0))
+    doAssert rDefault.shape === 1
+    doAssert rDefault.stride === 1
+  echo "  Exact-value: 14 Python assertions OK"
 
 # ─── Symbol-routed static bound ──────────────────────────────────────
 proc runComplementSymbolBoundTests =
@@ -763,6 +790,38 @@ proc runComposeNestedTests =
   doAssert compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
   echo "    Scalar LHS: 5/5"
 
+proc runComposeTilerTests =
+  ## Tiler-tuple composition, CuTe composition's tuple variant:
+  ## per-dimension composition over the first tiler dimensions,
+  ## leftovers drop, and the pycute `_composition` zip-per-dimension.
+  echo "    Tiler tuple [CUTE-CM tuple variant + PY-L _composition]:"
+  # int tiler elements compose each dimension with (N):(1), the first N positions
+  doAssert compose(make_layout((32, 8), (1, 32)), (16, 2)) === ((16, 2), (1, 32))
+  # keep tiler element, `_` passes the dimension through whole
+  doAssert compose(make_layout((4, 8), (1, 4)), (_, 2)) === ((4, 2), (1, 4))
+  # leftover dimensions drop, CuTe and pycute agree
+  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, 4)) === ((2, 4), (1, 4))
+  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, _, _)) === ((2, 8, 2), (1, 4, 32))
+  # Layout tiler element, a (T, V) atom pattern composed per dimension
+  doAssert compose(make_layout((4, 8), (1, 4)), (make_layout(2, 2), _)) === ((2, 8), (2, 4))
+  doAssert compose(make_layout((16, 8), (1, 16)), (make_layout((2, 4), (1, 4)), _)) ===
+    (((2, 4), 8), ((1, 4), 16))
+  # static tiler literals promote through makeIntTuple forms too
+  doAssert compose(make_layout((32, 8), (1, 32)), makeIntTuple((16, 2))) === ((16, 2), (1, 32))
+  # runtime int stride, the consume stays runtime
+  let dS = 2
+  doAssert compose(make_layout((32, 8), (1, dS)), (16, 4)) === ((16, 4), (1, dS))
+  # a tiler longer than the layout is a compile-time error
+  static:
+    doAssert not compiles(compose(make_layout(4, 1), (2, 3)))
+  # a 1-element tiler keeps its 1-tuple structure, pycute (2,):(1,)
+  doAssert compose(make_layout((4, 8), (1, 4)), (2,)) === ((2,), (1,))
+  # a sub-tuple tiler element on a scalar dimension is a rank error,
+  # pycute "Rank mismatch: composition(8:4, (2, 2))"
+  static:
+    doAssert not compiles(compose(make_layout((4, 8), (1, 4)), (2, (2, 2))))
+  echo "    11/11"
+
 proc runComposeSwizzleTests =
   echo "    Swizzle [CUTE-CM #55-56]:"
   # [CUTE-CM] #55: compose(Layout<8,8>:(8,1), Swizzle ∘ Layout<8,8>:(8,1))
@@ -869,7 +928,7 @@ proc runDivideTests: void =
   checkDivMap(make_layout((3, 4), (1, 3)), 6)
   echo "    3/3"
 
-  echo "  Rank-1 closed form (value-identical to the general formula):"
+  echo "  Rank-1 direct divide (value-identical to the general formula):"
   doAssert logical_divide(make_layout(10, 2), 4) === ((4, 3), (2, 8))
   doAssert logical_divide(make_layout(10, 0), 4) === ((4, 3), (0, 0))
   doAssert logical_divide(make_layout(10, 2), Int[4]()) === ((4, 3), (2, 8))
@@ -880,10 +939,15 @@ proc runDivideTests: void =
   doAssert logical_divide(make_layout(dynS, 1), dynT) === ((4, 4), (1, 4))
   echo "    6/6"
 
-  echo "  Closed form through the per-dimension tuple-tiler path:"
+  echo "  Direct divide through the per-dimension tuple-tiler path:"
   doAssert logical_divide(make_layout((10, 8), (2, 1)), (4, 4)) ===
     (((4, 3), (4, 2)), ((2, 8), (1, 4)))
-  echo "    1/1"
+  # a (1, 1) tiler divides each dimension by 1, the per-dimension
+  # result is (1, shape):(stride, stride), which locks the degenerate
+  # (1, 1) spelling of the per-dimension divide path
+  doAssert logical_divide(make_layout((2, 4, 8), (1, 2, 3)), (1, 1)) ===
+    (((1, 2), (1, 4), 8), ((1, 1), (2, 2), 3))
+  echo "    2/2"
 
   echo "  Python port: test_logical_divide_tuple_tiler + test_logical_divide_2d:"
   checkDivMap(make_layout((4, 8)), (2, 4))
@@ -894,6 +958,13 @@ proc runDivideTests: void =
   checkDivMap(make_layout(((2, 4), 8), ((1, 2), 8)), (4, 4))
   echo "    1/1"
 
+  # contract-doc Examples on the Layout-tiler overload, locked:
+  # logical_divide(make_layout(16, 3), 4) -> (4, 4):(3, 12)
+  doAssert logical_divide(make_layout(16, 3), 4) === ((4, 4), (3, 12))
+  # CuTe C++ 1-D worked example:
+  # A=(4,2,3):(2,1,8), B=4:2 -> ((2,2),(2,3)):((4,1),(2,8))
+  let ldExample = logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
+  doAssert ldExample === (((2, 2), (2, 3)), ((4, 1), (2, 8)))
 
   ## logical_divide with Layout tiler — triggered compose flattening bug
   ## A=(8,8):(1,8), T=(2,2):(1,4)
@@ -1016,7 +1087,12 @@ proc runRightInvExactValueTests =
     # result: (8,2):(1,192)
     let R = right_inverse(make_layout((8, 4, 6, 2), (1, 2, 4, 8)))
     doAssert R === ((8, 2), (1, 192)), "got " & $R
-  echo "  Exact-value [PY-E Table 5]: 10 cases OK"
+  block:
+    # Chained through coalesce, the intermediate materializes once via evalOnceAs
+    let L = make_layout((4, 8), (1, 4))
+    let R = right_inverse(coalesce(L))
+    doAssert R === (32, 1), "expected 32:1 got " & $R
+  echo "  Exact-value [PY-E Table 5]: 11 cases OK"
 
 proc runRightInvDynamicTests =
   ## [CUTE-IR] Dynamic shapes/strides
@@ -1111,7 +1187,12 @@ proc runLeftInvExactValueTests =
     # Broadcast unit stride: left_inverse(((2,2),(2,4)):((0,1),(0,2))) = (2,4):(2,8)
     let Li = left_inverse(make_layout(((2, 2), (2, 4)), ((0, 1), (0, 2))))
     doAssert Li === ((2, 4), (2, 8)), "expected (2,4):(2,8) got " & $Li
-  echo "  Exact-value [PY-E Table 6]: 9 cases OK"
+  block:
+    # Chained through coalesce, the intermediate materializes once via evalOnceAs
+    let L = make_layout((3, 7, 5), (5, 15, 1))
+    let Li = left_inverse(coalesce(L))
+    doAssert Li === ((5, 21), (21, 1)), "expected (5,21):(21,1) got " & $Li
+  echo "  Exact-value [PY-E Table 6]: 10 cases OK"
 
 
 proc runLeftInvTests =
@@ -1286,6 +1367,90 @@ proc runRakedProductTests =
     doAssert m1 === ((1, 2), (0, 2)), "raked diff-rank m1: " & $m1
   echo "    raked_product: 5 cases OK"
 
+# ── pad candidate parity (cgs_pad runner forms vs src) ──
+
+func padRightImpl(layout: Layout; n: static int): auto =
+  when rank(layout) >= n: layout
+  else: padRightImpl(make_layout(concat(layout.shape, 1), concat(layout.stride, 0)), n)
+
+func padLeftImpl(layout: Layout; n: static int): auto =
+  when rank(layout) >= n: layout
+  else: padLeftImpl(make_layout(concat(1, layout.shape), concat(0, layout.stride)), n)
+
+func padRightR(layout: Layout; rank: static int): auto = padRightImpl(layout, rank)
+func padLeftR(layout: Layout; rank: static int): auto = padLeftImpl(layout, rank)
+
+# one-shot candidate, single make_layout with a locally built fill
+# padRight/padLeft keep their role as the pad-to-rank primitives
+template repeatFill(v: Int, n: static int): auto =
+  when n <= 0: ()
+  else: concat(repeatFill(v, n - 1), v)
+
+func padRightO(layout: Layout; n: static int): auto =
+  when rank(layout) >= n: layout
+  else: make_layout(concat(layout.shape, repeatFill(Int[1](), n - rank(layout))),
+                    concat(layout.stride, repeatFill(Int[0](), n - rank(layout))))
+
+func padLeftO(layout: Layout; n: static int): auto =
+  when rank(layout) >= n: layout
+  else: make_layout(concat(repeatFill(Int[1](), n - rank(layout)), layout.shape),
+                    concat(repeatFill(Int[0](), n - rank(layout)), layout.stride))
+
+# candidate consumers, same bodies as src with the candidate pads
+template blockedProductR(blk, tlr): auto =
+  const mxR = max(blk.rank(), tlr.rank())
+  let lp = logical_product(padRightR(blk, mxR), padRightR(tlr, mxR))
+  zipDimensions(dimension(lp, 0), dimension(lp, 1))
+
+template rakedProductR(blk, tlr): auto =
+  const mxR = max(blk.rank(), tlr.rank())
+  let lp = logical_product(padRightR(blk, mxR), padRightR(tlr, mxR))
+  zipDimensions(dimension(lp, 1), dimension(lp, 0))
+
+template tileToShapeR(blk, ts): auto =
+  const R = static(rank(ts))
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(tss, ts)
+    let padded_blk = padRightR(bk, R)
+    let blk_shape = product_each(padded_blk.shape)
+    let trg_flat = product_each(tss)
+    let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
+    let tiler = make_layout(product_shape, LayoutLeft)
+    blockedProductR(padded_blk, tiler)
+
+proc runPadCandidateParityTests =
+  ## Asserts the value parity of the cgs_pad runner candidate forms against src.
+  block:
+    let L = make_layout((8, 4), (16, 1))
+    let N = make_layout((8, (4, 2)), (16, (1, 2)))
+    let S = make_layout(8, 4)
+    let P = make_layout((8, 4, 1), (16, 1, 0))
+    doAssert padRightR(L, 4) === padRight(L, 4)
+    doAssert padLeftR(L, 4) === padLeft(L, 4)
+    doAssert padRightR(N, 4) === padRight(N, 4)
+    doAssert padLeftR(N, 4) === padLeft(N, 4)
+    doAssert padRightR(S, 3) === padRight(S, 3)
+    doAssert padLeftR(S, 3) === padLeft(S, 3)
+    doAssert padRightR(P, 3) === P
+    doAssert padLeftR(P, 3) === P
+    doAssert padRightR(P, 2) === P
+    let blk = make_layout((8, 4), (16, 1))
+    let tiler = make_layout(2, 2)
+    doAssert blockedProductR(blk, tiler) === blocked_product(blk, tiler)
+    doAssert rakedProductR(blk, tiler) === raked_product(blk, tiler)
+    doAssert tileToShapeR(make_layout((2, 3), (1, 2)), (6, 12)) ===
+      tile_to_shape(make_layout((2, 3), (1, 2)), (6, 12))
+    doAssert padRightO(L, 4) === padRight(L, 4)
+    doAssert padLeftO(L, 4) === padLeft(L, 4)
+    doAssert padRightO(N, 4) === padRight(N, 4)
+    doAssert padLeftO(N, 4) === padLeft(N, 4)
+    doAssert padRightO(S, 3) === padRight(S, 3)
+    doAssert padLeftO(S, 3) === padLeft(S, 3)
+    doAssert padRightO(P, 3) === P
+    doAssert padLeftO(P, 3) === P
+  echo "    pad candidate parity: 21 cases OK"
+
 proc runZippedProductTests =
   # block:
   #   ## Python ref: zipped_divide(Layout((4,8)), (2,4)) -> ((2,4),(2,2)):((1,4),(2,16))
@@ -1330,23 +1495,24 @@ proc runTiledProductTests =
     doAssert rank(td) === 2, "rank-1 tiled rank: " & $rank(td)
     doAssert size(dimension(td, 0)) === 3
     doAssert size(dimension(td, 1)) === 4
-  # block:
-  #   ## tiled_divide: rank-2, exact dimension structure
-  #   let L = make_layout((4, 8), (1, 4))
-  #   let td = tiled_divide(L, (2, 4))
-  #   doAssert rank(td) === 3, "tiled rank: " & $rank(td)
-  #   doAssert size(dimension(td, 0)) === 8
-  #   doAssert size(dimension(td, 1)) === 2
-  #   doAssert size(dimension(td, 2)) === 2
-  # block:
-  #   ## [PY-L] CuTe C++: tiled_divide with Layout tiler
-  #   ## A=(8,8):(1,8), T=(2,2):(1,4)
-  #   ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
-  #   let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
-  #   doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
-  #   ## tiled vs flat: same input, rank(tiled) = rank(flat) - 1
-  #   let L = make_layout((4, 8), (1, 4))
-  #   doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
+  block:
+    ## tiled_divide, rank-2 exact dimension structure
+    let L = make_layout((4, 8), (1, 4))
+    let td = tiled_divide(L, (2, 4))
+    doAssert rank(td) === 3, "tiled rank: " & $rank(td)
+    doAssert size(dimension(td, 0)) === 8
+    doAssert size(dimension(td, 1)) === 2
+    doAssert size(dimension(td, 2)) === 2
+  block:
+    ## [PY-L] CuTe C++ tiled_divide, A=(8,8):(1,8), T=(2,2):(1,4)
+    ## tiled_divide -> ((2,2),2,8):((1,4),2,8)
+    let td = tiled_divide(make_layout((8, 8), (1, 8)), make_layout((2, 2), (1, 4)))
+    doAssert td === (((2, 2), 2, 8), ((1, 4), 2, 8)), "td: " & $td
+    ## Meta tensor-layouts doc, tiled_divide(Layout((8,8)), (2,2)) -> ((2,2), 4, 4)
+    doAssert tiled_divide(make_layout((8, 8), (1, 8)), (2, 2)) === (((2, 2), 4, 4), ((1, 8), 2, 16))
+    ## tiled vs flat, same input, rank(tiled) = rank(flat) - 1
+    let L = make_layout((4, 8), (1, 4))
+    doAssert rank(tiled_divide(L, (2, 4))) === rank(flat_divide(L, (2, 4))) - 1
 
   block:
     ## tiled_product: smoke test
@@ -1389,45 +1555,16 @@ proc runFlatProductTests =
   echo "    flat_divide/product: 5 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  tile_unzip — unzip logical_divide/product result into tiles+rest
+#  zipped_divide, rank-1 layout with Layout and int tiler terminals
 # ═══════════════════════════════════════════════════════════════
-proc runTileUnzipTests =
+proc runZippedDivideRank1Tests =
   block:
     ## Rank-1 layout / rank-1 tiler (both Layout terminals)
     let L = make_layout(8, 1)
     let tiler = make_layout(2, 1)
-    let divided = logical_divide(L, tiler)
-    let unzipped = tile_unzip(divided, tiler)
-    doAssert rank(unzipped) === 2
-  # block:
-  #   ## Rank-2 layout / tuple tiler (2 ints) — Python reference
-  #   # zipped_divide(Layout((4,8)), (2,4)) -> Layout(((2,4),(2,2)), ((1,4),(2,16)))
-  #   let L = make_layout((4, 8), (1, 4))
-  #   let tiler = (2, 4)
-  #   let divided = logical_divide(L, tiler)
-  #   let unzipped = tile_unzip(divided, tiler)
-  #   let m0 = dimension(unzipped, 0)
-  #   let m1 = dimension(unzipped, 1)
-  #   doAssert rank(unzipped) === 2, "rank: " & $rank(unzipped)
-  #   doAssert m0 === ((2, 4), (1, 4)), "m0: " & $m0
-  #   doAssert m1 === ((2, 2), (2, 16)), "m1: " & $m1
-  # block:
-  #   ## Rank-2 layout / rank-2 tuple of Layouts
-  #   let L = make_layout((4, 8), (1, 4))
-  #   let tiler = (make_layout(2, 1), make_layout(4, 1))
-  #   let divided = logical_divide(L, tiler)
-  #   let unzipped = tile_unzip(divided, tiler)
-  #   doAssert rank(unzipped) === 2
-  #   doAssert size(dimension(unzipped, 0)) === 8
-  #   doAssert size(dimension(unzipped, 1)) === 4
-  # block:
-  #   ## Rank-2 layout / rank-1 tiler (partial tiler)
-  #   let L = make_layout((4, 8), (1, 4))
-  #   let tiler = (2,)
-  #   let divided = logical_divide(L, tiler)
-  #   let unzipped = tile_unzip(divided, tiler)
-  #   doAssert rank(unzipped) === 2
-  echo "  tile_unzip: 4 cases OK"
+    let zipped = zipped_divide(L, tiler)
+    doAssert rank(zipped) === 2
+  echo "  zipped_divide rank-1: 1 case OK"
 
 
 # ═══════════════════════════════════════════════════════════════

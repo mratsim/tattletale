@@ -10,37 +10,37 @@ import std/macros, std/typetraits, std/math
 import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] — compile-time integer type
+#  Int[N]
 # ═══════════════════════════════════════════════════════════════
+#
+# We provide an Int phantom type that will be used to propagate values across Ceramic
+# without them losing their const-ness at function boundaries.
+#
+# Furthermore low-level primitives and overload are provided as templates for most.
+#
+# Templates are substituted directly without generated code, significantly improving readability
+# of generated code as there is no function indirection.
+#
+# A limitation is that inputs MUST be used only once in the template body or inputs will be inlined twice, including their side-effects.
+# Concretely if an input that does 'echo "launch missiles"' is passed to a template, "launch missiles" will be printed as many times as the input is called within the template.
 
-type Int*[V: static int] = object
-  ## Compile-time integer literal, analogous to CuTe's `Int<N>`.
-  ##   Int<4>  ⇔  Int[4]
+type
+  Int*[V: static int] = object
+    ## Compile-time integer literal
+    ## This allows constant-folding as plain 'int' lose constness across function boundaries
 
-type IntOrIntTuple* = int | Int | tuple
-
-  ## Shape/stride element type alias for convenience.
-
-## ── PERF CRITICAL: templates, not funcs ──
-## toIntVal(int) is called on EVERY element access (via []/() operators).
-## As a non-`{.inline.}` `func`, it lands in its own C++ compilation unit,
-## blocking cross-module inlining. Even `{.inline.}` generates a C++ function
-## definition the inliner must process; `template` produces zero C++ definitions.
-## When extracting Int[V] → int, a template extracts V directly in the generated
-## C++ expression; a func wraps it in a C struct parameter that is noisy for no gain.
-## History: commit b93bb95 changed func→template, recovering ~12× on flat-index copies.
+  IntOrIntTuple* = int | Int | tuple
 
 template toIntVal*(x: int): int = x
 template toIntVal*[V: static int](x: Int[V]): int = V
 
-
-func `$`*[V: static int](x: Int[V]): static string = "Int[" & $V & "]"
+template `$`*[V: static int](x: Int[V]): string = "Int[" & $V & "]"
 
 func `==`*[V: static int](a: Int[V]; b: int): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 func `==`*[V, U: static int](a: Int[V]; b: Int[U]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 
-func rank*(t: typedesc[IntOrIntTuple]): static int =
+template rank*(t: typedesc[IntOrIntTuple]): static int =
   when t is (int or Int):
     1
   else:
@@ -53,32 +53,31 @@ template rank*(t: IntOrIntTuple): static int =
     tupleLen(typeof(t))
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] == int — global overloads for tuple comparison
+#  Int[N] == int, global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 
-func `<=`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V <= b
-func `<=`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a <= V
-func `>=`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V >= b
-func `>=`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a >= V
-func `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
-func `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
+template `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
+template `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
+template `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
+template `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
+template `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
+template `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
 
 # ═══════════════════════════════════════════════════════════════
-#  `===` — deep element-wise tuple comparison (handles Int[N] vs int)
+#  `===`, deep element-wise comparison across Int[N] and int
 # ═══════════════════════════════════════════════════════════════
 
-func `===`*(a, b: int): bool {.inline.} = a == b
-func `===`*(a, b: static int): static bool = a == b
-func `===`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V == U
+template `===`*(a, b: int): bool = a == b
+template `===`*(a, b: static int): bool = a == b
+template `===`*[V, U: static int](a: Int[V]; b: Int[U]): bool = V == U
 
-func `===`*[V: static int](a: Int[V]; b: int): bool {.inline.} = V == b
-func `===`*[V: static int](a: int; b: Int[V]): bool {.inline.} = a == V
-func `===`*[V: static int](a: Int[V]; b: static int): static bool = V == b
-func `===`*[V: static int](a: static int; b: Int[V]): static bool = a == V
+template `===`*[V: static int](a: Int[V]; b: int): bool = V == b
+template `===`*[V: static int](a: int; b: Int[V]): bool = a == V
+template `===`*[V: static int](a: Int[V]; b: static int): bool = V == b
+template `===`*[V: static int](a: static int; b: Int[V]): bool = a == V
 
 func `===`*[T: tuple, U: tuple](a: T; b: U): bool {.inline.} =
   ## Deep element-wise tuple comparison.
-  ## Handles Int[N] vs int mismatches via per-element === overloads.
   when tupleLen(T) != tupleLen(U):
     false
   else:
@@ -87,14 +86,14 @@ func `===`*[T: tuple, U: tuple](a: T; b: U): bool {.inline.} =
         return false
     true
 
-func `===`*[T: tuple](a: T; b: int): bool {.inline.} =
+template `===`*[T: tuple](a: T; b: int): bool =
   ## Compare a tuple against an int — only valid for 1-element tuples.
   when tupleLen(T) == 1:
     a[0] === b
   else:
     false
 
-func `===`*[U: tuple](a: int; b: U): bool {.inline.} =
+template `===`*[U: tuple](a: int; b: U): bool =
   ## Compare an int against a tuple — only valid for 1-element tuples.
   when tupleLen(U) == 1:
     a === b[0]
@@ -102,38 +101,42 @@ func `===`*[U: tuple](a: int; b: U): bool {.inline.} =
     false
 
 # ═══════════════════════════════════════════════════════════════
-#  `!==` — negation of deep element-wise tuple comparison
+#  `!==`, negation of the deep element-wise comparison
 # ═══════════════════════════════════════════════════════════════
 
-func `!==`*(a, b: auto): bool {.inline.} = not (a === b)
+template `!==`*(a, b: auto): bool = not (a === b)
 
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] arithmetic
 # ═══════════════════════════════════════════════════════════════
 
 func ceil_div*(a, b: int): int {.inline.} =
-  ## Integer ceiling division, called by the emitted compose and divide arithmetic
+  (a + b - 1) div b
+
+func ceil_div*(a, b: static int): static int {.inline.} =
+  ## Static overload, both arguments fold at compile time.
   (a + b - 1) div b
 
 func sign*(x: int): int {.inline.} =
   if x > 0: 1 elif x < 0: -1 else: 0
 
-func abs*[V: static int](x: Int[V]): Int[abs(V)] = Int[abs(V)]()
+func sign*(x: static int): static int {.inline.} =
+  ## Static overload, folds at compile time.
+  if x > 0: 1 elif x < 0: -1 else: 0
 
-func sign*[V: static int](x: Int[V]): Int[if V > 0: 1 elif V < 0: -1 else: 0] = discard
+template sign*[V: static int](x: Int[V]): auto =
+  const S =
+    if V > 0: 1
+    elif V < 0: -1
+    else: 0
+  Int[S]()
+
+template abs*[V: static int](x: Int[V]): auto = Int[abs(V)]()
 
 template genBinOp(op: untyped): untyped =
-  ## Generate arithmetic operators for Int[V] vs int/Int.
-  ##
-  ## PERF CRITICAL: `Int[V] * int` and `int * Int[V]` MUST be `template`, not `func`.
-  ## These are called inside crd2idx's foldZipWith inner product loop.
-  ## A `func` with `Int[V]` arguments generates C struct-object parameters
-  ## that the C++ inliner must unravel. A `template` collapses
-  ## `Int[16]() * i` to the bare constant `16 * i` at the Nim codegen level.
-
   template op*[V, U: static int](a: Int[V]; b: Int[U]): auto = Int[op(V, U)]()
-  func op*[V: static int](a: Int[V]; b: static int): auto {.inline.} = Int[op(V, b)]()
-  func op*[V: static int](a: static int; b: Int[V]): auto {.inline.} = Int[op(a, V)]()
+  template op*[V: static int](a: Int[V]; b: static int): auto = Int[op(V, b)]()
+  template op*[V: static int](a: static int; b: Int[V]): auto = Int[op(a, V)]()
   template op*[V: static int](a: Int[V]; b: int): int = op(V, b)
   template op*[V: static int](a: int; b: Int[V]): int = op(a, V)
 
@@ -148,10 +151,10 @@ genBinOp(`min`)
 genBinOp(`ceil_div`)
 genBinOp(`gcd`)
 
-func `+=`*[V: static int](a: var int; b: Int[V]) = a += V
+template `+=`*[V: static int](a: var int; b: Int[V]) = a += V
 
 # ═══════════════════════════════════════════════════════════════
-#  Iteration bounds
+#  iteration bounds
 # ═══════════════════════════════════════════════════════════════
 
 template `..<`*[V: static int](start: int; bound: Int[V]): Slice[int] =

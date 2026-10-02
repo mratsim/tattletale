@@ -18,14 +18,14 @@ const baselineOverheadMsl = metal:
 const makeFragmentLikeVMsl = metal:
   proc makeFragmentLikeVKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout(((16, 2), 16), ((1, 16), 4))
-    let f = make_fragment_like(L, (16, 2))
+    let f = make_fragment_like(L)
     C[0] = float32 toIntVal size(f)
 
 # make_fragment_like with a broadcast V, feeds the epilogue broadcast-bias call site
 const makeFragmentLikeBroadcastMsl = metal:
   proc makeFragmentLikeBroadcastKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 8), (0, 1))
-    let f = make_fragment_like(L, 4)
+    let f = make_fragment_like(L)
     C[0] = float32 toIntVal size(f)
 
 # ── kernel rows ──

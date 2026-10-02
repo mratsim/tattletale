@@ -24,6 +24,7 @@
 import std/[macros, math, typetraits]
 
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
