@@ -6,7 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
+import ./int_tuples_compiletime
 import ./int_tuples_datatypes
+import ./int_tuples_streams
 import ./int_tuples_transforms
 import workspace/ceramic/src/macros/replace_nodes
 
@@ -14,10 +16,15 @@ import workspace/ceramic/src/macros/replace_nodes
 #  zipDimensionsWith, zip the top-level elements with a binary op
 # ═══════════════════════════════════════════════════════════════
 
-macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untyped =
+macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A, b: B, body: untyped): untyped =
   ## Zip top-level elements of tuples `a` and `b` pairwise via `body` (does NOT recurse into nested tuples).
   ## `it_a` / `it_b` bind to corresponding elements.
   ## Leftover elements from the longer tuple are appended unchanged.
+  ##
+  ## Contract:
+  ## - the zip is top-level only, a nested tuple element is one element,
+  ##   the body sees it whole
+  ## - ranks may differ, the longer tuple's tail passes through unchanged
   ##
   ## Example:
   ##   zipWith((2, 4), (10, 20)): it_a + it_b  →  (12, 24)
@@ -48,36 +55,41 @@ macro zipDimensionsWith*[A, B: IntOrIntTuple](a: A; b: B; body: untyped): untype
 #  zipLeavesWith, element-wise binary op for equal-structure tuples
 # ═══════════════════════════════════════════════════════════════
 
-template zipLeavesRecur*(a, b: typed; idx: static int; body: untyped): untyped =
-  ## Internal: walk tuple from index `idx`, recurse into nested tuples.
-  when idx < a.rank():
-    when a[idx] is tuple:
-      concat((zipLeavesRecur(a[idx], b[idx], 0, body),),
-             zipLeavesRecur(a, b, idx + 1, body))
-    else:
-      block:
-        let it_a {.inject.} = a[idx]
-        let it_b {.inject.} = b[idx]
-        when idx == a.rank() - 1:
-          (body,)
-        else:
-          concat((body,), zipLeavesRecur(a, b, idx + 1, body))
-  else:
-    ()
-
-template zipLeavesWith*(a, b: typed; body: untyped): untyped =
+macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   ## Apply `body` to corresponding leaf pairs of equal-structure tuples.
   ## Inside `body`, `it` is a 2-tuple `(leaf_a, leaf_b)`.
   ## Use `it_a` for the leaf from `a` and `it_b` for the leaf from `b`.
   ##
-  ## runnableExamples:
+  ## Contract:
+  ## - `a` and `b` have the same structure, one leaf pair at a time,
+  ##   recursion-free, no runtime `let` in the emitted code
+  ## - scalar inputs unwrap, the result is the mapped scalar
+  ##
+  ## Example:
   ##   let r = zipLeavesWith((10, 10), (3, 2)): it_a - it_b
   ##   doAssert r == (7, 8)
   ##   let r2 = zipLeavesWith(((1, 2), 3), ((4, 5), 6)): it_a - it_b
   ##   doAssert r2 == ((-3, -3), -3)
-  when a is tuple:
-    zipLeavesRecur(a, b, 0, body)
-  else:
-    let it_a = a
-    let it_b = b
-    body
+  var inputTuple = a.getTypeInst().isTupleTy()
+  var builder = TupleBuilderNested.new(1)
+  var aStream = a.tupleStream()
+  var bStream = b.tupleStream()
+  while not aStream.done():
+    if bStream.done():
+      error "zipLeavesWith: `b` has fewer elements than `a`", b
+    let aEvent = aStream.next()
+    let bEvent = bStream.next()
+    if aEvent.kind != bEvent.kind:
+      error "zipLeavesWith: `a` and `b` have different tuple structures", b
+    case aEvent.kind
+    of kLeaf:
+      let mapped = body.replaceNodes(
+        ("it_a", aEvent.leaf), ("it_b", bEvent.leaf),
+        ("it", nnkPar.newTree(aEvent.leaf, bEvent.leaf)))
+      builder.append(mapped, verbatim = false)
+    else:
+      builder.append(aEvent)
+  if not bStream.done():
+    error "zipLeavesWith: `b` has more elements than `a`", b
+  let (resultTuple, _) = builder.emit(0, emitScalarForSize1 = not inputTuple)
+  result = newStmtList(resultTuple)
