@@ -22,13 +22,13 @@ type Layout*[Sh, St] = object
   shape*: Sh
   stride*: St
 
-func `===`*(a: Layout; b: tuple): bool =
+func `===`*(a: Layout, b: tuple): bool {.inline.} =
   ## Deep comparison against a (shape, stride) tuple.
   ## This handles static Int checks against int checks
   ## and also size-1 tuples against int/Int
   (a.shape === b[0]) and (a.stride === b[1])
 
-func `===`*[A, B: Layout](a: A; b: B): bool =
+func `===`*[A, B: Layout](a: A, b: B): bool {.inline.} =
   ## Deep comparison between two Layouts.
   a.shape === b.shape and a.stride === b.stride
 
@@ -46,7 +46,7 @@ template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of dimensions in a layout type (compile-time constant).
   rank(Sh)
 
-func size*(layout: Layout): auto =
+func size*(layout: Layout): auto {.inline.} =
   ## Number of logical elements: fold over all shape leaves.
   ## Returns Int[N] for all-static shapes, int otherwise.
   fold(flatten(layout.shape), Int[1](), acc * it)
@@ -82,7 +82,7 @@ func cosize*(layout: Layout): auto =
         result = newCall(bindSym"+", result, term)
   cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
-func cosize*[A, B](_: typedesc[Layout[A, B]]): static int =
+func cosize*[A, B](_: typedesc[Layout[A, B]]): static int {.inline.} =
   ## Compile-time cosize from the Layout type alone.
   ## Precondition, the shape and stride are all-static Int[N] leaves.
   ## Dynamic layouts produce a compile error.

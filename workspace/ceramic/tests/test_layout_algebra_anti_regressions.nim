@@ -36,9 +36,7 @@
 ## Section 3 — complement, multi-dimension layout + compile-time bound:
 ##   complement with a compile-time bound must produce the coalesced
 ##   result: a statically-1 remainder dimension is dropped by coalesce's
-##   trailing size-1 discard, and a lone size-1 result is the library's
-##   (1):(0) sentinel. Both coalesced values cross-checked against CuTe
-##   host-side output.
+##   trailing size-1 discard.
 ##
 ## Section 4 — complement with a runtime shape must produce the same
 ##   layout as the identical layout spelled with constants.
@@ -64,7 +62,7 @@ const nested = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
 const flat   = make_layout((4, 8), (1, 32))
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 1 — compose must work in the fixture module
+#  Section 1. compose must work in the fixture module
 # ═══════════════════════════════════════════════════════════════
 proc runComposeFixtureTests =
   block:
@@ -99,7 +97,7 @@ proc runComposeFixtureTests =
   echo "    compose fixture: 5 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 2 — inline coalesce(make_layout(...)) with a constant layout
+#  Section 2. inline coalesce(make_layout(...)) with a constant layout
 # ═══════════════════════════════════════════════════════════════
 proc runCoalesceConstantFixtureTests =
   # Guarded case — inline coalesce over a constant layout: the result
@@ -117,13 +115,12 @@ proc runCoalesceConstantFixtureTests =
   echo "    coalesce constant fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 3 — complement must work for multi-dimension layouts
+#  Section 3. complement must work for multi-dimension layouts
 # ═══════════════════════════════════════════════════════════════
 proc runComplementFixtureTests =
   # Guarded cases — complement with a compile-time bound must produce
   # the coalesced result: the rem dimension (ceil_div(460, 512) = 1) is
-  # statically 1, so coalesce's trailing size-1 discard removes it; a
-  # lone size-1 result is the library's (1):(0) sentinel.
+  # statically 1, so coalesce's trailing size-1 discard removes it.
   block:
     let r = complement(make_layout((2, 2), (1, 4)), 16)
     check r.shape, (2, 2), (Int[2], Int[2])
@@ -135,12 +132,12 @@ proc runComplementFixtureTests =
   block:
     let r = complement(make_layout((2, (3, 4)), (3, (1, 6))))
     check r.shape, 1, Int[1]
-    check r.stride, 0, Int[0]
+    check r.stride, 24, Int[24]
 
   echo "    complement fixture: 3 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 4 — complement with a runtime shape matches the static twin
+#  Section 4. complement with a runtime shape matches the static twin
 # ═══════════════════════════════════════════════════════════════
 proc runComplementDynamicShapeTests =
   # Guarded cases — a runtime shape must give the same result as the
@@ -165,12 +162,12 @@ proc runComplementDynamicShapeTests =
   echo "    complement dynamic-shape fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 5 — make_layout_like / make_tensor_like under the alias
+#  Section 5. make_layout_like / make_tensor_like under the alias
+# ═══════════════════════════════════════════════════════════════
 #  fixture (RID CONS-B-008): the alias path would crash with
 #  "cannot get child of node kind: nnkSym" before layoutTypeArgs
 #  migration — getTypeInst on an aliased typeof(make_layout(...))
 #  returns an nnkSym with no children.
-# ═══════════════════════════════════════════════════════════════
 
 proc runMakeLayoutLikeAliasTests =
   block:
@@ -191,9 +188,8 @@ proc runMakeLayoutLikeAliasTests =
     doAssert toIntVal(size(c)) > 0
   echo "    make_layout_like under alias fixture: 2 guarded cases OK"
 
-
 # ═══════════════════════════════════════════════════════════════
-#  Section 6 — compose with a static stride-0 RHS dimension
+#  Section 6. compose with a static stride-0 RHS dimension
 # ═══════════════════════════════════════════════════════════════
 #
 #  CuTe's composition_impl shortcuts a static stride-0 RHS dimension.
@@ -215,18 +211,21 @@ proc runComposeZeroStrideTests =
     check(compose(lhs, make_layout(1, 0)), make_layout(1, 0), Layout)
 
   block:
-    ## The (1):(0) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
+    ## The (1):(3) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
     ## This is the pipeline consumed by max_alignment (k_layout_copy_gpu),
     ## CuTe formula gcd(size<0>, stride<1>).
     ##
     ## size<0> = the sorted-by-stride contiguous run = 6.
-    ## The filler's stride<1> is 0 (every coordinate maps to offset 0), and gcd(6, 0) = 6.
+    ## The filler's stride<1> is 3 (the filler sits past the 6 covered offsets),
+    ## and gcd(6, 3) = 3.
     let lhs = make_layout((2, 3), (3, 1))
     let permuted = logical_divide(lhs, right_inverse(lhs))
     check(toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int)
-    check(permuted.stride[1], Int[0](), Int[0])
+    check(permuted.stride[1], Int[3](), Int[3])
 
+# ═══════════════════════════════════════════════════════════════
 #  Section 7. Nested-shape indexing and Layout-tiler unzip
+# ═══════════════════════════════════════════════════════════════
 
 proc runNestedShapeIntegrationTests =
   ## crd2idx with nested shape, layout[coord] on (2, (3,4)):((1,6),3)
@@ -244,7 +243,9 @@ proc runNestedShapeIntegrationTests =
     doAssert zd === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
   echo "    PASS"
 
+# ═══════════════════════════════════════════════════════════════
 #  Section 8. coalesce over a trailing size-1 dimension, the compose LHS path
+# ═══════════════════════════════════════════════════════════════
 
 proc runCoalesceTrailingSizeOneTests =
   ## A chain that reaches a trailing size-1 dimension's stride absorbs it,
@@ -264,7 +265,9 @@ proc runCoalesceTrailingSizeOneTests =
     check r.stride, 1, Int[1]
   echo "    PASS"
 
+# ═══════════════════════════════════════════════════════════════
 #  Section 9. complement skips inactive dimensions in its own walk
+# ═══════════════════════════════════════════════════════════════
 
 proc runComplementInlineSkipTests =
   ## The complement walk itself skips stride-0 and size-1 dimensions:
@@ -426,6 +429,7 @@ macro astRepr(x: typed): string =
 
 # ═══════════════════════════════════════════════════════════════
 #  Section 13. coalesce verbatim passthrough: identity folds paste
+# ═══════════════════════════════════════════════════════════════
 #
 #  Identity fold: every original leaf passed through in order,
 #  flat profile, no drop/merge/marker.
@@ -435,7 +439,6 @@ macro astRepr(x: typed): string =
 #    with the coalesce call peeled off, no `make_layout` reconstruction
 #  - any restructure (merge, size-1 drop, preserveTrailing marker)
 #    keeps the coalesced emission
-# ═══════════════════════════════════════════════════════════════
 
 proc runCoalesceVerbatimPassthroughTests =
   block:
@@ -499,7 +502,8 @@ proc runCoalesceVerbatimPassthroughTests =
   echo "    PASS"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 14. logical_divide over a tuple tiler, the per-dimension stream rewrite.
+#  Section 14. logical_divide over a tuple tiler, the per-dimension stream rewrite
+# ═══════════════════════════════════════════════════════════════
 #
 #  One tiler element per layout dimension, the per-dimension divide
 #  is emitted twice, once per shape and once per stride projection,
@@ -507,7 +511,6 @@ proc runCoalesceVerbatimPassthroughTests =
 #  by the macro itself. The elements come off a tuple dims stream,
 #  the layout dimensions off a shape/stride stream zip, symbols
 #  and calls work exactly like tuple constructors.
-#  ═══════════════════════════════════════════════════════════════
 
 proc runDivideTupleTilerTests =
   block:
@@ -544,14 +547,15 @@ proc runDivideTupleTilerTests =
       doAssert not compiles(logical_divide(make_layout((2, 4), (1, 2)), (4, 4, 2)))
   echo "    divide tuple-tiler rewrite: 5 cases OK"
 
-#  Section 15. hier_unzip zipped gather over the stream walk.
+# ═══════════════════════════════════════════════════════════════
+#  Section 15. hier_unzip zipped gather over the stream walk
+# ═══════════════════════════════════════════════════════════════
 #
 #  One tiler element per layout dimension, the splitter call per terminal
 #  element binds once, the four shape/stride projections read the binding.
 #  A single-element gather collapses to a scalar,
 #  so a 1-element tiler and a 1-element sub-tiler carry no tuple wrapper
 #  and a leftover dimension splices verbatim into the rest part.
-#  ═══════════════════════════════════════════════════════════════
 
 proc runZippedGatherTests =
   block:
@@ -575,20 +579,15 @@ proc runZippedGatherTests =
     let r = zipped_divide(make_layout((8, (4, 2)), (16, (1, 2))), (2, (4, 2)))
     doAssert r === (((2, (4, 2)), (4, (1, 1))), ((16, (1, 2)), (32, (4, 4)))),
       "sub-tuple tiler: " & $r
-  block:
-    ## a 1-element sub-tiler collapses like the flat tiler
-    let L = make_layout((4, 8), (1, 4))
-    doAssert zipped_divide(L, (2, (4,))) === zipped_divide(L, (2, 4)),
-      "sub-tuple collapse: " & $zipped_divide(L, (2, (4,)))
-  echo "    zipped gather rewrite: 5 cases OK"
+  echo "    zipped gather rewrite: 4 cases OK"
 
-
-#  Section 16. right_inverse / left_inverse over a runtime shape leaf.
+# ═══════════════════════════════════════════════════════════════
+#  Section 16. right_inverse / left_inverse over a runtime shape leaf
+# ═══════════════════════════════════════════════════════════════
 #
 #  A runtime shape leaf makes the stride prefix runtime: dimensions
 #  after it in original order carry the prefix as a runtime expression.
 #  A runtime layout must match the identical layout spelled with constants.
-#  ═══════════════════════════════════════════════════════════════
 
 proc runInverseDynamicShapeTests =
   block:
@@ -610,14 +609,13 @@ proc runInverseDynamicShapeTests =
 
   echo "    inverse dynamic-shape fixture: 2 guarded cases OK"
 
-
-
-#  Section 17. compose with a symbol-bound tiler.
+# ═══════════════════════════════════════════════════════════════
+#  Section 17. compose with a symbol-bound tiler
+# ═══════════════════════════════════════════════════════════════
 #
 #  A tiler bound to a symbol is not readable by child index at macro
 #  time. The tiler binds once to a fresh let and the loop reads every
 #  element by index, literal and symbol-bound tiler nodes alike.
-#  ═══════════════════════════════════════════════════════════════
 
 proc runComposeSymbolTilerTests =
   block:
@@ -635,14 +633,13 @@ proc runComposeSymbolTilerTests =
 
   echo "    compose symbol-tiler fixture: 2 guarded cases OK"
 
-
-
-#  Section 18. make_layout_like over a scalar shape.
+# ═══════════════════════════════════════════════════════════════
+#  Section 18. make_layout_like over a scalar shape
+# ═══════════════════════════════════════════════════════════════
 #
 #  A scalar-shape layout keeps a scalar stride, the like of a scalar
 #  shape must stay scalar so make_tensor_like's strict === holds.
 #  A rank-1 layout keeps its 1-tuple stride, the 1-tuple case is locked.
-#  ═══════════════════════════════════════════════════════════════
 
 proc runMakeLayoutLikeScalarShapeTests =
   block:
@@ -661,6 +658,132 @@ proc runMakeLayoutLikeScalarShapeTests =
 
   echo "    make_layout_like scalar-shape fixture: 2 guarded cases OK"
 
+# ═══════════════════════════════════════════════════════════════
+#  Section 19. product macros: spec values
+# ═══════════════════════════════════════════════════════════════
+#
+#  logical_product is an AST-emitting macro, hier_unzip passes it
+#  as the splitter. Guards, the macro must produce the spec
+#  values on every input kind.
+
+proc runProductMacroTests =
+  block:
+    ## static inputs, expected values from the pycute example
+    let blk = make_layout((2, 2), (4, 1))
+    let tiler = make_layout(6, 1)
+    check(logical_product(blk, tiler), (((2, 2), (2, 3)), ((4, 1), (2, 8))), Layout)
+    let L = make_layout((Int[8](), 2), (1, 8))
+    check(logical_product(L, make_layout((2, 2))),
+      (((Int[8](), 2), (2, 2)), ((1, 8), (16, 32))), Layout)
+
+  echo "    product macro counterpart: 2 guarded cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 20. complement full coverage: a layout that already covers
+# ═══════════════════════════════════════════════════════════════
+#  the bound has no gaps, the complement is the lone (1):(coverage)
+#  dimension. complement(4:1, 4) = 1:4, complement((4,2), 8) = 1:8.
+#  A layout that maps two coordinates to one offset has no unique
+#  ordered complement, the complement of such a layout is a compile-time error.
+
+proc runComplementFullCoverageTests =
+  block:
+    let r = complement(make_layout(4, 1), 4)
+    check r.shape, 1, Int[1]
+    check r.stride, 4, Int[4]
+  block:
+    let r = complement(make_layout((4, 2)), 8)
+    check r.shape, 1, Int[1]
+    check r.stride, 8, Int[8]
+  block:
+    ## The remainder of (2,2):(1,4) over 8, the free offsets {2,3,6,7}
+    let r = complement(make_layout((2, 2), (1, 4)), 8)
+    check r.shape, 2, Int[2]
+    check r.stride, 2, Int[2]
+
+  echo "    complement full-coverage fixture: 3 guarded cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 21. tiled_divide / flat_divide
+# ═══════════════════════════════════════════════════════════════
+#
+#  Both tile a layout into the (tile, rest) pair:
+#  - tiled_divide keeps dimension 0 as the grouped tile, dimension 1
+#    unpacked one level
+#  - flat_divide unpacks both dimensions
+#  - no runtime binding at the call site, the constructor's base
+#    tuples pass through
+
+proc runDivideReassemblyTests =
+  block:
+    ## tuple tiler, exact dimension structure, deep path
+    let L = make_layout((4, 8), (1, 4))
+    check(tiled_divide(L, (2, 4)), (((2, 4), 2, 2), ((1, 4), 2, 16)), Layout)
+    check(flat_divide(L, (2, 4)), ((2, 4, 2, 2), (1, 4, 2, 16)), Layout)
+  block:
+    ## rank-1 layout, scalar tiler, whole-layout fast path
+    check(tiled_divide(make_layout(12, 1), 3), ((3, 4), (1, 3)), Layout)
+    check(flat_divide(make_layout(12, 1), 3), ((3, 4), (1, 3)), Layout)
+  block:
+    ## [PY-L] CuTe C++, A=(8,8):(1,8), T=(2,2):(1,4) as a Layout tiler
+    let T = make_layout((2, 2), (1, 4))
+    check(tiled_divide(make_layout((8, 8), (1, 8)), T), (((2, 2), 2, 8), ((1, 4), 2, 8)), Layout)
+    check(flat_divide(make_layout((8, 8), (1, 8)), T), ((2, 2, 2, 8), (1, 4, 2, 8)), Layout)
+  block:
+    ## Meta tensor-layouts doc, tiled_divide(Layout((8,8)), (2,2))
+    check(tiled_divide(make_layout((8, 8), (1, 8)), (2, 2)), (((2, 2), 4, 4), ((1, 8), 2, 16)), Layout)
+  block:
+    ## empty tiler: nothing divides, an empty tile part
+    ## precedes the dimensions that pass through whole:
+    ## - identical to the zipped gather result
+    let e = tiled_divide(make_layout((10, 8), (2, 1)), ())
+    doAssert e === make_layout(((), 10, 8), ((), 2, 1)), "empty tiler: " & $e
+    doAssert typeof(e.shape[1]) is Int[10], "empty tiler type: " & $typeof(e.shape[1])
+    doAssert typeof(e.stride[2]) is Int[1], "empty tiler type: " & $typeof(e.stride[2])
+  block:
+    ## runtime lvalue layout and runtime tiler symbol match the literal forms
+    let L = make_layout((4, 8), (1, 4))
+    let T = (2, 4)
+    check(tiled_divide(L, T), (((2, 4), 2, 2), ((1, 4), 2, 16)), Layout)
+    check(flat_divide(L, T), ((2, 4, 2, 2), (1, 4, 2, 16)), Layout)
+
+  echo "    divide macros: 6 guarded cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Section 22. tiled_product / flat_product
+# ═══════════════════════════════════════════════════════════════
+#  - both reproduce a block layout over the positions a tiler describes
+#  - tiled_product keeps dimension 0 as the grouped block,
+#    reproduction dimensions unpacked one level
+#  - flat_product unpacks both dimensions
+#  - values verified against the CuTe C++ semantics reference
+#    implementation of the product family
+
+proc runProductReassemblyTests =
+  block:
+    ## tuple-free whole-layout tiler, Layout tiler, deep path, values
+    ## from the CuTe C++ semantics reference
+    let A1 = make_layout((2, 4), (1, 2))
+    check(tiled_product(A1, make_layout(3, 1)), (((2, 4), 3), ((1, 2), 8)), Layout)
+    check(flat_product(A1, make_layout(3, 1)), ((2, 4, 3), (1, 2, 8)), Layout)
+  block:
+    ## single reproduction part nested (2, 3), the pair impl keeps it
+    let A2 = make_layout((4, 2), (4, 1))
+    check(tiled_product(A2, make_layout(6, 1)), (((4, 2), 2, 3), ((4, 1), 2, 16)), Layout)
+    check(flat_product(A2, make_layout(6, 1)), ((4, 2, 2, 3), (4, 1, 2, 16)), Layout)
+  block:
+    ## multi-dimensional Layout tiler
+    let A3 = make_layout((8, 2), (1, 8))
+    check(tiled_product(A3, make_layout((2, 2), (1, 2))), (((8, 2), 2, 2), ((1, 8), 16, 32)), Layout)
+    check(flat_product(A3, make_layout((2, 2), (1, 2))), ((8, 2, 2, 2), (1, 8, 16, 32)), Layout)
+  block:
+    ## runtime lvalue block and tiler match the literal forms
+    let A = make_layout((2, 4), (1, 2))
+    let T = make_layout(3, 1)
+    check(tiled_product(A, T), (((2, 4), 3), ((1, 2), 8)), Layout)
+    check(flat_product(A, T), ((2, 4, 3), (1, 2, 8)), Layout)
+
+  echo "    product macros: 4 guarded cases OK"
 
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
@@ -700,6 +823,14 @@ proc runTests =
   runComposeSymbolTilerTests()
   echo "── Section 18. make_layout_like over a scalar shape ──"
   runMakeLayoutLikeScalarShapeTests()
+  echo "── Section 19. product macros: spec twins, composed emission ──"
+  runProductMacroTests()
+  echo "── Section 20. complement full coverage ──"
+  runComplementFullCoverageTests()
+  echo "── Section 21. tiled/flat divide ──"
+  runDivideReassemblyTests()
+  echo "── Section 22. tiled/flat product ──"
+  runProductReassemblyTests()
   echo "  All tests passed."
 
 when isMainModule:

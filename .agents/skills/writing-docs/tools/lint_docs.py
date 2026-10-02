@@ -122,7 +122,9 @@ WALL_OF_TEXT_LINES = 10
 WALL_NO_AIR_LINES = 4
 # A ##-doc line indented this deep past the marker is worked-example or
 # diagram content, air under the wall and stub rules (prose wrap sits at
-# 2-3, nothing intentional is written that deep).
+# 2-3, nothing intentional is written that deep). An `Example:` or
+# `Usage:` line puts every following doc line in the same paragraph into
+# example content, code and result comments indented shallow stay air.
 DEEP_EXAMPLE_INDENT = 4
 # A table cell over this many words is a wall of prose in a cell,
 # split it into bullets or a diagram.
@@ -678,6 +680,11 @@ def eol_token(text):
 def words(text):
     """Splits prose into its whitespace-separated words."""
     return [w for w in re.split(r"\s+", text.strip()) if w]
+
+
+def pseudo_code(text):
+    """Returns True for elided pseudo-code, dots inside (...) [...] <...>."""
+    return bool(re.search(r"[(\[][^)\]]*\.\.\.[)\]]|<[^>]*\.\.\.", text))
 
 
 def code_like(text):
@@ -1845,9 +1852,15 @@ def scan(path, text, findings):
     prev_text = {}
     for n, c, kind, _, _ in entries:
         prev_text[n] = c
+    prev_block_kinds = None
     for block in blocks:
         kinds = {e[2] for e in block}
         block_is_doc = "doc" in kinds
+        # a doc block and a code-comment block are not one paragraph,
+        # the stub check must not reflow across the kind boundary
+        if kinds != prev_block_kinds:
+            prev_prose = None
+        prev_block_kinds = kinds
         check_bullets(path, block, findings)
         check_tables(path, block, findings)
         check_missing_diagram(path, block, findings)
@@ -1857,6 +1870,7 @@ def scan(path, text, findings):
         run = []
         air_run = []
         prev_bullet = False
+        in_example = False
         for n, c, kind, indent, trailing in block:
             if kind == "heading":
                 if strip_backticks(c).split()[:1] == ["The"]:
@@ -1866,12 +1880,20 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
+                in_example = False
+                prev_prose = None
                 continue
             if not c:
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
+                # a blank line is a reflow boundary, the stub check must
+                # not reach across it for a reflowable predecessor
+                prev_prose = None
+                in_example = False
                 continue
+            if c in ("Example:", "Usage:"):
+                in_example = True
             if kind == "fence":
                 # Fenced lines never join prose runs.
         # The structure rules see code layout they cannot judge.
@@ -1881,7 +1903,8 @@ def scan(path, text, findings):
                 check_line(path, n, c, kind, is_nim, prev_text, findings)
                 continue
             check_line(path, n, c, kind, is_nim, prev_text, findings)
-            deep_example = block_is_doc and indent >= DEEP_EXAMPLE_INDENT
+            deep_example = block_is_doc and (indent >= DEEP_EXAMPLE_INDENT
+                                             or in_example)
             if structural(c) or deep_example:
                 flush_wall(path, run, findings)
                 run = []
@@ -1909,18 +1932,23 @@ def scan(path, text, findings):
             wc = len(words(strip_backticks(c)))
             # a stub carrying inline code or math is a deliberate formula
             # line, not lazy wrapping; a capitalized stub without terminal
-            # punctuation above a blank line is a heading fragment
+            # punctuation above a blank line is a heading fragment.
+            # the predecessor must be the previous source line of the
+            # same kind, a block boundary or a kind switch breaks reflow
             if (wc <= 2 and "`" not in c and not c.endswith(":")
+                    and not pseudo_code(c)
                     and not (c[0:1].isupper()
                              and not c.endswith((".", ",", ";"))
                              and (n + 1) in blank_nos)
                     and prev_prose is not None
+                    and prev_prose[0] + 1 == n
+                    and prev_prose[2] == kind
                     and len(prev_prose[1]) < SINGLE_WORD_EOL_PREV_MAX):
                 findings.append(Finding(
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
-            prev_prose = (n, c)
+            prev_prose = (n, c, kind)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 

@@ -17,6 +17,7 @@ import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/macros/replace_nodes
 import ./layouts_datatypes
 import ./layout_constructors
+import ./layouts_unsanctioned_helpers
 import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 
@@ -55,51 +56,60 @@ func isCompact*(layout: static Layout): static bool {.inline.} =
 # ═══════════════════════════════════════════════════════════════
 
 
+macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
+  ## Pass every outer dimension through whole, append `(1, 0)` pads after.
+  var builder = TupleBuilderFlat.new(2)
+  var dimCount = 0
+  for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    inc dimCount
+  if dimCount >= rank:
+    result = originalLayout
+    return
+  for i in dimCount ..< rank:
+    builder.append(IntCT(1), IntCT(0))
+  let (node, verbatim) = builder.emitLayout()
+  if verbatim:
+    result = originalLayout
+  else:
+    result = node
+
 macro padRight*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by padding with identity dimensions (1, 0).
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"padRightImpl".newCall(originalLayout, sh, st, newLit(rank))
 
-  if curRank >= rank:
-    result = layout
+macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
+  ## Prepend `(1, 0)` pads, pass every outer dimension through whole after them.
+  var builder = TupleBuilderFlat.new(2)
+  var dimCount = 0
+  for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    inc dimCount
+  if dimCount >= rank:
+    result = originalLayout
     return
-
-  var ct = LayoutCT()
-  if shTyp.kind == nnkTupleConstr:
-    for i in 0 ..< shTyp.len:
-      ct.shape.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"shape"), newLit i)
-      ct.stride.add newTree(nnkBracketExpr, newTree(nnkDotExpr, layout, ident"stride"), newLit i)
+  var padShape, padStride: seq[NimNode]
+  for i in dimCount ..< rank:
+    padShape.add IntCT(1)
+    padStride.add IntCT(0)
+  builder.prependBatch(padShape, padStride)
+  let (node, verbatim) = builder.emitLayout()
+  if verbatim:
+    result = originalLayout
   else:
-    ct.shape.add newTree(nnkDotExpr, layout, ident"shape")
-    ct.stride.add newTree(nnkDotExpr, layout, ident"stride")
-  for i in curRank ..< rank:
-    ct.shape.add IntCT(1)
-    ct.stride.add IntCT(0)
-  result = ct.emit()
-
-
+    result = node
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity dimensions (1, 0).
-  let shTyp = layoutTypeArgs(layout).shapeTy
-  let curRank = if shTyp.kind == nnkTupleConstr: shTyp.len else: 1
-
-  if curRank >= rank:
-    result = layout
-    return
-
-  var ct = LayoutCT()
-  for i in 0 ..< (rank - curRank):
-    ct.shape.add IntCT(1)
-    ct.stride.add IntCT(0)
-  if shTyp.kind == nnkTupleConstr:
-    for i in 0 ..< shTyp.len:
-      ct.shape.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"shape"), newLit i)
-      ct.stride.add nnkBracketExpr.newTree(nnkDotExpr.newTree(layout, ident"stride"), newLit i)
-  else:
-    ct.shape.add nnkDotExpr.newTree(layout, ident"shape")
-    ct.stride.add nnkDotExpr.newTree(layout, ident"stride")
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"padLeftImpl".newCall(originalLayout, sh, st, newLit(rank))
 
 # ═══════════════════════════════════════════════════════════════
 #  mapLeavesWith, apply body to each leaf (shape, stride) pair
@@ -259,23 +269,42 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   result = bindSym"make_layout".newCall(zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
-#  selection-macro helpers, dimension access and rank
+#  selection macros, group/take/select/replace dimensions
 # ═══════════════════════════════════════════════════════════════
 
-proc dimAt(l: NimNode; field: static string; i: int): NimNode {.compileTime.} =
-  ## `l.field[i]` as a bracket-index node over the field dot-expr.
-  let accessor = nnkDotExpr.newTree(l, ident(field))
-  nnkBracketExpr.newTree(accessor, newLit(i))
+proc streamDims(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: int] {.compileTime.} =
+  ## Outer dimension leaves of both tuple pieces, one stream pass each.
+  var shapeStream = sh.tupleDimsStream()
+  var strideStream = st.tupleDimsStream()
+  while not shapeStream.done():
+    let shapeEvent = shapeStream.next()
+    let strideEvent = strideStream.next()
+    result.shapes.add shapeEvent.leaf
+    result.strides.add strideEvent.leaf
+  result.count = result.shapes.len
 
-proc appendDim(ct: var LayoutCT; l: NimNode; i: int) {.compileTime.} =
-  ## Append dimension `i` of `l`, shape with stride, to a LayoutCT accumulator.
-  let sh = dimAt(l, "shape", i)
-  let st = dimAt(l, "stride", i)
-  ct.append(sh, st)
-
-# ═══════════════════════════════════════════════════════════════
-#  groupDimensions, wrap dimensions [B, E) into a nested sub-Layout
-# ═══════════════════════════════════════════════════════════════
+macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
+  ## Wrap outer dimensions `[B, E)` into one nested sub-tuple, pass the rest whole.
+  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert B >= 0, "groupDimensions: B must be a valid dimension index"
+  let endIdx = min(E, dimCount)
+  if B == 0 and endIdx == dimCount:
+    result = originalLayout
+    return
+  var builder = TupleBuilderNested.new(2)
+  let openEvent = TupleStreamEvent(verbatim: true, path: @[], kind: kOpen)
+  let closeEvent = TupleStreamEvent(verbatim: true, path: @[], kind: kClose)
+  builder.append(openEvent, openEvent)
+  for i in 0 ..< B:
+    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  var grouped = TupleBuilderFlat.new(2)
+  for i in B ..< endIdx:
+    grouped.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  builder.append(grouped.emit(0).resultTuple, grouped.emit(1).resultTuple)
+  for i in endIdx ..< dimCount:
+    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  builder.append(closeEvent, closeEvent)
+  result = builder.emitLayout().resultLayout
 
 macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   ## Wraps dimensions at indices `[B, E)` into a nested sub-tuple in both
@@ -284,21 +313,23 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   ## Examples:
   ##   groupDimensions(make_layout((2, 3, 5, 7)), 0, 2)
   ##   # → ((2, 3), 5, 7):((1, 2), 6, 30)
-  var ct = LayoutCT()
-  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
-  for i in 0 ..< B: ct.appendDim(layout, i)
-  var gSh = nnkPar.newNimNode()
-  var gSt = nnkPar.newNimNode()
-  for i in B ..< E:
-    gSh.add dimAt(layout, "shape", i)
-    gSt.add dimAt(layout, "stride", i)
-  ct.append(gSh, gSt)
-  for i in E ..< R: ct.appendDim(layout, i)
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"groupDimensionsImpl".newCall(originalLayout, sh, st, newLit(B), newLit(E))
 
-# ═══════════════════════════════════════════════════════════════
-#  takeDimensions, extract dimensions [B, E) into a new Layout
-# ═══════════════════════════════════════════════════════════════
+macro takeDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
+  ## Append the outer dimensions `[B, E)` whole into the extracted layout.
+  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
+  if B <= 0 and E >= dimCount:
+    result = originalLayout
+    return
+  var builder = TupleBuilderFlat.new(2)
+  for i in B ..< min(E, dimCount):
+    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  result = builder.emitLayout().resultLayout
 
 macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ## Extract dimensions in range `[B, E)` into a new Layout.
@@ -307,33 +338,57 @@ macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ## Examples:
   ##   takeDimensions(make_layout((2, 3, 5, 7)), 1, 3)
   ##   # → (3, 5):(2, 6)
-  var ct = LayoutCT()
-  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
-  for i in B ..< min(E, R): ct.appendDim(layout, i)
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  result.add bindSym"takeDimensionsImpl".newCall(originalLayout, sh, st, newLit(B), newLit(E))
 
-# ═══════════════════════════════════════════════════════════════
-#  selectDimensions, extract specific dimension indices into a new Layout
-# ═══════════════════════════════════════════════════════════════
+macro selectDimensionsImpl(originalLayout, sh, st: typed, Is: varargs[int]{lit|`const`}): untyped =
+  ## Append the indexed outer dimensions whole into the extracted layout.
+  var dimCount = 0
+  var counter = sh.tupleDimsStream()
+  while not counter.done():
+    discard counter.next()
+    inc dimCount
+  var whole = Is.len == dimCount
+  for i in 0 ..< Is.len:
+    if Is[i].intVal != i:
+      whole = false
+  if whole:
+    result = originalLayout
+    return
+  var builder = TupleBuilderFlat.new(2)
+  for i in 0 ..< Is.len:
+    builder.append(getTupleIndex(sh, Is[i].intVal), getTupleIndex(st, Is[i].intVal))
+  result = builder.emitLayout().resultLayout
 
 macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   ## Extract specific dimension indices into a new Layout.
-  var ct = LayoutCT()
-  for i in 0 ..< Is.len: ct.appendDim(layout, Is[i].intVal)
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                       else: result[^1][1] # returned `let`/`const` symbol
+  var call = bindSym"selectDimensionsImpl".newCall(originalLayout, sh, st)
+  for i in 0 ..< Is.len:
+    call.add newLit(int(Is[i].intVal))
+  result.add call
 
-# ═══════════════════════════════════════════════════════════════
-#  replaceDimension, replace a dimension with a sub-Layout
-# ═══════════════════════════════════════════════════════════════
+macro replaceDimensionImpl(sh, st, xShape, xStride: typed, N: static int): untyped =
+  ## Slot `N` takes the replacement's dimension, every other slot passes whole.
+  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert N < dimCount, "replaceDimension: slot out of range"
+  var builder = TupleBuilderFlat.new(2)
+  for i in 0 ..< dimCount:
+    if i == N:
+      builder.append(xShape, xStride, verbatim = true)
+    else:
+      builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  result = builder.emitLayout().resultLayout
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
-  var ct = LayoutCT()
-  let R = shapeRank(layoutTypeArgs(layout).shapeTy)
-  for i in 0 ..< R:
-    if i == N:
-      ct.append(newTree(nnkDotExpr, x, ident"shape"),
-                 newTree(nnkDotExpr, x, ident"stride"))
-    else:
-      ct.appendDim(layout, i)
-  result = ct.emit()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let (xSh, xSt) = destructureLayout(result, x)
+  result.add bindSym"replaceDimensionImpl".newCall(sh, st, xSh, xSt, newLit(N))

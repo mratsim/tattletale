@@ -21,7 +21,6 @@ these roots:
 | kernel-doc-shape    | an exported `{.device.}`/`{.global.}` kernel with no SDPA-form doc block                                      | counted  |
 | hash-above-proc     | a `#` comment sits immediately above a proc, func, or template definition                                     | counted  |
 | divider-space       | a section divider (`# ─── ... ───`) without a blank line before or after it                                   | counted  |
-| one-liner           | a proc, func, or template whose body is one code line, the wrapper shape stays evident at review              | advisory |
 | explicit-generics   | a call site spells generic arguments the compiler infers from the value arguments                             | counted  |
 | newcall-method      | a newCall(x, ...) plain call, method call syntax x.newCall(...) is the required form (constructed nnk callees exempt)                       | counted  |
 | tupleflatten-method | a tupleFlatten(x) plain call or bare x.tupleFlatten, method call syntax x.tupleFlatten() is the required form | counted  |
@@ -133,8 +132,6 @@ RULES = {
     "hash-above-proc": "a # comment sits immediately above a proc/func/template "
                        "definition, use a ## doc comment; Nim reads ##",
     "divider-space": "a section divider keeps a blank line before and after it",
-    "one-liner": "a proc/func/template body is a single line, the wrapper shape "
-                 "is named at review, never a violation",
     "explicit-generics": "a call site spells generic arguments the compiler "
                          "infers from the value arguments",
     "newcall-method": "a newCall(x, ...) plain call, method "
@@ -1251,24 +1248,6 @@ def scan_body_wrap(path, lines, ds, blocked, findings):
                                      len(joined))))
 
 
-def scan_one_liner(path, ds, findings):
-    """Runs the one-liner advisory over a file's callable declarations.
-
-    Contract:
-    - the advisory names the wrapper, it never blocks
-    - a single-line body is a shape the review reads, not a defeat
-    """
-    for d in ds:
-        if d["name"] is None or d["kind"] not in RULE_KINDS:
-            continue
-        if d["eq_line"] is not None and d["body"] == 1:
-            findings.append(Finding(
-                path, d["start"], "one-liner",
-                "the body of %s %s is a single line, name the wrapper shape "
-                "in the doc so the entry stays evident at review"
-                % (d["kind"], d["name"]), warning=True))
-
-
 def build_generic_map(files):
     """Parses the generic signatures of every scanned file's declarations.
 
@@ -1356,7 +1335,6 @@ def scan(path, text, findings, consts, builtins, generic_map=None):
     scan_hash_above_proc(path, lines, blocked, findings)
     scan_newcall_method(path, lines, blocked, findings)
     scan_body_wrap(path, lines, ds, blocked, findings)
-    scan_one_liner(path, ds, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     scan_decl_t_suffix(path, ds, lines, findings)
     scan_tuplelen_rank(path, lines, blocked, findings)

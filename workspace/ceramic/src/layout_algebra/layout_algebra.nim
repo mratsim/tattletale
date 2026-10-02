@@ -12,13 +12,14 @@ import std/sequtils
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
+import ./layouts_unsanctioned_helpers
 import ./layouts
 import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
-#  getIndicesSortedByStride, sort permutation by stride
+#  getIndicesSortedByStride
 # ═══════════════════════════════════════════════════════════════
 
 proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
@@ -33,7 +34,7 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
         swap result[i], result[j]
 
 # ═══════════════════════════════════════════════════════════════
-#  coalesce, merge contiguous dimensions where stride matches
+#  coalesce
 # ═══════════════════════════════════════════════════════════════
 
 macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool = false): untyped =
@@ -41,7 +42,7 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
   var chunkShape, chunkStride: NimNode
   var chunkShapeVal, chunkStrideVal: int
   var chunkVerbatim = true
-  # the trailing-leaf state feeds only the preserveTrailing marker emission
+  # the trailing-leaf state feeds only the preserveTrailing marker hierUnzipAst
   var lastShapeVal, lastStrideVal: int
   var lastStride: NimNode
   for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
@@ -102,10 +103,15 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
   else:
     result = node
 
-macro coalesce*(layout: Layout; preserveTrailing: static bool = false): untyped =
+macro coalesce*(layout: Layout, preserveTrailing: static bool = false): untyped =
   ## Merge contiguous dimensions.
+  ##
+  ## Say you index a tensor dimension by dimension and want
+  ## one flat counter instead: dimensions whose strides run
+  ## contiguously merge, the merged chain indexes by one counter.
+  ##
   ## Merge a layout's flat (shape, stride) leaf pairs into contiguous chains,
-  ## one pure `make_layout` emission:
+  ## one pure `make_layout` hierUnzipAst:
   ## - size-1 dimensions drop, the frontmost one opens no chain
   ## - a dimension joins the chain in front of it when the chain's span
   ##   reaches the dimension's stride, the merged chain keeps the front
@@ -127,7 +133,7 @@ macro coalesce*(layout: Layout; preserveTrailing: static bool = false): untyped 
   result.add bindSym"coalesceImpl".newCall(originalLayout, sh, st, newLit(preserveTrailing))
 
 # ═══════════════════════════════════════════════════════════════
-#  complement, fill stride gaps up to the cosize bound
+#  complement
 # ═══════════════════════════════════════════════════════════════
 
 type ComplementRegime = enum
@@ -142,6 +148,25 @@ func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
   if stDims.len != shDims.len and stDims.len != 1:
     error "complement: expected one stride per shape dimension, got " &
       $stDims.len & " strides for " & $shDims.len & " shape dimensions"
+  # Injectivity: strides must cover the range
+  # We can only check static strides as it's not possible to assert at runtime on a GPU
+  var span = 1
+  var spanTrusted = true
+  var walkStrides: seq[int]
+  for i in 0 ..< shDims.len:
+    walkStrides.add (if stDims.len == 1: stDims[0].stride else: stDims[i].stride)
+  if DynamicSentinel notin walkStrides:
+    for idx in getIndicesSortedByStride(walkStrides):
+      let (stride, shape) = (walkStrides[idx], shDims[idx].shape)
+      if stride == 0 or shape == 1:
+        continue
+      if spanTrusted and stride < span:
+        error "complement: non-injective layout, stride " & $stride &
+          " overlaps the covered span " & $span
+      if shape == DynamicSentinel:
+        spanTrusted = false
+      else:
+        span *= shape
   if DynamicSentinel notin shDims.mapIt(it.shape) and
       DynamicSentinel notin stDims.mapIt(it.stride):
     return crStatic
@@ -157,11 +182,13 @@ func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
       error "complement: non-flat shape at index " & $i
   crDynMulti
 
-func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, defaultBound: bool): NimNode =
+func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, boundStatic: int, defaultBound: bool): NimNode =
   var gapNodes, curNodes: seq[NimNode]
   var curNode = IntCT(1)
   var b = 1
   var allSkipped = true
+  var accSpan = 1
+  var fullCoverage = true
   for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
     let dim = dims[idx]
     if dim.stride == 0 or dim.shape == 1:
@@ -173,12 +200,16 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
     gapNodes.add bindSym"max".newCall(
       IntCT(1), nnkInfix.newTree(ident"div", s, curNode))
     curNodes.add curNode
-    curNode =
-      if dim.shape == DynamicSentinel:
-        # past a dynamic shape leaf the frontier is runtime arithmetic
-        s * dim.leaf
-      else:
-        IntCT(dim.stride * dim.shape)
+    if dim.shape == DynamicSentinel:
+      # past a dynamic shape leaf the frontier is runtime arithmetic
+      fullCoverage = false
+      curNode = s * dim.leaf
+    else:
+      if dim.stride != accSpan:
+        fullCoverage = false
+      curNode = IntCT(dim.stride * dim.shape)
+      # the covered span grows by the shape when the stride closes on it
+      accSpan *= dim.shape
     if defaultBound:
       # cosize over the live leaves, invariant under the skip
       b += (dim.shape - 1) * abs(dim.stride)
@@ -187,6 +218,11 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
     # every leaf skipped, the complement collapses to (bound):(1)
     return bindSym"make_layout".newCall(
       (if defaultBound: IntCT(b) else: bound), newLit(1))
+  let boundVal = if defaultBound: b else: boundStatic
+  if fullCoverage and boundVal != DynamicSentinel and boundVal <= accSpan:
+    # the layout already covers the bound, no gaps to fill, the complement
+    # is a lone (1):(coverage) dimension
+    return bindSym"make_layout".newCall(IntCT(1), IntCT(accSpan))
   curNodes.add curNode
   gapNodes.add bindSym"ceil_div".newCall(
     (if defaultBound: IntCT(b) else: bound), curNode)
@@ -210,6 +246,9 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
     else:
       bound
   let boundDyn = if defaultBound: bound else: boundExpr
+  let boundStatic =
+    if defaultBound: DynamicSentinel
+    else: bound.getTypeInst().getStaticInt()
 
   # one stride leaf broadcasts over the shape
   var dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]]
@@ -219,10 +258,10 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
 
   case complementRegime(shDims, stDims)
   of crStatic:
-    result = complementFold(dims, boundExpr, defaultBound)
+    result = complementFold(dims, boundExpr, boundStatic, defaultBound)
   of crDynMulti:
     # the fold emits runtime arithmetic for dynamic shape leaves
-    result = complementFold(dims, boundDyn, defaultBound = false)
+    result = complementFold(dims, boundDyn, DynamicSentinel, defaultBound = false)
   of crDynRank1Zero:
     # a static zero stride, every coordinate maps to offset 0
     result = bindSym"make_layout".newCall(boundDyn, newLit(1))
@@ -266,19 +305,17 @@ macro complement*(layout: Layout): untyped =
   ##    4:2                     → (2, 1):(1, 8)
   ##    4:2 with 16             → (2, 2):(1, 8)
   ##    (2, 2):(1, 4) with 16   → (2, 2):(2, 8)
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
 
-  let originalLayout = if stmts.len == 0: layout else: stmts[^1][1]
-  result = stmts
+  let originalLayout = if result.len == 0: layout else: result[^1][1]
   result.add bindSym"complementImpl".newCall(
     sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
-  result = stmts
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
   result.add bindSym"complementImpl".newCall(
     sh, st,
     nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(cosizeBound))),
@@ -293,13 +330,12 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
       nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", cosizeBound))
     else:
       cosizeBound
-  var stmts = newStmtList()
-  let (sh, st) = stmts.destructureLayout(layout)
-  result = stmts
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
   result.add bindSym"complementImpl".newCall(sh, st, bound, newLit(false))
 
 # ═══════════════════════════════════════════════════════════════
-#  compose, apply a layout through another
+#  compose
 # ═══════════════════════════════════════════════════════════════
 
 macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
@@ -422,9 +458,12 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   else:
     result.add getAst(composeDelegatePlain(aShape, aStrides, bShape, bStrides))
 
-
-macro compose*(layout: Layout; tiler: tuple): untyped =
+macro compose*(layout: Layout, tiler: tuple): untyped =
   ## Layout composition
+  ##
+  ## Say you have a tile of positions `tiler` and a buffer laid out
+  ## by `layout`: the composition answers where every tile position
+  ## lands inside the buffer.
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
@@ -490,7 +529,285 @@ macro compose*(layout: Layout; tiler: tuple): untyped =
     result.add bindSym"make_layout".newCall(nnkPar.newTree(shapes), nnkPar.newTree(strides))
 
 # ═══════════════════════════════════════════════════════════════
-#  logical_divide, tile a layout into (tile, rest)
+#  logical_product
+# ═══════════════════════════════════════════════════════════════
+
+macro logicalProductFinish(a, rest: typed): untyped =
+  result = newStmtList()
+  var grid = rest
+  while grid.kind == nnkStmtListExpr:
+    for i in 0 ..< grid.len - 1:
+      result.add(grid[i])
+    grid = grid[^1]
+  let (aShape, aStrides) = result.destructureLayout(a)
+  let (rShape, rStrides) = result.destructureLayout(grid)
+  result.add bindSym"make_layout".newCall(
+    nnkTupleConstr.newTree(aShape, rShape),
+    nnkTupleConstr.newTree(aStrides, rStrides)
+  )
+
+macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
+  ## Logical product, `a x tiler = (a, a* ∘ tiler)`.
+  ##
+  ## Say you need a small tile written out at every
+  ## grid position, the product is the layout of that write-out.
+  ## Reproduce the block `a` over the grid the tiler describes:
+  ## - a copy of `a` (dimension 0) lands at every position the tiler's
+  ##   offset map selects
+  ## - the copy positions are numbered by `a`'s complement composed
+  ##   with the tiler (dimension 1)
+  ##
+  ## Returns a rank-2 layout `R` such that `R(t, i) = a(t) + a*(tiler(i))`:
+  ## - dimension 0 is the block itself, `R[0] == a`
+  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * cosize(tiler)) ∘ tiler`
+  ## - `size(R) == size(a) * size(tiler)`
+  ##
+  ## Inverse of logical_divide: the divide factors `a` into tiles
+  ## `a ∘ (tiler, complement(tiler, size(a)))`, the product reassembles
+  ## from the block and the copy grid.
+  ##
+  ##    domain ──── a ════════▶  block positions    (dim 0)
+  ##    domain ──── a* ∘ tiler ─▶  copy numbers     (dim 1)
+  ##    domain ════════════ R ════════════▶  (block, copy)
+  ##
+  ## Examples:
+  ##
+  ##    logical_product(make_layout((2, 2), (4, 1)), make_layout(6, 1))
+  ##    → ((2, 2), (2, 3)):((4, 1), (2, 8))
+  ##
+  ##    logical_product(make_layout((2, 2), (1, 2)), make_layout((3, 4), (4, 1)))
+  ##    → ((2, 2), (3, 4)):((1, 2), (16, 4))
+  ##
+  ## Copy-grid semantics:
+  ## - the complement extends to the bound `size(a) * cosize(tiler)`, the span one contiguous copy grid covers
+  ## - a divisible block stride chain gives distinct, non-overlapping copy slots, one per tiler position
+  ## - an under-filling block keeps the largest ordered, disjoint copy grid that fits
+
+  # Implementation note
+  #
+  #   For direct AST->AST transformation of constructors we need to manipulate the AST *produced* by compose(complement(...), tiler)
+  #   In this macro we can only see the macro call AST so we need to defer to another macro
+  #   so that compose(complement(...), tiler) have the time to do their own AST->AST constructor transformation
+  #
+  #   Now one tricky part of this is that using an AST node or a template input in multiple plice will paste it verbatim
+  #   if it's used 3 times like below, `a` expression will be evaluated 3 times. This is problematic if the expression has side-effects like 'echo "launch_missiles"'.
+  #
+  #   In our case, layouts are pure and only involve integer arithmetic.
+  #   Furthermore, I argue that compared to the alternative (assigning expressions to temporaties)
+  #   an integer expression is significantly more compiler-friendly as they can be:
+  #   - constant-folded (done by nim compiler)
+  #   - terms can be reorder, say we receive (2 * (3 * (dynamic_value * (5 * 6))))
+  #     with temporaries dynamic_value would be an optimization barrier, so we would have `6 * dynamic_value * 30` with a naive compiler,
+  #     while we would have 180 * dynamic_value with a expression with more certainty as it's easier for the compiler to reorder integers
+  #   - compilers can do common sub-expression elimination more easily when only integers are dumped into an expression
+  #
+  #   This is particularly relevant for Vulkan and WebGPU backends which might not have
+  #   optimizers as thorough as LLVM's.
+
+  template logicalProductDelegate(a_layout, tiler_layout) =
+    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * cosize(tiler_layout)), tiler_layout))
+  result = getAst(logicalProductDelegate(a, tiler))
+
+# ═══════════════════════════════════════════════════════════════
+#  zipped_product, tiled_product, flat_product
+# ═══════════════════════════════════════════════════════════════
+
+template zipped_product*(blk: Layout, tiler: auto): auto =
+  ## Reproduce the block `blk` over the grid the tiler describes:
+  ## the block dimensions and the copy dimensions zipped into one rank-2
+  ## layout with both sides gathered.
+  ##
+  ## Say you reproduce a per-thread tile over a thread grid and one
+  ## index must select the thread's tile, dimension 0 reads inside
+  ## the tile, dimension 1 selects the tile.
+  ##
+  ## `zipped_product` applies `logical_product` and gathers the split
+  ## dimensions into two dimensions:
+  ## - dimension 0 = the block dimensions, one leaf per tiler element
+  ## - dimension 1 = the copy dimensions, each numbered by `blk* ∘ tiler`
+  ##   over its tiler element, `blk* = complement(blk, size(blk) * cosize(tiler))`
+  ##
+  ## Returns a layout `R` = `((M, N, ...), (TileM, TileN, ...))`,
+  ## `size(R) == size(blk) * size(tiler)`.
+  ##
+  ## `zipped_divide` runs the mirrored gather:
+  ## - `zipped_divide(a, b)[0] = compose(a, b)`, the tile sides gathered
+  ## - `zipped_product(a, b)[1] = compose(complement(a, size(a) * cosize(b)), b)`,
+  ##   the copy sides gathered
+  ##
+  ## Example:
+  ##   zipped_product(make_layout(4, 1), make_layout(3, 1))
+  ##   # → (4, 3):(1, 4)
+  ##
+  ##   zipped_product(make_layout((2, 4), (1, 2)), make_layout(((3, 1), (1, 3)), ((1, 3), (3, 3))))
+  ##   # → ((2, 4), ((3, 1), (1, 3))):((1, 2), ((8, 24), (24, 24)))
+  hier_unzip(logical_product, blk, tiler)
+
+macro tiled_product*(blk: Layout, tiler: typed): untyped =
+  ## Reproduce a block layout across the positions a tiler describes,
+  ## the block dimensions grouped as dimension 0, the reproduction
+  ## dimensions flat after them.
+  ##
+  ## Say a block's threads fill a shared-memory buffer and each
+  ## whole tile must sit flat in the layout, block first.
+  ##
+  ## Returns a layout `R` = `((BlkM, BlkN), RepM, RepN, ...)` where
+  ## every tiler position carries one copy of `blk`:
+  ## - dimension 0 = the block, the block dimensions grouped together
+  ## - dimensions 1+ = the reproduction dimensions, flat
+  ##
+  ## Contrast `zipped_product`, which keeps the reproduction dimensions
+  ## grouped as a second dimension.
+  ##
+  ## Example:
+  ##   tiled_product(make_layout((2, 4), (1, 2)), make_layout(3, 1))
+  ##   # → ((2, 4), 3):((1, 2), 8)
+  template productSplitter(l, b: auto): auto =
+    # getAst indirection to delegate overload resolution to the Nim compiler
+    logical_product(l, b)
+  let hierUnzipAst = getAst(hier_unzip(productSplitter, blk, tiler))
+  if hierUnzipAst.kind == nnkBlockExpr:
+    result = newStmtList()
+    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
+    let makeLayoutCall = hierUnzipAst[^1][^1]
+    let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
+    result.add bindSym"zippedToTiledPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+  else:
+    result = newStmtList()
+    result.add bindSym"evalOnceAs".newCall(newIdentNode("zippedProductLayout"), hierUnzipAst)
+    let zippedLayout = newIdentNode("zippedProductLayout")
+    result.add bindSym"zippedToTiledPairImpl".newCall(
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 0),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 1),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 0),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 1))
+
+macro flat_product*(blk: Layout, tiler: typed): untyped =
+  ## Reproduce a block layout across the positions a tiler describes,
+  ## every dimension at one level, no grouping anywhere.
+  ##
+  ## Say the copies' positions must index flat with no grouping,
+  ## one dimension per level.
+  ##
+  ## Returns a layout `R` = `(BlkM, BlkN, RepM, RepN, ...)` where
+  ## every tiler position carries one copy of `blk`.
+  ##
+  ## Contrast `tiled_product`, which groups the block dimensions
+  ## as dimension 0:
+  ## - `zipped_product` groups the reproduction dimensions too
+  ##
+  ## Example:
+  ##   flat_product(make_layout((2, 4), (1, 2)), make_layout(3, 1))
+  ##   # → (2, 4, 3):(1, 2, 8)
+  template productSplitter(l, b: auto): auto =
+    # getAst indirection to delegate overload resolution to the Nim compiler
+    logical_product(l, b)
+  let hierUnzipAst = getAst(hier_unzip(productSplitter, blk, tiler))
+  if hierUnzipAst.kind == nnkBlockExpr:
+    result = newStmtList()
+    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
+    let makeLayoutCall = hierUnzipAst[^1][^1]
+    let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
+    result.add bindSym"zippedToFlatPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+  else:
+    result = newStmtList()
+    result.add bindSym"evalOnceAs".newCall(newIdentNode("zippedProductLayout"), hierUnzipAst)
+    let zippedLayout = newIdentNode("zippedProductLayout")
+    result.add bindSym"zippedToFlatPairImpl".newCall(
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 0),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 1),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 0),
+      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 1))
+
+# ═══════════════════════════════════════════════════════════════
+#  blocked_product / raked_product
+# ═══════════════════════════════════════════════════════════════
+
+macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
+  result = newStmtList()
+  let (prodShape, prodStride) = result.destructureLayout(unwrapStmtListExpr(prodCtor))
+  let firstShape = getTupleIndex(prodShape, if raked: 1 else: 0)
+  let secondShape = getTupleIndex(prodShape, if raked: 0 else: 1)
+  let firstStride = getTupleIndex(prodStride, if raked: 1 else: 0)
+  let secondStride = getTupleIndex(prodStride, if raked: 0 else: 1)
+  var firstShapeStream = firstShape.tupleDimsStream()
+  var secondShapeStream = secondShape.tupleDimsStream()
+  var firstStrideStream = firstStride.tupleDimsStream()
+  var secondStrideStream = secondStride.tupleDimsStream()
+  var builder = TupleBuilderNested.new(2)
+  builder.append(TupleStreamEvent(path: @[], kind: kOpen, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kOpen, verbatim: true))
+  while not firstShapeStream.done():
+    let firstShapeEvent = firstShapeStream.next()
+    let secondShapeEvent = secondShapeStream.next()
+    let firstStrideEvent = firstStrideStream.next()
+    let secondStrideEvent = secondStrideStream.next()
+    builder.append(nnkPar.newTree(firstShapeEvent.leaf, secondShapeEvent.leaf),
+                   nnkPar.newTree(firstStrideEvent.leaf, secondStrideEvent.leaf))
+  builder.append(TupleStreamEvent(path: @[], kind: kClose, verbatim: true),
+                 TupleStreamEvent(path: @[], kind: kClose, verbatim: true))
+  result.add builder.emitLayout().resultLayout
+
+macro productPairZipDelegate[A, B: Layout](blk: A, tiler: B, raked: static bool): untyped =
+  let rakedLit = newLit(raked)
+  result = quote do:
+    block:
+      const rankMax = max(`blk`.rank(), `tiler`.rank())
+      productPairZipImpl(
+        logical_product(padRight(`blk`, rankMax), padRight(`tiler`, rankMax)),
+        `rakedLit`)
+
+macro blocked_product*[A, B: Layout](blk: A, tiler: B): untyped =
+  ## Repeat block over tiler grid, each block contiguous.
+  ## Returns:
+  ## - ((BLK_A, TILER_A), (BLK_B, TILER_B), ...), each block contiguous
+  ##
+  ## Say each tile copy must stay contiguous, one whole tile before
+  ## the grid steps to the next.
+  quote do:
+    productPairZipDelegate(`blk`, `tiler`, false)
+
+macro raked_product*[A, B: Layout](blk: A, tiler: B): untyped =
+  ## Repeat block over tiler grid, blocks interleaved.
+  ## Returns:
+  ## - ((TILER_A, BLK_A), (TILER_B, BLK_B), ...), blocks interleaved
+  ##
+  ## Say the tile's elements must spread across grid slots instead,
+  ## a cyclic fill over the grid.
+  quote do:
+    productPairZipDelegate(`blk`, `tiler`, true)
+
+# ═══════════════════════════════════════════════════════════════
+#  tile_to_shape
+# ═══════════════════════════════════════════════════════════════
+
+template tile_to_shape*(blk: Layout, target_shape: typed, ord_shape: static StrideOrder = LayoutLeft): auto =
+  ## Repeat a block layout to fill a target shape.
+  ##
+  ## Say you have an atom layout and must fill a whole buffer tile
+  ## with repeats of it, repeat order per dimension from `ord_shape`.
+  ##
+  ## Returns:
+  ##   the block tiled over the target shape, ceil_div repeats per
+  ##   target dimension, repeat order per dimension from ord_shape
+  ##
+  ## Example:
+  ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
+  ##   # block (2,3) repeated to fill (6,12) in 3 columns:
+  ##   # ((2,3),3):((1,2),6)
+  const R = static(target_shape.rank())
+  block:
+    evalOnceAs(bk, blk)
+    evalOnceAs(ts, target_shape)
+    let padded_blk = padRight(bk, R)
+    let blk_shape = product_each(padded_blk.shape)
+    let trg_flat = product_each(ts)
+    let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
+    let tiler = make_layout(product_shape, ord_shape)
+    blocked_product(padded_blk, tiler)
+
+# ═══════════════════════════════════════════════════════════════
+#  logical_divide
 # ═══════════════════════════════════════════════════════════════
 
 template divideFormula(shA, stA, shB, stB) =
@@ -541,10 +858,9 @@ macro logical_divide*[A, B: Layout](layout: A, tiler: B): untyped =
   ##
   ##    logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
   ##    # → ((2, 2), (2, 3)):((4, 1), (2, 8))
-  var stmts = newStmtList()
-  let (shA, stA) = stmts.destructureLayout(layout)
-  let (shB, stB) = stmts.destructureLayout(tiler)
-  result = stmts
+  result = newStmtList()
+  let (shA, stA) = result.destructureLayout(layout)
+  let (shB, stB) = result.destructureLayout(tiler)
   result.add getAst(divideFormula(shA, stA, shB, stB))
 
 macro logical_divide*[L: Layout](layout: L, tiler: int): untyped =
@@ -552,18 +868,8 @@ macro logical_divide*[L: Layout](layout: L, tiler: int): untyped =
   getAst(divideRank1(layout, tiler))
 
 macro logical_divide*[L: Layout, V: static int](layout: L, tiler: Int[V]): untyped =
-  ## Logical divide by a static int tiler, see the Layout
-  ## overload for the contract.
+  ## Logical divide by a static int tiler, see the int overload
   getAst(divideRank1(layout, tiler))
-
-macro logical_divide*[L: Layout](layout: L, tiler: static int): untyped =
-  ## Logical divide by a static int tiler
-  var stmts = newStmtList()
-  let (shA, stA) = stmts.destructureLayout(layout)
-  result = stmts
-  result.add getAst(divideFormula(shA, stA,
-    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(tiler))),
-    nnkCall.newTree(nnkBracketExpr.newTree(bindSym"Int", newLit(1)))))
 
 macro divideTupleImpl(sh, st, tiler: typed): untyped =
   ## Per-dimension divide over the destructured layout.
@@ -615,49 +921,104 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result = newStmtList()
     result.add layout
   else:
-    var stmts = newStmtList()
-    let (sh, st) = stmts.destructureLayout(layout)
+    result = newStmtList()
+    let (sh, st) = result.destructureLayout(layout)
     template divideTupleDelegate(sh2, st2, tiler2) =
       divideTupleImpl(sh2, st2, tiler2)
-    result = stmts
     result.add getAst(divideTupleDelegate(sh, st, tiler))
 
-func zipped_divide*[LayoutT: Layout, TilerT](layout: LayoutT; tiler: TilerT): auto {.inline.} =
+template zipped_divide*(layout: Layout, tiler: auto): auto =
   ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
+  ##
+  ## Say a kernel level needs the tile and the rest at once, one
+  ## index into dimension 1 selects which tile, dimension 0 walks
+  ## positions inside it.
+  ##
+  ## Returns:
+  ## - dimension 0 carries the tile, dimension 1 the rest, zipped
   hier_unzip(logical_divide, layout, tiler)
 
-template tiled_divide*(layout: Layout; tiler: auto): auto =
-  ## Like zipped_divide but unpack the second dimension into individual dimensions.
-  ## Keeps dimension-0 grouped (the tile).
-  block:
-    evalOnceAs(lyt, layout)
-    evalOnceAs(tlr, tiler)
-    evalOnceAs(zd, zipped_divide(lyt, tlr))
-    make_layout(
-      groupedHead(dimension(zd, 0).shape, dimension(zd, 1).shape),
-      groupedHead(dimension(zd, 0).stride, dimension(zd, 1).stride)
-    )
+# ═══════════════════════════════════════════════════════════════
+#  tiled_divide / flat_divide
+# ═══════════════════════════════════════════════════════════════
 
-template flat_divide*(layout: Layout; tiler: auto): auto =
-  ## Like zipped_divide but unpack BOTH dimensions into a flat layout.
-  ## Unlike tiled_divide the tile dimensions are also unpacked.
-  block:
-    evalOnceAs(lyt, layout)
-    evalOnceAs(tlr, tiler)
-    evalOnceAs(zd, zipped_divide(lyt, tlr))
-    make_layout(
-      concatFlat(
-        dimension(zd, 0).shape,
-        dimension(zd, 1).shape,
-      ),
-      concatFlat(
-        dimension(zd, 0).stride,
-        dimension(zd, 1).stride,
-      ),
-    )
+macro tiled_divide*(layout: Layout, tiler: typed): untyped =
+  ## Split a layout into a tile and number the tiles.
+  ##
+  ## Say a block of a kernel owns one tile, dimension 0 reads
+  ## positions inside it, dimensions 1+ count the block's tile.
+  ##
+  ## Returns a layout `R` such that reading element `(t, r)` of `R`
+  ## reads element `tiler(t) + tiles(r)` of `layout`:
+  ## - dimension 0 = the tile, the tile dimensions grouped together
+  ## - dimensions 1+ = the rest dimensions and undivided dimensions, flat
+  ##
+  ## `R = ((TileM, TileN), RestM, RestN, ...)`.
+  ##
+  ## Contrast `zipped_divide`, which keeps the rest dimensions grouped
+  ## as a second dimension, and `flat_divide`, which unpacks the tile too.
+  ##
+  ## Divisibility of the layout by the tiler is a caller precondition.
+  ##
+  ## Example:
+  ##   tiled_divide(make_layout((4, 8), (1, 4)), (2, 4))
+  ##   # → ((2, 4), 2, 2):((1, 4), 2, 16)
+  ##
+  ##    layout (4, 8):(1, 4)
+  ##    tile (2, 4) ══▶ dimension 0, positions inside a chunk
+  ##    rest 2, 2  ──▶ dimensions 1, 2, the chunk numbers
+  template divideSplitter(l, t: auto): auto =
+    # getAst indirection to delegate overload resolution to the Nim compiler
+    logical_divide(l, t)
+  let hierUnzipAst = getAst(hier_unzip(divideSplitter, layout, tiler))
+  if hierUnzipAst.kind == nnkBlockExpr:
+    result = newStmtList()
+    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
+    let makeLayoutCall = hierUnzipAst[^1][^1]
+    let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
+    result.add bindSym"zippedToTiledPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+  else:
+    result = bindSym"zippedToTiledImpl".newCall(hierUnzipAst)
+
+macro flat_divide*(layout: Layout, tiler: typed): untyped =
+  ## Split a layout into a tile and number the tiles, every dimension
+  ## at one level, no grouping anywhere.
+  ##
+  ## Say a kernel indexes its tile flat, tile positions first,
+  ## tile counts after, one dimension per level.
+  ##
+  ## Returns a layout `R` such that reading element `(t, r)` of `R`
+  ## reads element `tiler(t) + tiles(r)` of `layout`, every dimension
+  ## at one level, no grouping anywhere:
+  ## - the tile dimensions first
+  ## - then the rest dimensions and undivided dimensions
+  ##
+  ## `R = (TileM, TileN, RestM, RestN, ...)`.
+  ##
+  ## Contrast `tiled_divide`, which groups the tile dimensions
+  ## as dimension 0:
+  ## - `zipped_divide` groups the rest dimensions too
+  ##
+  ## Divisibility of the layout by the tiler is a caller precondition.
+  ##
+  ## Example:
+  ##   flat_divide(make_layout((4, 8), (1, 4)), (2, 4))
+  ##   # → (2, 4, 2, 2):(1, 4, 2, 16)
+  template divideSplitter(l, t: auto): auto =
+    # getAst indirection to delegate overload resolution to the Nim compiler
+    logical_divide(l, t)
+  let hierUnzipAst = getAst(hier_unzip(divideSplitter, layout, tiler))
+  if hierUnzipAst.kind == nnkBlockExpr:
+    result = newStmtList()
+    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
+    let makeLayoutCall = hierUnzipAst[^1][^1]
+    let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
+    result.add bindSym"zippedToFlatPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+  else:
+    result = bindSym"zippedToFlatImpl".newCall(hierUnzipAst)
 
 # ═══════════════════════════════════════════════════════════════
-#  right_inverse, quasi-inverse sorted by stride
+#  right_inverse
 # ═══════════════════════════════════════════════════════════════
 
 macro rightInverseImpl(sh, st: typed): untyped =
@@ -708,19 +1069,21 @@ macro rightInverseImpl(sh, st: typed): untyped =
 
 macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
+  ##
+  ## Say you know a target offset and need the coordinate
+  ## reaching it, the inverse maps offsets back to coordinates.
   ## Returns:
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists
-  var stmts = newStmtList()
-  let (sh, st) = destructureLayout(stmts, layout)
+  result = newStmtList()
+  let (sh, st) = destructureLayout(result, layout)
   template rightInverseDelegate(sh2, st2) =
     ## Expands the inverse core on the destructured tuples at the use site.
     rightInverseImpl(sh2, st2)
-  result = stmts
   result.add getAst(rightInverseDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
-#  left_inverse, left inverse (injective layouts only)
+#  left_inverse
 # ═══════════════════════════════════════════════════════════════
 
 macro leftInverseImpl(sh, st: typed): untyped =
@@ -789,128 +1152,18 @@ macro leftInverseImpl(sh, st: typed): untyped =
 
 macro left_inverse*(layout: typed): untyped =
   ## Left inverse, Li(L(i)) == i for injective layouts.
+  ##
+  ## Say a layout maps coordinates one-to-one and you need
+  ## to undo the mapping, the left inverse computes it.
+  ##
   ## Returns:
   ## - a coalesced Layout over the static-stride gaps
   ## - requires all static strides, compile-time assert
-  var stmts = newStmtList()
-  let (sh, st) = destructureLayout(stmts, layout)
+  result = newStmtList()
+  let (sh, st) = destructureLayout(result, layout)
   template leftInverseDelegate(sh2, st2) =
     ## Coalesce canonicalizes strides first, the chaining asserts require it.
     evalOnceAs(coalescedLayout, coalesce(make_layout(sh2, st2)))
     leftInverseImpl(coalescedLayout.shape, coalescedLayout.stride)
-  result = stmts
   result.add getAst(leftInverseDelegate(sh, st))
-
-
-# ═══════════════════════════════════════════════════════════════
-#  logical_product, reproduce a block over a tiler
-# ═══════════════════════════════════════════════════════════════
-
-func logical_product*[A, B: Layout](a: A; tiler: B): auto =
-  ## Reproduce block over tiler: rank-2 result ((BLOCK), (TILE)).
-  ## Inverse of logical_divide.
-  let rest = compose(complement(a, size(a) * cosize(tiler)), tiler)
-  make_layout((a.shape, rest.shape), (a.stride, rest.stride))
-
-
-func nested_product*[A, B: Layout](a: A; b: B): auto =
-  ## Categorical product of two layouts, preserving each argument's dimension grouping.
-  ##
-  ## Given:
-  ##   A: (a0, a1, ...):(sa0, sa1, ...)
-  ##   B: (b0, b1, ...):(sb0, sb1, ...)
-  ## Returns:
-  ##   ((a0, a1, ...), (b0, b1, ...)) : ((sa0, sa1, ...), (sb0, sb1, ...))
-  make_layout((a.shape, b.shape), (a.stride, b.stride))
-
-
-# ── zipped_product / tiled_product / flat_product ──
-
-template zipped_product*(blk: Layout; tiler: auto): auto =
-  ## Reproduce block over tiler, zipped into rank-2 result.
-  ##
-  ## CuTe: zipped_product = hier_unzip(logical_product, block, tiler)
-  hier_unzip(logical_product, blk, tiler)
-
-template tiled_product*(blk: Layout; tiler: auto): auto =
-  ## Like zipped_product but unpack the second dimension.
-  ## Keeps dimension-0 grouped (the block).
-  block:
-    evalOnceAs(bk, blk)
-    evalOnceAs(tlr, tiler)
-    evalOnceAs(zp, zipped_product(bk, tlr))
-    make_layout(
-      groupedHead(dimension(zp, 0).shape, dimension(zp, 1).shape),
-      groupedHead(dimension(zp, 0).stride, dimension(zp, 1).stride),
-    )
-
-template flat_product*(blk: Layout; tiler: auto): auto =
-  ## Like zipped_product but unpack BOTH dimensions into a flat layout.
-  ## Unlike tiled_product the block dimensions are also unpacked.
-  block:
-    evalOnceAs(bk, blk)
-    evalOnceAs(tlr, tiler)
-    evalOnceAs(zp, zipped_product(bk, tlr))
-    make_layout(
-      concatFlat(
-        dimension(zp, 0).shape,
-        dimension(zp, 1).shape,
-      ),
-      concatFlat(
-        dimension(zp, 0).stride,
-        dimension(zp, 1).stride,
-      ),
-    )
-
-# ═══════════════════════════════════════════════════════════════
-#  blocked_product, blocks laid out contiguously
-# ═══════════════════════════════════════════════════════════════
-
-func blocked_product*[A, B: Layout](blk: A; tiler: B): auto =
-  ## Repeat block over tiler grid, each block contiguous.
-  ## Results in ((BLK_A, TILER_A), (BLK_B, TILER_B), ...).
-  const mxR = max(blk.rank(), tiler.rank())
-  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = dimension(lp, 0)
-  let m1 = dimension(lp, 1)
-  zipDimensions(m0, m1)
-
-# ═══════════════════════════════════════════════════════════════
-#  raked_product, blocks interleaved over the tiler grid
-# ═══════════════════════════════════════════════════════════════
-
-func raked_product*[A, B: Layout](blk: A; tiler: B): auto =
-  ## Repeat block over tiler grid, blocks interleaved.
-  ## Results in ((TILER_A, BLK_A), (TILER_B, BLK_B), ...).
-  const mxR = max(blk.rank(), tiler.rank())
-  let lp = logical_product(padRight(blk, mxR), padRight(tiler, mxR))
-  let m0 = dimension(lp, 0)
-  let m1 = dimension(lp, 1)
-  zipDimensions(m1, m0)
-
-# ═══════════════════════════════════════════════════════════════
-#  tile_to_shape, repeat a block layout to fill a target shape
-# ═══════════════════════════════════════════════════════════════
-
-template tile_to_shape*(blk: Layout; target_shape: typed; ord_shape: static StrideOrder = LayoutLeft): auto =
-  ## Repeat a block layout to fill a target shape.
-  ##
-  ## Returns:
-  ##   the block tiled over the target shape, ceil_div repeats per
-  ##   target dimension, repeat order per dimension from ord_shape
-  ##
-  ## Example:
-  ##   let tile = tile_to_shape(make_layout((2,3), (1,2)), (6, 12))
-  ##   # block (2,3) repeated to fill (6,12) in 3 columns:
-  ##   # ((2,3),3):((1,2),6)
-  const R = static(rank(target_shape))
-  block:
-    evalOnceAs(bk, blk)
-    evalOnceAs(ts, target_shape)
-    let padded_blk = padRight(bk, R)
-    let blk_shape = product_each(padded_blk.shape)
-    let trg_flat = product_each(ts)
-    let product_shape = zipDimensionsWith(trg_flat, blk_shape): ceil_div(it_a, it_b)
-    let tiler = make_layout(product_shape, ord_shape)
-    blocked_product(padded_blk, tiler)
 

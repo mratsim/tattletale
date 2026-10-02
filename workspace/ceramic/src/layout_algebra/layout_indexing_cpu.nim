@@ -26,6 +26,7 @@
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layouts_unsanctioned_helpers
 import ./layout_compiletime
 
 # ═══════════════════════════════════════════════════════════════

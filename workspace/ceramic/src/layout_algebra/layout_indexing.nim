@@ -17,6 +17,7 @@ import workspace/ceramic/src/int_tuples
 import ./layout_indexing_cpu
 import ./layout_indexing_gpu
 import ./layouts
+import ./layouts_unsanctioned_helpers
 import ./layout_compiletime
 import workspace/ceramic/src/macros/varargs_to_par
 

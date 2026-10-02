@@ -38,7 +38,7 @@ type
 func depth*(ev: TupleStreamEvent): int {.inline.} =
   result = ev.path.len
 
-func unwrapStmtListExpr(node: NimNode): NimNode =
+func unwrapStmtListExpr*(node: NimNode): NimNode =
   if node.kind == nnkStmtListExpr:
     node[^1]
   else: node
@@ -171,6 +171,12 @@ func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
 func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], verbatim: bool) =
   tb.appendImpl(leafValues, isVerbatim = verbatim)
 
+func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
+  doAssert tb.accums.len == batches.len
+  tb.verbatim = false
+  for i, batch in batches:
+    tb.accums[i] = batch & tb.accums[i]
+
 func markNonVerbatim*(tb: var TupleBuilderFlat) =
   tb.verbatim = false
 
@@ -208,15 +214,16 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
       else:
         tb.accums[i][^1].add ev.leaf
     of kClose:
-      let node = tb.accums[i].pop()
+      var node = tb.accums[i].pop()
       if node.len == 0:
         # every child of the subtree was dropped, keep nothing in the parent
         if tb.accums[i].len == 0:
           tb.completed[i] = nnkTupleConstr.newTree()
-      elif tb.accums[i].len == 0:
-        tb.completed[i] = node
       else:
-        tb.accums[i][^1].add node
+        if tb.accums[i].len == 0:
+          tb.completed[i] = node
+        else:
+          tb.accums[i][^1].add node
 
 template appendImpl(tb: var TupleBuilderNested, leafValues: varargs[NimNode], isVerbatim: bool) =
   # vargards[NimNode] + default arguments doesn't seem to work
@@ -301,7 +308,7 @@ iterator items*(z: TupleZip): tuple[a, b: TupleStreamEvent] =
 #  Filters
 # ═══════════════════════════════════════════════════════════════════════
 
-func hasType*(x: NimNode; t: static string): bool =
+func hasType*(x: NimNode, t: static string): bool =
   ## Type equality in macro. Resolves through aliases.
   ## This does not handle generic matches (i.e. Int[4].hasType"Int")
   ##

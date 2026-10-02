@@ -15,19 +15,38 @@
 import std/macros
 import workspace/ceramic/src/int_tuples
 
-proc shapeRank*(shTyp: NimNode): int {.compileTime.} =
-  ## Rank of a layout given its shape type node, tuple constr = element count, scalar = 1.
-  if shTyp.kind == nnkTupleConstr:
-    shTyp.len
-  else:
-    1
+# ═══════════════════════════════════════════════════════════════
+#  layoutTypeArgs, layout dimensions+types extraction
+# ═══════════════════════════════════════════════════════════════
 
-proc dimCount*(ty: NimNode): int {.compileTime.} =
-  ## Top-level dimension count of a shape or layout type node.
-  if ty.isTupleTy():
-    ty.len
-  else:
-    1
+func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
+  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
+  ##
+  ## Removability: a macro can often avoid this helper by destructuring
+  ## the layout first and passing
+  ## the destructured shape and stride to a typed macro:
+  ##
+  ## - the destructured nodes arrive semchecked
+  ##   (the nested call's argument semcheck)
+  ## - the inner fold works on nodes and per-leaf values directly
+  ##   (coalesce took this route, complement's transplant candidate)
+  ##
+  ## Prefer the destructure route when the fold does not need
+  ## the whole-profile type peek in one shot.
+  let typ = layout.getTypeInst()
+  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
+    return (typ[1], typ[2])
+  if typ.kind == nnkSym:
+    let objTy = typ.getTypeImpl()
+    if objTy.kind == nnkObjectTy:
+      for field in objTy[2]:
+        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
+          result.shapeTy = field[1]
+        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
+          result.strideTy = field[1]
+      if result.shapeTy != nil and result.strideTy != nil:
+        return
+  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
 
 # ── AST-level helpers (compile-time value extraction) ──
 

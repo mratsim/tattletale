@@ -10,63 +10,6 @@ import workspace/ceramic/src/int_tuples
 import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
-#  layoutTypeArgs, layout dimensions+types extraction
-# ═══════════════════════════════════════════════════════════════
-
-func layoutTypeArgs*(layout: NimNode): tuple[shapeTy, strideTy: NimNode] {.compileTime.} =
-  ## Extract the Layout type's shape and stride type nodes from a typed expression, resolving type aliases.
-  ##
-  ## Removability: a macro can often avoid this helper by destructuring
-  ## the layout first and passing
-  ## the destructured shape and stride to a typed macro:
-  ##
-  ## - the destructured nodes arrive semchecked
-  ##   (the nested call's argument semcheck)
-  ## - the inner fold works on nodes and per-leaf values directly
-  ##   (coalesce took this route, complement's transplant candidate)
-  ##
-  ## Prefer the destructure route when the fold does not need
-  ## the whole-profile type peek in one shot.
-  let typ = layout.getTypeInst()
-  if typ.kind == nnkBracketExpr and typ[0].eqIdent("Layout"):
-    return (typ[1], typ[2])
-  if typ.kind == nnkSym:
-    let objTy = typ.getTypeImpl()
-    if objTy.kind == nnkObjectTy:
-      for field in objTy[2]:
-        if field.kind == nnkIdentDefs and field[0].eqIdent("shape"):
-          result.shapeTy = field[1]
-        elif field.kind == nnkIdentDefs and field[0].eqIdent("stride"):
-          result.strideTy = field[1]
-      if result.shapeTy != nil and result.strideTy != nil:
-        return
-  error("layoutTypeArgs: cannot recover Layout type args from " & typ.repr)
-
-# ═══════════════════════════════════════════════════════════════
-#  LayoutCT, compile-time Layout accumulator for macros
-# ═══════════════════════════════════════════════════════════════
-
-type LayoutCT* = object
-  shape*, stride*: seq[NimNode]
-
-proc append*(ct: var LayoutCT; sh, st: NimNode) {.compileTime.} =
-  ct.shape.add sh
-  ct.stride.add st
-
-func emit*(ct: LayoutCT): NimNode {.compileTime.} =
-  ## Build make_layout from accumulated dimensions (no coalesce).
-  # nnkPar: single-item result stays scalar (avoids explicit `if result.len == 1`).
-  # Multi-item: construct a tuple like nnkTupleConstr.
-  var outSh = newNimNode(nnkPar)
-  var outSt = newNimNode(nnkPar)
-  for i in 0 ..< ct.shape.len:
-    outSh.add ct.shape[i]; outSt.add ct.stride[i]
-  if ct.shape.len == 0:
-    result = ident"make_layout".newCall(newLit(1), newLit(0))
-  else:
-    result = ident"make_layout".newCall(outSh, outSt)
-
-# ═══════════════════════════════════════════════════════════════
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
@@ -89,8 +32,7 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
   else:
     (ctor.newCall(sh, st), shV and stV)
 
-proc appendDimension*(builder: var TupleBuilderNested;
-                      pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
+proc appendDimension*(builder: var TupleBuilderNested, pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
   ## Append a fold's pair set as one dimension slot.
   if pairs.len == 1:
     builder.append(pairs[0].shape, pairs[0].stride)
@@ -106,7 +48,7 @@ proc appendDimension*(builder: var TupleBuilderNested;
 #  destructureLayout, layout AST -> (shape, stride) expressions
 # ═══════════════════════════════════════════════════════════════
 
-func destructureLayout*(resultStmt: var NimNode; layoutAst: NimNode): tuple[shape, strides: NimNode] =
+func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
   ## Destructure a typed Layout into (shape, stride) tuple expressions,
   ## without forcing a Layout materialization when the AST already
   ## carries the base tuples:
@@ -170,101 +112,133 @@ macro hier_unzip*(splitter: untyped, layout: typed, tiler: typed): untyped =
   ## Usage:
   ##   let r = hier_unzip(logical_divide, make_layout((4, 8), (1, 4)), (2, 4))
   ##   doAssert r === (((2, 4), (2, 2)), ((1, 4), (2, 16)))
-  let splitterNode = splitter
-  proc dimensionCall(e: NimNode, idx: int): NimNode =
-    ## `e.dimension(idx)` as a method-call node.
-    let dim = ident"dimension"
-    result = newCall(nnkDotExpr.newTree(e, dim), newLit(idx))
-  proc fieldElem(e: NimNode, f: string, idx: int): NimNode =
-    ## Element `idx` of field `f` on `e`.
-    let fld = nnkDotExpr.newTree(e, ident(f))
-    result = nnkBracketExpr.newTree(fld, newLit(idx))
-  proc unwrap(e0: NimNode): NimNode =
-    ## Typed macro parameters of macro call arguments arrive wrapped in a statement list. The value is the last child.
-    result = e0
-    if e0.kind == nnkStmtListExpr:
-      result = e0[^1]
-
-  let layoutShapeTy = layoutTypeArgs(layout).shapeTy
-  let R = dimCount(layoutShapeTy)
-  let tlrTy = unwrap(tiler).getTypeInst()
+  let tilerInner = if tiler.kind == nnkStmtListExpr: tiler[^1]
+                   else: tiler
+  let tlrTy = tilerInner.getTypeInst()
   if tlrTy.kind notin {nnkTupleTy, nnkTupleConstr}:
-    return splitterNode.newCall(layout, tiler)
-  let tilerRank = tlrTy.len
-  doAssert tilerRank <= R,
-    "hier_unzip: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
-
+    return splitter.newCall(layout, tiler)
   var stmts = newStmtList()
-  var bindingCount = 0
-  proc freshAlias(): NimNode {.compileTime.} =
-    inc bindingCount
-    ident("huzSplit" & $bindingCount)
+  let (sh, st) = stmts.destructureLayout(layout)
+  let (shapeTy, strideTy) = layoutTypeArgs(layout)
 
-  type Parts = tuple[fsh, fst, ssh, sst: seq[NimNode]]
+  proc huzTyAt(ty: NimNode, path: seq[int]): NimNode {.compileTime.} =
+    result = ty
+    for i in path:
+      if result.isTupleTy():
+        result = result[i]
+      else:
+        break
 
-  proc walk(e, eShapeTy, tval, ty: NimNode, needBinding: static bool): Parts {.compileTime.} =
-    ## Split the layout dimension `e` by the tiler element of type `ty`.
-    ## `eShapeTy` carries the element type of `e`, `tval` carries the tiler value expression.
-    ## - a leaf, a scalar or Layout sub-tiler, emits one `splitter` call
-    ## - a sub-tuple tiler emits one `splitter` call per sub-element and binds the gathered rank-2 result once
-    ## Returns the shape and stride of the first and second gathered dimensions,
-    ## one element per sub-dimension plus one per leftover layout dimension.
-    ## `needBinding` false at the top level, there the gathered parts form the final Layout directly.
-    if ty.kind in {nnkTupleTy, nnkTupleConstr}:
-      doAssert ty.len <= dimCount(eShapeTy),
-        "hier_unzip: tiler has more dimensions (" & $ty.len &
-        ") than the layout dimension (" & $dimCount(eShapeTy) & ")"
-      for j in 0 ..< ty.len:
-        let child = walk(dimensionCall(e, j), eShapeTy[j],
-                         nnkBracketExpr.newTree(tval, newLit(j)), ty[j], true)
-        result.fsh.add child.fsh
-        result.fst.add child.fst
-        result.ssh.add child.ssh
-        result.sst.add child.sst
-      for j in ty.len ..< dimCount(eShapeTy):
-        result.ssh.add fieldElem(e, "shape", j)
-        result.sst.add fieldElem(e, "stride", j)
-      when needBinding:
-        let nodeR = freshAlias()
-        if result.fsh.len == 1 and result.ssh.len == 1:
-          # a 1-element sub-tiler gathers one element per part, the parts
-          # emit flat, no tuple wrapper, matching the flat-tiler form
-          stmts.add newCall(bindSym"evalOnceAs", nodeR,
-            ident"make_layout".newCall(
-              nnkTupleConstr.newTree(result.fsh[0], result.ssh[0]),
-              nnkTupleConstr.newTree(result.fst[0], result.sst[0])))
-        else:
-          stmts.add newCall(bindSym"evalOnceAs", nodeR,
-            ident"make_layout".newCall(
-              nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fsh),
-                                     nnkTupleConstr.newTree(result.ssh)),
-              nnkTupleConstr.newTree(nnkTupleConstr.newTree(result.fst),
-                                     nnkTupleConstr.newTree(result.sst))))
-        result.fsh = @[fieldElem(nodeR, "shape", 0)]
-        result.fst = @[fieldElem(nodeR, "stride", 0)]
-        result.ssh = @[fieldElem(nodeR, "shape", 1)]
-        result.sst = @[fieldElem(nodeR, "stride", 1)]
+  proc huzAt(e, ty: NimNode, path: seq[int]): NimNode {.compileTime.} =
+    result = e
+    var t = ty
+    for i in path:
+      if not t.isTupleTy():
+        break
+      t = t[i]
+      result = getTupleIndex(result, i)
+
+  template huzArity(e, ty: NimNode, path: seq[int]): int =
+    let n = huzAt(e, ty, path)
+    if n.kind in {nnkTupleConstr, nnkPar}:
+      n.len
     else:
-      let leafR = freshAlias()
-      stmts.add bindSym"evalOnceAs".newCall(leafR,
-        splitterNode.newCall(e, tval))
-      result.fsh = @[fieldElem(leafR, "shape", 0)]
-      result.fst = @[fieldElem(leafR, "stride", 0)]
-      result.ssh = @[fieldElem(leafR, "shape", 1)]
-      result.sst = @[fieldElem(leafR, "stride", 1)]
+      let t = huzTyAt(ty, path)
+      if t.isTupleTy():
+        t.len
+      else: 1
 
-  let top = walk(ident"huzLyt", layoutShapeTy, ident"huzTlr", tlrTy, false)
-  stmts.insert(0, newCall(bindSym"evalOnceAs", ident"huzLyt", layout))
-  stmts.insert(1, nnkLetSection.newTree(
-    nnkIdentDefs.newTree(ident"huzTlr", newEmptyNode(), tiler)))
-  if top.fsh.len == 1 and top.ssh.len == 1:
-    # a 1-element tiler on a scalar-dimensioned layout gathers one element
-    # per part, the parts emit flat, no tuple wrapper, matching the scalar-tiler form
-    stmts.add ident"make_layout".newCall(
-      nnkTupleConstr.newTree(top.fsh[0], top.ssh[0]),
-      nnkTupleConstr.newTree(top.fst[0], top.sst[0]))
-  else:
-    stmts.add ident"make_layout".newCall(
-      nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fsh), nnkTupleConstr.newTree(top.ssh)),
-      nnkTupleConstr.newTree(nnkTupleConstr.newTree(top.fst), nnkTupleConstr.newTree(top.sst)))
+  template huzProj(fld: string, dsh, dst, dtl: NimNode): NimNode =
+    splitter.newCall(ident"make_layout".newCall(dsh, dst), dtl).newDotExpr(ident(fld))
+
+  let R = huzArity(sh, shapeTy, @[])
+  doAssert tlrTy.len <= R,
+    "hier_unzip: tiler has more dimensions (" & $tlrTy.len & ") than the layout (" & $R & ")"
+
+  var tileParts = TupleBuilderNested.new(2)
+  var restParts = TupleBuilderNested.new(2)
+  var levelState: seq[tuple[tilerLen, arity: int]]
+  for ev in tiler.tupleStream():
+    case ev.kind
+    of kOpen:
+      let tilerLen = huzArity(tilerInner, tlrTy, ev.path)
+      let arity = huzArity(sh, shapeTy, ev.path)
+      doAssert tilerLen <= arity,
+        "hier_unzip: tiler has more dimensions (" & $tilerLen &
+        ") than the layout dimension (" & $arity & ")"
+      levelState.add (tilerLen, arity)
+      tileParts.append(ev, ev)
+      restParts.append(ev, ev)
+    of kLeaf:
+      let dsh = huzAt(sh, shapeTy, ev.path)
+      let dst = huzAt(st, strideTy, ev.path)
+      # spliced pure, once per projection, both copies stay pure expressions
+      # the Nim and C compiler constnat fold and common sub-expression elimination
+      # while when composed, the whole AST can be discarded if unused.
+      let lsh = huzProj("shape", dsh, dst, ev.leaf)
+      let lst = huzProj("stride", dsh, dst, ev.leaf)
+      tileParts.append(getTupleIndex(lsh, 0), getTupleIndex(lst, 0))
+      restParts.append(getTupleIndex(lsh, 1), getTupleIndex(lst, 1))
+    of kClose:
+      # dimensions past the tiler at this level pass through whole
+      let lvl = levelState.pop()
+      for j in lvl.tilerLen ..< lvl.arity:
+        restParts.append(huzAt(sh, shapeTy, ev.path & j), huzAt(st, strideTy, ev.path & j))
+      tileParts.append(ev, ev)
+      restParts.append(ev, ev)
+
+  let (tileShape, _) = tileParts.emit(0, emitScalarForSize1 = true)
+  let (tileStride, _) = tileParts.emit(1, emitScalarForSize1 = true)
+  let (restShape, _) = restParts.emit(0, emitScalarForSize1 = true)
+  let (restStride, _) = restParts.emit(1, emitScalarForSize1 = true)
+  stmts.add ident"make_layout".newCall(
+    nnkTupleConstr.newTree(tileShape, restShape),
+    nnkTupleConstr.newTree(tileStride, restStride))
   result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+
+
+macro zippedToTiledPairImpl*(tileShape, restShape, tileStride, restStride: typed): untyped =
+  ## Regroup the zipped (tile, rest) parts into the tiled form:
+  ## - the tile part kept whole
+  ## - the rest part unpacked one level, a scalar kept whole
+  result = newStmtList()
+  var builder = TupleBuilderFlat.new(2)
+  builder.append(tileShape, tileStride, verbatim = false)
+  let restShapeType = restShape.getTypeInst()
+  if restShapeType.kind in {nnkTupleTy, nnkTupleConstr} and restShapeType.len > 0:
+    for i in 0 ..< restShapeType.len:
+      builder.append(getTupleIndex(restShape, i),
+                     getTupleIndex(restStride, i), verbatim = false)
+  else:
+    builder.append(restShape, restStride, verbatim = false)
+  result.add builder.emitLayout().resultLayout
+
+macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed): untyped =
+  ## Flatten the zipped (tile, rest) parts, every leaf at one level
+  result = newStmtList()
+  var builder = TupleBuilderFlat.new(2)
+  for (shapeEvent, strideEvent) in tileShape.tupleDimsStream().zip(tileStride.tupleDimsStream()):
+    shapeEvent.onLeaves():
+      builder.append(shapeEvent.leaf, strideEvent.leaf)
+  for (shapeEvent, strideEvent) in restShape.tupleDimsStream().zip(restStride.tupleDimsStream()):
+    shapeEvent.onLeaves():
+      builder.append(shapeEvent.leaf, strideEvent.leaf)
+  result.add builder.emitLayout().resultLayout
+
+macro zippedToTiledImpl*(zipped: typed): untyped =
+  ## Reassemble the zipped (tile, rest) layout into the tiled form,
+  ## the pair impl over the destructured dimensions
+  result = newStmtList()
+  let (zippedShape, zippedStride) = result.destructureLayout(zipped)
+  result.add getAst(zippedToTiledPairImpl(
+    getTupleIndex(zippedShape, 0), getTupleIndex(zippedShape, 1),
+    getTupleIndex(zippedStride, 0), getTupleIndex(zippedStride, 1)))
+
+macro zippedToFlatImpl*(zipped: typed): untyped =
+  ## Flatten the zipped (tile, rest) layout:
+  ## - destructure, the pair impl over the dimensions
+  result = newStmtList()
+  let (zippedShape, zippedStride) = result.destructureLayout(zipped)
+  result.add getAst(zippedToFlatPairImpl(
+    getTupleIndex(zippedShape, 0), getTupleIndex(zippedShape, 1),
+    getTupleIndex(zippedStride, 0), getTupleIndex(zippedStride, 1)))

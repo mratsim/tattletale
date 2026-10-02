@@ -42,7 +42,6 @@ export layouts_datatypes
 
 # ═══════════════════════════════════════════════════════════════
 #  Construction, the constructors only
-#  (the LayoutCT emitter machinery is not part of the surface)
 # ═══════════════════════════════════════════════════════════════
 
 export layout_constructors.col_major_strides
@@ -122,9 +121,6 @@ export layout_algebra.left_inverse
 ## Logical product, the CuTe ⊗ operator.
 ## Appends the tiler dimensions after the block dimensions.
 export layout_algebra.logical_product
-
-## Logical product with the tiler nested inside each block dimension.
-export layout_algebra.nested_product
 
 ## Logical product with block and tiler dimensions zipped.
 export layout_algebra.zipped_product
