@@ -67,6 +67,9 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
   ## Returns:
   ##   - shape, carries the shape tuple expression of the destructured layout
   ##   - strides, carries the stride tuple expression of the destructured layout
+  ## Pattern:
+  ##   - a one-line template and getAst delegate the (shape, stride) pair to a typed macro, right after the call
+  ##   - the Impl walks the pair's leaves with tupleStream, `leafTy` carries each leaf's type
   ## Precondition:
   ##   - layoutAst semantically type-checks as a Layout
   let typ = layoutAst.getTypeInst()

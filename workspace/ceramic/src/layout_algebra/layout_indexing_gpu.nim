@@ -7,7 +7,7 @@
 
 ## GPU-suitable indexing: idx2crd (idx→coord), div/mod based.
 
-import std/[macros, sequtils, typetraits]
+import std/[macros, sequtils]
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
@@ -18,6 +18,43 @@ import ./layout_indexing_slicedice
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd, index to coordinate decomposition
 # ═══════════════════════════════════════════════════════════════
+
+macro idx2crdGpuImpl(sh, st: typed, idx: int or Int): untyped =
+  ## Index-to-coordinate emit for the destructured shape/stride.
+  if not sh.getTypeInst().isTupleTy():
+    # scalar shape, the broadcast Int[1] case maps to 0
+    let shTy = sh.getTypeInst()
+    result = if isStaticOne(shTy):
+      IntCT(0)
+    else:
+      idx div st
+  else:
+    # the leaves, the stream's `leaf` is the bracket expression on the param
+    var shDims, shTys, stDims: seq[NimNode] = @[]
+    var stVals: seq[int] = @[]
+    for shEv in sh.tupleStream():
+      if shEv.kind == kLeaf:
+        shDims.add shEv.leaf
+        shTys.add shEv.leafTy
+    for stEv in st.tupleStream():
+      if stEv.kind == kLeaf:
+        stDims.add stEv.leaf
+        stVals.add stEv.leafTy.getStaticInt()
+    # most-significant leaf = the largest stride, identifiable only
+    # when every stride is static, so dynamic strides keep the mod
+    let maxIdx = stVals.maxIndex
+    let allStatic = DynamicSentinel notin stVals
+    # for tuple shapes, the quotient runs unmod'd at the largest static stride
+    var parts: seq[NimNode] = @[]
+    for i in 0 ..< shDims.len:
+      if isStaticOne(shTys[i]):
+        # broadcast dimension, the coordinate is 0 before any division
+        parts.add IntCT(0)
+      elif allStatic and i == maxIdx:
+        parts.add idx div stDims[i]
+      else:
+        parts.add (idx div stDims[i]) mod shDims[i]
+    result = nnkPar.newTree(parts)
 
 macro idx2crd_gpu*(layout: Layout, idx: int or Int): untyped =
   ## Say `layout` is the element order of a tensor in memory.
@@ -60,49 +97,14 @@ macro idx2crd_gpu*(layout: Layout, idx: int or Int): untyped =
   ##
   ## Layouts must have a flat, one-level shape.
   ## TODO: nested shape support, say ((2,3), 4).
-  let shT = layoutTypeArgs(layout).shapeTy
-  let stT = layoutTypeArgs(layout).strideTy
-  let sh = newTree(nnkDotExpr, layout, ident"shape")
-  let st = newTree(nnkDotExpr, layout, ident"stride")
-  if shT.kind != nnkTupleConstr:
-    result = quote do:
-      when `sh` is Int[1]:
-        Int[0]()
-      else:
-        `idx` div `st`
-  else:
-    # most-significant leaf = the largest stride, identifiable only
-    # when every stride is static, so dynamic strides keep the mod
-    let stVals = toSeqStaticInts(stT)
-    let maxIdx = stVals.maxIndex
-    let allStatic = DynamicSentinel notin stVals
-    # for tuple shapes, the quotient runs unmod'd at the largest static stride
-    var parts: seq[NimNode] = @[]
-    for i in 0 ..< shT.len:
-      let s = bindSym"[]".newCall(st, newLit(i))
-      let shI = bindSym"[]".newCall(sh, newLit(i))
-      let leaf = if allStatic and i == maxIdx:
-        quote do: `idx` div `s`
-      else:
-        quote do: (`idx` div `s`) mod `shI`
-      parts.add quote do:
-        when `shI` is Int[1]:
-          Int[0]()
-        else:
-          `leaf`
-    result = nnkPar.newTree(parts)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  template idx2crdGpuDelegate(s2, t2, i2) =
+    idx2crdGpuImpl(s2, t2, i2)
+  result.add getAst(idx2crdGpuDelegate(sh, st, idx))
+
 
 # ═══════════════════════════════════════════════════════════════
-
-proc emitCoordTree(profile: NimNode, parts: seq[NimNode], i: var int): NimNode {.compileTime.} =
-  ## Rebuild the shape's nesting over the flat decomposition `parts`.
-  if profile.kind in {nnkTupleTy, nnkTupleConstr}:
-    result = nnkPar.newTree()
-    for j in 0 ..< profile.len:
-      result.add emitCoordTree(profile[j], parts, i)
-  else:
-    result = parts[i]
-    inc i
 
 macro idx2crd_gpu*(shape: IntOrIntTuple, idx: int or Int): untyped =
   ## Say a tensor packs its elements one after another, with dimension 0
@@ -126,18 +128,41 @@ macro idx2crd_gpu*(shape: IntOrIntTuple, idx: int or Int): untyped =
   ##   idx2crd((4, 8), 31)            == (3, 7)   # 31 = 3 + 4·7
   ##   idx2crd(((4, 8), (2, 2)), 31)  == ((3, 7), (0, 0))
   ##   idx2crd((3, 7, 2), 42)         == (0, 0, 2)  # excess on the last dimension
-  let shT = shape.getTypeInst()
-  if shT.kind in {nnkTupleTy, nnkTupleConstr}:
-    let flat = shape.tupleFlatten()
+  let shTy = shape.getTypeInst()
+  if shTy.kind in {nnkTupleTy, nnkTupleConstr}:
+    # first pass, the shape's leaves in order
+    var sizes: seq[NimNode] = @[]
+    var stream = shape.tupleStream()
+    while not stream.done():
+      let ev = stream.next()
+      if ev.kind == kLeaf:
+        sizes.add ev.leaf
+    # the parts, dimension 0 fastest, the last leaf keeps
+    # the plain quotient with no mod
     var parts: seq[NimNode] = @[]
     var q = idx
-    for k in 0 ..< flat.len - 1:
-      let s = flat[k].leaf
-      parts.add newCall(bindSym"mod", q, s)
-      q = newCall(bindSym"div", q, s)
+    for k in 0 ..< sizes.len - 1:
+      parts.add q mod sizes[k]
+      q = q div sizes[k]
     parts.add q
+    # second pass, the parts re-nest over the shape's tree
+    var stack: seq[NimNode] = @[]
     var i = 0
-    result = emitCoordTree(shT, parts, i)
+    stream = shape.tupleStream()
+    while not stream.done():
+      let ev = stream.next()
+      case ev.kind
+      of kOpen:
+        stack.add nnkPar.newTree()
+      of kLeaf:
+        stack[^1].add parts[i]
+        inc i
+      of kClose:
+        let done = stack.pop()
+        if stack.len == 0:
+          result = done
+        else:
+          stack[^1].add done
   else:
     result = idx
 
