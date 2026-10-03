@@ -179,6 +179,7 @@ template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## - an underscore in the coord keeps that grid slot whole,
   ##   the result has a dimension indexing the leftover tiles
   partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = true)
+
 template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Cut the tensor into tiles, select the same slice from every tile,
   ## the tiles themselves are gone from the view.
@@ -212,6 +213,7 @@ template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## - `coord` indexes positions inside a tile, the same positions `inner_partition`'s result covers
   ## - a scalar coord addresses the tile by linear index, a tuple coord per dimension
   partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = false)
+
 template local_tile*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Select the one tile of the tensor that the current threadgroup owns.
   ##

@@ -41,7 +41,7 @@ Rule table (rule | trigger | severity):
 | hidden-context       | an advisory hidden-context word ("mirrors"), the audience is a CS undergraduate that just cloned   | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
-| missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)            | advisory |
+| missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
@@ -170,7 +170,7 @@ PY_TEST_FILE_RE = re.compile(r"(?:^|/)(?:test_[^/]*|[^/]*_test)\.py$")
 # Labeled sections (Args:, Output:) count through their colon shape.
 # The bare contract words count by themselves.
 CONTRACT_MARKER_RE = re.compile(
-    r"\b(?:args|returns|raises|usage|parameters)\b|\boutput\s*:|"
+    r"\b(?:args|returns|raises|usage|examples|parameters)\b|\boutput\s*:|"
     r"\b(?:contract|precondition|postcondition|invariants?|expected input|"
     r"input shapes|output shape|lifetime|data flow)\b", re.IGNORECASE)
 
@@ -473,7 +473,7 @@ RULES = {
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
-                             "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant)"),
+                             "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)"),
     "sig-wrap": Rule("sig-wrap", True,
                      "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,

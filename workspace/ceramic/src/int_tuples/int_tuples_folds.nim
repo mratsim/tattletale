@@ -5,50 +5,56 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/typetraits
+import std/macros, std/typetraits
+import ./int_tuples_compiletime
 import ./int_tuples_datatypes
+import ./int_tuples_streams
 import ./int_tuples_transforms
+import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
 #  fold, left-fold reduction with Int[N] support
 # ═══════════════════════════════════════════════════════════════
-#
-#  The fold pattern adapts to scalar and Int[N] elements:
-#    - Scalar `int` → inject `acc`, `it`, evaluate body
-#    - Scalar `Int[N]` → inject `acc`, `it` (Int[V] → int via * overloads)
-#    - Tuple → recurse over fields via `for f in fields(t)`
-#
-#  Injects `acc` (accumulator, type int) and `it` (current element).
-#  `body` returns new accumulator.  Always returns `int`.
-#
-#  Examples:
-#    fold(5, 1, acc * it)            → 5
-#    fold(Int[5](), 1, acc * it)     → 5  (Int[V] extracted via * overload)
-#    fold((2,3,4), 1, acc * it)      → 24
-#    fold((2,(3,4)), 1, acc * it)    → 24
-# ═══════════════════════════════════════════════════════════════
 
-template fold_recurse*(idx: static int; t: tuple; state: typed; body: untyped): auto =
-  let field = fold(t[idx], state, body)
-  when idx == t.rank() - 1:
-    field
-  else:
-    fold_recurse(idx + 1, t, field, body)
-
-template fold*(t: IntOrIntTuple; startingAcc: typed; body: untyped): auto =
+macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
   ## Fold over all leaves of t with an accumulator.
-  ## Sub-tuples are handled recursively via fold_recurse.
-  ## Returns Int[N] for all-Int[N] leaf paths, int otherwise.
-  when t is int or t is Int:
-    block:
-      let acc {.inject.} = startingAcc
-      let it {.inject.} = t
-      body
-  else:  # tuple
-    when t.rank() == 0:
-      startingAcc
-    else:
-      fold_recurse(0, t, startingAcc, body)
+  ##
+  ## The accumulator is called `acc` and the iteration variable `it`
+  ##
+  ##  Examples:
+  ##    fold(5, 1, acc * it)            → 5
+  ##    fold(Int[5](), 1, acc * it)     → 5  (Int[V] extracted via * overload)
+  ##    fold((2,3,4), 1, acc * it)      → 24
+  ##    fold((2,(3,4)), 1, acc * it)    → 24
+  let accTy = startingAcc.getTypeInst()
+  let intStart = accTy.sameType(bindSym"int")
+  var leaves: seq[NimNode]
+
+  if t.getTypeInst().isTupleTy():
+    var stream = t.tupleStream()
+    while not stream.done():
+      let event = stream.next()
+      if event.kind == kLeaf:
+        leaves.add event.leaf
+  else:
+    leaves.add t
+  if leaves.len == 0:
+    return newStmtList(startingAcc)
+
+  var chain: NimNode = nil
+  var acc: NimNode = if intStart: ident"acc" else: startingAcc
+
+  for leaf in leaves:
+    chain = body.replaceNodes(("acc", acc), ("it", leaf))
+    acc = chain
+
+  if intStart:
+    result = quote do:
+      block:
+        let acc {.inject.} = `startingAcc`
+        `chain`
+  else:
+    result = newStmtList(chain)
 
 # ═══════════════════════════════════════════════════════════════
 #  prefix_scanIt and suffix_scanIt, scans preserving constness
