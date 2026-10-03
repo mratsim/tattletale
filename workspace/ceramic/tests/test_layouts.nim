@@ -964,31 +964,35 @@ proc runUpcastDowncastTests =
 
 
 # ═══════════════════════════════════════════════════════════════
-#  compact_order / make_layout_like — CuTe test_compact_order.cpp
+#  make_ordered_layout / make_layout_like — pycute spec
 # ═══════════════════════════════════════════════════════════════
 
-proc runCompactOrderTests =
-  # CuTe section 1: scalar shape
+proc runOrderedLayoutTests =
+  # Section 1: scalar shape
   block:
-    doAssert compact_order(2, 0) == 1
-    echo "    1. compact_order scalar: 1 case OK"
+    doAssert make_ordered_layout(2, 0) === (2, 1)
+    echo "    1. make_ordered_layout scalar: 1 case OK"
 
-  # CuTe section 2: 2D explicit permutations
+  # Section 2: 2D explicit permutations
   block:
-    let a = make_layout((2,3), compact_order((2,3), (0,1)))
-    doAssert a === ((2,3), (1,2))
-    let b = make_layout((2,3), compact_order((2,3), (1,0)))
-    doAssert b === ((2,3), (3,1))
-    echo "    2. compact_order 2D: 2 cases OK"
+    doAssert make_ordered_layout((2,3), (0,1)) === ((2,3), (1,2))
+    doAssert make_ordered_layout((2,3), (1,0)) === ((2,3), (3,1))
+    echo "    2. make_ordered_layout 2D: 2 cases OK"
 
-  # CuTe section 3: 3D explicit permutations
+  # Section 3: 3D explicit permutations
   block:
-    doAssert make_layout((2,3,4), compact_order((2,3,4), (0,1,2))) === ((2,3,4), (1,2,6))
-    doAssert make_layout((2,3,4), compact_order((2,3,4), (2,1,0))) === ((2,3,4), (12,4,1))
-    doAssert make_layout((2,3,4), compact_order((2,3,4), (0,2,1))) === ((2,3,4), (1,8,2))
-    doAssert make_layout((2,3,4), compact_order((2,3,4), (1,2,0))) === ((2,3,4), (4,8,1))
-    doAssert make_layout((2,3,4), compact_order((2,3,4), (2,0,1))) === ((2,3,4), (12,1,3))
-    echo "    3. compact_order 3D: 5 cases OK"
+    doAssert make_ordered_layout((2,3,4), (0,1,2)) === ((2,3,4), (1,2,6))
+    doAssert make_ordered_layout((2,3,4), (2,1,0)) === ((2,3,4), (12,4,1))
+    doAssert make_ordered_layout((2,3,4), (0,2,1)) === ((2,3,4), (1,8,2))
+    doAssert make_ordered_layout((2,3,4), (1,2,0)) === ((2,3,4), (4,8,1))
+    doAssert make_ordered_layout((2,3,4), (2,0,1)) === ((2,3,4), (12,1,3))
+    echo "    3. make_ordered_layout 3D: 5 cases OK"
+
+  # Section 4: tied orders keep left-to-right position
+  block:
+    doAssert make_ordered_layout((2,3), (0,0)) === ((2,3), (1,2))
+    doAssert make_ordered_layout((2,3,4,2), (0,2,3,0)) === ((2,3,4,2), (1,4,12,2))
+    echo "    4. make_ordered_layout tied orders: 2 cases OK"
 
   # CuTe section 5: make_layout_like 2D
   block:
@@ -1010,11 +1014,11 @@ proc runCompactOrderTests =
 
   # Dimension-reordering rejection
   block:
-    # compact_order: dimension i keeps position i; only stride values change
-    let cm = compact_order((2,3,4), (1,2,0))
-    doAssert cm[0] == 4
-    doAssert cm[1] == 8
-    doAssert cm[2] == 1
+    # make_ordered_layout: dimension i keeps position i, only stride values change
+    let cm = make_ordered_layout((2,3,4), (1,2,0))
+    doAssert cm.stride[0].toIntVal == 4
+    doAssert cm.stride[1].toIntVal == 8
+    doAssert cm.stride[2].toIntVal == 1
     echo "    7. Dimensions NOT reordered: 3 checks OK"
 
   block:
@@ -1028,8 +1032,8 @@ proc runCompactOrderTests =
 proc runTests =
   echo "--- make_layout ---"
   runMakeLayoutTests()
-  echo "--- compact_order / make_layout_like ---"
-  runCompactOrderTests()
+  echo "--- make_ordered_layout / make_layout_like ---"
+  runOrderedLayoutTests()
   echo "--- Flatten ---"
   runFlattenTests()
   echo "--- Concat ---"
