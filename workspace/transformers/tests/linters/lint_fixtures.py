@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fixture-tree linter, deterministic checks over the fixture trees.
-The finding record shape comes from lint_docs.py, the single source of truth for the linter family.
+The finding record shape comes from lint_md_nim_py.py, the single source of truth for the linter family.
 
 Rule table (rule | trigger | severity):
 
@@ -44,7 +44,7 @@ Golden rules:
 - the linter is a reporting tool, it never edits files
 - exit 0 means clean
 - exit 1 means at least one counted finding
-- exit 2 means the lint_docs.py import or the zstd binary is missing
+- exit 2 means the lint_md_nim_py.py import or the zstd binary is missing
 """
 
 import json
@@ -62,7 +62,7 @@ def _skill_root():
     walking up from this file, or None."""
     d = _FILE.parent
     while d.parent != d:
-        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_docs.py").is_file():
+        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_md_nim_py.py").is_file():
             return d
         d = d.parent
     return None
@@ -71,15 +71,15 @@ def _skill_root():
 _SKILL_ROOT = _skill_root()
 if _SKILL_ROOT is None:
     # One source of truth for the finding record shape:
-    # a missing lint_docs.py import is a hard error, never a silent skip.
+    # a missing lint_md_nim_py.py import is a hard error, never a silent skip.
     sys.stderr.write(
-        "lint_fixtures: fatal: .agents/skills/writing-docs/tools/lint_docs.py "
+        "lint_fixtures: fatal: .agents/skills/writing-docs/tools/lint_md_nim_py.py "
         "not found above %s\n" % _FILE)
     raise SystemExit(2)
 sys.path.insert(0, str(_SKILL_ROOT / ".agents" / "skills" / "writing-docs" / "tools"))
-import lint_docs  # noqa  # the sys.path setup runs above, E402 silent
+import lint_nim  # noqa  # the sys.path setup runs above, E402 silent
 
-Finding = lint_docs.Finding
+Finding = lint_nim.Finding
 
 FILE_CAP = 262144
 DIR_CAP = 1572864

@@ -2,7 +2,7 @@
 """Nim fixture-consumer linter, deterministic checks over the Nim fixture
 consumers (q_bf16/, q_exl3/, and the tests-root *.nim modules).
 
-Doc compliance comes from lint_docs.py, imported as the single
+Doc compliance comes from lint_md_nim_py.py, imported as the single
 source of truth for the linter family.
 
 
@@ -33,7 +33,7 @@ Rule table (rule | trigger | severity):
 | try-discard | an except branch that only discards, or a discard inside try/except, in a suite file | counted |
 | proc-spacing | a top-level proc-family definition with no blank line before or after it | counted |
 | comma-spacing | a comma outside a string literal or comment carrying no space or newline after it | counted |
-| (lint_docs rules) | doc compliance over every scanned file, the wall rule included | per lint_docs.py |
+| (lint_nim rules) | doc compliance over every scanned file, the wall rule included | per lint_md_nim_py.py |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -56,11 +56,11 @@ Golden rules:
   lint_nim_fixtures_consumers.py`, it reports clean
 - one finding per line, `path:line: rule-id: reason`, sorted by path and line
 - advisory findings print with a [warning] tag and never set the exit code
-- the lint pass never edits files, --fix mode runs the lint_docs
+- the lint pass never edits files, --fix mode runs the lint_nim
   mechanical autofix over the collected consumer files first
 - exit 0 means clean, in --fix mode also no mechanical doc finding left
 - exit 1 means at least one counted finding or mechanical doc finding left
-- exit 2 means the lint_docs.py import is missing
+- exit 2 means the lint_md_nim_py.py import is missing
 """
 
 import re
@@ -75,7 +75,7 @@ def _skill_root():
     walking up from this file, or None."""
     d = _FILE.parent
     while d.parent != d:
-        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_docs.py").is_file():
+        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_md_nim_py.py").is_file():
             return d
         d = d.parent
     return None
@@ -83,16 +83,16 @@ def _skill_root():
 
 _SKILL_ROOT = _skill_root()
 if _SKILL_ROOT is None:
-    # One source of truth for the doc rules, a missing lint_docs.py is
+    # One source of truth for the doc rules, a missing lint_md_nim_py.py is
     # a hard error, never a silent skip of the doc checks.
     sys.stderr.write(
-        "lint_nim_fixtures_consumers: fatal: .agents/skills/writing-docs/tools/lint_docs.py "
+        "lint_nim_fixtures_consumers: fatal: .agents/skills/writing-docs/tools/lint_md_nim_py.py "
         "not found above %s\n" % _FILE)
     raise SystemExit(2)
 sys.path.insert(0, str(_SKILL_ROOT / ".agents" / "skills" / "writing-docs" / "tools"))
-import lint_docs  # noqa  # the sys.path setup runs above, E402 silent
+import lint_nim  # noqa  # the sys.path setup runs above, E402 silent
 
-Finding = lint_docs.Finding
+Finding = lint_nim.Finding
 
 # The target allowlist, the only assert* calls a suite may call,
 # both imported from tests/harness.
@@ -705,7 +705,7 @@ def is_command_body(body, prev_ended_backslash):
     """
     if prev_ended_backslash:
         return True
-    return bool(lint_docs.RUN_CMD_RE.search(body))
+    return bool(lint_nim.RUN_CMD_RE.search(body))
 
 
 def check_header_cap(path, text, findings):
@@ -736,8 +736,8 @@ def check_header_cap(path, text, findings):
             first = i
         elif not body:
             continue
-        if (lint_docs.is_table(body) or lint_docs.is_diagram(body)
-                or lint_docs.BULLET_RE.match(body)):
+        if (lint_nim.is_table(body) or lint_nim.is_diagram(body)
+                or lint_nim.BULLET_RE.match(body)):
             prev_backslash = body.endswith("\\")
             continue
         if is_command_body(body, prev_backslash):
@@ -809,7 +809,7 @@ def check_comma_spacing(path, lines, findings):
 
 def scan(path, text, findings):
     """Runs every rule over one consumer file, appending to findings."""
-    for fd in lint_docs.lint_text(text, str(path)):
+    for fd in lint_nim.lint_text(text, str(path)):
         findings.append(Finding(fd.path, fd.line, fd.rule, fd.reason, fd.warning))
     lines = text.splitlines()
     consumer = is_fixture_consumer(lines)
@@ -871,7 +871,7 @@ def lint(paths):
 
 
 def main(argv):
-    """Runs the CLI on a file and directory list, with --fix running the lint_docs
+    """Runs the CLI on a file and directory list, with --fix running the lint_nim
     mechanical autofix over the collected consumer files first. Returns the process
     exit code (0 clean, 1 findings, 2 failure)."""
     args = argv[1:]
@@ -888,7 +888,7 @@ def main(argv):
             root = tests_root_for(a)
             if root is not None:
                 files.update(collect_files(root))
-        mechanical_left = sum(lint_docs.fix_one_reported(f)
+        mechanical_left = sum(lint_nim.fix_one_reported(f)
                               for f in sorted(files))
     if not args:
         print(__doc__)

@@ -131,18 +131,18 @@ macro partitionImpl(tv: typed, zipped: Layout, coord: typed, doInner: static boo
     if doInner:
       # Tile whole first, sliced rest second.
       result.add quote do:
-        make_view(`tv`.data +% toIntVal(crd2idxWalk(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
           make_layout(concat(`wholeShape`, slice(`slicedShape`, `coord`)),
                       concat(`wholeStride`, slice(`slicedStride`, `coord`))))
     else:
       # Sliced tile first, rest whole second.
       result.add quote do:
-        make_view(`tv`.data +% toIntVal(crd2idxWalk(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
           make_layout(concat(slice(`slicedShape`, `coord`), `wholeShape`),
                       concat(slice(`slicedStride`, `coord`), `wholeStride`)))
   else:
     result.add quote do:
-      make_view(`tv`.data +% toIntVal(crd2idxWalk(`coord`, `slicedShape`, `slicedStride`)),
+      make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
         make_layout(`wholeShape`, `wholeStride`))
 
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =

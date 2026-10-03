@@ -153,15 +153,16 @@ block:
 echo "  [OK] idx2crd(shape, idx): shape-based decomposition"
 
 # ═══════════════════════════════════════════════════════════════
-#  idx2crd(layout, idx) — stride-based: NON-compact layouts are NOT the
-#  inverse of crd2idx (CuTe documents the same restriction on its 3-arg
-#  idx2crd(i, shape, stride)) — documented, so use the shape overload.
+#  idx2crd(layout, idx), stride-based
+#
+#  Non-compact layouts do not invert: only compact layouts have one
+#  coordinate per slot. Use the shape-based idx2crd(shape, idx) there.
 # ═══════════════════════════════════════════════════════════════
 
 block:
   let n = make_layout((4, 8), (16, 1))   # atom T-dimension structure, gaps
-  # flat 31 over the shape is (3, 7); the stride-based decomposition
-  # gives (1, 7) and does not roundtrip — the documented compact-only case
+  # flat 31 over the shape is (3, 7) and the stride-based
+  # decomposition gives (1, 7), no roundtrip, the compact-only case
   doAssert idx2crd(n, 31) === (1, 7)
   doAssert crd2idx(n, idx2crd(n, 31)).toIntVal() != 31
 
@@ -220,6 +221,30 @@ block:
 ##       let idx = crd2idx(L, crd)
 #      doAssert idx === i, "roundtrip i=" & $i & ": got " & $idx
 #  echo "  idx2crd: 8 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd_cpu — wheel peeling, no div/mod
+# ═══════════════════════════════════════════════════════════════
+
+block:
+  # every recovered coordinate roundtrips through crd2idx
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd_cpu(L, 22) == (2, 5)
+  for i in 0 ..< 32:
+    doAssert crd2idx(L, idx2crd_cpu(L, i)) == i
+
+block:
+  # out of range: the highest dimension counts beyond its size
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd_cpu(L, 35) == (3, 8)
+  doAssert crd2idx(L, idx2crd_cpu(L, 35)) == 35
+
+block:
+  # scalar shape is the rank-1 degenerate case
+  let S = make_layout(8, 1)
+  doAssert idx2crd_cpu(S, 5) == 5
+
+echo "  [OK] idx2crd_cpu: wheel peeling (3 cases)"
 
 # ═══════════════════════════════════════════════════════════════
 #  slice/dice on Layout

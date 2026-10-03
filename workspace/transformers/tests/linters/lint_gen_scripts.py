@@ -1,12 +1,12 @@
 """Fixture-generator linter, deterministic checks over testgen/gen_*.py.
-Doc rules come from lint_docs.py, imported as the single source of truth.
+Doc rules come from lint_md_nim_py.py, imported as the single source of truth.
 
 Rule table (rule | trigger | severity):
 
 | exactness-vocab | a comment says byte-exact, byte-identical, bit-exact, or bit-identical: a regen verifies by the instruments, bit equality = the codec payload contract only (noqa exempt) | counted |
 | rule-id | trigger | severity |
 |---|---|---|
-| (lint_docs rules) | every doc rule of lint_docs.py over the script's docstrings and comments | per lint_docs.py |
+| (lint_nim rules) | every doc rule of lint_md_nim_py.py over the script's docstrings and comments | per lint_md_nim_py.py |
 | config-is-king | the script parses config.json and also hardcodes a geometry const (hidden size, head count, head or rotary dim, rank, top-k, layer count, intermediate dim, vocab) | counted |
 | model-name-const | a module-level const holding a model checkpoint name | advisory |
 | version-const | a module-level const holding a version string | advisory |
@@ -35,7 +35,7 @@ The scan covers the gen_*.py scripts under the given paths, recursion included, 
 - the lint pass never edits files, --fix runs the mechanical autofix first
 - exit 0 means clean, --fix mode also asks for no mechanical doc finding left
 - exit 1 on a counted finding or a mechanical doc finding left
-- exit 2 on the missing lint_docs.py import
+- exit 2 on the missing lint_md_nim_py.py import
 """
 
 import ast
@@ -51,7 +51,7 @@ def _skill_root():
     walking up from this file, or None."""
     d = _FILE.parent
     while d.parent != d:
-        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_docs.py").is_file():
+        if (d / ".agents" / "skills" / "writing-docs" / "tools" / "lint_md_nim_py.py").is_file():
             return d
         d = d.parent
     return None
@@ -60,14 +60,14 @@ def _skill_root():
 _SKILL_ROOT = _skill_root()
 if _SKILL_ROOT is None:
     # One source of truth for the doc rules:
-    #   a missing lint_docs.py is
+    #   a missing lint_md_nim_py.py is
     # a hard error, never a silent skip of the doc checks.
     sys.stderr.write(
-        "lint_gen_scripts: fatal: .agents/skills/writing-docs/tools/lint_docs.py "
+        "lint_gen_scripts: fatal: .agents/skills/writing-docs/tools/lint_md_nim_py.py "
         "not found above %s\n" % _FILE)
     raise SystemExit(2)
 sys.path.insert(0, str(_SKILL_ROOT / ".agents" / "skills" / "writing-docs" / "tools"))
-import lint_docs  # noqa, E402, the import sits after the sys.path setup
+import lint_nim  # noqa, E402, the import sits after the sys.path setup
 
 
 class Finding:
@@ -372,7 +372,7 @@ def collect_files(paths):
 
 def scan(path, text, findings):
     """Runs every rule over one generator script, appending to findings."""
-    doc = lint_docs.lint_text(text, str(path))
+    doc = lint_nim.lint_text(text, str(path))
     for fd in doc:
         findings.append(Finding(fd.path, fd.line, fd.rule, fd.reason, fd.warning))
     try:
@@ -384,7 +384,7 @@ def scan(path, text, findings):
     lines = text.splitlines()
     code_lines = [strip_comment(ln) for ln in lines]
     code = "\n".join(code_lines)
-    doc_lines = [(n, c) for n, c, kind, _, _ in lint_docs.py_prose_lines(text)[0]
+    doc_lines = [(n, c) for n, c, kind, _, _ in lint_md_nim_py.py_prose_lines(text)[0]
                  if kind == "doc"]
     check_config_is_king(path, tree, code, findings)
     check_named_consts(path, tree, findings)
@@ -411,14 +411,14 @@ def lint(paths):
 
 def main(argv):
     """CLI entry point over a file and directory list, with --fix running
-    the lint_docs mechanical autofix over the collected generators first.
+    the lint_nim mechanical autofix over the collected generators first.
     Returns the process exit code, 0 for clean, 1 for findings, 2 for failure."""
     args = argv[1:]
     fix_mode = "--fix" in args
     args = [a for a in args if a != "--fix"]
     mechanical_left = 0
     if fix_mode and args:
-        mechanical_left = sum(lint_docs.fix_one_reported(f)
+        mechanical_left = sum(lint_nim.fix_one_reported(f)
                               for f in collect_files(args))
     if not args:
         print(__doc__)

@@ -105,7 +105,7 @@ Nothing commits without them:
 | `lint_gen_scripts.py` | the generators: docs, config over consts, entry shape, the directory allowlist |
 | `lint_fixtures.py` | the fixtures: size caps (the EXL3 carve-out is explicit), one dir per tier, record schema |
 | `lint_nim_fixtures_consumers.py` | the suites: the assert allowlist, one flat main, filepath-only consts, shared-helper imports, docs |
-| `lint_docs.py` (in the writing-docs skill) | doc comments everywhere, including this tree |
+| `lint_md_nim_py.py` (in the writing-docs skill) | doc comments everywhere, including this tree |
 
 Run commands and rule tables live in each linter header and inside
 the [testing skill](../../../.agents/skills/testing/SKILL.md).
