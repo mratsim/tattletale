@@ -16,6 +16,7 @@ import std/typetraits
 import workspace/ceramic/src/int_tuples
 import ./layout_indexing_cpu
 import ./layout_indexing_gpu
+import ./layout_indexing_slicedice
 import ./layouts
 import ./layouts_unsanctioned_helpers
 import ./layout_compiletime
@@ -23,19 +24,16 @@ import workspace/ceramic/src/macros/varargs_to_par
 
 export layout_indexing_cpu
 export layout_indexing_gpu
+export layout_indexing_slicedice
 
 # ═══════════════════════════════════════════════════════════════
 #  crd2idx / idx2crd, delegates to layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 
 template crd2idx*(layout: Layout; coord: IntOrIntTuple): auto =
-  ## Logical-to-memory offset for a coordinate on a Layout.
-  ##
-  ## `coord` can be:
-  ## - an `int`, decomposed column-major across all dimensions
-  ## - a `tuple`, inner product `coord·stride` per dimension
-  ## - a static `Int[V]`, same at compile time
-  crd2idx(makeIntTuple(coord), layout.shape, layout.stride)
+  ## Logical-to-memory offset for a coordinate on a Layout, the multiply-add
+  ## chain over the layout's strides.
+  crd2idx_gpu(layout, coord)
 
 macro idx2crd*(layout: Layout; idx: int or Int): untyped =
   ## Convert linear index to coordinate using a Layout.
@@ -141,116 +139,8 @@ macro idx2crd*(shape: IntOrIntTuple; idx: int or Int): untyped =
     result = idx
 
 # ═══════════════════════════════════════════════════════════════
-#  slice and dice, marker-based dimension selection
-# ═══════════════════════════════════════════════════════════════
-
-macro slice*(target: tuple; selector: typed): untyped =
-  ## Slice a tuple, keep elements where the selector entry is X.
-  ## Elements with a Y, int, or Int selector are dropped.
-
-  let ty = selector.getTypeInst() # The selector is a type or a tuple of types
-  let sel = if ty.kind == nnkBracketExpr: ty[1]
-            else: selector
-  var builder = TupleBuilderNested.new(1)
-  for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
-    tgtEvent.onLeaves():
-      let raw = selEvent.leafTy
-      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
-                    raw[1]
-                  else: raw
-      if selTy.hasType"X":
-        builder.append(tgtEvent)
-      elif selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
-        discard
-      else:
-        error "slice: selector items must be X, Y, or ints", selTy
-  result = builder.emit(0).resultTuple
-
-macro dice*(target: tuple; selector: typed): untyped =
-  ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
-  ## Elements with an X selector are dropped.
-
-  let ty = selector.getTypeInst() # The selector is a type or a tuple of types
-  let sel = if ty.kind == nnkBracketExpr: ty[1]
-            else: selector
-  var builder = TupleBuilderNested.new(1)
-  for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
-    tgtEvent.onLeaves():
-      let raw = selEvent.leafTy
-      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
-                    raw[1]
-                  else: raw
-      if selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
-        builder.append(tgtEvent)
-      elif selTy.hasType"X":
-        discard
-      else:
-        error "dice: selector items must be X, Y, or ints", selTy
-  result = builder.emit(0).resultTuple
-
-template slice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout.
-  ##
-  ## Returns the layout keeping the dimensions marked X or _,
-  ## dimensions marked Y, int, or Int are dropped.
-  ##
-  ## Accepts both varargs and a single tuple argument:
-  ## - slice(L, X, Y)     two separate args
-  ## - slice(L, (X, Y))   single tuple argument, equivalent
-  block:
-    evalOnceAs(t, target)
-    make_layout(
-      slice(t.shape, varargs_to_par(selectors)),
-      slice(t.stride, varargs_to_par(selectors)))
-
-template dice*(target: Layout; selectors: varargs[untyped]): untyped =
-  ## Extract a sub-Layout.
-  ##
-  ## Returns the layout keeping the dimensions marked Y, int, or Int,
-  ## dimensions marked X are dropped.
-  ##
-  ## Accepts both varargs and a single tuple argument:
-  ## - dice(L, Y, X)     two separate args
-  ## - dice(L, (Y, X))   single tuple argument, equivalent
-  block:
-    evalOnceAs(t, target)
-    make_layout(
-      dice(t.shape, varargs_to_par(selectors)),
-      dice(t.stride, varargs_to_par(selectors)))
-
-# ═══════════════════════════════════════════════════════════════
 #  layout() call syntax
 # ═══════════════════════════════════════════════════════════════
-
-template hasUnderscoreImpl*(coord: typed): bool =
-  when coord is tuple:
-    block:
-      var found = false
-      for c in fields(coord):
-        when c.hasUnderscore():
-          found = true
-      found
-  elif coord is int:
-    false
-  elif coord is Int:
-    false
-  elif coord is X:
-    true
-  else:
-    {.error: "[ttt] unsupported type: " & typeof(coord).}
-
-macro hasUnderscore*(Cs: varargs[untyped]): bool =
-  let r = ident"r"
-  result = newStmtList()
-  result.add quote do:
-    var `r` = false
-  for i in 0 ..< Cs.len:
-    let Ci = Cs[i]
-    result.add quote do:
-      `r` = `r` or hasUnderscoreImpl(`Ci`)
-  result.add quote do:
-    `r`
-  result = newBlockStmt(result)
 
 template `()`*(layout: Layout; args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.

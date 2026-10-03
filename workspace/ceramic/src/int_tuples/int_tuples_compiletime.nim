@@ -66,6 +66,12 @@ func `*`*(a, b: NimNode): NimNode {.compileTime.} =
 func `div`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"div", a, b)
 
+func `+`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"+", a, b)
+
+func `mod`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"mod", a, b)
+
 func abs*(a: NimNode): NimNode {.compileTime.} =
   bindSym"abs".newCall(a)
 

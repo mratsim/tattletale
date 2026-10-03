@@ -24,27 +24,29 @@
 ##     ... use off ...
 ##     wheel.incr(shape)
 
+import std/macros
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/int_tuples
 import ./layouts
 import ./layouts_unsanctioned_helpers
 import ./layout_compiletime
+import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  CoordWheel, iterate logical positions without divmod
 # ═══════════════════════════════════════════════════════════════
 
-type CoordWheel*[Rank: static int] = object
+type CoordWheel[Rank: static int] = object
   ## Track a logical coordinate as it advances through a shape.
   ## Initialized to all zeros (first logical position).
   ## `incr` advances by one position via carry-chain (no divmod).
-  coord*: array[Rank, int]
+  coord: array[Rank, int]
 
-func initCoordWheel*[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
+func initCoordWheel[Rank: static int](_: typedesc[CoordWheel[Rank]]): CoordWheel[Rank] =
   ## Wheel at (0, 0, ..., 0), the first logical position.
   CoordWheel[Rank](coord: default(array[Rank, int]))
 
-import workspace/ceramic/src/macros/static_for
-func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
+func incr[Rank: static int](wheel: var CoordWheel[Rank], shape: auto) =
   ## Advance the coordinate by one logical position (carry-chain).
   ##
   ## - in-range carry, the coordinate never reaches the shape
@@ -58,7 +60,7 @@ func incr*[Rank: static int](wheel: var CoordWheel[Rank]; shape: auto) =
     else:
       wheel.coord[k] = 0
 
-func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int =
+func coordOffset[Rank: static int](wheel: CoordWheel[Rank], strides: auto): int =
   ## Linear offset = sum(coord[i] * stride[i]), pure multiply-add.
   staticFor i, 0, Rank:
     result += wheel.coord[i] * int(strides[i])
@@ -67,15 +69,8 @@ func coordOffset*[Rank: static int](wheel: CoordWheel[Rank]; strides: auto): int
 #  CPU wrappers, dispatch targets for useGpuIndexing
 # ═══════════════════════════════════════════════════════════════
 
-import ./layout_indexing_gpu
-import std/macros
 
-func crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): int {.inline, noInit.} =
-  ## CPU-suffixed crd2idx: delegates to the same multiply-add 3-arg.
-  ## For tuple coords this is identical to GPU path (no divmod).
-  crd2idx(coord, layout.shape, layout.stride)
-
-macro idx2crd_cpu*(layout: Layout; idx: int or Int): untyped =
+macro idx2crd_cpu*(layout: Layout, idx: int or Int): untyped =
   ## CPU-suffixed idx2crd: uses same divmod approach.
   ## No wheel-winding alternative for random access.
   ##

@@ -3,114 +3,122 @@
 ## Licensed and distributed under either of
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+## at your option.
+## This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU-suitable indexing: crd2idx (coord→idx) and idx2crd (idx→coord).
-##
-## These are the raw computation functions (no Layout imports).
-## They operate on shape/stride tuples and scalars.
+## GPU-suitable indexing: crd2idx (coord→idx), div/mul/add only,
+## and idx2crd (idx→coord), div/mod based.
 
 import std/[macros, typetraits]
+
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/macros/static_for
-
-
-# ═══════════════════════════════════════════════════════════════
-#  slice and dice markers
-# ═══════════════════════════════════════════════════════════════
-
-type
-  X* = object  ## slice: keep this dimension, dice: drop this dimension
-  Y* = object  ## dice: keep this dimension, slice: drop this dimension
-
-const _* = X()  ## value-level marker for free/slice dimensions
-
-# X marker arithmetic: X contributes 0 in inner products
-# X*Int[V] returns Int[0] (not plain int) so compile-time constant folding
-# preserves the Int type system. X*int is plain int for runtime values.
-template `*`*(c: X; s: int): Int[0] = Int[0]()
-template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
-template `*`*(s: int; c: X): Int[0] = Int[0]()
-template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
-
-template mapLeavesWith*(singleton: X, body: untyped): X =
-  singleton
+import ./layouts
+import ./layout_compiletime
+import ./layout_indexing_slicedice
 
 # ═══════════════════════════════════════════════════════════════
-#  scalar overloads
+#  crd2idx over a Layout, one stream pass, no recursion
 # ═══════════════════════════════════════════════════════════════
 
-template crd2idx*(coord, shape: int): int = coord
-template crd2idx*[V: static int](coord: Int[V]; shape: int): Int[V] = V
-template crd2idx*(coord, shape, stride: int): int = coord * stride
-template crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = coord * stride
-template crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): auto = coord * stride
-template crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): auto = coord * stride
-template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): auto = coord * stride
-template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
+macro crd2idxWalk*(coord, shape, stride: typed): untyped =
+  ## One pass over the coord, shape, and stride streams
+  ##
+  ## c, sh, st a leaf from (coord, shape, stride)
+  ##
+  ##
+  ##   tuple coord, one contribution per leaf triple:
+  ##     result += c * st
+  ##
+  ##   scalar coord, decomposed over the dim's leaves in order:
+  ##     remaining = coord
+  ##     for each leaf (sh, st) except the last:
+  ##       result += (remaining mod sh) * st
+  ##       remaining = remaining div sh
+  ##     result += remaining * st_last
 
-# ═══════════════════════════════════════════════════════════════
-#  tuple overloads
-# ═══════════════════════════════════════════════════════════════
-
-template crd2idxDimension*(coord, shape, stride: typed): auto =
-  ## Per-dimension crd2idx anchored on the shape dimension structure.
-  when coord is X:
-    # X markers contribute 0 at any nesting level
-    Int[0]()
-  elif shape is tuple:
-    when coord is tuple:
-      # Nested coord into a nested dimension: recurse over the sub-dimensions
-      crd2idxRecur(coord, shape, stride, 0)
-    else:
-      # Scalar coord into a nested dimension: delegate to the scalar
-      # decomposition path (foldDim over the dimension's leaves)
-      crd2idx(coord, shape, stride)
-  else:
-    # Flat dimension: inner product of the coord element with the stride
-    coord * stride
-
-template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
-  ## Sum the per-dimension contributions of a tuple coord over the shape.
-  when i == rank(shape) - 1:
-    crd2idxDimension(coord[i], shape[i], stride[i])
-  else:
-    crd2idxDimension(coord[i], shape[i], stride[i]) +
-      crd2idxRecur(coord, shape, stride, i + 1)
-
-template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Recursive over shape, dispatching each top-level dimension's
-  ## (coord element, shape dimension, stride dimension) triple.
-  crd2idxRecur(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)
-
-macro foldDim*(co, sh, st: typed; i: static int): auto =
-  ## Args:
-  ## - `co`, the coord expression
-  ## - `sh`, `st` flat tuples for shape and stride
-  ## - `i`, the first component to accumulate
-  ## Returns one nested expression summing per-component contributions
-  ##   `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
-  block:
-    var shLeaves, stLeaves: seq[NimNode]
-    for (leaf, _) in sh.tupleFlatten():
-      shLeaves.add leaf
-    for (leaf, _) in st.tupleFlatten():
-      stLeaves.add leaf
-    let r = shLeaves.len
-    if stLeaves.len != r:
-      error("foldDim: shape and stride leaf counts differ: " & $r & " vs " & $stLeaves.len)
-    if r == 0:
-      error("foldDim: empty shape")
-    proc foldFrom(c: NimNode, k: int): NimNode =
-      let shK = shLeaves[k]
-      let stK = stLeaves[k]
-      if k == r - 1:
-        result = quote do: `c` * `stK`
+  var coordStream = TupleStream()
+  if coord.getTypeInst().isTupleTy():
+    coordStream = coord.tupleStream()
+  var shapeStream = shape.tupleStream()
+  var strideStream = stride.tupleStream()
+  var sum: NimNode = nil
+  var remaining: NimNode = nil       # the quotient thread, decompose only
+  var pending, pendingFinal: NimNode # the pending contribution, decompose only
+  var decomposing = false
+  var openDepth = -1        # the decompose subtree opens at this depth
+  if not coord.getTypeInst().isTupleTy():
+    # A scalar coord decomposes over the whole layout, the root opens
+    # and closes on the shape, the coord stream holds no leaves.
+    remaining = coord
+    openDepth = shapeStream.next().depth
+    discard strideStream.next()
+    decomposing = true
+  while decomposing or not coordStream.done():
+    if decomposing:
+      let shapeEvent = shapeStream.next()
+      let strideEvent = strideStream.next()
+      case shapeEvent.kind
+      of kLeaf:
+        if strideEvent.kind != shapeEvent.kind:
+          error "crd2idx: `shape` and `stride` have different structures", stride
+        sum = if sum == nil: pending else: sum + pending
+        let shapeLeaf = shapeEvent.leaf
+        let strideLeaf = strideEvent.leaf
+        let oldRemaining = remaining
+        pending = oldRemaining mod shapeLeaf * strideLeaf
+        pendingFinal = oldRemaining * strideLeaf
+        remaining = oldRemaining div shapeLeaf
+      of kClose:
+        if shapeEvent.depth == openDepth:
+          # the excess stays on the last leaf, it keeps the full quotient
+          if pending != nil:
+            sum = if sum == nil: pendingFinal
+                  else: sum + pendingFinal
+            pending = nil
+          decomposing = false
       else:
-        let rest = foldFrom(quote do: `c` div `shK`, k + 1)
-        result = quote do: (`c` mod `shK`) * `stK` + `rest`
-    result = foldFrom(co, i)
+        discard
+      continue
+    let coordEvent = coordStream.next()
+    let shapeEvent = shapeStream.next()
+    let strideEvent = strideStream.next()
+    if coordEvent.kind == kLeaf and shapeEvent.kind == kOpen:
+      # A scalar coord element into a nested dimension, the coord
+      # stream holds still until the subtree closes.
+      remaining = coordEvent.leaf
+      openDepth = shapeEvent.depth
+      decomposing = true
+      continue
+    if shapeEvent.kind != coordEvent.kind or strideEvent.kind != coordEvent.kind:
+      error "crd2idx: `coord` and `shape` have different structures", shape
+    if coordEvent.kind == kLeaf:
+      let prod = coordEvent.leaf * strideEvent.leaf
+      sum = if sum == nil: prod else: sum + prod
+  if sum == nil:
+    error "crd2idx: empty shape", shape
+  result = sum
 
-template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
-  ## Decompose coord across shape dimensions with strides.
-  foldDim(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)
+macro crd2idx_gpu*(layout: Layout; coord: IntOrIntTuple): auto =
+  ## Logical-to-memory offset for a coordinate on a Layout.
+  ##
+  ## `coord` can be:
+  ## - an `int`, decomposed column-major across all dimensions
+  ## - a `tuple`, inner product `coord·stride` per dimension
+  ## - a static `Int[V]`, same at compile time
+  ##
+  ##   Layout ──▶ destructureLayout ──▶ (shape, stride) ──┐
+  ##   coord (runtime leaves) ──▶ let cc = coord ─────────┼──▶ walk ──▶ offset
+  ##   coord (literal/static leaves) ──▶ as-is ───────────┘
+  let (sh, st) = destructureLayout(result, layout)
+  template crd2idxDelegate(c2, sh2, st2) =
+    crd2idxWalk(c2, sh2, st2)
+  result = getAst(crd2idxDelegate(coord, sh, st))
+
+macro crd2idx_cpu*(layout: Layout; coord: IntOrIntTuple): auto =
+  ## CPU-suffixed crd2idx: multiply-add only, no div/mod,
+  ## identical to the GPU path.
+  result = getAst(crd2idx_gpu(layout, coord))
+
+# ═══════════════════════════════════════════════════════════════
+#  idx2crd, index to coordinate decomposition
+# ═══════════════════════════════════════════════════════════════
