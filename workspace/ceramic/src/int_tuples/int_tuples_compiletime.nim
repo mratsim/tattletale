@@ -64,7 +64,10 @@ func tupleTypeWithoutNames(t: NimNode): NimNode {.compileTime.} =
   var fields: seq[NimNode] = @[]
   for f in t:
     if f.kind == nnkIdentDefs:
-      fields.add f[^2].tupleTypeWithoutNames()
+      # a grouped `tuple[a, b: int]` IdentDefs carries several
+      # identifiers and one shared type, the type appends once per identifier
+      for _ in 0 ..< f.len - 2:
+        fields.add f[^2].tupleTypeWithoutNames()
     else:
       fields.add f
   result = nnkTupleTy.newTree(fields)

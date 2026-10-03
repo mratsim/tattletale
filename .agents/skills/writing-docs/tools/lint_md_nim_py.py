@@ -2188,6 +2188,10 @@ def lint(paths, base=None):
         if f.suffix == ".nim" and _rel(f).startswith(
                 tuple(Path(r).as_posix() for r in KERNEL_ROOTS)):
             tile_phase(f, text, findings, added)
+        elif f.suffix == ".nim" and "tests/codegen/ir/" in _rel(f):
+            # the closed-test-directory rule reads any Nim change under
+            # tests/codegen/ir, the path sits outside KERNEL_ROOTS
+            tile_phase(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -3846,7 +3850,10 @@ def scan_newcall_method(path, lines, blocked, findings):
         stripped = line.lstrip()
         if stripped.startswith("#"):
             continue
-        m = NEWCALL_METHOD_RE.search(line)
+        # string literals blank before the matchers, a quoted method
+        # call form is text, not a call site
+        code = re.sub(r'"[^"]*"', '""', code)
+        m = NEWCALL_METHOD_RE.search(code)
         if m is not None:
             # first argument after the open paren decides the form:
             # - an nnk* constructed callee builds the method call content
@@ -3857,7 +3864,7 @@ def scan_newcall_method(path, lines, blocked, findings):
             #   ident-named newCall stays a violation (owner ruling)
             # - anything else, a node variable or a runtime-built ident,
             #   converts to receiver.newCall(args) directly
-            rest = line[m.end():].lstrip()
+            rest = code[m.end():].lstrip()
             nm = None
             if not rest.startswith("nnk"):
                 nm = NEWCALL_CALLEE_NAME_RE.match(rest)
@@ -3875,63 +3882,63 @@ def scan_newcall_method(path, lines, blocked, findings):
                         path, i + 1, "newcall-method",
                         "newCall builds %s(x, ...) where x.%s(...) is the method "
                         "call form" % (name, name)))
-        if TUPLEFLATTEN_CALL_RE.search(line):
+        if TUPLEFLATTEN_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "tupleflatten-method",
                 "tupleFlatten reads as a plain call here, write "
                 "x.tupleFlatten()"))
-        elif TUPLEFLATTEN_BARE_RE.search(line):
+        elif TUPLEFLATTEN_BARE_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "tupleflatten-method",
                 "tupleFlatten reads without call parens here, write "
                 "x.tupleFlatten()"))
-        if TUPLESTREAM_CALL_RE.search(line):
+        if TUPLESTREAM_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "tuplestream-method",
                 "tupleStream reads as a plain call here, write "
                 "x.tupleStream()"))
-        elif TUPLESTREAM_BARE_RE.search(line):
+        elif TUPLESTREAM_BARE_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "tuplestream-method",
                 "tupleStream reads without call parens here, write "
                 "x.tupleStream()"))
-        if ONLEAVES_CALL_RE.search(line):
+        if ONLEAVES_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "onleaves-method",
                 "onLeaves reads as a plain call here, write "
                 "x.onLeaves()"))
-        elif ONLEAVES_BARE_RE.search(line):
+        elif ONLEAVES_BARE_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "onleaves-method",
                 "onLeaves reads without call parens here, write "
                 "x.onLeaves()"))
         for static_name, static_call_re in STATICINT_CALL_RES.items():
-            if static_call_re.search(line):
+            if static_call_re.search(code):
                 findings.append(Finding(
                     path, i + 1, "staticint-method",
                     "%s reads as a plain call here, write x.%s()" %
                     (static_name, static_name)))
-            elif STATICINT_BARE_RES[static_name].search(line):
+            elif STATICINT_BARE_RES[static_name].search(code):
                 findings.append(Finding(
                     path, i + 1, "staticint-method",
                     "%s reads without call parens here, write x.%s()" %
                     (static_name, static_name)))
-        if EMITLAYOUT_CALL_RE.search(line):
+        if EMITLAYOUT_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "emitlayout-method",
                 "emitLayout reads as a plain call here, write "
                 "x.emitLayout()"))
-        elif EMITLAYOUT_BARE_RE.search(line):
+        elif EMITLAYOUT_BARE_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "emitlayout-method",
                 "emitLayout reads without call parens here, write "
                 "x.emitLayout()"))
-        if DESTRUCTRELAYOUT_CALL_RE.search(line):
+        if DESTRUCTRELAYOUT_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "destructrelayout-method",
                 "destructureLayout reads as a plain call here, write "
                 "x.destructureLayout(...)"))
-        elif DESTRUCTRELAYOUT_BARE_RE.search(line):
+        elif DESTRUCTRELAYOUT_BARE_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "destructrelayout-method",
                 "destructureLayout reads without call parens here, write "

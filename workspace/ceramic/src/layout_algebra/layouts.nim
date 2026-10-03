@@ -249,7 +249,9 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
       of kLeaf:
         builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
     builder.emit(0).resultTuple
-  # a scalar broadcasts, its pair is bare, the stream's size-1 wrapper stays out
+  if ash.isTupleTy() != bsh.isTupleTy():
+    error "zipDimensions: the layouts have different ranks, " &
+      "zip pairs matching dimensions, no scalar broadcast", bsh
   let zShape = if ash.isTupleTy(): zipPair(ash, bsh)
                else: nnkTupleConstr.newTree(ash, bsh)
   let zStride = if ast.isTupleTy(): zipPair(ast, bst)
