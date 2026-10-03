@@ -21,9 +21,9 @@ import ./layout_indexing_slicedice
 
 macro idx2crdGpuImpl(sh, st: typed, idx: int or Int): untyped =
   ## Index-to-coordinate emit for the destructured shape/stride.
-  if not sh.getTypeInst().isTupleTy():
+  let shTy = sh.getTypeInst()
+  if not shTy.isTupleTy():
     # scalar shape, the broadcast Int[1] case maps to 0
-    let shTy = sh.getTypeInst()
     result = if isStaticOne(shTy):
       IntCT(0)
     else:

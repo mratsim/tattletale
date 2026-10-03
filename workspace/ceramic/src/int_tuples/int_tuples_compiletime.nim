@@ -57,8 +57,20 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
 #  AST syntax sugar
 # ═══════════════════════════════════════════════════════════════
 
+func getTupleType*(n: NimNode): NimNode {.compileTime.} =
+  ## The node's tuple type, values, consts, type aliases, and bare type nodes resolved uniformly.
+  let t = n.getType()
+  let inner =
+    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
+      t[1]
+    else:
+      t
+  inner.getTypeImpl()
+
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
-  t.kind in {nnkTupleConstr, nnkTupleTy}
+  ## True for tuple values and tuple types
+  let ty = t.getTupleType()
+  ty.kind in {nnkTupleConstr, nnkTupleTy}
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)

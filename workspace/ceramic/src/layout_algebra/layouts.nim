@@ -29,7 +29,7 @@ export layout_constructors
 # ═══════════════════════════════════════════════════════════════
 
 macro dimensionImpl(l, sh, st: typed, idx: static int): untyped =
-  if sh.getTypeInst().isTupleTy():
+  if sh.isTupleTy():
     nnkCall.newTree(bindSym"make_layout", getTupleIndex(sh, idx), getTupleIndex(st, idx))
   else:
     doAssert idx == 0, "dimension: scalar layout only has dimension 0"
@@ -256,9 +256,9 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
         builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
     builder.emit(0).resultTuple
   # a scalar broadcasts, its pair is bare, the stream's size-1 wrapper stays out
-  let zShape = if ash.getTypeInst().isTupleTy(): zipPair(ash, bsh)
+  let zShape = if ash.isTupleTy(): zipPair(ash, bsh)
                else: nnkTupleConstr.newTree(ash, bsh)
-  let zStride = if ast.getTypeInst().isTupleTy(): zipPair(ast, bst)
+  let zStride = if ast.isTupleTy(): zipPair(ast, bst)
                 else: nnkTupleConstr.newTree(ast, bst)
   result = bindSym"make_layout".newCall(zShape, zStride)
 

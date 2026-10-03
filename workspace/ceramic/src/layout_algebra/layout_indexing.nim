@@ -51,7 +51,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
   ##     result += remaining * st_last
 
   var coordStream = TupleStream()
-  if coord.getTypeInst().isTupleTy():
+  if coord.isTupleTy():
     coordStream = coord.tupleStream()
   var shapeStream = shape.tupleStream()
   var strideStream = stride.tupleStream()
@@ -60,7 +60,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
   var pending, pendingFinal: NimNode # the pending contribution, decompose only
   var decomposing = false
   var openDepth = -1        # the decompose subtree opens at this depth
-  if not coord.getTypeInst().isTupleTy():
+  if not coord.isTupleTy():
     # A scalar coord decomposes over the whole layout, the root opens
     # and closes on the shape, the coord stream holds no leaves.
     remaining = coord

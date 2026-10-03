@@ -63,9 +63,12 @@ type
     shallow: bool
     reversed: bool
 
+func resolveAliasTy(ty: NimNode): NimNode {.compileTime.} =
+  if ty.kind == nnkSym: ty.getTupleType() else: ty
+
 func tupleStream*(s: NimNode, reversed = false): TupleStream =
   let ev = unwrapStmtListExpr(s)
-  let ty = s.getTypeInst()
+  let ty = s.getTypeInst().resolveAliasTy()
   let idx0 = if reversed and ty.isTupleTy():
                 ty.len - 1
               else: 0
@@ -86,7 +89,7 @@ func tupleDimsStream*(s: NimNode): TupleStream =
   ## - scalars wrap in a size-1 tuple
   ## - no root wrapper, the walk opens and closes on the leaves
   let ev = unwrapStmtListExpr(s)
-  let ty = s.getTypeInst()
+  let ty = s.getTypeInst().resolveAliasTy()
   result.shallow = true
   if ty.isTupleTy():
     if ty.len != 0:

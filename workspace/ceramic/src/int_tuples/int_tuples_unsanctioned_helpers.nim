@@ -21,17 +21,6 @@ macro groupedHead*(head, tail: typed): untyped =
   for i in 0 ..< tt.len:
     result.add nnkBracketExpr.newTree(tail, newLit(i))
 
-func tupleType*(n: NimNode): NimNode {.compileTime.} =
-  ## Resolve to the underlying TupleConstr node, handling values, consts,
-  ## and type aliases uniformly.
-  let t = n.getType()
-  let inner =
-    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
-      t[1]
-    else:
-      t
-  inner.getTypeImpl()
-
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
   ## Returns low(int) (DynamicSentinel) for non-static (dynamic int) elements.

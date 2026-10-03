@@ -127,7 +127,7 @@ macro partitionImpl(tv: typed, zipped: Layout, coord: typed, doInner: static boo
   let (slicedShape, slicedStride, wholeShape, wholeStride) =
     if doInner: (restShape, restStride, tileShape, tileStride)
     else: (tileShape, tileStride, restShape, restStride)
-  if coord.getTypeInst().isTupleTy():
+  if coord.isTupleTy():
     if doInner:
       # Tile whole first, sliced rest second.
       result.add quote do:

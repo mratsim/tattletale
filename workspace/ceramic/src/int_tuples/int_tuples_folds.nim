@@ -31,7 +31,7 @@ macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
   let intStart = accTy.sameType(bindSym"int")
   var leaves: seq[NimNode]
 
-  if t.getTypeInst().isTupleTy():
+  if t.isTupleTy():
     var stream = t.tupleStream()
     while not stream.done():
       let event = stream.next()
@@ -96,7 +96,7 @@ macro prefix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
   ##    prefix_scanIt((2, 3, 4), 1, acc * it)      → (1, 2, 6)
   ##    prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
   ##        → ((1, 4), (4, 32))
-  if t.getTypeInst().isTupleTy():
+  if t.isTupleTy():
     let scanned = t.scanBuilder(startingAcc, body, false)
     if startingAcc.getTypeInst().sameType(bindSym"int"):
       result = quote do:
@@ -119,7 +119,7 @@ macro suffix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
   ##    suffix_scanIt((2, 3, 4), 1, acc * it)      → (12, 4, 1)
   ##    suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
   ##        → ((64, 64), (8, 1))
-  if t.getTypeInst().isTupleTy():
+  if t.isTupleTy():
     let scanned = t.scanBuilder(startingAcc, body, true)
     if startingAcc.getTypeInst().sameType(bindSym"int"):
       result = quote do:
