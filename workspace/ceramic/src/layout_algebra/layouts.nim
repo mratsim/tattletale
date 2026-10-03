@@ -28,14 +28,24 @@ export layout_constructors
 #  dimension, extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
-template dimension*(layout: Layout; idx: static int): auto =
+macro dimensionImpl(l, sh, st: typed, idx: static int): untyped =
+  if sh.getTypeInst().isTupleTy():
+    nnkCall.newTree(bindSym"make_layout", getTupleIndex(sh, idx), getTupleIndex(st, idx))
+  else:
+    doAssert idx == 0, "dimension: scalar layout only has dimension 0"
+    l
+
+macro dimension*(layout: Layout, idx: static int): untyped =
   ## Extract dimension `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
-  when layout.shape is tuple:
-    make_layout(layout.shape[idx], layout.stride[idx])
-  else:
-    static: doAssert idx == 0
-    layout
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                      else: result[^1][1]
+  template dimensionDelegate(l2, sh2, st2, idx2) =
+    dimensionImpl(l2, sh2, st2, idx2)
+  result.add getAst(dimensionDelegate(originalLayout, sh, st, newLit(idx)))
+
 
 # ═══════════════════════════════════════════════════════════════
 #  isCompact, check if strides match canonical col-major ordering
@@ -272,17 +282,6 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
 #  selection macros, group/take/select/replace dimensions
 # ═══════════════════════════════════════════════════════════════
 
-proc streamDims(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: int] {.compileTime.} =
-  ## Outer dimension leaves of both tuple pieces, one stream pass each.
-  var shapeStream = sh.tupleDimsStream()
-  var strideStream = st.tupleDimsStream()
-  while not shapeStream.done():
-    let shapeEvent = shapeStream.next()
-    let strideEvent = strideStream.next()
-    result.shapes.add shapeEvent.leaf
-    result.strides.add strideEvent.leaf
-  result.count = result.shapes.len
-
 macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
   ## Wrap outer dimensions `[B, E)` into one nested sub-tuple, pass the rest whole.
   let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
@@ -318,18 +317,6 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   let originalLayout = if result.len == 0: layout
                        else: result[^1][1] # returned `let`/`const` symbol
   result.add bindSym"groupDimensionsImpl".newCall(originalLayout, sh, st, newLit(B), newLit(E))
-
-macro takeDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
-  ## Append the outer dimensions `[B, E)` whole into the extracted layout.
-  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
-  doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
-  if B <= 0 and E >= dimCount:
-    result = originalLayout
-    return
-  var builder = TupleBuilderFlat.new(2)
-  for i in B ..< min(E, dimCount):
-    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  result = builder.emitLayout().resultLayout
 
 macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ## Extract dimensions in range `[B, E)` into a new Layout.

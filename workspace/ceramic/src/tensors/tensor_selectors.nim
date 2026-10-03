@@ -8,6 +8,7 @@
 ## Tensor selection: element access, subviews, slicing, partitioning.
 
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_compiletime
 import std/macros
 
 import workspace/ceramic/src/macros/varargs_to_par
@@ -25,59 +26,47 @@ proc pop(tree: var NimNode): NimNode {.compileTime.} =
 #  `()` — dual dispatch: all-int → element, has _ → sub-View
 # ═════════════════════════════════════════════════════════════════════════
 
+template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[untyped]): untyped =
+  # Layout and coords are pasted verbatim twice, this is intentional.
+  # Layout and coordinates are pure so no side-effect will be evaluated twice
+  # and we argue that it's easier for compilers, especially shader compilers that might not be as tuned as LLVM,
+  # to do constant folding and common subexpression elimination on an integer expression
+  # than through temporaries especially if wrapped in block expressions.
+  make_view(dataBase +% toIntVal(crd2idx(layout, varargs_to_par(coords))), slice(layout, varargs_to_par(coords)))
+
 template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
-    block:
-      evalOnceAs(coord, varargs_to_par(args))
-      evalOnceAs(sub, slice(t.layout, coord))
-      evalOnceAs(offset, crd2idx(t.layout, coord))
-      make_view(t.data[0].addr +% toIntVal(offset), sub)
+    tensorSubViewImpl(t.data[0].addr, t.layout, args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    let pos = block:
-      evalOnceAs(coord, varargs_to_par(args))
-      crd2idx(t.layout, coord)
-    t.data[toIntVal pos]
+    t.data[toIntVal crd2idx(t.layout, varargs_to_par(args))]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
-    block:
-      evalOnceAs(coord, varargs_to_par(args))
-      evalOnceAs(sub, slice(tv.layout, coord))
-      evalOnceAs(offset, crd2idx(tv.layout, coord))
-      make_view(tv.data +% toIntVal(offset), sub)
+    tensorSubViewImpl(tv.data, tv.layout, args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    let pos = block:
-      evalOnceAs(coord, varargs_to_par(args))
-      crd2idx(tv.layout, coord)
-    tv.data[toIntVal pos]
+    tv.data[toIntVal crd2idx(tv.layout, varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `[]` — element access only (underscore rejected)
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
-  let pos = block:
-    evalOnceAs(coord, varargs_to_par(args))
-    when hasUnderscore(coord):
-      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-    toIntVal crd2idx(t.layout, coord)
-  t.data[pos]
+  when hasUnderscore(varargs_to_par(args)):
+    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+  t.data[toIntVal crd2idx(t.layout, varargs_to_par(args))]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
-  let pos = block:
-    evalOnceAs(coord, varargs_to_par(args))
-    when hasUnderscore(coord):
-      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-    toIntVal crd2idx(tv.layout, coord)
-  tv.data[pos]
+  when hasUnderscore(varargs_to_par(args)):
+    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+  tv.data[toIntVal crd2idx(tv.layout, varargs_to_par(args))]
 
 macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   var a = args
@@ -104,18 +93,10 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 template slice*(t: TensorOwned; coords: varargs[untyped]): untyped =
-  block:
-    evalOnceAs(crd, varargs_to_par(coords))
-    evalOnceAs(sub, slice(t.layout, crd))
-    let off = crd2idx(t.layout, crd)
-    make_view(t.data[0].addr +% off.toIntVal(), sub)
+  tensorSubViewImpl(t.data[0].addr, t.layout, coords)
 
 template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
-  block:
-    evalOnceAs(crd, varargs_to_par(coords))
-    evalOnceAs(sub, slice(tv.layout, crd))
-    let off = crd2idx(tv.layout, crd)
-    make_view(tv.data +% off.toIntVal(), sub)
+  tensorSubViewImpl(tv.data, tv.layout, coords)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  repeatTuple

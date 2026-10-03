@@ -194,7 +194,7 @@ macro make_layout_like*(layout: Layout): untyped =
 #  make_fragment_like
 # ═══════════════════════════════════════════════════════════════
 
-template make_fragment_like*(layout: Layout): auto =
+macro make_fragment_like*(layout: Layout): untyped =
   ## Register-buffer layout for a partition view.
   ##
   ## Contract:
@@ -204,14 +204,18 @@ template make_fragment_like*(layout: Layout): auto =
   ##   same size and flat access order as the view so view and fragment copies match
   ##
   ## Precondition, static shape and stride, the register part compact col-major or all-zero
-  block:
-    evalOnceAs(lyt, layout)
-    when rank(lyt) == 1:
-      make_layout(lyt.shape)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout else: result[^1][1]
+  let dim0Shape = getTupleIndex(sh, 0)
+  let dim0Stride = getTupleIndex(st, 0)
+  result.add quote do:
+    when `sh`.rank() == 1:
+      make_layout(`sh`)
     else:
-      evalOnceAs(v, dimension(lyt, 0))
-      evalOnceAs(rest, takeDimensions(lyt, 1, rank(lyt)))
-      when cosize(typeof(v)) == 1:
-        tiled_product(v, make_layout_like(rest))
+      when cosize(typeof(make_layout(`dim0Shape`, `dim0Stride`))) == 1:
+        tiled_product(make_layout(`dim0Shape`, `dim0Stride`),
+          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank()))))
       else:
-        tiled_product(make_layout(v.shape), make_layout_like(rest))
+        tiled_product(make_layout(`dim0Shape`),
+          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank())))
