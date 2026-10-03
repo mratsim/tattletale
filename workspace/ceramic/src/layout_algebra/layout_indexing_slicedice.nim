@@ -6,9 +6,6 @@
 ## at your option.
 ## This file may not be copied, modified, or distributed except according to those terms.
 
-## Slice and dice: the X/Y marker sub-language and the dimension
-## selection macros built on it.
-
 import std/macros
 
 import workspace/ceramic/src/int_tuples
@@ -62,7 +59,7 @@ macro slice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "slice: selector items must be X, Y, or ints", selTy
-  result = builder.emit(0).resultTuple
+  return builder.emit(0).resultTuple
 
 macro dice*(target: tuple; selector: typed): untyped =
   ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
@@ -86,7 +83,7 @@ macro dice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "dice: selector items must be X, Y, or ints", selTy
-  result = builder.emit(0).resultTuple
+  return builder.emit(0).resultTuple
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.

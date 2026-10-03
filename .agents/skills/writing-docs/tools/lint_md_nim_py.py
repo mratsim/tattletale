@@ -2938,6 +2938,10 @@ TILE_RULES = {
     "emitlayout-method": "an emitLayout(x) plain call or bare x.emitLayout "
                          "where method call syntax x.emitLayout() is the "
                          "required form",
+    "destructrelayout-method": "a destructureLayout(x, ...) plain call or "
+                               "bare x.destructureLayout where method call "
+                               "syntax x.destructureLayout(...) is the "
+                               "required form",
     "body-wrap": "a single-expression callable body is split across lines "
                  "while the joined form fits one line",
 }
@@ -2969,6 +2973,8 @@ ONLEAVES_CALL_RE = re.compile(r"(?<![.\w])onLeaves\s*\(")
 ONLEAVES_BARE_RE = re.compile(r"\.\s*onLeaves(?!\s*\()")
 EMITLAYOUT_CALL_RE = re.compile(r"(?<![.\w])emitLayout\s*\(")
 EMITLAYOUT_BARE_RE = re.compile(r"\.\s*emitLayout(?!\s*\()")
+DESTRUCTRELAYOUT_CALL_RE = re.compile(r"(?<![.\w])destructureLayout\s*\(")
+DESTRUCTRELAYOUT_BARE_RE = re.compile(r"\.\s*destructureLayout(?!\s*\()")
 STATICINT_NAMES = ("getStaticInt", "isStaticInt")
 STATICINT_CALL_RES = {n: re.compile(r"(?<![.\w])%s\s*\(" % n) for n in STATICINT_NAMES}
 STATICINT_BARE_RES = {n: re.compile(r"\.\s*%s(?!\s*[(\*])" % n) for n in STATICINT_NAMES}
@@ -3920,6 +3926,16 @@ def scan_newcall_method(path, lines, blocked, findings):
                 path, i + 1, "emitlayout-method",
                 "emitLayout reads without call parens here, write "
                 "x.emitLayout()"))
+        if DESTRUCTRELAYOUT_CALL_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "destructrelayout-method",
+                "destructureLayout reads as a plain call here, write "
+                "x.destructureLayout(...)"))
+        elif DESTRUCTRELAYOUT_BARE_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "destructrelayout-method",
+                "destructureLayout reads without call parens here, write "
+                "x.destructureLayout(...)"))
 
 
 BODY_WRAP_MAX = 180

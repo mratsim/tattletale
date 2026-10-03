@@ -5,12 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout transforms and selectors: dimension, padRight/Left,
-## mapLeavesWith, zipDimensions, groupDimensions, upcast/downcast, etc.
-##
-## Re-exports `layouts_datatypes` (Layout type, predicates) and
-## `layout_constructors` (make_layout, col_major_strides).
-
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/static_for
@@ -180,7 +174,7 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   var stmts = newStmtList()
   let (outSh, outSt) = mapLeavesRec(stmts, shExpr, shTyp, stExpr, stTyp, bodyExpr)
   stmts.add bindSym"make_layout".newCall(outSh, outSt)
-  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+  return nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -260,7 +254,7 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
                else: nnkTupleConstr.newTree(ash, bsh)
   let zStride = if ast.isTupleTy(): zipPair(ast, bst)
                 else: nnkTupleConstr.newTree(ast, bst)
-  result = bindSym"make_layout".newCall(zShape, zStride)
+  return bindSym"make_layout".newCall(zShape, zStride)
 
 macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ## Zip dimensions of two layouts: interleave corresponding dimensions pairwise.
@@ -372,11 +366,11 @@ macro replaceDimensionImpl(sh, st, xShape, xStride: typed, N: static int): untyp
       builder.append(xShape, xStride, verbatim = true)
     else:
       builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  result = builder.emitLayout().resultLayout
+  return builder.emitLayout().resultLayout
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-  let (xSh, xSt) = destructureLayout(result, x)
+  let (xSh, xSt) = result.destructureLayout(x)
   result.add bindSym"replaceDimensionImpl".newCall(sh, st, xSh, xSt, newLit(N))

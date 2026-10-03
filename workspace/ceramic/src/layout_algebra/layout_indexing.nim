@@ -5,9 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout indexing: crd2idx, idx2crd, slice, dice.
 {.experimental: "callOperator".}
-
 
 import std/macros
 import std/sequtils
@@ -135,10 +133,11 @@ macro crd2idx*(layout: Layout, coord: IntOrIntTuple): auto =
   ##   # → 22                       # 2·1 + 5·4
   ##   crd2idx(make_layout((4, 8), (1, 4)), 9)
   ##   # → 9                        # 9 = (1, 2), 1·1 + 2·4
-  let (sh, st) = destructureLayout(result, layout)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
   template crd2idxDelegate(c2, sh2, st2) =
     crd2idxImpl(c2, sh2, st2)
-  return getAst(crd2idxDelegate(coord, sh, st))
+  result.add getAst(crd2idxDelegate(coord, sh, st))
 
 template idx2crd*(layout: Layout, idx: int or Int): untyped =
   idx2crd_gpu(layout, idx)
