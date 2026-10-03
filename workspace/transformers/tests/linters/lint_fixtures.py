@@ -77,7 +77,7 @@ if _SKILL_ROOT is None:
         "not found above %s\n" % _FILE)
     raise SystemExit(2)
 sys.path.insert(0, str(_SKILL_ROOT / ".agents" / "skills" / "writing-docs" / "tools"))
-import lint_nim  # noqa  # the sys.path setup runs above, E402 silent
+import lint_md_nim_py as lint_nim  # noqa  # the sys.path setup runs above, E402 silent
 
 Finding = lint_nim.Finding
 

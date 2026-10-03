@@ -64,7 +64,7 @@ type
     reversed: bool
 
 func resolveAliasTy(ty: NimNode): NimNode {.compileTime.} =
-  if ty.kind == nnkSym: ty.getTupleType() else: ty
+  if ty.kind in {nnkSym, nnkTupleTy}: ty.getTupleType() else: ty
 
 func tupleStream*(s: NimNode, reversed = false): TupleStream =
   let ev = unwrapStmtListExpr(s)

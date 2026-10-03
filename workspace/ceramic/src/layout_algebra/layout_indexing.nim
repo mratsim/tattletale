@@ -110,7 +110,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       sum = if sum == nil: prod else: sum + prod
   if sum == nil:
     error "crd2idx: empty shape", shape
-  result = sum
+  return sum
 
 macro crd2idx*(layout: Layout, coord: IntOrIntTuple): auto =
   ## Say `layout` is the element order of a tensor in memory.
@@ -138,7 +138,7 @@ macro crd2idx*(layout: Layout, coord: IntOrIntTuple): auto =
   let (sh, st) = destructureLayout(result, layout)
   template crd2idxDelegate(c2, sh2, st2) =
     crd2idxImpl(c2, sh2, st2)
-  result = getAst(crd2idxDelegate(coord, sh, st))
+  return getAst(crd2idxDelegate(coord, sh, st))
 
 template idx2crd*(layout: Layout, idx: int or Int): untyped =
   idx2crd_gpu(layout, idx)

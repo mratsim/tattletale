@@ -97,6 +97,32 @@ proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
+proc orderedStaticInt(leaf, leafTy: NimNode): int {.compileTime.} =
+  ## Returns: the static value of one shape/order leaf,
+  ## DynamicSentinel when the leaf is a runtime value.
+  ##
+  ## Leaf value sources, in order:
+  ## - literals and Int[N] nodes, the value sits in the node
+  ## - the leaf's type, a tuple variable's Int[N] leaf is an indexing
+  ##   expression and carries its static value in the type
+  ## - a const definition, `const order = (1, 0)`, each leaf becomes
+  ##   an indexing of a const symbol whose impl carries the value
+  result = leaf.getStaticInt()
+  if result != DynamicSentinel:
+    return
+  result = leafTy.getStaticInt()
+  if result != DynamicSentinel:
+    return
+  if leaf.kind in {nnkBracketExpr, nnkCall} and leaf.len == 2 and
+      leaf[0].kind == nnkSym and leaf[0].symKind == nskConst and
+      leaf[1].kind == nnkIntLit:
+    let impl = leaf[0].getImpl()
+    if impl.kind == nnkConstDef and impl[2].kind in {nnkTupleConstr, nnkPar}:
+      let val = impl[2][int(leaf[1].intVal)]
+      if val.kind == nnkIntLit:
+        return int(val.intVal)
+  result = DynamicSentinel
+
 macro make_ordered_layout*(shape, order: typed): untyped =
   ## Construct a compact layout whose strides are ranked by `order`.
   ##
@@ -124,10 +150,16 @@ macro make_ordered_layout*(shape, order: typed): untyped =
   ## - dimension 1 slowest → stride 1*2*4 = 8
   ##   and the result is (2,3,4):(1,8,2)
   var shVals, ordVals: seq[int] = @[]
-  for (leaf, _) in shape.tupleStream().leaves():
-    shVals.add leaf.getStaticInt()
-  for (leaf, _) in order.tupleStream().leaves():
-    ordVals.add leaf.getStaticInt()
+  for (leaf, leafTy) in shape.tupleStream().leaves():
+    let v = orderedStaticInt(leaf, leafTy)
+    doAssert v != DynamicSentinel,
+      "make_ordered_layout: shape leaves must be statically known, " &
+      "a dynamic shape leaf cannot produce a compile-time compact stride"
+    shVals.add v
+  for (leaf, leafTy) in order.tupleStream().leaves():
+    # dynamic order leaves rank after every static entry,
+    # the substitution keeps their relative position
+    ordVals.add orderedStaticInt(leaf, leafTy)
   doAssert shVals.len == ordVals.len,
     "make_ordered_layout: shape and order of equal flat rank required"
   let strides = compactOrderStridesImpl(shVals, compactOrderDynamicSubstitution(ordVals))

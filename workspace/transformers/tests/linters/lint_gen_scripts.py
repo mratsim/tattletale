@@ -67,7 +67,7 @@ if _SKILL_ROOT is None:
         "not found above %s\n" % _FILE)
     raise SystemExit(2)
 sys.path.insert(0, str(_SKILL_ROOT / ".agents" / "skills" / "writing-docs" / "tools"))
-import lint_nim  # noqa, E402, the import sits after the sys.path setup
+import lint_md_nim_py as lint_nim  # noqa, E402, the import sits after the sys.path setup
 
 
 class Finding:
@@ -384,7 +384,7 @@ def scan(path, text, findings):
     lines = text.splitlines()
     code_lines = [strip_comment(ln) for ln in lines]
     code = "\n".join(code_lines)
-    doc_lines = [(n, c) for n, c, kind, _, _ in lint_md_nim_py.py_prose_lines(text)[0]
+    doc_lines = [(n, c) for n, c, kind, _, _ in lint_nim.py_prose_lines(text)[0]
                  if kind == "doc"]
     check_config_is_king(path, tree, code, findings)
     check_named_consts(path, tree, findings)

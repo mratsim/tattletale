@@ -39,6 +39,25 @@ block:
   check crd2idx(make_layout((3, 4), st2), (2, 3)), 11, int
   check crd2idx(make_layout((3, 4), st2), (3, 4)), 15, int
 
+block:
+  # Alias-typed layouts and layout-valued calls hold the destructured
+  # shape and stride bindings, the binding must reach the offset
+  proc mkLayout(): auto =
+    make_layout((4, 8), (1, 4))
+  let L = mkLayout()
+  check crd2idx(L, (2, 5)), 22, Int
+  check crd2idx(mkLayout(), (2, 5)), 22, Int
+
+block:
+  # Named tuple types from call-typed coordinates, the stream walks
+  # them after field reduction, nested and wide alike
+  proc coordN(): tuple[a: tuple[x, y: int], b: int] =
+    ((2, 1), 3)
+  check crd2idx(make_layout(((2, 2), 3), ((1, 2), 4)), coordN()), 16, Int
+  proc coord4(): tuple[p, q, r, s: int] =
+    (1, 2, 0, 1)
+  check crd2idx(make_layout((2, 3, 4, 2), (1, 2, 6, 24)), coord4()), 29, Int
+
 echo "  [OK] crd2idx: tuple coord (6 cases)"
 
 # ═══════════════════════════════════════════════════════════════

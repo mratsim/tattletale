@@ -1027,6 +1027,22 @@ proc runOrderedLayoutTests =
     doAssert l.stride[1].toIntVal == 8
     doAssert l.stride[2].toIntVal == 1
     echo "    8. make_layout_like dimension positions: 3 checks OK"
+
+  # Section 9: tuple variables, const symbols, and dynamic entries
+  block:
+    # a tuple variable's Int[N] leaf is an indexing expression whose
+    # static value sits in the leaf's type
+    var shape = (Int[2](), Int[3]())
+    doAssert make_ordered_layout(shape, (0, 1)) === ((2,3), (1,2))
+    # a const symbol's value sits in its const definition, keeping
+    # the order static
+    const order = (1, 0)
+    doAssert make_ordered_layout((2,3), order) === ((2,3), (3,1))
+    # plain-int leaves of a runtime tuple variable are dynamic order
+    # entries ranking after every static entry, left-to-right
+    var ordDyn = (1, 0)
+    doAssert make_ordered_layout((2,3), ordDyn) === ((2,3), (1,2))
+    echo "    9. make_ordered_layout tuple variables: 3 cases OK"
 #  Run all
 # ═══════════════════════════════════════════════════════════════
 proc runTests =

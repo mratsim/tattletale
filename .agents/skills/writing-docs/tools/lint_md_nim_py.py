@@ -21,7 +21,7 @@ Rule table (rule | trigger | severity):
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| unit-split           | a line opens on a severed one-word continuation ("apply,")                                        | counted  |
+| unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,")                   | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
@@ -1018,7 +1018,7 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
             warning=warning))
 
 
-def check_line(path, n, c, kind, is_nim, prev_text, findings):
+def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     """Runs the per-line rules over one prose line."""
     if not c:
         return
@@ -1063,10 +1063,28 @@ def check_line(path, n, c, kind, is_nim, prev_text, findings):
         return
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
+    # The two-word shape ("any arity,") fires after an unterminated
+    # previous line only, a terminated sentence opens fresh.
+    # skill 11: a description never opens on "The", the Returns
+    # opener is the sanctioned exception for value-returning functions;
+    # only the description's first doc line, a mid-description sentence
+    # opens fresh
+    if (kind == "doc" and re.match(r"^The\b", bare.strip())
+            and not re.match(r"^Returns\b", bare.strip())
+            and prev_kind.get(n - 1) != "doc"):
+        findings.append(Finding(
+            path, n, "the-opener",
+            "description opens with The (open with what the thing is)"))
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
         findings.append(Finding(
             path, n, "unit-split",
             "the line opens on a severed one-word continuation "
+            "(keep the semantic unit on one line)"))
+    elif (re.match(r"^[a-z]+ [a-z]+,", bare.strip()) and prev_text.get(n - 1)
+          and not re.search(r"[.:!?]\s*$", prev_text[n - 1].rstrip())):
+        findings.append(Finding(
+            path, n, "unit-split",
+            "the line opens on a severed 2-word continuation "
             "(keep the semantic unit on one line)"))
     if len(c) > PROSE_CAP:
         findings.append(Finding(
@@ -1863,8 +1881,10 @@ def scan(path, text, findings):
 
     prev_prose = None
     prev_text = {}
+    prev_kind = {}
     for n, c, kind, _, _ in entries:
         prev_text[n] = c
+        prev_kind[n] = kind
     prev_block_kinds = None
     for block in blocks:
         kinds = {e[2] for e in block}
@@ -1913,9 +1933,9 @@ def scan(path, text, findings):
                 flush_wall(path, run, findings)
                 flush_wall_no_air(path, air_run, findings)
                 run, air_run, prev_bullet = [], [], False
-                check_line(path, n, c, kind, is_nim, prev_text, findings)
+                check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings)
                 continue
-            check_line(path, n, c, kind, is_nim, prev_text, findings)
+            check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings)
             deep_example = block_is_doc and (indent >= DEEP_EXAMPLE_INDENT
                                              or in_example)
             if structural(c) or deep_example:
@@ -2165,7 +2185,8 @@ def lint(paths, base=None):
         else:
             added = None
             findings.extend(file_findings)
-        if f.suffix == ".nim" and str(f).startswith(KERNEL_ROOTS):
+        if f.suffix == ".nim" and _rel(f).startswith(
+                tuple(Path(r).as_posix() for r in KERNEL_ROOTS)):
             tile_phase(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
@@ -2210,7 +2231,7 @@ _SPAN_TOKEN_RE = re.compile(r"`[^`]*`[.,;:()'\"*]?|\S+")
 NOQA_RE = re.compile(r"\s*noqa\b")
 
 # A line opening on a severed `word,` continuation (the unit-split shape).
-_COMMA_LEAD_RE = re.compile(r"^[a-z]+,")
+_COMMA_LEAD_RE = re.compile(r"^[a-z]+(?: [a-z]+)?,")
 
 # A lowercase single-word colon lead, the colon-break shape the house
 # rules keep with their lead phrase.
@@ -3662,6 +3683,17 @@ def decls(lines):
         j = i
         while j < n and j <= i + 25:
             line = lines[j]
+            code, _c = _strip_comment(line)
+            line_indent = len(line) - len(line.lstrip())
+            if (j > i and code.strip() and depth == 0
+                    and line_indent <= indent
+                    and not code.lstrip().startswith(')')):
+                # a statement at the declaration's own indent level
+                # ends the scan: a bodyless callable must not adopt a
+                # following statement's `=` as its terminator. The `)`
+                # opener is the one same-indent line that still belongs
+                # to the signature, the closing `): ret =` line.
+                break
             k = 0
             while k < len(line):
                 ch = line[k]

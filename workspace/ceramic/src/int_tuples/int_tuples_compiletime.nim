@@ -57,20 +57,38 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
 #  AST syntax sugar
 # ═══════════════════════════════════════════════════════════════
 
+func tupleTypeWithoutNames(t: NimNode): NimNode {.compileTime.} =
+  # Keep only the types from a named tuple like  `tuple[a: int, b: int]`
+  if t.kind != nnkTupleTy:
+    return t
+  var fields: seq[NimNode] = @[]
+  for f in t:
+    if f.kind == nnkIdentDefs:
+      fields.add f[^2].tupleTypeWithoutNames()
+    else:
+      fields.add f
+  result = nnkTupleTy.newTree(fields)
+
 func getTupleType*(n: NimNode): NimNode {.compileTime.} =
-  ## The node's tuple type, values, consts, type aliases, and bare type nodes resolved uniformly.
+  ## Returns a tuple of corresponding types
+  if n.kind == nnkTupleTy:
+    return n.tupleTypeWithoutNames()
   let t = n.getType()
   let inner =
     if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
       t[1]
     else:
       t
-  inner.getTypeImpl()
+  result = inner.getTypeImpl().tupleTypeWithoutNames()
 
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
   ## True for tuple values and tuple types
-  let ty = t.getTupleType()
-  ty.kind in {nnkTupleConstr, nnkTupleTy}
+  case t.kind
+  of nnkTupleTy:
+    true
+  else:
+    let ty = t.getTupleType()
+    ty.kind in {nnkTupleConstr, nnkTupleTy}
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)
