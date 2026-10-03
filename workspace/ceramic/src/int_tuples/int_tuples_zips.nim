@@ -70,7 +70,7 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   ##   doAssert r == (7, 8)
   ##   let r2 = zipLeavesWith(((1, 2), 3), ((4, 5), 6)): it_a - it_b
   ##   doAssert r2 == ((-3, -3), -3)
-  var inputTuple = a.getTypeInst().isTupleTy()
+  var inputTuple = a.isTupleTy()
   var builder = TupleBuilderNested.new(1)
   var aStream = a.tupleStream()
   var bStream = b.tupleStream()

@@ -57,14 +57,56 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
 #  AST syntax sugar
 # ═══════════════════════════════════════════════════════════════
 
+func tupleTypeWithoutNames(t: NimNode): NimNode {.compileTime.} =
+  # Keep only the types from a named tuple like  `tuple[a: int, b: int]`
+  if t.kind != nnkTupleTy:
+    return t
+  var fields: seq[NimNode] = @[]
+  for f in t:
+    if f.kind == nnkIdentDefs:
+      # a grouped `tuple[a, b: int]` IdentDefs carries several
+      # identifiers and one shared type, the type appends once per identifier
+      for _ in 0 ..< f.len - 2:
+        fields.add f[^2].tupleTypeWithoutNames()
+    else:
+      fields.add f
+  result = nnkTupleTy.newTree(fields)
+
+func getTupleType*(n: NimNode): NimNode {.compileTime.} =
+  ## Returns a tuple of corresponding types
+  if n.kind == nnkTupleTy:
+    return n.tupleTypeWithoutNames()
+  let t = n.getType()
+  let inner =
+    if t.kind == nnkBracketExpr and t[0].eqIdent("typeDesc"):
+      t[1]
+    else:
+      t
+  result = inner.getTypeImpl().tupleTypeWithoutNames()
+
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
-  t.kind in {nnkTupleConstr, nnkTupleTy}
+  ## True for tuple values and tuple types
+  case t.kind
+  of nnkTupleTy:
+    true
+  else:
+    let ty = t.getTupleType()
+    ty.kind in {nnkTupleConstr, nnkTupleTy}
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)
 
 func `div`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"div", a, b)
+
+func `+`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"+", a, b)
+
+func `-`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"-", a, b)
+
+func `mod`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"mod", a, b)
 
 func abs*(a: NimNode): NimNode {.compileTime.} =
   bindSym"abs".newCall(a)
@@ -81,100 +123,6 @@ func sign*(a: NimNode): NimNode {.compileTime.} =
 proc newLetAsgn*(stmts: var NimNode; name: string; value: NimNode): NimNode {.compileTime.} =
   result = genSym(nskLet, name)
   stmts.add result.newLetStmt value
-
-# ═══════════════════════════════════════════════════════════════
-#  Constant foldable check
-# ═══════════════════════════════════════════════════════════════
-
-func isCompileTime*(node: NimNode): bool {.compileTime.} =
-  ## True if `node` is a compile-time known integer expression.
-  #
-  # Branch analysis:
-  #
-  # `nnkIntLit`
-  #   Matches literal integers: `1`, `16`, `1024`.
-  #
-  # `Int[N]`
-  #
-  # all-args-CT call
-  #   Matches function/macro calls where EVERY argument passes `isCompileTime` recursively.
-  #   This handles expressions like `1 + 2` (infix is a call).
-  #
-  # `nnkSym` → `nnkConstSection`
-  #   Matches identifiers (symbols) that resolve to a `const` definition.
-  #
-  # `false` (default)
-  #   Everything else
-  #
-  # Note: unfortunately this is very hard to get right and it is still incomplete
-  if node.kind in nnkLiterals:
-    return true
-  if node.kind == nnkSym:
-    let impl = node.getImpl()
-    return impl.kind == nnkConstSection
-  if node.kind in {nnkEmpty, nnkNone}:
-    # Empty / None: trivially CT (no-op)
-    return true
-  if node.kind in {nnkIdent, nnkAccQuoted}:
-    # Ident / AccQuoted: unresolved names (e.g. macro-injected it_sh, it_st)
-    return false
-  if node.kind == nnkPostfix and node.len >= 1:
-    # Postfix / Prefix: declaration modifiers (e.g. `{.inject.} it`)
-    return isCompileTime(node[^1])
-  if node.kind == nnkPrefix and node.len > 0:
-    for i in 0 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  if node.kind == nnkBindStmt:
-    return true
-  if node.kind == nnkExprColonExpr:
-    # ExprColonExpr (a: 7 inside named tuples): only the value (child 1) matters
-    return isCompileTime(node[1])
-  if node.kind in {nnkCall, nnkHiddenCallConv}:
-    if node.len == 1:
-      # No-arg call (e.g. Int[3]()): compile-time by nature
-      return true
-    if node.len > 1:
-      for i in 1 ..< node.len:
-        if not isCompileTime(node[i]):
-          return false
-    return true
-  if node.kind == nnkDotExpr and node.len >= 1:
-    # DotExpr: only check the base (child 0), field name (child 1) is an identifier
-    return isCompileTime(node[0])
-  if node.kind == nnkBlockExpr and node.len > 1:
-    # BlockExpr: child 0 is a label/nil, check body from index 1
-    for i in 1 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  if node.kind in {nnkStmtList, nnkStmtListExpr} and node.len > 0:
-    for i in 0 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  if node.kind == nnkIdentDefs and node.len > 0:
-    # IdentDefs: a single binding (ident, type, value) inside LetSection/VarSection
-    for i in 0 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  if node.kind in {nnkLetSection, nnkVarSection, nnkConstSection} and node.len > 0: # LetSection / VarSection / ConstSection: recurse into binding children
-    for i in 0 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  if node.kind in {nnkAsgn, nnkFastAsgn} and node.len > 1:
-    # Asgn: assignment (a = b), check the value
-    return isCompileTime(node[1])
-  if node.kind in {nnkBracketExpr, nnkPar, nnkTupleConstr} and node.len > 0:
-    # Tuple / bracket constructors
-    for i in 0 ..< node.len:
-      if not isCompileTime(node[i]):
-        return false
-    return true
-  false
 
 # ═══════════════════════════════════════════════════════════════
 #  evalOnceAs

@@ -6,10 +6,10 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
+import std/algorithm
 import workspace/ceramic/src/int_tuples
 import ./layouts_datatypes
 import ./layout_compiletime
-import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides, canonical column-major strides
@@ -49,20 +49,20 @@ template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): a
   )
 
 # ═══════════════════════════════════════════════════════════════
-#  compact_order
+#  make_ordered_layout, strides following a dimension ordering
 # ═══════════════════════════════════════════════════════════════
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Compute stride for each dimension m as product of shapes of dimensions
-  ## whose order value is smaller than order[m].
-  let n = shVals.len
-  result = newSeq[int](n)
-  for m in 0 ..< n:
-    var strideStart = 1
-    for k in 0 ..< n:
-      if ordVals[k] < ordVals[m]:
-        strideStart *= shVals[k]
-    result[m] = strideStart
+  ## Assign compact strides in ascending order-value order, ties keep
+  ## left-to-right position, each stride the prefix product so far.
+  result = newSeq[int](shVals.len)
+  var pairs = newSeq[(int, int)](shVals.len)
+  for i in 0 ..< shVals.len:
+    pairs[i] = (ordVals[i], i)
+  var current = 1
+  for (_, i) in pairs.sorted(system.cmp):
+    result[i] = current
+    current *= shVals[i]
 
 proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.} =
   ## Resolve dynamic order entries to unique values larger than any static
@@ -97,59 +97,106 @@ proc compactLikeStrides(sh, st: seq[int]; scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
-macro compact_order*(shape, order): untyped =
-  ## Produce compact strides for a given dimension permutation.
+proc orderedStaticInt(leaf, leafTy: NimNode): int {.compileTime.} =
+  ## Returns: the static value of one shape/order leaf,
+  ## DynamicSentinel when the leaf is a runtime value.
+  ##
+  ## Leaf value sources, in order:
+  ## - literals and Int[N] nodes, the value sits in the node
+  ## - the leaf's type, a tuple variable's Int[N] leaf is an indexing
+  ##   expression and carries its static value in the type
+  ## - a const definition, `const order = (1, 0)`, each leaf becomes
+  ##   an indexing of a const symbol whose impl carries the value
+  result = leaf.getStaticInt()
+  if result != DynamicSentinel:
+    return
+  result = leafTy.getStaticInt()
+  if result != DynamicSentinel:
+    return
+  if leaf.kind in {nnkBracketExpr, nnkCall} and leaf.len == 2 and
+      leaf[0].kind == nnkSym and leaf[0].symKind == nskConst and
+      leaf[1].kind == nnkIntLit:
+    let impl = leaf[0].getImpl()
+    if impl.kind == nnkConstDef and impl[2].kind in {nnkTupleConstr, nnkPar}:
+      let val = impl[2][int(leaf[1].intVal)]
+      if val.kind == nnkIntLit:
+        return int(val.intVal)
+  result = DynamicSentinel
+
+macro make_ordered_layout*(shape, order: typed): untyped =
+  ## Construct a compact layout whose strides are ranked by `order`.
+  ##
+  ## Returns: the layout with the input shape and strides ranked by `order`.
   ##
   ## `order[i]` specifies the position of dimension `i` in the stride ordering:
   ## smaller value = faster-varying (smaller stride).
-  ## Returns a tuple of strides where the dimension with `order[i] = 0` gets
-  ## stride 1, the next gets stride = shape[fastest], and so on.
+  ## The dimension with `order[i] = 0` gets stride 1, the next gets
+  ## stride = shape[fastest], and so on.
+  ## Dynamic order entries rank after every static entry, in left-to-right position, so they compact column-major behind every static rank.
   ##
   ## Example, 2D permutations:
-  ##   compact_order((2,3), (0,1))  → (1, 2)   # col-major (dimension 0 fastest)
-  ##   compact_order((2,3), (1,0))  → (3, 1)   # row-major (dimension 1 fastest)
+  ##   make_ordered_layout((2,3), (0,1))  →  (2,3):(1,2)   # col-major (dimension 0 fastest)
+  ##   make_ordered_layout((2,3), (1,0))  →  (2,3):(3,1)   # row-major (dimension 1 fastest)
+  ##
+  ## Example, tied orders keep left-to-right position:
+  ##   make_ordered_layout((2,3), (0,0))  →  (2,3):(1,2)
   ##
   ## Example, 3D custom permutation:
   ##
-  ##   compact_order((2,3,4), (0,2,1))
+  ##   make_ordered_layout((2,3,4), (0,2,1))
   ##
   ## - dimension 0 fastest → stride 1
   ## - dimension 2 next → stride 1*2 = 2
   ## - dimension 1 slowest → stride 1*2*4 = 8
-  ##   and the result is (1, 8, 2)
-
-  let shLeaves = flattenAst(shape)
-  let ordLeaves = flattenAst(order)
-
-  if shLeaves.len == 0 or ordLeaves.len != shLeaves.len:
-    error "compact_order: compile-time known shape and order of " &
-          "equal flat rank required"
-
-  let n = shLeaves.len
-  var shVals = newSeq[int](n)
-  var ordVals = newSeq[int](n)
-
-  for i in 0 ..< n:
-    shVals[i] = shLeaves[i].getStaticInt()
-    ordVals[i] = ordLeaves[i].getStaticInt()
-
-  # Apply max-order substitution for dynamic entries
-  let resolvedOrder = compactOrderDynamicSubstitution(ordVals)
-
-  # Compute strides
-  let strides = compactOrderStridesImpl(shVals, resolvedOrder)
-
-  # Emit result tuple
-  if n == 1:
-    result = newLit(strides[0])
-  else:
-    result = nnkPar.newTree()
-    for s in strides:
-      result.add newLit(s)
+  ##   and the result is (2,3,4):(1,8,2)
+  var shVals, ordVals: seq[int] = @[]
+  for (leaf, leafTy) in shape.tupleStream().leaves():
+    let v = orderedStaticInt(leaf, leafTy)
+    doAssert v != DynamicSentinel,
+      "make_ordered_layout: shape leaves must be statically known, " &
+      "a dynamic shape leaf cannot produce a compile-time compact stride"
+    shVals.add v
+  for (leaf, leafTy) in order.tupleStream().leaves():
+    # dynamic order leaves rank after every static entry,
+    # the substitution keeps their relative position
+    ordVals.add orderedStaticInt(leaf, leafTy)
+  doAssert shVals.len == ordVals.len,
+    "make_ordered_layout: shape and order of equal flat rank required"
+  let strides = compactOrderStridesImpl(shVals, compactOrderDynamicSubstitution(ordVals))
+  var builder = TupleBuilderFlat.new(1)
+  for s in strides:
+    builder.append(newLit(s))
+  result = bindSym"make_layout".newCall(
+    shape,
+    builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()).resultTuple)
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout_like
 # ═══════════════════════════════════════════════════════════════
+
+macro make_layout_likeImpl(sh, st: typed): untyped =
+  ## Compact strides preserving the (shape, stride) pair's element-access order.
+  ##
+  ## Contract:
+  ## - the shape passes through verbatim, only the stride is rebuilt
+  ## - broadcast dimensions, statically Int[0], keep stride 0
+  ## - dynamic strides take the slowest free positions
+  ## - a scalar shape keeps a scalar stride, a 1-tuple shape keeps a 1-tuple stride
+  let shapeIsTuple = sh.getTypeInst().isTupleTy()
+  var shVals, stVals: seq[int] = @[]
+  for (leaf, leafTy) in sh.tupleStream().leaves():
+    shVals.add leafTy.getStaticInt()
+  for (leaf, leafTy) in st.tupleStream().leaves():
+    stVals.add leafTy.getStaticInt()
+  doAssert shVals.len == stVals.len,
+    "make_layout_like: shape/stride rank mismatch"
+  let strides = compactLikeStrides(shVals, stVals)
+  var builder = TupleBuilderFlat.new(1)
+  for s in strides:
+    builder.append(newLit(s))
+  result = bindSym"make_layout".newCall(
+    sh,
+    builder.emit(0, emitScalarForSize1 = not shapeIsTuple).resultTuple)
 
 macro make_layout_like*(layout: Layout): untyped =
   ## Create a compact layout with the same shape and element-access order.
@@ -172,29 +219,17 @@ macro make_layout_like*(layout: Layout): untyped =
   ## - dimension 0 (stride 3) middle → stride 1*4 = 4
   ## - dimension 1 (stride 6) slowest → stride 1*4*2 = 8
 
-  let (shTyp, stTyp) = layoutTypeArgs(layout)
-  let shVals = typeIntVals(shTyp)
-  let stVals = typeIntVals(stTyp)
-
-  if shVals.len != stVals.len:
-    error "make_layout_like: shape/stride rank mismatch"
-
-  let strides = compactLikeStrides(shVals, stVals)
-  # Stride rank matches the input's shape rank:
-  #   a 1-tuple shape keeps a 1-tuple stride,
-  #   a scalar shape keeps a scalar stride.
-  let outSt = if strides.len == 1 and shTyp.kind == nnkTupleConstr:
-                nnkTupleConstr.newTree(newLit(strides[0]))
-              else:
-                litTuple(strides)
-  result = quote do:
-    make_layout(`layout`.shape, `outSt`)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  template likeDelegate(sh2, st2) =
+    make_layout_likeImpl(sh2, st2)
+  result.add getAst(likeDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
 #  make_fragment_like
 # ═══════════════════════════════════════════════════════════════
 
-template make_fragment_like*(layout: Layout): auto =
+macro make_fragment_like*(layout: Layout): untyped =
   ## Register-buffer layout for a partition view.
   ##
   ## Contract:
@@ -204,14 +239,18 @@ template make_fragment_like*(layout: Layout): auto =
   ##   same size and flat access order as the view so view and fragment copies match
   ##
   ## Precondition, static shape and stride, the register part compact col-major or all-zero
-  block:
-    evalOnceAs(lyt, layout)
-    when rank(lyt) == 1:
-      make_layout(lyt.shape)
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout else: result[^1][1]
+  let dim0Shape = getTupleIndex(sh, 0)
+  let dim0Stride = getTupleIndex(st, 0)
+  result.add quote do:
+    when `sh`.rank() == 1:
+      make_layout(`sh`)
     else:
-      evalOnceAs(v, dimension(lyt, 0))
-      evalOnceAs(rest, takeDimensions(lyt, 1, rank(lyt)))
-      when cosize(typeof(v)) == 1:
-        tiled_product(v, make_layout_like(rest))
+      when cosize(typeof(make_layout(`dim0Shape`, `dim0Stride`))) == 1:
+        tiled_product(make_layout(`dim0Shape`, `dim0Stride`),
+          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank())))
       else:
-        tiled_product(make_layout(v.shape), make_layout_like(rest))
+        tiled_product(make_layout(`dim0Shape`),
+          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank())))

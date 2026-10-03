@@ -902,7 +902,7 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
       else:
         # a pass-through dimension, the dimension arrives whole
         builder.append(shEv.leaf, stEv.leaf)
-  result = builder.emitLayout().resultLayout
+  return builder.emitLayout().resultLayout
 
 macro logical_divide*(layout: Layout, tiler: tuple): untyped =
   ## Logical divide by a tuple tiler, one tiler element per layout dimension:
@@ -1065,7 +1065,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
       if dim.shape == DynamicSentinel:
         break
       curr = dim.stride * dim.shape
-  result = bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
+  return bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
 
 macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
@@ -1148,7 +1148,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
     let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                  else: IntCT(dim.prefix)
     builder.append(shLeaf, stLeaf)
-  result = bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
+  return bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
 
 macro left_inverse*(layout: typed): untyped =
   ## Left inverse, Li(L(i)) == i for injective layouts.

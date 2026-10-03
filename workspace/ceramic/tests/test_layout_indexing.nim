@@ -1,20 +1,14 @@
-## Test: layout_indexing — crd2idx, idx2crd, CoordWheel
+## Test: layout_indexing, crd2idx idx2crd
+## Run: nim cpp -r tests/test_layout_indexing.nim
 ##
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
 import ../src/layout_algebra
 import std/typetraits
+import std/macros
 import ./layouts_testutils
 
 {.experimental: "callOperator".}
-
-# ═══════════════════════════════════════════════════════════════
-#  crd2idx — scalar
-# ═══════════════════════════════════════════════════════════════
-
-block:
-  check crd2idx(5, 10), 5, int
-  check crd2idx(3, 5, 2), 6, int
 
 # ═══════════════════════════════════════════════════════════════
 #  crd2idx — tuple coord → inner product
@@ -22,29 +16,65 @@ block:
 
 block:
   # Scalar coord decomposed over shape/stride
-  check crd2idx(5, (3, 4), (2, 8)), 12, Int
-  check crd2idx(0, (3, 4), (2, 8)), 0, Int
-  check crd2idx(3, (3, 4), (2, 8)), 8, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), 5), 12, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), 0), 0, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), 3), 8, Int
   # Tuple coord
-  check crd2idx((2, 2), (3, 4), (2, 8)), 20, Int
-  check crd2idx((1, 3), (3, 4), (2, 8)), 26, Int
-  check crd2idx((3, 4), (3, 4), (2, 8)), 38, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), (2, 2)), 20, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), (1, 3)), 26, Int
+  check crd2idx(make_layout((3, 4), (2, 8)), (3, 4)), 38, Int
 
 block:
   # 3D
-  check crd2idx((1, 2, 3), (3, 4, 5), (1, 3, 12)), 43, Int
+  check crd2idx(make_layout((3, 4, 5), (1, 3, 12)), (1, 2, 3)), 43, Int
 
 block:
   # Negative strides
-  check crd2idx((2, 1), (4, 8), (-1, -4)), -6, Int
+  check crd2idx(make_layout((4, 8), (-1, -4)), (2, 1)), -6, Int
 
 block:
   # Dynamic strides (runtime value, not compile-time Int)
   let st = (1, 3)
-  check crd2idx((1, 2), (3, 4), st), 7, int
+  check crd2idx(make_layout((3, 4), st), (1, 2)), 7, int
   let st2 = (1, 3)
-  check crd2idx((2, 3), (3, 4), st2), 11, int
-  check crd2idx((3, 4), (3, 4), st2), 15, int
+  check crd2idx(make_layout((3, 4), st2), (2, 3)), 11, int
+  check crd2idx(make_layout((3, 4), st2), (3, 4)), 15, int
+
+proc runCrd2idxAliasLayoutTests =
+  ## Alias-typed layouts and layout-valued calls hold the destructured
+  ## shape and stride bindings, the binding must reach the offset
+  block:
+    proc mkLayout(): auto =
+      make_layout((4, 8), (1, 4))
+    let L = mkLayout()
+    check crd2idx(L, (2, 5)), 22, Int
+    check crd2idx(mkLayout(), (2, 5)), 22, Int
+
+proc runCrd2idxNamedTupleCoordTests =
+  ## Named tuple types from call-typed coordinates, the stream walks
+  ## them after field reduction, nested and grouped identifiers alike
+  block:
+    proc coordN(): tuple[a: tuple[x, y: int], b: int] =
+      ((2, 1), 3)
+    check crd2idx(make_layout(((2, 2), 3), ((1, 2), 4)), coordN()), 16, Int
+    proc coord4(): tuple[p, q, r, s: int] =
+      (1, 2, 0, 1)
+    check crd2idx(make_layout((2, 3, 4, 2), (1, 2, 6, 24)), coord4()), 29, Int
+
+runCrd2idxAliasLayoutTests()
+runCrd2idxNamedTupleCoordTests()
+
+proc runGroupedNamedTupleTypeTests =
+  ## A written grouped named tuple type reduces field-wise, the shared
+  ## type appends once per identifier
+  block:
+    macro groupedArity(): untyped =
+      let ty = nnkTupleTy.newTree(
+        nnkIdentDefs.newTree(ident"a", ident"b", ident"int", newEmptyNode()))
+      result = newLit(ty.getTupleType().len)
+    check groupedArity(), 2, int
+
+runGroupedNamedTupleTypeTests()
 
 echo "  [OK] crd2idx: tuple coord (6 cases)"
 
@@ -58,20 +88,20 @@ proc runCrd2idxNestedLeafTests =
   ## single-leaf collapse included.
   block:
     # Static nested shape and stride
-    check crd2idx(5, ((3, 4),), ((2, 8),)), 12, Int
-    check crd2idx(7, ((3, 4),), ((2, 8),)), 18, Int
+    check crd2idx(make_layout(((3, 4),), ((2, 8),)), 5), 12, Int
+    check crd2idx(make_layout(((3, 4),), ((2, 8),)), 7), 18, Int
     # Single-leaf nested collapses to the plain inner product
-    check crd2idx(3, ((10,),), ((2,),)), 6, Int
+    check crd2idx(make_layout(((10,),), ((2,),)), 3), 6, Int
     # Deeply nested 1-tuple wrappers
-    check crd2idx(7, (((3, 4),),), (((2, 8),),)), 18, Int
+    check crd2idx(make_layout((((3, 4),),), (((2, 8),),)), 7), 18, Int
   block:
     # Dynamic nested shape and stride
     let s = ((3, 4),)
     let st = ((2, 8),)
-    check crd2idx(5, s, st), 12, int
+    check crd2idx(make_layout(s, st), 5), 12, int
     let s1 = ((10,),)
     let st1 = ((2,),)
-    check crd2idx(3, s1, st1), 6, int
+    check crd2idx(make_layout(s1, st1), 3), 6, int
   block:
     # Nested layout indexed through the crd2idx(L, coord) wrapper
     let l = make_layout(((3, 4),), ((2, 8),))
@@ -155,20 +185,21 @@ block:
   let sh = (3, 4)
   for i in 0 ..< 12:
     let crd = idx2crd(sh, i)
-    doAssert crd2idx(crd, sh, (1, 3)) == i, "shape idx2crd roundtrip " & $i
+    doAssert crd2idx(make_layout(sh, (1, 3)), crd) == i, "shape idx2crd roundtrip " & $i
 
 echo "  [OK] idx2crd(shape, idx): shape-based decomposition"
 
 # ═══════════════════════════════════════════════════════════════
-#  idx2crd(layout, idx) — stride-based: NON-compact layouts are NOT the
-#  inverse of crd2idx (CuTe documents the same restriction on its 3-arg
-#  idx2crd(i, shape, stride)) — documented, so use the shape overload.
+#  idx2crd(layout, idx), stride-based
+#
+#  Non-compact layouts do not invert: only compact layouts have one
+#  coordinate per slot. Use the shape-based idx2crd(shape, idx) there.
 # ═══════════════════════════════════════════════════════════════
 
 block:
   let n = make_layout((4, 8), (16, 1))   # atom T-dimension structure, gaps
-  # flat 31 over the shape is (3, 7); the stride-based decomposition
-  # gives (1, 7) and does not roundtrip — the documented compact-only case
+  # flat 31 over the shape is (3, 7) and the stride-based
+  # decomposition gives (1, 7), no roundtrip, the compact-only case
   doAssert idx2crd(n, 31) === (1, 7)
   doAssert crd2idx(n, idx2crd(n, 31)).toIntVal() != 31
 
@@ -229,93 +260,28 @@ block:
 #  echo "  idx2crd: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  CoordWheel — basic iteration
-# ═══════════════════════════════════════════════════════════════
-#  CoordWheel — basic iteration
+#  idx2crd_cpu — wheel peeling, no div/mod
 # ═══════════════════════════════════════════════════════════════
 
 block:
-  let shape = (3, 4)
-  let strides = (1, 3)
-  var wheel = initCoordWheel(CoordWheel[2])
-  var expectedIdx = 0
-  for _ in 0 ..< 12:
-    let off = wheel.coordOffset(strides)
-    doAssert off == expectedIdx, "CoordWheel offset " & $off & " != expected " & $expectedIdx
-    doAssert wheel.coord[0] == expectedIdx mod 3
-    doAssert wheel.coord[1] == expectedIdx div 3
-    expectedIdx += 1
-    wheel.incr(shape)
-
-echo "  [OK] CoordWheel: 2D iteration"
-
-# ═══════════════════════════════════════════════════════════════
-#  CoordWheel — 3D iteration
-# ═══════════════════════════════════════════════════════════════
+  # every recovered coordinate roundtrips through crd2idx
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd_cpu(L, 22) == (2, 5)
+  for i in 0 ..< 32:
+    doAssert crd2idx(L, idx2crd_cpu(L, i)) == i
 
 block:
-  let shape = (2, 3, 4)
-  let strides = (1, 2, 6)
-  var wheel = initCoordWheel(CoordWheel[3])
-  # Expected: coord (0,0,0)→(1,0,0)→(0,1,0)→(1,1,0)→(0,2,0)→...
-  var expected: array[3, int]
-  for idx in 0 ..< 24:
-    let off = wheel.coordOffset(strides)
-    doAssert off == expected[0]*1 + expected[1]*2 + expected[2]*6
-    doAssert wheel.coord[0] == expected[0]
-    doAssert wheel.coord[1] == expected[1]
-    doAssert wheel.coord[2] == expected[2]
-    # Advance expected
-    expected[0] += 1
-    if expected[0] >= 2:
-      expected[0] = 0
-      expected[1] += 1
-      if expected[1] >= 3:
-        expected[1] = 0
-        expected[2] += 1
-    wheel.incr(shape)
-
-echo "  [OK] CoordWheel: 3D iteration"
-
-# ═══════════════════════════════════════════════════════════════
-#  CoordWheel — single element
-# ═══════════════════════════════════════════════════════════════
+  # out of range: the highest dimension counts beyond its size
+  let L = make_layout((4, 8), (1, 4))
+  doAssert idx2crd_cpu(L, 35) == (3, 8)
+  doAssert crd2idx(L, idx2crd_cpu(L, 35)) == 35
 
 block:
-  let shape = (1,)
-  let strides = (1,)
-  var wheel = initCoordWheel(CoordWheel[1])
-  doAssert wheel.coordOffset(strides) == 0
-  wheel.incr(shape)
-  # After one incr: coord goes (0) → (0) because 1-1 == 0, so it resets to 0
-  doAssert wheel.coordOffset(strides) == 0
+  # scalar shape is the rank-1 degenerate case
+  let S = make_layout(8, 1)
+  doAssert idx2crd_cpu(S, 5) == 5
 
-echo "  [OK] CoordWheel: single element"
-
-# ═══════════════════════════════════════════════════════════════
-#  CoordWheel — LayoutRight strides vs LayoutLeft
-# ═══════════════════════════════════════════════════════════════
-block:
-  # Both LayoutRight and LayoutLeft: CoordWheel increments dim-0 fastest
-  # (carry chain from dim-0). Compare offsets against crd2idx computed from
-  # the current coordinate tuple.
-  let shape = (3, 4)
-  let rightStrides = (1, 3)
-  let leftStrides = (4, 1)
-  var wR = initCoordWheel(CoordWheel[2])
-  var wL = initCoordWheel(CoordWheel[2])
-  for r in 0 ..< 3:
-    for c in 0 ..< 4:
-      let offR = wR.coordOffset(rightStrides)
-      let offL = wL.coordOffset(leftStrides)
-      let expectedR = crd2idx((wR.coord[0], wR.coord[1]), shape, rightStrides)
-      let expectedL = crd2idx((wL.coord[0], wL.coord[1]), shape, leftStrides)
-      doAssert offR == expectedR, "LayoutRight CoordWheel vs crd2idx"
-      doAssert offL == expectedL, "LayoutLeft CoordWheel vs crd2idx"
-      wR.incr(shape)
-      wL.incr(shape)
-
-echo "  [OK] CoordWheel: LayoutRight vs LayoutLeft"
+echo "  [OK] idx2crd_cpu: wheel peeling (3 cases)"
 
 # ═══════════════════════════════════════════════════════════════
 #  slice/dice on Layout

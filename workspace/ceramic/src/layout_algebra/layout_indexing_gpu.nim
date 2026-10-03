@@ -5,112 +5,164 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU-suitable indexing: crd2idx (coord→idx) and idx2crd (idx→coord).
-##
-## These are the raw computation functions (no Layout imports).
-## They operate on shape/stride tuples and scalars.
+## GPU-suitable indexing: idx2crd (idx→coord), div/mod based.
 
-import std/[macros, typetraits]
+import std/[macros, sequtils]
+
 import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/macros/static_for
-
-
-# ═══════════════════════════════════════════════════════════════
-#  slice and dice markers
-# ═══════════════════════════════════════════════════════════════
-
-type
-  X* = object  ## slice: keep this dimension, dice: drop this dimension
-  Y* = object  ## dice: keep this dimension, slice: drop this dimension
-
-const _* = X()  ## value-level marker for free/slice dimensions
-
-# X marker arithmetic: X contributes 0 in inner products
-# X*Int[V] returns Int[0] (not plain int) so compile-time constant folding
-# preserves the Int type system. X*int is plain int for runtime values.
-template `*`*(c: X; s: int): Int[0] = Int[0]()
-template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
-template `*`*(s: int; c: X): Int[0] = Int[0]()
-template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
-
-template mapLeavesWith*(singleton: X, body: untyped): X =
-  singleton
+import ./layouts
+import ./layouts_unsanctioned_helpers
+import ./layout_compiletime
+import ./layout_indexing_slicedice
 
 # ═══════════════════════════════════════════════════════════════
-#  scalar overloads
+#  idx2crd, index to coordinate decomposition
 # ═══════════════════════════════════════════════════════════════
 
-template crd2idx*(coord, shape: int): int = coord
-template crd2idx*[V: static int](coord: Int[V]; shape: int): Int[V] = V
-template crd2idx*(coord, shape, stride: int): int = coord * stride
-template crd2idx*[V: static int](coord: Int[V]; shape, stride: int): int = coord * stride
-template crd2idx*[V, U: static int](coord: int; shape: Int[V]; stride: Int[U]): auto = coord * stride
-template crd2idx*[V: static int](coord: int; shape: Int[V]; stride: int): auto = coord * stride
-template crd2idx*[U: static int](coord: int; shape: int; stride: Int[U]): auto = coord * stride
-template crd2idx*[V, U, W: static int](coord: Int[V], shape: Int[U], stride: Int[W]): auto = coord * stride
-
-# ═══════════════════════════════════════════════════════════════
-#  tuple overloads
-# ═══════════════════════════════════════════════════════════════
-
-template crd2idxDimension*(coord, shape, stride: typed): auto =
-  ## Per-dimension crd2idx anchored on the shape dimension structure.
-  when coord is X:
-    # X markers contribute 0 at any nesting level
-    Int[0]()
-  elif shape is tuple:
-    when coord is tuple:
-      # Nested coord into a nested dimension: recurse over the sub-dimensions
-      crd2idxRecur(coord, shape, stride, 0)
+macro idx2crdGpuImpl(sh, st: typed, idx: int or Int): untyped =
+  ## Index-to-coordinate emit for the destructured shape/stride.
+  let shTy = sh.getTypeInst()
+  if not shTy.isTupleTy():
+    # scalar shape, the broadcast Int[1] case maps to 0
+    result = if isStaticOne(shTy):
+      IntCT(0)
     else:
-      # Scalar coord into a nested dimension: delegate to the scalar
-      # decomposition path (foldDim over the dimension's leaves)
-      crd2idx(coord, shape, stride)
+      idx div st
   else:
-    # Flat dimension: inner product of the coord element with the stride
-    coord * stride
-
-template crd2idxRecur*(coord, shape, stride: typed; i: static int): auto =
-  ## Sum the per-dimension contributions of a tuple coord over the shape.
-  when i == rank(shape) - 1:
-    crd2idxDimension(coord[i], shape[i], stride[i])
-  else:
-    crd2idxDimension(coord[i], shape[i], stride[i]) +
-      crd2idxRecur(coord, shape, stride, i + 1)
-
-template crd2idx*[Sh, St: tuple](coord: tuple; shape: Sh; stride: St): auto =
-  ## Recursive over shape, dispatching each top-level dimension's
-  ## (coord element, shape dimension, stride dimension) triple.
-  crd2idxRecur(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)
-
-macro foldDim*(co, sh, st: typed; i: static int): auto =
-  ## Args:
-  ## - `co`, the coord expression
-  ## - `sh`, `st` flat tuples for shape and stride
-  ## - `i`, the first component to accumulate
-  ## Returns one nested expression summing per-component contributions
-  ##   `(co div prior components mod sh[k]) * st[k]` over k in i .. rank-1.
-  block:
-    var shLeaves, stLeaves: seq[NimNode]
-    for (leaf, _) in sh.tupleFlatten():
-      shLeaves.add leaf
-    for (leaf, _) in st.tupleFlatten():
-      stLeaves.add leaf
-    let r = shLeaves.len
-    if stLeaves.len != r:
-      error("foldDim: shape and stride leaf counts differ: " & $r & " vs " & $stLeaves.len)
-    if r == 0:
-      error("foldDim: empty shape")
-    proc foldFrom(c: NimNode, k: int): NimNode =
-      let shK = shLeaves[k]
-      let stK = stLeaves[k]
-      if k == r - 1:
-        result = quote do: `c` * `stK`
+    # the leaves, the stream's `leaf` is the bracket expression on the param
+    var shDims, shTys, stDims: seq[NimNode] = @[]
+    var stVals: seq[int] = @[]
+    for shEv in sh.tupleStream():
+      if shEv.kind == kLeaf:
+        shDims.add shEv.leaf
+        shTys.add shEv.leafTy
+    for stEv in st.tupleStream():
+      if stEv.kind == kLeaf:
+        stDims.add stEv.leaf
+        stVals.add stEv.leafTy.getStaticInt()
+    # most-significant leaf = the largest stride, identifiable only
+    # when every stride is static, so dynamic strides keep the mod
+    let maxIdx = stVals.maxIndex
+    let allStatic = DynamicSentinel notin stVals
+    # for tuple shapes, the quotient runs unmod'd at the largest static stride
+    var parts: seq[NimNode] = @[]
+    for i in 0 ..< shDims.len:
+      if isStaticOne(shTys[i]):
+        # broadcast dimension, the coordinate is 0 before any division
+        parts.add IntCT(0)
+      elif allStatic and i == maxIdx:
+        parts.add idx div stDims[i]
       else:
-        let rest = foldFrom(quote do: `c` div `shK`, k + 1)
-        result = quote do: (`c` mod `shK`) * `stK` + `rest`
-    result = foldFrom(co, i)
+        parts.add (idx div stDims[i]) mod shDims[i]
+    result = nnkPar.newTree(parts)
 
-template crd2idx*[C: int or Int; Sh, St: tuple](coord: C; shape: Sh; stride: St): auto =
-  ## Decompose coord across shape dimensions with strides.
-  foldDim(makeIntTuple(coord), makeIntTuple(shape), makeIntTuple(stride), 0)
+macro idx2crd_gpu*(layout: Layout, idx: int or Int): untyped =
+  ## Say `layout` is the element order of a tensor in memory.
+  ## Say `idx` is an element's slot in the backing buffer.
+  ## `idx2crd` reverses `crd2idx`: it maps the slot to the tensor's
+  ## coordinate of the element stored there.
+  ##
+  ## Returns the coordinate `c` with `crd2idx(layout, c) = idx`,
+  ## `(idx div stride) mod shape` per dimension.
+  ##
+  ##        idx ──┬─▶ (idx div st) mod sh ──▶ every dimension's coordinate
+  ##              └─▶ idx div st, no mod ──▶ the largest-stride dimension
+  ##
+  ## A coordinate exists only when the layout is compact:
+  ## - the tensor is stored like a plain dense array, consecutive
+  ##   elements at consecutive slots, no gaps and no repeats
+  ## - column-major, dimension 0 fastest, and row-major, last
+  ##   dimension fastest, are both compact
+  ## - a strided or broadcast layout is not
+  ## - for non-compact layouts use `idx2crd(shape, idx)` on the shapes
+  ##
+  ## For an `idx` larger than the tensor's size, the coordinate is out of range:
+  ## - every dimension's coordinate wraps at its size via `mod`, except
+  ##   the dimension with the largest stride: its coordinate is
+  ##   `idx div stride` with no `mod`, so it can exceed the size
+  ## - so `crd2idx` of the result gives `idx` back, even out of range
+  ## - that no-`mod` behavior needs compile-time constant strides:
+  ##   with a runtime stride every dimension takes the `mod`, `crd2idx` inverts in range only
+  ##
+  ## - a static shape-1 dimension maps to 0 before the division, keeping
+  ##   a stride-0 broadcast dimension out of the arithmetic
+  ##
+  ## Example, the size is 32 and `idx = 35`:
+  ##   idx2crd(make_layout((4, 8), (1, 4)), 35)
+  ##   # → (3, 8)          # dimension 1 keeps 35 div 4 = 8, beyond its size
+  ##
+  ## Roundtrip after the overrun:
+  ##   crd2idx(make_layout((4, 8), (1, 4)), (3, 8))
+  ##   # → 35
+  ##
+  ## Layouts must have a flat, one-level shape.
+  ## TODO: nested shape support, say ((2,3), 4).
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  template idx2crdGpuDelegate(s2, t2, i2) =
+    idx2crdGpuImpl(s2, t2, i2)
+  result.add getAst(idx2crdGpuDelegate(sh, st, idx))
+
+
+# ═══════════════════════════════════════════════════════════════
+
+macro idx2crd_gpu*(shape: IntOrIntTuple, idx: int or Int): untyped =
+  ## Say a tensor packs its elements one after another, with dimension 0
+  ## varying fastest, and `idx` points into that packing.
+  ## `idx2crd` reverses the packing: it maps the linear position
+  ## to the coordinate of the element stored there.
+  ##
+  ## Returns the coordinate tuple:
+  ## - `idx mod sh` per dimension, the integer division `idx div sh`
+  ##   carried to the next dimension, dimension 0 fastest
+  ## - an `idx` larger than the tensor's size still gives a coordinate:
+  ##   the last dimension's coordinate is the plain `idx div sh`, no
+  ##   `mod`, so it can exceed the dimension's size
+  ## - so `crd2idx` of the result gives `idx` back, even out of range
+  ## - a scalar shape is the degenerate case, the coordinate is the index
+  ##
+  ## Only the sizes matter, so this works for any shape, compact or not.
+  ##
+  ## Examples:
+  ##
+  ##   idx2crd((4, 8), 31)            == (3, 7)   # 31 = 3 + 4·7
+  ##   idx2crd(((4, 8), (2, 2)), 31)  == ((3, 7), (0, 0))
+  ##   idx2crd((3, 7, 2), 42)         == (0, 0, 2)  # excess on the last dimension
+  let shTy = shape.getTypeInst()
+  if shTy.kind in {nnkTupleTy, nnkTupleConstr}:
+    # first pass, the shape's leaves in order
+    var sizes: seq[NimNode] = @[]
+    var stream = shape.tupleStream()
+    while not stream.done():
+      let ev = stream.next()
+      if ev.kind == kLeaf:
+        sizes.add ev.leaf
+    # the parts, dimension 0 fastest, the last leaf keeps
+    # the plain quotient with no mod
+    var parts: seq[NimNode] = @[]
+    var q = idx
+    for k in 0 ..< sizes.len - 1:
+      parts.add q mod sizes[k]
+      q = q div sizes[k]
+    parts.add q
+    # second pass, the parts re-nest over the shape's tree
+    var stack: seq[NimNode] = @[]
+    var i = 0
+    stream = shape.tupleStream()
+    while not stream.done():
+      let ev = stream.next()
+      case ev.kind
+      of kOpen:
+        stack.add nnkPar.newTree()
+      of kLeaf:
+        stack[^1].add parts[i]
+        inc i
+      of kClose:
+        let done = stack.pop()
+        if stack.len == 0:
+          result = done
+        else:
+          stack[^1].add done
+  else:
+    result = idx
+

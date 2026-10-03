@@ -35,13 +35,6 @@ func flatten*(t: static IntOrIntTuple): static auto {.inline, noInit.} =
   ##   flatten((1,(2,3)))  → (1,2,3)
   flatMapLeaves(t, it)
 
-func unwrap*(t: tuple): auto {.inline.} =
-  ## A 1-element tuple becomes its element, longer tuples pass through
-  when rank(t) == 1:
-    t[0]
-  else:
-    t
-
 # ═══════════════════════════════════════════════════════════════
 #  concat, concatenate two tuples or a scalar and a tuple
 # ═══════════════════════════════════════════════════════════════

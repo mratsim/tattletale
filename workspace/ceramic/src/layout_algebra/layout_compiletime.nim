@@ -67,13 +67,18 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
   ## Returns:
   ##   - shape, carries the shape tuple expression of the destructured layout
   ##   - strides, carries the stride tuple expression of the destructured layout
+  ## Pattern:
+  ##   - a one-line template and getAst delegate the (shape, stride) pair to a typed macro, right after the call
+  ##   - the Impl walks the pair's leaves with tupleStream, `leafTy` carries each leaf's type
   ## Precondition:
   ##   - layoutAst semantically type-checks as a Layout
   let typ = layoutAst.getTypeInst()
   let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
   doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
     "destructureLayout: expected a Layout, got " & typ.repr
-  let inner = if layoutAst.kind == nnkStmtListExpr: layoutAst[^1] else: layoutAst
+  var inner = layoutAst
+  while inner.kind in {nnkStmtListExpr, nnkBlockExpr}:
+    inner = inner[^1]
   if inner.kind == nnkObjConstr:
     for field in inner:
       if field.kind == nnkExprColonExpr:
@@ -83,8 +88,9 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
           result.strides = field[1]
     # the semchecked constructor fields wrap the base tuples
     # in a hidden conversion, unwrap it.
-    if result.shape.kind == nnkHiddenSubConv: result.shape = result.shape[^1]
-    if result.strides.kind == nnkHiddenSubConv:
+    while result.shape.kind == nnkHiddenSubConv:
+      result.shape = result.shape[^1]
+    while result.strides.kind == nnkHiddenSubConv:
       result.strides = result.strides[^1]
     doAssert result.shape != nil and result.strides != nil,
       "destructureLayout: Layout constructor without shape/stride fields"
@@ -242,3 +248,29 @@ macro zippedToFlatImpl*(zipped: typed): untyped =
   result.add getAst(zippedToFlatPairImpl(
     getTupleIndex(zippedShape, 0), getTupleIndex(zippedShape, 1),
     getTupleIndex(zippedStride, 0), getTupleIndex(zippedStride, 1)))
+
+# ═══════════════════════════════════════════════════════════════
+#  streamDims, takeDimensionsImpl, outer-dimension streams and slices
+# ═══════════════════════════════════════════════════════════════
+
+proc streamDims*(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: int] {.compileTime.} =
+  var shapeStream = sh.tupleDimsStream()
+  var strideStream = st.tupleDimsStream()
+  while not shapeStream.done():
+    let shapeEvent = shapeStream.next()
+    let strideEvent = strideStream.next()
+    result.shapes.add shapeEvent.leaf
+    result.strides.add strideEvent.leaf
+  result.count = result.shapes.len
+
+macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): untyped =
+  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
+  if B <= 0 and E >= dimCount:
+    result = originalLayout
+    return
+  var builder = TupleBuilderFlat.new(2)
+  for i in B ..< min(E, dimCount):
+    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+  result = builder.emitLayout().resultLayout
+

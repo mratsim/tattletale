@@ -58,28 +58,21 @@ func size*(layout: Layout): auto {.inline.} =
 func cosize*(layout: Layout): auto =
   ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
   macro cosizeFlat(sh, st: typed): untyped =
-    let shT = sh.getTypeInst()
+    ## Cosize emit, one term per shape leaf, a scalar stride broadcasts.
     let one = IntCT(1)
-    if shT.kind != nnkTupleConstr:
-      # Scalar: (sh-1)*|st| + 1
-      result = newCall(bindSym"+",
-        newCall(bindSym"*",
-          newCall(bindSym"-", sh, one),
-          newCall(bindSym"abs", st)),
-        one)
-    else:
-      # Flat tuple: sum over elements
-      # a scalar stride broadcasts over the shape profile
-      let scalarStride = st.getTypeInst().kind != nnkTupleConstr
-      result = one
-      for i in 0 ..< shT.len:
-        let s = newTree(nnkBracketExpr, sh, newLit(i))
-        let d = if scalarStride: st
-                else: newTree(nnkBracketExpr, st, newLit(i))
-        let term = newCall(bindSym"*",
-          newCall(bindSym"-", s, one),
-          newCall(bindSym"abs", d))
-        result = newCall(bindSym"+", result, term)
+    var shDims, stDims: seq[NimNode] = @[]
+    for shEv in sh.tupleStream():
+      if shEv.kind == kLeaf:
+        shDims.add shEv.leaf
+    for stEv in st.tupleStream():
+      if stEv.kind == kLeaf:
+        stDims.add stEv.leaf
+    result = one
+    for i in 0 ..< shDims.len:
+      # a scalar stride is one leaf, it broadcasts over every shape leaf
+      let d = if stDims.len == 1: stDims[0] else: stDims[i]
+      let term = (shDims[i] - one) * abs(d)
+      result = result + term
   cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
 func cosize*[A, B](_: typedesc[Layout[A, B]]): static int {.inline.} =

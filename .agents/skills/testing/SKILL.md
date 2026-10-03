@@ -99,7 +99,7 @@ Ban list, enforced by the linters:
 
 | linter | checks |
 |---|---|
-| `.agents/skills/writing-docs/tools/lint_docs.py` | doc comments everywhere |
+| `.agents/skills/writing-docs/tools/lint_md_nim_py.py` | doc comments everywhere, tile rules over the kernel roots |
 | `tests/linters/lint_gen_scripts.py` | generators: docs, config over consts, entry shape, directory allowlist |
 | `tests/linters/lint_fixtures.py` | fixtures: size caps, dir tiers, symlinks, record schema, provenance |
 | `tests/linters/lint_nim_fixtures_consumers.py` | suites: assert allowlist, flat main, consts, shared helpers, docs |

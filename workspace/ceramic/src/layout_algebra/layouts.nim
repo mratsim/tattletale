@@ -5,12 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Layout transforms and selectors: dimension, padRight/Left,
-## mapLeavesWith, zipDimensions, groupDimensions, upcast/downcast, etc.
-##
-## Re-exports `layouts_datatypes` (Layout type, predicates) and
-## `layout_constructors` (make_layout, col_major_strides).
-
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/static_for
@@ -28,14 +22,24 @@ export layout_constructors
 #  dimension, extract dimension as rank-1 Layout
 # ═══════════════════════════════════════════════════════════════
 
-template dimension*(layout: Layout; idx: static int): auto =
+macro dimensionImpl(l, sh, st: typed, idx: static int): untyped =
+  if sh.isTupleTy():
+    nnkCall.newTree(bindSym"make_layout", getTupleIndex(sh, idx), getTupleIndex(st, idx))
+  else:
+    doAssert idx == 0, "dimension: scalar layout only has dimension 0"
+    l
+
+macro dimension*(layout: Layout, idx: static int): untyped =
   ## Extract dimension `idx` as a standalone rank-1 Layout.
   ## For scalar layouts (rank-1), only idx=0 is valid.
-  when layout.shape is tuple:
-    make_layout(layout.shape[idx], layout.stride[idx])
-  else:
-    static: doAssert idx == 0
-    layout
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  let originalLayout = if result.len == 0: layout
+                      else: result[^1][1]
+  template dimensionDelegate(l2, sh2, st2, idx2) =
+    dimensionImpl(l2, sh2, st2, idx2)
+  result.add getAst(dimensionDelegate(originalLayout, sh, st, newLit(idx)))
+
 
 # ═══════════════════════════════════════════════════════════════
 #  isCompact, check if strides match canonical col-major ordering
@@ -170,7 +174,7 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   var stmts = newStmtList()
   let (outSh, outSt) = mapLeavesRec(stmts, shExpr, shTyp, stExpr, stTyp, bodyExpr)
   stmts.add bindSym"make_layout".newCall(outSh, outSt)
-  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+  return nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -232,6 +236,28 @@ template downcast*(layout: Layout; N: static int): auto =
 #  zipDimensions, interleave corresponding dimensions of two layouts
 # ═══════════════════════════════════════════════════════════════
 
+macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
+  proc zipPair(a, b: NimNode): NimNode =
+    # The pair tree, one (a_i, b_i) tuple leaf per dimension pair.
+    var builder = TupleBuilderNested.new(1)
+    var zs = zip(a.tupleStream(), b.tupleStream())
+    while not zs.done():
+      let (ea, eb) = zs.next()
+      case ea.kind
+      of kOpen, kClose:
+        builder.append(ea)
+      of kLeaf:
+        builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
+    builder.emit(0).resultTuple
+  if ash.isTupleTy() != bsh.isTupleTy():
+    error "zipDimensions: the layouts have different ranks, " &
+      "zip pairs matching dimensions, no scalar broadcast", bsh
+  let zShape = if ash.isTupleTy(): zipPair(ash, bsh)
+               else: nnkTupleConstr.newTree(ash, bsh)
+  let zStride = if ast.isTupleTy(): zipPair(ast, bst)
+                else: nnkTupleConstr.newTree(ast, bst)
+  return bindSym"make_layout".newCall(zShape, zStride)
+
 macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ## Zip dimensions of two layouts: interleave corresponding dimensions pairwise.
   ##
@@ -241,47 +267,17 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ##
   ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
 
-  let (aShT, aStT) = layoutTypeArgs(a)
-  let (bShT, bStT) = layoutTypeArgs(b)
-  let aShape = newTree(nnkDotExpr, a, ident"shape")
-  let bShape = newTree(nnkDotExpr, b, ident"shape")
-  let aStride = newTree(nnkDotExpr, a, ident"stride")
-  let bStride = newTree(nnkDotExpr, b, ident"stride")
+  result = newStmtList()
+  let (aSh, aSt) = result.destructureLayout(a)
+  let (bSh, bSt) = result.destructureLayout(b)
+  template zipDelegate(ash2, ast2, bsh2, bst2) =
+    zipDimensionsImpl(ash2, ast2, bsh2, bst2)
+  result.add getAst(zipDelegate(aSh, aSt, bSh, bSt))
 
-  proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
-    let aIsTuple = typA.kind == nnkTupleConstr
-    let bIsTuple = typB.kind == nnkTupleConstr
-    if not aIsTuple and not bIsTuple:
-      result = newTree(nnkTupleConstr, valA, valB)
-    elif aIsTuple and bIsTuple:
-      result = newNimNode(nnkTupleConstr)
-      for i in 0 ..< typA.len:
-        let ai = newTree(nnkBracketExpr, valA, newLit i)
-        let bi = newTree(nnkBracketExpr, valB, newLit i)
-        let subA = typA[i].getTypeInst()
-        let subB = typB[i].getTypeInst()
-        result.add zipElems(ai, bi, subA, subB)
-    else:
-      error "zipDimensions: mismatched rank"
-
-  let zShape = zipElems(aShape, bShape, aShT, bShT)
-  let zStride = zipElems(aStride, bStride, aStT, bStT)
-  result = bindSym"make_layout".newCall(zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
 #  selection macros, group/take/select/replace dimensions
 # ═══════════════════════════════════════════════════════════════
-
-proc streamDims(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: int] {.compileTime.} =
-  ## Outer dimension leaves of both tuple pieces, one stream pass each.
-  var shapeStream = sh.tupleDimsStream()
-  var strideStream = st.tupleDimsStream()
-  while not shapeStream.done():
-    let shapeEvent = shapeStream.next()
-    let strideEvent = strideStream.next()
-    result.shapes.add shapeEvent.leaf
-    result.strides.add strideEvent.leaf
-  result.count = result.shapes.len
 
 macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
   ## Wrap outer dimensions `[B, E)` into one nested sub-tuple, pass the rest whole.
@@ -318,18 +314,6 @@ macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   let originalLayout = if result.len == 0: layout
                        else: result[^1][1] # returned `let`/`const` symbol
   result.add bindSym"groupDimensionsImpl".newCall(originalLayout, sh, st, newLit(B), newLit(E))
-
-macro takeDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
-  ## Append the outer dimensions `[B, E)` whole into the extracted layout.
-  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
-  doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
-  if B <= 0 and E >= dimCount:
-    result = originalLayout
-    return
-  var builder = TupleBuilderFlat.new(2)
-  for i in B ..< min(E, dimCount):
-    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  result = builder.emitLayout().resultLayout
 
 macro takeDimensions*(layout: Layout; B, E: static int): untyped =
   ## Extract dimensions in range `[B, E)` into a new Layout.
@@ -384,11 +368,11 @@ macro replaceDimensionImpl(sh, st, xShape, xStride: typed, N: static int): untyp
       builder.append(xShape, xStride, verbatim = true)
     else:
       builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  result = builder.emitLayout().resultLayout
+  return builder.emitLayout().resultLayout
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-  let (xSh, xSt) = destructureLayout(result, x)
+  let (xSh, xSt) = result.destructureLayout(x)
   result.add bindSym"replaceDimensionImpl".newCall(sh, st, xSh, xSt, newLit(N))
