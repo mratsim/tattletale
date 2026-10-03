@@ -208,11 +208,13 @@ type
     accums: seq[seq[NimNode]]
     completed: seq[NimNode]
     verbatim: bool = true
+    dropEmpty: bool = true
 
-func new*(T: type TupleBuilderNested, numTuples = 1): T =
+func new*(T: type TupleBuilderNested, numTuples = 1, dropEmpty = true): T =
   result.accums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
   result.verbatim = true
+  result.dropEmpty = dropEmpty
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
@@ -229,7 +231,7 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
         tb.accums[i][^1].add ev.leaf
     of kClose:
       var node = tb.accums[i].pop()
-      if node.len == 0:
+      if node.len == 0 and tb.dropEmpty:
         # every child of the subtree was dropped, keep nothing in the parent
         if tb.accums[i].len == 0:
           tb.completed[i] = nnkTupleConstr.newTree()
