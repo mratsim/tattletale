@@ -215,7 +215,7 @@ macro make_fragment_like*(layout: Layout): untyped =
     else:
       when cosize(typeof(make_layout(`dim0Shape`, `dim0Stride`))) == 1:
         tiled_product(make_layout(`dim0Shape`, `dim0Stride`),
-          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank()))))
+          make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank())))
       else:
         tiled_product(make_layout(`dim0Shape`),
           make_layout_like(takeDimensionsImpl(`originalLayout`, `sh`, `st`, 1, `sh`.rank())))

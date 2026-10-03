@@ -117,6 +117,34 @@ macro repeat(elem: typed, n: static int): untyped =
 #  - makeIntTuple promotes compile-time-known tiler int leaves (literals, const symbols) to Int[N]()
 #  - the tile coords stay runtime, the coord is a runtime value, the shape is static
 
+macro partitionImpl(tv: typed, zipped: Layout, coord: typed, doInner: static bool): untyped =
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(zipped)
+  let tileShape = getTupleIndex(sh, 0)
+  let restShape = getTupleIndex(sh, 1)
+  let tileStride = getTupleIndex(st, 0)
+  let restStride = getTupleIndex(st, 1)
+  let (slicedShape, slicedStride, wholeShape, wholeStride) =
+    if doInner: (restShape, restStride, tileShape, tileStride)
+    else: (tileShape, tileStride, restShape, restStride)
+  if coord.getTypeInst().isTupleTy():
+    if doInner:
+      # Tile whole first, sliced rest second.
+      result.add quote do:
+        make_view(`tv`.data +% toIntVal(crd2idx(`coord`, `slicedShape`, `slicedStride`)),
+          make_layout(concat(`wholeShape`, slice(`slicedShape`, `coord`)),
+                      concat(`wholeStride`, slice(`slicedStride`, `coord`))))
+    else:
+      # Sliced tile first, rest whole second.
+      result.add quote do:
+        make_view(`tv`.data +% toIntVal(crd2idx(`coord`, `slicedShape`, `slicedStride`)),
+          make_layout(concat(slice(`slicedShape`, `coord`), `wholeShape`),
+                      concat(slice(`slicedStride`, `coord`), `wholeStride`)))
+  else:
+    result.add quote do:
+      make_view(`tv`.data +% toIntVal(crd2idx(`coord`, `slicedShape`, `slicedStride`)),
+        make_layout(`wholeShape`, `wholeStride`))
+
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Cut the tensor into tiles, select the one tile `coord` targets,
   ## the rest of the tiles is gone from the view.
@@ -150,23 +178,7 @@ template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ##   coord per dimension
   ## - an underscore in the coord keeps that grid slot whole,
   ##   the result has a dimension indexing the leftover tiles
-  block:
-    when tiler is tuple:
-      evalOnceAs tilerS, makeIntTuple(tiler)
-    else:
-      evalOnceAs tilerS, tiler
-    evalOnceAs zd, zipped_divide(tv.layout, tilerS)
-    when coord is tuple:
-      evalOnceAs c, coord
-      evalOnceAs keptRest, make_layout(slice(zd.shape[1], c), slice(zd.stride[1], c))
-      evalOnceAs offset, crd2idx(c, zd.shape[1], zd.stride[1])
-      evalOnceAs subLayout, make_layout(concat(zd.shape[0], keptRest.shape), concat(zd.stride[0], keptRest.stride))
-      make_view(tv.data +% toIntVal(offset), subLayout)
-    else:
-      evalOnceAs offset, crd2idx(coord, zd.shape[1], zd.stride[1])
-      evalOnceAs subLayout, make_layout(zd.shape[0], zd.stride[0])
-      make_view(tv.data +% toIntVal(offset), subLayout)
-
+  partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = true)
 template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Cut the tensor into tiles, select the same slice from every tile,
   ## the tiles themselves are gone from the view.
@@ -199,23 +211,7 @@ template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## - the result shape is the grid of tiles, the tile dims drop
   ## - `coord` indexes positions inside a tile, the same positions `inner_partition`'s result covers
   ## - a scalar coord addresses the tile by linear index, a tuple coord per dimension
-  block:
-    when tiler is tuple:
-      evalOnceAs tilerS, makeIntTuple(tiler)
-    else:
-      evalOnceAs tilerS, tiler
-    evalOnceAs zd, zipped_divide(tv.layout, tilerS)
-    when coord is tuple:
-      evalOnceAs c, coord
-      evalOnceAs keptTile, make_layout(slice(zd.shape[0], c), slice(zd.stride[0], c))
-      evalOnceAs offset, crd2idx(c, zd.shape[0], zd.stride[0])
-      evalOnceAs subLayout, make_layout(concat(keptTile.shape, zd.shape[1]), concat(keptTile.stride, zd.stride[1]))
-      make_view(tv.data +% toIntVal(offset), subLayout)
-    else:
-      evalOnceAs offset, crd2idx(coord, zd.shape[0], zd.stride[0])
-      evalOnceAs subLayout, make_layout(zd.shape[1], zd.stride[1])
-      make_view(tv.data +% toIntVal(offset), subLayout)
-
+  partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = false)
 template local_tile*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Select the one tile of the tensor that the current threadgroup owns.
   ##
