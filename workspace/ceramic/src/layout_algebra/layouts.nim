@@ -242,6 +242,26 @@ template downcast*(layout: Layout; N: static int): auto =
 #  zipDimensions, interleave corresponding dimensions of two layouts
 # ═══════════════════════════════════════════════════════════════
 
+macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
+  proc zipPair(a, b: NimNode): NimNode =
+    # The pair tree, one (a_i, b_i) tuple leaf per dimension pair.
+    var builder = TupleBuilderNested.new(1)
+    var zs = zip(a.tupleStream(), b.tupleStream())
+    while not zs.done():
+      let (ea, eb) = zs.next()
+      case ea.kind
+      of kOpen, kClose:
+        builder.append(ea)
+      of kLeaf:
+        builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
+    builder.emit(0).resultTuple
+  # a scalar broadcasts, its pair is bare, the stream's size-1 wrapper stays out
+  let zShape = if ash.getTypeInst().isTupleTy(): zipPair(ash, bsh)
+               else: nnkTupleConstr.newTree(ash, bsh)
+  let zStride = if ast.getTypeInst().isTupleTy(): zipPair(ast, bst)
+                else: nnkTupleConstr.newTree(ast, bst)
+  result = bindSym"make_layout".newCall(zShape, zStride)
+
 macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ## Zip dimensions of two layouts: interleave corresponding dimensions pairwise.
   ##
@@ -251,32 +271,13 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ##
   ##   For rank-1 inputs: (a:b, x:y) → ((a,x):(b,y))
 
-  let (aShT, aStT) = layoutTypeArgs(a)
-  let (bShT, bStT) = layoutTypeArgs(b)
-  let aShape = newTree(nnkDotExpr, a, ident"shape")
-  let bShape = newTree(nnkDotExpr, b, ident"shape")
-  let aStride = newTree(nnkDotExpr, a, ident"stride")
-  let bStride = newTree(nnkDotExpr, b, ident"stride")
+  result = newStmtList()
+  let (aSh, aSt) = result.destructureLayout(a)
+  let (bSh, bSt) = result.destructureLayout(b)
+  template zipDelegate(ash2, ast2, bsh2, bst2) =
+    zipDimensionsImpl(ash2, ast2, bsh2, bst2)
+  result.add getAst(zipDelegate(aSh, aSt, bSh, bSt))
 
-  proc zipElems(valA, valB, typA, typB: NimNode): NimNode =
-    let aIsTuple = typA.kind == nnkTupleConstr
-    let bIsTuple = typB.kind == nnkTupleConstr
-    if not aIsTuple and not bIsTuple:
-      result = newTree(nnkTupleConstr, valA, valB)
-    elif aIsTuple and bIsTuple:
-      result = newNimNode(nnkTupleConstr)
-      for i in 0 ..< typA.len:
-        let ai = newTree(nnkBracketExpr, valA, newLit i)
-        let bi = newTree(nnkBracketExpr, valB, newLit i)
-        let subA = typA[i].getTypeInst()
-        let subB = typB[i].getTypeInst()
-        result.add zipElems(ai, bi, subA, subB)
-    else:
-      error "zipDimensions: mismatched rank"
-
-  let zShape = zipElems(aShape, bShape, aShT, bShT)
-  let zStride = zipElems(aStride, bStride, aStT, bStT)
-  result = bindSym"make_layout".newCall(zShape, zStride)
 
 # ═══════════════════════════════════════════════════════════════
 #  selection macros, group/take/select/replace dimensions

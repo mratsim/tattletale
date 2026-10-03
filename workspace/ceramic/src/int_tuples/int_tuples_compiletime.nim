@@ -69,6 +69,9 @@ func `div`*(a, b: NimNode): NimNode {.compileTime.} =
 func `+`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"+", a, b)
 
+func `-`*(a, b: NimNode): NimNode {.compileTime.} =
+  nnkInfix.newTree(ident"-", a, b)
+
 func `mod`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"mod", a, b)
 
