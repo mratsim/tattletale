@@ -61,12 +61,17 @@ type
     hasPending: bool
     pending: TupleStreamEvent
     shallow: bool
+    reversed: bool
 
-func tupleStream*(s: NimNode): TupleStream =
+func tupleStream*(s: NimNode, reversed = false): TupleStream =
   let ev = unwrapStmtListExpr(s)
   let ty = s.getTypeInst()
+  let idx0 = if reversed and ty.isTupleTy():
+                ty.len - 1
+              else: 0
+  result.reversed = reversed
   if ty.isTupleTy():
-    result.stack.add (ev, ty, 0, 0, @[])
+    result.stack.add (ev, ty, idx0, 0, @[])
     result.pending = TupleStreamEvent(path: @[], kind: kOpen, verbatim: true)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
     result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0, @[])
@@ -105,17 +110,23 @@ func next*(s: var TupleStream): TupleStreamEvent =
   # Prepare the next pending event.
   if s.stack.len != 0:
     let f = s.stack[^1]
-    if f.idx < f.ty.len:
+    let exhausted = if s.reversed: f.idx < 0
+                    else: f.idx >= f.ty.len
+    if not exhausted:
       let childE = getTupleIndex(f.elem, f.idx)
       let childT = f.ty[f.idx]
       let childPath = f.path & f.idx
-      inc s.stack[^1].idx
+      if s.reversed:
+        dec s.stack[^1].idx
+      else:
+        inc s.stack[^1].idx
       if s.shallow:
         # a shallow stream yields the whole sub-tuple element as one leaf
         s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
       elif childT.isTupleTy():
         s.pending = TupleStreamEvent(path: childPath, kind: kOpen, verbatim: true)
-        s.stack.add (childE, childT, 0, f.depth + 1, childPath)
+        let idx0 = if s.reversed: childT.len - 1 else: 0
+        s.stack.add (childE, childT, idx0, f.depth + 1, childPath)
       else:
         s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
     else:

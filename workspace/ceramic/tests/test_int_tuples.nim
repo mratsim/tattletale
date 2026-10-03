@@ -266,8 +266,8 @@ proc runProductScanTests =
   # ── prefix_scanIt with nested tuples ──
   block:
     let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
-    doAssert s[0][0] === 1 and s[0][1] == 4
-    doAssert s[1][0] == 4 and s[1][1] == 32
+    doAssert s[0][0] === 1 and s[0][1] === 4
+    doAssert s[1][0] === 4 and s[1][1] === 32
 
   # ── Nested tuple prefix_product ──
   block:

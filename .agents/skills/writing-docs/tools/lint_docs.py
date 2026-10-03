@@ -42,7 +42,7 @@ Rule table (rule | trigger | severity):
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
-| sig-wrap             | a proc or func signature wrapped across lines while the joined form fits a 140-char line          | counted  |
+| sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -1521,15 +1521,16 @@ def check_doc_above_type(path, text, findings):
                 "inside the body, above the fields it describes"))
 
 
-SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func)\b")
+SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func|macro|template|iterator|converter)\b")
 SIG_WRAP_MAX = 140
 
 
 def nim_sig_wrap_checks(path, text, findings):
-    """Flags a proc or func signature wrapped across lines while the joined
-    single-line form fits the 100-column code budget. Only the comma-join
-    shape counts, a first line ending on a comma and continuations that
-    complete the parameter list; a signature too long to join stays legal."""
+    """Flags a callable signature (proc, func, macro, template, iterator,
+    converter) wrapped across lines while the joined single-line form fits
+    the 100-column code budget. Only the comma-join shape counts, a first
+    line ending on a comma and continuations that complete the parameter
+    list; a signature too long to join stays legal."""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
         if not SIG_HEAD_RE.match(raw) or not raw.rstrip().endswith(","):

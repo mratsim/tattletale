@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
+import std/algorithm
 import ./int_tuples_compiletime
 import ./int_tuples_datatypes
 import ./int_tuples_streams
@@ -59,110 +60,73 @@ macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
 # ═══════════════════════════════════════════════════════════════
 #  prefix_scanIt and suffix_scanIt, scans preserving constness
 # ═══════════════════════════════════════════════════════════════
-#
-#  Recursive template block + concat for type-correct tuple building.
-#  Injects `acc` (accumulator before element) and `it` (element).
-#  Returns tuple where each element = `acc` BEFORE that element.
-# ═══════════════════════════════════════════════════════════════
 
-template tail_accumulator(strides, shape: IntOrIntTuple; body: untyped): auto =
-  ## Final accumulator after prefix_scan: walks last-elem chain to the leaf.
-  ## Applies body(acc, it) at each level.
-  const L = shape.rank() - 1
-  when shape[L] is int or shape[L] is Int:
-    block:
-      let acc {.inject.} = strides[L]
-      let it {.inject.} = shape[L]
-      body
-  else:
-    tail_accumulator(strides[L], shape[L], body)
-
-template head_accumulator(strides, shape: IntOrIntTuple; body: untyped): auto =
-  ## Final accumulator after suffix_scan: walks first-elem chain to the leaf.
-  ## Applies body(acc, it) at each level.
-  when shape[0] is int or shape[0] is Int:
-    block:
-      let acc {.inject.} = strides[0]
-      let it {.inject.} = shape[0]
-      body
-  else:
-    head_accumulator(strides[0], shape[0], body)
-
-template prefix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: untyped): untyped =
-  ## Recursive prefix scan. Each level injects acc/it into a block scope.
-  ##
-  ## Due to generic sandwich / template symbol resolution issues
-  ## this is exported but it really is an internal module
-
-  when t[idx] is tuple:
-    let it = t[idx]
-    let acc = state
-    let subStrides = prefix_scanIt(it, acc, body)
-    const L = it.rank() - 1
-    let newState =
-      when it[L] is int or it[L] is Int:
-        block:
-          let acc {.inject.} = subStrides[L]
-          let it {.inject.} = it[L]
-          body
-      else:
-        tail_accumulator(subStrides[L], it[L], body)
-    when idx == t.rank() - 1:
-      (subStrides,)
+proc scanBuilder(node: NimNode, acc0: NimNode, body: NimNode, reversed: bool): NimNode =
+  var stream = node.tupleStream(reversed)
+  var builder = TupleBuilderNested.new(1)
+  var acc = acc0
+  while not stream.done():
+    let ev = stream.next()
+    case ev.kind
+    of kLeaf:
+      builder.append(acc, verbatim = false)
+      acc = body.replaceNodes(("acc", acc), ("it", ev.leaf))
     else:
-      concat((subStrides,), prefix_scanIt_recurse(idx + 1, t, newState, body))
-  else:
-    block:
-      let it {.inject.} = t[idx]
-      let acc {.inject.} = state
-      let newState = body
-      when idx == t.rank() - 1:
-        (acc,)
-      else:
-        concat((acc,), prefix_scanIt_recurse(idx + 1, t, newState, body))
-
-template suffix_scanIt_recurse*(idx: static int; t: tuple; state: typed; body: untyped): untyped =
-  ## Recursive suffix scan. Each level injects acc/it into a block scope.
-  ##
-  ## Due to generic sandwich / template symbol resolution issues
-  ## this is exported but it really is an internal module
-
-  when t[idx] is tuple:
-    let it = t[idx]
-    let acc = state
-    let subStrides = suffix_scanIt(it, acc, body)
-    let newState =
-      when it[0] is int or it[0] is Int:
-        block:
-          let acc {.inject.} = subStrides[0]
-          let it {.inject.} = it[0]
-          body
-      else:
-        head_accumulator(subStrides[0], it[0], body)
-    when idx == 0:
-      (subStrides,)
+      builder.append(ev)
+  result = builder.emit(0).resultTuple
+  proc reverseTree(n: NimNode): NimNode =
+    if n.kind == nnkTupleConstr:
+      var items: seq[NimNode]
+      for i in countdown(n.len - 1, 0):
+        items.add reverseTree(n[i])
+      result = nnkTupleConstr.newTree(items)
     else:
-      concat(suffix_scanIt_recurse(idx - 1, t, newState, body), (subStrides,))
-  else:
-    block:
-      let it {.inject.} = t[idx]
-      let acc {.inject.} = state
-      let newState = body
-      when idx == 0:
-        (acc,)
-      else:
-        concat(suffix_scanIt_recurse(idx - 1, t, newState, body), (acc,))
+      result = n
+  if reversed:
+    result = reverseTree(result)
 
-template prefix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
-  ## Left-to-right prefix scan. Injects `acc`, `it`; body → new accumulator.
-  when t is int or t is Int:
-    startingAcc
+macro prefix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
+  ## Left-to-right prefix scan over all leaves of t with an accumulator.
+  ##
+  ## The accumulator is called `acc` and the iteration variable `it`,
+  ## `acc` binds the value before the element in scan direction
+  ##
+  ##  Examples:
+  ##    prefix_scanIt(5, 1, acc * it)              → 1
+  ##    prefix_scanIt((2, 3, 4), 1, acc * it)      → (1, 2, 6)
+  ##    prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+  ##        → ((1, 4), (4, 32))
+  if t.getTypeInst().isTupleTy():
+    let scanned = t.scanBuilder(startingAcc, body, false)
+    if startingAcc.getTypeInst().sameType(bindSym"int"):
+      result = quote do:
+        block:
+          let acc {.inject.} = `startingAcc`
+          `scanned`
+    else:
+      result = newStmtList(scanned)
   else:
-    prefix_scanIt_recurse(0, t, startingAcc, body)
+    result = newStmtList(startingAcc)
 
-template suffix_scanIt*(t: untyped; startingAcc: auto; body: untyped): untyped =
-  ## Right-to-left suffix scan. Injects `acc`, `it`; body → new accumulator.
-  when t is int or t is Int:
-    startingAcc
+macro suffix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
+  ## Right-to-left suffix scan over all leaves of t with an accumulator.
+  ##
+  ## The accumulator is called `acc` and the iteration variable `it`,
+  ## `acc` binds the value before the element in scan direction
+  ##
+  ##  Examples:
+  ##    suffix_scanIt(5, 1, acc * it)              → 1
+  ##    suffix_scanIt((2, 3, 4), 1, acc * it)      → (12, 4, 1)
+  ##    suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+  ##        → ((64, 64), (8, 1))
+  if t.getTypeInst().isTupleTy():
+    let scanned = t.scanBuilder(startingAcc, body, true)
+    if startingAcc.getTypeInst().sameType(bindSym"int"):
+      result = quote do:
+        block:
+          let acc {.inject.} = `startingAcc`
+          `scanned`
+    else:
+      result = newStmtList(scanned)
   else:
-    suffix_scanIt_recurse(t.rank() - 1, t, startingAcc, body)
+    result = newStmtList(startingAcc)
