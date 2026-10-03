@@ -33,9 +33,6 @@ template `*`*[V: static int](c: X; s: Int[V]): Int[0] = Int[0]()
 template `*`*(s: int; c: X): Int[0] = Int[0]()
 template `*`*[V: static int](s: Int[V]; c: X): Int[0] = Int[0]()
 
-template mapLeavesWith*(singleton: X, body: untyped): X =
-  singleton
-
 # X coords contribute 0 to any crd2idx inner product, the marker
 # arithmetic folds through the scalar leaf dispatch
 

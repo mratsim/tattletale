@@ -99,15 +99,6 @@ template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
   tensorSubViewImpl(tv.data, tv.layout, coords)
 
 # ═════════════════════════════════════════════════════════════════════════
-#  repeatTuple
-# ═════════════════════════════════════════════════════════════════════════
-
-macro repeat(elem: typed, n: static int): untyped =
-  result = nnkTupleConstr.newTree()
-  for i in 0 ..< n:
-    result.add elem
-
-# ═════════════════════════════════════════════════════════════════════════
 #  inner_partition / outer_partition / local_tile / local_partition
 #  CuTe: tensor_impl.hpp, zipped_divide + slice_and_offset
 # ═════════════════════════════════════════════════════════════════════════

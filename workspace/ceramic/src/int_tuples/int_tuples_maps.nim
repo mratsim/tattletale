@@ -151,19 +151,6 @@ macro flatMapLeaves*(t: IntOrIntTuple, body: untyped): untyped =
   flatMapLeavesImpl(t, body)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  concatFlat, the leaves of two tuples as one flat tuple
-# ═══════════════════════════════════════════════════════════════════════
-
-macro concatFlat*(a, b: typed): untyped =
-  ## The leaves of `a` then the leaves of `b` as one flat tuple,
-  ## no intermediate flattened tuple materializes.
-  result = nnkTupleConstr.newTree()
-  for (leaf, _) in a.tupleFlatten():
-    result.add leaf
-  for (leaf, _) in b.tupleFlatten():
-    result.add leaf
-
-# ═══════════════════════════════════════════════════════════════════════
 #  mapDimensionsWith, top-level-only tuple map
 # ═══════════════════════════════════════════════════════════════════════
 
