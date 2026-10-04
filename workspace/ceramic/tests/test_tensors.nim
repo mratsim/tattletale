@@ -132,11 +132,11 @@ proc runFlatIndexTests =
     var t = make_tensor(float32, shape, stride)
     for i in 0..<24: t(i) = float32(i)
     let sub = t(_, 2)  # all rows, col 2
-    doAssert sub.layout.shape === (4,), "shape should be (4,)"
+    doAssert sub.shape === (4,), "shape should be (4,)"
     doAssert sub(0) == 8.0'f32, "first row, col 2"
     doAssert sub(3) == 11.0'f32, "last row, col 2"
     let sub2 = t(0, _)  # row 0, all cols
-    doAssert sub2.layout.shape === (6,), "shape should be (6,)"
+    doAssert sub2.shape === (6,), "shape should be (6,)"
     doAssert sub2(0) == 0.0'f32, "row 0, first col"
     doAssert sub2(5) == 20.0'f32, "row 0, last col"
     echo "  ok"
@@ -375,7 +375,7 @@ proc runDisplaceTests =
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
     let sub = displace(v, (3, 2))
-    doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
+    doAssert sub.shape === (7, 8) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
     doAssert sub[1, 0] == 24.0'f32
     doAssert sub[0, 1] == 33.0'f32
@@ -385,7 +385,7 @@ proc runDisplaceTests =
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
     let sub = displace(v, (0, 0))
-    doAssert sub.layout.shape === (10, 10) and sub.layout.stride === (1, 10)
+    doAssert sub.shape === (10, 10) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 0.0'f32
     doAssert sub[9, 9] == 99.0'f32
 
@@ -394,7 +394,7 @@ proc runDisplaceTests =
     for i in 0 ..< 100: buf[i] = i.float32
     let t = make_view(buf +% 0, make_layout((10, 10), (1, 10)))
     let sub = displace(t, (3, 2))
-    doAssert sub.layout.shape === (7, 8) and sub.layout.stride === (1, 10)
+    doAssert sub.shape === (7, 8) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
 
   echo "  displace: 3 cases OK"
@@ -438,9 +438,9 @@ proc testColMajor2D =
   for i in 0..<64: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -453,9 +453,9 @@ proc testRowMajor2D =
   for i in 0..<64: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -470,9 +470,9 @@ proc testNonUnitStrides =
   let like = make_tensor_like(t)
   # (2,12) → col-major order → compact (1,4): dimension 0 stride 1, dimension 1 stride 4
   let expected = make_layout((4, 6), (1, 4))
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === expected.stride, "compact stride (1,4) vs orig (2,12)"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === expected.stride, "compact stride (1,4) vs orig (2,12)"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(expected)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -485,9 +485,9 @@ proc testRank1 =
   for i in 0..<32: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -500,9 +500,9 @@ proc testRank3ColMajor =
   for i in 0..<64: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -515,9 +515,9 @@ proc testRank3RowMajor =
   for i in 0..<64: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -531,9 +531,9 @@ proc testRank3MixedOrder =
 
   let like = make_tensor_like(t)
   # (4,1,16) → order (1,0,2) → compact (4,1,16) — already compact!
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -548,9 +548,9 @@ proc test3D_MidMajor =
   let like = make_tensor_like(t)
   # (2,20,5) → order (0,2,1) → compact (1,15,3)
   let expected = make_layout((3, 4, 5), (1, 15, 3))
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === expected.stride, "compact stride (1,15,3) vs orig (2,20,5)"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === expected.stride, "compact stride (1,15,3) vs orig (2,20,5)"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(expected)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -563,9 +563,9 @@ proc test4DColMajor =
   for i in 0..<120: t(i) = float32(i)
 
   let like = make_tensor_like(t)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === layout.stride, "stride match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === layout.stride, "stride match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -580,9 +580,9 @@ proc test4DRowMajor =
   let like = make_tensor_like(t)
   # (24,12,4,1) → row-major order → compact (60,20,5,1)
   let expected = make_layout((2, 3, 4, 5), (60, 20, 5, 1))
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === expected.stride, "compact stride (60,20,5,1) vs orig (24,12,4,1)"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === expected.stride, "compact stride (60,20,5,1) vs orig (24,12,4,1)"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(expected)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -597,9 +597,9 @@ proc test4DSparseStrides =
   let like = make_tensor_like(t)
   # (5,1,15,3) → order (1,3,0,2) → compact (15,1,30,3)
   let expected = make_layout((2, 3, 4, 5), (15, 1, 30, 3))
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert like.layout.stride === expected.stride, "compact stride (15,1,30,3) vs orig (5,1,15,3)"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(expected)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert like.stride === expected.stride, "compact stride (15,1,30,3) vs orig (5,1,15,3)"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(expected)), "size match"
   doAssert cast[int](addr like.data[0]) != cast[int](addr t.data[0]), "distinct data"
   doAssert like.data[0] == 0.0'f32, "zero-init"
   echo "  ok"
@@ -612,8 +612,8 @@ proc testExplicitType =
   for i in 0..<64: t(i) = float32(i)
 
   let like = make_tensor_like(t, float64)
-  doAssert like.layout.shape === layout.shape, "shape match"
-  doAssert toIntVal(cosize(like.layout)) == toIntVal(cosize(t.layout)), "size match"
+  doAssert like.shape === layout.shape, "shape match"
+  doAssert toIntVal(cosize(like)) == toIntVal(cosize(t)), "size match"
   doAssert sizeof(like.data[0]) == sizeof(float64), "is double"
   echo "  ok"
 

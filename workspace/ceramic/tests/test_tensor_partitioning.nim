@@ -22,7 +22,7 @@ proc runOuter2dTupleCoord(errors: var int) =
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,4), (1,0))
-  doAssert p.layout.shape === (2,2), "shape=(2,2)"
+  doAssert p.shape === (2,2), "shape=(2,2)"
   doAssert p(0,0) == 1.0'f32, "(0,0)==1"
   doAssert p(1,0) == 5.0'f32, "(1,0)==5"
   doAssert p(0,1) == 33.0'f32, "(0,1)==33"
@@ -42,7 +42,7 @@ proc runOuter2dScalarCoord(errors: var int) =
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,4), 5)
-  doAssert p.layout.shape === (2,2), "shape=(2,2)"
+  doAssert p.shape === (2,2), "shape=(2,2)"
   doAssert p(0,0) == 9.0'f32, "(0,0)==9"
   doAssert p(1,0) == 13.0'f32, "(1,0)==13"
   echo "  OK"
@@ -60,7 +60,7 @@ proc runInner2dTupleCoord(errors: var int) =
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = inner_partition(v, (4,4), (1,0))
-  doAssert p.layout.shape === (4,4), "shape=(4,4)"
+  doAssert p.shape === (4,4), "shape=(4,4)"
   doAssert p(0,0) == 4.0'f32, "(0,0)==4"
   doAssert p(1,0) == 5.0'f32, "(1,0)==5"
   echo "  OK"
@@ -82,7 +82,7 @@ proc runOuter3dScalarCoord(errors: var int) =
   let v = t
   let p = outer_partition(v, (4,2), 0)
   # rest group (2,2,3):(4,16,32), all dimensions at coord 0
-  doAssert p.layout.shape === (2,2,3), "shape=(2,2,3)"
+  doAssert p.shape === (2,2,3), "shape=(2,2,3)"
   doAssert p(0,0,0) == 0.0'f32, "(0,0,0)==0"
   doAssert p(1,0,0) == 4.0'f32, "(1,0,0)==4"
   doAssert p(0,1,0) == 16.0'f32, "(0,1,0)==16"
@@ -129,7 +129,7 @@ proc runInner2dUnderscore(errors: var int) =
   let v = t
   let p = inner_partition(v, (3,3), (1, X()))
   # rest m0 fixed→1 (offset=3), rest m1 kept (3)
-  doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
+  doAssert p.shape === (3,3,3), "shape=(3,3,3)"
   doAssert p(0,0,0) == 3.0'f32, "(0,0,0)==3"
   doAssert p(1,0,0) == 4.0'f32, "(1,0,0)==4"
   doAssert p(0,1,0) == 12.0'f32, "(0,1,0)==12"
@@ -152,7 +152,7 @@ proc runOuter2dUnderscore(errors: var int) =
   let v = t
   let p = outer_partition(v, (3,3), (1, X()))
   # tile m0 fixed→1 (offset=1), tile m1 kept (3), rest kept (3,3)
-  doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
+  doAssert p.shape === (3,3,3), "shape=(3,3,3)"
   doAssert p(0,0,0) == 1.0'f32, "(0,0,0)==1"
   doAssert p(1,0,0) == 10.0'f32, "(1,0,0)==10"
   doAssert p(0,1,0) == 4.0'f32, "(0,1,0)==4"
@@ -175,7 +175,7 @@ proc runInner2dUnderscore3d(errors: var int) =
   let v = t
   let p = inner_partition(v, (3,3), (0, X()))
   # rest m0 fixed→0 (offset=0), rest m1 kept (3)
-  doAssert p.layout.shape === (3,3,3), "shape=(3,3,3)"
+  doAssert p.shape === (3,3,3), "shape=(3,3,3)"
   doAssert p(0,0,0) == 0.0'f32, "(0,0,0)==0"
   doAssert p(0,1,0) == 9.0'f32, "(0,1,0)==9"
   doAssert p(0,0,1) == 27.0'f32, "(0,0,1)==27"
@@ -207,7 +207,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
     #   zipped_divide: dimension 0 split by 128→(128,4), dimension 1 split by 8→(8,8)
     #   slice(0,_): keep tile, fix rest dimension 0 to 0
     #   shape: (128, 8, 8)
-    doAssert gA.layout.shape === (bM, bK, K div bK), "shape=(" & $bM & "," & $bK & "," & $(K div bK) & ")"
+    doAssert gA.shape === (bM, bK, K div bK), "shape=(" & $bM & "," & $bK & "," & $(K div bK) & ")"
     doAssert gA(0,0,0) == 0.0'f32, "(0,0,0)==0"
     doAssert gA(0,1,0) == 512.0'f32, "(0,1,0)==512"
     echo "  mA (Y,X,Y) OK"
@@ -219,7 +219,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
     for i in 0..<N*K: mB(i) = float32(i)
     let v = mB
     let gB = local_tile(v, tiler, coord0, (X, Y, Y))
-    doAssert gB.layout.shape === (bN, bK, K div bK), "shape=(" & $bN & "," & $bK & "," & $(K div bK) & ")"
+    doAssert gB.shape === (bN, bK, K div bK), "shape=(" & $bN & "," & $bK & "," & $(K div bK) & ")"
     doAssert gB(0,0,0) == 0.0'f32, "(0,0,0)==0"
     echo "  mB (X,Y,Y) OK"
 
@@ -235,7 +235,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
     #   zipped_divide: split dimension 0 by 128→(128,4), dimension 1 by 128→(128,4)
     #   slice(0,0): keep tile, fix both rest dimensions
     #   shape: (128, 128)
-    doAssert gC.layout.shape === (bM, bN), "shape=(" & $bM & "," & $bN & ")"
+    doAssert gC.shape === (bM, bN), "shape=(" & $bM & "," & $bN & ")"
     doAssert gC(0,0) == 0.0'f32, "(0,0)==0"
     doAssert gC(1,0) == 1.0'f32, "(1,0)==1"
     doAssert gC(0,1) == 512.0'f32, "(0,1)==512"
@@ -300,7 +300,7 @@ proc runLocalPartition3Arg3d(errors: var int) =
   let L = make_layout((4,2))
   let v = t
   let p = local_partition(v, L, 0)
-  doAssert p.layout.shape === (2,2,2)
+  doAssert p.shape === (2,2,2)
   doAssert p(0,0,0) == 0.0'f32
   doAssert p(1,0,0) == 4.0'f32
   doAssert p(0,1,0) == 16.0'f32
@@ -315,7 +315,7 @@ proc runLocalPartition3ArgLarge(errors: var int) =
   let L = make_layout((16,16))
   let v = t
   let p = local_partition(v, L, 0)
-  doAssert p.layout.shape === (2,2)
+  doAssert p.shape === (2,2)
   doAssert p(0,0) == 0.0'f32
   doAssert p(1,0) == 16.0'f32
   doAssert p(0,1) == 512.0'f32
@@ -344,7 +344,7 @@ proc runLocalPartition4ArgStep1X(errors: var int) =
   let v = t
   block:
     let p = local_partition(v, tC, 0, (Y, X))
-    doAssert p.layout.shape === (8,8)
+    doAssert p.shape === (8,8)
     doAssert p(0,0) == 0.0'f32
     doAssert p(1,0) == 16.0'f32
     doAssert p(0,1) == 128.0'f32
@@ -376,7 +376,7 @@ proc runLocalPartition4ArgStep11(errors: var int) =
   let v = t
   block:
     let p = local_partition(v, tC, 0,   (Y, Y))
-    doAssert p.layout.shape === (8,8)
+    doAssert p.shape === (8,8)
     doAssert p(0,0) == 0.0'f32
   block:
     let p = local_partition(v, tC, 255, (Y, Y))

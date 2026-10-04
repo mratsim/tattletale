@@ -67,9 +67,9 @@ proc runLayoutAlgebraTests =
     let tAv = tma.partition_A(thr, make_view(dummyPtr, make_layout((8, 8))))
     let tBv = tma.partition_B(thr, make_view(dummyPtr, make_layout((8, 8))))
     var tCv = tma.partition_C(thr, make_view(dummyPtr, make_layout((8, 8))))
-    doAssert size(tAv.layout) === 2, "A partition size (V=2 per lane)"
-    doAssert size(tBv.layout) === 2, "B partition size (V=2 per lane)"
-    doAssert size(tCv.layout) === 2, "C partition size (V=2 per lane)"
+    doAssert size(tAv.getLayout()) === 2, "A partition size (V=2 per lane)"
+    doAssert size(tBv.getLayout()) === 2, "B partition size (V=2 per lane)"
+    doAssert size(tCv.getLayout()) === 2, "C partition size (V=2 per lane)"
     # Lane 0's A fragment reads the (0, 0) tile element.
     doAssert tAv(0) == 42.0'f32, "A fragment reads the (0,0) tile element"
     doAssert tBv(0) == 42.0'f32, "B fragment reads the (0,0) tile element"

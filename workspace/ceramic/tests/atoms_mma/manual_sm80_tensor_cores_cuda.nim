@@ -52,7 +52,7 @@ func mmaMicrotile(tma: static TiledMma; t: int;
 
   gemm_atom(tma.atom, cFrag, aFrag, bFrag)   # one mma.sync, in-place accumulate
 
-  for i in 0 ..< size(tCv.layout):
+  for i in 0 ..< size(tCv.getLayout()):
     tCv(i) = cFrag(i)
 
 func mmaMicrotileExplicit(tma: static TiledMma; t: int;
@@ -81,7 +81,7 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
   dFrag.copyFrom(cFrag)
   gemm_atom(tma.atom, dFrag, aFrag, bFrag)   # dFrag = aFrag·bFrag + cFrag
 
-  for i in 0 ..< size(tCv.layout):
+  for i in 0 ..< size(tCv.getLayout()):
     tCv(i) = dFrag(i)
 
 const kernelCode = cuda:

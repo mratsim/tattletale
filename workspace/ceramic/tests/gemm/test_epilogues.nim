@@ -43,7 +43,7 @@ template applyEpilogue(op: Epilogue; D, AB: auto): untyped =
   block:
     var o = op
     o.preflight()
-    var tmp = make_tensor(typeof(AB(0)), AB.layout.shape)
+    var tmp = make_tensor(typeof(AB(0)), AB.shape)
     o.apply(tmp, AB)
     o.finalStore(D, tmp)
 
@@ -96,7 +96,7 @@ proc runEpilogueTests =
     var D2 = make_view(bufD2 +% 0, make_layout((M, N), (1, M)))
     var op = initEpiAXPBY(0.5'f32, 2.0'f32, C)
     op.preflight()
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     op.finalStore(D, tmp)
     applyEpilogue(op, D2, AB)

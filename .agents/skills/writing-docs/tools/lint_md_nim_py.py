@@ -2946,6 +2946,9 @@ TILE_RULES = {
                                "bare x.destructureLayout where method call "
                                "syntax x.destructureLayout(...) is the "
                                "required form",
+    "getlayout-method": "a getLayout(x) plain call or bare x.getLayout "
+                        "where method call syntax x.getLayout() is the "
+                        "required form",
     "body-wrap": "a single-expression callable body is split across lines "
                  "while the joined form fits one line",
 }
@@ -2979,6 +2982,13 @@ EMITLAYOUT_CALL_RE = re.compile(r"(?<![.\w])emitLayout\s*\(")
 EMITLAYOUT_BARE_RE = re.compile(r"\.\s*emitLayout(?!\s*\()")
 DESTRUCTRELAYOUT_CALL_RE = re.compile(r"(?<![.\w])destructureLayout\s*\(")
 DESTRUCTRELAYOUT_BARE_RE = re.compile(r"\.\s*destructureLayout(?!\s*\()")
+# getLayout always reads as a method call with parens, x.getLayout().
+# Violations:
+# - plain call `getLayout(x)`
+# - bare property form `x.getLayout`, parens missing
+# - decl header stays out, the exported marker `*` sits before the paren there
+GETLAYOUT_CALL_RE = re.compile(r"(?<![.\w])getLayout\s*\(")
+GETLAYOUT_BARE_RE = re.compile(r"\.\s*getLayout(?!\s*[(\w])")
 STATICINT_NAMES = ("getStaticInt", "isStaticInt")
 STATICINT_CALL_RES = {n: re.compile(r"(?<![.\w])%s\s*\(" % n) for n in STATICINT_NAMES}
 STATICINT_BARE_RES = {n: re.compile(r"\.\s*%s(?!\s*[(\*])" % n) for n in STATICINT_NAMES}
@@ -3943,6 +3953,16 @@ def scan_newcall_method(path, lines, blocked, findings):
                 path, i + 1, "destructrelayout-method",
                 "destructureLayout reads without call parens here, write "
                 "x.destructureLayout(...)"))
+        if GETLAYOUT_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "getlayout-method",
+                "getLayout reads as a plain call here, write "
+                "x.getLayout()"))
+        elif GETLAYOUT_BARE_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "getlayout-method",
+                "getLayout reads without call parens here, write "
+                "x.getLayout()"))
 
 
 BODY_WRAP_MAX = 180

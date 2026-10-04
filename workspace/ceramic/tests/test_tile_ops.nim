@@ -74,9 +74,9 @@ proc checkFmaStorage() =
   # strides (32·strideRow, 16·strideCol); the subtile steps come from the
   # lane's fragment cell, evaluated from the atom's A/C layout at the load.
   let fmaView = local_tile_dyn(gdBuf, 32, 16, (0, 0, 0, 0))
-  doAssert fmaView.layout.stride[0] == gdBuf.layout.stride[2],
+  doAssert fmaView.stride[0] == gdBuf.stride[2],
     "the FMA tile-plane row stride must be the view's row stride"
-  doAssert fmaView.layout.stride[1] == gdBuf.layout.stride[3],
+  doAssert fmaView.stride[1] == gdBuf.stride[3],
     "the FMA tile-plane col stride must be the view's col stride"
   # Host load over lane 0's owned cells: slot (n, m, v) reads buffer
   # element (8n)·16 + 8m + v.

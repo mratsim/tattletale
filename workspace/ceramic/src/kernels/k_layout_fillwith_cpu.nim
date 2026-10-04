@@ -48,14 +48,14 @@ import system/memory
 # ── Compile-time helpers (shared pattern with k_layout_copy_cpu) ──
 
 
-proc flattenElem(lay, field: NimNode; idx: NimNode; totalRank: int): NimNode {.compileTime.} =
-  ## Generates `int(flatten(lay.field)[idx])` (multi-dimension) or `int(flatten(lay.field))` (rank-1).
+proc flattenElem(layoutAst: NimNode, field: NimNode, idx: NimNode, totalRank: int): NimNode {.compileTime.} =
+  ## Generates `int(flatten(layoutAst.field)[idx])` (multi-dimension) or `int(flatten(layoutAst.field))` (rank-1).
   if totalRank <= 1:
     result = quote do:
-      int(flatten(`lay`.`field`))
+      int(flatten(`layoutAst`.`field`))
   else:
     result = quote do:
-      int(flatten(`lay`.`field`)[`idx`])
+      int(flatten(`layoutAst`.`field`)[`idx`])
 
 proc buildSortedArrays(
     R: int;
@@ -265,7 +265,7 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
 
   # ── Extract data pointer and layout reference ──
   let dstData = newTree(nnkDotExpr, dst, ident"data")
-  let dstLay = newTree(nnkDotExpr, dst, ident"layout")
+  let dstLay = newTree(nnkCall, ident"getLayout", dst)
   let isZero = isZeroVal(val)
 
   # ── Build stride-sorted arrays ──

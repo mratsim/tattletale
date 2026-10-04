@@ -36,23 +36,23 @@ template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[un
 
 template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
-    tensorSubViewImpl(t.data[0].addr, t.layout, args)
+    tensorSubViewImpl(t.data[0].addr, t.getLayout(), args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    t.data[toIntVal crd2idx(t.layout, varargs_to_par(args))]
+    t.data[toIntVal crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
-    tensorSubViewImpl(tv.data, tv.layout, args)
+    tensorSubViewImpl(tv.data, tv.getLayout(), args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    tv.data[toIntVal crd2idx(tv.layout, varargs_to_par(args))]
+    tv.data[toIntVal crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `[]` — element access only (underscore rejected)
@@ -61,12 +61,12 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  t.data[toIntVal crd2idx(t.layout, varargs_to_par(args))]
+  t.data[toIntVal crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  tv.data[toIntVal crd2idx(tv.layout, varargs_to_par(args))]
+  tv.data[toIntVal crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   var a = args
@@ -76,7 +76,7 @@ macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
     when hasUnderscore(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
-      `t`.data[toIntVal crd2idx(`t`.layout, `coord`)] = `val`
+      `t`.data[toIntVal crd2idx(`t`.getLayout(), `coord`)] = `val`
 
 macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   var a = args
@@ -86,17 +86,17 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
     when hasUnderscore(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
-      `tv`.data[toIntVal crd2idx(`tv`.layout, `coord`)] = `val`
+      `tv`.data[toIntVal crd2idx(`tv`.getLayout(), `coord`)] = `val`
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
 
 template slice*(t: TensorOwned; coords: varargs[untyped]): untyped =
-  tensorSubViewImpl(t.data[0].addr, t.layout, coords)
+  tensorSubViewImpl(t.data[0].addr, t.getLayout(), coords)
 
 template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
-  tensorSubViewImpl(tv.data, tv.layout, coords)
+  tensorSubViewImpl(tv.data, tv.getLayout(), coords)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  inner_partition / outer_partition / local_tile / local_partition
@@ -169,7 +169,7 @@ template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ##   coord per dimension
   ## - an underscore in the coord keeps that grid slot whole,
   ##   the result has a dimension indexing the leftover tiles
-  partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = true)
+  partitionImpl(tv, zipped_divide(tv.getLayout(), tiler), coord, doInner = true)
 
 template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Cut the tensor into tiles, select the same slice from every tile,
@@ -203,7 +203,7 @@ template outer_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## - the result shape is the grid of tiles, the tile dims drop
   ## - `coord` indexes positions inside a tile, the same positions `inner_partition`'s result covers
   ## - a scalar coord addresses the tile by linear index, a tuple coord per dimension
-  partitionImpl(tv, zipped_divide(tv.layout, tiler), coord, doInner = false)
+  partitionImpl(tv, zipped_divide(tv.getLayout(), tiler), coord, doInner = false)
 
 template local_tile*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Select the one tile of the tensor that the current threadgroup owns.
@@ -296,10 +296,10 @@ func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto 
   ## Offset TensorView by `coord` (logical coords).
   ## Returns: a sub-view with shape `original_shape - coord` (element-wise),
   ## the data pointer advanced by `crd2idx(layout, coord)`, strides preserved.
-  let off = crd2idx(t.layout, coord)
-  let ns = zipLeavesWith(t.layout.shape, coord):
+  let off = crd2idx(t.getLayout(), coord)
+  let ns = zipLeavesWith(t.shape, coord):
     it_a - it_b
-  make_view(t.data +% off, make_layout(ns, t.layout.stride))
+  make_view(t.data +% off, make_layout(ns, t.stride))
 
 func displace*[T, Sh, St](t: TensorOwned[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorOwned by `coord` (logical coords). Returns a sub-view whose shape is

@@ -222,7 +222,7 @@ func partition_A*[T, Sh, St](
     thrM  = tma.threadLayout.shape[0]
     thrK  = tma.threadLayout.shape[2]
     rshape = (Sh.default[0] div (thrM * atomM), Sh.default[1] div (thrK * atomK))
-  let thrTensor = make_view(A.data, thrfrg_A(tma, A.layout))
+  let thrTensor = make_view(A.data, thrfrg_A(tma, A.getLayout()))
   let tsel = idx2crd(tma.atom.getLayoutA().shape[0], thr.tv)
   let vsel = mapLeavesWith(tma.atom.getLayoutA().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
@@ -239,7 +239,7 @@ func partition_B*[T, Sh, St](
     thrN  = tma.threadLayout.shape[1]
     thrK  = tma.threadLayout.shape[2]
     rshape = (Sh.default[0] div (thrN * atomN), Sh.default[1] div (thrK * atomK))
-  let thrTensor = make_view(B.data, thrfrg_B(tma, B.layout))
+  let thrTensor = make_view(B.data, thrfrg_B(tma, B.getLayout()))
   let tsel = idx2crd(tma.atom.getLayoutB().shape[0], thr.tv)
   let vsel = mapLeavesWith(tma.atom.getLayoutB().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
@@ -257,7 +257,7 @@ func partition_C*[T, Sh, St](
     thrM  = tma.threadLayout.shape[0]
     thrN  = tma.threadLayout.shape[1]
     rshape = (Sh.default[0] div (thrM * atomM), Sh.default[1] div (thrN * atomN))
-  let thrTensor = make_view(C.data, thrfrg_C(tma, C.layout))
+  let thrTensor = make_view(C.data, thrfrg_C(tma, C.getLayout()))
   let tsel = idx2crd(tma.atom.getLayoutC().shape[0], thr.tv)
   let vsel = mapLeavesWith(tma.atom.getLayoutC().shape[1]): X()
   let rsel = mapLeavesWith(rshape): X()
@@ -337,7 +337,7 @@ template make_fragment_A*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout))
+    make_tensor(T, make_fragment_like(t.getLayout()))
 
 template make_fragment_B*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
@@ -348,7 +348,7 @@ template make_fragment_B*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, true]()
   else:
-    make_tensor(T, make_fragment_like(t.layout))
+    make_tensor(T, make_fragment_like(t.getLayout()))
 
 template make_fragment_C*[T, Sh, St](
     mma: static MmaAtom; t: TensorView[T, Sh, St] or TensorOwned[T, Sh, St]): auto =
@@ -360,4 +360,4 @@ template make_fragment_C*[T, Sh, St](
   when mma.getInstr() == "simdgroup_multiply_accumulate":
     SimdgroupMatrix[T, false]()
   else:
-    make_tensor(T, make_fragment_like(t.layout))
+    make_tensor(T, make_fragment_like(t.getLayout()))

@@ -74,7 +74,7 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
   # accumulator: zeroed once, then gemm_tiled accumulates into it
-  var dFrag = make_tensor(float32, tCv.layout.shape)
+  var dFrag = make_tensor(float32, tCv.shape)
   dFrag.fillWith(float32(0))
   # prepare the full tileK-sized slice of K gmem → smem, unmasked:
   # this test runs full tiles with no ragged lanes
@@ -93,7 +93,7 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   syncthreads()
   tma.gemm_tiled(dFrag, sA, sB, (TILE_M, TILE_N, TILE_K), threadIdx)
   epi.preflight()
-  var tmp = make_tensor(float32, dFrag.layout.shape)
+  var tmp = make_tensor(float32, dFrag.shape)
   epi.apply(tmp, dFrag)
   epi.finalStore(tCv, tmp)
 
@@ -120,7 +120,7 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   var tCv = tma.partition_C(thr, tC)
   var epi = initEpiAXPBY(alpha, beta, tCv)
   # accumulator: zeroed once, then gemm_tiled accumulates into it
-  var dFrag = make_tensor(float32, tCv.layout.shape)
+  var dFrag = make_tensor(float32, tCv.shape)
   dFrag.fillWith(float32(0))
   # prepare the full tileK-sized slice of K gmem → smem, unmasked:
   # this test runs full tiles with no ragged lanes
@@ -139,7 +139,7 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   syncthreads()
   tma.gemm_tiled(dFrag, sA, sB, (TILE_M, TILE_N, TILE_K), threadIdx)
   epi.preflight()
-  var tmp = make_tensor(float32, dFrag.layout.shape)
+  var tmp = make_tensor(float32, dFrag.shape)
   epi.apply(tmp, dFrag)
   epi.finalStore(tCv, tmp)
 

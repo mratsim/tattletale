@@ -107,18 +107,18 @@ func copyFrom*[T, ShD, StD, ShS, StS](
   ## Copies every element of src to dst, dst(flat k) = src(flat k).
   ##
   ## For runtime strides, assumes 128B alignment for vectorized copies
-  guardWriteDisjointness(dst.layout.shape, dst.layout.stride,
-                         src.layout.shape, src.layout.stride)
+  guardWriteDisjointness(dst.shape, dst.stride,
+                         src.shape, src.stride)
   var dstV = when typeof(dst) is TensorOwned: view(dst) else: dst
   let srcV = when typeof(src) is TensorOwned: view(src) else: src
-  let R = right_inverse(srcV.layout)
-  let C = coalesce(compose(dstV.layout, R))
+  let R = right_inverse(srcV.getLayout())
+  let C = coalesce(compose(dstV.getLayout(), R))
   const elemBits = sizeof(T) * 8
   let
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
     wV = when typeof(C.shape) is tuple: toIntVal(C.shape[0]) else: toIntVal(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  let spansCover = toIntVal(size(R)) == toIntVal(size(srcV.layout))
+  let spansCover = toIntVal(size(R)) == toIntVal(size(srcV))
   if spansCover and s0 === 1:
     copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
   else:
@@ -234,7 +234,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(src.data, thrfrg_copy(src.layout, atom, blockSize))
+  let thrTensor = make_view(src.data, thrfrg_copy(src.getLayout(), atom, blockSize))
   thrTensor(thrIdx, _, _)
 
 func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
@@ -253,5 +253,5 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(dst.data, thrfrg_copy(dst.layout, atom, blockSize))
+  let thrTensor = make_view(dst.data, thrfrg_copy(dst.getLayout(), atom, blockSize))
   thrTensor(thrIdx, _, _)

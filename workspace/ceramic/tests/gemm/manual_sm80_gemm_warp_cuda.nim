@@ -68,7 +68,7 @@ func gemmWarpMicrotile(tma: static TiledMma; t: int;
 
   gemm_warp(tma.atom, cFrag, aFrag, bFrag)   # two mma.sync, accumulating
 
-  for i in 0 ..< size(tCv.layout):
+  for i in 0 ..< size(tCv.getLayout()):
     tCv(i) = cFrag(i)
 
 const kernelCode = cuda:
