@@ -23,10 +23,10 @@ import workspace/crucible
 proc fillWith*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
   ## Set every logical element of `tv` to `val`.
   ## Uses flat-index iteration — acceptable on GPU, slow on CPU.
-  for i in 0 ..< size(tv.layout):
+  for i in 0 ..< size(tv):
     tv(i) = val
 
 proc fillWith*[T, Sh, St](t: var TensorOwned[T, Sh, St]; val: T) =
   ## Set every logical element of `t` to `val`.
-  for i in 0 ..< size(t.layout):
+  for i in 0 ..< size(t):
     t(i) = val

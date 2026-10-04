@@ -108,8 +108,7 @@ func gd*[T](buf: ptr UncheckedArray[T], batch, depth, rows, cols: SomeInteger): 
     let r = int(rows)
     let c = int(cols)
     let one = 1
-    GlView[T](data: buf,
-              layout: make_layout((b, d, r, c), (d * r * c, r * c, c, one)))
+    make_view(buf, make_layout((b, d, r, c), (d * r * c, r * c, c, one)))
 
 func gd*[T](buf: ptr UncheckedArray[T],
                 shape, stride: tuple): GlView[T] {.inline.} =
@@ -125,8 +124,7 @@ func gd*[T](buf: ptr UncheckedArray[T],
     let sd = int(st[1])
     let sr = int(st[2])
     let sc = int(st[3])
-    GlView[T](data: buf,
-              layout: make_layout((b, d, r, c), (sb, sd, sr, sc)))
+    make_view(buf, make_layout((b, d, r, c), (sb, sd, sr, sc)))
 
 func local_tile_dyn*[T](
         gl: GlView[T],
@@ -140,15 +138,11 @@ func local_tile_dyn*[T](
     let o1 = int(origin[1])
     let o2 = int(origin[2])
     let o3 = int(origin[3])
-    let sb = int(gl.layout.stride[0])
-    let sd = int(gl.layout.stride[1])
-    let sr = int(gl.layout.stride[2])
-    let sc = int(gl.layout.stride[3])
+    let sb = int(gl.stride[0])
+    let sd = int(gl.stride[1])
+    let sr = int(gl.stride[2])
+    let sc = int(gl.stride[3])
     let base = o0 * sb + o1 * sd + o2 * sr * R + o3 * sc * C
     let r = int(R)
     let c = int(C)
-    TensorView[T, (int, int), (int, int)](
-      data: gl.data +% base,
-      layout: Layout[(int, int), (int, int)](
-        shape: (r, c),
-        stride: (sr, sc)))
+    make_view(gl.data +% base, make_layout((r, c), (sr, sc)))

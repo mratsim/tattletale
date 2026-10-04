@@ -1,11 +1,12 @@
 ## CPU unit test: the store-predication mask (cStoreMask) and the copy
 ## partition (partition_S / partition_D) against independent references.
 ##
-## Store-mask reference: crd2idx(view.layout, i) is the flat tile offset
+## Store-mask reference: crd2idx(view.getLayout(), i) is the flat tile offset
 ## of fragment element i (element i of the view is element i of the
-## fragment), without using the helper's own atom-offset math. The tile
-## is col-major, so the row is offset mod tileM and the column offset
-## div tileM.
+## fragment), without using the helper's own atom-offset math.
+## - The tile is col-major
+## - The row offset is offset mod tileM
+## - The column offset is offset div tileM
 ##
 ## Copy-partition proof: the partition views are checked against the
 ## pinned chunk sequence for every thread. The thread's 16-byte chunks
@@ -69,8 +70,8 @@ proc main() =
     for (validM, validN) in [(TILE_M, TILE_N), (16, 16), (16, 8), (8, 16),
                              (8, 8), (1, 1)]:
       var expected = 0
-      for i in 0 ..< size(tCv.layout):
-        let off = originC + toIntVal(crd2idx(tCv.layout, i))
+      for i in 0 ..< size(tCv):
+        let off = originC + toIntVal(crd2idx(tCv.getLayout(), i))
         let m = off mod TILE_M
         let n = off div TILE_M
         if m < validM and n < validN:
@@ -89,28 +90,28 @@ proc main() =
     let tA = make_view(dummyPtr, (TILE_M, TILE_K), (1, ldA))
     let tAgA = partition_S(tA, CpAsyncAtom[uint32], blockSize, tid)
     let originA = (cast[int](tAgA.data) - cast[int](tA.data)) div int(sizeof(uint32))
-    doAssert tAgA.layout.shape === (1, copyUnits),
-      "partition_S: thread " & $tid & ": unit-view shape " & $tAgA.layout.shape &
+    doAssert tAgA.shape === (1, copyUnits),
+      "partition_S: thread " & $tid & ": unit-view shape " & $tAgA.shape &
       ", expected (1, " & $copyUnits & ")"
     for i in 0 ..< copyUnits:
       let c = tid + i * blockSize
       let (m0, k0) = idx2crd((TILE_M, TILE_K), 4 * c)
       let expected = toIntVal(m0) + toIntVal(k0) * ldA
-      let got = originA + toIntVal(crd2idx(tAgA.layout, (0, i)))
+      let got = originA + toIntVal(crd2idx(tAgA.getLayout(), (0, i)))
       doAssert got == expected,
         "partition_S: thread " & $tid & " unit " & $i & ": tile offset " & $got &
         ", reference " & $expected
     let tD = make_view(dummyPtr, (TILE_M, TILE_K), (1, TILE_M))
     let tDsD = partition_D(tD, CpAsyncAtom[uint32], blockSize, tid)
     let originD = (cast[int](tDsD.data) - cast[int](tD.data)) div int(sizeof(uint32))
-    doAssert tDsD.layout.shape === (1, copyUnits),
-      "partition_D: thread " & $tid & ": unit-view shape " & $tDsD.layout.shape &
+    doAssert tDsD.shape === (1, copyUnits),
+      "partition_D: thread " & $tid & ": unit-view shape " & $tDsD.shape &
       ", expected (1, " & $copyUnits & ")"
     for i in 0 ..< copyUnits:
       let c = tid + i * blockSize
       let (m0, k0) = idx2crd((TILE_M, TILE_K), 4 * c)
       let expected = toIntVal(m0) + toIntVal(k0) * TILE_M
-      let got = originD + toIntVal(crd2idx(tDsD.layout, (0, i)))
+      let got = originD + toIntVal(crd2idx(tDsD.getLayout(), (0, i)))
       doAssert got == expected,
         "partition_D: thread " & $tid & " unit " & $i & ": tile offset " & $got &
         ", reference " & $expected

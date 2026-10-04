@@ -66,14 +66,14 @@ proc toBracket(vals: seq[int]): NimNode {.compileTime.} =
 
 # ── Helper: flatten + index into a layout field ─────────────────
 
-proc flattenElem(lay, field: NimNode; idx: NimNode; totalRank: int): NimNode {.compileTime.} =
-  ## Generates `int(flatten(lay.field)[idx])` (multi-dimension) or `int(flatten(lay.field))` (rank-1).
+proc flattenElem(layoutAst: NimNode, field: NimNode, idx: NimNode, totalRank: int): NimNode {.compileTime.} =
+  ## Generates `int(flatten(layoutAst.field)[idx])` (multi-dimension) or `int(flatten(layoutAst.field))` (rank-1).
   if totalRank <= 1:
     result = quote do:
-      int(flatten(`lay`.`field`))
+      int(flatten(`layoutAst`.`field`))
   else:
     result = quote do:
-      int(flatten(`lay`.`field`)[`idx`])
+      int(flatten(`layoutAst`.`field`)[`idx`])
 
 
 proc buildStrideSortedArrays(
@@ -104,23 +104,23 @@ proc buildStrideSortedArrays(
   ##
   ## Returns:
   ##   shLit/dstStLit/srcStLit: nnkBracket literals for let-bindings in generated code.
-  ##   preStmts: nnkStmtList with evalOnceAs bindings for flatten() of each (lay, field) pair.
+  ##   preStmts: nnkStmtList with evalOnceAs bindings for flatten() of each (layoutAst, field) pair.
   ##   shapeVals/srcStVals/dstStVals: seq[int] of compile-time-known values,
   ##     DynamicSentinel for runtime-unknown (for compile-time analysis like contiguity).
   ##   effR: effective rank after size-1 filtering.
   ##   lastOk: original dim index of the innermost (last) entry after reordering.
-  var flatCache = newSeq[tuple[name: string; lay, field: NimNode]]()
+  var flatCache = newSeq[tuple[name: string, layoutAst: NimNode, field: NimNode]]()
   var flatIdCounter = 0
-  proc cachedFlatten(lay, field: NimNode; idx: NimNode): NimNode =
+  proc cachedFlatten(layoutAst: NimNode, field: NimNode, idx: NimNode): NimNode =
     ## Generate `int(flat_N[idx])` with flatten cached via evalOnceAs.
     for c in flatCache:
-      if c.lay.repr == lay.repr and c.field.repr == field.repr:
+      if c.layoutAst.repr == layoutAst.repr and c.field.repr == field.repr:
         let cid = ident(c.name)
         return quote do: int(`cid`[`idx`])
     let nstr = "flat_" & $flatIdCounter
     inc flatIdCounter
     let nid = ident(nstr)
-    flatCache.add (name: nstr, lay: lay, field: field)
+    flatCache.add (name: nstr, layoutAst: layoutAst, field: field)
     return quote do:
       int(`nid`[`idx`])
   # preStmts will be built after the main loop populates flatCache
@@ -204,10 +204,10 @@ proc buildStrideSortedArrays(
   result.preStmts = newStmtList()
   for c in flatCache:
     let name = ident(c.name)
-    let lay = c.lay
+    let layoutAst = c.layoutAst
     let field = c.field
     result.preStmts.add quote do:
-      evalOnceAs(`name`, flatten(`lay`.`field`))
+      evalOnceAs(`name`, flatten(`layoutAst`.`field`))
 proc genCopyMemLoops(
     dstData, srcData, shSym, dstStSym, srcStSym: NimNode;
     loopCount: int; copyCountExpr: NimNode
@@ -313,8 +313,8 @@ proc runtimeCopyArgs(
 ): NimNode {.compileTime.} =
   ## Build genNestedCopy call using runtime layout.shape/stride.
   ## Extracts flat arrays ONCE into local variables before the nested loops.
-  let srcLay = newTree(nnkDotExpr, src, ident"layout")
-  let dstLay = newTree(nnkDotExpr, dst, ident"layout")
+  let srcLay = newTree(nnkCall, ident"getLayout", src)
+  let dstLay = newTree(nnkCall, ident"getLayout", dst)
   if R == 1:
     let sh = flattenElem(srcLay, ident"shape", newLit(0), R)
     let sst = flattenElem(srcLay, ident"stride", newLit(0), R)
@@ -400,8 +400,8 @@ macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped 
   # ── Extract data pointers and layout references ──
   let dstData = newTree(nnkDotExpr, dst, ident"data")
   let srcData = newTree(nnkDotExpr, src, ident"data")
-  let srcLay = newTree(nnkDotExpr, src, ident"layout")
-  let dstLay = newTree(nnkDotExpr, dst, ident"layout")
+  let srcLay = newTree(nnkCall, ident"getLayout", src)
+  let dstLay = newTree(nnkCall, ident"getLayout", dst)
 
   # ── Build stride-sorted shape/strides arrays ──
   let a = buildStrideSortedArrays(
@@ -444,8 +444,8 @@ macro copyPermutedImpl[Rank: static int](
   let bs = blockSize
   let dstData = newTree(nnkDotExpr, dst, ident"data")
   let srcData = newTree(nnkDotExpr, src, ident"data")
-  let dstLay = newTree(nnkDotExpr, dst, ident"layout")
-  let srcLay = newTree(nnkDotExpr, src, ident"layout")
+  let dstLay = newTree(nnkCall, ident"getLayout", dst)
+  let srcLay = newTree(nnkCall, ident"getLayout", src)
 
 
   # Convert static perm to seq for shared helper

@@ -82,7 +82,7 @@ func finalStore*[T, Sh, StR, StD](
   ## storeMask describes the valid (M, N) range of the tile:
   ## full tile when all bits are set, predicated per element otherwise.
 
-  const S = toIntVal(size(D.layout))
+  const S = toIntVal(size(D))
 
   if op.storeMask == (1 shl S) - 1:
     # Full tile
@@ -142,7 +142,7 @@ func apply*[T, Sh, StAB, StC, StR](
   # On GPU the branches are uniform
   #   α/β are identical for every thread
   #   no warp divergence, the cost is on instruction cache / code size
-  const S = toIntVal(size(tmp.layout))
+  const S = toIntVal(size(tmp))
   if op.beta == T(0):
     if op.alpha == T(1):
       for i in 0 ..< S:
@@ -192,7 +192,7 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB, element-wise copy over the tile's (M, N) shape.
-  for i in 0 ..< size(tmp.layout):
+  for i in 0 ..< size(tmp):
     tmp(i) = AB(i)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -234,7 +234,7 @@ func apply*[T, Sh, StAB, StB, StR](
   ##   - the bias element is read only where the store mask's bit is set
   ##   - on a ragged tile a padded lane's bias address falls outside
   ##     the real region and the store drops that lane anyway
-  const S = toIntVal(size(tmp.layout))
+  const S = toIntVal(size(tmp))
   if op.storeMask == (1 shl S) - 1:
     # Full tile:
     #   every element's bias is in range, read unguarded
@@ -281,7 +281,7 @@ func apply*[T, Sh, StAB, StB, StR](
   ## D = max(0, AB + bias), with bias a column vector broadcasted onto AB.
   ## The bias element is read only where the store mask's bit is set, see
   ## EpiAddBias's apply for the ragged-tile reasoning.
-  const S = toIntVal(size(tmp.layout))
+  const S = toIntVal(size(tmp))
   if op.storeMask == (1 shl S) - 1:
     # Full tile:
     #   every element's bias is in range, read unguarded
@@ -316,5 +316,5 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), element-wise over the tile's (M, N) shape.
-  for i in 0 ..< size(tmp.layout):
+  for i in 0 ..< size(tmp):
     tmp(i) = max(AB(i), T(0))

@@ -247,8 +247,8 @@ func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
       "gemm_warp: B RepeatN (" & $ShB.default[1] & ") != 1. B k slice must be exactly one atom B fragment (V, 1)"
     doAssert ShB.default[2] === kSlices,
       "gemm_warp: B k dimension (" & $ShB.default[2] & ") != A k dimension (" & $kSlices & "). A and B must agree on the k slice count"
-    doAssert dFrag.layout.cosize().toIntVal() === mma.valuesPerThread(opC),
-        "gemm_warp: accumulator size (" & $dFrag.layout.cosize().toIntVal() &
+    doAssert dFrag.cosize().toIntVal() === mma.valuesPerThread(opC),
+        "gemm_warp: accumulator size (" & $dFrag.cosize().toIntVal() &
         ") != atom valuesPerThread(opC) (" & $mma.valuesPerThread(opC) & ")"
 
   staticFor kSlice, 0, kSlices.toIntVal():
@@ -420,7 +420,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   # Accumulator
   # -----------
   # zeroed once, persists across the slices of K
-  var dFrag = make_tensor(TD, D.layout.shape)
+  var dFrag = make_tensor(TD, D.shape)
   dFrag.fillWith(TD(0))
 
   # Valid tile range
@@ -517,7 +517,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   # The store mask is set before the apply. The epilogues read their gmem operands per element, and a lane the store mask
   # drops must not read an operand (the tile's padded size can reach past the real M/N region).
   o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
-  var tmp = make_tensor(TD, D.layout.shape)
+  var tmp = make_tensor(TD, D.shape)
   o.apply(tmp, dFrag)
   o.finalStore(D, tmp)
 

@@ -120,7 +120,7 @@ proc runEpilogueGuardTests =
     let C = fragView(bufC)
     var op = initEpiAXPBY(2.0'f32, 3.0'f32, C)
     op.storeMask = 0b0101
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     for i in 0 ..< S:
       doAssert not tmp(i).isNaN, "lane " & $i & " read C against its mask bit"
@@ -141,7 +141,7 @@ proc runEpilogueGuardTests =
     let C = fragView(bufC)
     var op = initEpiAXPBY(1.0'f32, 0.5'f32, C)
     op.storeMask = 0b0010
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     doAssert not tmp(0).isNaN and not tmp(2).isNaN and not tmp(3).isNaN
     doAssert tmp(0) == 1.0'f32
@@ -159,7 +159,7 @@ proc runEpilogueGuardTests =
     let C = fragView(bufC)
     var op = initEpiAXPBY(2.0'f32, 0.0'f32, C)
     op.storeMask = 0b0101
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     for i in 0 ..< S:
       doAssert tmp(i) == 2.0'f32 * float32(i + 1)
@@ -174,12 +174,12 @@ proc runEpilogueGuardTests =
     for i in 0 ..< S: bufC[i] = float32(10 * (i + 1))
     let AB = fragView(bufAB)
     let C = fragView(bufC)
-    var tmpRagged = make_tensor(float32, AB.layout.shape)
+    var tmpRagged = make_tensor(float32, AB.shape)
     block:
       var op = initEpiAXPBY(2.0'f32, 3.0'f32, C)
       op.storeMask = (1 shl S) - 1
       op.apply(tmpRagged, AB)
-    var tmpFast = make_tensor(float32, AB.layout.shape)
+    var tmpFast = make_tensor(float32, AB.shape)
     block:
       var op = initEpiAXPBY(2.0'f32, 3.0'f32, C)
       op.storeMask = -1            # the constructor default, all bits
@@ -202,7 +202,7 @@ proc runEpilogueGuardTests =
     let bias = fragView(bufB)
     var op = initEpiAddBias(bias)
     op.storeMask = 0b0010
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     doAssert not tmp(0).isNaN and not tmp(2).isNaN and not tmp(3).isNaN
     doAssert tmp(0) == 1.0'f32
@@ -219,7 +219,7 @@ proc runEpilogueGuardTests =
     let bias = fragView(bufB)
     var op = initEpiAddBias(bias)
     op.storeMask = -1
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     for i in 0 ..< S:
       doAssert tmp(i) == float32(i + 1) + float32(i)
@@ -238,7 +238,7 @@ proc runEpilogueGuardTests =
     let bias = fragView(bufB)
     var op = initEpiLinearBiasReLU(bias)
     op.storeMask = 0b1001
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     for i in 0 ..< S:
       doAssert not tmp(i).isNaN, "lane " & $i & " read the bias against its mask bit"
@@ -256,7 +256,7 @@ proc runEpilogueGuardTests =
     let bias = fragView(bufB)
     var op = initEpiLinearBiasReLU(bias)
     op.storeMask = -1
-    var tmp = make_tensor(float32, AB.layout.shape)
+    var tmp = make_tensor(float32, AB.shape)
     op.apply(tmp, AB)
     for i in 0 ..< S:
       doAssert tmp(i) == 0.0'f32

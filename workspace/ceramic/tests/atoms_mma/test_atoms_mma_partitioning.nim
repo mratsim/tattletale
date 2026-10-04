@@ -64,9 +64,9 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
                of opB: thrM
                of opC: thrK
   block:
-    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).layout)
-            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).layout)
-            else: mma.thrfrg_C(compactView(tileM, tileK).layout)
+    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).getLayout())
+            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).getLayout())
+            else: mma.thrfrg_C(compactView(tileM, tileK).getLayout())
     var counts = newSeq[int](tileM * tileK)
     for flatThread in 0 ..< T * thrM * thrN * thrK:
       let tv = flatThread mod T
@@ -116,9 +116,9 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
             else: tileK div (thrN * static(mma.atom.getN()))
     restK = tileK div (thrK * static(mma.atom.getK()))
   block:
-    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).layout)
-            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).layout)
-            else: mma.thrfrg_C(compactView(tileM, tileK).layout)
+    let p = when operand == opA: mma.thrfrg_A(compactView(tileM, tileK).getLayout())
+            elif operand == opB: mma.thrfrg_B(compactView(tileM, tileK).getLayout())
+            else: mma.thrfrg_C(compactView(tileM, tileK).getLayout())
     let tv = t mod T
     let (tm, tn, tk) = idx2crd(mma.threadLayout.shape, t div T)
     let tc = idx2crd(dimension(atomLayout, 0).shape, tv)
@@ -297,7 +297,7 @@ proc runRejectionAndInvariantTests =
   block:  # non-multiple tile shape is rejected (doAssert fires)
     const mma = tiled(2, 2, 1)
     try:
-      discard mma.thrfrg_A(compactView(33, 8).layout)   # 33 not a multiple of 32
+      discard mma.thrfrg_A(compactView(33, 8).getLayout())   # 33 not a multiple of 32
       doAssert false, "expected AssertionDefect for non-multiple tile shape"
     except AssertionDefect:
       discard
