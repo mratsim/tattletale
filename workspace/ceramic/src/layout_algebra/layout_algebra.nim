@@ -42,7 +42,8 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
   var chunkShape, chunkStride: NimNode
   var chunkShapeVal, chunkStrideVal: int
   var chunkVerbatim = true
-  # the trailing-leaf state feeds only the preserveTrailing marker hierUnzipAst
+  # the last-leaf state feeds the preserveTrailing marker hierUnzipAst
+  # and the all-size-1 collapse (pycute keeps the last size-1 leaf's stride)
   var lastShapeVal, lastStrideVal: int
   var lastStride: NimNode
   for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
@@ -53,10 +54,9 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
       builder.markNonVerbatim()
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
-    if preserveTrailing:
-      lastShapeVal = shapeVal
-      lastStrideVal = strideVal
-      lastStride = strideEv.leaf
+    lastShapeVal = shapeVal
+    lastStrideVal = strideVal
+    lastStride = strideEv.leaf
     if shapeVal == 1:
       # a dropped dimension is a stream restructure
       builder.markNonVerbatim()
@@ -85,10 +85,16 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
     chunkVerbatim = true
 
   if chunkShape.isNil:
-    # every leaf is size-1, a lone (1):(0) sentinel or the preserved marker
+    # every leaf is size-1: pycute keeps the last size-1 leaf as (1):(lastStride)
+    # (its fold pops a size-1 mode only when a newer leaf arrives), a lone
+    # (1):(0) sentinel only when the layout had no leaves at all
     builder.markNonVerbatim()
     if preserveTrailing:
       builder.append(IntCT(DynamicSentinel), lastStride)
+    elif lastStride != nil:
+      builder.append(IntCT(1), lastStride)
+    else:
+      builder.append(IntCT(1), IntCT(0))
   else:
     builder.append(chunkShape, chunkStride, verbatim = chunkVerbatim)
     if preserveTrailing and lastShapeVal == 1 and not (

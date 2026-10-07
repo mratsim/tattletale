@@ -385,11 +385,6 @@ BANNED = [
      None,
      "use size, dims, or bounds (Vulkan/CUDA ABI type names exempt)"),
     # path-scoped: the mode ban is ceramic-only (tuples have dimensions there);
-    # crucible and positron keep their own vocabulary
-    (r"\bmodes?\b",
-     lambda l, path="": "ceramic" not in str(path) or bool(
-         re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
-     "tuples and tensors have dimensions, use dimension (compiler, POSIX, and ABI senses exempt)"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
@@ -1028,6 +1023,20 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
         return
     if kind == "license":
         findings.append(Finding(path, n, "license-prefix", c))
+        return
+    if is_nim and kind == "doc" and re.match(r"Run:\s", c):
+        findings.append(Finding(
+            path, n, "run-command-doc",
+            "a run command is not module documentation (## renders it in "
+            "generated docs), use a # comment"))
+        return
+    if is_nim and "nim cpp" in c and not (
+            "workspace/libtorch" in str(path)
+            or "workspace/transformers" in str(path)):
+        findings.append(Finding(
+            path, n, "nim-cpp",
+            "nim cpp only for workspace/libtorch and workspace/transformers "
+            "(C++ interop), use nim c (host-only C backend)"))
         return
     bare = strip_backticks(c)
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):

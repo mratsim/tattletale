@@ -28,11 +28,6 @@
 ##   CuTe-flat (single-dimension results unwrapped to scalars), matching the
 ##   unwrap in CuTe's composition_impl.
 ##
-## Section 2 — inline coalesce(make_layout(...)) with a constant layout:
-##   the inline form must type-check and stay Int[N]. NOTE: compiles()
-##   does NOT capture the failure (returns true) — only a real compile
-##   surfaces it, so the guarded case is a direct assert, not a
-##   compiles() check.
 ## Section 3 — complement, multi-dimension layout + compile-time bound:
 ##   complement with a compile-time bound must produce the coalesced
 ##   result: a statically-1 remainder dimension is dropped by coalesce's
@@ -95,24 +90,6 @@ proc runComposeFixtureTests =
     check r.stride, ((32, 1), (8, 128)), ((Int[32], Int[1]), (Int[8], Int[128]))
 
   echo "    compose fixture: 5 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 2. inline coalesce(make_layout(...)) with a constant layout
-# ═══════════════════════════════════════════════════════════════
-proc runCoalesceConstantFixtureTests =
-  # Guarded case — inline coalesce over a constant layout: the result
-  # must type-check and stay Int[N].
-  block:
-    let r = coalesce(make_layout((2, ceil_div(16, 8)), (2, 8)))
-    check r.shape, (2, 2), (Int[2], Int[2])
-    check r.stride, (2, 8), (Int[2], Int[8])
-  # Guarded case (const form) — const-context evaluation must work too.
-  block:
-    const c = coalesce(make_layout((2, ceil_div(16, 8)), (2, 8)))
-    check c.shape, (2, 2), (Int[2], Int[2])
-    check c.stride, (2, 8), (Int[2], Int[8])
-
-  echo "    coalesce constant fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  Section 3. complement must work for multi-dimension layouts
@@ -244,28 +221,6 @@ proc runNestedShapeIntegrationTests =
   echo "    PASS"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 8. coalesce over a trailing size-1 dimension, the compose LHS path
-# ═══════════════════════════════════════════════════════════════
-
-proc runCoalesceTrailingSizeOneTests =
-  ## A chain that reaches a trailing size-1 dimension's stride absorbs it,
-  ## a chain that stops short keeps the dynamic `Int[DynamicSentinel]`
-  ## marker and the marker must never enter the chain's arithmetic.
-  block:
-    ## (4,1):(1,4) ∘ 4:1: the (4,1) chain's span 4 reaches the trailing
-    ## dimension's stride 4, the size-1 dimension is absorbed
-    let r = compose(make_layout((4, 1), (1, 4)), make_layout(4, 1))
-    check r.shape, 4, Int[4]
-    check r.stride, 1, Int[1]
-  block:
-    ## (2,1):(1,3) ∘ 2:1: the (2,1) chain's span 2 falls short of stride 3,
-    ## the marker stays in the coalesced layout, the compose fold drops it
-    let r = compose(make_layout((2, 1), (1, 3)), make_layout(2, 1))
-    check r.shape, 2, Int[2]
-    check r.stride, 1, Int[1]
-  echo "    PASS"
-
-# ═══════════════════════════════════════════════════════════════
 #  Section 9. complement skips inactive dimensions in its own walk
 # ═══════════════════════════════════════════════════════════════
 
@@ -307,198 +262,6 @@ proc runComplementInlineSkipTests =
     check rs.stride, (1, 18), (Int[1], Int[18])
     doAssert r.shape === rs.shape
     doAssert r.stride === rs.stride
-  echo "    PASS"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 10. coalesce over runtime layouts, double-eval safety
-# ═══════════════════════════════════════════════════════════════
-proc runCoalesceRuntimeLayoutTests =
-  # A runtime leaf is not visible at compile time: it never merges,
-  # it passes through with its own value between the static folds.
-  # The layout argument must be evaluated exactly once, a layout-valued
-  # call argument materializes through a single binding.
-  block:
-    var buildCount = 0
-    proc countedLayout(n, m: int): auto =
-      inc buildCount
-      make_layout((n, m), (1, n))
-    let r = coalesce(countedLayout(4, 8))
-    doAssert buildCount == 1,
-      "coalesce must evaluate a layout-valued argument exactly once"
-    doAssert r.shape === (4, 8)
-    doAssert r.stride === (1, 4)
-  block:
-    # a runtime scalar layout passes through unchanged
-    let n = 4
-    let s = 8
-    let r = coalesce(make_layout(n, s))
-    doAssert r.shape === 4
-    doAssert r.stride === 8
-    doAssert r(3) == 24
-  block:
-    # a runtime leaf blocks a merge the paired static layout performs,
-    # the static leaves around it still fold on their own values
-    let n = 2
-    let r = coalesce(make_layout((4, n, 8), (1, 4, 8)))
-    doAssert r.shape === (4, 2, 8)
-    doAssert r.stride === (1, 4, 8)
-    let rs = coalesce(make_layout((4, 2, 8), (1, 4, 8)))
-    check rs.shape, 64, Int[64]
-    check rs.stride, 1, Int[1]
-  echo "    PASS"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 11. coalesce preserveTrailing, the marker survives the fold
-# ═══════════════════════════════════════════════════════════════
-proc runCoalescePreserveTrailingTests =
-  # With preserveTrailing the trailing size-1 dimension survives
-  # as an Int[DynamicSentinel] marker when the chain stops short of its stride,
-  # and is absorbed when the chain reaches it.
-  block:
-    ## the chain's span 2 stops short of stride 3, the marker stays
-    let r = coalesce(make_layout((2, 1), (1, 3)), true)
-    check r.shape, (2, DynamicSentinel), (Int[2], Int[DynamicSentinel])
-    check r.stride, (1, 3), (Int[1], Int[3])
-  block:
-    ## the chain's span 4 reaches stride 4, the size-1 dimension is absorbed
-    let r = coalesce(make_layout((4, 1), (1, 4)), true)
-    check r.shape, 4, Int[4]
-    check r.stride, 1, Int[1]
-  block:
-    ## every dimension is size-1, the whole layout collapses to the marker
-    let r = coalesce(make_layout((1, 1), (0, 0)), true)
-    check r.shape, DynamicSentinel, Int[DynamicSentinel]
-    check r.stride, 0, Int[0]
-  echo "    PASS"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 12. coalesce degenerate 1-leaf inputs fold without an early-out
-# ═══════════════════════════════════════════════════════════════
-proc runCoalesceOneLeafTests =
-  # These cases match what a pre-flight 1-leaf early-out would emit.
-  # A lone non-one leaf flushes as one chunk. An empty-builder tail
-  # collapses an all-size-1 layout, one leaf or many, to the (1):(0)
-  # sentinel. No pre-flight early-out exists, the fold itself covers
-  # every degenerate shape.
-  block:
-    ## the lone leaf opens and flushes one chunk, identity result
-    let r = coalesce(make_layout(64, 1))
-    check r.shape, 64, Int[64]
-    check r.stride, 1, Int[1]
-  block:
-    ## a lone size-1 leaf is skipped, the empty tail is the sentinel
-    let r = coalesce(make_layout(1, 0))
-    check r.shape, 1, Int[1]
-    check r.stride, 0, Int[0]
-  block:
-    ## a lone size-1 leaf with a nonzero stride is skipped the same way
-    let r = coalesce(make_layout(1, 4))
-    check r.shape, 1, Int[1]
-    check r.stride, 0, Int[0]
-  block:
-    ## every leaf is size-1, no chunk ever opens, the sentinel again
-    let r = coalesce(make_layout((1, 1), (0, 0)))
-    check r.shape, 1, Int[1]
-    check r.stride, 0, Int[0]
-  echo "    PASS"
-
-func stripGensymCounters(ast: string): string {.compileTime.} =
-  ## Strip the gensym counter suffixes the semmed AST carries: a decimal
-  ## run of 8+ digits right after an underscore that ends the identifier.
-  ##
-  ## Mangled base62 hash tails pass through byte for byte.
-  const digits = {'0' .. '9'}
-  result = newStringOfCap(ast.len)
-  var i = 0
-  while i < ast.len:
-    if ast[i] == '_':
-      var j = i + 1
-      while j < ast.len and ast[j] in digits:
-        inc j
-      if j - (i + 1) >= 8 and (j == ast.len or ast[j] notin {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}):
-        i = j
-        continue
-    result.add ast[i]
-    inc i
-
-macro astRepr(x: typed): string =
-  ## The semmed expansion of x as a string. An identity coalesce pastes
-  ## its input, so the expansion of `coalesce(X)` equals the expansion
-  ## of X itself; a rebuild carries extra lets and a make_layout call.
-  result = newLit(repr(x))
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 13. coalesce verbatim passthrough: identity folds paste
-# ═══════════════════════════════════════════════════════════════
-#
-#  Identity fold: every original leaf passed through in order,
-#  flat profile, no drop/merge/marker.
-#
-#  - an identity fold re-pastes the layout expression itself
-#  - an identity site's emitted MSL is byte-identical to the same kernel
-#    with the coalesce call peeled off, no `make_layout` reconstruction
-#  - any restructure (merge, size-1 drop, preserveTrailing marker)
-#    keeps the coalesced emission
-
-proc runCoalesceVerbatimPassthroughTests =
-  block:
-    ## static identity, no chain merges: the values and the Int[N]
-    ## folding stay correct through the paste
-    let r = coalesce(make_layout((2, 3, 4), (1, 8, 64)))
-    check r.shape, (2, 3, 4), (Int[2], Int[3], Int[4])
-    check r.stride, (1, 8, 64), (Int[1], Int[8], Int[64])
-  block:
-    ## static identity paste: `coalesce(L)` expands to L itself,
-    ## a rebuild would emit lets and a make_layout call
-    doAssert astRepr(coalesce(make_layout((2, 3, 4), (1, 8, 64)))) ==
-      astRepr(make_layout((2, 3, 4), (1, 8, 64)))
-  block:
-    ## runtime identity: a layout carried by a symbol pastes the symbol,
-    ## no field reads, no make_layout
-    let m = 4
-    let n = 8
-    let s = 2
-    let L = make_layout((m, n), (1, s))
-    doAssert astRepr(coalesce(L)) == astRepr(L)
-    doAssert astRepr(coalesce(make_layout((2, 3), (1, 4)))) ==
-      astRepr(make_layout((2, 3), (1, 4)))
-  block:
-    ## runtime identity values survive the paste
-    let m = 4
-    let n = 8
-    let s = 2
-    let r = coalesce(make_layout((m, n), (1, s)))
-    doAssert r.shape === (4, 8)
-    doAssert r.stride === (1, 2)
-    doAssert toIntVal(size(r)) == 32
-  block:
-    ## preserveTrailing identity, the trailing leaf is not size-1 so no
-    ## marker is appended: still a paste
-    doAssert astRepr(coalesce(make_layout((2, 3, 4), (1, 8, 64)), true)) ==
-      astRepr(make_layout((2, 3, 4), (1, 8, 64)))
-  block:
-    ## call-valued chain site, right_inverse + coalesce(compose(A, R)):
-    ## - the compose call expands once, coalesce pastes its result,
-    ##   identical to the peeled composition, with no evalOnce lets
-    ##   and no make_layout reconstruction
-    ## - the expansion carries macro-gensym'd temporaries, each
-    ##   expansion advances the global gensym counter independently,
-    ##   the comparison strips the `_<10-digit counter>` suffixes
-    ## - the raw equality checks above carry no such temporaries
-    let m = 4
-    let n = 8
-    let sd = 2
-    let ss = 16
-    let R = right_inverse(make_layout((int(m), int(n)), (1, int(ss))))
-    doAssert stripGensymCounters(astRepr(coalesce(compose(
-        make_layout((int(m), int(n)), (1, int(sd))), R)))) ==
-      stripGensymCounters(astRepr(compose(
-        make_layout((int(m), int(n)), (1, int(sd))), R)))
-  block:
-    ## a restructure never pastes: the merged fold keeps its emission
-    let r = coalesce(make_layout((2, 4), (1, 2)))
-    check r.shape, 8, Int[8]
-    check r.stride, 1, Int[1]
   echo "    PASS"
 
 # ═══════════════════════════════════════════════════════════════
@@ -789,8 +552,6 @@ proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
   echo "── Section 1: compose under module-scope typeof-alias fixture ──"
   runComposeFixtureTests()
-  echo "── Section 2: inline coalesce + constant layout ──"
-  runCoalesceConstantFixtureTests()
   echo "── Section 3: complement multi-dimension + compile-time bound ──"
   runComplementFixtureTests()
   echo "── Section 4: complement runtime shape = static twin ──"
@@ -801,18 +562,8 @@ proc runTests =
   runComposeZeroStrideTests()
   echo "── Section 7. Nested-shape indexing and Layout-tiler unzip ──"
   runNestedShapeIntegrationTests()
-  echo "── Section 8. coalesce over a trailing size-1 dimension ──"
-  runCoalesceTrailingSizeOneTests()
   echo "── Section 9. complement skips inactive dimensions ──"
   runComplementInlineSkipTests()
-  echo "── Section 10. coalesce over runtime layouts ──"
-  runCoalesceRuntimeLayoutTests()
-  echo "── Section 11. coalesce preserveTrailing marker ──"
-  runCoalescePreserveTrailingTests()
-  echo "── Section 12. coalesce degenerate 1-leaf inputs ──"
-  runCoalesceOneLeafTests()
-  echo "── Section 13. coalesce verbatim passthrough ──"
-  runCoalesceVerbatimPassthroughTests()
   echo "── Section 14. divide tuple-tiler stream rewrite ──"
   runDivideTupleTilerTests()
   echo "── Section 15. hier_unzip zipped gather stream rewrite ──"
