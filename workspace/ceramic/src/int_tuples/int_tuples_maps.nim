@@ -29,7 +29,7 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
   for event in t.tupleStream():
     builder.onLeaves(event):
       builder.append(body.replaceNodes(("it", event.leaf)))
-  result = builder.emit(0, emitScalarForSize1 = scalar).resultTuple
+  result = builder.emit(0, emitScalarForSize1 = scalar)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  flatMapLeaves, flat leaf-wise tuple map of a single pack
@@ -77,4 +77,4 @@ macro mapDimensionsWith*(t: tuple; body: untyped): untyped =
   for event in t.tupleDimsStream():
     builder.onLeaves(event):
       builder.append(body.replaceNodes(("it", event.leaf)))
-  result = builder.emit(0).resultTuple
+  result = builder.emit(0)

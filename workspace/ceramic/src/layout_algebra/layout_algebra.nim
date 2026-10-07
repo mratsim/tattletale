@@ -38,12 +38,11 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool = false): untyped =
+macro coalesceImpl(sh, st: typed, preserveTrailing: static bool = false): untyped =
   var builder = TupleBuilderFlat.new(2)
   var chunkShape, chunkStride: NimNode
   var chunkShapeVal, chunkStrideVal: int
   var chunkCrd: CoordStrideDescriptor
-  var chunkVerbatim = true
   # the last-leaf state feeds the preserveTrailing marker hierUnzipAst
   # and the all-size-1 collapse (pycute keeps the last size-1 leaf's stride)
   var lastShapeVal, lastStrideVal: int
@@ -51,9 +50,6 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
   for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
     if shapeEv.kind != kLeaf:
       continue
-    if shapeEv.depth > 1:
-      # a leaf below the first tuple level, the fold flattens nested profiles
-      builder.markNonVerbatim()
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
     let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
@@ -61,8 +57,6 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
     lastStrideVal = strideVal
     lastStride = strideEv.leaf
     if shapeVal == 1:
-      # a dropped dimension is a stream restructure
-      builder.markNonVerbatim()
       continue
     if chunkShape.isNil:
       # a chain opens on the first live leaf
@@ -84,22 +78,19 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
       # the chain's span reaches this dimension's stride, merge frontward
       chunkShapeVal *= shapeVal
       chunkShape = IntCT(chunkShapeVal)
-      chunkVerbatim = false
       continue
     # the chain stops short of this dimension, flush and open the next chain
-    builder.append(chunkShape, chunkStride, verbatim = chunkVerbatim)
+    builder.append(chunkShape, chunkStride)
     chunkShape = shapeEv.leaf
     chunkShapeVal = shapeVal
     chunkStride = strideEv.leaf
     chunkStrideVal = strideVal
     chunkCrd = strideCrd
-    chunkVerbatim = true
 
   if chunkShape.isNil:
     # every leaf is size-1: pycute keeps the last size-1 leaf as (1):(lastStride)
     # (its fold pops a size-1 mode only when a newer leaf arrives), a lone
     # (1):(0) sentinel only when the layout had no leaves at all
-    builder.markNonVerbatim()
     if preserveTrailing:
       builder.append(IntCT(DynamicSentinel), lastStride)
     elif lastStride != nil:
@@ -107,18 +98,14 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
     else:
       builder.append(IntCT(1), IntCT(0))
   else:
-    builder.append(chunkShape, chunkStride, verbatim = chunkVerbatim)
+    builder.append(chunkShape, chunkStride)
     if preserveTrailing and lastShapeVal == 1 and not (
         chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
         lastStrideVal != DynamicSentinel and
         chunkShapeVal * chunkStrideVal == lastStrideVal):
       # the trailing size-1 marker survives a chain that stops short of it
       builder.append(IntCT(DynamicSentinel), lastStride)
-  let (node, verbatim) = builder.emitLayout()
-  if verbatim: # Reuse the original to avoid destructuring -> restructuring temporaries
-    result = originalLayout
-  else:
-    result = node
+  result = builder.emitLayout()
 
 macro coalesce*(layout: Layout, preserveTrailing: static bool = false): untyped =
   ## Merge contiguous dimensions.
@@ -143,11 +130,7 @@ macro coalesce*(layout: Layout, preserveTrailing: static bool = false): untyped 
   ##   (4, 1):(1, 0)  with preserveTrailing stays (4, Int[DynamicSentinel]):(1, 0)
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-  # The original layout when coalesce is a no-op,
-  # This avoids deconstruction -> reconstruction temporaries in the generated code
-  let originalLayout = if result.len == 0: layout
-                       else: result[^1][1] # returned `let`/`const` symbol
-  result.add bindSym"coalesceImpl".newCall(originalLayout, sh, st, newLit(preserveTrailing))
+  result.add bindSym"coalesceImpl".newCall(sh, st, newLit(preserveTrailing))
 
 # ═══════════════════════════════════════════════════════════════
 #  complement
@@ -367,7 +350,7 @@ macro layout_add*[A, B: Layout](a: A, b: B): untyped =
       builder.append(evA.leaf + evB.leaf)
   let scalar = not stA.isTupleTy()
   result.add bindSym"make_layout".newCall(
-    shA, builder.emit(0, emitScalarForSize1 = scalar).resultTuple)
+    shA, builder.emit(0, emitScalarForSize1 = scalar))
 
 # ═══════════════════════════════════════════════════════════════
 #  compose
@@ -456,7 +439,7 @@ macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
         remStrideV = ceil_div(absRemV, shVk) * sign(remStrideV)
     appendDimension(builder, pairs)
 
-  result.add builder.emitLayout().resultLayout
+  result.add builder.emitLayout()
 
 macro compose*[A, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
@@ -786,8 +769,8 @@ macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
   var firstStrideStream = firstStride.tupleDimsStream()
   var secondStrideStream = secondStride.tupleDimsStream()
   var builder = TupleBuilderNested.new(2)
-  builder.append(TupleStreamEvent(path: @[], kind: kOpen, verbatim: true),
-                 TupleStreamEvent(path: @[], kind: kOpen, verbatim: true))
+  builder.append(TupleStreamEvent(path: @[], kind: kOpen),
+                 TupleStreamEvent(path: @[], kind: kOpen))
   while not firstShapeStream.done():
     let firstShapeEvent = firstShapeStream.next()
     let secondShapeEvent = secondShapeStream.next()
@@ -795,9 +778,9 @@ macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
     let secondStrideEvent = secondStrideStream.next()
     builder.append(nnkPar.newTree(firstShapeEvent.leaf, secondShapeEvent.leaf),
                    nnkPar.newTree(firstStrideEvent.leaf, secondStrideEvent.leaf))
-  builder.append(TupleStreamEvent(path: @[], kind: kClose, verbatim: true),
-                 TupleStreamEvent(path: @[], kind: kClose, verbatim: true))
-  result.add builder.emitLayout().resultLayout
+  builder.append(TupleStreamEvent(path: @[], kind: kClose),
+                 TupleStreamEvent(path: @[], kind: kClose))
+  result.add builder.emitLayout()
 
 macro productPairZipDelegate[A, B: Layout](blk: A, tiler: B, raked: static bool): untyped =
   let rakedLit = newLit(raked)
@@ -953,7 +936,7 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
       else:
         # a pass-through dimension, the dimension arrives whole
         builder.append(shEv.leaf, stEv.leaf)
-  return builder.emitLayout().resultLayout
+  return builder.emitLayout()
 
 macro logical_divide*(layout: Layout, tiler: tuple): untyped =
   ## Logical divide by a tuple tiler, one tiler element per layout dimension:
@@ -1116,7 +1099,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
       if dim.shape == DynamicSentinel:
         break
       curr = dim.stride * dim.shape
-  return bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
+  return bindSym"coalesce".newCall(builder.emitLayout())
 
 macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
@@ -1199,7 +1182,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
     let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                  else: IntCT(dim.prefix)
     builder.append(shLeaf, stLeaf)
-  return bindSym"coalesce".newCall(builder.emitLayout().resultLayout)
+  return bindSym"coalesce".newCall(builder.emitLayout())
 
 macro left_inverse*(layout: typed): untyped =
   ## Left inverse, Li(L(i)) == i for injective layouts.

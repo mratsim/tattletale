@@ -59,7 +59,7 @@ macro slice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "slice: selector items must be X, Y, or ints", selTy
-  return builder.emit(0).resultTuple
+  return builder.emit(0)
 
 macro dice*(target: tuple; selector: typed): untyped =
   ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
@@ -83,7 +83,7 @@ macro dice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "dice: selector items must be X, Y, or ints", selTy
-  return builder.emit(0).resultTuple
+  return builder.emit(0)
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.

@@ -13,36 +13,31 @@ import ./layouts_unsanctioned_helpers
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
-func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil):
-    tuple[resultLayout: NimNode, verbatim: bool] {.compileTime.} =
+func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil): NimNode {.compileTime.} =
   ## Emit a flat layout from an arity-2 tuple builder.
   ## If no `ctor` is passed, "make_layout(accumulated_shape, accumulated_stride)" will be emitted
   ##
-  ## A verbatim flag is returned so the caller can use the original symbol
-  ## if no transformation was applied to the stream.
-  ## Otherwise the layout is reconstructed from elements.
-  ##
   ## An empty builder emits make_layout(1, 0).
-  let (sh, shV) = tb.emit(0, emitScalarForSize1 = true)
-  let (st, stV) = tb.emit(1, emitScalarForSize1 = true)
+  let sh = tb.emit(0, emitScalarForSize1 = true)
+  let st = tb.emit(1, emitScalarForSize1 = true)
   if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
-    (ident"make_layout".newCall(IntCT(1), newLit(0)), shV and stV)
+    ident"make_layout".newCall(IntCT(1), newLit(0))
   elif ctor.isNil():
-    (ident"make_layout".newCall(sh, st), shV and stV)
+    ident"make_layout".newCall(sh, st)
   else:
-    (ctor.newCall(sh, st), shV and stV)
+    ctor.newCall(sh, st)
 
 proc appendDimension*(builder: var TupleBuilderNested, pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
   ## Append a fold's pair set as one dimension slot.
   if pairs.len == 1:
     builder.append(pairs[0].shape, pairs[0].stride)
     return
-  builder.append(TupleStreamEvent(path: @[], kind: kOpen, verbatim: true),
-                 TupleStreamEvent(path: @[], kind: kOpen, verbatim: true))
+  builder.append(TupleStreamEvent(path: @[], kind: kOpen),
+                 TupleStreamEvent(path: @[], kind: kOpen))
   for p in pairs:
     builder.append(p.shape, p.stride)
-  builder.append(TupleStreamEvent(path: @[], kind: kClose, verbatim: true),
-                 TupleStreamEvent(path: @[], kind: kClose, verbatim: true))
+  builder.append(TupleStreamEvent(path: @[], kind: kClose),
+                 TupleStreamEvent(path: @[], kind: kClose))
 
 # ═══════════════════════════════════════════════════════════════
 #  destructureLayout, layout AST -> (shape, stride) expressions
@@ -193,10 +188,10 @@ macro hier_unzip*(splitter: untyped, layout: typed, tiler: typed): untyped =
       tileParts.append(ev, ev)
       restParts.append(ev, ev)
 
-  let (tileShape, _) = tileParts.emit(0, emitScalarForSize1 = true)
-  let (tileStride, _) = tileParts.emit(1, emitScalarForSize1 = true)
-  let (restShape, _) = restParts.emit(0, emitScalarForSize1 = true)
-  let (restStride, _) = restParts.emit(1, emitScalarForSize1 = true)
+  let tileShape = tileParts.emit(0, emitScalarForSize1 = true)
+  let tileStride = tileParts.emit(1, emitScalarForSize1 = true)
+  let restShape = restParts.emit(0, emitScalarForSize1 = true)
+  let restStride = restParts.emit(1, emitScalarForSize1 = true)
   stmts.add ident"make_layout".newCall(
     nnkTupleConstr.newTree(tileShape, restShape),
     nnkTupleConstr.newTree(tileStride, restStride))
@@ -209,15 +204,15 @@ macro zippedToTiledPairImpl*(tileShape, restShape, tileStride, restStride: typed
   ## - the rest part unpacked one level, a scalar kept whole
   result = newStmtList()
   var builder = TupleBuilderFlat.new(2)
-  builder.append(tileShape, tileStride, verbatim = false)
+  builder.append(tileShape, tileStride)
   let restShapeType = restShape.getTypeInst()
   if restShapeType.kind in {nnkTupleTy, nnkTupleConstr} and restShapeType.len > 0:
     for i in 0 ..< restShapeType.len:
       builder.append(getTupleIndex(restShape, i),
-                     getTupleIndex(restStride, i), verbatim = false)
+                     getTupleIndex(restStride, i))
   else:
-    builder.append(restShape, restStride, verbatim = false)
-  result.add builder.emitLayout().resultLayout
+    builder.append(restShape, restStride)
+  result.add builder.emitLayout()
 
 macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed): untyped =
   ## Flatten the zipped (tile, rest) parts, every leaf at one level
@@ -229,7 +224,7 @@ macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed)
   for (shapeEvent, strideEvent) in restShape.tupleDimsStream().zip(restStride.tupleDimsStream()):
     builder.onLeaves(shapeEvent):
       builder.append(shapeEvent.leaf, strideEvent.leaf)
-  result.add builder.emitLayout().resultLayout
+  result.add builder.emitLayout()
 
 macro zippedToTiledImpl*(zipped: typed): untyped =
   ## Reassemble the zipped (tile, rest) layout into the tiled form,
@@ -271,6 +266,6 @@ macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): unty
     return
   var builder = TupleBuilderFlat.new(2)
   for i in B ..< min(E, dimCount):
-    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  result = builder.emitLayout().resultLayout
+    builder.append(shapeLeaves[i], strideLeaves[i])
+  result = builder.emitLayout()
 

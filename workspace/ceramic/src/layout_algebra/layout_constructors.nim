@@ -176,7 +176,7 @@ macro make_ordered_layout*(shape, order: typed): untyped =
     builder.append(newLit(s))
   result = bindSym"make_layout".newCall(
     shape,
-    builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()).resultTuple)
+    builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()))
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout_like
@@ -204,7 +204,7 @@ macro make_layout_likeImpl(sh, st: typed): untyped =
     builder.append(newLit(s))
   result = bindSym"make_layout".newCall(
     sh,
-    builder.emit(0, emitScalarForSize1 = not shapeIsTuple).resultTuple)
+    builder.emit(0, emitScalarForSize1 = not shapeIsTuple))
 
 macro make_layout_like*(layout: Layout): untyped =
   ## Create a compact layout with the same shape and element-access order.

@@ -180,7 +180,7 @@ macro make_basis_like*(profile: typed): untyped =
     builder.onLeaves(ev):
       builder.append(nnkCall.newTree(
         nnkBracketExpr.newTree(bindSym"CoordStride", ev.path.getCoordinates())))
-  result = builder.emit(0).resultTuple
+  result = builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════
 #   Pretty-printing

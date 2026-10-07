@@ -65,18 +65,14 @@ macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
   var builder = TupleBuilderFlat.new(2)
   var dimCount = 0
   for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    builder.append(shapeEvent.leaf, strideEvent.leaf)
     inc dimCount
   if dimCount >= rank:
     result = originalLayout
     return
   for i in dimCount ..< rank:
     builder.append(IntCT(1), IntCT(0))
-  let (node, verbatim) = builder.emitLayout()
-  if verbatim:
-    result = originalLayout
-  else:
-    result = node
+  result = builder.emitLayout()
 
 macro padRight*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by padding with identity dimensions (1, 0).
@@ -91,7 +87,7 @@ macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
   var builder = TupleBuilderFlat.new(2)
   var dimCount = 0
   for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    builder.append(shapeEvent.leaf, strideEvent.leaf, verbatim = true)
+    builder.append(shapeEvent.leaf, strideEvent.leaf)
     inc dimCount
   if dimCount >= rank:
     result = originalLayout
@@ -101,11 +97,7 @@ macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
     padShape.add IntCT(1)
     padStride.add IntCT(0)
   builder.prependBatch(padShape, padStride)
-  let (node, verbatim) = builder.emitLayout()
-  if verbatim:
-    result = originalLayout
-  else:
-    result = node
+  result = builder.emitLayout()
 
 macro padLeft*(layout: Layout; rank: static int): untyped =
   ## Extend layout to target rank by prepending identity dimensions (1, 0).
@@ -248,7 +240,7 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
         builder.append(ea)
       of kLeaf:
         builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
-    builder.emit(0).resultTuple
+    builder.emit(0)
   if ash.isTupleTy() != bsh.isTupleTy():
     error "zipDimensions: the layouts have different ranks, " &
       "zip pairs matching dimensions, no scalar broadcast", bsh
@@ -288,19 +280,19 @@ macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): unty
     result = originalLayout
     return
   var builder = TupleBuilderNested.new(2)
-  let openEvent = TupleStreamEvent(verbatim: true, path: @[], kind: kOpen)
-  let closeEvent = TupleStreamEvent(verbatim: true, path: @[], kind: kClose)
+  let openEvent = TupleStreamEvent(path: @[], kind: kOpen)
+  let closeEvent = TupleStreamEvent(path: @[], kind: kClose)
   builder.append(openEvent, openEvent)
   for i in 0 ..< B:
-    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+    builder.append(shapeLeaves[i], strideLeaves[i])
   var grouped = TupleBuilderFlat.new(2)
   for i in B ..< endIdx:
-    grouped.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  builder.append(grouped.emit(0).resultTuple, grouped.emit(1).resultTuple)
+    grouped.append(shapeLeaves[i], strideLeaves[i])
+  builder.append(grouped.emit(0), grouped.emit(1))
   for i in endIdx ..< dimCount:
-    builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
+    builder.append(shapeLeaves[i], strideLeaves[i])
   builder.append(closeEvent, closeEvent)
-  result = builder.emitLayout().resultLayout
+  result = builder.emitLayout()
 
 macro groupDimensions*(layout: Layout; B, E: static int): untyped =
   ## Wraps dimensions at indices `[B, E)` into a nested sub-tuple in both
@@ -345,7 +337,7 @@ macro selectDimensionsImpl(originalLayout, sh, st: typed, Is: varargs[int]{lit|`
   var builder = TupleBuilderFlat.new(2)
   for i in 0 ..< Is.len:
     builder.append(getTupleIndex(sh, Is[i].intVal), getTupleIndex(st, Is[i].intVal))
-  result = builder.emitLayout().resultLayout
+  result = builder.emitLayout()
 
 macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
   ## Extract specific dimension indices into a new Layout.
@@ -365,10 +357,10 @@ macro replaceDimensionImpl(sh, st, xShape, xStride: typed, N: static int): untyp
   var builder = TupleBuilderFlat.new(2)
   for i in 0 ..< dimCount:
     if i == N:
-      builder.append(xShape, xStride, verbatim = true)
+      builder.append(xShape, xStride)
     else:
-      builder.append(shapeLeaves[i], strideLeaves[i], verbatim = true)
-  return builder.emitLayout().resultLayout
+      builder.append(shapeLeaves[i], strideLeaves[i])
+  return builder.emitLayout()
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =
   ## Replace dimension N of layout with Layout x.
