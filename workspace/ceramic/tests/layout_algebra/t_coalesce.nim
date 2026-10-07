@@ -298,7 +298,7 @@ proc runCoalesceIdentityTests =
 
 # ── coordinate strides ───────────────────────────────────────
 
-proc runCoalesceCrdTests =
+proc runCoalesceCoordStrideTests =
   # c04 scale mismatch blocks
   block:
     let c = coalesce(make_layout((2, 3), (E(0), E(3, 0))))
@@ -343,35 +343,53 @@ proc runCoalesceCrdTests =
   block:
     let c = coalesce(make_layout((2, 3), (E(0), E(4, 0))))
     doAssert c === ((2, 3), (E(0), E(4, 0)))
-  # c01 TODO: same-path merge, path 0
+  # c01 same-path merge, path 0
   block:
     let c = coalesce(make_layout((2, 3), (E(0), E(2, 0))))
     doAssert c === (6, E(0))
-  # c02 TODO: same-path merge, path 1
+  # c02 same-path merge, path 1
   block:
     let c = coalesce(make_layout((2, 3), (E(1), E(2, 1))))
     doAssert c === (6, E(1))
-  # c03 TODO: multi-term same-path merge
+  # c03 multi-term same-path merge
   block:
     let c = coalesce(make_layout((2, 3), (E((1, 1)), E((2, 2)))))
     doAssert c === (6, E((1, 1)))
-  # c06 TODO: negative same-path merge
+  # c06 negative same-path merge
   block:
     let c = coalesce(make_layout((2, 3), (E(-1, 0), E(-2, 0))))
     doAssert c === (6, E(-1, 0))
-  # c10 TODO: size-1 symbolic leaf pops like an int one
+  # c10 size-1 symbolic leaf pops like an int one
   block:
     let c = coalesce(make_layout((2, 1, 6), (1, E(0), 2)))
     doAssert c === (12, 1)
-  # c11 TODO: triple chain
+  # c11 triple chain
   block:
     let c = coalesce(make_layout((2, 2, 2), (E(0), E(2, 0), E(4, 0))))
     doAssert c === (8, E(0))
-  # c17 TODO: nested inner merge
+  # c17 nested inner merge
   block:
     let c = coalesce(make_layout((2, (2, 3)), (E(0), (E(1), E(2, 1)))))
     doAssert c === ((2, 6), (E(0), E(1)))
-  echo "  coordinate strides: 18 cases OK"
+  block:
+    let c = coalesce(make_layout(1, E(0)))
+    doAssert c === (1, E(0))
+  block:
+    let c = coalesce(make_layout(1, E(1)))
+    doAssert c === (1, E(1))
+  block:
+    let c = coalesce(make_layout((1, 1), (E(0), E(1))))
+    doAssert c === (1, E(1))
+  block:
+    let c = coalesce(make_layout((2, 4), (E(0), E(1))))
+    doAssert c === ((2, 4), (E(0), E(1)))
+  block:
+    let c = coalesce(make_layout((2, 4), (E(1), E(2, 1))))
+    doAssert c === (8, E(1))
+  block:
+    let c = coalesce(make_layout(((2, 2), (2, 2)), ((E(0), E(1)), (E(2, 1), E(2, 0)))))
+    doAssert c === ((2, 4, 2), (E(0), E(1), E(2, 0)))
+  echo "  coordinate strides: 23 cases OK"
 
 proc runCoalesceTests =
   echo "\n── Coalesce ──"
@@ -391,7 +409,7 @@ proc runCoalesceTests =
   runCoalesceOneLeafTests()
   runCoalesceIdentityTests()
   echo "\n── Coordinate strides ──"
-  runCoalesceCrdTests()
+  runCoalesceCoordStrideTests()
   echo "\nALL TESTS PASSED"
 
 when isMainModule:

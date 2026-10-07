@@ -547,6 +547,101 @@ proc runComposeSymbolTilerTests =
     doAssert viaSym === lit
   echo "  symbol tiler: 2 cases OK"
 
+# ── coordinate strides ────────────────────────────────────────
+proc runComposeCoordStrideTests =
+  # LHS Coords: a basis-stride LHS under int tilers
+  block:
+    let c = compose(make_layout(12, E(0)), make_layout((4, 3), (1, 4)))
+    doAssert c === ((4, 3), (E(0), E(4, 0)))
+  block:
+    let c = compose(make_layout(12, E(2, 1)), make_layout((4, 3), (1, 4)))
+    doAssert c === ((4, 3), (E(2, 1), E(8, 1)))
+  block:
+    let c = compose(make_layout(12, E(0)), make_layout((4, 3), (3, 1)))
+    doAssert c === ((4, 3), (E(3, 0), E(0)))
+  block:
+    let c = compose(make_layout(12, E(2, 1)), make_layout((4, 3), (3, 1)))
+    doAssert c === ((4, 3), (E(6, 1), E(2, 1)))
+  block:
+    let a = make_layout((4, 3), (E(0), E(1)))
+    let c = compose(a, make_layout((4, 3), (1, 4)))
+    doAssert c === ((4, 3), (E(0), E(1)))
+  block:
+    let a = make_layout((4, 3), (E(0), E(1)))
+    let c = compose(a, make_layout(12, 1))
+    doAssert c === ((4, 3), (E(0), E(1)))
+  block:
+    let c = compose(make_layout((4, 3), (E(0), E(1))), make_layout(6, 2))
+    doAssert c === ((2, 3), (E(2, 0), E(1)))
+  block:
+    let c = compose(make_layout((4, 3), (E(0), E(1))), make_layout((6, 2), (2, 1)))
+    doAssert c === (((2, 3), 2), ((E(2, 0), E(1)), E(0)))
+  block:
+    let c = compose(make_layout((4, 3), (E(1), E(0))), make_layout(6, 2))
+    doAssert c === ((2, 3), (E(2, 1), E(0)))
+  block:
+    let c = compose(make_layout((4, 3), (E(1), E(0))), make_layout((6, 2), (2, 1)))
+    doAssert c === (((2, 3), 2), ((E(2, 1), E(0)), E(1)))
+  block:
+    let c = compose(make_layout((4, 3), (E(6, 1), E(2, 1))), make_layout(6, 2))
+    doAssert c === ((2, 3), (E(12, 1), E(2, 1)))
+  block:
+    let c = compose(make_layout((4, 3), (E(6, 1), E(2, 1))), make_layout((6, 2), (2, 1)))
+    doAssert c === (((2, 3), 2), ((E(12, 1), E(2, 1)), E(6, 1)))
+  # LHS Coords: multi-term strides under a mode-whole tiler
+  block:
+    let a = make_layout((4, 4), (E((1, 1)), E((3, 1))))
+    let c = compose(a, make_layout((4, 2), (2, 1)))
+    doAssert c === (((2, 2), 2), ((E((2, 2)), E((3, 1))), E((1, 1))))
+  # LHS Coords: rank-3 basis strides
+  block:
+    let a = make_layout((4, 6, 8), (E(0), E(1), E(2)))
+    let c = compose(a, make_layout((2, 2, 2), (1, 2, 4)))
+    doAssert c === ((2, 2, 2), (E(0), E(2, 0), E(1)))
+  # RHS Coords: a basis-stride tiler over an int LHS
+  block:
+    let c = compose(make_layout((4, 4), (4, 1)), make_layout((4, 4), (E(0), E(1))))
+    doAssert c === ((4, 4), (4, 1))
+  block:
+    let c = compose(make_layout((4, 4), (4, 1)), make_layout((4, 4), (E(1), E(0))))
+    doAssert c === ((4, 4), (1, 4))
+  block:
+    let c = compose(make_layout((4, 5), (5, 1)), make_layout(30, E(0)))
+    doAssert c === (30, 5)
+  block:
+    let c = compose(make_layout((4, 5), (5, 1)), make_layout(12, E(1)))
+    doAssert c === (12, 1)
+  block:
+    let c = compose(make_layout((4, 6, 8), (1, 4, 24)), make_layout((2, 2, 2), (E(0), E(1), E(2))))
+    doAssert c === ((2, 2, 2), (1, 4, 24))
+  block:
+    let c = compose(make_layout((4, 6, 8), (1, 4, 24)), make_layout((2, 2, 2), (E(2), E(0), E(1))))
+    doAssert c === ((2, 2, 2), (24, 1, 4))
+  block:
+    let a = make_layout((4, 6, 8), (E(0), E(1), E(2)))
+    let c = compose(a, make_layout((2, 2, 2), (E(0), E(1), E(2))))
+    doAssert c === ((2, 2, 2), (E(0), E(1), E(2)))
+  block:
+    let a = make_layout((3, 5, 7, 11), (E(0), E(1), E(2), E(3)))
+    let c = compose(a, make_layout(3, E(4, 2)))
+    doAssert c === (3, E(4, 2))
+  block:
+    let a = make_layout((3, 5, 7, 11), (E(0), E(1), E(2), E(3)))
+    let c = compose(a, make_layout(3, E((0, 0, 4, 2))))
+    doAssert c === (3, E((0, 0, 4, 2)))
+  block:
+    let a = make_layout((3, 5, 7, 11), (E(0), E(1), E(2), E(3)))
+    let c = compose(a, make_layout(3, E((1, 0, 0, 1))))
+    doAssert c === (3, E((1, 0, 0, 1)))
+  # Diag: an int LHS under a multi-term tiler
+  block:
+    let c = compose(make_layout((4, 4), (3, 42)), make_layout(4, E((1, 1))))
+    doAssert c === (4, 45)
+  block:
+    let c = compose(make_layout((4, 8), (3, 42)), make_layout(4, E((1, 2))))
+    doAssert c === (4, 87)
+  echo "  coordinate strides (pycute suite): 27 cases OK"
+
 runComposeExactValueTests()
 runComposeFixtureTests()
 runComposeSimpleTests()
@@ -558,5 +653,6 @@ runComposeTilerTests()
 runComposeDynamicTests()
 runComposeZeroStrideTests()
 runComposeSymbolTilerTests()
+runComposeCoordStrideTests()
 
 echo "ALL TESTS PASSED"
