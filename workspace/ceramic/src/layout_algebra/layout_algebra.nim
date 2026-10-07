@@ -362,90 +362,130 @@ macro layout_add*[A, B: Layout](a: A, b: B): untyped =
 #  compose
 # ═══════════════════════════════════════════════════════════════
 
+type ComposeAcc = object
+  ## Fold state for one RHS dimension walked through the LHS profile:
+  ## each LHS dimension takes as many RHS coordinates as fit its size,
+  ## the leftovers carry into the next LHS dimension.
+  ## - remShape, remStride: the RHS size and stride not yet consumed
+  ## - remShapeV, remStrideV: their compile-time values (DynamicSentinel when dynamic)
+  ## - bShapeV: the RHS dimension's full size, the divisibility yardstick
+  ## - pairs: the (shape, stride) dimensions emitted so far
+  remShape, remStride: NimNode
+  remShapeV, remStrideV, bShapeV: int
+  pairs: seq[tuple[shape, stride: NimNode]]
+  builder: TupleBuilderNested
+
+proc init(acc: var ComposeAcc) =
+  acc.builder = TupleBuilderNested.new(2)
+
+proc init(acc: var ComposeAcc, shapeEv, strideEv: TupleStreamEvent) =
+  acc.remShape = shapeEv.leaf
+  acc.remStride = strideEv.leaf
+  acc.remShapeV = shapeEv.leafTy.getStaticInt()
+  acc.remStrideV = strideEv.leafTy.getStaticInt()
+  acc.bShapeV = acc.remShapeV
+  acc.pairs = @[]
+
+proc update(acc: var ComposeAcc, stmts: var NimNode, k, R: int, shapeLeaf, strideLeaf: NimNode, shV, stV: int) =
+  ## One LHS dimension takes as many of B's remaining coordinates
+  ## as its size allows and emits them as a (shape, stride) pair.
+  ##
+  ##   A = (6,2):(8,2) composed with B = 4:3
+  ##     A's 6:8 holds 2 of B's 4 coords, step 3 -> pair (2, 24)
+  ##     A's 2:2  takes the other 2          -> pair (2, 2)
+  ##     result (2,2):(24,2)
+  ##
+  ## Divisibility, checked whenever all operands are static:
+  ## - stride: a stride that does not step past whole dimensions must
+  ##   split the crossed dimension, the stride divides the crossed
+  ##   dimension's shape exactly, or the crossed dimension holds all
+  ##   but one of B's coordinates.
+  ## - stride sign: negative strides may only step past whole dimensions.
+  ## - shape: B's remaining size divides by the consumed shape
+  if k == R - 1:
+    if acc.pairs.len == 0 or acc.remShapeV != 1:
+      # no LHS leaf was consumed, the RHS leaf passes through
+      acc.pairs.add (shape: acc.remShape, stride: acc.remStride * strideLeaf)
+    return
+  let absRemV = if acc.remStrideV != DynamicSentinel: abs(acc.remStrideV)
+                else: DynamicSentinel
+  if absRemV != DynamicSentinel and shV != DynamicSentinel and acc.bShapeV != DynamicSentinel and
+      absRemV mod shV != 0:
+    if acc.remStrideV < 0 or (shV mod absRemV != 0 and shV div absRemV < acc.bShapeV - 1):
+      error "compose: stride divisibility condition violated: the stride splits no dimension and no dimension holds B's size"
+  let absRem = stmts.newLetAsgn("absRem", abs(acc.remStride))
+  let clampedV = if absRemV != DynamicSentinel and shV != DynamicSentinel and acc.remShapeV != DynamicSentinel:
+    min(ceil_div(shV, absRemV), acc.remShapeV)
+  else:
+    DynamicSentinel
+  let clamped = stmts.newLetAsgn("clampedShape", min(ceil_div(shapeLeaf, absRem), acc.remShape))
+  if clampedV != 1 and acc.remShapeV != 1:
+    # a leaf whose consumed shape folds to 1 contributes nothing
+    # dynamic leaves never fold to 1
+    if acc.remShapeV != DynamicSentinel and clampedV != DynamicSentinel and acc.remShapeV mod clampedV != 0:
+      error "compose: shape divisibility condition violated: B's remaining size does not divide by the consumed shape"
+    acc.pairs.add (shape: clamped, stride: acc.remStride * strideLeaf)
+    acc.remShape = stmts.newLetAsgn("remainingShape", acc.remShape div clamped)
+    if clampedV != DynamicSentinel:
+      acc.remShapeV = acc.remShapeV div clampedV
+  acc.remStride = stmts.newLetAsgn("remainingStride", ceil_div(absRem, shapeLeaf) * sign(acc.remStride))
+  if absRemV != DynamicSentinel and shV != DynamicSentinel:
+    acc.remStrideV = ceil_div(absRemV, shV) * sign(acc.remStrideV)
+
+proc finish(acc: var ComposeAcc) =
+  ## Flush this dimension's pairs into the result tree.
+  acc.builder.appendDimension(acc.pairs)
+
 macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
   ## Nested walk over coalesced LHS and the destructured RHS:
   ## - level 1: zip walk over the RHS shape and stride
-  ## - level 2: one dimension of B at a time is walked through A's dimensions.
-  ##   Each A dimension takes as many B coordinates as its size,
-  ##   and emits them as a (shape, stride) pair.
-  ##   The leftover B (shape, strides) carry into the next A dimension.
-  ##
-  ##   A = (2,3):(2,1) composed with B = 6:(-1)
-  ##     A's 2:2  takes 2 B coords -> pair (2, -2);  3 left, step -1
-  ##     A's 3:1  takes 3 B coords -> pair (3, -1);  none left
-  ##     result (2,3):(-2,-1)
+  ## - level 2: one dimension of B at a time is walked through A's
+  ##   dimensions by the fold accumulator, each A dimension consumes
+  ##   as many B coordinates as its size allows and the leftovers carry
   result = newStmtList()
 
   let (aShape, aStrides) = result.destructureLayout(aLayout)
   let shapeLeaves = aShape.tupleFlatten()
   let strideLeaves = aStrides.tupleFlatten()
 
-  # level 1: the zip walk over the RHS shape and stride trees
-  var builder = TupleBuilderNested.new(2)
+  var acc: ComposeAcc
+  acc.init()
+
+  # level 1: one fold per RHS dimension over the shape and stride trees
   for (shapeEv, strideEv) in bShape.tupleStream().zip(bStrides.tupleStream()):
     if shapeEv.kind != kLeaf:
-      builder.append(shapeEv, strideEv)
+      acc.builder.append(shapeEv, strideEv)
       continue
     if strideEv.leafTy.getStaticInt() == 0:
       # a stride-0 RHS dimension maps every coordinate to offset 0,
       # the pair is the RHS dimension itself, the LHS is untouched
-      builder.append(shapeEv.leaf, strideEv.leaf)
+      acc.builder.append(shapeEv.leaf, strideEv.leaf)
       continue
     let basisStride = strideEv.leafTy.getCoordStrideDescriptor()
     if basisStride.kind != caNone:
       # a basis-stride RHS leaf names LHS modes, each nonzero term scales
       # its selected stride, the terms sum through the stride algebra
-      var acc: NimNode
+      var termAcc: NimNode
       for (index, scale) in csTerms(basisStride.coeffs):
         let term = IntCT(scale) * strideLeaves[index].leaf
-        acc = if acc.isNil: term else: acc + term
-      builder.append(shapeEv.leaf,
-        if acc.isNil: IntCT(0) else: acc)
+        termAcc = if termAcc.isNil: term else: termAcc + term
+      acc.builder.append(shapeEv.leaf,
+        if termAcc.isNil: IntCT(0) else: termAcc)
       continue
     if shapeLeaves.len == 1:
       # a 1-leaf profile consumes nothing, the strides multiply, no lets
-      builder.append(shapeEv.leaf, strideEv.leaf * strideLeaves[0].leaf)
+      acc.builder.append(shapeEv.leaf, strideEv.leaf * strideLeaves[0].leaf)
       continue
     # level 2: fold this RHS leaf over the flat LHS profile
-    var pairs: seq[tuple[shape, stride: NimNode]]
-    var remShape = shapeEv.leaf
-    var remStride = strideEv.leaf
-    var remShapeV = shapeEv.leafTy.getStaticInt()
-    var remStrideV = strideEv.leafTy.getStaticInt()
+    acc.init(shapeEv, strideEv)
     let R = shapeLeaves.len
     for k in 0 ..< R:
-      let shapeLeaf = shapeLeaves[k].leaf
-      let strideLeaf = strideLeaves[k].leaf
-      let shVk = shapeLeaves[k].leafTy.getStaticInt()
-      let stVk = strideLeaves[k].leafTy.getStaticInt()
-      if k == R - 1:
-        if pairs.len == 0 or remShapeV != 1:
-          # no LHS leaf was consumed, the RHS leaf passes through
-          pairs.add (shape: remShape, stride: remStride * strideLeaf)
-        break
-      let absRemV = if remStrideV != DynamicSentinel: abs(remStrideV)
-                    else: DynamicSentinel
-      let absRem = result.newLetAsgn("absRem", abs(remStride))
-      let clampedV = if absRemV != DynamicSentinel and shVk != DynamicSentinel and remShapeV != DynamicSentinel:
-        min(ceil_div(shVk, absRemV), remShapeV)
-      else:
-        DynamicSentinel
-      let clamped = result.newLetAsgn("clampedShape", min(ceil_div(shapeLeaf, absRem), remShape))
-      if clampedV != 1 and remShapeV != 1:
-        # a leaf whose consumed shape folds to 1 contributes nothing
-        # dynamic leaves never fold to 1
-        pairs.add (shape: clamped, stride: remStride * strideLeaf)
-        let remShUpdate = remShape div clamped
-        remShape = result.newLetAsgn("remainingShape", remShUpdate)
-        if clampedV != DynamicSentinel:
-          remShapeV = remShapeV div clampedV
-      let remStUpdate = ceil_div(absRem, shapeLeaf) * sign(remStride)
-      remStride = result.newLetAsgn("remainingStride", remStUpdate)
-      if absRemV != DynamicSentinel and shVk != DynamicSentinel:
-        remStrideV = ceil_div(absRemV, shVk) * sign(remStrideV)
-    appendDimension(builder, pairs)
+      acc.update(result, k, R, shapeLeaves[k].leaf, strideLeaves[k].leaf,
+                 shapeLeaves[k].leafTy.getStaticInt(),
+                 strideLeaves[k].leafTy.getStaticInt())
+    acc.finish()
 
-  result.add builder.emitLayout()
+  result.add acc.builder.emitLayout()
 
 macro compose*[A, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
@@ -461,8 +501,8 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
-  ## Divisibility of the consumed shape is a caller precondition.
-  ## Runtime shapes are unchecked.
+  ## Statically checkable divisibility violations are compile-time errors,
+  ## runtime shapes are unchecked.
   ##
   ##    domain  ──── B ────▶  A's domain  ──── A ────▶  values
   ##    domain  ══════════════ R ════════════════════▶  values
@@ -508,7 +548,7 @@ macro compose*(layout: Layout, tiler: tuple): untyped =
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
   ## `i` in `0 ..< cosize(B)`.
   ##
-  ## Divisibility of the consumed shape is a caller precondition.
+  ## Statically checkable divisibility violations are compile-time errors.
   ##
   ## Example:
   ##   compose(make_layout((32, 8), (1, 32)), (16, _))
