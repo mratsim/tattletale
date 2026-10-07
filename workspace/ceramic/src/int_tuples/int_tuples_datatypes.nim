@@ -93,6 +93,20 @@ template `===`*[T: tuple](a: T; b: int): bool =
   else:
     false
 
+template `===`*[V: static int](a: Int[V], b: tuple): bool =
+  ## An Int equals a 1-element tuple holding an equal element.
+  when tupleLen(b) == 1:
+    a === b[0]
+  else:
+    false
+
+template `===`*[T: tuple, V: static int](a: T, b: Int[V]): bool =
+  ## A tuple equals an Int only as a 1-element tuple.
+  when tupleLen(T) == 1:
+    a[0] === b
+  else:
+    false
+
 template `===`*[U: tuple](a: int; b: U): bool =
   ## Compare an int against a tuple — only valid for 1-element tuples.
   when tupleLen(U) == 1:

@@ -7,6 +7,7 @@
 
 import std/macros
 import std/strutils
+import std/typetraits
 import workspace/ceramic/src/int_tuples
 
 type
@@ -70,6 +71,44 @@ macro `$`*(T: typedesc[CoordStride]): string =
 macro `$`*(a: CoordStride): string =
   result = newStrLitNode(pretty(a.unwrapTypedesc(), @[]))
 
+macro E*(mode: static int): untyped =
+  ## Unit basis atom at `mode`: E(0) is 1@0, E(1) is 1@1.
+  var coeffs = nnkTupleConstr.newTree()
+  for i in 0 ..< mode:
+    coeffs.add(newIntLitNode(0))
+  coeffs.add(newIntLitNode(1))
+  result = nnkCall.newTree(
+    nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
+
+macro E*(scale, mode: static int): untyped =
+  ## Scaled basis atom: E(2, 0) is 2@0, E(-2, 1) is -2@1.
+  var coeffs = nnkTupleConstr.newTree()
+  for i in 0 ..< mode:
+    coeffs.add(newIntLitNode(0))
+  coeffs.add(newIntLitNode(scale))
+  result = nnkCall.newTree(
+    nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
+
+macro E*(coeffs: typed): untyped =
+  ## Multi-term atom from a coefficient vector: E((1, 1)) is 1@0 + 1@1.
+  result = nnkCall.newTree(
+    nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
+
+func `===`*[A, B: CoordStride](a: A, b: B): bool {.inline.} =
+  A is B
+
+func `===`*[T: tuple](a: T, b: CoordStride): bool {.inline.} =
+  when T.rank() == 1:
+    a[0] === b
+  else:
+    false
+
+func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
+  when b.rank() == 1:
+    a === b[0]
+  else:
+    false
+
 macro `+`*[A: CoordStride, B: CoordStride](a: typedesc[A], b: typedesc[B]): typedesc =
   let ta = a.unwrapTypedesc()
   let tb = b.unwrapTypedesc()
@@ -122,7 +161,7 @@ macro make_basis_like*(profile: typed): untyped =
   ##   make_basis_like(10)             ==  1
   ##
   ## In particular, the following:
-  ## 
+  ##
   ##   make_basis_like((10, (20, 30))) ==  (1@0, (1@0@1, 1@1@1))
   ##
   ## reads '20' exists at inner index 0 of outer tuple index 1

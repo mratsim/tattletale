@@ -9,12 +9,21 @@
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/tests/layouts_testutils
+import workspace/ceramic/src/layout_algebra/layout_constructors
+
+template check(got: untyped, expected: typed, expectedType: typedesc) =
+  ## Check with constant-folding assertion
+  block:
+    let tmp = got
+    type TmpType = typeof(tmp)
+    when TmpType is expectedType:
+      doAssert tmp === expected
+    else:
+      {.error: "[ttt] Please check constant-folding: type is " & $TmpType & ", expected " & $expectedType.}
 
 proc assertNestedCoalesceIsAstNoop(L: Layout, preserveTrailing: static bool = false) =
   ## Coalescing an already-coalesced layout is a no-op.
-  doAssert coalesce(L, preserveTrailing) ===
-    coalesce(coalesce(L, preserveTrailing), preserveTrailing)
+  doAssert coalesce(L, preserveTrailing) === coalesce(coalesce(L, preserveTrailing), preserveTrailing)
 
 
 # ── Scalar rank-1 ────────────────────────────────────────────
@@ -286,6 +295,84 @@ proc runCoalesceIdentityTests =
     check r.stride, 1, Int[1]
   echo "  already-coalesced: 5 cases OK"
 
+
+# ── coordinate strides ───────────────────────────────────────
+
+proc runCoalesceCrdTests =
+  # c04 scale mismatch blocks
+  block:
+    let c = coalesce(make_layout((2, 3), (E(0), E(3, 0))))
+    doAssert c === ((2, 3), (E(0), E(3, 0)))
+  # c05 sign mismatch blocks
+  block:
+    let c = coalesce(make_layout((2, 3), (E(0), E(-2, 0))))
+    doAssert c === ((2, 3), (E(0), E(-2, 0)))
+  # c07 mixed symbolic + int blocks
+  block:
+    let c = coalesce(make_layout((4, 8), (E(0), 1)))
+    doAssert c === ((4, 8), (E(0), 1))
+  # c08 different paths block
+  block:
+    let c = coalesce(make_layout((4, 8), (E(0), E(1))))
+    doAssert c === ((4, 8), (E(0), E(1)))
+  # c09 size-1 int leaf drops, static merge
+  block:
+    let c = coalesce(make_layout((2, 1, 6), (E(0), 3, 2)))
+    doAssert c === ((2, 6), (E(0), 2))
+  # c12 symbolic zero is int 0
+  block:
+    let c = coalesce(make_layout((2, 3), (0, 1)))
+    doAssert c === ((2, 3), (0, 1))
+  # c13 symbolic + stride-0 int blocks
+  block:
+    let c = coalesce(make_layout((2, 3), (E(0), 0)))
+    doAssert c === ((2, 3), (E(0), 0))
+  # c14 reverse order blocks
+  block:
+    let c = coalesce(make_layout((2, 3), (E(2, 0), E(0))))
+    doAssert c === ((2, 3), (E(2, 0), E(0)))
+  # c15 4*1@0 != 2@0, no reach
+  block:
+    let c = coalesce(make_layout((4, 2), (E(0), E(2, 0))))
+    doAssert c === ((4, 2), (E(0), E(2, 0)))
+  # c16 3*1@1 != 2@1
+  block:
+    let c = coalesce(make_layout((3, 4), (E(1), E(2, 1))))
+    doAssert c === ((3, 4), (E(1), E(2, 1)))
+  # c18 2*1@0 != 4@0
+  block:
+    let c = coalesce(make_layout((2, 3), (E(0), E(4, 0))))
+    doAssert c === ((2, 3), (E(0), E(4, 0)))
+  # c01 TODO: same-path merge, path 0
+  block:
+    let c = coalesce(make_layout((2, 3), (E(0), E(2, 0))))
+    doAssert c === (6, E(0))
+  # c02 TODO: same-path merge, path 1
+  block:
+    let c = coalesce(make_layout((2, 3), (E(1), E(2, 1))))
+    doAssert c === (6, E(1))
+  # c03 TODO: multi-term same-path merge
+  block:
+    let c = coalesce(make_layout((2, 3), (E((1, 1)), E((2, 2)))))
+    doAssert c === (6, E((1, 1)))
+  # c06 TODO: negative same-path merge
+  block:
+    let c = coalesce(make_layout((2, 3), (E(-1, 0), E(-2, 0))))
+    doAssert c === (6, E(-1, 0))
+  # c10 TODO: size-1 symbolic leaf pops like an int one
+  block:
+    let c = coalesce(make_layout((2, 1, 6), (1, E(0), 2)))
+    doAssert c === (12, 1)
+  # c11 TODO: triple chain
+  block:
+    let c = coalesce(make_layout((2, 2, 2), (E(0), E(2, 0), E(4, 0))))
+    doAssert c === (8, E(0))
+  # c17 TODO: nested inner merge
+  block:
+    let c = coalesce(make_layout((2, (2, 3)), (E(0), (E(1), E(2, 1)))))
+    doAssert c === ((2, 6), (E(0), E(1)))
+  echo "  coordinate strides: 18 cases OK"
+
 proc runCoalesceTests =
   echo "\n── Coalesce ──"
   runCoalesceScalarTests()
@@ -303,6 +390,8 @@ proc runCoalesceTests =
   runCoalescePreserveTrailingTests()
   runCoalesceOneLeafTests()
   runCoalesceIdentityTests()
+  echo "\n── Coordinate strides ──"
+  runCoalesceCrdTests()
   echo "\nALL TESTS PASSED"
 
 when isMainModule:
