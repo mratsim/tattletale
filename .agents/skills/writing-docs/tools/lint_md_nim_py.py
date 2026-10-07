@@ -331,8 +331,10 @@ BANNED = [
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
      "cite the command and its output that prove the claim"),
-    (r"\bfollow(?:s|ing|ed)?\b", None,
-     "name the thing directly, the item, the preceding entries, or restate the mechanism"),
+    (r"\bfollow(?:s|ing|ed)?\b",
+     lambda l: l.rstrip().endswith(":"),
+     "name the thing directly, the item, the preceding entries, or restate the mechanism "
+     "(a colon-terminated lead-in announcing the adjacent example is exempt)"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -1030,15 +1032,9 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     bare = strip_backticks(c)
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
         return
-    # The title flag fires on a short colon-terminated line.
-    # The title opens on a noun phrase, including the lowercase
-    # article form, comma segments after the opener are prose.
-    if c.endswith(":"):
-        segs = [s.strip() for s in bare.split(",") if s.strip()]
-        if segs and all(len(s.split()) <= 8 for s in segs) and segs[0].split()[0].lower() == "the":
-            findings.append(Finding(
-                path, n, "the-opener",
-                "title opens with the (open with a noun phrase)"))
+    # Title openers are checked at the heading level (kind == "heading",
+    # block-level pass) and at doc-block openers; colon-terminated prose
+    # lead-ins are legal prose (rule 29), never titles
     if kind == "fence":
         # Fenced content is code-with-layout.
         # - the vocabulary rules apply
@@ -1857,9 +1853,16 @@ def scan(path, text, findings):
     if not is_md:
         header_lines = meta["module_header"] if is_py else None
         if header_lines is None:
+            first_code = next((i for i, l in enumerate(text.splitlines())
+                               if l.strip() and not l.lstrip().startswith("#")),
+                              len(text.splitlines()))
             for block in blocks:
                 kinds = {e[2] for e in block}
                 if "doc" in kinds:
+                    # A doc block past the first code line is a function
+                    # or type doc, never the module header
+                    if block[0][0] > first_code:
+                        break
                     header_lines = [(e[0], e[1]) for e in block if e[2] == "doc"]
                     break
         check_module_header(path, header_lines or [], is_test, is_self, findings)

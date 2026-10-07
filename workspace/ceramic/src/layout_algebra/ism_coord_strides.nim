@@ -7,21 +7,26 @@
 
 import std/macros
 import std/strutils
+import workspace/ceramic/src/int_tuples
 
 type
-  ATuple*[AT: static tuple] = object
+  CoordStride*[AT: static tuple] = object
 
 proc unwrapTypedesc(n: NimNode): NimNode =
   var t = n.getTypeInst
   if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
     t = t[1]
-  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "ATuple":
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "CoordStride":
     return t[1]
   if t.kind == nnkSym:
     return t.getImpl[2][1]
-  error("ATuple: not an ATuple instantiation: " & t.repr, n)
+  error("CoordStride: not an CoordStride instantiation: " & t.repr, n)
 
 proc pretty(t: NimNode, path: seq[int]): string =
+  # TODO:
+  #   For the life of me, I have no idea why pycute / CuTe
+  #   is printing `E` paths innermost first.
+
   # 1. classify - depth-first count of nonzero leaves
   var
     nzCount = 0
@@ -42,7 +47,7 @@ proc pretty(t: NimNode, path: seq[int]): string =
   if nzCount == 0:
     return "0"
 
-  # 3. single basis leaf - value@p_n@...@p_0, outermost first
+  # 3. single basis leaf - value@p_n@...@p_0, innermost first
   if nzCount == 1:
     var s = $nzValue
     for i in countdown(nzPath.len - 1, 0):
@@ -59,45 +64,78 @@ proc pretty(t: NimNode, path: seq[int]): string =
       parts.add($t[i].intVal)
   return "(" & parts.join(",") & ")"
 
-macro `$`*(T: typedesc[ATuple]): string =
+macro `$`*(T: typedesc[CoordStride]): string =
   result = newStrLitNode(pretty(T.unwrapTypedesc(), @[]))
 
-macro `+`*[A: ATuple, B: ATuple](a: typedesc[A], b: typedesc[B]): typedesc =
+macro `$`*(a: CoordStride): string =
+  result = newStrLitNode(pretty(a.unwrapTypedesc(), @[]))
+
+macro `+`*[A: CoordStride, B: CoordStride](a: typedesc[A], b: typedesc[B]): typedesc =
   let ta = a.unwrapTypedesc()
   let tb = b.unwrapTypedesc()
   if ta.len != tb.len:
-    error("ATuple +: rank mismatch " & $ta.len & " vs " & $tb.len, b)
+    error("CoordStride +: rank mismatch " & $ta.len & " vs " & $tb.len, b)
   var sum = nnkTupleConstr.newTree()
   for i in 0 ..< ta.len:
     sum.add(newIntLitNode(ta[i].intVal + tb[i].intVal))
-  result = nnkBracketExpr.newTree(ident("ATuple"), sum)
+  result = nnkBracketExpr.newTree(bindSym"CoordStride", sum)
 
-macro `*`*(k: static int, A: typedesc[ATuple]): typedesc =
+macro `*`*(k: static int, A: typedesc[CoordStride]): typedesc =
   let ta = A.unwrapTypedesc()
   var scaled = nnkTupleConstr.newTree()
   for i in 0 ..< ta.len:
     scaled.add(newIntLitNode(k * ta[i].intVal))
-  result = nnkBracketExpr.newTree(ident("ATuple"), scaled)
+  result = nnkBracketExpr.newTree(bindSym"CoordStride", scaled)
 
-template `*`*(A: typedesc[ATuple], k: static int): typedesc =
+template `*`*(A: typedesc[CoordStride], k: static int): typedesc =
   k * A
 
-when isMainModule:
-  type
-    E0 = ATuple[(1, 0)]
-    E1 = ATuple[(0, 1)]
-    Sum = ATuple[(3, 5)]
-    Nested = ATuple[((1, 0), 5)]
-    ThreeD = ATuple[(1, 0, 0)]
-    Deep = ATuple[(((0, 7), 0), 0)]
+# ═══════════════════════════════════════════════════════════════
+#  E, the unit basis atoms, and make_basis_like
+# ═══════════════════════════════════════════════════════════════
 
-  echo $E0
-  echo $E1
-  echo $Sum
-  echo $Nested
-  echo $ThreeD
-  echo $Deep
-  echo $ATuple[(((1, 0, 0), 0), 0)]
-  echo $(E0 + E1)
-  echo $(4 * Sum)
-  echo $ATuple[(0, 0)]
+proc getCoordinates(path: seq[int]): NimNode =
+  var node = newIntLitNode(1)
+  for i in countdown(path.len - 1, 0):
+    var level = nnkTupleConstr.newTree()
+    for j in 0 ..< path[i] + 1:
+      if j == path[i]:
+        level.add(node)
+      else:
+        level.add(newIntLitNode(0))
+    node = level
+  return node
+
+macro make_basis_like*(profile: typed): untyped =
+  ## Builds a (nested) tuple of coordinates describing the input `profile`.
+  ##
+  ## The coordinates are represented as:
+  ##     value@path.
+  ##
+  ## Value is either 1 (a value exist at those coordinates)
+  ## or 0 (out-of-bounds)
+  ##
+  ## Examples:
+  ##
+  ##   make_basis_like((10, 20))       ==  (1@0, 1@1)
+  ##   make_basis_like((10, (20, 30))) ==  (1@0, (1@0@1, 1@1@1))
+  ##   make_basis_like(10)             ==  1
+  ##
+  ## In particular, the following:
+  ## 
+  ##   make_basis_like((10, (20, 30))) ==  (1@0, (1@0@1, 1@1@1))
+  ##
+  ## reads '20' exists at inner index 0 of outer tuple index 1
+  ##
+  ## Note:
+  ##   For the life of me, I have no idea why coordinates/paths are printed
+  ##   innermost index first in the pycute / CuTe reference.
+
+  if not profile.getTypeInst().isTupleTy():
+    return newIntLitNode(1)
+  var builder = TupleBuilderNested.new(1)
+  for ev in profile.tupleStream():
+    builder.onLeaves(ev):
+      builder.append(nnkCall.newTree(
+        nnkBracketExpr.newTree(bindSym"CoordStride", ev.path.getCoordinates())))
+  result = builder.emit(0).resultTuple

@@ -10,6 +10,8 @@ import std/algorithm
 import workspace/ceramic/src/int_tuples
 import ./layouts_datatypes
 import ./layout_compiletime
+import ./ism_coord_strides
+export ism_coord_strides
 
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides, canonical column-major strides
@@ -224,6 +226,13 @@ macro make_layout_like*(layout: Layout): untyped =
   template likeDelegate(sh2, st2) =
     make_layout_likeImpl(sh2, st2)
   result.add getAst(likeDelegate(sh, st))
+
+# ═══════════════════════════════════════════════════════════════
+#  make_identity_layout, coordinate strides as strides
+# ═══════════════════════════════════════════════════════════════
+
+template make_identity_layout*(shape: IntOrIntTuple): Layout =
+  make_layout(shape, make_basis_like(shape))
 
 # ═══════════════════════════════════════════════════════════════
 #  make_fragment_like
