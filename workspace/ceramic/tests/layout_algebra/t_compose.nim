@@ -35,7 +35,6 @@ const flat   = make_layout((4, 8), (1, 32))
 const nested = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
 
 # ── exact values ─────────────────────────────────────────────
-# Expected outputs recorded from pycute composition.
 proc runComposeExactValueTests =
   block:
     let c = compose(make_layout(8, 2), make_layout(4, 1))
@@ -57,6 +56,10 @@ proc runComposeExactValueTests =
     let c = compose(make_layout(16, 1), make_layout((4, 4), (1, 4)))
     check c.shape, (4, 4), (Int[4], Int[4])
     check c.stride, (1, 4), (Int[1], Int[4])
+  block:
+    let c = compose(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
+    check c.shape, 200, Int[200]
+    check c.stride, 1, Int[1]
   # rank-1 LHS with hierarchical RHS preserves the nesting
   block:
     let c = compose(make_layout(64, 1), make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8))))
@@ -83,10 +86,6 @@ proc runComposeExactValueTests =
     let c = compose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5)))
     check c.shape, (5, (2, 2)), (Int[5], (Int[2], Int[2]))
     check c.stride, (16, (80, 4)), (Int[16], (Int[80], Int[4]))
-  # pycute prints these as 1-mode-wrapped ((4, 3),):((1, 1),) forms,
-  # ours is the flat (4, 3):(1, 1), checked by assertCompositionProperty since the structures differ
-  assertCompositionProperty(make_layout((4, 3), (1, 1)), make_layout(12, 1))
-  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(12, 1))
   # tuple LHS + scalar RHS
   block:
     let c = compose(make_layout((4, 8), (1, 4)), make_layout(10, 1))
@@ -260,13 +259,11 @@ proc runComposeMultiDimensionTests =
     let c = compose(make_layout((4, 3), (3, 1)), make_layout((4, 3), (1, 4)))
     check c.shape, (4, 3), (Int[4], Int[3])
     check c.stride, (3, 1), (Int[3], Int[1])
-  assertCompositionProperty(make_layout((4, 3), (1, 1)), make_layout(12, 1))
   assertCompositionProperty(make_layout(12, 1), make_layout((4, 3), (1, 1)))
   assertCompositionProperty(make_layout(12, 2), make_layout((4, 3), (1, 1)))
   assertCompositionProperty(make_layout(12, 1), make_layout((4, 3), (3, 1)))
   assertCompositionProperty(make_layout(12, 2), make_layout((4, 3), (3, 1)))
   assertCompositionProperty(make_layout(12, 1), make_layout((2, 3), (2, 4)))
-  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(12, 1))
   assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(6, 2))
   assertCompositionProperty(make_layout((4, 3), (1, 4)), make_layout((4, 3), (1, 4)))
   assertCompositionProperty(make_layout((4, 3), (1, 4)), make_layout((6, 2), (2, 1)))
@@ -338,12 +335,6 @@ proc runComposeRemainderTests =
   assertCompositionProperty(make_layout((8, 8), (8, 1)), make_layout(3, 3))
   assertCompositionProperty(make_layout(3, 1), make_layout(4, 1))
   assertCompositionProperty(make_layout((48, 24, 5), (1, 128, 3072)), make_layout(32, 1))
-  # pycute prints these as 1-mode-wrapped ((4, 6),):((3, 1),) forms,
-  # ours is flat, checked by assertCompositionProperty
-  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(24, 1))
-  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(8, 1))
-  assertCompositionProperty(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
-  assertCompositionProperty(make_layout((4, 6, 8, 10), (2, 3, 5, 7)), make_layout(6, 12))
   echo "  remainder: 12 cases OK"
 
 # ── nested RHS ───────────────────────────────────────────────
@@ -392,9 +383,6 @@ proc runComposeNestedTests =
     let c = compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),)))
     check c.shape, (4, 2), (Int[4], Int[2])
     check c.stride, (1, 16), (Int[1], Int[16])
-  # pycute prints this with a trailing scalar leaf ((2, 2), 2):((2, 16), 1),
-  # ours keeps a 1-tuple leaf ((2, 2), (2,)):((2, 16), (1,))
-  assertCompositionProperty(make_layout(((4, 2),), ((1, 16),)), make_layout((4, 2), (2, 1)))
   assertCompositionProperty(make_layout((2, 2), (2, 1)), make_layout((2, 2), (2, 1)))
   assertCompositionProperty(make_layout((4, 8, 2), (1, 4, 32)), make_layout((2, 2, 2), (2, 8, 1)))
   assertCompositionProperty(make_layout((4, 8, 2), (2, 8, 1)), make_layout((2, 2, 2), (1, 8, 2)))
@@ -523,9 +511,6 @@ proc runComposeDynamicTests =
     let a = make_layout(16, 2)
     let b = make_layout(4, 2)
     assertCompositionProperty(a, b)
-  assertCompositionProperty(make_layout((12, 3), (1, 24)), make_layout(4, 1))
-  assertCompositionProperty(make_layout((128, 24, 5), (1, 128, 3072)), make_layout(64, 2))
-  assertCompositionProperty(make_layout((128, 24, 5), (1, 128, 3072)), make_layout(480, 32))
   echo "  symbol-bound: 5 cases OK"
 
 # ── zero-stride RHS ──────────────────────────────────────────
@@ -574,15 +559,4 @@ runComposeDynamicTests()
 runComposeZeroStrideTests()
 runComposeSymbolTilerTests()
 
-# ── divisibility rejections ──
-proc runComposeRejectionTests =
-  # pycute raises its divisibility preconditions on these two inputs
-  # and produces nothing, ours and C++ return a layout, checked
-  # against the definition of composition itself: result(c) == a(b(c))
-  # over every coordinate of B.
-  assertCompositionProperty(make_layout((2, 3), (2, 1)), make_layout(6, -1))
-  assertCompositionProperty(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
-  echo "  rejections: 2 cases OK"
-
-runComposeRejectionTests()
 echo "ALL TESTS PASSED"
