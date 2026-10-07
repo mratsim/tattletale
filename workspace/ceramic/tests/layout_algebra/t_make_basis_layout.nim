@@ -5,10 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## make_basis_like, unit coordinate strides for a shape profile,
-## and make_identity_layout, the identity layout built from them.
-## Run: nim c -r --hints:off --warnings:off -p:"$PWD" workspace/ceramic/tests/layout_algebra/make_identity_layout.nim
-## Reference: pycute atuple.py (make_basis_like), layout.py (make_identity_layout)
+# Run: nim c -r --hints:off --warnings:off -p:"$PWD" workspace/ceramic/tests/layout_algebra/t_make_basis_layout.nim
 
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra/layout_constructors
