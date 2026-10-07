@@ -739,8 +739,10 @@ def nim_prose_lines(text):
             continue
         if s.startswith("##"):
             if LICENSE_SHAPE.match(s.lstrip("#").strip()):
-                # The license header is fixed legal text, exempt here the
-                # same way the `#`-comment branch exempts it
+                # The license banner is fixed legal text, never API prose:
+                # `#` prefixed only, a `##` banner is a violation reported
+                # through check_line's `license` kind
+                out.append((i, "license banner must be `#` prefixed, not `##`", "license", 0, False))
                 continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
@@ -1021,6 +1023,9 @@ def _pattern_findings(path, n, c, table, rule, findings, warning=False):
 def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     """Runs the per-line rules over one prose line."""
     if not c:
+        return
+    if kind == "license":
+        findings.append(Finding(path, n, "license-prefix", c))
         return
     bare = strip_backticks(c)
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
