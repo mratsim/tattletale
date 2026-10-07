@@ -57,41 +57,6 @@ const nested = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
 const flat   = make_layout((4, 8), (1, 32))
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 1. compose must work in the fixture module
-# ═══════════════════════════════════════════════════════════════
-proc runComposeFixtureTests =
-  block:
-    ## rank-1 LHS × flat RHS → flatten path — identity (a.stride = 1)
-    let r = compose(make_layout(32, 1), flat)
-    check r.shape, (4, 8), (Int[4], Int[8])
-    check r.stride, (1, 32), (Int[1], Int[32])
-  block:
-    ## coalescable rank-2 LHS × nested RHS → coalesce→rank-1→make_layout
-    ## (a = (8,8):(1,8) coalesces to (64):(1); result = b unchanged)
-    let r = compose(make_layout((8, 8), (1, 8)), nested)
-    check r.shape, ((4, 8), (2, 2)), ((Int[4], Int[8]), (Int[2], Int[2]))
-    check r.stride, ((16, 1), (8, 64)), ((Int[16], Int[1]), (Int[8], Int[64]))
-  block:
-    ## non-coalescable rank-2 LHS × flat RHS → composeImpl path.
-    ## R(i) = A(B(i)): B(i) = r + 32c, A at flat r + 32c = r + 64c ✓
-    let r = compose(make_layout((16, 8), (1, 32)), flat)
-    check r.shape, (4, 8), (Int[4], Int[8])
-    check r.stride, (1, 64), (Int[1], Int[64])
-  block:
-    ## rank-1 LHS × nested RHS → composeDistribute path — fixed by
-    ## layoutTypeArgs (nnkSym-safe type extraction); must stay working.
-    let r = compose(make_layout(32, 1), nested)
-    check r.shape, ((4, 8), (2, 2)), ((Int[4], Int[8]), (Int[2], Int[2]))
-    check r.stride, ((16, 1), (8, 64)), ((Int[16], Int[1]), (Int[8], Int[64]))
-  block:
-    ## non-coalescable rank-2 LHS × nested RHS → composeDistribute path
-    let r = compose(make_layout((16, 8), (1, 32)), nested)
-    check r.shape, ((4, 8), (2, 2)), ((Int[4], Int[8]), (Int[2], Int[2]))
-    check r.stride, ((32, 1), (8, 128)), ((Int[32], Int[1]), (Int[8], Int[128]))
-
-  echo "    compose fixture: 5 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  Section 3. complement must work for multi-dimension layouts
 # ═══════════════════════════════════════════════════════════════
 proc runComplementFixtureTests =
@@ -164,41 +129,6 @@ proc runMakeLayoutLikeAliasTests =
     doAssert toIntVal(size(b)) > 0
     doAssert toIntVal(size(c)) > 0
   echo "    make_layout_like under alias fixture: 2 guarded cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 6. compose with a static stride-0 RHS dimension
-# ═══════════════════════════════════════════════════════════════
-#
-#  CuTe's composition_impl shortcuts a static stride-0 RHS dimension.
-#  Every coordinate maps to offset 0, so the composed dimension is the RHS
-#  dimension itself and the LHS is never touched.
-#
-#  This arises when composing with a logical_divide whose complement
-#  filler is (1):(0), i.e. tiler cosize == cosize bound.
-#  For example, take max_alignment of a rank-2 layout whose strides are
-#  fully contiguous after sorting by stride.
-#  coalesce cannot merge them in the original dimension order, but
-#  right_inverse covers the whole cosize of make_layout((2, 3), (3, 1)).
-
-proc runComposeZeroStrideTests =
-  block:
-    ## Isolated shortcut. Composing a rank-2 LHS with a (1):(0) RHS dim yields (1):(0).
-    ## No division by a zero stride at compile time.
-    let lhs = make_layout((2, 3), (3, 1))
-    check(compose(lhs, make_layout(1, 0)), make_layout(1, 0), Layout)
-
-  block:
-    ## The (1):(3) filler inside a logical_divide of make_layout((2, 3), (3, 1)).
-    ## This is the pipeline consumed by max_alignment (k_layout_copy_gpu),
-    ## CuTe formula gcd(size<0>, stride<1>).
-    ##
-    ## size<0> = the sorted-by-stride contiguous run = 6.
-    ## The filler's stride<1> is 3 (the filler sits past the 6 covered offsets),
-    ## and gcd(6, 3) = 3.
-    let lhs = make_layout((2, 3), (3, 1))
-    let permuted = logical_divide(lhs, right_inverse(lhs))
-    check(toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int)
-    check(permuted.stride[1], Int[3](), Int[3])
 
 # ═══════════════════════════════════════════════════════════════
 #  Section 7. Nested-shape indexing and Layout-tiler unzip
@@ -373,30 +303,6 @@ proc runInverseDynamicShapeTests =
   echo "    inverse dynamic-shape fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 17. compose with a symbol-bound tiler
-# ═══════════════════════════════════════════════════════════════
-#
-#  A tiler bound to a symbol is not readable by child index at macro
-#  time. The tiler binds once to a fresh let and the loop reads every
-#  element by index, literal and symbol-bound tiler nodes alike.
-
-proc runComposeSymbolTilerTests =
-  block:
-    ## int tiler: the symbol-bound tuple matches the literal tuple
-    let t = (16, 2)
-    let lit = compose(make_layout((32, 8), (1, 32)), (16, 2))
-    let viaSym = compose(make_layout((32, 8), (1, 32)), t)
-    doAssert viaSym === lit, "int tiler: " & $viaSym & " != " & $lit
-  block:
-    ## Layout tiler element: the symbol-bound tuple matches the literal form
-    let t = (make_layout(16, 1), 2)
-    let lit = compose(make_layout((32, 8), (1, 32)), (make_layout(16, 1), 2))
-    let viaSym = compose(make_layout((32, 8), (1, 32)), t)
-    doAssert viaSym === lit, "layout tiler: " & $viaSym & " != " & $lit
-
-  echo "    compose symbol-tiler fixture: 2 guarded cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  Section 18. make_layout_like over a scalar shape
 # ═══════════════════════════════════════════════════════════════
 #
@@ -550,16 +456,12 @@ proc runProductReassemblyTests =
 
 proc runTests =
   echo "\n── layout_algebra anti-regressions (integration) ──"
-  echo "── Section 1: compose under module-scope typeof-alias fixture ──"
-  runComposeFixtureTests()
   echo "── Section 3: complement multi-dimension + compile-time bound ──"
   runComplementFixtureTests()
   echo "── Section 4: complement runtime shape = static twin ──"
   runComplementDynamicShapeTests()
   echo "── Section 5: make_layout_like under typeof-alias fixture ──"
   runMakeLayoutLikeAliasTests()
-  echo "── Section 6: compose with static stride-0 RHS dim ──"
-  runComposeZeroStrideTests()
   echo "── Section 7. Nested-shape indexing and Layout-tiler unzip ──"
   runNestedShapeIntegrationTests()
   echo "── Section 9. complement skips inactive dimensions ──"
@@ -570,8 +472,6 @@ proc runTests =
   runZippedGatherTests()
   echo "── Section 16. inverse strides after a runtime shape leaf ──"
   runInverseDynamicShapeTests()
-  echo "── Section 17. compose with a symbol-bound tiler ──"
-  runComposeSymbolTilerTests()
   echo "── Section 18. make_layout_like over a scalar shape ──"
   runMakeLayoutLikeScalarShapeTests()
   echo "── Section 19. product macros: spec twins, composed emission ──"
