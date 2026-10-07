@@ -48,7 +48,7 @@ macro slice*(target: tuple; selector: typed): untyped =
   for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     if selEvent.kind != tgtEvent.kind:
       error "slice: the selector and the target have different structures", selEvent.leaf
-    tgtEvent.onLeaves():
+    builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]
@@ -72,7 +72,7 @@ macro dice*(target: tuple; selector: typed): untyped =
   for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     if selEvent.kind != tgtEvent.kind:
       error "slice: the selector and the target have different structures", selEvent.leaf
-    tgtEvent.onLeaves():
+    builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]

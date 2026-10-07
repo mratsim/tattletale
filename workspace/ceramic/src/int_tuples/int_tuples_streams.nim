@@ -272,7 +272,7 @@ func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[r
 #  onLeaves, consumer-side event ingest
 # ═══════════════════════════════════════════════════════════════════════
 
-template onLeaves*(event: TupleStreamEvent, body: untyped): untyped =
+template onLeaves*(builder: TupleBuilderFlat or TupleBuilderNested, event: TupleStreamEvent, body: untyped): untyped =
   case event.kind
   of kOpen, kClose:
     builder.append(event)

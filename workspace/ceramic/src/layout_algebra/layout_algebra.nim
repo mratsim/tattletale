@@ -890,7 +890,7 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
   var builder = TupleBuilderFlat.new(2)
   var tilerDims = tiler.tupleDimsStream()
   for (shEv, stEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    shEv.onLeaves():
+    builder.onLeaves(shEv):
       if not tilerDims.done():
         # the per-dim divide is emitted twice, once per projection.
         # Both copies stay pure expressions the C compiler folds and deduplicates,

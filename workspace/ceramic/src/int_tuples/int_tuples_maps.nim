@@ -27,7 +27,7 @@ macro mapLeavesWith*(t: IntOrIntTuple, body: untyped): untyped =
   let scalar = not t.isTupleTy() # Preserve 1 vs (1, ) input
   var builder = TupleBuilderNested.new(1, dropEmpty = false)
   for event in t.tupleStream():
-    event.onLeaves():
+    builder.onLeaves(event):
       builder.append(body.replaceNodes(("it", event.leaf)))
   result = builder.emit(0, emitScalarForSize1 = scalar).resultTuple
 
@@ -75,6 +75,6 @@ macro mapDimensionsWith*(t: tuple; body: untyped): untyped =
   ##   mapDimensionsWith((2, 4, 6)): it * 2  →  (4, 8, 12)
   var builder = TupleBuilderFlat.new(1)
   for event in t.tupleDimsStream():
-    event.onLeaves():
+    builder.onLeaves(event):
       builder.append(body.replaceNodes(("it", event.leaf)))
   result = builder.emit(0).resultTuple

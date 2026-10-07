@@ -224,10 +224,10 @@ macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed)
   result = newStmtList()
   var builder = TupleBuilderFlat.new(2)
   for (shapeEvent, strideEvent) in tileShape.tupleDimsStream().zip(tileStride.tupleDimsStream()):
-    shapeEvent.onLeaves():
+    builder.onLeaves(shapeEvent):
       builder.append(shapeEvent.leaf, strideEvent.leaf)
   for (shapeEvent, strideEvent) in restShape.tupleDimsStream().zip(restStride.tupleDimsStream()):
-    shapeEvent.onLeaves():
+    builder.onLeaves(shapeEvent):
       builder.append(shapeEvent.leaf, strideEvent.leaf)
   result.add builder.emitLayout().resultLayout
 
