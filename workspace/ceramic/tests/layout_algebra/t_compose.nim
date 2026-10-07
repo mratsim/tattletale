@@ -22,6 +22,15 @@ template check(got: untyped, expected: typed, expectedType: typedesc) =
       {.error: "[ttt] Please check constant-folding: type is " &
           $TmpType & ", expected " & $expectedType.}
 
+proc assertCompositionProperty[Sh1, St1, Sh2, St2](a: Layout[Sh1, St1], b: Layout[Sh2, St2]) =
+  ## Check that (a ∘ b)(x) == a(b(x))
+  let r = compose(a, b)
+  doAssert compatible(b.shape, r.shape),
+    "compatible(" & $b.shape & ", " & $r.shape & ")"
+  for x in 0 ..< size(b):
+    doAssert r(x) == a(b(x)),
+      "(a ∘ b)(" & $x & ")=" & $r(x) & " a(b(" & $x & "))=" & $a(b(x))
+
 const flat   = make_layout((4, 8), (1, 32))
 const nested = make_layout(((4, 8), (2, 2)), ((16, 1), (8, 64)))
 
@@ -74,6 +83,10 @@ proc runComposeExactValueTests =
     let c = compose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5)))
     check c.shape, (5, (2, 2)), (Int[5], (Int[2], Int[2]))
     check c.stride, (16, (80, 4)), (Int[16], (Int[80], Int[4]))
+  # pycute prints these as 1-mode-wrapped ((4, 3),):((1, 1),) forms,
+  # ours is the flat (4, 3):(1, 1), checked by assertCompositionProperty since the structures differ
+  assertCompositionProperty(make_layout((4, 3), (1, 1)), make_layout(12, 1))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(12, 1))
   # tuple LHS + scalar RHS
   block:
     let c = compose(make_layout((4, 8), (1, 4)), make_layout(10, 1))
@@ -180,6 +193,21 @@ proc runComposeSimpleTests =
     let c = compose(make_layout(4, 2), make_layout(2, 2))
     check c.shape, 2, Int[2]
     check c.stride, 4, Int[4]
+  assertCompositionProperty(make_layout(1, 0), make_layout(1, 0))
+  assertCompositionProperty(make_layout(1, 0), make_layout(1, 1))
+  assertCompositionProperty(make_layout(1, 1), make_layout(1, 0))
+  assertCompositionProperty(make_layout(1, 1), make_layout(1, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 2), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, 2))
+  assertCompositionProperty(make_layout(4, 0), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, 0))
+  assertCompositionProperty(make_layout(1, 0), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(1, 0))
+  assertCompositionProperty(make_layout(4, 1), make_layout(2, 1))
+  assertCompositionProperty(make_layout(4, 2), make_layout(2, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(2, 2))
+  assertCompositionProperty(make_layout(4, 2), make_layout(2, 2))
   echo "  simple: 15 cases OK"
 
 # ── multi-dimension ──────────────────────────────────────────
@@ -232,6 +260,18 @@ proc runComposeMultiDimensionTests =
     let c = compose(make_layout((4, 3), (3, 1)), make_layout((4, 3), (1, 4)))
     check c.shape, (4, 3), (Int[4], Int[3])
     check c.stride, (3, 1), (Int[3], Int[1])
+  assertCompositionProperty(make_layout((4, 3), (1, 1)), make_layout(12, 1))
+  assertCompositionProperty(make_layout(12, 1), make_layout((4, 3), (1, 1)))
+  assertCompositionProperty(make_layout(12, 2), make_layout((4, 3), (1, 1)))
+  assertCompositionProperty(make_layout(12, 1), make_layout((4, 3), (3, 1)))
+  assertCompositionProperty(make_layout(12, 2), make_layout((4, 3), (3, 1)))
+  assertCompositionProperty(make_layout(12, 1), make_layout((2, 3), (2, 4)))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(12, 1))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(6, 2))
+  assertCompositionProperty(make_layout((4, 3), (1, 4)), make_layout((4, 3), (1, 4)))
+  assertCompositionProperty(make_layout((4, 3), (1, 4)), make_layout((6, 2), (2, 1)))
+  assertCompositionProperty(make_layout((4, 3), (1, 4)), make_layout((4, 3), (3, 1)))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout((4, 3), (1, 4)))
   echo "  multi-dimension: 12 cases OK"
 
 # ── remainder ────────────────────────────────────────────────
@@ -286,6 +326,24 @@ proc runComposeRemainderTests =
     let c = compose(make_layout((48, 24, 5), (1, 128, 3072)), make_layout(32, 1))
     check c.shape, 32, Int[32]
     check c.stride, 1, Int[1]
+  assertCompositionProperty(make_layout(1, 0), make_layout(4, 1))
+  assertCompositionProperty(make_layout(1, 1), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, 2))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(24, 1))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(8, 1))
+  assertCompositionProperty(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
+  assertCompositionProperty(make_layout((4, 3, 1), (3, 1, 0)), make_layout(4, 1))
+  assertCompositionProperty(make_layout((4, 6, 8, 10), (2, 3, 5, 7)), make_layout(6, 12))
+  assertCompositionProperty(make_layout((8, 8), (8, 1)), make_layout(2, 3))
+  assertCompositionProperty(make_layout((8, 8), (8, 1)), make_layout(3, 3))
+  assertCompositionProperty(make_layout(3, 1), make_layout(4, 1))
+  assertCompositionProperty(make_layout((48, 24, 5), (1, 128, 3072)), make_layout(32, 1))
+  # pycute prints these as 1-mode-wrapped ((4, 6),):((3, 1),) forms,
+  # ours is flat, checked by assertCompositionProperty
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(24, 1))
+  assertCompositionProperty(make_layout((4, 3), (3, 1)), make_layout(8, 1))
+  assertCompositionProperty(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
+  assertCompositionProperty(make_layout((4, 6, 8, 10), (2, 3, 5, 7)), make_layout(6, 12))
   echo "  remainder: 12 cases OK"
 
 # ── nested RHS ───────────────────────────────────────────────
@@ -334,6 +392,13 @@ proc runComposeNestedTests =
     let c = compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),)))
     check c.shape, (4, 2), (Int[4], Int[2])
     check c.stride, (1, 16), (Int[1], Int[16])
+  # pycute prints this with a trailing scalar leaf ((2, 2), 2):((2, 16), 1),
+  # ours keeps a 1-tuple leaf ((2, 2), (2,)):((2, 16), (1,))
+  assertCompositionProperty(make_layout(((4, 2),), ((1, 16),)), make_layout((4, 2), (2, 1)))
+  assertCompositionProperty(make_layout((2, 2), (2, 1)), make_layout((2, 2), (2, 1)))
+  assertCompositionProperty(make_layout((4, 8, 2), (1, 4, 32)), make_layout((2, 2, 2), (2, 8, 1)))
+  assertCompositionProperty(make_layout((4, 8, 2), (2, 8, 1)), make_layout((2, 2, 2), (1, 8, 2)))
+  assertCompositionProperty(make_layout((4, 8, 2), (2, 8, 1)), make_layout((4, 2, 2), (2, 8, 1)))
   echo "  nested: 10 cases OK"
 
 # ── negative strides ─────────────────────────────────────────
@@ -362,6 +427,12 @@ proc runComposeNegStrideTests =
     let c = compose(make_layout((4, 4), (-1, 1)), make_layout((2, 4, 2), (1, 4, 2)))
     check c.shape, (2, 4, 2), (Int[2], Int[4], Int[2])
     check c.stride, (-1, 1, -2), (Int[-1], Int[1], Int[-2])
+  assertCompositionProperty(make_layout(4, -1), make_layout(4, 1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, -1))
+  assertCompositionProperty(make_layout(4, -1), make_layout(4, -1))
+  assertCompositionProperty(make_layout(4, 1), make_layout(4, -2))
+  assertCompositionProperty(make_layout((4, 4), (-1, 1)), make_layout(2, 1))
+  assertCompositionProperty(make_layout((4, 4), (-1, 1)), make_layout((2, 4, 2), (1, 4, 2)))
   echo "  negative strides: 6 cases OK"
 
 # ── tiler composition ────────────────────────────────────────
@@ -445,6 +516,16 @@ proc runComposeDynamicTests =
     let c = compose(make_layout((128, 24, 5), (1, 128, 3072)), make_layout(480, 32))
     check c.shape, 480, Int[480]
     check c.stride, 32, Int[32]
+  block:
+    let b = make_layout(4, 1)
+    assertCompositionProperty(make_layout(12, 1), b)
+  block:
+    let a = make_layout(16, 2)
+    let b = make_layout(4, 2)
+    assertCompositionProperty(a, b)
+  assertCompositionProperty(make_layout((12, 3), (1, 24)), make_layout(4, 1))
+  assertCompositionProperty(make_layout((128, 24, 5), (1, 128, 3072)), make_layout(64, 2))
+  assertCompositionProperty(make_layout((128, 24, 5), (1, 128, 3072)), make_layout(480, 32))
   echo "  symbol-bound: 5 cases OK"
 
 # ── zero-stride RHS ──────────────────────────────────────────
@@ -492,4 +573,16 @@ runComposeTilerTests()
 runComposeDynamicTests()
 runComposeZeroStrideTests()
 runComposeSymbolTilerTests()
+
+# ── divisibility rejections ──
+proc runComposeRejectionTests =
+  # pycute raises its divisibility preconditions on these two inputs
+  # and produces nothing, ours and C++ return a layout, checked
+  # against the definition of composition itself: result(c) == a(b(c))
+  # over every coordinate of B.
+  assertCompositionProperty(make_layout((2, 3), (2, 1)), make_layout(6, -1))
+  assertCompositionProperty(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
+  echo "  rejections: 2 cases OK"
+
+runComposeRejectionTests()
 echo "ALL TESTS PASSED"
