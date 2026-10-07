@@ -75,7 +75,7 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
     let crdReachable =
       if strideCrd.kind != caNone and chunkCrd.kind != caNone and
           shapeVal != DynamicSentinel and chunkShapeVal != DynamicSentinel:
-        canMergeCoordStrides(chunkCrd, strideCrd, chunkShapeVal)
+        csCanMerge(chunkCrd, strideCrd, chunkShapeVal)
       else:
         false
     if (shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
@@ -352,6 +352,24 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
   result.add bindSym"complementImpl".newCall(sh, st, bound, newLit(false))
 
 # ═══════════════════════════════════════════════════════════════
+#  layout_add
+# ═══════════════════════════════════════════════════════════════
+
+macro layout_add*[A, B: Layout](a: A, b: B): untyped =
+  ## Layout addition, coordinate-wise: `R(i) == A(i) + B(i)`.
+  ## Supports only same nesting at the moment.
+  result = newStmtList()
+  let (shA, stA) = result.destructureLayout(a)
+  let (_, stB) = result.destructureLayout(b)
+  var builder = TupleBuilderNested.new(1)
+  for (evA, evB) in stA.tupleStream().zip(stB.tupleStream()):
+    builder.onLeaves(evA):
+      builder.append(evA.leaf + evB.leaf)
+  let scalar = not stA.isTupleTy()
+  result.add bindSym"make_layout".newCall(
+    shA, builder.emit(0, emitScalarForSize1 = scalar).resultTuple)
+
+# ═══════════════════════════════════════════════════════════════
 #  compose
 # ═══════════════════════════════════════════════════════════════
 
@@ -369,7 +387,7 @@ macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
   ##     result (2,3):(-2,-1)
   result = newStmtList()
 
-  let (aShape, aStrides) = destructureLayout(result, aLayout)
+  let (aShape, aStrides) = result.destructureLayout(aLayout)
   let shapeLeaves = aShape.tupleFlatten()
   let strideLeaves = aStrides.tupleFlatten()
 
@@ -383,6 +401,17 @@ macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
       # a stride-0 RHS dimension maps every coordinate to offset 0,
       # the pair is the RHS dimension itself, the LHS is untouched
       builder.append(shapeEv.leaf, strideEv.leaf)
+      continue
+    let basisStride = strideEv.leafTy.getCoordStrideDescriptor()
+    if basisStride.kind != caNone:
+      # a basis-stride RHS leaf names LHS modes, each nonzero term scales
+      # its selected stride, the terms sum through the stride algebra
+      var acc: NimNode
+      for (index, scale) in csTerms(basisStride.coeffs):
+        let term = IntCT(scale) * strideLeaves[index].leaf
+        acc = if acc.isNil: term else: acc + term
+      builder.append(shapeEv.leaf,
+        if acc.isNil: IntCT(0) else: acc)
       continue
     if shapeLeaves.len == 1:
       # a 1-leaf profile consumes nothing, the strides multiply, no lets
@@ -470,7 +499,12 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
     composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
 
   let aShapeIsTuple = layoutTypeArgs(a).shapeTy.isTupleTy()
-  if aShapeIsTuple:
+  var bHasBasis = false
+  for ev in layoutTypeArgs(b).strideTy.tupleStream():
+    if ev.kind == kLeaf and ev.leafTy.getCoordStrideDescriptor().kind != caNone:
+      bHasBasis = true
+      break
+  if aShapeIsTuple and not bHasBasis:
     result.add getAst(composeDelegateCoalesced(aShape, aStrides, bShape, bStrides))
   else:
     result.add getAst(composeDelegatePlain(aShape, aStrides, bShape, bStrides))
@@ -1093,7 +1127,7 @@ macro right_inverse*(layout: typed): untyped =
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists
   result = newStmtList()
-  let (sh, st) = destructureLayout(result, layout)
+  let (sh, st) = result.destructureLayout(layout)
   template rightInverseDelegate(sh2, st2) =
     ## Expands the inverse core on the destructured tuples at the use site.
     rightInverseImpl(sh2, st2)
@@ -1177,7 +1211,7 @@ macro left_inverse*(layout: typed): untyped =
   ## - a coalesced Layout over the static-stride gaps
   ## - requires all static strides, compile-time assert
   result = newStmtList()
-  let (sh, st) = destructureLayout(result, layout)
+  let (sh, st) = result.destructureLayout(layout)
   template leftInverseDelegate(sh2, st2) =
     ## Coalesce canonicalizes strides first, the chaining asserts require it.
     evalOnceAs(coalescedLayout, coalesce(make_layout(sh2, st2)))

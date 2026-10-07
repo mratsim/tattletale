@@ -9,6 +9,7 @@ import std/macros
 import std/strutils
 import std/typetraits
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
 #   Coordinate Strides
@@ -32,32 +33,80 @@ func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
   else:
     false
 
-proc unwrapTypedesc(n: NimNode): NimNode =
-  var t = n.getTypeInst
-  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
-    t = t[1]
-  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "CoordStride":
-    return t[1]
-  if t.kind == nnkSym:
-    return t.getImpl[2][1]
-  error("CoordStride: not an CoordStride instantiation: " & t.repr, n)
 
-macro `+`*[A: CoordStride, B: CoordStride](a: typedesc[A], b: typedesc[B]): typedesc =
-  let ta = a.unwrapTypedesc()
-  let tb = b.unwrapTypedesc()
-  if ta.len != tb.len:
-    error("CoordStride +: rank mismatch " & $ta.len & " vs " & $tb.len, b)
-  var sum = nnkTupleConstr.newTree()
-  for i in 0 ..< ta.len:
-    sum.add(newIntLitNode(ta[i].intVal + tb[i].intVal))
-  result = nnkBracketExpr.newTree(bindSym"CoordStride", sum)
+# ═══════════════════════════════════════════════════════════════
+#   NimNode helpers and syntactic sugar
+# ═══════════════════════════════════════════════════════════════
 
-macro `*`*(k: static int, A: typedesc[CoordStride]): typedesc =
-  let ta = A.unwrapTypedesc()
-  var scaled = nnkTupleConstr.newTree()
-  for i in 0 ..< ta.len:
-    scaled.add(newIntLitNode(k * ta[i].intVal))
-  result = nnkBracketExpr.newTree(bindSym"CoordStride", scaled)
+
+proc unwrapTypedesc(n: NimNode): NimNode
+proc csAdd*(ta, tb: NimNode): NimNode {.compileTime.}
+proc csScaleCoeffs*(kv: int, ta: NimNode): NimNode {.compileTime.}
+
+macro `+`*(a, b: typedesc[CoordStride]): typedesc =
+  result = nnkBracketExpr.newTree(
+    bindSym"CoordStride", csAdd(a.unwrapTypedesc(), b.unwrapTypedesc()))
+
+macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
+  result = nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", csAdd(a.getTypeInst[1], b.getTypeInst[1])))
+
+macro `+`*(A: typedesc[CoordStride], k: typed): typedesc =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
+  result = nnkBracketExpr.newTree(bindSym"CoordStride",
+    csAdd(A.unwrapTypedesc(), nnkTupleConstr.newTree(newIntLitNode(kv))))
+
+macro `+`*(k: typed, A: typedesc[CoordStride]): typedesc =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
+  result = nnkBracketExpr.newTree(bindSym"CoordStride",
+    csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), A.unwrapTypedesc()))
+
+macro `*`*(k: typed, A: typedesc[CoordStride]): typedesc =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride *: cannot scale by a runtime value", k)
+  result = nnkBracketExpr.newTree(bindSym"CoordStride", csScaleCoeffs(kv, A.unwrapTypedesc()))
+
+macro `*`*[A: CoordStride](a: A, k: typed): untyped =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride *: cannot scale by a runtime value", k)
+  result = nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
+
+macro `+`*[A: CoordStride](a: A, k: typed): untyped =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
+  result = nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride",
+    csAdd(a.getTypeInst[1], nnkTupleConstr.newTree(newIntLitNode(kv)))))
+
+macro `+`*[A: CoordStride](k: typed, a: A): untyped =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
+  result = nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride",
+    csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), a.getTypeInst[1])))
+
+macro `*`*[A: CoordStride](k: typed, a: A): untyped =
+  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
+           else: k.getTypeInst().getStaticInt()
+  if kv == DynamicSentinel:
+    error("CoordStride *: cannot scale by a runtime value", k)
+  result = nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
 
 template `*`*(A: typedesc[CoordStride], k: static int): typedesc =
   k * A
@@ -232,25 +281,25 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compile
   if nzCount == 0:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
   elif nzCount == 1:
-    CoordStrideDescriptor(kind: caSingle, path: nzPath, scale: nzValue)
+    CoordStrideDescriptor(kind: caSingle, path: nzPath, scale: nzValue, coeffs: coeffs)
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
-proc scaledEq(a, b: NimNode, s: int): bool {.compileTime.} =
+proc csScaledEq(a, b: NimNode, s: int): bool {.compileTime.} =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
   ## false on any structural mismatch.
   if a.kind in {nnkTupleConstr, nnkPar} and b.kind in {nnkTupleConstr, nnkPar}:
     if a.len != b.len:
       return false
     for i in 0 ..< a.len:
-      if not scaledEq(a[i], b[i], s):
+      if not csScaledEq(a[i], b[i], s):
         return false
     return true
   if a.kind in {nnkTupleConstr, nnkPar} or b.kind in {nnkTupleConstr, nnkPar}:
     return false
   b.intVal == s * a.intVal
 
-func canMergeCoordStrides*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
+func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
   ## Merge test for adjacent stride leaves, symbolic `s * d_a == d_b`:
   ##
   ##   single-term:  path_a == path_b  and  scale_b == s * scale_a
@@ -265,4 +314,47 @@ func canMergeCoordStrides*(a, b: CoordStrideDescriptor, s: int): bool {.compileT
   of caSingle:
     b.kind == caSingle and a.path == b.path and b.scale == s * a.scale
   of caMulti:
-    b.kind == caMulti and scaledEq(a.coeffs, b.coeffs, s)
+    b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
+
+proc csTerms*(coeffs: NimNode): seq[tuple[index, scale: int]] {.compileTime.} =
+  ## Nonzero (index, scale) pairs of a flat coefficient tuple:
+  ## csTerms((0, 4, 2, 0)) == [(1, 4), (2, 2)].
+  for i in 0 ..< coeffs.len:
+    let coeff = coeffs[i]
+    if coeff.kind in {nnkTupleConstr, nnkPar}:
+      error "csTerms: coefficient paths nested deeper than one level" &
+        " are not supported"
+    if coeff.intVal != 0:
+      result.add (i, int(coeff.intVal))
+
+proc csScaleCoeffs(kv: int, ta: NimNode): NimNode {.compileTime.} =
+  result = nnkTupleConstr.newTree()
+  for i in 0 ..< ta.len:
+    result.add(newIntLitNode(kv * ta[i].intVal))
+
+proc csAdd(ta, tb: NimNode): NimNode {.compileTime.} =
+  # Elementwise addition of CoordStride AST
+  let taIsTuple = ta.kind in {nnkTupleConstr, nnkPar}
+  let tbIsTuple = tb.kind in {nnkTupleConstr, nnkPar}
+  if not taIsTuple and not tbIsTuple:
+    return newIntLitNode(ta.intVal + tb.intVal)
+  if not taIsTuple or not tbIsTuple:
+    let (tupleSide, scalarSide) = if taIsTuple: (ta, tb) else: (tb, ta)
+    doAssert scalarSide.intVal == 0,
+      "CoordStride +: a nonzero scalar cannot add a tuple"
+    return tupleSide
+  result = nnkTupleConstr.newTree()
+  for i in 0 ..< max(ta.len, tb.len):
+    let va = if i < ta.len: ta[i] else: newIntLitNode(0)
+    let vb = if i < tb.len: tb[i] else: newIntLitNode(0)
+    result.add csAdd(va, vb)
+
+proc unwrapTypedesc(n: NimNode): NimNode =
+  var t = n.getTypeInst
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
+    t = t[1]
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "CoordStride":
+    return t[1]
+  if t.kind == nnkSym:
+    return t.getImpl[2][1]
+  error("CoordStride: not an CoordStride instantiation: " & t.repr, n)
