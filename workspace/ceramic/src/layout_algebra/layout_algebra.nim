@@ -16,6 +16,7 @@ import ./layouts_unsanctioned_helpers
 import ./layouts
 import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
+import ./ism_coord_strides
 import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
@@ -41,6 +42,7 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
   var builder = TupleBuilderFlat.new(2)
   var chunkShape, chunkStride: NimNode
   var chunkShapeVal, chunkStrideVal: int
+  var chunkCrd: CoordStrideDescriptor
   var chunkVerbatim = true
   # the last-leaf state feeds the preserveTrailing marker hierUnzipAst
   # and the all-size-1 collapse (pycute keeps the last size-1 leaf's stride)
@@ -54,6 +56,7 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
       builder.markNonVerbatim()
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
+    let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
     lastShapeVal = shapeVal
     lastStrideVal = strideVal
     lastStride = strideEv.leaf
@@ -67,10 +70,17 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
       chunkShapeVal = shapeVal
       chunkStride = strideEv.leaf
       chunkStrideVal = strideVal
+      chunkCrd = strideCrd
       continue
-    if shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
+    let crdReachable =
+      if strideCrd.kind != caNone and chunkCrd.kind != caNone and
+          shapeVal != DynamicSentinel and chunkShapeVal != DynamicSentinel:
+        canMergeCoordStrides(chunkCrd, strideCrd, chunkShapeVal)
+      else:
+        false
+    if (shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
         chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
-        chunkShapeVal * chunkStrideVal == strideVal:
+        chunkShapeVal * chunkStrideVal == strideVal) or crdReachable:
       # the chain's span reaches this dimension's stride, merge frontward
       chunkShapeVal *= shapeVal
       chunkShape = IntCT(chunkShapeVal)
@@ -82,6 +92,7 @@ macro coalesceImpl(originalLayout, sh, st: typed, preserveTrailing: static bool 
     chunkShapeVal = shapeVal
     chunkStride = strideEv.leaf
     chunkStrideVal = strideVal
+    chunkCrd = strideCrd
     chunkVerbatim = true
 
   if chunkShape.isNil:

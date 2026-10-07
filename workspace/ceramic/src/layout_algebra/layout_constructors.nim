@@ -43,12 +43,18 @@ template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = Layou
         stride: strideVal
       )
 
-template make_layout*[ShT, StT: IntOrIntTuple](shapeArg: ShT; strideArg: StT): auto =
-  ## Make a Layout from explicit shape and stride.
-  Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
-    shape: makeIntTuple(shapeArg),
-    stride: makeIntTuple(strideArg)
-  )
+template make_layout*[ShT, StT: IntOrIntTuple or CoordStride](shapeArg: ShT, strideArg: StT): auto =
+  ## Make a Layout from explicit shape and stride
+  when StT is CoordStride:
+    Layout[typeof(makeIntTuple(shapeArg)), StT](
+      shape: makeIntTuple(shapeArg),
+      stride: strideArg
+    )
+  else:
+    Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
+      shape: makeIntTuple(shapeArg),
+      stride: makeIntTuple(strideArg)
+    )
 
 # ═══════════════════════════════════════════════════════════════
 #  make_ordered_layout, strides following a dimension ordering
