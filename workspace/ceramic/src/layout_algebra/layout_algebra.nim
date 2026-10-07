@@ -38,99 +38,105 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce
 # ═══════════════════════════════════════════════════════════════
 
-macro coalesceImpl(sh, st: typed, preserveTrailing: static bool = false): untyped =
-  var builder = TupleBuilderFlat.new(2)
-  var chunkShape, chunkStride: NimNode
-  var chunkShapeVal, chunkStrideVal: int
-  var chunkCrd: CoordStrideDescriptor
-  # the last-leaf state feeds the preserveTrailing marker hierUnzipAst
-  # and the all-size-1 collapse (pycute keeps the last size-1 leaf's stride)
-  var lastShapeVal, lastStrideVal: int
-  var lastStride: NimNode
-  for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
-    if shapeEv.kind != kLeaf:
-      continue
-    let shapeVal = shapeEv.leafTy.getStaticInt()
-    let strideVal = strideEv.leafTy.getStaticInt()
-    let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
-    lastShapeVal = shapeVal
-    lastStrideVal = strideVal
-    lastStride = strideEv.leaf
-    if shapeVal == 1:
-      continue
-    if chunkShape.isNil:
-      # a chain opens on the first live leaf
-      chunkShape = shapeEv.leaf
-      chunkShapeVal = shapeVal
-      chunkStride = strideEv.leaf
-      chunkStrideVal = strideVal
-      chunkCrd = strideCrd
-      continue
-    let crdReachable =
-      if strideCrd.kind != caNone and chunkCrd.kind != caNone and
-          shapeVal != DynamicSentinel and chunkShapeVal != DynamicSentinel:
-        csCanMerge(chunkCrd, strideCrd, chunkShapeVal)
-      else:
-        false
-    if (shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
-        chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
-        chunkShapeVal * chunkStrideVal == strideVal) or crdReachable:
-      # the chain's span reaches this dimension's stride, merge frontward
-      chunkShapeVal *= shapeVal
-      chunkShape = IntCT(chunkShapeVal)
-      continue
-    # the chain stops short of this dimension, flush and open the next chain
-    builder.append(chunkShape, chunkStride)
-    chunkShape = shapeEv.leaf
-    chunkShapeVal = shapeVal
-    chunkStride = strideEv.leaf
-    chunkStrideVal = strideVal
-    chunkCrd = strideCrd
+type CoalesceAcc = object
+  ## State of one coalesced chain.
+  ## - the chain: consecutive dimensions merged into a single dimension
+  ##   when one dimension's shape times the chain's stride reaches
+  ##   the next dimension's stride
+  ## - the chain's shape is the product of the merged shapes
+  ## - the chain's stride is the first merged dimension's own stride
+  shapeProduct: int
+  firstShape, firstStride: NimNode
+  firstStrideCtValue: int
+  firstCoordStride: CoordStrideDescriptor
+  lastShapeCtValue, lastStrideCtValue: int
+  lastStride: NimNode
+  builder: TupleBuilderFlat
 
-  if chunkShape.isNil:
-    # every leaf is size-1: pycute keeps the last size-1 leaf as (1):(lastStride)
-    # (its fold pops a size-1 mode only when a newer leaf arrives), a lone
-    # (1):(0) sentinel only when the layout had no leaves at all
-    if preserveTrailing:
-      builder.append(IntCT(DynamicSentinel), lastStride)
-    elif lastStride != nil:
-      builder.append(IntCT(1), lastStride)
+proc init(acc: var CoalesceAcc) =
+  acc.builder = TupleBuilderFlat.new(2)
+
+proc update(acc: var CoalesceAcc, shapeEv, strideEv: TupleStreamEvent) =
+  if shapeEv.kind != kLeaf:
+    return
+  let shapeVal = shapeEv.leafTy.getStaticInt()
+  let strideVal = strideEv.leafTy.getStaticInt()
+  let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
+  acc.lastShapeCtValue = shapeVal
+  acc.lastStrideCtValue = strideVal
+  acc.lastStride = strideEv.leaf
+
+  if shapeVal == 1:
+    return
+
+  if acc.firstShape.isNil:
+    acc.firstShape = shapeEv.leaf
+    acc.shapeProduct = shapeVal
+    acc.firstStride = strideEv.leaf
+    acc.firstStrideCtValue = strideVal
+    acc.firstCoordStride = strideCrd
+    return
+  let crdReachable =
+    if strideCrd.kind != caNone and acc.firstCoordStride.kind != caNone and
+        shapeVal != DynamicSentinel and acc.shapeProduct != DynamicSentinel:
+      csCanMerge(acc.firstCoordStride, strideCrd, acc.shapeProduct)
     else:
-      builder.append(IntCT(1), IntCT(0))
-  else:
-    builder.append(chunkShape, chunkStride)
-    if preserveTrailing and lastShapeVal == 1 and not (
-        chunkShapeVal != DynamicSentinel and chunkStrideVal != DynamicSentinel and
-        lastStrideVal != DynamicSentinel and
-        chunkShapeVal * chunkStrideVal == lastStrideVal):
-      # the trailing size-1 marker survives a chain that stops short of it
-      builder.append(IntCT(DynamicSentinel), lastStride)
-  result = builder.emitLayout()
+      false
+  if (shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
+      acc.shapeProduct != DynamicSentinel and acc.firstStrideCtValue != DynamicSentinel and
+      acc.shapeProduct * acc.firstStrideCtValue == strideVal) or crdReachable:
+    # the chain's span reaches this dimension's stride, merge frontward
+    acc.shapeProduct *= shapeVal
+    acc.firstShape = IntCT(acc.shapeProduct)
+    return
 
-macro coalesce*(layout: Layout, preserveTrailing: static bool = false): untyped =
+  # the chain stops short of this dimension, flush and open the next chain
+  acc.builder.append(acc.firstShape, acc.firstStride)
+  acc.firstShape = shapeEv.leaf
+  acc.shapeProduct = shapeVal
+  acc.firstStride = strideEv.leaf
+  acc.firstStrideCtValue = strideVal
+  acc.firstCoordStride = strideCrd
+
+proc finish(acc: var CoalesceAcc, preserveTrailing: bool): NimNode =
+  if acc.firstShape.isNil:
+    if preserveTrailing:
+      acc.builder.append(IntCT(DynamicSentinel), acc.lastStride)
+    elif acc.lastStride != nil:
+      acc.builder.append(IntCT(1), acc.lastStride)
+    else:
+      acc.builder.append(IntCT(1), IntCT(0))
+  else:
+    acc.builder.append(acc.firstShape, acc.firstStride)
+    if preserveTrailing and acc.lastShapeCtValue == 1 and not (
+        acc.shapeProduct != DynamicSentinel and acc.firstStrideCtValue != DynamicSentinel and
+        acc.lastStrideCtValue != DynamicSentinel and
+        acc.shapeProduct * acc.firstStrideCtValue == acc.lastStrideCtValue):
+      # the trailing size-1 marker survives when the chain stops short of it
+      acc.builder.append(IntCT(DynamicSentinel), acc.lastStride)
+  result = acc.builder.emitLayout()
+
+macro coalesceImpl(sh, st: typed, preserveTrailing: static bool = false): untyped =
+  var acc: CoalesceAcc
+  acc.init()
+  for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
+    acc.update(shapeEv, strideEv)
+  result = acc.finish(preserveTrailing)
+
+macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
   ##
-  ## Say you index a tensor dimension by dimension and want
-  ## one flat counter instead: dimensions whose strides run
-  ## contiguously merge, the merged chain indexes by one counter.
-  ##
-  ## Merge a layout's flat (shape, stride) leaf pairs into contiguous chains,
-  ## one pure `make_layout` hierUnzipAst:
-  ## - size-1 dimensions drop, the frontmost one opens no chain
-  ## - a dimension joins the chain in front of it when the chain's span
-  ##   reaches the dimension's stride, the merged chain keeps the front
-  ##   dimension's own stride
-  ## - preserveTrailing keeps a trailing size-1 dimension as the dynamic
-  ##   `Int[DynamicSentinel]` marker
+  ## - size-1 dimensions are dropped
+  ## - a dimension merges into the chain when the chain's span
+  ##   (shape times stride) equals that dimension's stride.
   ##
   ##   (2, 4):(1, 2)  folds to (8):(1), the (2,1) chain's span 2
   ##                  reaches the second dimension's stride 2
   ##   (4, 1):(1, 0)  folds to (4):(1), the trailing broadcast drops,
   ##                  a chain reaching its stride 0 absorbs it
-  ##   (4, 1):(1, 0)  with preserveTrailing stays (4, Int[DynamicSentinel]):(1, 0)
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-  result.add bindSym"coalesceImpl".newCall(sh, st, newLit(preserveTrailing))
+  result.add bindSym"coalesceImpl".newCall(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
 #  complement
@@ -477,7 +483,7 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   let (bShape, bStrides) = result.destructureLayout(b)
 
   template composeDelegateCoalesced(aShape2, aStrides2, bShape2, bStrides2) =
-    composeImpl(coalesce(make_layout(aShape2, aStrides2), true), bShape2, bStrides2)
+    composeImpl(coalesceImpl(aShape2, aStrides2, preserveTrailing = true), bShape2, bStrides2)
   template composeDelegatePlain(aShape2, aStrides2, bShape2, bStrides2) =
     composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
 

@@ -21,9 +21,9 @@ template check(got: untyped, expected: typed, expectedType: typedesc) =
     else:
       {.error: "[ttt] Please check constant-folding: type is " & $TmpType & ", expected " & $expectedType.}
 
-proc assertNestedCoalesceIsAstNoop(L: Layout, preserveTrailing: static bool = false) =
+proc assertNestedCoalesceIsAstNoop(L: Layout) =
   ## Coalescing an already-coalesced layout is a no-op.
-  doAssert coalesce(L, preserveTrailing) === coalesce(coalesce(L, preserveTrailing), preserveTrailing)
+  doAssert coalesce(L) === coalesce(coalesce(L))
 
 
 # ── Scalar rank-1 ────────────────────────────────────────────
@@ -238,24 +238,6 @@ proc runCoalesceRuntimeLayoutTests =
     check rs.stride, 1, Int[1]
   echo "  runtime layouts: 3 cases OK"
 
-# ── coalesce preserveTrailing ─────────────────────────────────
-proc runCoalescePreserveTrailingTests =
-  ## preserveTrailing keeps a trailing size-1 dimension as an Int[DynamicSentinel] marker
-  ## unless the chain absorbs it.
-  block:
-    let r = coalesce(make_layout((2, 1), (1, 3)), true)
-    check r.shape, (2, DynamicSentinel), (Int[2], Int[DynamicSentinel])
-    check r.stride, (1, 3), (Int[1], Int[3])
-  block:
-    let r = coalesce(make_layout((4, 1), (1, 4)), true)
-    check r.shape, 4, Int[4]
-    check r.stride, 1, Int[1]
-  block:
-    let r = coalesce(make_layout((1, 1), (0, 0)), true)
-    check r.shape, DynamicSentinel, Int[DynamicSentinel]
-    check r.stride, 0, Int[0]
-  echo "  preserveTrailing: 3 cases OK"
-
 # ── all-size-1 layouts ────────────────────────────────────────
 proc runCoalesceOneLeafTests =
   # an all-size-1 layout keeps its last stride, coalesce(1:4) == 1:4
@@ -288,7 +270,7 @@ proc runCoalesceIdentityTests =
   block:
     assertNestedCoalesceIsAstNoop(make_layout((4, 1), (1, 4)))
   block:
-    assertNestedCoalesceIsAstNoop(make_layout((2, 1), (1, 3)), true)
+    assertNestedCoalesceIsAstNoop(make_layout((2, 1), (1, 3)))
   block:
     let r = coalesce(make_layout((2, 4), (1, 2)))
     check r.shape, 8, Int[8]
@@ -405,7 +387,6 @@ proc runCoalesceTests =
   runCoalesceConstantFixtureTests()
   runCoalesceTrailingSizeOneTests()
   runCoalesceRuntimeLayoutTests()
-  runCoalescePreserveTrailingTests()
   runCoalesceOneLeafTests()
   runCoalesceIdentityTests()
   echo "\n── Coordinate strides ──"
