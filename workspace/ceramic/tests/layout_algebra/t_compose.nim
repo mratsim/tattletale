@@ -295,10 +295,10 @@ proc runComposeRemainderTests =
     check c.shape, (4, 2), (Int[4], Int[2])
     check c.stride, (3, 1), (Int[3], Int[1])
   block:
-    # a trailing size-1 stride-0 dimension survives in the shape
+    # coalesce drops trailing size-1 stride-0 modes
     let c = compose(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
-    check c.shape, (4, 3, 2), (Int[4], Int[3], Int[2])
-    check c.stride, (3, 1, 0), (Int[3], Int[1], Int[0])
+    check c.shape, (4, 6), (Int[4], Int[6])
+    check c.stride, (3, 1), (Int[3], Int[1])
   block:
     let c = compose(make_layout((4, 3, 1), (3, 1, 0)), make_layout(4, 1))
     check c.shape, 4, Int[4]

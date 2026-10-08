@@ -417,26 +417,54 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 macro stridedDiv(strided: Layout, M: typed): untyped =
   ## A' / M, the layout of every d-th element of A'
   ##
-  ## Every mode emits the same expressions, with `pᵢ` the running shape-prefix product:
+  ## Every mode follows the same rule, with `pᵢ` the running shape-prefix product:
   ##
-  ##     qᵢ = max(1, M div pᵢ)
+  ##     qᵢ = M div pᵢ, 1 when exhausted (the mode passes through)
   ##     strideᵢ = qᵢ * dᵢ
-  ##     shapeᵢ = max(1, sᵢ div qᵢ)
+  ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
+  ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
+  ##            = sᵢ             otherwise, the remainder is trimmed by % N
+  ##
+  ## Statically known modes are computed here, dynamic modes emit the
+  ## rule as plain int arithmetic for the compiler to fold downstream.
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
   macro stridedDivImpl(sh, st, M: typed): untyped =
     var shLeaves, stLeaves: seq[NimNode]
     var prefix = IntCT(1)
+    var prefixVal = 1
+    let mVal = M.getStaticInt()
     for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
       if shapeEv.kind != kLeaf:
         continue
       let shapeDim = shapeEv.leaf
       let strideDim = strideEv.leaf
-      let q = quote do: max(1, `M` div `prefix`)
-      stLeaves.add quote do: `q` * `strideDim`
-      shLeaves.add quote do: max(1, `shapeDim` div `q`)
-      prefix = quote do: `prefix` * `shapeDim`
+      let shapeVal = shapeDim.getStaticInt()
+      if mVal != DynamicSentinel and shapeVal != DynamicSentinel and
+          prefixVal != DynamicSentinel:
+        # static mode, computed here
+        var q = mVal div prefixVal
+        if q == 0:
+          q = 1
+        let shapeD = if q mod shapeVal == 0: 1
+                     elif q >= 1 and shapeVal mod q == 0: shapeVal div q
+                     else: shapeVal
+        stLeaves.add quote do: Int[`q`]() * `strideDim`
+        shLeaves.add IntCT(shapeD)
+        prefixVal *= shapeVal
+        prefix = IntCT(prefixVal)
+      else:
+        # dynamic mode, the rule as plain int arithmetic
+        let q = quote do:
+          (if `M` div `prefix` === 0: 1 else: toInt(`M` div `prefix`))
+        stLeaves.add quote do: `q` * `strideDim`
+        shLeaves.add quote do:
+          (if `q` mod `shapeDim` === 0: 1
+           elif `q` >= 1 and `shapeDim` mod `q` === 0: toInt(`shapeDim` div `q`)
+           else: toInt(`shapeDim`))
+        prefix = quote do: `prefix` * `shapeDim`
+        prefixVal = DynamicSentinel
     result = newStmtList()
     result.add bindSym"make_layout".newCall(
 
@@ -448,9 +476,10 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   ##
   ##     shapeᵢ = min(sᵢ, max(1, N div pᵢ))
   ##
-  ## The last mode gets the multiplied by the remainder
+  ## The last mode carries the running quotient, past-end extensions
+  ## included, truncation decays to size-1 modes
   ##
-  ##     shape_last = max(min(s, q), s * (q div s)),  q = N div p
+  ##     shape_last = max(1, N div p_last)
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
@@ -468,8 +497,7 @@ macro stridedMod(strided: Layout, N: typed): untyped =
         shLeaves.add quote do: min(`shapeDim`, max(1, `N` div `prefix`))
       else:
         let q = quote do: `N` div `prefix`
-        shLeaves.add quote do: max(1, max(min(`shapeDim`, `q`),
-          `shapeDim` * (`q` div `shapeDim`)))
+        shLeaves.add quote do: max(1, `q`)
       stLeaves.add mode.strideDim
       prefix = quote do: `prefix` * `shapeDim`
     result = newStmtList()
@@ -566,25 +594,43 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
     return
   # tuple tiler pairs each tiler leaf with the next A mode's stride,
   # extra A modes are dropped, extra tiler leaves are an error
+  # a `_` tiler leaf passes the whole A mode through, shape and stride,
+  # a Layout tiler leaf composes as the (shape, stride) atom it spells
+  proc isUnderscore(n: NimNode): bool {.compileTime.} =
+    n.kind in {nnkSym, nnkIdent} and $n == "_"
+  proc isLayoutTy(n: NimNode): bool {.compileTime.} =
+    let ty = n.getTypeInst()
+    (ty.kind == nnkBracketExpr and ty[0].eqIdent("Layout")) or
+      (ty.kind == nnkSym and $ty == "Layout")
   var tilerLeaves: seq[NimNode]
   for tEv in tiler.tupleDimsStream():
     let tLeaf = tEv.leaf
-    if tLeaf.getTypeInst().isTupleTy():
+    if not isUnderscore(tLeaf) and not isLayoutTy(tLeaf) and
+        tLeaf.getTypeInst().isTupleTy():
       error("nested tiler entries are not supported", tLeaf)
     tilerLeaves.add tLeaf
   var bSh: seq[NimNode]
   var bSt: seq[NimNode]
   var ti = 0
-  if aStride.getTypeInst().isTupleTy():
-    for stEv in aStride.tupleDimsStream():
+  proc tilerMode(stmts: var NimNode, tLeaf, aShLeaf, aStLeaf: NimNode) {.compileTime.} =
+    if isUnderscore(tLeaf):
+      bSh.add aShLeaf
+      bSt.add aStLeaf
+    elif isLayoutTy(tLeaf):
+      let (lSh, lSt) = stmts.destructureLayout(tLeaf)
+      bSh.add lSh
+      bSt.add lSt
+    else:
+      bSh.add tLeaf
+      bSt.add aStLeaf
+  if aShape.getTypeInst().isTupleTy():
+    for (shEv, stEv) in aShape.tupleDimsStream().zip(aStride.tupleDimsStream()):
       if ti >= tilerLeaves.len:
         break
-      bSh.add tilerLeaves[ti]
-      bSt.add stEv.leaf
+      result.tilerMode(tilerLeaves[ti], shEv.leaf, stEv.leaf)
       inc ti
   elif tilerLeaves.len > 0:
-    bSh.add tilerLeaves[0]
-    bSt.add aStride
+    result.tilerMode(tilerLeaves[0], aShape, aStride)
     ti = 1
   if ti < tilerLeaves.len:
     error("tiler has more modes than the layout", tilerLeaves[ti])
