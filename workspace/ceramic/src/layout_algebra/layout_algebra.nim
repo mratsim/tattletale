@@ -413,6 +413,42 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #             elif r != 0: the shape divisibility condition fails
 #             else: keep sᵢ
 
+proc stridedDiv(aShape, aStride: NimNode, M: NimNode): tuple[shape, stride: NimNode] {.compileTime.} =
+  ## A' / M, the layout of every d-th element of A'
+  ##
+  ## Every mode emits the same expressions, with `pᵢ` the running shape-prefix product:
+  ##
+  ##     qᵢ = max(1, M div pᵢ)
+  ##     strideᵢ = qᵢ * dᵢ
+  ##     shapeᵢ = max(1, sᵢ div qᵢ)
+  var shLeaves, stLeaves: seq[NimNode]
+  var prefix = IntCT(1)
+  for (shapeEv, strideEv) in aShape.tupleStream().zip(aStride.tupleStream()):
+    if shapeEv.kind != kLeaf:
+      continue
+    let shapeDim = shapeEv.leaf
+    let strideDim = strideEv.leaf
+    let q = quote do: `M` div `prefix`
+    stLeaves.add quote do: `q` * `strideDim`
+    shLeaves.add quote do: max(1, `shapeDim` div `q`)
+    prefix = quote do: `prefix` * `shapeDim`
+  return (nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+
+proc stridedMod(aShape, aStride: NimNode, N: NimNode): tuple[shape, stride: NimNode] {.compileTime.} =
+  ## Strided % N on the first N elements of Strided
+  ##
+  ##     shapeᵢ = min(sᵢ, max(1, N div pᵢ))
+  var shLeaves, stLeaves: seq[NimNode]
+  var prefix = IntCT(1)
+  for (shapeEv, strideEv) in aShape.tupleStream().zip(aStride.tupleStream()):
+    if shapeEv.kind != kLeaf:
+      continue
+    let shapeDim = shapeEv.leaf
+    shLeaves.add quote do: min(`shapeDim`, max(1, `N` div `prefix`))
+    stLeaves.add strideEv.leaf
+    prefix = quote do: `prefix` * `shapeDim`
+  result = (nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+
 macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
   ##
