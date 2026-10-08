@@ -13,13 +13,13 @@ import ./layouts_unsanctioned_helpers
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
-func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil): NimNode {.compileTime.} =
+func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil, emitScalarForSize1 = true): NimNode {.compileTime.} =
   ## Emit a flat layout from an arity-2 tuple builder.
   ## If no `ctor` is passed, "make_layout(accumulated_shape, accumulated_stride)" will be emitted
   ##
   ## An empty builder emits make_layout(1, 0).
-  let sh = tb.emit(0, emitScalarForSize1 = true)
-  let st = tb.emit(1, emitScalarForSize1 = true)
+  let sh = tb.emit(0, emitScalarForSize1 = emitScalarForSize1)
+  let st = tb.emit(1, emitScalarForSize1 = emitScalarForSize1)
   if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
     ident"make_layout".newCall(IntCT(1), newLit(0))
   elif ctor.isNil():
