@@ -528,7 +528,7 @@ proc runComposeZeroStrideTests =
   block:
     let lhs = make_layout((2, 3), (3, 1))
     let permuted = logical_divide(lhs, right_inverse(lhs))
-    check size(make_layout(permuted.shape[0], permuted.stride[0])), 6, int
+    check size(make_layout(permuted.shape[0], permuted.stride[0])), 6, Int[6]
     check permuted.stride[1], Int[3](), Int[3]
   echo "  zero-stride: 2 cases OK"
 
