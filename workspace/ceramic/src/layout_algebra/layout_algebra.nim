@@ -493,17 +493,20 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
     result.add bindSym"make_layout".newCall(bShape, IntCT(0))
     return
   if bShape.getTypeInst().isTupleTy():
-    let aPrime = genSym(nskLet, "aPrime")
-    let (aShp, aStp) = result.destructureLayout(
-      quote do: coalesceImpl(`aShape`, `aStride`)
-    )
+    result.add quote do:
+      evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
+    template composeMode(bShape, bStride: typed): untyped =
+      composeImpl(aPrime.shape, aPrime.stride, bShape, bStride)
     var builder = TupleBuilderFlat.new(2)
-    for (bShape, bStride) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
-      builder.onLeaves(bShape):
-        let (st, sh) = result.destructureLayout(
-          quote do: composeImpl(`aShp`, `aStp`, `bShape`, `bStride`)
-        )
-        builder.append(st, sh)
+    for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
+      let bModeShape = shEv.leaf
+      let bModeStride = stEv.leaf
+      # modeAst is emitted twice. As a expression of integers it should be easily constant-folded
+      # and common subexpression eliminated
+      let modeAst = getAst(composeMode(bModeShape, bModeStride))
+      builder.append(
+        modeAst.newDotExpr(ident"shape"),
+        modeAst.newDotExpr(ident"stride"))
     result.add builder.emitLayout()
   else:
     let nVal = bShape.getStaticInt()

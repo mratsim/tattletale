@@ -65,15 +65,20 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
   ## Pattern:
   ##   - a one-line template and getAst delegate the (shape, stride) pair to a typed macro, right after the call
   ##   - the Impl walks the pair's leaves with tupleStream, `leafTy` carries each leaf's type
+  ##   - an unexpanded make_layout(shape, stride) call, say a getAst expansion, strips to its base tuple arguments, no type needed
   ## Precondition:
-  ##   - layoutAst semantically type-checks as a Layout
+  ##   - layoutAst semantically type-checks as a Layout, unless it is an unexpanded make_layout(shape, stride) call
+  var inner = layoutAst
+  while inner.kind in {nnkStmtList, nnkStmtListExpr, nnkBlockExpr}:
+    inner = inner[^1]
+  if inner.kind == nnkCall and inner[0].eqIdent("make_layout") and inner.len == 3:
+    result.shape = inner[1]
+    result.strides = inner[2]
+    return
   let typ = layoutAst.getTypeInst()
   let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
   doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
     "destructureLayout: expected a Layout, got " & typ.repr
-  var inner = layoutAst
-  while inner.kind in {nnkStmtListExpr, nnkBlockExpr}:
-    inner = inner[^1]
   if inner.kind == nnkObjConstr:
     for field in inner:
       if field.kind == nnkExprColonExpr:
