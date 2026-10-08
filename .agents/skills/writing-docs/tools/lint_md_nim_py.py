@@ -3538,6 +3538,9 @@ RANK_CALL_RE = re.compile(r"(?<![\w.\"'`])rank\s*\(")
 RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
 TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
 RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
+TOINT_CALL_RE = re.compile(r"(?<![\w.\"'`])toInt\s*\(")
+BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
+                      "int_tuples_datatypes.nim")
 BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
                      "int_tuples_datatypes.nim")
 
@@ -3640,6 +3643,13 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             continue
         prev = lines[i - 1] if i > 0 else ""
         allowed = "rank-allow" in raw or "rank-allow" in prev
+        if TOINT_CALL_RE.search(code) and path.replace("\\", "/").endswith(BLESSED_TOINT_FILE):
+            continue
+        if TOINT_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "toint-call-syntax",
+                "toInt reads as a prefix call here, write x.toInt() or "
+                "mark # toint-allow"))
         if TUPLELEN_RE.search(code) and not allowed:
             findings.append(Finding(
                 path, i + 1, "tuplelen-rank",
