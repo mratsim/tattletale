@@ -433,7 +433,7 @@ proc runTypeTests =
 proc testColMajor2D =
   echo "--- 1. make_tensor_like col-major 2D (8,8):(1,8) ---"
   let layout = make_layout((8, 8))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 
@@ -448,7 +448,7 @@ proc testColMajor2D =
 proc testRowMajor2D =
   echo "--- 2. make_tensor_like row-major 2D (8,8):(8,1) ---"
   let layout = make_layout((8, 8), (8, 1))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 
@@ -463,7 +463,7 @@ proc testRowMajor2D =
 proc testNonUnitStrides =
   echo "--- 3. make_tensor_like non-unit strides (4,6):(2,12) ---"
   let layout = make_layout((4, 6), (2, 12))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<24: t(i) = float32(i)
 
@@ -480,7 +480,7 @@ proc testNonUnitStrides =
 proc testRank1 =
   echo "--- 4. make_tensor_like rank-1 (32,):(1,) ---"
   let layout = make_layout((32,))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<32: t(i) = float32(i)
 
@@ -495,7 +495,7 @@ proc testRank1 =
 proc testRank3ColMajor =
   echo "--- 5. make_tensor_like rank-3 col-major (4,4,4):(1,4,16) ---"
   let layout = make_layout((4, 4, 4))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 
@@ -510,7 +510,7 @@ proc testRank3ColMajor =
 proc testRank3RowMajor =
   echo "--- 6. make_tensor_like rank-3 row-major (4,4,4):(16,4,1) ---"
   let layout = make_layout((4, 4, 4), (16, 4, 1))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 
@@ -525,7 +525,7 @@ proc testRank3RowMajor =
 proc testRank3MixedOrder =
   echo "--- 7. make_tensor_like rank-3 mixed strides (4,4,4):(4,1,16) ---"
   let layout = make_layout((4, 4, 4), (4, 1, 16))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 
@@ -541,7 +541,7 @@ proc testRank3MixedOrder =
 proc test3D_MidMajor =
   echo "--- 7b. make_tensor_like 3D middle-major (3,4,5):(2,20,5) ---"
   let layout = make_layout((3, 4, 5), (2, 20, 5))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<60: t(i) = float32(i)
 
@@ -558,7 +558,7 @@ proc test3D_MidMajor =
 proc test4DColMajor =
   echo "--- 8. make_tensor_like 4D (2,3,4,5):(1,2,6,24) ---"
   let layout = make_layout((2, 3, 4, 5))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<120: t(i) = float32(i)
 
@@ -573,7 +573,7 @@ proc test4DColMajor =
 proc test4DRowMajor =
   echo "--- 9. make_tensor_like 4D (2,3,4,5):(24,12,4,1) ---"
   let layout = make_layout((2, 3, 4, 5), (24, 12, 4, 1))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<120: t(i) = float32(i)
 
@@ -590,7 +590,7 @@ proc test4DRowMajor =
 proc test4DSparseStrides =
   echo "--- 10. make_tensor_like 4D (2,3,4,5):(5,1,15,3) ---"
   let layout = make_layout((2, 3, 4, 5), (5, 1, 15, 3))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<120: t(i) = float32(i)
 
@@ -607,7 +607,7 @@ proc test4DSparseStrides =
 proc testExplicitType =
   echo "--- 11. make_tensor_like with explicit float64 ---"
   let layout = make_layout((8, 8))
-  var buf = newSeq[float32](cosize(layout).toIntVal())
+  var buf = newSeq[float32](coshape(layout).toIntVal())
   var t = make_view(buf +% 0, layout)
   for i in 0..<64: t(i) = float32(i)
 

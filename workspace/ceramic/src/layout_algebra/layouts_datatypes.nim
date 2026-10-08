@@ -11,6 +11,8 @@ import std/macros
 import std/typetraits
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra/ism_coord_strides
+import workspace/ceramic/src/layout_algebra/layout_compiletime
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St], typed shape + stride pair
@@ -52,50 +54,53 @@ func size*(layout: Layout): auto {.inline.} =
   fold(flatten(layout.shape), Int[1](), acc * it)
 
 # ═══════════════════════════════════════════════════════════════
-#  cosize, max offset + 1 of a layout
+#  Codomain properties
 # ═══════════════════════════════════════════════════════════════
 
-func cosize*(layout: Layout): auto =
-  ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
-  macro cosizeFlat(sh, st: typed): untyped =
-    ## Cosize emit, one term per shape leaf, a scalar stride broadcasts.
-    let one = IntCT(1)
-    var shDims, stDims: seq[NimNode] = @[]
-    for shEv in sh.tupleStream():
-      if shEv.kind == kLeaf:
-        shDims.add shEv.leaf
-    for stEv in st.tupleStream():
-      if stEv.kind == kLeaf:
-        stDims.add stEv.leaf
-    result = one
-    for i in 0 ..< shDims.len:
-      # a scalar stride is one leaf, it broadcasts over every shape leaf
-      let d = if stDims.len == 1: stDims[0] else: stDims[i]
-      let term = (shDims[i] - one) * abs(d)
-      result = result + term
-  cosizeFlat(flatten(layout.shape), flatten(layout.stride))
+macro coshapeImpl*(sh, st: typed): untyped =
+  result = IntCT(1)
+  for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
+    if shEv.kind == kLeaf:
+      result = result + (shEv.leaf - IntCT(1)) * abs(stEv.leaf)
 
-func cosize*[A, B](_: typedesc[Layout[A, B]]): static int {.inline.} =
-  ## Compile-time cosize from the Layout type alone.
-  ## Precondition, the shape and stride are all-static Int[N] leaves.
-  ## Dynamic layouts produce a compile error.
-  var tmp {.noInit.}: Layout[A, B]
-  cosize(tmp).toIntVal()
+macro coshape*(layout: Layout): untyped =
+  ## Coshape of the layout, the size of the layout's codomain:
+  ## `coshape = Σᵢ (shᵢ - 1)·|stᵢ| + 1`
+  result = newStmtList()
+  let (shape, strides) = result.destructureLayout(layout)
+  result.add quote do:
+    coshapeImpl(`shape`, `strides`)
+
+macro coprofileImpl*(bStrides: typed): untyped =
+  result = IntCT(0)
+  for stEv in bStrides.tupleStream():
+    if stEv.kind == kLeaf:
+      result = result + stEv.leaf
+
+macro coprofile*(layout: Layout): untyped =
+  ## Codomain profile of the layout:
+  ## `profile = Σ leaves(layout.stride)`
+  result = newStmtList()
+  let (_, strides) = result.destructureLayout(layout)
+  result.add quote do:
+    coprofileImpl(`strides`)
 
 # ═══════════════════════════════════════════════════════════════
-#  StrideOrder, layout-left (col-major) or layout-right (row-major)
+#  StrideOrder
 # ═══════════════════════════════════════════════════════════════
 
 type StrideOrder* = enum
   LayoutLeft
-    ## Leftmost dimension is contiguous (stride 1), equivalent to prefix_product.
+    ## Leftmost dimension is contiguous (stride 1),
+    ## equivalent to col-major / prefix_product.
     ##
     ## Example:
     ##   make_layout((M, N), LayoutLeft) -> (M, N) : (1, M)
     ##   make_layout((3, 4, 5), LayoutLeft) -> (3, 4, 5) : (1, 3, 12)
 
   LayoutRight
-    ## Rightmost dimension is contiguous (stride 1), equivalent to suffix_product.
+    ## Rightmost dimension is contiguous (stride 1),
+    ## equivalent to row-major / suffix_product.
     ##
     ## Example:
     ##   make_layout((M, N), LayoutRight) -> (M, N) : (N, 1)

@@ -26,29 +26,57 @@ func col_major_strides*(shape: IntOrIntTuple): auto =
 #  make_layout
 # ═══════════════════════════════════════════════════════════════
 
+# Implementation note for direct AST->AST transformation of constructors
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# Why no evalOnceAs here?
+#
+#   For direct AST->AST transformation of constructors we need to manipulate the AST *produced* by compose(complement(...), tiler)
+#   In this macro we can only see the macro call AST so we need to defer to another macro
+#   so that compose(complement(...), tiler) have the time to do their own AST->AST constructor transformation
+#
+#   Now one tricky part of this is that using an AST node or a template input in multiple place will paste it verbatim
+#   if it's used 3 times like below, `a` expression will be evaluated 3 times. This is problematic if the expression has side-effects like 'echo "launch_missiles"'.
+#
+#   In our case, layouts are pure and only involve integer arithmetic.
+#   Furthermore, I argue that compared to the alternative (assigning expressions to temporaties)
+#   an integer expression is significantly more compiler-friendly as they can be:
+#   - constant-folded (done by nim compiler)
+#   - terms can be reorder, say we receive (2 * (3 * (dynamic_value * (5 * 6))))
+#     with temporaries dynamic_value would be an optimization barrier, so we would have `6 * dynamic_value * 30` with a naive compiler,
+#     while we would have 180 * dynamic_value with a expression with more certainty as it's easier for the compiler to reorder integers
+#   - compilers can do common sub-expression elimination more easily when only integers are dumped into an expression
+#
+#   This is particularly relevant for Vulkan and WebGPU backends which might not have
+#   optimizers as thorough as LLVM's.
+
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
-  ## Create a compact Layout from a shape, computing strides automatically.
-  block:
-    evalOnceAs(convShape, makeIntTuple(shapeArg))
-    when order == LayoutLeft:
-      evalOnceAs(strideVal, prefix_product(convShape))
-      Layout[typeof(convShape), typeof(strideVal)](
-        shape: convShape,
-        stride: strideVal
-      )
-    else:
-      evalOnceAs(strideVal, suffix_product(convShape))
-      Layout[typeof(convShape), typeof(strideVal)](
-        shape: convShape,
-        stride: strideVal
-      )
+  # Implementation note:
+
+  when order == LayoutLeft:
+    Layout[typeof(makeIntTuple(shapeArg)), typeof(prefix_product(convShape))](
+      shape: makeIntTuple(shapeArg),
+      stride: prefix_product(convShape)
+    )
+  else:
+    Layout[typeof(convShape), typeof(suffix_product(convShape))](
+      shape: convShape,
+      stride: suffix_product(convShape)
+    )
 
 template make_layout*[ShT, StT: IntOrIntTuple or CoordStride](shapeArg: ShT, strideArg: StT): auto =
-  ## Make a Layout from explicit shape and stride
   when StT is CoordStride:
     Layout[typeof(makeIntTuple(shapeArg)), StT](
       shape: makeIntTuple(shapeArg),
       stride: strideArg
+    )
+  elif StT is int or StT is Int:
+    Layout[typeof(makeIntTuple(shapeArg)),
+           typeof(prefix_scanIt(makeIntTuple(shapeArg),
+                                makeIntTuple(strideArg), acc * it))](
+      shape: makeIntTuple(shapeArg),
+      stride: prefix_scanIt(makeIntTuple(shapeArg),
+                            makeIntTuple(strideArg), acc * it)
     )
   else:
     Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](

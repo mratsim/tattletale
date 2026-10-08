@@ -167,6 +167,10 @@ genBinOp(`gcd`)
 
 template `+=`*[V: static int](a: var int; b: Int[V]) = a += V
 
+# Specialized overloads
+template `*`*(a: Int[0], b: int): Int[0] = Int[0]()
+template `*`*(a: int, b: Int[0]): Int[0] = Int[0]()
+
 # ═══════════════════════════════════════════════════════════════
 #  iteration bounds
 # ═══════════════════════════════════════════════════════════════

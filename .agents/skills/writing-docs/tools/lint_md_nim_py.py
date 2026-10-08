@@ -2938,6 +2938,15 @@ TILE_RULES = {
                          "infers from the value arguments",
     "newcall-method": "a newCall(x, ...) plain call, method "
                       "call syntax x.newCall(...) is the required form",
+    "layout-dot-field": "a hand-built .shape/.stride field read; "
+                        "destructureLayout is the required form",
+    "eqident-layout": "a string-named Layout type check; compare "
+                      "types through the type system, not names",
+    "bindsym-arithmetic": "an arithmetic, comparison, or boolean builtin "
+                          "spelled through bindSym/ident; use the "
+                          "compile-time NimNode operators or infix source",
+    "compiles-probe": "a compiles() probe as control flow; dispatch "
+                      "through the type system or typed arguments",
 
     "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
                            "where method call syntax x.tupleFlatten() is the "
@@ -3857,6 +3866,55 @@ def scan_hash_above_proc(path, lines, blocked, findings):
         i += 1
 
 
+LAYOUT_DOT_RE = re.compile(
+    r"newDotExpr\s*\(\s*[^,()]+,\s*(?:ident|newIdentNode)\s*\(\s*\"(?:shape|stride)\"\s*\)")
+EQIDENT_LAYOUT_RE = re.compile(r"eqIdent\s*\(\s*\"Layout\"\s*\)")
+BINDSYM_ARITH_RE = re.compile(
+    r"(?:bindSym|bindsym|ident|newIdentNode)\s*\(\s*[\"']"
+    r"(?:[+\-*/%<>]|==|!=|<=|>=|and|or|not|xor|div|mod|in|notin|min|max|abs|sign|ceil_div)"
+    r"[\"']\s*\)")
+COMPILES_PROBE_RE = re.compile(
+    r"(?:not\s*\(\s*|when\s+|\=\s*)compiles\s*\(")
+
+
+def scan_layout_type_machinery(path, lines, blocked, findings):
+    """Flags hand-built Layout field reads and string-named Layout checks.
+
+    Contract:
+    - fires once per line, on the line carrying the pattern
+    - layout_compiletime.nim is exempt, destructureLayout itself
+      constructs the field reads it hands out
+    """
+    if path.name == "layout_compiletime.nim":
+        return
+    for i, line in enumerate(lines):
+        if (i + 1) in blocked:
+            continue
+        code, comment_only = _strip_comment(line)
+        if comment_only:
+            continue
+        if LAYOUT_DOT_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "layout-dot-field",
+                "hand-built .shape/.stride field read, destructureLayout "
+                "is the required form"))
+        if EQIDENT_LAYOUT_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "eqident-layout",
+                "eqIdent(\"Layout\") string-matches the type name, compare "
+                "through the type system"))
+        if BINDSYM_ARITH_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "bindsym-arithmetic",
+                "arithmetic spelled through bindSym/ident, use the "
+                "compile-time NimNode operators or infix source"))
+        if COMPILES_PROBE_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "compiles-probe",
+                "compiles() probe as control flow, dispatch through "
+                "the type system"))
+
+
 def scan_newcall_method(path, lines, blocked, findings):
     """Flags call sites that read better as method call syntax.
 
@@ -4162,6 +4220,7 @@ def tile_scan(path, text, findings, consts, builtins, generic_map=None):
         generic_map = build_generic_map([(path, lines)])
     scan_hash_above_proc(path, lines, blocked, findings)
     scan_newcall_method(path, lines, blocked, findings)
+    scan_layout_type_machinery(path, lines, blocked, findings)
     scan_body_wrap(path, lines, ds, blocked, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     scan_decl_t_suffix(path, ds, lines, findings)

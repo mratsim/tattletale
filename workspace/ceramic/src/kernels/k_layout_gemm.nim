@@ -247,8 +247,8 @@ func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
       "gemm_warp: B RepeatN (" & $ShB.default[1] & ") != 1. B k slice must be exactly one atom B fragment (V, 1)"
     doAssert ShB.default[2] === kSlices,
       "gemm_warp: B k dimension (" & $ShB.default[2] & ") != A k dimension (" & $kSlices & "). A and B must agree on the k slice count"
-    doAssert dFrag.cosize().toIntVal() === mma.valuesPerThread(opC),
-        "gemm_warp: accumulator size (" & $dFrag.cosize().toIntVal() &
+    doAssert dFrag.coshape().toIntVal() === mma.valuesPerThread(opC),
+        "gemm_warp: accumulator size (" & $dFrag.coshape().toIntVal() &
         ") != atom valuesPerThread(opC) (" & $mma.valuesPerThread(opC) & ")"
 
   staticFor kSlice, 0, kSlices.toIntVal():

@@ -57,9 +57,9 @@ proc runLayoutAlgebraTests =
     # One 8×8×8 atom per 32-lane threadgroup: the (1, 1, 1) tiling's
     # fragment of an 8×8 operand is the atom's whole 64-value fragment.
     let tileL = make_layout((8, 8))
-    doAssert cosize(tma.thrfrg_A(tileL)) === 64, "A fragment cosize"
-    doAssert cosize(tma.thrfrg_B(tileL)) === 64, "B fragment cosize"
-    doAssert cosize(tma.thrfrg_C(tileL)) === 64, "C fragment cosize"
+    doAssert coshape(tma.thrfrg_A(tileL)) === 64, "A fragment coshape"
+    doAssert coshape(tma.thrfrg_B(tileL)) === 64, "B fragment coshape"
+    doAssert coshape(tma.thrfrg_C(tileL)) === 64, "C fragment coshape"
 
   block:
     dummyBuf[0] = 42.0'f32

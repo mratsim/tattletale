@@ -41,7 +41,7 @@ template threadCount*(atom: static MmaAtom; operand: static MmaOperand): untyped
 template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): untyped =
   ## Operand values per thread. A, B and C may each differ.
   ##
-  ## Returns the operand layout's cosize divided by the atom's thread count.
+  ## Returns the operand layout's coshape divided by the atom's thread count.
   ##
   ## Declared atoms' V_A/V_B/V_C
   ##
@@ -52,9 +52,9 @@ template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): unt
   ## | int8+e4m3 (k32)           | 16/8/4      |
   ## | universal 8x8x8 and Apple | 2/2/2       |
   ## | 1x1x1                     | 1/1/1       |
-  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount(opA)
-  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount(opB)
-  else:                cosize(atom.getLayoutC()) div atom.threadCount(opC)
+  when operand == opA: coshape(atom.getLayoutA()) div atom.threadCount(opA)
+  elif operand == opB: coshape(atom.getLayoutB()) div atom.threadCount(opB)
+  else:                coshape(atom.getLayoutC()) div atom.threadCount(opC)
 
 macro getThreadCount*(A: static MmaAtom): untyped =
   ## Returns the number of threads one atom invocation cooperates over.

@@ -86,10 +86,6 @@ export layout_algebra.complement
 ## Compose two layouts, function composition threaded dimension by dimension.
 export layout_algebra.compose
 
-## Layout addition, coordinate-wise: `R(i) == A(i) + B(i)`.
-## Supports only same nesting at the moment.
-export layout_algebra.layout_add
-
 # ═══════════════════════════════════════════════════════════════
 #  Partitioning: divide a layout by a tiler
 # ═══════════════════════════════════════════════════════════════
