@@ -32,6 +32,10 @@ func IntCT*(val: int): NimNode {.compileTime.} =
   newNimNode(nnkObjConstr).add(
     newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
 
+func divmod*(a, b: int): (int, int) {.compileTime.} =
+  ## Quotient and remainder of `a` divided by `b`.
+  (a div b, a mod b)
+
 func isStaticInt*(t: NimNode): bool {.compileTime.} =
   (t.kind == nnkBracketExpr and $t[0] == "Int") or t.kind == nnkIntLit
 

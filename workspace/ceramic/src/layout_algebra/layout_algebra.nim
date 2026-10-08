@@ -37,6 +37,25 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 # ═══════════════════════════════════════════════════════════════
 #  coalesce
 # ═══════════════════════════════════════════════════════════════
+#
+# Pseudo code
+#
+#   coalesce(A):   # simplify the layout without changing it
+#                  # as a function from integers to integers
+#
+#     result = the first mode s₀:d₀ of A, flattened
+#     for each next mode s₁:d₁:
+#         result = result ++ s₁:d₁
+#     return result
+#
+#     s₀:d₀ ++ s₁:d₁, four cases:
+#     1. s₁ == 1:      s₀:d₀                    # a size-1 mode is ignored
+#     2. s₀ == 1:      s₁:d₁                    # a size-1 mode is ignored
+#     3. d₁ == s₀*d₀:  s₀*s₁:d₀                 # no gap between the modes
+#     4. else:         (s₀,s₁):(d₀,d₁)
+#
+#     the size is unchanged and every input integer maps to the
+#     same output integer
 
 proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
@@ -351,6 +370,48 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 # ═══════════════════════════════════════════════════════════════
 #  compose
 # ═══════════════════════════════════════════════════════════════
+#
+# Pseudo code
+#
+#   compose(A, B):   # A o B,  (A o B)(c) = A(B(c))
+#
+#     # B as a tuple of modes composes mode by mode
+#     # (left-distributivity over concatenation)
+#     if B is a tuple of modes <B0, B1, ...>:
+#         return make_layout(compose(A[0], B0), compose(A[1], B1), ...)
+#
+#     A' = coalesce_z(A, coprofile(B))    # A flattened and coalesced
+#
+#     if B.shape is a tuple:
+#         return make_layout(compose(A', b) for each mode b of B)
+#
+#     # from here B = N:M, one shape and one stride
+#     if M == 0:  return N:0
+#     if N == 1:  return 1:A'(M)          # A' evaluated at one point
+#     if A' is a single mode a:b:  return N:(M*b)
+#
+#     # general case, per coefficient Mⱼ of M
+#     # (one turn when M is one number):
+#     Strided = A' / Mⱼ                   # every Mⱼ-th element of A'
+#     Kept    = Strided % N               # its first N elements
+#     result  = concat(result, Kept)
+#     return coalesce(result)             # per-mode coalesce
+#
+#     A' / d is the layout of every d-th element of A':
+#         q = d
+#         for each mode sᵢ:dᵢ of A':
+#             dᵢ = q * dᵢ
+#             if q % sᵢ == 0:   sᵢ = 1, q = q / sᵢ
+#             elif sᵢ % q == 0: sᵢ = sᵢ / q, stop
+#             else: the stride divisibility condition fails
+#
+#     Strided % N is the first N elements of Strided:
+#         q = N
+#         for each mode sᵢ of Strided:
+#             q, r = divmod(q, sᵢ)
+#             if q == 0:   sᵢ = r, the modes after sᵢ become 1, stop
+#             elif r != 0: the shape divisibility condition fails
+#             else: keep sᵢ
 
 type ComposeAcc = object
   ## Fold state for one RHS dimension walked through the LHS profile:
