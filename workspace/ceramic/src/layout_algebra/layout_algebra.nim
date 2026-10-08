@@ -413,118 +413,6 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #             elif r != 0: the shape divisibility condition fails
 #             else: keep sᵢ
 
-type ComposeAcc = object
-  ## Fold state for one RHS dimension walked through the LHS profile:
-  ## each LHS dimension takes as many RHS coordinates as fit its size,
-  ## the leftovers carry into the next LHS dimension.
-  ## - remShape, remStride: the RHS size and stride not yet consumed
-  ## - remShapeV, remStrideV: their compile-time values (DynamicSentinel when dynamic)
-  ## - bShapeV: the RHS dimension's full size, the divisibility yardstick
-  ## - pairs: the (shape, stride) dimensions emitted so far
-  remShape, remStride: NimNode
-  remShapeV, remStrideV, bShapeV: int
-  pairs: seq[tuple[shape, stride: NimNode]]
-  builder: TupleBuilderNested
-
-proc init(acc: var ComposeAcc) =
-  acc.builder = TupleBuilderNested.new(2)
-
-proc init(acc: var ComposeAcc, shapeEv, strideEv: TupleStreamEvent) =
-  acc.remShape = shapeEv.leaf
-  acc.remStride = strideEv.leaf
-  acc.remShapeV = shapeEv.leafTy.getStaticInt()
-  acc.remStrideV = strideEv.leafTy.getStaticInt()
-  acc.bShapeV = acc.remShapeV
-  acc.pairs = @[]
-
-proc update(acc: var ComposeAcc, stmts: var NimNode, k, R: int, shapeLeaf, strideLeaf: NimNode, shV, stV: int) =
-  ## One LHS dimension takes as many of B's remaining coordinates
-  ## as its size allows and emits them as a (shape, stride) pair.
-  ##
-  ##   A = (6,2):(8,2) composed with B = 4:3
-  ##     A's 6:8 holds 2 of B's 4 coords, step 3 -> pair (2, 24)
-  ##     A's 2:2  takes the other 2          -> pair (2, 2)
-  ##     result (2,2):(24,2)
-  ##
-  ## Divisibility, checked whenever all operands are static:
-  ## - stride: a stride that does not step past whole dimensions must
-  ##   split the crossed dimension, the stride divides the crossed
-  ##   dimension's shape exactly, or the crossed dimension holds all
-  ##   but one of B's coordinates.
-  ## - stride sign: negative strides may only step past whole dimensions.
-  ## - shape: B's remaining size divides by the consumed shape
-  if k == R - 1:
-    if acc.pairs.len == 0 or acc.remShapeV != 1:
-      # no LHS leaf was consumed, the RHS leaf passes through
-      acc.pairs.add (shape: acc.remShape, stride: acc.remStride * strideLeaf)
-    return
-  let absRemV = if acc.remStrideV != DynamicSentinel: abs(acc.remStrideV)
-                else: DynamicSentinel
-  if absRemV != DynamicSentinel and shV != DynamicSentinel and acc.bShapeV != DynamicSentinel and
-      absRemV mod shV != 0:
-    if acc.remStrideV < 0 or (shV mod absRemV != 0 and shV div absRemV < acc.bShapeV - 1):
-      error "compose: stride divisibility condition violated: the stride splits no dimension and no dimension holds B's size"
-  let absRem = stmts.newLetAsgn("absRem", abs(acc.remStride))
-  let clampedV = if absRemV != DynamicSentinel and shV != DynamicSentinel and acc.remShapeV != DynamicSentinel:
-    min(ceil_div(shV, absRemV), acc.remShapeV)
-  else:
-    DynamicSentinel
-  let clamped = stmts.newLetAsgn("clampedShape", min(ceil_div(shapeLeaf, absRem), acc.remShape))
-  if clampedV != 1 and acc.remShapeV != 1:
-    # a leaf whose consumed shape folds to 1 contributes nothing
-    # dynamic leaves never fold to 1
-    if acc.remShapeV != DynamicSentinel and clampedV != DynamicSentinel and acc.remShapeV mod clampedV != 0:
-      error "compose: shape divisibility condition violated: B's remaining size does not divide by the consumed shape"
-    acc.pairs.add (shape: clamped, stride: acc.remStride * strideLeaf)
-    acc.remShape = stmts.newLetAsgn("remainingShape", acc.remShape div clamped)
-    if clampedV != DynamicSentinel:
-      acc.remShapeV = acc.remShapeV div clampedV
-  acc.remStride = stmts.newLetAsgn("remainingStride", ceil_div(absRem, shapeLeaf) * sign(acc.remStride))
-  if absRemV != DynamicSentinel and shV != DynamicSentinel:
-    acc.remStrideV = ceil_div(absRemV, shV) * sign(acc.remStrideV)
-
-proc finish(acc: var ComposeAcc) =
-  ## Flush this dimension's pairs into the result tree.
-  acc.builder.appendDimension(acc.pairs)
-
-macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
-  ## Fold over the destructured RHS, one accumulator pass:
-  ## - level 1: zip walk over the RHS shape and stride
-  ## - level 2: each stride term folds its LHS profile mode slice,
-  ##   an int stride is one whole-profile term, a basis stride
-  ##   names one mode per nonzero coefficient, and term strides
-  ##   add up positionally
-  ##
-  ## Each result mode coalesces at the end, pycute's per-`B`-dimension
-  ## `resultL._coalesce()`, the top-level assembly never coalesces.
-  result = newStmtList()
-
-  let (aShape, aStrides) = result.destructureLayout(aLayout)
-  # pre-coalesce A under coprofile(B), pycute's `A._coalesce_z(coprofile(B))`
-  let preCoalesced = coalesceFoldImpl(aShape, aStrides)
-  var acc: ComposeAcc
-  acc.init(preCoalesced[1], preCoalesced[2])
-  for (shapeEv, strideEv) in bShape.tupleStream().zip(bStrides.tupleStream()):
-    if shapeEv.kind != kLeaf:
-      acc.builder.append(shapeEv, strideEv)
-      continue
-    acc.update(shapeEv, strideEv)
-    acc.finish()
-
-  let emitted = acc.builder.emitLayout()
-  let shapeArg = emitted[1]
-  let strideArg = emitted[2]
-  if shapeArg.kind in {nnkTupleConstr, nnkPar} and shapeArg.len > 0:
-    # each result mode coalesces alone, pycute's per-`B`-dimension
-    # resultL._coalesce(), the top-level assembly never coalesces
-    var dimsCall = nnkCall.newTree(bindSym"composeDims")
-    for i in 0 ..< shapeArg.len:
-      let dim = bindSym"make_layout".newCall(shapeArg[i], strideArg[i])
-      dimsCall.add bindSym"coalesce".newCall(dim)
-    result.add dimsCall
-  else:  # a scalar result is one mode, it coalesces whole
-    result.add bindSym"coalesce".newCall(emitted)
-
 macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
   ##
@@ -555,24 +443,6 @@ macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ##    (20, 2)       ∘ (5, 4):(4, 1) → (5, 4):(8, 2)
   ##
   ##    (6, 2):(8, 2) ∘ (4, 3):(3, 1) → ((2, 2), 3):((24, 2), 8)
-  result = newStmtList()
-  let (bShape, bStrides) = result.destructureLayout(b)
-
-  template composeDelegateCoalesced(aShape2, aStrides2, bShape2, bStrides2) =
-    composeImpl(coalesceImpl(aShape2, aStrides2, preserveTrailing = true), bShape2, bStrides2)
-  template composeDelegatePlain(aShape2, aStrides2, bShape2, bStrides2) =
-    composeImpl(make_layout(aShape2, aStrides2), bShape2, bStrides2)
-
-  let aShapeIsTuple = layoutTypeArgs(a).shapeTy.isTupleTy()
-  var bHasBasis = false
-  for ev in layoutTypeArgs(b).strideTy.tupleStream():
-    if ev.kind == kLeaf and ev.leafTy.getCoordStrideDescriptor().kind != caNone:
-      bHasBasis = true
-      break
-  if aShapeIsTuple and not bHasBasis:
-    result.add getAst(composeDelegateCoalesced(aShape, aStrides, bShape, bStrides))
-  else:
-    result.add getAst(composeDelegatePlain(aShape, aStrides, bShape, bStrides))
 
 macro compose*(layout: Layout, tiler: tuple): untyped =
   ## Layout composition
@@ -591,58 +461,6 @@ macro compose*(layout: Layout, tiler: tuple): untyped =
   ##   # → (16, 8):(1, 32)
   ##
   ## Dimension 0 consumes 16 positions, dimension 1 passes through.
-  let
-    shTy = layoutTypeArgs(layout).shapeTy
-    R = if shTy.kind == nnkTupleConstr: shTy.len else: 1
-    tilerRank = tiler.getTypeInst().len
-  doAssert tilerRank <= R,
-    "compose: tiler has more dimensions (" & $tilerRank & ") than the layout (" & $R & ")"
-  result = newStmtList()
-  let (aShape, aStrides) = result.destructureLayout(layout)
-  template composeTilerDim(aS2, aSt2, bElem) =
-    composeImpl(make_layout(aS2, aSt2), bElem.shape, bElem.stride)
-  var shapes: seq[NimNode]
-  var strides: seq[NimNode]
-  for k in 0 ..< tilerRank:
-    # bracket nodes, aShape[k] would index the NimNode's children
-    let aShapeK = if shTy.kind == nnkTupleConstr:
-                    nnkBracketExpr.newTree(aShape, newLit k)
-                  else:
-                    aShape
-    let aStrideK = if shTy.kind == nnkTupleConstr:
-                     nnkBracketExpr.newTree(aStrides, newLit k)
-                   else:
-                     aStrides
-    let elemTy = tiler.getTypeInst()[k]
-    if elemTy.eqIdent("X"):
-      # the profiler mark passes the dimension through whole
-      shapes.add aShapeK
-      strides.add aStrideK
-    elif elemTy.kind == nnkBracketExpr and elemTy[0].eqIdent("Layout"):
-      # a layout tiler element composes the dimension once
-      let dk = result.newLetAsgn("composedDim",
-        getAst(composeTilerDim(aShapeK, aStrideK, tiler.getTupleIndex(k))))
-      shapes.add dk.newDotExpr(ident"shape")
-      strides.add dk.newDotExpr(ident"stride")
-    elif elemTy.isTupleTy():
-      # a sub-tuple tiler element recurses per-sub-dimension, the rank
-      # guards hold at every level of that recursion
-      let dk = result.newLetAsgn("composedDim",
-        ident"compose".newCall(ident"make_layout".newCall(aShapeK, aStrideK),
-                               tiler.getTupleIndex(k)))
-      shapes.add dk.newDotExpr(ident"shape")
-      strides.add dk.newDotExpr(ident"stride")
-    else:
-      # an int tiler element composes the dimension with (N):(1),
-      # the first N positions: the pair is (N, the dimension's stride)
-      shapes.add tiler.getTupleIndex(k)
-      strides.add aStrideK
-
-  if shapes.len == 1:
-    result.add bindSym"make_layout".newCall(
-      nnkTupleConstr.newTree(shapes[0]), nnkTupleConstr.newTree(strides[0]))
-  else:
-    result.add bindSym"make_layout".newCall(nnkPar.newTree(shapes), nnkPar.newTree(strides))
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product
