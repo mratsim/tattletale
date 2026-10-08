@@ -285,6 +285,25 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compile
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
+proc basisRepr*(bStride: NimNode): seq[tuple[value: NimNode, path: seq[int]]] {.compileTime.} =
+  ## A stride decomposed into scaled basis terms:
+  ## - one term per nonzero coefficient of a coordinate stride
+  ## - an int stride, static or dynamic, is the single rank-zero term
+  ## - an all-zero coordinate stride yields no terms
+  var terms: seq[tuple[value: NimNode, path: seq[int]]]
+  proc walk(n: NimNode, p: seq[int]) =
+    if n.kind in {nnkTupleConstr, nnkPar}:
+      for i in 0 ..< n.len:
+        walk(n[i], p & i)
+    elif n.intVal != 0:
+      terms.add (newLit(int(n.intVal)), p)
+  let desc = getCoordStrideDescriptor(bStride.getTypeInst())
+  if desc.kind == caNone:
+    terms.add (bStride, @[])
+  else:
+    walk(desc.coeffs, @[])
+  terms
+
 proc csScaledEq(a, b: NimNode, s: int): bool {.compileTime.} =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
   ## false on any structural mismatch.

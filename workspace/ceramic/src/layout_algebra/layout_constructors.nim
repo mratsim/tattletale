@@ -50,6 +50,10 @@ func col_major_strides*(shape: IntOrIntTuple): auto =
 #   This is particularly relevant for Vulkan and WebGPU backends which might not have
 #   optimizers as thorough as LLVM's.
 
+proc make_layout*(shape, stride: NimNode): NimNode {.compileTime.} =
+  ## make_layout(shape, stride) as a compile-time node
+  ident"make_layout".newCall(shape, stride)
+
 template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
   # Implementation note:
 
@@ -204,7 +208,7 @@ macro make_ordered_layout*(shape, order: typed): untyped =
   var builder = TupleBuilderFlat.new(1)
   for s in strides:
     builder.append(newLit(s))
-  result = bindSym"make_layout".newCall(
+  result = make_layout(
     shape,
     builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()))
 
@@ -232,7 +236,7 @@ macro make_layout_likeImpl(sh, st: typed): untyped =
   var builder = TupleBuilderFlat.new(1)
   for s in strides:
     builder.append(newLit(s))
-  result = bindSym"make_layout".newCall(
+  result = make_layout(
     sh,
     builder.emit(0, emitScalarForSize1 = not shapeIsTuple))
 

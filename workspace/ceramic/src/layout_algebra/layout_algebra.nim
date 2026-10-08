@@ -148,7 +148,6 @@ macro coalesceImpl(sh, st: typed): untyped =
     if lastShapeVal == 1:
       shapeTuple.del(shapeTuple.len - 1)
       strideTuple.del(strideTuple.len - 1)
-
 macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
   ##
@@ -250,18 +249,18 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
     allSkipped = false
   if allSkipped:
     # every leaf skipped, the complement collapses to (bound):(1)
-    return bindSym"make_layout".newCall(
+    return make_layout(
       (if defaultBound: IntCT(b) else: bound), newLit(1))
   let boundVal = if defaultBound: b else: boundStatic
   if fullCoverage and boundVal != DynamicSentinel and boundVal <= accSpan:
     # the layout already covers the bound, no gaps to fill, the complement
     # is a lone (1):(coverage) dimension
-    return bindSym"make_layout".newCall(IntCT(1), IntCT(accSpan))
+    return make_layout(IntCT(1), IntCT(accSpan))
   curNodes.add curNode
   gapNodes.add bindSym"ceil_div".newCall(
     (if defaultBound: IntCT(b) else: bound), curNode)
   # coalesce is a macro and folds when the call site expands
-  result = bindSym"coalesce".newCall(bindSym"make_layout".newCall(
+  result = bindSym"coalesce".newCall(make_layout(
     nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
 
 macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): untyped =
@@ -298,7 +297,7 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
     result = complementFold(dims, boundDyn, DynamicSentinel, defaultBound = false)
   of crDynRank1Zero:
     # a static zero stride, every coordinate maps to offset 0
-    result = bindSym"make_layout".newCall(boundDyn, newLit(1))
+    result = make_layout(boundDyn, newLit(1))
   of crDynRank1:
     # rank-1, runtime gap formula
     let stLeaf = stDims[0].leaf
@@ -430,46 +429,21 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
-  macro stridedDivImpl(sh, st, M: typed): untyped =
-    var shLeaves, stLeaves: seq[NimNode]
-    var prefix = IntCT(1)
-    var prefixVal = 1
-    let mVal = M.getStaticInt()
-    for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
-      if shapeEv.kind != kLeaf:
-        continue
+  var builder = TupleBuilderFlat.new(2)
+  var prefix = IntCT(1)
+  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    builder.onLeaves(shapeEv):
       let shapeDim = shapeEv.leaf
       let strideDim = strideEv.leaf
-      let shapeVal = shapeDim.getStaticInt()
-      if mVal != DynamicSentinel and shapeVal != DynamicSentinel and
-          prefixVal != DynamicSentinel:
-        # static mode, computed here
-        var q = mVal div prefixVal
-        if q == 0:
-          q = 1
-        let shapeD = if q mod shapeVal == 0: 1
-                     elif q >= 1 and shapeVal mod q == 0: shapeVal div q
-                     else: shapeVal
-        stLeaves.add quote do: Int[`q`]() * `strideDim`
-        shLeaves.add IntCT(shapeD)
-        prefixVal *= shapeVal
-        prefix = IntCT(prefixVal)
-      else:
-        # dynamic mode, the rule as plain int arithmetic
-        let q = quote do:
-          (if `M` div `prefix` === 0: 1 else: toInt(`M` div `prefix`))
-        stLeaves.add quote do: `q` * `strideDim`
-        shLeaves.add quote do:
+      let q = quote do: `M` div `prefix` + ord(`M` div `prefix` === 0)
+      builder.append(
+        quote do:
           (if `q` mod `shapeDim` === 0: 1
-           elif `q` >= 1 and `shapeDim` mod `q` === 0: toInt(`shapeDim` div `q`)
-           else: toInt(`shapeDim`))
-        prefix = quote do: `prefix` * `shapeDim`
-        prefixVal = DynamicSentinel
-    result = newStmtList()
-    result.add bindSym"make_layout".newCall(
-
-      nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
-  result.add getAst(stridedDivImpl(sh, st, M))
+           elif `q` >= 1 and `shapeDim` mod `q` === 0: (`shapeDim` div `q`).toInt()
+           else: `shapeDim`.toInt()),
+        quote do: `q` * `strideDim`)
+      prefix = quote do: `prefix` * `shapeDim`
+  result.add builder.emitLayout()
 
 macro stridedMod(strided: Layout, N: typed): untyped =
   ## Strided % N on the first N elements of Strided
@@ -483,28 +457,31 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
-  macro stridedModImpl(sh, st, N: typed): untyped =
-    var modes: seq[tuple[shapeDim, strideDim: NimNode]]
-    for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
-      if shapeEv.kind != kLeaf:
-        continue
-      modes.add (shapeEv.leaf, strideEv.leaf)
-    var shLeaves, stLeaves: seq[NimNode]
-    var prefix = IntCT(1)
-    for i, mode in modes:
-      let shapeDim = mode.shapeDim
-      if i < modes.len - 1:
-        shLeaves.add quote do: min(`shapeDim`, max(1, `N` div `prefix`))
-      else:
-        let q = quote do: `N` div `prefix`
-        shLeaves.add quote do: max(1, `q`)
-      stLeaves.add mode.strideDim
-      prefix = quote do: `prefix` * `shapeDim`
-    result = newStmtList()
-    result.add bindSym"make_layout".newCall(
-      nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+  var modes: seq[tuple[shapeDim, strideDim: NimNode]]
+  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    modes.add (shapeEv.leaf, strideEv.leaf)
+  var builder = TupleBuilderFlat.new(2)
+  var prefix = IntCT(1)
+  for i, mode in modes:
+    let shapeDim = mode.shapeDim
+    if i < modes.len - 1:
+      builder.append(
+        quote do: min(`shapeDim`, max(1, `N` div `prefix`)), mode.strideDim)
+    else:
+      let q = quote do: `N` div `prefix`
+      builder.append(quote do: max(1, `q`), mode.strideDim)
+    prefix = quote do: `prefix` * `shapeDim`
+  result.add builder.emitLayout()
 
-  result.add getAst(stridedModImpl(sh, st, N))
+proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
+  ## Index `node` at `path`, one bracket read per level. A scalar mode
+  ## absorbs the rest of the path, it is its own single mode
+  result = node
+  for i in path:
+    if result.getTypeInst().isTupleTy():
+      result = nnkBracketExpr.newTree(result, newLit(i))
+    else:
+      break
 
 macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   ## Composition, `A ∘ B`, on destructured parts.
@@ -518,38 +495,63 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   result = newStmtList()
   let mVal = bStride.getStaticInt()
   if mVal == 0:
-    result.add bindSym"make_layout".newCall(bShape, IntCT(0))
+    result.add make_layout(bShape, IntCT(0))
     return
   if bShape.getTypeInst().isTupleTy():
-    result.add quote do:
-      block:
-        evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
-    template composeMode(bShape, bStride: typed): untyped =
-      composeImpl(aPrime.shape, aPrime.stride, bShape, bStride)
+    template composeMode(aSh, aSt, bSh, bSt: typed): untyped =
+      composeImpl(aSh, aSt, bSh, bSt)
     var builder = TupleBuilderFlat.new(2)
     for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
       let bModeShape = shEv.leaf
       let bModeStride = stEv.leaf
       # modeAst is emitted twice. As a expression of integers it should be easily constant-folded
       # and common subexpression eliminated
-      let modeAst = getAst(composeMode(bModeShape, bModeStride))
+      let modeAst = getAst(composeMode(aShape, aStride, bModeShape, bModeStride))
       builder.append(
         modeAst.newDotExpr(ident"shape"),
         modeAst.newDotExpr(ident"stride"))
-    let layoutAst = builder.emitLayout()
-    result[^1][^1].add layoutAst
+    result.add builder.emitLayout()
   else:
     let nVal = bShape.getStaticInt()
     if nVal == 1:
       # A' evaluated at one point, evaluation is coalesce-invariant
-      result.add bindSym"make_layout".newCall(IntCT(1),
-        bindSym"crd2idx".newCall(
-          bindSym"make_layout".newCall(aShape, aStride), bStride))
+      result.add make_layout(IntCT(1),
+        bindSym"crd2idx".newCall(make_layout(aShape, aStride), bStride))
     else:
-      # general case: Strided = coalesceImpl(A) / M, Kept = Strided % N,
-      template composeGeneralDelegate(aShape, aStride, bShape, bStride: typed): untyped =
-        coalesce(stridedMod(stridedDiv(coalesceImpl(aShape, aStride), bStride), bShape))
-      result.add getAst(composeGeneralDelegate(aShape, aStride, bShape, bStride))
+      var aSh, aSt: NimNode
+      let stmts = newStmtList()
+      if getCoordStrideDescriptor(bStride.getTypeInst()).kind == caNone:
+        stmts.add quote do:
+          evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
+        (aSh, aSt) = result.destructureLayout(ident"aPrime")
+      else:
+        aSh = aShape
+        aSt = aStride
+      var shapeAst, strideAst: NimNode = nil
+      template termDelegate(aSh, aSt, m, n: typed): untyped =
+        stridedMod(stridedDiv(make_layout(aSh, aSt), m), n)
+      for i, (termValue, termPath) in basisRepr(bStride):
+        let termAst = getAst(termDelegate(
+          pathSelect(aSh, termPath), pathSelect(aSt, termPath),
+          termValue, bShape))
+        let alias = ident("composeTerm" & $i)
+        stmts.add quote do:
+          let `alias` = `termAst`
+        let (termShape, termStride) = result.destructureLayout(alias)
+        if shapeAst.isNil:
+          shapeAst = termShape
+          strideAst = termStride
+        else:
+          strideAst = strideAst + termStride
+      if strideAst.isNil:
+        # every coefficient is zero, the LHS is never touched
+        stmts.add make_layout(bShape, IntCT(0))
+      else:
+        stmts.add quote do:
+          coalesce(make_layout(`shapeAst`, `strideAst`))
+      result.add quote do:
+        block:
+          `stmts`
 
 macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   ## Layout composition, `A o B`.
@@ -653,7 +655,7 @@ macro logicalProductFinish(a, rest: typed): untyped =
     grid = grid[^1]
   let (aShape, aStrides) = result.destructureLayout(a)
   let (rShape, rStrides) = result.destructureLayout(grid)
-  result.add bindSym"make_layout".newCall(
+  result.add make_layout(
     nnkTupleConstr.newTree(aShape, rShape),
     nnkTupleConstr.newTree(aStrides, rStrides)
   )

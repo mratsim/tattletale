@@ -3643,7 +3643,7 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             continue
         prev = lines[i - 1] if i > 0 else ""
         allowed = "rank-allow" in raw or "rank-allow" in prev
-        if TOINT_CALL_RE.search(code) and path.replace("\\", "/").endswith(BLESSED_TOINT_FILE):
+        if TOINT_CALL_RE.search(code) and _rel(path).endswith(BLESSED_TOINT_FILE):
             continue
         if TOINT_CALL_RE.search(code):
             findings.append(Finding(

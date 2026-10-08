@@ -24,7 +24,7 @@ export layout_constructors
 
 macro dimensionImpl(l, sh, st: typed, idx: static int): untyped =
   if sh.isTupleTy():
-    nnkCall.newTree(bindSym"make_layout", getTupleIndex(sh, idx), getTupleIndex(st, idx))
+    make_layout(getTupleIndex(sh, idx), getTupleIndex(st, idx))
   else:
     doAssert idx == 0, "dimension: scalar layout only has dimension 0"
     l
@@ -165,7 +165,7 @@ macro mapLeavesWith*(layout: Layout; body: untyped): untyped =
   let stExpr = newTree(nnkDotExpr, layout, ident"stride")
   var stmts = newStmtList()
   let (outSh, outSt) = mapLeavesRec(stmts, shExpr, shTyp, stExpr, stTyp, bodyExpr)
-  stmts.add bindSym"make_layout".newCall(outSh, outSt)
+  stmts.add make_layout(outSh, outSt)
   return nnkBlockExpr.newTree(newEmptyNode(), stmts)
 
 
@@ -248,7 +248,7 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
                else: nnkTupleConstr.newTree(ash, bsh)
   let zStride = if ast.isTupleTy(): zipPair(ast, bst)
                 else: nnkTupleConstr.newTree(ast, bst)
-  return bindSym"make_layout".newCall(zShape, zStride)
+  return make_layout(zShape, zStride)
 
 macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
   ## Zip dimensions of two layouts: interleave corresponding dimensions pairwise.
