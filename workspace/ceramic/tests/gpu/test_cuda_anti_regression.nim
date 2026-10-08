@@ -16,8 +16,8 @@ import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 const kernelLayout = cuda:
   proc kernel1(output: ptr UncheckedArray[uint32]) {.global.} =
     let L = make_layout((8, 16))
-    output[0] = uint32(size(L.dimension(0)).toIntVal)
-    output[1] = uint32(size(L.dimension(1)).toIntVal)
+    output[0] = uint32(size(L.dimension(0)).toInt)
+    output[1] = uint32(size(L.dimension(1)).toInt)
 
 # ═════════════════════════════════════════════════════════════════════════
 # Issue 2 (FIXED): Int[N]() in const produces "= ;" in generated code

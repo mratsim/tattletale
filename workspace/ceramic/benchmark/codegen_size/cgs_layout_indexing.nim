@@ -29,7 +29,7 @@ const crd2idxStaticMsl = metal:
 # measured kernel, the call site reads crd2idx directly
   proc crd2idxStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((16, 64), (1, 16))
-    C[0] = float32 toIntVal(crd2idx(L, (3, 2)))
+    C[0] = float32 toInt(crd2idx(L, (3, 2)))
 
 # idx2crd_cpu over a runtime rank-2 layout, flat-index divmod decomposition, cpu wrapper shares the unsuffixed macro tree
 const idx2crdCpuMsl = metal:

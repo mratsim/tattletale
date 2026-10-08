@@ -29,7 +29,7 @@ const atom = SM80_16x8x8_F32TF32TF32F32_TN
 const tiled = TiledMma[typeof(atom), typeof(make_layout((1, 1, 1)))](
   atom: atom, threadLayout: make_layout((1, 1, 1)))
 
-const WORK_GROUP = toIntVal(atom.threadCount(opA))   # 32 work-items = one warp
+const WORK_GROUP = toInt(atom.threadCount(opA))   # 32 work-items = one warp
 static:
   doAssert WORK_GROUP == 32,
     "mma.sync needs exactly one warp (32 work-items), got " & $WORK_GROUP
@@ -42,9 +42,9 @@ func mmaMicrotile(tma: static TiledMma; t: int;
     M = tma.atom.getM()
     N = tma.atom.getN()
     K = tma.atom.getK()
-    VA = toIntVal(tma.atom.valuesPerThread(opA))
-    VB = toIntVal(tma.atom.valuesPerThread(opB))
-    VC = toIntVal(tma.atom.valuesPerThread(opC))
+    VA = toInt(tma.atom.valuesPerThread(opA))
+    VB = toInt(tma.atom.valuesPerThread(opB))
+    VC = toInt(tma.atom.valuesPerThread(opC))
   let thr = tma.get_slice(t)
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, K), (1, N))))
@@ -70,9 +70,9 @@ func mmaMicrotileExplicit(tma: static TiledMma; t: int;
     M = tma.atom.getM()
     N = tma.atom.getN()
     K = tma.atom.getK()
-    VA = toIntVal(tma.atom.valuesPerThread(opA))
-    VB = toIntVal(tma.atom.valuesPerThread(opB))
-    VC = toIntVal(tma.atom.valuesPerThread(opC))
+    VA = toInt(tma.atom.valuesPerThread(opA))
+    VB = toInt(tma.atom.valuesPerThread(opB))
+    VC = toInt(tma.atom.valuesPerThread(opC))
   let thr = tma.get_slice(t)
   let tAv = tma.partition_A(thr, make_view(A, make_layout((M, K), (1, M))))
   let tBv = tma.partition_B(thr, make_view(B, make_layout((N, K), (1, N))))

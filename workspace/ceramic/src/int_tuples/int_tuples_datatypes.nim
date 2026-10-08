@@ -31,8 +31,8 @@ type
 
   IntOrIntTuple* = int | Int | tuple
 
-template toIntVal*(x: int): int = x
-template toIntVal*[V: static int](x: Int[V]): int = V
+template toInt*(x: int): int = x
+template toInt*[V: static int](x: Int[V]): int = V
 
 template `$`*[V: static int](x: Int[V]): string = "Int[" & $V & "]"
 

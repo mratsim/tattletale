@@ -57,13 +57,13 @@ type TiledMma*[A: MmaAtom, TL: Layout] = object
   threadLayout*: TL                      ## (ThrM, ThrN, ThrK)
 
 func thrM*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[0])
+  toInt(tma.threadLayout.shape[0])
 
 func thrN*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[1])
+  toInt(tma.threadLayout.shape[1])
 
 func thrK*(tma: static TiledMma): static int {.inline.} =
-  toIntVal(tma.threadLayout.shape[2])
+  toInt(tma.threadLayout.shape[2])
 
 func threadCount*(tma: static TiledMma): static int {.inline.} =
   ## Total threads the TiledMma uses: T × ThrM·ThrN·ThrK.
@@ -278,7 +278,7 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
   const atomM = tma.atom.getM()
   const atomN = tma.atom.getN()
   const atomL = make_layout((atomM, atomN), (1, atomM))
-  const fragSize = toIntVal(product(cLayout.shape[1]))
+  const fragSize = toInt(product(cLayout.shape[1]))
   const blockSize = tma.threadCount()
   static:
     doAssert fragSize <= 63,
@@ -296,14 +296,14 @@ func cStoreMask*(tma: static TiledMma; threadIdx: int;
   const coordMap = block:
     var a: array[fragSize, (int, int)]
     for v in 0 ..< fragSize:
-      a[v] = idx2crd(atomL, toIntVal(crd2idx(cLayout, (0, v))))
+      a[v] = idx2crd(atomL, toInt(crd2idx(cLayout, (0, v))))
     a
   const origin = block:
     var a: array[blockSize, (int, int)]
     for tid in 0 ..< blockSize:
       let s = tma.get_slice(tid)
       let tsel = idx2crd(cLayout.shape[0], s.tv)
-      let f0 = idx2crd(atomL, toIntVal(crd2idx(cLayout, (tsel, 0))))
+      let f0 = idx2crd(atomL, toInt(crd2idx(cLayout, (tsel, 0))))
       a[tid] = (s.tm * atomM + f0[0], s.tn * atomN + f0[1])
     a
 

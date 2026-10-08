@@ -126,8 +126,8 @@ proc runMakeLayoutLikeAliasTests =
     ## the remaining alias fixtures must also survive make_layout_like
     let b = make_layout_like(make_layout(((4, 8), 2), ((8, 1), 32)))
     let c = make_layout_like(make_layout(((4, 8), (2, 2)), ((32, 1), (16, 8))))
-    doAssert toIntVal(size(b)) > 0
-    doAssert toIntVal(size(c)) > 0
+    doAssert toInt(size(b)) > 0
+    doAssert toInt(size(c)) > 0
   echo "    make_layout_like under alias fixture: 2 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════

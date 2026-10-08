@@ -128,8 +128,8 @@ block: # evalOnceAs template → generic proc arg — Nim compiler limitation
     evalOnceAs(val, x)
     Int[val]()
   proc checkIndep[A, B: Int](a: A; b: B) =
-    doAssert toIntVal(a) == 3
-    doAssert toIntVal(b) == 7
+    doAssert toInt(a) == 3
+    doAssert toInt(b) == 7
   # Would fail inline (both args get Int[3]):
   # checkIndep(makeWrapped(3), makeWrapped(7))
   
@@ -186,67 +186,67 @@ suite "Int[N] — compile-time integer type":
 
   test "Int[4] literal":
     evalOnceAs(alias, Int[4]())
-    static: doAssert toIntVal(alias) == 4
+    static: doAssert toInt(alias) == 4
 
   test "negative Int[-1]":
     evalOnceAs(alias, Int[-1]())
-    static: doAssert toIntVal(alias) == -1
+    static: doAssert toInt(alias) == -1
 
   test "Int[0]":
     evalOnceAs(alias, Int[0]())
-    static: doAssert toIntVal(alias) == 0
+    static: doAssert toInt(alias) == 0
 
   test "Int[2] + Int[3]":
     evalOnceAs(alias, Int[2]() + Int[3]())
-    static: doAssert toIntVal(alias) == 5
+    static: doAssert toInt(alias) == 5
 
   test "Int[10] * Int[3]":
     evalOnceAs(alias, Int[10]() * Int[3]())
-    static: doAssert toIntVal(alias) == 30
+    static: doAssert toInt(alias) == 30
 
   test "Int[7] - Int[4]":
     evalOnceAs(alias, Int[7]() - Int[4]())
-    static: doAssert toIntVal(alias) == 3
+    static: doAssert toInt(alias) == 3
 
   test "Int[20] div Int[3]":
     evalOnceAs(alias, Int[20]() div Int[3]())
-    static: doAssert toIntVal(alias) == 6
+    static: doAssert toInt(alias) == 6
 
   test "Int[17] mod Int[5]":
     evalOnceAs(alias, Int[17]() mod Int[5]())
-    static: doAssert toIntVal(alias) == 2
+    static: doAssert toInt(alias) == 2
 
   test "chained arithmetic: Int[2]+Int[3]*Int[4]":
     evalOnceAs(alias, Int[2]() + Int[3]() * Int[4]())
-    static: doAssert toIntVal(alias) == 14
+    static: doAssert toInt(alias) == 14
 
   test "Int[5] + 3 (mixed Int+int)":
     evalOnceAs(alias, Int[5]() + 3)
-    static: doAssert toIntVal(alias) == 8
+    static: doAssert toInt(alias) == 8
 
   test "max(Int[3], Int[7])":
     evalOnceAs(a, max(Int[3](), Int[7]()))
-    static: doAssert toIntVal(a) == 7
+    static: doAssert toInt(a) == 7
 
   test "min(Int[9], Int[4])":
     evalOnceAs(b, min(Int[9](), Int[4]()))
-    static: doAssert toIntVal(b) == 4
+    static: doAssert toInt(b) == 4
 
   test "ceil_div(Int[10], Int[3])":
     evalOnceAs(c, ceil_div(Int[10](), Int[3]()))
-    static: doAssert toIntVal(c) == 4
+    static: doAssert toInt(c) == 4
 
   test "abs(Int[-7])":
     evalOnceAs(d, abs(Int[-7]()))
-    static: doAssert toIntVal(d) == 7
+    static: doAssert toInt(d) == 7
 
   test "multiple Int aliases in scope":
     evalOnceAs(a, Int[2]())
     evalOnceAs(b, Int[3]())
     evalOnceAs(c, Int[5]())
-    static: doAssert toIntVal(a) == 2
-    static: doAssert toIntVal(b) == 3
-    static: doAssert toIntVal(c) == 5
+    static: doAssert toInt(a) == 2
+    static: doAssert toInt(b) == 3
+    static: doAssert toInt(c) == 5
 
   test "no shadowing — genSym'd template aliases are independent":
     ## Regression: multiple evalOnceAs in the same scope used to collide
@@ -256,9 +256,9 @@ suite "Int[N] — compile-time integer type":
     evalOnceAs(sh2, Int[3]())
     evalOnceAs(sh3, Int[5]())
     static:
-      doAssert toIntVal(sh1) == 2
-      doAssert toIntVal(sh2) == 3
-      doAssert toIntVal(sh3) == 5
+      doAssert toInt(sh1) == 2
+      doAssert toInt(sh2) == 3
+      doAssert toInt(sh3) == 5
   test "no shadowing — evalOnceAs collisions":
     ## Direct evalOnceAs collision test: multiple calls with different
     ## values in the same scope must produce independent aliases.
@@ -267,9 +267,9 @@ suite "Int[N] — compile-time integer type":
     evalOnceAs(x2, Int[3]())
     evalOnceAs(x3, Int[5]())
     static:
-      doAssert toIntVal(x1) == 2
-      doAssert toIntVal(x2) == 3
-      doAssert toIntVal(x3) == 5
+      doAssert toInt(x1) == 2
+      doAssert toInt(x2) == 3
+      doAssert toInt(x3) == 5
 
   test "no shadowing — static int evalOnceAs collisions":
     evalOnceAs(a1, 10)
@@ -285,10 +285,10 @@ suite "Int[N] — compile-time integer type":
     evalOnceAs(m2, 42)
     evalOnceAs(m3, (Int[3](), Int[4]()))
     static:
-      doAssert toIntVal(m1) == 7
+      doAssert toInt(m1) == 7
       doAssert m2 == 42
-      doAssert toIntVal(m3[0]) == 3
-      doAssert toIntVal(m3[1]) == 4
+      doAssert toInt(m3[0]) == 3
+      doAssert toInt(m3[1]) == 4
 
 # 3.  Proc chains — Int[N] through function calls
 # ═══════════════════════════════════════════════════════════════════════
@@ -297,27 +297,27 @@ suite "Proc chains — Int[N] through function calls":
 
   test "identity through proc":
     evalOnceAs(alias, idInt(Int[4]()))
-    static: doAssert toIntVal(alias) == 4
+    static: doAssert toInt(alias) == 4
 
   test "add2 through proc":
     evalOnceAs(alias, add2(Int[4]()))
-    static: doAssert toIntVal(alias) == 6
+    static: doAssert toInt(alias) == 6
 
   test "proc-proc chain: add2(add2(Int[3]))":
     evalOnceAs(alias, add2(add2(Int[3]())))
-    static: doAssert toIntVal(alias) == 7
+    static: doAssert toInt(alias) == 7
 
   test "composeAddMul(Int[3], Int[5])":
     evalOnceAs(alias, composeAddMul(Int[3](), Int[5]()))
-    static: doAssert toIntVal(alias) == 21
+    static: doAssert toInt(alias) == 21
 
   test "three-deep proc chain: add2(add2(add2(Int[0])))":
     evalOnceAs(alias, add2(add2(add2(Int[0]()))))
-    static: doAssert toIntVal(alias) == 6
+    static: doAssert toInt(alias) == 6
 
   test "mixed arithmetic + proc chain: sum(Int[2], Int[3]) * Int[4]":
     evalOnceAs(alias, sum(Int[2](), Int[3]()) * Int[4]())
-    static: doAssert toIntVal(alias) == 20
+    static: doAssert toInt(alias) == 20
 
 # ═══════════════════════════════════════════════════════════════════════
 # 4.  Template chains — constant folding through templates
@@ -331,11 +331,11 @@ suite "Template chains — Int[N] through templates":
 
   test "identity through template":
     evalOnceAs(alias, tplIdentity(Int[4]()))
-    static: doAssert toIntVal(alias) == 4
+    static: doAssert toInt(alias) == 4
 
   test "add2 through template":
     evalOnceAs(alias, tplAdd2(Int[4]()))
-    static: doAssert toIntVal(alias) == 6
+    static: doAssert toInt(alias) == 6
 
   test "template chain: tplDouble(tplAdd2(Int[3]))":
     # Nim 2.2.10 cannot static-evaluate chained templates with static int params.
@@ -345,7 +345,7 @@ suite "Template chains — Int[N] through templates":
   test "evalOnceAs(evalOnceAs(...)) — nested":
     evalOnceAs(inner, Int[4]())
     evalOnceAs(outer, inner)
-    static: doAssert toIntVal(outer) == 4
+    static: doAssert toInt(outer) == 4
 
 # ═══════════════════════════════════════════════════════════════════════
 # 5.  Tuples of Int[N] — shape/stride computations
@@ -355,45 +355,45 @@ suite "Tuples of Int[N] — shape/stride tuples":
 
   test "tuple literal (Int[3], Int[4])":
     evalOnceAs(alias, (Int[3](), Int[4]()))
-    static: doAssert toIntVal(alias[0]) == 3
-    static: doAssert toIntVal(alias[1]) == 4
+    static: doAssert toInt(alias[0]) == 3
+    static: doAssert toInt(alias[1]) == 4
 
   test "1-element tuple (Int[10],)":
     evalOnceAs(alias, (Int[10](),))
-    static: doAssert toIntVal(alias[0]) == 10
+    static: doAssert toInt(alias[0]) == 10
 
   test "nested tuple ((Int[11], Int[22]), (Int[33],))":
     evalOnceAs(alias, ((Int[11](), Int[22]()), (Int[33](),)))
-    static: doAssert toIntVal(alias[0][0]) == 11
-    static: doAssert toIntVal(alias[0][1]) == 22
-    static: doAssert toIntVal(alias[1][0]) == 33
+    static: doAssert toInt(alias[0][0]) == 11
+    static: doAssert toInt(alias[0][1]) == 22
+    static: doAssert toInt(alias[1][0]) == 33
 
   test "tuple arithmetic: element-wise add":
     proc addTup[V, U: static int](a: Int[V]; b: Int[U]): Int[V + U] = Int[V + U]()
     evalOnceAs(alias, (addTup(Int[11](), Int[22]()), addTup(Int[44](), Int[55]())))
-    static: doAssert toIntVal(alias[0]) == 33
-    static: doAssert toIntVal(alias[1]) == 99
+    static: doAssert toInt(alias[0]) == 33
+    static: doAssert toInt(alias[1]) == 99
 
   test "tuple from proc chain":
     proc makeShape[V, U: static int](a: Int[V]; b: Int[U]): (Int[V], Int[U]) = (a, b)
     evalOnceAs(alias, makeShape(Int[6](), Int[7]()))
-    static: doAssert toIntVal(alias[0]) == 6
-    static: doAssert toIntVal(alias[1]) == 7
+    static: doAssert toInt(alias[0]) == 6
+    static: doAssert toInt(alias[1]) == 7
 
   test "tuple from template chain":
     template tplShape[V, U: static int](a: Int[V]; b: Int[U]): (Int[V], Int[U]) = (a, b)
     evalOnceAs(alias, tplShape(Int[8](), Int[9]()))
-    static: doAssert toIntVal(alias[0]) == 8
-    static: doAssert toIntVal(alias[1]) == 9
+    static: doAssert toInt(alias[0]) == 8
+    static: doAssert toInt(alias[1]) == 9
 
   test "nested tuple from chained procs":
     proc inner[V: static int](x: Int[V]): (Int[V], Int[V * 2]) = (x, Int[V * 2]())
     proc outer[V: static int](t: (Int[V], Int[V * 2])): (Int[V], Int[V * 2], Int[V * 3]) =
       (t[0], t[1], Int[V * 3]())
     evalOnceAs(alias, outer(inner(Int[4]())))
-    static: doAssert toIntVal(alias[0]) == 4
-    static: doAssert toIntVal(alias[1]) == 8
-    static: doAssert toIntVal(alias[2]) == 12
+    static: doAssert toInt(alias[0]) == 4
+    static: doAssert toInt(alias[1]) == 8
+    static: doAssert toInt(alias[2]) == 12
 
 # ═══════════════════════════════════════════════════════════════════════
 # 6.  isConst detection — constant info is NOT lost through alias
@@ -527,18 +527,18 @@ suite "No double evaluation — side effects with Int types":
 #     evalOnceAs(c, b)
 #     evalOnceAs(d, c)
 #     evalOnceAs(e, d)
-#     static: doAssert toIntVal(e) == 1
+#     static: doAssert toInt(e) == 1
 
 #   test "fibonacci at type level through evalOnceAs":
 #     proc fib(V: static int): static int =
 #       when V <= 1: V
 #       else: fib(V - 1) + fib(V - 2)
 #     evalOnceAs(alias, Int[fib(10)]())
-#     static: doAssert toIntVal(alias) == 55
+#     static: doAssert toInt(alias) == 55
 
 #   test "compile-time factorial through evalOnceAs":
 #     proc fact(V: static int): static int =
 #       when V <= 1: 1
 #       else: V * fact(V - 1)
 #     evalOnceAs(alias, Int[fact(6)]())
-#     static: doAssert toIntVal(alias) == 720
+#     static: doAssert toInt(alias) == 720

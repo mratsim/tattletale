@@ -20,7 +20,7 @@ import ./tiles
 template shardShape*[R, C: static int; A: static MmaAtom](): untyped =
   ## Per-lane shape of an epilogue operand view: (rowTiles, colTiles, vpt).
   (Int[R div A.getM()](), Int[C div A.getN()](),
-   Int[A.valuesPerThread(opC).toIntVal()]())
+   Int[A.valuesPerThread(opC).toInt()]())
 
 template shardStrides*[R, C: static int; A: static MmaAtom](
     strideRow, strideCol: static int): untyped =
@@ -35,14 +35,14 @@ template shardView*[T; R, C: static int; A: static MmaAtom](
     origin: untyped): untyped =
   ## Per-lane gmem view of an epilogue operand
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let baseOff = (uint32(origin[2]) * uint32(R)) * uint32(strideRow) +
                 (uint32(origin[3]) * uint32(C)) * uint32(strideCol) +
                 uint32(cell mod A.getM()) * uint32(strideRow) +
                 uint32(cell div A.getM()) * uint32(strideCol)
   make_view(buf +% baseOff,
             make_layout((Int[R div A.getM()](), Int[C div A.getN()](),
-                         Int[A.valuesPerThread(opC).toIntVal()]()),
+                         Int[A.valuesPerThread(opC).toInt()]()),
                         (Int[A.getM() * strideRow](), Int[A.getN() * strideCol](),
                          Int[strideCol]())))
 
@@ -91,7 +91,7 @@ template shardStridedOperand*[T; R, C: static int; A: static MmaAtom](
   ## offset plus the lane's cell offset. The args are named rscArg/cscArg
   ## so the constructor field names rsc/csc survive template substitution.
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let base = (uint32(origin[2]) * uint32(R)) * uint32(rscArg) +
              (uint32(origin[3]) * uint32(C)) * uint32(cscArg) +
              uint32(cell mod A.getM()) * uint32(rscArg) +

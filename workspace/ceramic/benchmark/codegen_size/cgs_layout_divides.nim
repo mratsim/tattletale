@@ -33,39 +33,39 @@ const logicalDivideOnlyMsl = metal:
 const sizeOverheadMsl = metal:
   proc sizeOverheadKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, int N))
-    C[0] = float32 toIntVal size(L)
+    C[0] = float32 toInt size(L)
 
 const sizeOverheadCompMsl = metal:
   proc sizeOverheadCompKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, 16))
-    C[0] = float32 toIntVal size(L)
+    C[0] = float32 toInt size(L)
 
 const sizeOverheadRank4Msl = metal:
   proc sizeOverheadRank4Kernel(C: ptr UncheckedArray[float32]; N4, C4, H4, W4: int32) {.global.} =
     let L = make_layout((int(N4), int(C4), int(H4), int(W4)),
                         (int(C4 * H4 * W4), int(H4 * W4), int(W4), 1))
-    C[0] = float32 toIntVal size(L)
+    C[0] = float32 toInt size(L)
 
 # logical_divide with a Layout tiler, covers the complement + compose general path
 const logicalDivideCompMsl = metal:
   proc logicalDivideCompKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, 16))
     let d = logical_divide(L, make_layout((16, 4)))
-    C[0] = float32 toIntVal size(d)
+    C[0] = float32 toInt size(d)
 
 # zipped_divide with a tuple tiler on a runtime rank-2 layout
 const zippedDivideTupleMsl = metal:
   proc zippedDivideTupleKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, int(N)))
     let zd = zipped_divide(L, (16, 16))
-    C[0] = float32 toIntVal size(zd)
+    C[0] = float32 toInt size(zd)
 
 # zipped_divide with a Layout tiler, the logical_divide whole-layout call applies to the entire layout
 const zippedDivideLayoutMsl = metal:
   proc zippedDivideLayoutKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, int(N)))
     let zd = zipped_divide(L, make_layout((16, 4), (1, 16)))
-    C[0] = float32 toIntVal size(zd)
+    C[0] = float32 toInt size(zd)
 
 # zipped_divide on a runtime rank-4 layout, the NHWC gmem view pattern
 const zippedDivideRank4Msl = metal:
@@ -73,7 +73,7 @@ const zippedDivideRank4Msl = metal:
     let L = make_layout((int(N4), int(C4), int(H4), int(W4)),
                         (int(C4 * H4 * W4), int(H4 * W4), int(W4), 1))
     let zd = zipped_divide(L, (8, 8, 8, 8))
-    C[0] = float32 toIntVal size(zd)
+    C[0] = float32 toInt size(zd)
 
 # ── kernel rows ──
 

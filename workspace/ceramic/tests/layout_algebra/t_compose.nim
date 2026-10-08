@@ -28,7 +28,7 @@ proc assertCompositionProperty[Sh1, St1, Sh2, St2](a: Layout[Sh1, St1], b: Layou
   doAssert compatible(b.shape, r.shape),
     "compatible(" & $b.shape & ", " & $r.shape & ")"
   for x in 0 ..< size(b):
-    doAssert r(x) == a(b(x)),
+    doAssert r(x) === a(b(x)),
       "(a ∘ b)(" & $x & ")=" & $r(x) & " a(b(" & $x & "))=" & $a(b(x))
 
 const flat   = make_layout((4, 8), (1, 32))
@@ -371,8 +371,8 @@ proc runComposeNestedTests =
     check c.stride, (1, 16), (Int[1], Int[16])
   block:
     let c = compose(make_layout(16, 1), make_layout(((4, 2), (2,)), ((1, 16), (32,))))
-    check c.shape, ((4, 2), (2,)), ((Int[4], Int[2]), (Int[2],))
-    check c.stride, ((1, 16), (32,)), ((Int[1], Int[16]), (Int[32],))
+    check c.shape, ((4, 2), 2), ((Int[4], Int[2]), Int[2])
+    check c.stride, ((1, 16), 32), ((Int[1], Int[16]), Int[32])
   block:
     let c = compose(make_layout(8, 2), make_layout(4, 1))
     check c.shape, 4, Int[4]
@@ -528,7 +528,7 @@ proc runComposeZeroStrideTests =
   block:
     let lhs = make_layout((2, 3), (3, 1))
     let permuted = logical_divide(lhs, right_inverse(lhs))
-    check toIntVal(size(make_layout(permuted.shape[0], permuted.stride[0]))), 6, int
+    check size(make_layout(permuted.shape[0], permuted.stride[0])), 6, int
     check permuted.stride[1], Int[3](), Int[3]
   echo "  zero-stride: 2 cases OK"
 

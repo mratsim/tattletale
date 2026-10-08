@@ -201,7 +201,7 @@ block:
   # flat 31 over the shape is (3, 7) and the stride-based
   # decomposition gives (1, 7), no roundtrip, the compact-only case
   doAssert idx2crd(n, 31) === (1, 7)
-  doAssert crd2idx(n, idx2crd(n, 31)).toIntVal() != 31
+  doAssert crd2idx(n, idx2crd(n, 31)).toInt() != 31
 
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd — specific coordinate tests (commented: == on Int[N] blocked)

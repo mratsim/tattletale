@@ -54,14 +54,16 @@ template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = Layou
   # Implementation note:
 
   when order == LayoutLeft:
-    Layout[typeof(makeIntTuple(shapeArg)), typeof(prefix_product(convShape))](
+    Layout[typeof(makeIntTuple(shapeArg)),
+           typeof(prefix_product(makeIntTuple(shapeArg)))](
       shape: makeIntTuple(shapeArg),
-      stride: prefix_product(convShape)
+      stride: prefix_product(makeIntTuple(shapeArg))
     )
   else:
-    Layout[typeof(convShape), typeof(suffix_product(convShape))](
-      shape: convShape,
-      stride: suffix_product(convShape)
+    Layout[typeof(makeIntTuple(shapeArg)),
+           typeof(suffix_product(makeIntTuple(shapeArg)))](
+      shape: makeIntTuple(shapeArg),
+      stride: suffix_product(makeIntTuple(shapeArg))
     )
 
 template make_layout*[ShT, StT: IntOrIntTuple or CoordStride](shapeArg: ShT, strideArg: StT): auto =

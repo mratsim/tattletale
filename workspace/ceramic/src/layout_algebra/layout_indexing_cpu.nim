@@ -36,16 +36,16 @@ func seek(wheel: var CoordWheel, shape, strides: auto, target: int) {.inline.} =
   staticForCountdown k, wheel.Rank - 1, 1:
     var span = 1
     staticFor j, 0, k:
-      span *= toIntVal(shape[j])
+      span *= toInt(shape[j])
     while remaining >= span:
       remaining -= span
       wheel.coord[k] += 1
-      wheel.offset += toIntVal(strides[k])
+      wheel.offset += toInt(strides[k])
   wheel.coord[0] = remaining
   when wheel.Rank == 1:
-    wheel.offset += remaining * toIntVal(strides)
+    wheel.offset += remaining * toInt(strides)
   else:
-    wheel.offset += remaining * toIntVal(strides[0])
+    wheel.offset += remaining * toInt(strides[0])
 
 # ═══════════════════════════════════════════════════════════════
 #  idx2crd over a Layout, wheel peeling

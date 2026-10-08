@@ -87,8 +87,8 @@ func copyChunks[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
         dstP[dstOff + i] = srcP[srcOff + i]
   else:
     let
-      cdI = toIntVal(C.shape[d])
-      sdI = toIntVal(C.stride[d])
+      cdI = toInt(C.shape[d])
+      sdI = toInt(C.stride[d])
     for j in 0 ..< cdI:
       copyChunks(C, d + 1, dstP, srcP,
                  dstOff + sdI * j, srcOff + srcStride * j, srcStride * cdI,
@@ -116,9 +116,9 @@ func copyFrom*[T, ShD, StD, ShS, StS](
   const elemBits = sizeof(T) * 8
   let
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
-    wV = when typeof(C.shape) is tuple: toIntVal(C.shape[0]) else: toIntVal(C.shape)
+    wV = when typeof(C.shape) is tuple: toInt(C.shape[0]) else: toInt(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  let spansCover = toIntVal(size(R)) == toIntVal(size(srcV))
+  let spansCover = toInt(size(R)) == toInt(size(srcV))
   if spansCover and s0 === 1:
     copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
   else:

@@ -261,12 +261,12 @@ proc runTest() =
     let B = f16Fixture(rng, N, K, discriminator = trial == 0)
 
     var gpuC = newSeq[float32](M * N)
-    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("f16MmaKernel", gpuC, (A, B))
+    engine.run<<(1, toInt(atom.threadCount(opA)))>>("f16MmaKernel", gpuC, (A, B))
     verifyF16(atom, gpuC, A, B, 0.0'f32, "in-place trial " & $trial)
 
     # explicit-output (5-arg)
     var gpuD = newSeq[float32](M * N)
-    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("f16MmaExplicitKernel", gpuD, (A, B))
+    engine.run<<(1, toInt(atom.threadCount(opA)))>>("f16MmaExplicitKernel", gpuD, (A, B))
     verifyF16(atom, gpuD, A, B, 1.0'f32, "explicit trial " & $trial)
 
   echo "  OK: f16 m8n8k8 microtile matches the exact f32 reference (", $atom,

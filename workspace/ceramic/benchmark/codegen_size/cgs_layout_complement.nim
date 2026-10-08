@@ -14,14 +14,14 @@ const complementDirectMsl = metal:
   proc complementDirectKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int(M), int(N)), (1, 16))
     let r = complement(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # complement of a fully static layout, the compile-time path
 const complementStaticMsl = metal:
   proc complementStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 2), (1, 16))
     let r = complement(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # the copy chain, right_inverse + coalesce(compose(dst, R)) in copyFrom,
 # the KV-write pattern, row-padded dst and row-compact src

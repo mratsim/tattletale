@@ -13,7 +13,7 @@ const concatDirectMsl = metal:
 # measured kernel, the call site reads crd2idx directly
   proc concatDirectKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let r = make_layout(concat((2, 3), (4,)), concat((1, 3), (12,)))
-    C[0] = float32 toIntVal crd2idx(r, (1, 1, 1))
+    C[0] = float32 toInt crd2idx(r, (1, 1, 1))
 
 # ── kernel rows ──
 

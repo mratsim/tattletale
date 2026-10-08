@@ -379,8 +379,8 @@ proc runComplementDisjointnessTests =
     let c = complement(layout)
     for i in 0 ..< size(layout):
       for j in 0 ..< size(c):
-        if layout(i) != 0 and c(j) != 0:
-          doAssert layout(i) != c(j),
+        if layout(i) !== 0 and c(j) !== 0:
+          doAssert layout(i) !== c(j),
             "complement overlaps at " & $i & "," & $j
 
   chkDisjoint(make_layout(1, 0))
