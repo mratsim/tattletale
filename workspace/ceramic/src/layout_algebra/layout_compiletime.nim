@@ -7,7 +7,9 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
+import std/importutils
 import ./layouts_unsanctioned_helpers
+import ./ism_coord_strides
 
 # ═══════════════════════════════════════════════════════════════
 #  emitLayout, builder-to-layout constructor
@@ -285,3 +287,17 @@ macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): unty
     builder.append(shapeLeaves[i], strideLeaves[i])
   result = builder.emitLayout()
 
+# ═══════════════════════════════════════════════════════════════
+#  basisReprStream
+# ═══════════════════════════════════════════════════════════════
+
+func basisReprStream*(stride: NimNode): TupleStream =
+  ## Unified stream for strides, regular scalars or coordinate strides
+  privateAccess(TupleStream)
+  let ty = stride.getTypeInst()
+  let csDesc = ty.getCoordStrideDescriptor()
+  if csDesc.kind == caNone:
+    result.pending = TupleStreamEvent(path: @[], kind: kLeaf, leaf: stride, leafTy: ty)
+    result.hasPending = true
+  else:
+    result = csDesc.coeffs.tupleStream()

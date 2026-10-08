@@ -250,8 +250,8 @@ type
     scale*: int
     coeffs*: NimNode # caMulti: the coefficient tuple, values as int literals
 
-proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compileTime.} =
-  ## Extracts the compile-time descriptor of one stride leaf from its type.
+proc isCoordStride*(leafTy: NimNode): bool {.compileTime.} =
+  ## True when the type is a coordinate stride instantiation
   var t = leafTy
   if t.kind == nnkSym:
     let impl = t.getImpl
@@ -259,10 +259,17 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compile
         impl[2][0].kind == nnkSym and impl[2][0].strVal == "typeDesc":
       t = impl[2][1]
     else:
-      return CoordStrideDescriptor(kind: caNone)
-  if not (t.kind == nnkBracketExpr and t[0].kind == nnkSym and
-      t[0].strVal == "CoordStride"):
+      return false
+  result = t.kind == nnkBracketExpr and t[0].kind == nnkSym and
+    t[0].strVal == "CoordStride"
+
+proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compileTime.} =
+  ## Extracts the compile-time descriptor of one stride leaf from its type.
+  if not isCoordStride(leafTy):
     return CoordStrideDescriptor(kind: caNone)
+  var t = leafTy
+  if t.kind == nnkSym:
+    t = t.getImpl[2][1]
   let coeffs = t[1]
   var
     nzCount = 0
@@ -284,25 +291,6 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compile
     CoordStrideDescriptor(kind: caSingle, path: nzPath, scale: nzValue, coeffs: coeffs)
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
-
-proc basisRepr*(bStride: NimNode): seq[tuple[value: NimNode, path: seq[int]]] {.compileTime.} =
-  ## A stride decomposed into scaled basis terms:
-  ## - one term per nonzero coefficient of a coordinate stride
-  ## - an int stride, static or dynamic, is the single rank-zero term
-  ## - an all-zero coordinate stride yields no terms
-  var terms: seq[tuple[value: NimNode, path: seq[int]]]
-  proc walk(n: NimNode, p: seq[int]) =
-    if n.kind in {nnkTupleConstr, nnkPar}:
-      for i in 0 ..< n.len:
-        walk(n[i], p & i)
-    elif n.intVal != 0:
-      terms.add (newLit(int(n.intVal)), p)
-  let desc = getCoordStrideDescriptor(bStride.getTypeInst())
-  if desc.kind == caNone:
-    terms.add (bStride, @[])
-  else:
-    walk(desc.coeffs, @[])
-  terms
 
 proc csScaledEq(a, b: NimNode, s: int): bool {.compileTime.} =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,

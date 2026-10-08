@@ -520,7 +520,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
     else:
       var aSh, aSt: NimNode
       let stmts = newStmtList()
-      if getCoordStrideDescriptor(bStride.getTypeInst()).kind == caNone:
+      if not isCoordStride(bStride.getTypeInst()):
         stmts.add quote do:
           evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
         (aSh, aSt) = result.destructureLayout(ident"aPrime")
@@ -530,11 +530,19 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
       var shapeAst, strideAst: NimNode = nil
       template termDelegate(aSh, aSt, m, n: typed): untyped =
         stridedMod(stridedDiv(make_layout(aSh, aSt), m), n)
-      for i, (termValue, termPath) in basisRepr(bStride):
+      var termIndex = 0
+      var termStream = bStride.basisReprStream()
+      for termEv in termStream:
+        if termEv.kind != kLeaf:
+          continue
+        if termEv.leaf.kind in {nnkIntLit .. nnkInt64Lit} and termEv.leaf.intVal == 0:
+          continue
+        let termValue = termEv.leaf
         let termAst = getAst(termDelegate(
-          pathSelect(aSh, termPath), pathSelect(aSt, termPath),
+          pathSelect(aSh, termEv.path), pathSelect(aSt, termEv.path),
           termValue, bShape))
-        let alias = ident("composeTerm" & $i)
+        let alias = ident("composeTerm" & $termIndex)
+        inc termIndex
         stmts.add quote do:
           let `alias` = `termAst`
         let (termShape, termStride) = result.destructureLayout(alias)
@@ -1030,7 +1038,9 @@ template zipped_divide*(layout: Layout, tiler: auto): auto =
   ##
   ## Returns:
   ## - dimension 0 carries the tile, dimension 1 the rest, zipped
-  hier_unzip(logical_divide, layout, tiler)
+  hier_unzip(logical_divide, layout,
+    when tiler is Layout: tiler
+    else: makeIntTuple(tiler))
 
 # ═══════════════════════════════════════════════════════════════
 #  tiled_divide / flat_divide
