@@ -75,36 +75,39 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
     result.shape = inner[1]
     result.strides = inner[2]
     return
-  let typ = layoutAst.getTypeInst()
-  let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
-  doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
-    "destructureLayout: expected a Layout, got " & typ.repr
-  if inner.kind == nnkObjConstr:
-    for field in inner:
-      if field.kind == nnkExprColonExpr:
-        if field[0].eqIdent("shape"):
-          result.shape = field[1]
-        elif field[0].eqIdent("stride"):
-          result.strides = field[1]
-    # the semchecked constructor fields wrap the base tuples
-    # in a hidden conversion, unwrap it.
-    while result.shape.kind == nnkHiddenSubConv:
-      result.shape = result.shape[^1]
-    while result.strides.kind == nnkHiddenSubConv:
-      result.strides = result.strides[^1]
-    doAssert result.shape != nil and result.strides != nil,
-      "destructureLayout: Layout constructor without shape/stride fields"
-  elif layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
-      inner.kind in {nnkCall, nnkCommand}:
-    # A layout-valued call, or a value typed through
-    # a `typeof(make_layout(...))` alias symbol.
-    let alias = ident("destructuredLayout")
-    resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
-    result.shape = alias.newDotExpr(ident"shape")
-    result.strides = alias.newDotExpr(ident"stride")
-  else:
-    result.shape = layoutAst.newDotExpr(ident"shape")
-    result.strides = layoutAst.newDotExpr(ident"stride")
+  if layoutAst.kind notin {nnkSym, nnkIdent}:
+    let typ = layoutAst.getTypeInst()
+    let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
+    doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
+      "destructureLayout: expected a Layout, got " & typ.repr
+    if inner.kind == nnkObjConstr:
+      for field in inner:
+        if field.kind == nnkExprColonExpr:
+          if field[0].eqIdent("shape"):
+            result.shape = field[1]
+          elif field[0].eqIdent("stride"):
+            result.strides = field[1]
+      # the semchecked constructor fields wrap the base tuples
+      # in a hidden conversion, unwrap it.
+      while result.shape.kind == nnkHiddenSubConv:
+        result.shape = result.shape[^1]
+      while result.strides.kind == nnkHiddenSubConv:
+        result.strides = result.strides[^1]
+      doAssert result.shape != nil and result.strides != nil,
+        "destructureLayout: Layout constructor without shape/stride fields"
+      return
+    if layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
+        inner.kind in {nnkCall, nnkCommand}:
+      # A layout-valued call, or a value typed through
+      # a `typeof(make_layout(...))` alias symbol.
+      let alias = ident("destructuredLayout")
+      resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
+      result.shape = alias.newDotExpr(ident"shape")
+      result.strides = alias.newDotExpr(ident"stride")
+      return
+
+  result.shape = layoutAst.newDotExpr(ident"shape")
+  result.strides = layoutAst.newDotExpr(ident"stride")
 
 # ═══════════════════════════════════════════════════════════════
 #  hier_unzip, split a layout dimension by dimension, gather tiles and rest

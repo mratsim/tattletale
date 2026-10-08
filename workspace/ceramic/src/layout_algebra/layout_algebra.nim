@@ -494,7 +494,8 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
     return
   if bShape.getTypeInst().isTupleTy():
     result.add quote do:
-      evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
+      block:
+        evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
     template composeMode(bShape, bStride: typed): untyped =
       composeImpl(aPrime.shape, aPrime.stride, bShape, bStride)
     var builder = TupleBuilderFlat.new(2)
@@ -507,7 +508,8 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
       builder.append(
         modeAst.newDotExpr(ident"shape"),
         modeAst.newDotExpr(ident"stride"))
-    result.add builder.emitLayout()
+    let layoutAst = builder.emitLayout()
+    result[^1][^1].add layoutAst
   else:
     let nVal = bShape.getStaticInt()
     if nVal == 1:
@@ -521,8 +523,8 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
         coalesce(stridedMod(stridedDiv(coalesceImpl(aShape, aStride), bStride), bShape))
       result.add getAst(composeGeneralDelegate(aShape, aStride, bShape, bStride))
 
-macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
-  ## Layout composition, `A ∘ B`.
+macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
+  ## Layout composition, `A o B`.
   ##
   ## Say `A` is a layout, the element order of a tensor,
   ## and `B` an access pattern, say take every second element.
@@ -552,23 +554,47 @@ macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ##
   ##    (6, 2):(8, 2) ∘ (4, 3):(3, 1) → ((2, 2), 3):((24, 2), 8)
 
-macro compose*(layout: Layout, tiler: tuple): untyped =
-  ## Layout composition
-  ##
-  ## Say you have a tile of positions `tiler` and a buffer laid out
-  ## by `layout`: the composition answers where every tile position
-  ## lands inside the buffer.
-  ##
-  ## Returns a layout `R` such that `R(i) = A(B(i))` for all
-  ## `i` in `0 ..< cosize(B)`.
-  ##
-  ## Statically checkable divisibility violations are compile-time errors.
-  ##
-  ## Example:
-  ##   compose(make_layout((32, 8), (1, 32)), (16, _))
-  ##   # → (16, 8):(1, 32)
-  ##
-  ## Dimension 0 consumes 16 positions, dimension 1 passes through.
+  result = newStmtList()
+  let (aShape, aStride) = result.destructureLayout(a)
+  let tilerTy = tiler.getTypeInst()
+  if not tilerTy.isTupleTy():
+    # a layout tiler: destructured and handed to composeImpl as-is
+    let (bShape, bStride) = result.destructureLayout(tiler)
+    template composeDelegate(aShape, aStride, bShape, bStride: typed): untyped =
+      composeImpl(aShape, aStride, bShape, bStride)
+    result.add getAst(composeDelegate(aShape, aStride, bShape, bStride))
+    return
+  # tuple tiler pairs each tiler leaf with the next A mode's stride,
+  # extra A modes are dropped, extra tiler leaves are an error
+  var tilerLeaves: seq[NimNode]
+  for tEv in tiler.tupleDimsStream():
+    let tLeaf = tEv.leaf
+    if tLeaf.getTypeInst().isTupleTy():
+      error("nested tiler entries are not supported", tLeaf)
+    tilerLeaves.add tLeaf
+  var bSh: seq[NimNode]
+  var bSt: seq[NimNode]
+  var ti = 0
+  if aStride.getTypeInst().isTupleTy():
+    for stEv in aStride.tupleDimsStream():
+      if ti >= tilerLeaves.len:
+        break
+      bSh.add tilerLeaves[ti]
+      bSt.add stEv.leaf
+      inc ti
+  elif tilerLeaves.len > 0:
+    bSh.add tilerLeaves[0]
+    bSt.add aStride
+    ti = 1
+  if ti < tilerLeaves.len:
+    error("tiler has more modes than the layout", tilerLeaves[ti])
+  let bShapeNode = nnkTupleConstr.newTree(bSh)
+  let bStrideNode = nnkTupleConstr.newTree(bSt)
+  template tilerDelegate(aShape, aStride, bShapeNode, bStrideNode: typed): untyped =
+    composeImpl(aShape, aStride, bShapeNode, bStrideNode)
+  result.add getAst(tilerDelegate(aShape, aStride, bShapeNode, bStrideNode))
+
+
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product
