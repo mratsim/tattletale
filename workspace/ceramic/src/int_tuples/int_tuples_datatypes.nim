@@ -53,15 +53,20 @@ template rank*(t: IntOrIntTuple): static int =
     tupleLen(typeof(t))
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] == int, global overloads for tuple comparison
+#  Int[N] ordering, global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 
-template `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
-template `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
-template `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
-template `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
-template `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
-template `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
+template genCmpOp(op: untyped): untyped =
+  template op*[V, U: static int](a: Int[V], b: Int[U]): static bool = op(V, U)
+  template op*[V: static int](a: Int[V], b: static int): static bool = op(V, b)
+  template op*[V: static int](a: static int, b: Int[V]): static bool = op(a, V)
+  template op*[V: static int](a: Int[V], b: int): bool = op(V, b)
+  template op*[V: static int](a: int, b: Int[V]): bool = op(a, V)
+
+genCmpOp(`<`)
+genCmpOp(`<=`)
+genCmpOp(`>`)
+genCmpOp(`>=`)
 
 # ═══════════════════════════════════════════════════════════════
 #  `===`, deep element-wise comparison across Int[N] and int

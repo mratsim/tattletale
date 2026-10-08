@@ -99,9 +99,9 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
             result.strides = field[1]
       # the semchecked constructor fields wrap the base tuples
       # in a hidden conversion, unwrap it.
-      while result.shape.kind == nnkHiddenSubConv:
+      while result.shape != nil and result.shape.kind == nnkHiddenSubConv:
         result.shape = result.shape[^1]
-      while result.strides.kind == nnkHiddenSubConv:
+      while result.strides != nil and result.strides.kind == nnkHiddenSubConv:
         result.strides = result.strides[^1]
       doAssert result.shape != nil and result.strides != nil,
         "destructureLayout: Layout constructor without shape/stride fields"

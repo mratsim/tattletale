@@ -628,6 +628,8 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
     elif isLayoutTy(tLeafTy):
       let (lSh, lSt) = stmts.destructureLayout(tLeaf)
       builder.append(lSh, lSt)
+    elif not isScalarTy(tLeafTy):
+      error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
     else:
       builder.append(tLeaf, aStLeaf)
   if aShape.getTypeInst().isTupleTy():

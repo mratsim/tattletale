@@ -96,11 +96,22 @@ func getTupleType*(n: NimNode): NimNode {.compileTime.} =
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
   ## True for tuple values and tuple types
   case t.kind
-  of nnkTupleTy:
+  of nnkTupleTy, nnkTupleConstr:
     true
+  of nnkPar:
+    t.len != 1 # A single elem in parenthesis is not a tuple
+  of nnkIntLit, nnkInt64Lit, nnkFloatLit, nnkCharLit, nnkStrLit,
+     nnkNilLit, nnkEmpty:
+    # fresh macro nodes, no type to resolve and never tuples
+    false
   else:
-    let ty = t.getTupleType()
-    ty.kind in {nnkTupleConstr, nnkTupleTy}
+    t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
+
+func isScalarTy*(t: NimNode): bool {.compileTime.} =
+  t.kind == nnkIntLit or
+    (t.kind == nnkBracketExpr and t[0].sameType(bindSym"Int")) or
+    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].sameType(bindSym"Int")) or
+    (t.kind == nnkSym and t.sameType(bindSym"int"))
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)
