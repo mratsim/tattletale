@@ -38,90 +38,96 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #  coalesce
 # ═══════════════════════════════════════════════════════════════
 
-type CoalesceAcc = object
-  ## State of one coalesced chain.
-  ## - the chain: consecutive dimensions merged into a single dimension
-  ##   when one dimension's shape times the chain's stride reaches
-  ##   the next dimension's stride
-  ## - the chain's shape is the product of the merged shapes
-  ## - the chain's stride is the first merged dimension's own stride
-  shapeProduct: int
-  firstShape, firstStride: NimNode
-  firstStrideCtValue: int
-  firstCoordStride: CoordStrideDescriptor
-  lastShapeCtValue, lastStrideCtValue: int
-  lastStride: NimNode
-  builder: TupleBuilderFlat
+proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
+  ## Merges adjacent dimensions as long as there are no gaps between their elements.
+  ##
+  ## A size-1 dimension is dropped except the last one.
+  ## An empty input is mapped to (1, 0)
+  var builder = TupleBuilderFlat.new(2)
+  var span = 0                 # the open chain's shape product, 0 = no open chain
+  var headTy: NimNode          # the open chain's head stride type
+  var pending: NimNode         # a trailing size-1 leaf's stride, nil when none
+  var pendingVal = DynamicSentinel  # the pending stride's static value
 
-proc init(acc: var CoalesceAcc) =
-  acc.builder = TupleBuilderFlat.new(2)
-
-proc update(acc: var CoalesceAcc, shapeEv, strideEv: TupleStreamEvent) =
-  if shapeEv.kind != kLeaf:
-    return
-  let shapeVal = shapeEv.leafTy.getStaticInt()
-  let strideVal = strideEv.leafTy.getStaticInt()
-  let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
-  acc.lastShapeCtValue = shapeVal
-  acc.lastStrideCtValue = strideVal
-  acc.lastStride = strideEv.leaf
-
-  if shapeVal == 1:
-    return
-
-  if acc.firstShape.isNil:
-    acc.firstShape = shapeEv.leaf
-    acc.shapeProduct = shapeVal
-    acc.firstStride = strideEv.leaf
-    acc.firstStrideCtValue = strideVal
-    acc.firstCoordStride = strideCrd
-    return
-  let crdReachable =
-    if strideCrd.kind != caNone and acc.firstCoordStride.kind != caNone and
-        shapeVal != DynamicSentinel and acc.shapeProduct != DynamicSentinel:
-      csCanMerge(acc.firstCoordStride, strideCrd, acc.shapeProduct)
+  template appendChain =
+    let headVal = headTy.getStaticInt()
+    if headVal != DynamicSentinel:
+      builder.append(IntCT(span), IntCT(headVal))
     else:
-      false
-  if (shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
-      acc.shapeProduct != DynamicSentinel and acc.firstStrideCtValue != DynamicSentinel and
-      acc.shapeProduct * acc.firstStrideCtValue == strideVal) or crdReachable:
-    # the chain's span reaches this dimension's stride, merge frontward
-    acc.shapeProduct *= shapeVal
-    acc.firstShape = IntCT(acc.shapeProduct)
-    return
+      var t = headTy
+      if t.kind == nnkSym:
+        t = t.getImpl[2][1]
+      builder.append(IntCT(span), bindSym"E".newCall(t[1]))
 
-  # the chain stops short of this dimension, flush and open the next chain
-  acc.builder.append(acc.firstShape, acc.firstStride)
-  acc.firstShape = shapeEv.leaf
-  acc.shapeProduct = shapeVal
-  acc.firstStride = strideEv.leaf
-  acc.firstStrideCtValue = strideVal
-  acc.firstCoordStride = strideCrd
-
-proc finish(acc: var CoalesceAcc, preserveTrailing: bool): NimNode =
-  if acc.firstShape.isNil:
-    if preserveTrailing:
-      acc.builder.append(IntCT(DynamicSentinel), acc.lastStride)
-    elif acc.lastStride != nil:
-      acc.builder.append(IntCT(1), acc.lastStride)
-    else:
-      acc.builder.append(IntCT(1), IntCT(0))
-  else:
-    acc.builder.append(acc.firstShape, acc.firstStride)
-    if preserveTrailing and acc.lastShapeCtValue == 1 and not (
-        acc.shapeProduct != DynamicSentinel and acc.firstStrideCtValue != DynamicSentinel and
-        acc.lastStrideCtValue != DynamicSentinel and
-        acc.shapeProduct * acc.firstStrideCtValue == acc.lastStrideCtValue):
-      # the trailing size-1 marker survives when the chain stops short of it
-      acc.builder.append(IntCT(DynamicSentinel), acc.lastStride)
-  result = acc.builder.emitLayout()
-
-macro coalesceImpl(sh, st: typed, preserveTrailing: static bool = false): untyped =
-  var acc: CoalesceAcc
-  acc.init()
   for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
-    acc.update(shapeEv, strideEv)
-  result = acc.finish(preserveTrailing)
+    if shapeEv.kind != kLeaf:
+      continue
+    let shapeVal = shapeEv.leafTy.getStaticInt()
+    let strideVal = strideEv.leafTy.getStaticInt()
+    let headVal = if headTy.isNil: DynamicSentinel else: headTy.getStaticInt()
+
+    # size-1 dimension
+    if shapeVal == 1:
+      if not headTy.isNil and strideVal != DynamicSentinel and
+          headVal != DynamicSentinel and span * headVal == strideVal:
+        pending = nil
+        pendingVal = DynamicSentinel
+      else:
+        pending = strideEv.leaf
+        pendingVal = strideVal
+      continue
+
+    let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
+    let headCrd = if headTy.isNil: CoordStrideDescriptor(kind: caNone)
+                  else: headTy.getCoordStrideDescriptor()
+    let crdReachable =
+      strideCrd.kind != caNone and headCrd.kind != caNone and
+      shapeVal != DynamicSentinel and csCanMerge(headCrd, strideCrd, span)
+
+    if not headTy.isNil and
+        ((shapeVal != DynamicSentinel and strideVal != DynamicSentinel and
+          headVal != DynamicSentinel and span * headVal == strideVal) or
+         crdReachable):
+      # the chain's span reaches this dimension's stride, merge frontward
+      span *= shapeVal
+      pending = nil
+      pendingVal = DynamicSentinel
+
+    else: # Flush
+      if not headTy.isNil:
+        appendChain()
+      if shapeVal != DynamicSentinel and
+          (strideVal != DynamicSentinel or strideCrd.kind != caNone):
+        span = shapeVal
+        headTy = strideEv.leafTy
+      else:
+        builder.append(shapeEv.leaf,
+          (if strideVal != DynamicSentinel: IntCT(strideVal) else: strideEv.leaf))
+        span = 0
+        headTy = nil
+      pending = newEmptyNode()
+      pendingVal = DynamicSentinel
+
+  if not headTy.isNil:
+    appendChain()
+  elif pending.isNil:
+    builder.append(IntCT(1), IntCT(0))
+  if not pending.isNil and pending.kind != nnkEmpty:
+    builder.append(IntCT(1),
+      (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
+  return builder.emitLayout()
+
+macro coalesceImpl(sh, st: typed): untyped =
+  ## Size-1-preserving coalesce
+  result = newStmtList()
+  result.add coalesceFoldImpl(sh, st)
+  let shapeTuple = result[0][1]
+  let strideTuple = result[0][2]
+  if shapeTuple.kind in {nnkTupleConstr, nnkPar} and shapeTuple.len > 1:
+    let lastShapeVal = shapeTuple[^1].getStaticInt()
+    if lastShapeVal == 1:
+      shapeTuple.del(shapeTuple.len - 1)
+      strideTuple.del(strideTuple.len - 1)
 
 macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
@@ -136,7 +142,9 @@ macro coalesce*(layout: Layout): untyped =
   ##                  a chain reaching its stride 0 absorbs it
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-  result.add bindSym"coalesceImpl".newCall(sh, st)
+  template coalesceDelegate(shape, stride: typed): untyped =
+    coalesceImpl(shape, stride)
+  result.add getAst(coalesceDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
 #  complement
@@ -217,7 +225,7 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
       # the covered span grows by the shape when the stride closes on it
       accSpan *= dim.shape
     if defaultBound:
-      # cosize over the live leaves, invariant under the skip
+      # coshape over the live leaves, invariant under the skip
       b += (dim.shape - 1) * abs(dim.stride)
     allSkipped = false
   if allSkipped:
@@ -300,7 +308,7 @@ macro complement*(layout: Layout): untyped =
   ## Skip semantics:
   ## - a stride-0 dimension maps every coordinate to offset 0,
   ##   a size-1 dimension covers a single offset, neither opens a gap
-  ## - the default bound is cosize(layout), invariant under the skip
+  ## - the default bound is coshape(layout), invariant under the skip
   ##
   ##    offsets  ════ layout ════▶  its offsets, every second slot
   ##    offsets  ──── complement ─▶  the free slots, gap-filled in order
@@ -316,7 +324,7 @@ macro complement*(layout: Layout): untyped =
 
   let originalLayout = if result.len == 0: layout else: result[^1][1]
   result.add bindSym"complementImpl".newCall(
-    sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
+    sh, st, bindSym"coshape".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
@@ -339,24 +347,6 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
   result.add bindSym"complementImpl".newCall(sh, st, bound, newLit(false))
-
-# ═══════════════════════════════════════════════════════════════
-#  layout_add
-# ═══════════════════════════════════════════════════════════════
-
-macro layout_add*[A, B: Layout](a: A, b: B): untyped =
-  ## Layout addition, coordinate-wise: `R(i) == A(i) + B(i)`.
-  ## Supports only same nesting at the moment.
-  result = newStmtList()
-  let (shA, stA) = result.destructureLayout(a)
-  let (_, stB) = result.destructureLayout(b)
-  var builder = TupleBuilderNested.new(1)
-  for (evA, evB) in stA.tupleStream().zip(stB.tupleStream()):
-    builder.onLeaves(evA):
-      builder.append(evA.leaf + evB.leaf)
-  let scalar = not stA.isTupleTy()
-  result.add bindSym"make_layout".newCall(
-    shA, builder.emit(0, emitScalarForSize1 = scalar))
 
 # ═══════════════════════════════════════════════════════════════
 #  compose
@@ -437,57 +427,44 @@ proc finish(acc: var ComposeAcc) =
   acc.builder.appendDimension(acc.pairs)
 
 macro composeImpl(aLayout, bShape, bStrides: typed): untyped =
-  ## Nested walk over coalesced LHS and the destructured RHS:
+  ## Fold over the destructured RHS, one accumulator pass:
   ## - level 1: zip walk over the RHS shape and stride
-  ## - level 2: one dimension of B at a time is walked through A's
-  ##   dimensions by the fold accumulator, each A dimension consumes
-  ##   as many B coordinates as its size allows and the leftovers carry
+  ## - level 2: each stride term folds its LHS profile mode slice,
+  ##   an int stride is one whole-profile term, a basis stride
+  ##   names one mode per nonzero coefficient, and term strides
+  ##   add up positionally
+  ##
+  ## Each result mode coalesces at the end, pycute's per-`B`-dimension
+  ## `resultL._coalesce()`, the top-level assembly never coalesces.
   result = newStmtList()
 
   let (aShape, aStrides) = result.destructureLayout(aLayout)
-  let shapeLeaves = aShape.tupleFlatten()
-  let strideLeaves = aStrides.tupleFlatten()
-
+  # pre-coalesce A under coprofile(B), pycute's `A._coalesce_z(coprofile(B))`
+  let preCoalesced = coalesceFoldImpl(aShape, aStrides)
   var acc: ComposeAcc
-  acc.init()
-
-  # level 1: one fold per RHS dimension over the shape and stride trees
+  acc.init(preCoalesced[1], preCoalesced[2])
   for (shapeEv, strideEv) in bShape.tupleStream().zip(bStrides.tupleStream()):
     if shapeEv.kind != kLeaf:
       acc.builder.append(shapeEv, strideEv)
       continue
-    if strideEv.leafTy.getStaticInt() == 0:
-      # a stride-0 RHS dimension maps every coordinate to offset 0,
-      # the pair is the RHS dimension itself, the LHS is untouched
-      acc.builder.append(shapeEv.leaf, strideEv.leaf)
-      continue
-    let basisStride = strideEv.leafTy.getCoordStrideDescriptor()
-    if basisStride.kind != caNone:
-      # a basis-stride RHS leaf names LHS modes, each nonzero term scales
-      # its selected stride, the terms sum through the stride algebra
-      var termAcc: NimNode
-      for (index, scale) in csTerms(basisStride.coeffs):
-        let term = IntCT(scale) * strideLeaves[index].leaf
-        termAcc = if termAcc.isNil: term else: termAcc + term
-      acc.builder.append(shapeEv.leaf,
-        if termAcc.isNil: IntCT(0) else: termAcc)
-      continue
-    if shapeLeaves.len == 1:
-      # a 1-leaf profile consumes nothing, the strides multiply, no lets
-      acc.builder.append(shapeEv.leaf, strideEv.leaf * strideLeaves[0].leaf)
-      continue
-    # level 2: fold this RHS leaf over the flat LHS profile
-    acc.init(shapeEv, strideEv)
-    let R = shapeLeaves.len
-    for k in 0 ..< R:
-      acc.update(result, k, R, shapeLeaves[k].leaf, strideLeaves[k].leaf,
-                 shapeLeaves[k].leafTy.getStaticInt(),
-                 strideLeaves[k].leafTy.getStaticInt())
+    acc.update(shapeEv, strideEv)
     acc.finish()
 
-  result.add acc.builder.emitLayout()
+  let emitted = acc.builder.emitLayout()
+  let shapeArg = emitted[1]
+  let strideArg = emitted[2]
+  if shapeArg.kind in {nnkTupleConstr, nnkPar} and shapeArg.len > 0:
+    # each result mode coalesces alone, pycute's per-`B`-dimension
+    # resultL._coalesce(), the top-level assembly never coalesces
+    var dimsCall = nnkCall.newTree(bindSym"composeDims")
+    for i in 0 ..< shapeArg.len:
+      let dim = bindSym"make_layout".newCall(shapeArg[i], strideArg[i])
+      dimsCall.add bindSym"coalesce".newCall(dim)
+    result.add dimsCall
+  else:  # a scalar result is one mode, it coalesces whole
+    result.add bindSym"coalesce".newCall(emitted)
 
-macro compose*[A, B: Layout](a: A, b: B): untyped =
+macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
   ##
   ## Say `A` is a layout, the element order of a tensor,
@@ -500,12 +477,11 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   ## indexing by hand.
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
-  ## `i` in `0 ..< cosize(B)`.
-  ## Statically checkable divisibility violations are compile-time errors,
-  ## runtime shapes are unchecked.
+  ## `i` in `0 ..< coshape(B)`.
+  ## The caller is responsible for ensuring divisibility.
   ##
   ##    domain  ──── B ────▶  A's domain  ──── A ────▶  values
-  ##    domain  ══════════════ R ════════════════════▶  values
+  ##    domain  ════════════ R ══════════════▶  values
   ##
   ## With B = (5, 4):(4, 1) and A = 20:2, R = (5, 4):(8, 2):
   ##
@@ -519,7 +495,6 @@ macro compose*[A, B: Layout](a: A, b: B): untyped =
   ##
   ##    (6, 2):(8, 2) ∘ (4, 3):(3, 1) → ((2, 2), 3):((24, 2), 8)
   result = newStmtList()
-  let (aShape, aStrides) = result.destructureLayout(a)
   let (bShape, bStrides) = result.destructureLayout(b)
 
   template composeDelegateCoalesced(aShape2, aStrides2, bShape2, bStrides2) =
@@ -629,8 +604,8 @@ macro logicalProductFinish(a, rest: typed): untyped =
 macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
   ## Logical product, `a x tiler = (a, a* ∘ tiler)`.
   ##
-  ## Say you need a small tile written out at every
-  ## grid position, the product is the layout of that write-out.
+  ## Say you need a small tile written out at every grid position,
+  ## the product is the layout of that write-out.
   ## Reproduce the block `a` over the grid the tiler describes:
   ## - a copy of `a` (dimension 0) lands at every position the tiler's
   ##   offset map selects
@@ -639,7 +614,7 @@ macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
   ##
   ## Returns a rank-2 layout `R` such that `R(t, i) = a(t) + a*(tiler(i))`:
   ## - dimension 0 is the block itself, `R[0] == a`
-  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * cosize(tiler)) ∘ tiler`
+  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * coshape(tiler)) ∘ tiler`
   ## - `size(R) == size(a) * size(tiler)`
   ##
   ## Inverse of logical_divide: the divide factors `a` into tiles
@@ -659,33 +634,14 @@ macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
   ##    → ((2, 2), (3, 4)):((1, 2), (16, 4))
   ##
   ## Copy-grid semantics:
-  ## - the complement extends to the bound `size(a) * cosize(tiler)`, the span one contiguous copy grid covers
+  ## - the complement extends to the bound `size(a) * coshape(tiler)`, the span one contiguous copy grid covers
   ## - a divisible block stride chain gives distinct, non-overlapping copy slots, one per tiler position
   ## - an under-filling block keeps the largest ordered, disjoint copy grid that fits
 
-  # Implementation note
-  #
-  #   For direct AST->AST transformation of constructors we need to manipulate the AST *produced* by compose(complement(...), tiler)
-  #   In this macro we can only see the macro call AST so we need to defer to another macro
-  #   so that compose(complement(...), tiler) have the time to do their own AST->AST constructor transformation
-  #
-  #   Now one tricky part of this is that using an AST node or a template input in multiple plice will paste it verbatim
-  #   if it's used 3 times like below, `a` expression will be evaluated 3 times. This is problematic if the expression has side-effects like 'echo "launch_missiles"'.
-  #
-  #   In our case, layouts are pure and only involve integer arithmetic.
-  #   Furthermore, I argue that compared to the alternative (assigning expressions to temporaties)
-  #   an integer expression is significantly more compiler-friendly as they can be:
-  #   - constant-folded (done by nim compiler)
-  #   - terms can be reorder, say we receive (2 * (3 * (dynamic_value * (5 * 6))))
-  #     with temporaries dynamic_value would be an optimization barrier, so we would have `6 * dynamic_value * 30` with a naive compiler,
-  #     while we would have 180 * dynamic_value with a expression with more certainty as it's easier for the compiler to reorder integers
-  #   - compilers can do common sub-expression elimination more easily when only integers are dumped into an expression
-  #
-  #   This is particularly relevant for Vulkan and WebGPU backends which might not have
-  #   optimizers as thorough as LLVM's.
-
   template logicalProductDelegate(a_layout, tiler_layout) =
-    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * cosize(tiler_layout)), tiler_layout))
+    # Please read "Implementation note for direct AST->AST transformation of constructors"
+    # in layout_constructors on why no evalOnceAs
+    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * coshape(tiler_layout)), tiler_layout))
   result = getAst(logicalProductDelegate(a, tiler))
 
 # ═══════════════════════════════════════════════════════════════
@@ -698,21 +654,21 @@ template zipped_product*(blk: Layout, tiler: auto): auto =
   ## layout with both sides gathered.
   ##
   ## Say you reproduce a per-thread tile over a thread grid and one
-  ## index must select the thread's tile, dimension 0 reads inside
-  ## the tile, dimension 1 selects the tile.
+  ## index must select the thread's tile: dimension 0 reads inside
+  ## the tile and dimension 1 selects the tile.
   ##
   ## `zipped_product` applies `logical_product` and gathers the split
   ## dimensions into two dimensions:
   ## - dimension 0 = the block dimensions, one leaf per tiler element
   ## - dimension 1 = the copy dimensions, each numbered by `blk* ∘ tiler`
-  ##   over its tiler element, `blk* = complement(blk, size(blk) * cosize(tiler))`
+  ##   over its tiler element, `blk* = complement(blk, size(blk) * coshape(tiler))`
   ##
   ## Returns a layout `R` = `((M, N, ...), (TileM, TileN, ...))`,
   ## `size(R) == size(blk) * size(tiler)`.
   ##
   ## `zipped_divide` runs the mirrored gather:
   ## - `zipped_divide(a, b)[0] = compose(a, b)`, the tile sides gathered
-  ## - `zipped_product(a, b)[1] = compose(complement(a, size(a) * cosize(b)), b)`,
+  ## - `zipped_product(a, b)[1] = compose(complement(a, size(a) * coshape(b)), b)`,
   ##   the copy sides gathered
   ##
   ## Example:
@@ -922,8 +878,7 @@ macro logical_divide*[A, B: Layout](layout: A, tiler: B): untyped =
   ## Contract:
   ## - a Layout tiler returns a 2-dimension layout, dimension 0
   ##   is `compose(layout, tiler)`, dimension 1 numbers the tiles
-  ## - every element of `layout` appears exactly once, the divide
-  ##   reorders elements, it drops none
+  ## - every element of `layout` appears exactly once, the divide reorders elements without dropping any
   ## - the tiler must divide the layout, a caller precondition,
   ##   checked only on compile-time values
   ##
@@ -955,7 +910,7 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
   ## Per-dimension divide over the destructured layout.
   ##
   ## - one tiler element per layout dimension
-  ## - dimensions past the tiler pass through
+  ## - dimensions beyond the tiler length pass through
   ## - a divided dimension carries the (tile, rest) pair.
   template divideTupleDimShape(dsh, dst, dtl) =
     logical_divide(make_layout(dsh, dst), dtl).shape
@@ -987,7 +942,7 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
 macro logical_divide*(layout: Layout, tiler: tuple): untyped =
   ## Logical divide by a tuple tiler, one tiler element per layout dimension:
   ## - tiler elements matched positionally to layout dimensions,
-  ##   dimensions past the tiler length pass through undivided
+  ##   dimensions beyond the tiler length pass through undivided
   ## - a divided dimension becomes the (tile, rest) pair, each
   ##   pair carries the Layout-tiler contract
   ## - an empty tiler divides nothing, every dimension passes through
@@ -1150,8 +1105,8 @@ macro rightInverseImpl(sh, st: typed): untyped =
 macro right_inverse*(layout: typed): untyped =
   ## Quasi-inverse, the largest injective R with L(R(i)) == i.
   ##
-  ## Say you know a target offset and need the coordinate
-  ## reaching it, the inverse maps offsets back to coordinates.
+  ## Say you know a target offset and need the coordinate reaching it,
+  ## the inverse maps offsets back to coordinates.
   ## Returns:
   ## - a coalesced Layout, typically lower rank than L
   ## - (1, 0) when no chain exists

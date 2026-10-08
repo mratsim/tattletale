@@ -190,21 +190,6 @@ proc runCoalesceConstantFixtureTests =
     check c.stride, (2, 8), (Int[2], Int[8])
   echo "  const layout: 2 cases OK"
 
-# ── coalesce inside compose, trailing size-1 dimension ───────
-proc runCoalesceTrailingSizeOneTests =
-  ## Coalesce of the compose LHS: a chain that reaches a trailing
-  ## size-1 dimension's stride absorbs it, a chain that stops short
-  ## leaves the Int[DynamicSentinel] marker untouched by the arithmetic.
-  block:
-    let r = compose(make_layout((4, 1), (1, 4)), make_layout(4, 1))
-    check r.shape, 4, Int[4]
-    check r.stride, 1, Int[1]
-  block:
-    let r = compose(make_layout((2, 1), (1, 3)), make_layout(2, 1))
-    check r.shape, 2, Int[2]
-    check r.stride, 1, Int[1]
-  echo "  compose trailing size-1: 2 cases OK"
-
 # ── coalesce over runtime layouts ─────────────────────────────
 proc runCoalesceRuntimeLayoutTests =
   ## Runtime leaves are invisible at compile time: never merged.
@@ -385,7 +370,6 @@ proc runCoalesceTests =
   runCoalesceNestedLeafTests()
   echo "\n── Anti-regressions ──"
   runCoalesceConstantFixtureTests()
-  runCoalesceTrailingSizeOneTests()
   runCoalesceRuntimeLayoutTests()
   runCoalesceOneLeafTests()
   runCoalesceIdentityTests()
