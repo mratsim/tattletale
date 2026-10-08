@@ -17,6 +17,7 @@ import ./layouts
 import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 import ./ism_coord_strides
+import ./layout_indexing
 import ./layout_indexing_gpu
 
 # ═══════════════════════════════════════════════════════════════
@@ -413,7 +414,7 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #             elif r != 0: the shape divisibility condition fails
 #             else: keep sᵢ
 
-proc stridedDiv(aShape, aStride: NimNode, M: NimNode): tuple[shape, stride: NimNode] {.compileTime.} =
+macro stridedDiv(strided: Layout, M: typed): untyped =
   ## A' / M, the layout of every d-th element of A'
   ##
   ## Every mode emits the same expressions, with `pᵢ` the running shape-prefix product:
@@ -421,33 +422,101 @@ proc stridedDiv(aShape, aStride: NimNode, M: NimNode): tuple[shape, stride: NimN
   ##     qᵢ = max(1, M div pᵢ)
   ##     strideᵢ = qᵢ * dᵢ
   ##     shapeᵢ = max(1, sᵢ div qᵢ)
-  var shLeaves, stLeaves: seq[NimNode]
-  var prefix = IntCT(1)
-  for (shapeEv, strideEv) in aShape.tupleStream().zip(aStride.tupleStream()):
-    if shapeEv.kind != kLeaf:
-      continue
-    let shapeDim = shapeEv.leaf
-    let strideDim = strideEv.leaf
-    let q = quote do: `M` div `prefix`
-    stLeaves.add quote do: `q` * `strideDim`
-    shLeaves.add quote do: max(1, `shapeDim` div `q`)
-    prefix = quote do: `prefix` * `shapeDim`
-  return (nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(strided)
 
-proc stridedMod(aShape, aStride: NimNode, N: NimNode): tuple[shape, stride: NimNode] {.compileTime.} =
+  macro stridedDivImpl(sh, st, M: typed): untyped =
+    var shLeaves, stLeaves: seq[NimNode]
+    var prefix = IntCT(1)
+    for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
+      if shapeEv.kind != kLeaf:
+        continue
+      let shapeDim = shapeEv.leaf
+      let strideDim = strideEv.leaf
+      let q = quote do: max(1, `M` div `prefix`)
+      stLeaves.add quote do: `q` * `strideDim`
+      shLeaves.add quote do: max(1, `shapeDim` div `q`)
+      prefix = quote do: `prefix` * `shapeDim`
+    result = newStmtList()
+    result.add bindSym"make_layout".newCall(
+
+      nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+  result.add getAst(stridedDivImpl(sh, st, M))
+
+macro stridedMod(strided: Layout, N: typed): untyped =
   ## Strided % N on the first N elements of Strided
   ##
   ##     shapeᵢ = min(sᵢ, max(1, N div pᵢ))
-  var shLeaves, stLeaves: seq[NimNode]
-  var prefix = IntCT(1)
-  for (shapeEv, strideEv) in aShape.tupleStream().zip(aStride.tupleStream()):
-    if shapeEv.kind != kLeaf:
-      continue
-    let shapeDim = shapeEv.leaf
-    shLeaves.add quote do: min(`shapeDim`, max(1, `N` div `prefix`))
-    stLeaves.add strideEv.leaf
-    prefix = quote do: `prefix` * `shapeDim`
-  result = (nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+  ##
+  ## The last mode gets the multiplied by the remainder
+  ##
+  ##     shape_last = max(min(s, q), s * (q div s)),  q = N div p
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(strided)
+
+  macro stridedModImpl(sh, st, N: typed): untyped =
+    var modes: seq[tuple[shapeDim, strideDim: NimNode]]
+    for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
+      if shapeEv.kind != kLeaf:
+        continue
+      modes.add (shapeEv.leaf, strideEv.leaf)
+    var shLeaves, stLeaves: seq[NimNode]
+    var prefix = IntCT(1)
+    for i, mode in modes:
+      let shapeDim = mode.shapeDim
+      if i < modes.len - 1:
+        shLeaves.add quote do: min(`shapeDim`, max(1, `N` div `prefix`))
+      else:
+        let q = quote do: `N` div `prefix`
+        shLeaves.add quote do: max(1, max(min(`shapeDim`, `q`),
+          `shapeDim` * (`q` div `shapeDim`)))
+      stLeaves.add mode.strideDim
+      prefix = quote do: `prefix` * `shapeDim`
+    result = newStmtList()
+    result.add bindSym"make_layout".newCall(
+      nnkTupleConstr.newTree(shLeaves), nnkTupleConstr.newTree(stLeaves))
+
+  result.add getAst(stridedModImpl(sh, st, N))
+
+macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
+  ## Composition, `A ∘ B`, on destructured parts.
+  ##
+  ## Scalar B = N:M dispatches:
+  ## - M == 0: N:0, the LHS is never touched
+  ## - N == 1: 1:A'(M), A' evaluated at one point
+  ## - otherwise: Strided = A' / M, Kept = Strided % N, coalesced
+  ##
+  ## Divisibility is the caller's responsibility, it is not checked.
+  result = newStmtList()
+  let mVal = bStride.getStaticInt()
+  if mVal == 0:
+    result.add bindSym"make_layout".newCall(bShape, IntCT(0))
+    return
+  if bShape.getTypeInst().isTupleTy():
+    let aPrime = genSym(nskLet, "aPrime")
+    let (aShp, aStp) = result.destructureLayout(
+      quote do: coalesceImpl(`aShape`, `aStride`)
+    )
+    var builder = TupleBuilderFlat.new(2)
+    for (bShape, bStride) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
+      builder.onLeaves(bShape):
+        let (st, sh) = result.destructureLayout(
+          quote do: composeImpl(`aShp`, `aStp`, `bShape`, `bStride`)
+        )
+        builder.append(st, sh)
+    result.add builder.emitLayout()
+  else:
+    let nVal = bShape.getStaticInt()
+    if nVal == 1:
+      # A' evaluated at one point, evaluation is coalesce-invariant
+      result.add bindSym"make_layout".newCall(IntCT(1),
+        bindSym"crd2idx".newCall(
+          bindSym"make_layout".newCall(aShape, aStride), bStride))
+    else:
+      # general case: Strided = coalesceImpl(A) / M, Kept = Strided % N,
+      template composeGeneralDelegate(aShape, aStride, bShape, bStride: typed): untyped =
+        coalesce(stridedMod(stridedDiv(coalesceImpl(aShape, aStride), bStride), bShape))
+      result.add getAst(composeGeneralDelegate(aShape, aStride, bShape, bStride))
 
 macro compose*[A: Layout, B: Layout](a: A, b: B): untyped =
   ## Layout composition, `A ∘ B`.
