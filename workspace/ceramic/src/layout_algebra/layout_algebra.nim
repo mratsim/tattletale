@@ -592,55 +592,53 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
       composeImpl(aShape, aStride, bShape, bStride)
     result.add getAst(composeDelegate(aShape, aStride, bShape, bStride))
     return
-  # tuple tiler pairs each tiler leaf with the next A mode's stride,
-  # extra A modes are dropped, extra tiler leaves are an error
-  # a `_` tiler leaf passes the whole A mode through, shape and stride,
-  # a Layout tiler leaf composes as the (shape, stride) atom it spells
-  proc isUnderscore(n: NimNode): bool {.compileTime.} =
-    n.kind in {nnkSym, nnkIdent} and $n == "_"
-  proc isLayoutTy(n: NimNode): bool {.compileTime.} =
-    let ty = n.getTypeInst()
-    (ty.kind == nnkBracketExpr and ty[0].eqIdent("Layout")) or
-      (ty.kind == nnkSym and $ty == "Layout")
+
+  proc isKeepMark(tLeaf, tLeafTy: NimNode): bool {.compileTime.} =
+    (tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_") or tLeafTy.hasType"X"
   var tilerLeaves: seq[NimNode]
+  var tilerLeafTys: seq[NimNode]
+  var hasLayoutLeaf = false
   for tEv in tiler.tupleDimsStream():
     let tLeaf = tEv.leaf
-    if not isUnderscore(tLeaf) and not isLayoutTy(tLeaf) and
-        tLeaf.getTypeInst().isTupleTy():
+    let tLeafTy = tEv.leafTy
+    if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and
+        tLeafTy.isTupleTy():
       error("nested tiler entries are not supported", tLeaf)
+    if not isKeepMark(tLeaf, tLeafTy) and isLayoutTy(tLeafTy):
+      hasLayoutLeaf = true
     tilerLeaves.add tLeaf
-  var bSh: seq[NimNode]
-  var bSt: seq[NimNode]
+    tilerLeafTys.add tLeafTy
+
+  var builder = TupleBuilderFlat.new(2)
   var ti = 0
-  proc tilerMode(stmts: var NimNode, tLeaf, aShLeaf, aStLeaf: NimNode) {.compileTime.} =
-    if isUnderscore(tLeaf):
-      bSh.add aShLeaf
-      bSt.add aStLeaf
-    elif isLayoutTy(tLeaf):
+
+  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aStLeaf: NimNode) {.compileTime.} =
+    if isKeepMark(tLeaf, tLeafTy):
+      builder.append(aShLeaf, aStLeaf)
+    elif isLayoutTy(tLeafTy):
       let (lSh, lSt) = stmts.destructureLayout(tLeaf)
-      bSh.add lSh
-      bSt.add lSt
+      builder.append(lSh, lSt)
     else:
-      bSh.add tLeaf
-      bSt.add aStLeaf
+      builder.append(tLeaf, aStLeaf)
   if aShape.getTypeInst().isTupleTy():
     for (shEv, stEv) in aShape.tupleDimsStream().zip(aStride.tupleDimsStream()):
       if ti >= tilerLeaves.len:
         break
-      result.tilerMode(tilerLeaves[ti], shEv.leaf, stEv.leaf)
+      result.tilerMode(tilerLeaves[ti], tilerLeafTys[ti], shEv.leaf, stEv.leaf)
       inc ti
   elif tilerLeaves.len > 0:
-    result.tilerMode(tilerLeaves[0], aShape, aStride)
+    result.tilerMode(tilerLeaves[0], tilerLeafTys[0], aShape, aStride)
     ti = 1
   if ti < tilerLeaves.len:
     error("tiler has more modes than the layout", tilerLeaves[ti])
-  let bShapeNode = nnkTupleConstr.newTree(bSh)
-  let bStrideNode = nnkTupleConstr.newTree(bSt)
+  if not hasLayoutLeaf:
+    result.add builder.emitLayout(emitScalarForSize1 = false)
+    return
+  let bShapeNode = builder.emit(0, emitScalarForSize1 = false)
+  let bStrideNode = builder.emit(1, emitScalarForSize1 = false)
   template tilerDelegate(aShape, aStride, bShapeNode, bStrideNode: typed): untyped =
     composeImpl(aShape, aStride, bShapeNode, bStrideNode)
   result.add getAst(tilerDelegate(aShape, aStride, bShapeNode, bStrideNode))
-
-
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product

@@ -53,6 +53,12 @@ func size*(layout: Layout): auto {.inline.} =
   ## Returns Int[N] for all-static shapes, int otherwise.
   fold(flatten(layout.shape), Int[1](), acc * it)
 
+func isLayoutTy*(n: NimNode): bool {.compileTime.} =
+  ## True for Layout values, the generic head carries the match
+  let ty = n.getTypeInst()
+  ty.sameType(bindSym"Layout") or
+    (ty.kind == nnkBracketExpr and ty[0].sameType(bindSym"Layout"))
+
 # ═══════════════════════════════════════════════════════════════
 #  Codomain properties
 # ═══════════════════════════════════════════════════════════════
