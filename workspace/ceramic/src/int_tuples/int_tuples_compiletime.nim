@@ -46,8 +46,13 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
   of nnkCall, nnkBracketExpr:
-    if t.len >= 1 and $t[0] == "Int" and t[1].kind == nnkIntLit:
+    if t[0].eqIdent("Int"):
       int(t[1].intVal)
+    else:
+      DynamicSentinel
+  of nnkObjConstr:
+    if t[0][0].eqIdent("Int"):
+      t[0].getStaticInt()
     else:
       DynamicSentinel
   else:
