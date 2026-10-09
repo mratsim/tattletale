@@ -12,7 +12,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
-#   Coordinate Strides
+#   Integer Semi-Module - Coordinate Strides
 # ═══════════════════════════════════════════════════════════════
 
 type
@@ -33,46 +33,17 @@ func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
   else:
     false
 
-
 # ═══════════════════════════════════════════════════════════════
 #   NimNode helpers and syntactic sugar
 # ═══════════════════════════════════════════════════════════════
 
-
 proc unwrapTypedesc(n: NimNode): NimNode
-proc csAdd*(ta, tb: NimNode): NimNode {.compileTime.}
-proc csScaleCoeffs*(kv: int, ta: NimNode): NimNode {.compileTime.}
-
-macro `+`*(a, b: typedesc[CoordStride]): typedesc =
-  result = nnkBracketExpr.newTree(
-    bindSym"CoordStride", csAdd(a.unwrapTypedesc(), b.unwrapTypedesc()))
+proc csAdd*(ta, tb: NimNode): NimNode
+proc csScaleCoeffs*(kv: int, ta: NimNode): NimNode
 
 macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   result = nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", csAdd(a.getTypeInst[1], b.getTypeInst[1])))
-
-macro `+`*(A: typedesc[CoordStride], k: typed): typedesc =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkBracketExpr.newTree(bindSym"CoordStride",
-    csAdd(A.unwrapTypedesc(), nnkTupleConstr.newTree(newIntLitNode(kv))))
-
-macro `+`*(k: typed, A: typedesc[CoordStride]): typedesc =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkBracketExpr.newTree(bindSym"CoordStride",
-    csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), A.unwrapTypedesc()))
-
-macro `*`*(k: typed, A: typedesc[CoordStride]): typedesc =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride *: cannot scale by a runtime value", k)
-  result = nnkBracketExpr.newTree(bindSym"CoordStride", csScaleCoeffs(kv, A.unwrapTypedesc()))
 
 macro `*`*[A: CoordStride](a: A, k: typed): untyped =
   let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
@@ -107,9 +78,6 @@ macro `*`*[A: CoordStride](k: typed, a: A): untyped =
     error("CoordStride *: cannot scale by a runtime value", k)
   result = nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
-
-template `*`*(A: typedesc[CoordStride], k: static int): typedesc =
-  k * A
 
 # ═══════════════════════════════════════════════════════════════
 #   Constructors
@@ -250,7 +218,7 @@ type
     scale*: int
     coeffs*: NimNode # caMulti: the coefficient tuple, values as int literals
 
-proc isCoordStride*(leafTy: NimNode): bool {.compileTime.} =
+proc isCoordStride*(leafTy: NimNode): bool =
   ## True when the type is a coordinate stride instantiation
   var t = leafTy
   if t.kind == nnkSym:
@@ -263,7 +231,7 @@ proc isCoordStride*(leafTy: NimNode): bool {.compileTime.} =
   result = t.kind == nnkBracketExpr and t[0].kind == nnkSym and
     t[0].strVal == "CoordStride"
 
-proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compileTime.} =
+proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
   ## Extracts the compile-time descriptor of one stride leaf from its type.
   if not isCoordStride(leafTy):
     return CoordStrideDescriptor(kind: caNone)
@@ -292,7 +260,7 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor {.compile
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
-proc csScaledEq(a, b: NimNode, s: int): bool {.compileTime.} =
+proc csScaledEq(a, b: NimNode, s: int): bool =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
   ## false on any structural mismatch.
   if a.kind in {nnkTupleConstr, nnkPar} and b.kind in {nnkTupleConstr, nnkPar}:
@@ -323,23 +291,12 @@ func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
   of caMulti:
     b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
 
-proc csTerms*(coeffs: NimNode): seq[tuple[index, scale: int]] {.compileTime.} =
-  ## Nonzero (index, scale) pairs of a flat coefficient tuple:
-  ## csTerms((0, 4, 2, 0)) == [(1, 4), (2, 2)].
-  for i in 0 ..< coeffs.len:
-    let coeff = coeffs[i]
-    if coeff.kind in {nnkTupleConstr, nnkPar}:
-      error "csTerms: coefficient paths nested deeper than one level" &
-        " are not supported"
-    if coeff.intVal != 0:
-      result.add (i, int(coeff.intVal))
-
-proc csScaleCoeffs(kv: int, ta: NimNode): NimNode {.compileTime.} =
+proc csScaleCoeffs(kv: int, ta: NimNode): NimNode =
   result = nnkTupleConstr.newTree()
   for i in 0 ..< ta.len:
     result.add(newIntLitNode(kv * ta[i].intVal))
 
-proc csAdd(ta, tb: NimNode): NimNode {.compileTime.} =
+proc csAdd(ta, tb: NimNode): NimNode =
   # Elementwise addition of CoordStride AST
   let taIsTuple = ta.kind in {nnkTupleConstr, nnkPar}
   let tbIsTuple = tb.kind in {nnkTupleConstr, nnkPar}
