@@ -30,8 +30,7 @@
 import
   ./ptr_arithmetic,
   workspace/ceramic/src/tensors/tensor_datatypes,
-  workspace/ceramic/src/tensors/tensor_selectors,
-  workspace/ceramic/src/tensors/tensors_mma_partitioning
+  workspace/ceramic/src/tensors/tensor_selectors
 
 # ═══════════════════════════════════════════════════════════════
 #  Datatypes, construction, accessors
@@ -42,7 +41,6 @@ import
 # - constructors, accessors, operators and display
 export tensor_datatypes
 export tensor_selectors
-export tensors_mma_partitioning
 
 # Re-exported for the generic sandwich: template and generic bodies bind
 # `+%` in their defining scope, kernels offset gmem pointers without

@@ -5,670 +5,171 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU Matrix Multiplication.
-##
-## This file implements the following primitives, ordered bottom-up
-##
-##   gemm_atom    one Matrix-Multiply-Accumulate (MMA) instruction on a thread's register fragments,
-##                accumulated in place.
-##   gemm_warp    loop over atoms
-##   gemm_tiled   partition the shared memory tiles and move data into registers
-##   gemm_cta     Copy data into shared memory, apply gemm_tiled, apply epilogue, store result into destination
-##   gemm_kernel  the GEMM with a fused epilogue
-##
-## SM80 example in matryoshka-like diagram
-##   - atom m16n8k8,
-##   - thread layout (2, 2, 1),
-##   - tile (32, 16, 32),
-##   - input (64, 32)
-##   - grid (2, 2).
-##
-## This is the manual gemm_cta configuration: tile and thread layout are passed explicitly (as in the manual gemm_cta tests).
-## gemm_kernel derives them from the input instead.
-## A (64, 32) input yields thread layout (4, 4, 1), tile (64, 32, 32), grid (1, 1), 512 lanes = 16 warps.
-##
-## Fragment shapes:
-##   a thread's register fragments are arrays, one per operand,
-##   each with a V axis and a Repeat axis per tile axis:
-##   - A: (V, RepeatM, RepeatK), here (4, 1, 4)
-##   - B: (V, RepeatN, RepeatK), here (2, 1, 4)
-##   - C: (V, RepeatM, RepeatN), the accumulator, here (4, 1, 1)
-## V is the values per thread per atom instruction
-## m16n8k8 gives
-##   - 4 for A and C
-##   - 2 for B.
-## Repeat* is the number of atoms the thread owns along the axis,
-##     tileM = ThrM·atomM·RepeatM,
-## here 1 along M and N, 4 along K.
-##
-## The axes are register storage, not the GEMM's (M, N, K).
-## The thread's output stays 2D, RepeatM·atomM × RepeatN·atomN,
-## and K is the contraction dimension.
-##
-## Thread organization: who owns what (worked example)
-## ---------------------------------------------------
-## Config (worked example):
-##   - atom: m16n8k8
-##   - thread layout: (2, 2, 1)
-##   - tile: (32, 16, 32)
-##   - CTA: one tile, 128 lanes = 4 warps
-## The same 32 lanes are the cooperation unit at both gemm_atom and gemm_warp.
-##
-## Terminology:
-##   lane = one thread (threadIdx.x % 32),
-##   warp = 32 lanes (the unit that executes mma.sync),
-##   CTA = the unit scheduled on one SM (blockIdx).
-##
-##   CTA (gemm_cta)            128 lanes = 4 warps, owns the (32, 16) output tile
-##     └─ warp (tm, tn) ∈ (2, 2)      [gemm_tiled partition]
-##        owns the (16, 8) sub-tile: A rows tm·16..tm·16+16, B rows tn·8..tn·8+8
-##        └─ lane l ∈ 0..31           [hardware fragment layouts]
-##           owns V values per atom: A: 4, B: 2, C: 4
-##
-##   gemm_atom:  one mma.sync. The warp's 32 lanes jointly perform
-##               one 16×8×8 MMA into their C fragment
-##               (16×8 = 128 values = 32 lanes × 4).
-##   gemm_warp:  the same 32 lanes loop kSlice = 0 ..< 4, issuing
-##               one warp-wide mma.sync per k slice
-##               (RepeatK = tileK/atomK = 32/8), accumulating in place.
-##               Per lane:
-##                 A (4, 1, 4)
-##                 B (2, 1, 4)
-##                 C (4, 1, 1)
-##
-##   The (2, 2, 1) thread layout never splits an atom across lanes:
-##   it replicates the atom 2×2 = 4 times across the 4 warps, so the warps together cover the (32, 16) CTA tile.
-##
-## State/data flow (per CTA tile, one tileK-sized slice of K at a time):
-##   gmem A (32, kView), B (16, kView)
-##     ── gemm_cta cp.async ──▶ smem A (32, 32), B (16, 32)
-##     ── gemm_tiled gather ──▶ lane registers A (4, 1, 4), B (2, 1, 4)
-##     ── gemm_cta zeroes C (4, 1, 1) once, before the K-loop
-##     ── gemm_warp 4× mma.sync ──▶ C (4, 1, 1) accumulated
-##     ── gemm_cta epilogue ──▶ gmem D (32, 16)
-##
-##   grid: the (64, 32) input, tiled into (2, 2) CTA tiles of (32, 16)
-##   - mCTA = blockIdx.x, rows
-##   - nCTA = blockIdx.y, cols
-##   ┌────────────────────────────────────────────────────────────┐
-##    nCTA →   (0, 0)       (0, 1)
-##    mCTA ↓   ┌──────────┐   ┌──────────┐
-##             │  CTA     │   │  CTA     │
-##             │ (32, 16) │   │ (32, 16) │
-##             └──────────┘   └──────────┘
-##             ┌──────────┐   ┌──────────┐
-##             │  CTA     │   │  CTA     │
-##             │ (32, 16) │   │ (32, 16) │
-##             └──────────┘   └──────────┘
-##   └────────────────────────────────────────────────────────────┘
-##
-##   One CTA zoomed in.
-##   The loop over the K dimension iterates the
-##   ceil(K/tileK) tileK-sized slices of K.
-##   ┌──────────────────────────────────────────────────────────────┐
-##    CTA: one (32, 16) output tile, tiled into (2, 2) warps
-##    data: gmem → smem via cp.async:
-##            A (32, kView)
-##            B (16, kView)
-##          epilogue store:
-##            D (32, 16) with ragged tile handling
-##
-##    (0,0)      (0,1)
-##      ┌────────┐  ┌────────┐
-##      │ warp   │  │ warp   │
-##      │ (16, 8)│  │ (16, 8)│
-##      └────────┘  └────────┘
-##    (1,0)      (1,1)
-##      ┌────────┐  ┌────────┐
-##      │ warp   │  │ warp   │
-##      │ (16, 8)│  │ (16, 8)│
-##      └────────┘  └────────┘
-##
-##   ┌──────────────────────────────────────────────────────────────┐
-##   │  one warp (16, 8)                                            │
-##   │  data: per slice of K, fragments copied smem → registers     │
-##   │         (V, RepeatM, RepeatK) × (V, RepeatN, RepeatK)        │
-##   │ │ ┌──────────────────────────────────────────────────────┐ │ │
-##   │ │  micropanel (16, 8, 8): one atomK-sized slice,           │ │
-##   │ │                      4 per slice of K                    │ │
-##   │ │ │ ┌──────────────────────────────────────────────────┐ │ │ │
-##   │ │ │  atom m16n8k8: one MMA instruction                   │ │ │
-##   │ │ │  dFrag (V, RepeatM, RepeatN) += aFrag·bFrag          │ │ │
-##   │ │ │ └──────────────────────────────────────────────────┘ │ │ │
-##   │ │ └──────────────────────────────────────────────────────┘ │ │
-##   │ └──────────────────────────────────────────────────────────┘ │
-##   └──────────────────────────────────────────────────────────────┘
-##
-## The dtype policy (mmaDType, atom_selector, threadTiling, tile_shape)
-## maps operand types to the atom, thread layout and tile.
-##
-## The host and the device run the same policy, so the config derives
-## on both sides.
+## GPU GEneralized Matrix Multiply (GEMM)
 
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/h_mma_configgen
 import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_configgen
 import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
-import workspace/ceramic/src/hardware/h_copy_registry
-import workspace/ceramic/src/hardware/h_copy_properties
-import workspace/ceramic/src/hardware/h_copy_dispatch
-import workspace/ceramic/src/tensors/tensors_mma_partitioning
-import ./k_layout_copy_gpu
-
-import ./k_layout_fillwith_gpu
-import ./k_layout_gemm_epilogues
 import workspace/ceramic/src/macros/static_for
-import workspace/crucible
 
 {.experimental: "callOperator".}
+{.experimental: "dynamicBindSym".}
 
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_atom(mma, ...): register-level MMA
-# ═════════════════════════════════════════════════════════════════════════
+macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: untyped): untyped =
+  ## One Matrix-Multiply-Accumulate (MMA) atom call at a tile position,
+  ## for an atom with 2 values per thread.
+  ## Args:
+  ##   - dTile, dLoc: accumulator tile and cell position
+  ##   - aTile, aLoc: A operand tile and cell position
+  ##   - bTile, bLoc: B operand tile and cell position
+  ##
+  ## This macro transforms
+  ##
+  ##   mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k))
+  ##
+  ## into:
+  ##
+  ##   block gemmAtomAt:
+  ##     var d0 = dTile[0, m, ns]
+  ##     var d1 = dTile[1, m, ns]
+  ##     let a0 = aTile[0, m, k]
+  ##     let a1 = aTile[1, m, k]
+  ##     let b0 = bTile[0, ns, kSlice]
+  ##     let b1 = bTile[1, ns, kSlice]
+  ##
+  ##     mma.gemm_mma(d0, d1, a0, a1, b0, b1)
+  ##
+  ##     dTile[0, m, ns] = d0
+  ##     dTile[1, m, ns] = d1
 
-func gemm_atom*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
-    mma: static MmaAtom,
-    dFrag: var TensorOwned[TD, ShD, StD],
-    aFrag: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
-    bFrag: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB]) {.inline.} =
-  ## Register-level MMA, in-place accumulate: dFrag += aFrag·bFrag.
-  ##
-  ## One mma.sync (tensor-core atoms), executed by the 32 lanes of a warp
-  ## cooperatively, or one scalar FMA (the universal FMA atoms, empty
-  ## instr) on 1×1 fragments, executed by a single thread. All
-  ## instruction-carrying atoms dispatch through `gemm` (h_mma_dispatch),
-  ## which derives the mnemonic and fragment counts from the atom.
-  ##
-  ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
-  ##   each lane runs this call on its own register slice.
-  ##   The warp's 32 lanes together hold the atom's (16, 8) fragments
-  ##   (A: 4 values/lane, B: 2, C: 4), then jointly perform
-  ##   one 16×8×8 MMA into the warp's C fragment.
+  let instr = constStr(mma, "instr")
+  let dV = mma.valuesPerThread("cLayout")
+  let aV = mma.valuesPerThread("aLayout")
+  let bV = mma.valuesPerThread("bLayout")
+
+  proc at(tile: NimNode, i: int, loc: NimNode): NimNode =
+    ## tile[i, loc], an empty loc (1-D cells) indexes the value only
+    if loc.kind in {nnkPar, nnkTupleConstr} and loc.len == 0:
+      nnkBracketExpr.newTree(tile, newLit(i))
+    else:
+      nnkBracketExpr.newTree(tile, newLit(i), loc)
+
+  result = newStmtList()
+
+  for i in 0 ..< dV:
+    result.add newVarStmt(ident("d" & $i), dTile.at(i, dLoc))
+  for i in 0 ..< aV:
+    result.add newLetStmt(ident("a" & $i), aTile.at(i, aLoc))
+  for i in 0 ..< bV:
+    result.add newLetStmt(ident("b" & $i), bTile.at(i, bLoc))
+
+  var mmaCall = bindSym"gemm_mma".newCall(newLit(mma))
+
+  for i in 0 ..< dV:
+    mmaCall.add(ident("d" & $i))
+  for i in 0 ..< aV:
+    mmaCall.add(ident("a" & $i))
+  for i in 0 ..< bV:
+    mmaCall.add(ident("b" & $i))
+  result.add mmaCall
+
+  for i in 0 ..< dV:
+    result.add newAssignment(dTile.at(i, dLoc), ident("d" & $i))
+
+  result = nnkBlockStmt.newTree(genSym(nskLabel, "gemmAtomAt"), result)
+
+func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned) =
+  ## Tile-level GEneralized Matrix-Multiply (GEMM)
   ##
   ## Args:
-  ##   mma: the hardware instruction descriptor
-  ##   dFrag: mutable register fragment tensor (V, RepeatM, RepeatN), the accumulator (AB).
-  ##   aFrag: the A register fragment tensor (V, RepeatM, 1), one k slice
-  ##   bFrag: the B register fragment tensor (V, RepeatN, 1), one k slice
-  when mma.getInstr() == "":
-    # The universal FMA atoms carry no mnemonic: plain a·b+c, no fused-fma op.
-    # Compiles on every backend and on the host; NVRTC/MSL/clang fuse
-    # the expression where available.
-    dFrag[0] = aFrag[0] * bFrag[0] + dFrag[0]
-  else:
-    gemm_mma(mma, dFrag, aFrag, bFrag)
+  ##   - mma: the hardware instruction descriptor
+  ##   - dTile: accumulator tile (V, MR, NR), accumulated in place
+  ##   - aTile: A operand tile (V, MR, KR)
+  ##   - bTile: B operand tile (V, NR, KR)
+  ##
+  ## Worked example, m16n8k8, warp tile (32, 16, 32): MR = NR = 2,
+  ## KR = 4, one warp per tile, fp16 A/B, fp32 D.
+  ##
+  ## Per-lane tiles:
+  ##
+  ## A (V, MR, KR) = (4, 2, 4)   32 vals, 16 regs    B (V, NR, KR) = (2, 2, 4)   16 vals, 8 regs    D (V, MR, NR) = (4, 2, 2)   16 vals, 16 regs
+  ##      k0   k1   k2   k3                               k0   k1   k2   k3                              n0   n1
+  ## m0v0  □    □    ■    □                          n0v0  □    □    ■    □                         m0v0  ■    □
+  ## m0v1  □    □    □    □                          n0v1  □    □    □    □                         m0v1  □    □
+  ## m0v2  □    □    □    □                          n1v0  □    □    □    □                         m0v2  □    □
+  ## m0v3  □    □    □    □                          n1v1  □    □    □    □                         m0v3  □    □
+  ## m1v0  □    □    □    □                                                                         m1v0  □    □
+  ## m1v1  □    □    □    □                                                                         m1v1  □    □
+  ## m1v2  □    □    □    □                                                                         m1v2  □    □
+  ## m1v3  □    □    □    □                                                                         m1v3  □    □
+  ##
+  ## warp tile: MR x NR = 2 x 2 atoms of m16n8k8
+  ##        n0      n1
+  ##   m0  atom00  atom01
+  ##   m1  atom10  atom11
+  ##
+  ## one atom's D, 16x8 accumulator, cell = lane that holds it:
+  ##      n0  n1  n2  n3  n4  n5  n6  n7
+  ## m0   0   0   1   1   2   2   3   3
+  ## m1   4   4   5   5   6   6   7   7
+  ## m2   8   8   9   9   10  10  11  11
+  ## m3   12  12  13  13  14  14  15  15
+  ## m4   16  16  17  17  18  18  19  19
+  ## m5   20  20  21  21  22  22  23  23
+  ## m6   24  24  25  25  26  26  27  27
+  ## m7   28  28  29  29  30  30  31  31
+  ## m8   0   0   1   1   2   2   3   3
+  ## m9   4   4   5   5   6   6   7   7
+  ## m10  8   8   9   9   10  10  11  11
+  ## m11  12  12  13  13  14  14  15  15
+  ## m12  16  16  17  17  18  18  19  19
+  ## m13  20  20  21  21  22  22  23  23
+  ## m14  24  24  25  25  26  26  27  27
+  ## m15  28  28  29  29  30  30  31  31
+  ##
+  ## Filled cells: one term of one D cell, the k = 2 slice.
+  ##   D[0, 0, 0] = A[0, 0, 0]·B[0, 0, 0]
+  ##                 + A[0, 0, 1]·B[0, 0, 1]
+  ##                 + A[0, 0, 2]·B[0, 0, 2]
+  ##                 + A[0, 0, 3]·B[0, 0, 3]
 
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_warp(mma, ...): loop over atoms
-# ═════════════════════════════════════════════════════════════════════════
-
-func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
-    mma: static MmaAtom,
-    dFrag: var TensorOwned[TD, ShD, StD],
-    aFrag: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
-    bFrag: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB]) {.inline.} =
-  ## Loop over atoms, one gemm_atom per k slice, with dFrag += aFrag·bFrag accumulated in place.
-  ##
-  ## Warp-scoped loop: the 32 lanes that cooperate on one gemm_atom run it
-  ## in lockstep, one warp-wide mma.sync per k slice, all accumulating
-  ## into the warp's C fragment.
-  ##
-  ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
-  ##   per lane:
-  ##     A: (4, 1, 4), 16 values
-  ##     B: (2, 1, 4), 8 values
-  ##     C: (4, 1, 1), 4 values
-  ##   kSlices = RepeatK = tileK/atomK = 32/8 = 4.
-  ##   Each warp issues 4 warp-wide mma.syncs, one per k slice of the A/B registers.
-  ##
-  ## Args:
-  ##   mma: the hardware instruction descriptor
-  ##   dFrag: mutable register fragment tensor (V, RepeatM, RepeatN), the accumulator (AB).
-  ##   aFrag: the A register fragment tensor (V, RepeatM, RepeatK), one atom's worth per k slice
-  ##   bFrag: the B register fragment tensor (V, RepeatN, RepeatK), one atom's worth per k slice
-  const
-    VA = mma.valuesPerThread(opA)
-    VB = mma.valuesPerThread(opB)
-    kSlices = ShA.default[2]
+  template flat0(s: untyped): untyped =
+    when s[0] is tuple: s[0][0] else: s[0]
   static:
-    doAssert ShA.default[0] === VA,
-      "gemm_warp: A fragment width (" & $ShA.default[0] & ") != atom valuesPerThread(opA) (" & $VA & ")"
-    doAssert ShB.default[0] === VB,
-      "gemm_warp: B fragment width (" & $ShB.default[0] & ") != atom valuesPerThread(opB) (" & $VB & ")"
-    # TODO: relax the Repeat == 1 restriction when the GEMM generalizes to
-    # multi-Repeat fragments.
-    doAssert ShA.default[1] === 1,
-      "gemm_warp: A RepeatM (" & $ShA.default[1] & ") != 1. A k slice must be exactly one atom A fragment (V, 1)"
-    doAssert ShB.default[1] === 1,
-      "gemm_warp: B RepeatN (" & $ShB.default[1] & ") != 1. B k slice must be exactly one atom B fragment (V, 1)"
-    doAssert ShB.default[2] === kSlices,
-      "gemm_warp: B k dimension (" & $ShB.default[2] & ") != A k dimension (" & $kSlices & "). A and B must agree on the k slice count"
-    doAssert dFrag.cosize() === mma.valuesPerThread(opC),
-        "gemm_warp: accumulator size (" & $dFrag.cosize().toInt() &
-        ") != atom valuesPerThread(opC) (" & $mma.valuesPerThread(opC) & ")"
-
-  staticFor kSlice, 0, kSlices.toInt():
-    gemm_atom(mma, dFrag, aFrag(_, _, kSlice), bFrag(_, _, kSlice))
-
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_tiled(tma, dFrag, sA, sB, TileShape, threadIdx)
-# ═════════════════════════════════════════════════════════════════════════
-
-func gemm_tiled*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD](
-    tma: static TiledMma,
-    dFrag: var TensorOwned[TD, ShD, StD],
-    sA: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
-    sB: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
-    TileShape: static tuple[M: int, N: int, K: int],
-    threadIdx: int) {.inline.} =
-  ## Returns the thread's fragment of the tile-level matmul
-  ## for one tileK-sized slice of K:
-  ##   dTile += aTile·bTile.
-  ## with
-  ##   dTile of shape (TileM, TileN)
-  ##   aTile of shape (TileM, TileK)
-  ##   bTile of shape (TileN, TileK)
-  ##
-  ## In practice dTile, aTile, bTile never materialize as tensors.
-  ## The thread tiling (ThrM, ThrN) partitions them across the threads,
-  ## according to the hardware MMA requirements
-  ## with the shapes (V, RepeatM, RepeatN)+=(V, RepeatM, RepeatK)·(V, RepeatN, RepeatK):
-  ##   - V is the values per thread per atom instruction,
-  ##   - RepeatM/N/K the number of atoms per threaf along M, N, K
-  ##
-  ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
-  ##   the CTA's 4 warps cover the (32, 16) output tile (C never lives in smem).
-  ##   Warp (tm, tn) ∈ (2, 2) owns the (16, 8) C sub-tile, reading from smem:
-  ##     A: rows tm·16..tm·16+16
-  ##     B: rows tn·8..tn·8+8
-  ##   Each of its 32 lanes gathers its V values into registers:
-  ##     A: (4, 1, 4)
-  ##     B: (2, 1, 4)
-  ##   It then hands off to gemm_warp.
-  ##   C (4, 1, 1) was pre-zeroed by gemm_cta.
-  ##
-  ## Args:
-  ##   tma: the TiledMma, atom plus (ThrM, ThrN, ThrK) thread tiling
-  ##   dFrag: the accumulator fragment (V, RepeatM, RepeatN), in/out.
-  ##          The caller zeroes it before the loop over the K dimension
-  ##   sA: shared memory (tileM, tileK) tile of A, col-major
-  ##   sB: shared memory (tileN, tileK) tile of B, col-major
-  ##   TileShape: static (tileM, tileN, tileK). tileM and tileN must be
-  ##        exactly the thread layout's coverage (thrM·atomM, thrN·atomN)
-  ##   threadIdx: the flat linear thread id in 0 ..< tma.threadCount()
+    doAssert aTile.shape.flat0 === mma.valuesPerThread(opA)
+    doAssert bTile.shape.flat0 === mma.valuesPerThread(opB)
+    doAssert dTile.shape[0] === mma.valuesPerThread(opC)
+    doAssert aTile.shape[1][1] === bTile.shape[1][1], "gemm_tile: A.KR != B.KR"
+    doAssert dTile.shape[1][0] === aTile.shape[1][0], "gemm_tile: C.MR != A.MR"
+    doAssert dTile.shape[1][1] === bTile.shape[1][0], "gemm_tile: C.NR != B.NR"
   const
-    tileM = TileShape[0]
-    tileN = TileShape[1]
-    tileK = TileShape[2]
+    KR = aTile.shape[1][1].toInt()
+    MR = aTile.shape[1][0].toInt()
+    NR = bTile.shape[1][0].toInt()
+    aBits = aTile.shape[0].toInt() * sizeof(typeof(aTile.data[0]))
+    bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
-  static:
-    doAssert tileM === tma.thrM * tma.atom.getM(),
-      "gemm_tiled: TileShape.M (" & $tileM & ") != thrM·atomM (" & $tma.thrM & "·" & $tma.atom.getM() &
-        "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileN === tma.thrN * tma.atom.getN(),
-      "gemm_tiled: TileShape.N (" & $tileN & ") != thrN·atomN (" & $tma.thrN & "·" & $tma.atom.getN() &
-        "). The thread layout must exactly cover the tile (partition contract)"
-    doAssert tileK mod (tma.thrK * tma.atom.getK()) == 0,
-      "gemm_tiled: TileShape.K (" & $tileK & ") mod (thrK·atomK) (" & $tma.thrK & "·" & $tma.atom.getK() &
-        ") != 0. Use a tileK multiple of thrK·atomK"
-    doAssert tma.thrK == 1,
-      "gemm_tiled: ThrK (" & $tma.thrK & ") != 1. At the moment, threads are not distributed along K"
-    doAssert ShA.default[0] === tileM and ShA.default[1] === tileK,
-      "gemm_tiled: A shape (" & $ShA.default[0] & ", " & $ShA.default[1] &
-        ") != tile (" & $tileM & ", " & $tileK & "). Pass a (tileM, tileK) view"
-    doAssert ShB.default[0] === tileN and ShB.default[1] === tileK,
-      "gemm_tiled: B shape (" & $ShB.default[0] & ", " & $ShB.default[1] &
-        ") != tile (" & $tileN & ", " & $tileK & "). Pass a (tileN, tileK) view"
-    doAssert ShD.default[0] * ShD.default[1] * ShD.default[2] === tileM * tileN div tma.threadCount(),
-      "gemm_tiled: accumulator size (" & $(ShD.default[0] * ShD.default[1] * ShD.default[2]) &
-        ") != tile elements per thread (" & $(tileM * tileN div tma.threadCount()) & ")"
-
-  let thr = tma.get_slice(threadIdx)
-  # The thread's operand views for the (tileM, tileK) smem tile:
-  #   tAv = (V, RepeatM, RepeatK), A fragment in smem, RepeatK = tileK div atomK
-  let tAv = tma.partition_A(thr, sA)
-  let tBv = tma.partition_B(thr, sB)
-
-  # Gather the tileK-sized slice's fragments smem → registers.
-  var aFragTile = make_fragment_A(tma.atom, tAv)
-  var bFragTile = make_fragment_B(tma.atom, tBv)
-  aFragTile.copyFrom(tAv)
-  bFragTile.copyFrom(tBv)
-
-  # gemm_warp: accumulate into dFrag (in/out)
-  gemm_warp(tma.atom, dFrag, aFragTile, bFragTile)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_cta(tma, D, A, B, M, N, K, epi, TileShape, mCTA, nCTA, threadIdx)
-# ═════════════════════════════════════════════════════════════════════════
-
-func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
-    tma: static TiledMma,
-    D: var (TensorView[TD, ShD, StD] or TensorOwned[TD, ShD, StD]),
-    A: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
-    B: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
-    M, N, K: int,
-    epi: Epi,
-    TileShape: static tuple[M: int, N: int, K: int],
-    mCTA, nCTA, threadIdx: int) {.inline.} =
-  ## Returns the (mCTA, nCTA) tile of the GEMM D = A·B:
-  ## the epilogue of aTile·bTile, accumulated over the tile's slices of K.
-  ## One tile per Cooperative Thread Array (CTA) in the grid,
-  ## one tileK-sized slice of K prepared in smem per loop iteration.
-  ##
-  ## Worked example (m16n8k8, (2, 2, 1), tile (32, 16, 32), 128 lanes = 4 warps):
-  ##   the CTA owns the (32, 16) output tile.
-  ##   Per tileK slice of K it stages the smem tiles via cp.async:
-  ##     A: (32, 32)
-  ##     B: (16, 32)
-  ##   The 4 warps compute the tile through gemm_tiled + gemm_warp,
-  ##   and the epilogue stores the (32, 16) D tile.
-  ##
-  ##   A: (M, kView) ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK)
-  ##      ── cp.async, 16-byte chunks per thread ──▶ smem ── partition_A ──▶ aFrag (V, RepeatM, RepeatK)
-  ##   B: (N, kView) ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK)
-  ##      ── cp.async, 16-byte chunks per thread ──▶ smem ── partition_B ──▶ bFrag (V, RepeatN, RepeatK)
-  ##                                                                                 │
-  ##                                                                                 ▼
-  ##                  gemm_warp: one gemm_atom per k slice,
-  ##                  dFrag (V, RepeatM, RepeatN) += aFrag(_, _, kSlice)·bFrag(_, _, kSlice),
-  ##                  per-slice fragments (V, RepeatM, 1) and (V, RepeatN, 1)
-  ##                                                                                 ▲
-  ##                                                                                 │
-  ##   D: (mCTA, nCTA) tile ◀── finalStore ◀── epilogue ◀── dFrag (V, RepeatM, RepeatN)
-  ##
-  ## Args:
-  ##   tma: the TiledMma (see gemm_tiled)
-  ##   D: the thread's destination fragment view,
-  ##      written to by the epilogue.
-  ##   A: (M, kView)
-  ##   B: (N, kView)
-  ##   M, N, K: input dimensions
-  ##   epi: the fused epilogue op (EpiAXPBY, EpiIdentity, EpiReLU,
-  ##        EpiAddBias or user-defined)
-  ##   TileShape: static (tileM, tileN, tileK) derived from hardware tensor cores
-  ##   mCTA, nCTA:
-  ##        the CTA launch coordinates, blockIdx.x/y.
-  ##        The tile origin is m0 = mCTA·tileM, n0 = nCTA·tileN
-  ##   threadIdx: the flat linear thread id in 0 ..< blockSize
-  ##
-  ## K = 0 runs no slices of the K dimension.
-  ## The accumulator stays zero and the epilogue stores only its own terms:
-  ##   for EpiAXPBY, β·C.
-  const kView = toInt(ShA.default[1])
-  const
-    tileM = TileShape[0]
-    tileN = TileShape[1]
-    tileK = TileShape[2]
-    blockSize = tma.threadCount()
-    unitsA = (tileM * tileK) div (numPacked(CpAsyncAtom[TA]) * blockSize)
-    unitsB = (tileN * tileK) div (numPacked(CpAsyncAtom[TB]) * blockSize)
-  static:
-    doAssert ShA.default[1] === ShB.default[1],
-      "gemm_cta: the A and B input views must agree on the allocated K (" & $kView & " vs " &
-      $toInt(ShB.default[1]) & "). The K slicing uses the A view's K"
-    doAssert kView mod tileK == 0,
-      "gemm_cta: the allocated K (" & $kView & ") mod tileK (" & $tileK & ") != 0." &
-      " local_tile needs the view K to tile evenly into tileK-sized slices of K"
-    doAssert Epi is Epilogue,
-      "gemm_cta: the epilogue op must satisfy the Epilogue concept (preflight + 2-arg apply)"
-
-  # Accumulator
-  # -----------
-  # zeroed once, persists across the slices of K
-  var dFrag = make_tensor(TD, D.shape)
-  dFrag.fillWith(TD(0))
-
-  # Valid tile range
-  let m0 = mCTA * tileM
-  let n0 = nCTA * tileN
-  let validM = min(M - m0, tileM)
-  let validN = min(N - n0, tileN)
-
-  # Out-of-range CTA
-  if validM <= 0 or validN <= 0:
-    return
-
-  # Shared memory staging buffers
-  # -----------------------------
-  var smemA {.smem.}: array[tileM * tileK, TA]
-  var smemB {.smem.}: array[tileN * tileK, TB]
-  var sA = make_view(addr smemA[0], make_layout((tileM, tileK)))
-  var sB = make_view(addr smemB[0], make_layout((tileN, tileK)))
-
-  # Compute loop
-  # ------------
-  #
-  #   (M, kView) view ── local_tile((tileM, tileK), (mCTA, kCTA)) ──▶ (tileM, tileK) gmem
-  #   (N, kView) view ── local_tile((tileN, tileK), (nCTA, kCTA)) ──▶ (tileN, tileK) gmem
-  #                              │                                        │
-  #                              ▼                                        ▼
-  #              the view's K, chunked into               load cp.async chunks
-  #              tileK-sized slices of K, one             + commit, wait, syncthreads
-  #              tile per (mCTA, kCTA)                    + gemm_tiled (smem → regs)
-  #
-  #
-  #   The last slice of K may be partial (ragged K),
-  #   with validK = K - kCTA·tileK < tileK,
-  #   and the load zero-fills the k >= validK lanes.
-
-  const tileLA = make_layout((tileM, tileK), (1, tileM))
-  const tileLB = make_layout((tileN, tileK), (1, tileN))
-
-  # Create a per-thread table that maps index -> coordinate
-  # to avoid runtime division and modulo
-  const unitCoordsA = block:
-    var a: array[blockSize * unitsA, (int, int)]
-    for tid in 0 ..< blockSize:
-      let p = thrfrg_copy(tileLA, CpAsyncAtom[TA], blockSize)
-      for i in 0 ..< unitsA:
-        a[tid * unitsA + i] = idx2crd((tileM, tileK), toInt(crd2idx(p, (tid, 0, i))))
-    a
-  const unitCoordsB = block:
-    var a: array[blockSize * unitsB, (int, int)]
-    for tid in 0 ..< blockSize:
-      let p = thrfrg_copy(tileLB, CpAsyncAtom[TB], blockSize)
-      for i in 0 ..< unitsB:
-        a[tid * unitsB + i] = idx2crd((tileN, tileK), toInt(crd2idx(p, (tid, 0, i))))
-    a
-
-  let kTiles = K.ceil_div(tileK)
-  for kCTA in 0 ..< kTiles:
-    let tA = local_tile(A, (tileM, tileK), (mCTA, kCTA))
-    let tB = local_tile(B, (tileN, tileK), (nCTA, kCTA))
-    let validK = min(tileK, K - kCTA * tileK)
-
-
-    # Load tile A into shared memory
-    let tAgA = partition_S(tA, CpAsyncAtom[TA], blockSize, threadIdx)
-    var tAsA = partition_D(sA, CpAsyncAtom[TA], blockSize, threadIdx)
-    var tApA: array[unitsA, bool]
-    for i in 0 ..< unitsA:
-      let c = unitCoordsA[threadIdx * unitsA + i]
-      tApA[i] = c[0] < validM and c[1] < validK
-    let tApAv = make_view(addr tApA[0], make_layout((1, unitsA)))
-    copyFromIfAsync(tAsA, tAgA, tApAv)
-
-    # Load tile B into shared memory
-    let tBgB = partition_S(tB, CpAsyncAtom[TB], blockSize, threadIdx)
-    var tBsB = partition_D(sB, CpAsyncAtom[TB], blockSize, threadIdx)
-    var tBpB: array[unitsB, bool]
-    for i in 0 ..< unitsB:
-      let c = unitCoordsB[threadIdx * unitsB + i]
-      tBpB[i] = c[0] < validN and c[1] < validK
-    let tBpBv = make_view(addr tBpB[0], make_layout((1, unitsB)))
-    copyFromIfAsync(tBsB, tBgB, tBpBv)
-
-    # one commit group for both loads
-    TA.commit_group()
-    TB.wait_group(0)
-    syncthreads() # Wait until all threads have copied their tiles
-    tma.gemm_tiled(dFrag, sA, sB, TileShape, threadIdx)
-    syncthreads() # Wait until all threads have processed gemm_tiled
-
-  # Fused epilogue
-  # --------------
-  var o = epi
-  o.preflight()
-  # The store mask is set before the apply. The epilogues read their gmem operands per element, and a lane the store mask
-  # drops must not read an operand (the tile's padded size can reach past the real M/N region).
-  o.storeMask = cStoreMask(tma, threadIdx, tileM, tileN, validM, validN)
-  var tmp = make_tensor(TD, D.shape)
-  o.apply(tmp, dFrag)
-  o.finalStore(D, tmp)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  The dtype policy: atom → thread layout → tile
-# ═════════════════════════════════════════════════════════════════════════
-#
-#  gemm_kernel computes its tma config internally.
-#  The host and the device run the same policy: the same atom, thread layout and tile.
-#  TODO: refactor this whole section: the dtype mapping is a naive first cut.
-
-template mmaDType(T: typedesc): MmaDType =
-  ## The MmaDType for an operand type.
-  # TODO: naive mapping: a uint32 operand may pack 4 × fp8 or 2 × fp16,
-  # not just TF32. Rework when the packed datatypes land.
-  when T is uint32: mdtTF32
-  elif T is float32: mdtF32
-  else:
-    {.error: "mmaDType: no MmaDType for the operand type " & $T &
-      ". At the moment: uint32 (TF32) and float32".}
-
-template atom_selector*(TA, TB, TC: typedesc): auto =
-  ## Derive the MMA atom for the operand types.
-  ##
-  ## - the raw operand types route the atom, mmaDType errors on any type
-  ##   but uint32 and float32, so the selector cannot route through it
-  ## - unmatched combinations fall back to the 1×1×1 universal atom,
-  ##   which compiles wherever plain arithmetic does
-  # TODO: naive dtype matching: the operand types may pack smaller
-  # datatypes (4 × fp8, 2 × fp16). Rework when those land.
-  when TA is uint32 and TB is uint32 and TC is float32:
-    SM80_16x8x8_F32TF32TF32F32_TN
-  elif TA is float32 and TB is float32 and TC is float32:
-    UNIVERSAL_1x1x1_F32F32F32F32
-  else:
-    {.warning: "atom_selector: no backend MMA for (" & $TA & ", " & $TB & ", " & $TC &
-      "); falling back to scalar FMA (UNIVERSAL_1x1x1_F32F32F32F32).".}
-    UNIVERSAL_1x1x1_F32F32F32F32
-
-func make_tiled_mma*[Sh, St](
-    a: static MmaAtom,
-    thread_layout: Layout[Sh, St]): TiledMma[MmaAtom, Layout[Sh, St]] {.inline.} =
-  TiledMma[MmaAtom, Layout[Sh, St]](atom: a, threadLayout: thread_layout)
-
-template threadTiling*(atom: static MmaAtom, M, N: static int): auto =
-  ## Thread tiling for a padded input size (M, N), derived from the atom's tile dimensions.
-  ##
-  ## - thrM = M div atom.getM()
-  ## - thrN = N div atom.getN()
-  ##
-  ## 
-  ##   callers pass the input padded up to atom multiples (gemm_kernel does), so the size must be a multiple of the atom
-  # TODO: this needs M, N known at compile-time but they are dynamic
-  make_layout((M div atom.getM(), N div atom.getN(), 1))
-
-template tile_shape*(tma: static TiledMma; tileK: static int): auto =
-  ## The tile one CTA computes: (thrM·atomM, thrN·atomN, tileK),
-  ## the thread layout times the atom on M and N,
-  ## one tileK-sized slice of K.
-  ## The grid is ceil(M/tileM) × ceil(N/tileN) CTAs.
-  (M: tma.thrM * tma.atom.getM(), N: tma.thrN * tma.atom.getN(), K: tileK)
-
-# ═════════════════════════════════════════════════════════════════════════
-#  gemm_kernel(D, A, B, epi)
-# ═════════════════════════════════════════════════════════════════════════
-
-proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
-    D: var (TensorView[TC, ShC, StC] or TensorOwned[TC, ShC, StC]),
-    A: TensorView[TA, ShA, StA] or TensorOwned[TA, ShA, StA],
-    B: TensorView[TB, ShB, StB] or TensorOwned[TB, ShB, StB],
-    epi: Epi) =
-  ## Computes D = f(A·B), with f an epilogue.
-  ##
-  ## Worked example (m16n8k8, tile (32, 16, 32)):
-  ##   gemm_kernel derives the thread layout, tile and grid from the input,
-  ##   then partitions D per thread (partition_C) and shards the epilogue.
-  ##   For a (32, 16) input:
-  ##     thread layout: (2, 2, 1)
-  ##     tile: (32, 16, 32)
-  ##     grid: 1×1
-  ##     CTA: 128 lanes = 4 warps
-  ##   Each CTA computes the (32, 16) output tile via gemm_cta.
-  ##   For a (64, 32) input:
-  ##     thread layout: (4, 4, 1)
-  ##     tile: (64, 32, 32)
-  ##     grid: 1×1
-  ##     CTA: 512 lanes = 16 warps
-  ##
-  ## Example: C += α·AB + β·C is implemented via
-  ##   let pA = make_view(A, (M, K), (1, M))
-  ##   let pB = make_view(B, (N, K), (1, N))
-  ##   var pC = make_view(C, (M, N), (1, M))
-  ##   gemm_kernel(pC, pA, pB, initEpiAXPBY(alpha, beta, pC))
-  ##
-  ## Args:
-  ##   D: the (M, N) destination view, written by the epilogue
-  ##   A: the (M, K) A view
-  ##   B: the (N, K) B view
-  ##   epi: the epilogue config, e.g. initEpiAXPBY(alpha, beta, pC)
-  ##
-  ## Expected input:
-  ##   - D of shape (M, N), float32, col-major at (1, M) strides
-  ##   - A of shape (M, K) and B of shape (N, K), 32-bit operands, col-major
-  ##   - the A and B views' allocated K must be a multiple of 32, one
-  ##     tileK-sized slice of K per loop iteration, and the problem K is
-  ##     runtime and may be ragged
-  ##
-  ## Output:
-  ##   the (mCTA, nCTA) tile of D = f(A·B), written per thread and masked
-  ##   to the valid (M, N) region.
-  ##
-  ## Ragged M/N:
-  ##   - M/N not multiples of the tile are legal, the thread layout covers
-  ##     the input padded up to atom multiples (statically derived from the view shapes)
-  ##   - gemm_cta zero-fills the loads, masks the store at the real region, and launches a grid of (ceil(M/tileM), ceil(N/tileN)) CTAs
-  ##
-  ## Gmem-operand epilogues:
-  ##   - the operands (C, bias) are read per thread over the padded size, and gemm_cta sets the store mask before the epilogue's apply
-  ##   - the shipped epilogues never read a padded lane's operand (the store drops those lanes), so the reads stay inside the real (M, N) region
-  ##
-  ## At the moment, 32-bit operands (TF32) with float32 accumulation.
-  static:
-    doAssert sizeof(TA) == 4 and sizeof(TB) == 4,
-      "gemm_kernel: at the moment, 32-bit operands only (the SM80 TF32 atom)"
-    doAssert TC is float32,
-      "gemm_kernel: at the moment, float32 accumulation only"
-  const
-    M = toInt(ShA.default[0])
-    K = toInt(ShA.default[1])
-    N = toInt(ShB.default[0])
-    # Ragged M/N:
-    #   the thread layout and the tile cover the input padded up
-    # to atom multiples (static, from the view shapes), the tile overhang
-    # past the real M/N is zero-filled at the loads and dropped at the store.
-    atomM = atom_selector(TA, TB, TC).getM()
-    atomN = atom_selector(TA, TB, TC).getN()
-    Mp = ((M + atomM - 1) div atomM) * atomM
-    Np = ((N + atomN - 1) div atomN) * atomN
-    layout = threadTiling(atom_selector(TA, TB, TC), Mp, Np)
-    # TODO:
-    #   temporary SM80 tileK, hardcoded until the dtype policy derives
-    # it per architecture and datatype. The smem tile's K size: gemm_cta
-    # prepares one tileK-sized slice of K at a time, whatever the input K.
-    defaultTileK = 32
-  template tma: untyped = make_tiled_mma(atom_selector(TA, TB, TC), layout)
-  const
-    (tileM, tileN, tileK) = tile_shape(tma, defaultTileK)
-  let mCTA = blockIdx.x
-  let nCTA = blockIdx.y
-  let thr = tma.get_slice(threadIdx.x)
-  var tD = local_tile(D, (tileM, tileN), (mCTA, nCTA))
-  var tDv = tma.partition_C(thr, tD)
-  gemm_cta(tma, tDv, A, B, M, N, K, epi.shard(tma, thr, mCTA, nCTA),
-           (M: tileM, N: tileN, K: tileK), mCTA, nCTA, threadIdx.x)
+  staticFor k, 0, KR:
+    when aBits == 8:
+      staticFor m, 0, MR:
+        staticFor n, 0, NR:
+          let ns = (when (m and 1) == 1: NR - 1 - n else: n)
+          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k))
+    elif bBits == 8:
+      staticFor n, 0, NR:
+        staticFor m, 0, MR:
+          let ms = (when (n and 1) == 1: MR - 1 - m else: m)
+          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k))
+    else:
+      staticFor n, 0, (NR + 1) div 2:
+        staticFor m, 0, MR:
+          let n0 = n * 2
+          let ms = (when (n * 2 and 2) == 2: MR - 1 - m else: m)
+          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k))
+          when n * 2 + 1 < NR:
+            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k))

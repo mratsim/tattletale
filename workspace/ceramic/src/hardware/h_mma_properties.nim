@@ -60,6 +60,12 @@ macro getThreadCount*(A: static MmaAtom): untyped =
   ## Returns the number of threads one atom invocation cooperates over.
   result = bindSym($A & "_threadCount")
 
+template getLayout*(atom: static MmaAtom, operand: static MmaOperand): untyped =
+  ## The operand's fragment layout, (T, V) → cell-local offset, keyed by operand.
+  when operand == opA: atom.getLayoutA()
+  elif operand == opB: atom.getLayoutB()
+  else:                atom.getLayoutC()
+
 macro getLayoutA*(A: static MmaAtom): untyped =
   ## Returns the atom's A fragment layout, (T, V) → col-major offset in (M, K).
   result = bindSym($A & "_aLayout")

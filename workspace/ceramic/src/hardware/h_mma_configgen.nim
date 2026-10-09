@@ -45,10 +45,17 @@ const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount",
   ## The property keys every atom must declare, in declaration order.
   ## The generated const name is `NAME_key`.
 
-const OptionalAtomPropKeys = ["elem"]
-  ## Optional property keys, declared only by the atoms that need them
-  ## (the Apple simdgroup atoms' MSL operand element name).
+const OptionalAtomPropKeys = ["aType", "bType", "cType"]
+  ## Optional property keys, declared only by the atoms that need them:
+  ## Per-operand datatypes (A, B, accumulator/C), the Apple simdgroup
+  ## atoms' MSL element names.
   ## Absent keys generate a default const ("" for string keys).
+
+const DtypePropKeys = ["aType", "bType", "cType"]
+  ## Optional per-operand datatype keys.
+  ## Values: the MSL element names for the Apple and universal atoms
+  ## ("float", "half", "bfloat"), the PTX mnemonics for the NVIDIA atoms
+  ## ("f32", "f16", "bf16", "tf32", "s8", "s32", "e4m3", "e5m2").
 
 const IntPropKeys = ["m", "n", "k", "vpt", "threadCount"]
   ## The scalar keys whose values must be positive int literals.
@@ -108,12 +115,15 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
                  v.strVal.startsWith("mma.sync.aligned."),
           "declareAtoms: invalid instruction `" & v.strVal & "` on atom `" & $name &
           "` (expected \"\", \"simdgroup_multiply_accumulate\", or an mma.sync.aligned.* mnemonic)"
-      elif keyStr == "elem":
+      elif keyStr in DtypePropKeys:
         let v = valNode[0]
         v.expectKind(nnkStrLit)
-        doAssert v.strVal in ["float", "half", "bfloat"],
-          "declareAtoms: invalid MSL element name `" & v.strVal & "` on atom `" & $name &
-          "` (expected \"float\", \"half\", or \"bfloat\")"
+        doAssert v.strVal in ["float", "half", "bfloat",
+                              "f32", "f16", "bf16", "tf32",
+                              "s8", "s32", "e4m3", "e5m2"],
+          "declareAtoms: invalid operand datatype `" & v.strVal & "` on atom `" & $name &
+          "` (expected an MSL element name \"float\"/\"half\"/\"bfloat\" or a PTX " &
+          "mnemonic \"f32\"/\"f16\"/\"bf16\"/\"tf32\"/\"s8\"/\"s32\"/\"e4m3\"/\"e5m2\")"
       params.props.add (keyStr, valNode[0])
     for key in AtomPropKeys:
       doAssert key in seen,
@@ -127,7 +137,7 @@ proc genAtomDecls(defs: seq[AtomParams]): NimNode =
   ##   const NAME1_m* = 8, NAME1_n* = 8, …
   ##
   ## Optional keys an atom does not declare emit a default const
-  ## ("" for the string key `elem`).
+  ## ("" for the per-operand datatype keys).
   result = newStmtList()
   var fields: seq[NimNode]
   for d in defs:
