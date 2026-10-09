@@ -141,6 +141,10 @@ macro coalesceImpl(sh, st: typed): untyped =
   ## Size-1-preserving coalesce
   result = newStmtList()
   result.add coalesceFoldImpl(sh, st)
+
+macro coalesceDropImpl(sh, st: typed): untyped =
+  result = newStmtList()
+  result.add coalesceFoldImpl(sh, st)
   let shapeTuple = result[0][1]
   let strideTuple = result[0][2]
   if shapeTuple.kind in {nnkTupleConstr, nnkPar} and shapeTuple.len > 1:
@@ -148,6 +152,7 @@ macro coalesceImpl(sh, st: typed): untyped =
     if lastShapeVal == 1:
       shapeTuple.del(shapeTuple.len - 1)
       strideTuple.del(strideTuple.len - 1)
+
 macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
   ##
@@ -162,7 +167,7 @@ macro coalesce*(layout: Layout): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
   template coalesceDelegate(shape, stride: typed): untyped =
-    coalesceImpl(shape, stride)
+    coalesceDropImpl(shape, stride)
   result.add getAst(coalesceDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════

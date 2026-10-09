@@ -295,10 +295,12 @@ proc runComposeRemainderTests =
     check c.shape, (4, 2), (Int[4], Int[2])
     check c.stride, (3, 1), (Int[3], Int[1])
   block:
-    # coalesce drops trailing size-1 stride-0 modes
+    # the trailing stride-0 mode survives A' coalescing and grows,
+    # absorbing B's extra domain
     let c = compose(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
-    check c.shape, (4, 6), (Int[4], Int[6])
-    check c.stride, (3, 1), (Int[3], Int[1])
+    check c.shape, (4, 3, 2), (Int[4], Int[3], Int[2])
+    check c.stride, (3, 1, 0), (Int[3], Int[1], Int[0])
+    assertCompositionProperty(make_layout((4, 3, 1), (3, 1, 0)), make_layout(24, 1))
   block:
     let c = compose(make_layout((4, 3, 1), (3, 1, 0)), make_layout(4, 1))
     check c.shape, 4, Int[4]
@@ -627,6 +629,64 @@ proc runComposeSymbolZeroTests =
     assertCompositionProperty(make_layout(12, 1), b)
   echo "  symbol zero dispatch: 7 cases OK"
 
+# ── slack absorption ─────────────────────────────────────────
+proc runComposeSlackTests =
+  ## B's domain exceeding A's size: A's trailing stride-0 mode
+  ## grows and carries the slack, the last-mode quotient rule
+  ## needs that mode alive at mod time
+  block:
+    let a = make_layout((2, 3, 1), (1, 4, 0))
+    let c = compose(a, make_layout(18, 1))
+    check c.shape, (2, 3, 3), (Int[2], Int[3], Int[3])
+    check c.stride, (1, 4, 0), (Int[1], Int[4], Int[0])
+    assertCompositionProperty(a, make_layout(18, 1))
+  block:
+    let a = make_layout((4, 1), (1, 0))
+    let c = compose(a, make_layout(12, 1))
+    check c.shape, (4, 3), (Int[4], Int[3])
+    check c.stride, (1, 0), (Int[1], Int[0])
+    assertCompositionProperty(a, make_layout(12, 1))
+  block:
+    # slack zero: the grown mode collapses back to 1 and the public
+    # coalesce drops it
+    let a = make_layout((4, 3, 1), (3, 1, 0))
+    let c = compose(a, make_layout(12, 1))
+    check c.shape, (4, 3), (Int[4], Int[3])
+    check c.stride, (3, 1), (Int[3], Int[1])
+    assertCompositionProperty(a, make_layout(12, 1))
+  block:
+    # interior size-1 modes still drop, only the trailing one survives
+    let a = make_layout((2, 1, 6), (1, 7, 8))
+    let c = compose(a, make_layout(12, 1))
+    check c.shape, (2, 6), (Int[2], Int[6])
+    check c.stride, (1, 8), (Int[1], Int[8])
+    assertCompositionProperty(a, make_layout(12, 1))
+  block:
+    # M > 1: the div rule passes the trailing mode through, the mod
+    # rule grows it, pycute (2, 3, 2):(6, 1, 0)
+    let a = make_layout((4, 3, 1), (3, 1, 0))
+    let c = compose(a, make_layout(12, 2))
+    check c.shape, (2, 3, 2), (Int[2], Int[3], Int[2])
+    check c.stride, (6, 1, 0), (Int[6], Int[1], Int[0])
+    assertCompositionProperty(a, make_layout(12, 2))
+  block:
+    # the interior (1, 7) drops, the trailing (1, 0) grows to 4
+    let a = make_layout((2, 1, 6, 1), (1, 7, 8, 0))
+    let c = compose(a, make_layout(48, 1))
+    check c.shape, (2, 6, 4), (Int[2], Int[6], Int[4])
+    check c.stride, (1, 8, 0), (Int[1], Int[8], Int[0])
+    assertCompositionProperty(a, make_layout(48, 1))
+  block:
+    # runtime first mode, slack modes stay static when quotients
+    # are static as well
+    let dN = 4
+    let a = make_layout((dN, 3, 1), (3, 1, 0))
+    let c = compose(a, make_layout(24, 1))
+    check c.shape, (4, 3, 2), (int, int, int)
+    check c.stride, (3, 1, 0), (Int[3], int, Int[0])
+    assertCompositionProperty(a, make_layout(24, 1))
+  echo "  slack absorption: 7 cases OK"
+
 # ── symbol-bound tiler ───────────────────────────────────────
 proc runComposeSymbolTilerTests =
   # a tiler bound to a symbol must match the literal tuple
@@ -748,6 +808,7 @@ runComposeTilerTests()
 runComposeDynamicTests()
 runComposeZeroStrideTests()
 runComposeSymbolZeroTests()
+runComposeSlackTests()
 runComposeSymbolTilerTests()
 runComposeCoordStrideTests()
 
