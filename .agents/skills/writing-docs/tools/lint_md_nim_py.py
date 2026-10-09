@@ -21,7 +21,7 @@ Rule table (rule | trigger | severity):
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "emission")       | counted  |
+| unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
