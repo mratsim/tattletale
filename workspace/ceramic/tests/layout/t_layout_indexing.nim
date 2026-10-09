@@ -1,5 +1,5 @@
 ## Test: layout_indexing, crd2idx idx2crd
-# Run: nim c -r workspace/ceramic/tests/layout/test_layout_indexing.nim
+# Run: nim c -r workspace/ceramic/tests/layout/t_layout_indexing.nim
 ##
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 

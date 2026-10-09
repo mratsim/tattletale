@@ -527,12 +527,14 @@ task test_toktoktok, "Test workspace/toktoktok":
 
 task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/ceramic/tests"):
-      runCmd(cmd)
-    for cmd in getTestCommands("workspace/ceramic/tests/atoms_mma"):
-      runCmd(cmd)
-    for cmd in getTestCommands("workspace/ceramic/tests/gemm"):
-      runCmd(cmd)
+    # The gpu/ and nim_compiler_ice/ dirs stay out: gpu tests are
+    # backend-specific (-d:metal or a CUDA toolchain), the ICE dir holds
+    # known compiler-bug repros that abort the run by design.
+    # Manual kernels tests (m_*) need -d:metal, run directly.
+    for d in ["", "int_tuples", "kernels/copy_fill", "layout",
+              "layout_algebra", "tensor"]:
+      for cmd in getTestCommands("workspace/ceramic/tests/" & d):
+        runCmd(cmd)
 
 # Ceramic codegen-size runners (CGS)
 # --------------------------------------------------

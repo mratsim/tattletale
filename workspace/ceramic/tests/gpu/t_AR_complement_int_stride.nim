@@ -31,7 +31,7 @@
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
 ##     nim cpp -r --hints:off --warnings:off \
 ##       --outdir:build/tests/gpu --nimcache:nimcache/tests/gpu \
-##       workspace/ceramic/tests/gpu/test_AR_complement_int_stride.nim
+##       workspace/ceramic/tests/gpu/t_AR_complement_int_stride.nim
 
 import std/[unittest]
 import workspace/crucible

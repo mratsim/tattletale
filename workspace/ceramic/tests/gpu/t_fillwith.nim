@@ -6,7 +6,7 @@
 ## Run:
 ##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/ceramic/tests/gpu/test_ceramic_issue4_fillwith.nim
+##     workspace/ceramic/tests/gpu/t_fillwith.nim
 
 import std/[unittest]
 import workspace/crucible

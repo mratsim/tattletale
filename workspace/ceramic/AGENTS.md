@@ -38,8 +38,8 @@ Mechanics (see `config.nims`):
 Single file (C backend, mirrors `testerCmd`):
 ```bash
 nim c -r --hints:off --warnings:off \
-  --outdir:build/tests/test_name --nimcache:nimcache/tests/test_name \
-  workspace/ceramic/tests/test_file.nim
+  --outdir:build/tests/t_name --nimcache:nimcache/tests/t_name \
+  workspace/ceramic/tests/<subdir>/t_file.nim
 ```
 
 ## Tensor access: `[]` vs `()`
