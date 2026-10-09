@@ -26,7 +26,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/ptr_arithmetic
-import workspace/ceramic/tests/layouts_testutils
+import workspace/ceramic/tests/layout/layouts_testutils
 
 proc runTests =
   echo "\n── tensor () mixed coord on nested layout (anti-regression) ──"

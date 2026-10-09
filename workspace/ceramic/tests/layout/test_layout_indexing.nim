@@ -1,12 +1,12 @@
 ## Test: layout_indexing, crd2idx idx2crd
-## Run: nim cpp -r tests/test_layout_indexing.nim
+# Run: nim c -r workspace/ceramic/tests/layout/test_layout_indexing.nim
 ##
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
-import ../src/layout_algebra
+import workspace/ceramic/src/layout_algebra
 import std/typetraits
 import std/macros
-import ./layouts_testutils
+import workspace/ceramic/tests/layout/layouts_testutils
 
 {.experimental: "callOperator".}
 

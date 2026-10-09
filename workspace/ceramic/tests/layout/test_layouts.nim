@@ -20,7 +20,7 @@ import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layouts {.all.}
-import workspace/ceramic/tests/layouts_testutils
+import workspace/ceramic/tests/layout/layouts_testutils
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout — shape + stride, const correctness, stride order

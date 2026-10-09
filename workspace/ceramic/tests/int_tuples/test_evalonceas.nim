@@ -1,4 +1,4 @@
-import ../src/int_tuples
+import workspace/ceramic/src/int_tuples
 import std/unittest
 import std/random
 # ═══════════════════════════════════════════════════════════════
