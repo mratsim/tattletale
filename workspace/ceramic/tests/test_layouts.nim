@@ -431,8 +431,8 @@ proc runSizeTests =
 #  Cosize tests (ported from Python tensor-layouts test suite)
 # ═══════════════════════════════════════════════════════════════
 #
-#  ⚠ Known discrepancies between implementations of cosize on
-#  COMPOSED layouts (make_layout(l1, l2)):
+#  ⚠ Known discrepancies between implementations of cosize
+#  on COMPOSED layouts (make_layout(l1, l2)):
 #
 #   1. CuTe C++ uses hierarchical (nested) cosize. For a composed
 #      layout Layout<A,B>, cosize = cosize(A) * cosize(B) effectively,
@@ -1016,16 +1016,16 @@ proc runOrderedLayoutTests =
   block:
     # make_ordered_layout: dimension i keeps position i, only stride values change
     let cm = make_ordered_layout((2,3,4), (1,2,0))
-    doAssert cm.stride[0].toIntVal == 4
-    doAssert cm.stride[1].toIntVal == 8
-    doAssert cm.stride[2].toIntVal == 1
+    doAssert cm.stride[0].toInt == 4
+    doAssert cm.stride[1].toInt == 8
+    doAssert cm.stride[2].toInt == 1
     echo "    7. Dimensions NOT reordered: 3 checks OK"
 
   block:
     let l = make_layout_like(make_layout((2,3,4), (3,6,1)))
-    doAssert l.stride[0].toIntVal == 4
-    doAssert l.stride[1].toIntVal == 8
-    doAssert l.stride[2].toIntVal == 1
+    doAssert l.stride[0].toInt == 4
+    doAssert l.stride[1].toInt == 8
+    doAssert l.stride[2].toInt == 1
     echo "    8. make_layout_like dimension positions: 3 checks OK"
 
   # Section 9: tuple variables, const symbols, and dynamic entries
@@ -1185,18 +1185,18 @@ proc runTests =
   block:
     let a = make_layout((3,))
     let b = make_layout((2, 4))
-    doAssert toIntVal(a.shape[0]) == 3, "no shadowing: layout (3,)"
-    doAssert toIntVal(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
-    doAssert toIntVal(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
+    doAssert toInt(a.shape[0]) == 3, "no shadowing: layout (3,)"
+    doAssert toInt(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
+    doAssert toInt(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
     echo "    make_layout: 3 cases OK"
   echo "--- makeIntTuple ---"
   block:
     const a = makeIntTuple((3,))
     const b = makeIntTuple((2, 4))
     static:
-      doAssert toIntVal(a[0]) == 3
-      doAssert toIntVal(b[0]) == 2
-      doAssert toIntVal(b[1]) == 4
+      doAssert toInt(a[0]) == 3
+      doAssert toInt(b[0]) == 2
+      doAssert toInt(b[1]) == 4
     echo "    makeIntTuple: 3 cases OK"
 
 when isMainModule:

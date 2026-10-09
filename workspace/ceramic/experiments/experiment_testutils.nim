@@ -56,8 +56,8 @@ proc allClose[T](testC: TensorOwned[T, _, _], refC: TensorOwned[T, _, _];
   ## Compare two tensors element-wise with numpy.allclose semantics:
   ## |test - ref| <= abs_tol + rel_tol·|ref| (single condition, NaN never
   ## equal). Uses doAssert for immediate loud breakage.
-  let M = testC.shape[0].toIntVal()
-  let N = testC.shape[1].toIntVal()
+  let M = testC.shape[0].toInt()
+  let N = testC.shape[1].toInt()
   var maxAbsErr: T = T(0)
   for m in 0 ..< M:
     for n in 0 ..< N:

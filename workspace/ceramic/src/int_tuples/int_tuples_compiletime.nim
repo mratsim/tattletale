@@ -32,6 +32,10 @@ func IntCT*(val: int): NimNode {.compileTime.} =
   newNimNode(nnkObjConstr).add(
     newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
 
+func divmod*(a, b: int): (int, int) {.compileTime.} =
+  ## Quotient and remainder of `a` divided by `b`.
+  (a div b, a mod b)
+
 func isStaticInt*(t: NimNode): bool {.compileTime.} =
   (t.kind == nnkBracketExpr and $t[0] == "Int") or t.kind == nnkIntLit
 
@@ -46,8 +50,13 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
   of nnkCall, nnkBracketExpr:
-    if t.len >= 1 and $t[0] == "Int" and t[1].kind == nnkIntLit:
+    if t[0].eqIdent("Int"):
       int(t[1].intVal)
+    else:
+      DynamicSentinel
+  of nnkObjConstr:
+    if t[0][0].eqIdent("Int"):
+      t[0].getStaticInt()
     else:
       DynamicSentinel
   else:
@@ -87,11 +96,22 @@ func getTupleType*(n: NimNode): NimNode {.compileTime.} =
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
   ## True for tuple values and tuple types
   case t.kind
-  of nnkTupleTy:
+  of nnkTupleTy, nnkTupleConstr:
     true
+  of nnkPar:
+    t.len != 1 # A single elem in parenthesis is not a tuple
+  of nnkIntLit, nnkInt64Lit, nnkFloatLit, nnkCharLit, nnkStrLit,
+     nnkNilLit, nnkEmpty:
+    # fresh macro nodes, no type to resolve and never tuples
+    false
   else:
-    let ty = t.getTupleType()
-    ty.kind in {nnkTupleConstr, nnkTupleTy}
+    t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
+
+func isScalarTy*(t: NimNode): bool {.compileTime.} =
+  t.kind == nnkIntLit or
+    (t.kind == nnkBracketExpr and t[0].sameType(bindSym"Int")) or
+    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].sameType(bindSym"Int")) or
+    (t.kind == nnkSym and t.sameType(bindSym"int"))
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)

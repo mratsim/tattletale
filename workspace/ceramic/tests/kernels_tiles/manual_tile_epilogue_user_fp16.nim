@@ -31,7 +31,7 @@ func apply[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]);
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## Per-thread epilogue math: tmp = s·AB.
-  const S = toIntVal(size(tmp))
+  const S = toInt(size(tmp))
   for i in 0 ..< S:
     tmp(i) = op.s * AB(i)
 
@@ -45,11 +45,11 @@ proc apply[T; R, C: static int; AT, ABT: static MmaAtom](
   ## applies).
   static:
     doAssert AT.getM() == ABT.getM() and AT.getN() == ABT.getN() and
-      toIntVal(AT.valuesPerThread(opC)) == toIntVal(ABT.valuesPerThread(opC)),
+      toInt(AT.valuesPerThread(opC)) == toInt(ABT.valuesPerThread(opC)),
       "apply: the accumulator and operand tiles must share the atom's subtile grid and per-lane count"
   const rowTiles = R div AT.getM()
   const colTiles = C div AT.getN()
-  const vpt = toIntVal(AT.valuesPerThread(opC))
+  const vpt = toInt(AT.valuesPerThread(opC))
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:

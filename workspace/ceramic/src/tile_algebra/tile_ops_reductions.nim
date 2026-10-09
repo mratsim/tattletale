@@ -29,7 +29,7 @@ func getReductionTree*(A: static MmaAtom): ReductionTree {.inline.} =
     const colCoeffs = block:
       var a: array[5, int]
       for b in 0 .. 4:
-        a[b] = toIntVal(crd2idx(A.getLayoutA(), 1 shl b)) div A.getM()
+        a[b] = toInt(crd2idx(A.getLayoutA(), 1 shl b)) div A.getM()
       a
     # Unrolled over the 5 lane bits: each nonzero col coefficient adds
     # its bit's delta (2^b) to the tree and to the leader mask.

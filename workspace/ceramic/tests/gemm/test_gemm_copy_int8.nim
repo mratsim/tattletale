@@ -48,10 +48,10 @@ proc runInt8PartitionTests =
         "int8 partition: thread " & $tid & ": slice shape " & $sub.shape &
         ", expected (1, " & $copyUnits & ")"
       for i in 0 ..< copyUnits:
-        let off = toIntVal(origin) + toIntVal(crd2idx(sub, (0, i)))
+        let off = toInt(origin) + toInt(crd2idx(sub, (0, i)))
         let c = tid + i * blockSize
         let (m0, k0) = idx2crd((TILE_M, TILE_K), 16 * c)
-        let expected = toIntVal(m0) + toIntVal(k0) * TILE_M
+        let expected = toInt(m0) + toInt(k0) * TILE_M
         doAssert off == expected,
           "int8 partition: thread " & $tid & " unit " & $i & ": tile offset " &
           $off & ", reference " & $expected
@@ -68,10 +68,10 @@ proc runInt8PartitionTests =
       let origin = crd2idx(pL, tid)
       let sub = slice(pL, (tid, _, _))
       for i in 0 ..< copyUnits:
-        let off = toIntVal(origin) + toIntVal(crd2idx(sub, (0, i)))
+        let off = toInt(origin) + toInt(crd2idx(sub, (0, i)))
         let c = tid + i * blockSize
         let (m0, k0) = idx2crd((TILE_M, TILE_K), 16 * c)
-        let expected = toIntVal(m0) + toIntVal(k0) * ldA
+        let expected = toInt(m0) + toInt(k0) * ldA
         doAssert off == expected,
           "int8 padded partition: thread " & $tid & " unit " & $i &
           ": tile offset " & $off & ", reference " & $expected

@@ -14,7 +14,7 @@ const composeStaticMsl = metal:
     let a = make_layout((4, 4), (1, 4))
     let b = make_layout((2, 2), (1, 2))
     let r = compose(a, b)
-    C[0] = float32 toIntVal crd2idx(r, (1, 1))
+    C[0] = float32 toInt crd2idx(r, (1, 1))
 
 # compose of a static rank-2 layout with a nested layout
 const composeNestedMsl = metal:
@@ -22,7 +22,7 @@ const composeNestedMsl = metal:
     let a = make_layout((8, 8), (1, 8))
     let b = make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))
     let r = compose(a, b)
-    C[0] = float32 toIntVal crd2idx(r, ((1, 1), (1, 1)))
+    C[0] = float32 toInt crd2idx(r, ((1, 1), (1, 1)))
 
 # compose with a runtime rank-1 LHS
 const composeRank1Msl = metal:
@@ -30,7 +30,7 @@ const composeRank1Msl = metal:
     let a = make_layout(int(M), 2)
     let b = make_layout((4, 4), (1, 4))
     let r = compose(a, b)
-    C[0] = float32 toIntVal crd2idx(r, (1, 1))
+    C[0] = float32 toInt crd2idx(r, (1, 1))
 
 # compose of a runtime layout with a static layout, the thrfrg_A/B/C compose call sites in k_layout_gemm.nim
 const composeDynMsl = metal:
@@ -38,7 +38,7 @@ const composeDynMsl = metal:
     let a = make_layout((int(M), int(N)), (1, 16))
     let b = make_layout((4, 4), (1, 4))
     let r = compose(a, b)
-    C[0] = float32 toIntVal crd2idx(r, (1, 1))
+    C[0] = float32 toInt crd2idx(r, (1, 1))
 
 # ── kernel rows ──
 

@@ -331,8 +331,10 @@ BANNED = [
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
      "cite the command and its output that prove the claim"),
-    (r"\bfollow(?:s|ing|ed)?\b", None,
-     "name the thing directly, the item, the preceding entries, or restate the mechanism"),
+    (r"\bfollow(?:s|ing|ed)?\b",
+     lambda l: l.rstrip().endswith(":"),
+     "name the thing directly, the item, the preceding entries, or restate the mechanism "
+     "(a colon-terminated lead-in announcing the adjacent example is exempt)"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -383,11 +385,6 @@ BANNED = [
      None,
      "use size, dims, or bounds (Vulkan/CUDA ABI type names exempt)"),
     # path-scoped: the mode ban is ceramic-only (tuples have dimensions there);
-    # crucible and positron keep their own vocabulary
-    (r"\bmodes?\b",
-     lambda l, path="": "ceramic" not in str(path) or bool(
-         re.search(r"mode: cint|mode: wgpu|sharing mode|storage mode|C\+\+ mode|compiler mode|64-bit mode", l)),
-     "tuples and tensors have dimensions, use dimension (compiler, POSIX, and ABI senses exempt)"),
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
@@ -739,8 +736,10 @@ def nim_prose_lines(text):
             continue
         if s.startswith("##"):
             if LICENSE_SHAPE.match(s.lstrip("#").strip()):
-                # The license header is fixed legal text, exempt here the
-                # same way the `#`-comment branch exempts it
+                # The license banner is fixed legal text, never API prose:
+                # `#` prefixed only, a `##` banner is a violation reported
+                # through check_line's `license` kind
+                out.append((i, "license banner must be `#` prefixed, not `##`", "license", 0, False))
                 continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
@@ -1022,18 +1021,29 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     """Runs the per-line rules over one prose line."""
     if not c:
         return
+    if kind == "license":
+        findings.append(Finding(path, n, "license-prefix", c))
+        return
+    if is_nim and kind == "doc" and re.match(r"Run:\s", c):
+        findings.append(Finding(
+            path, n, "run-command-doc",
+            "a run command is not module documentation (## renders it in "
+            "generated docs), use a # comment"))
+        return
+    if is_nim and "nim cpp" in c and not (
+            "workspace/libtorch" in str(path)
+            or "workspace/transformers" in str(path)):
+        findings.append(Finding(
+            path, n, "nim-cpp",
+            "nim cpp only for workspace/libtorch and workspace/transformers "
+            "(C++ interop), use nim c (host-only C backend)"))
+        return
     bare = strip_backticks(c)
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):
         return
-    # The title flag fires on a short colon-terminated line.
-    # The title opens on a noun phrase, including the lowercase
-    # article form, comma segments after the opener are prose.
-    if c.endswith(":"):
-        segs = [s.strip() for s in bare.split(",") if s.strip()]
-        if segs and all(len(s.split()) <= 8 for s in segs) and segs[0].split()[0].lower() == "the":
-            findings.append(Finding(
-                path, n, "the-opener",
-                "title opens with the (open with a noun phrase)"))
+    # Title openers are checked at the heading level (kind == "heading",
+    # block-level pass) and at doc-block openers; colon-terminated prose
+    # lead-ins are legal prose (rule 29), never titles
     if kind == "fence":
         # Fenced content is code-with-layout.
         # - the vocabulary rules apply
@@ -1852,9 +1862,16 @@ def scan(path, text, findings):
     if not is_md:
         header_lines = meta["module_header"] if is_py else None
         if header_lines is None:
+            first_code = next((i for i, l in enumerate(text.splitlines())
+                               if l.strip() and not l.lstrip().startswith("#")),
+                              len(text.splitlines()))
             for block in blocks:
                 kinds = {e[2] for e in block}
                 if "doc" in kinds:
+                    # A doc block past the first code line is a function
+                    # or type doc, never the module header
+                    if block[0][0] > first_code:
+                        break
                     header_lines = [(e[0], e[1]) for e in block if e[2] == "doc"]
                     break
         check_module_header(path, header_lines or [], is_test, is_self, findings)
@@ -2921,6 +2938,15 @@ TILE_RULES = {
                          "infers from the value arguments",
     "newcall-method": "a newCall(x, ...) plain call, method "
                       "call syntax x.newCall(...) is the required form",
+    "layout-dot-field": "a hand-built .shape/.stride field read; "
+                        "destructureLayout is the required form",
+    "eqident-layout": "a string-named Layout type check; compare "
+                      "types through the type system, not names",
+    "bindsym-arithmetic": "an arithmetic, comparison, or boolean builtin "
+                          "spelled through bindSym/ident; use the "
+                          "compile-time NimNode operators or infix source",
+    "compiles-probe": "a compiles() probe as control flow; dispatch "
+                      "through the type system or typed arguments",
 
     "tupleflatten-method": "a tupleFlatten(x) plain call or bare x.tupleFlatten "
                            "where method call syntax x.tupleFlatten() is the "
@@ -3512,6 +3538,10 @@ RANK_CALL_RE = re.compile(r"(?<![\w.\"'`])rank\s*\(")
 RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
 TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
 RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
+TOINT_CALL_RE = re.compile(r"(?<![\w.\"'`])toInt\s*\(")
+TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
+BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
+                      "int_tuples_datatypes.nim")
 BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
                      "int_tuples_datatypes.nim")
 
@@ -3614,6 +3644,20 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             continue
         prev = lines[i - 1] if i > 0 else ""
         allowed = "rank-allow" in raw or "rank-allow" in prev
+        if TOINT_CALL_RE.search(code) and _rel(path).endswith(BLESSED_TOINT_FILE):
+            continue
+        if TOINT_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "toint-call-syntax",
+                "toInt reads as a prefix call here, write x.toInt() or "
+                "mark # toint-allow"))
+        if (TOINT_ANY_RE.search(code)
+                and "toint-allow" not in raw and "toint-allow" not in prev
+                and re.search(r"(?<![<>!=])={2,}", code)):
+            findings.append(Finding(
+                path, i + 1, "toint-comparison",
+                "toInt beside ==/=== bypasses the Int comparison "
+                "overloads, compare the Int directly or mark # toint-allow"))
         if TUPLELEN_RE.search(code) and not allowed:
             findings.append(Finding(
                 path, i + 1, "tuplelen-rank",
@@ -3838,6 +3882,55 @@ def scan_hash_above_proc(path, lines, blocked, findings):
                 path, first_div, "divider-space",
                 "a section divider keeps a blank line before and after it"))
         i += 1
+
+
+LAYOUT_DOT_RE = re.compile(
+    r"newDotExpr\s*\(\s*[^,()]+,\s*(?:ident|newIdentNode)\s*\(\s*\"(?:shape|stride)\"\s*\)")
+EQIDENT_LAYOUT_RE = re.compile(r"eqIdent\s*\(\s*\"Layout\"\s*\)")
+BINDSYM_ARITH_RE = re.compile(
+    r"(?:bindSym|bindsym|ident|newIdentNode)\s*\(\s*[\"']"
+    r"(?:[+\-*/%<>]|==|!=|<=|>=|and|or|not|xor|div|mod|in|notin|min|max|abs|sign|ceil_div)"
+    r"[\"']\s*\)")
+COMPILES_PROBE_RE = re.compile(
+    r"(?:not\s*\(\s*|when\s+|\=\s*)compiles\s*\(")
+
+
+def scan_layout_type_machinery(path, lines, blocked, findings):
+    """Flags hand-built Layout field reads and string-named Layout checks.
+
+    Contract:
+    - fires once per line, on the line carrying the pattern
+    - layout_compiletime.nim is exempt, destructureLayout itself
+      constructs the field reads it hands out
+    """
+    if path.name == "layout_compiletime.nim":
+        return
+    for i, line in enumerate(lines):
+        if (i + 1) in blocked:
+            continue
+        code, comment_only = _strip_comment(line)
+        if comment_only:
+            continue
+        if LAYOUT_DOT_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "layout-dot-field",
+                "hand-built .shape/.stride field read, destructureLayout "
+                "is the required form"))
+        if EQIDENT_LAYOUT_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "eqident-layout",
+                "eqIdent(\"Layout\") string-matches the type name, compare "
+                "through the type system"))
+        if BINDSYM_ARITH_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "bindsym-arithmetic",
+                "arithmetic spelled through bindSym/ident, use the "
+                "compile-time NimNode operators or infix source"))
+        if COMPILES_PROBE_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "compiles-probe",
+                "compiles() probe as control flow, dispatch through "
+                "the type system"))
 
 
 def scan_newcall_method(path, lines, blocked, findings):
@@ -4145,6 +4238,7 @@ def tile_scan(path, text, findings, consts, builtins, generic_map=None):
         generic_map = build_generic_map([(path, lines)])
     scan_hash_above_proc(path, lines, blocked, findings)
     scan_newcall_method(path, lines, blocked, findings)
+    scan_layout_type_machinery(path, lines, blocked, findings)
     scan_body_wrap(path, lines, ds, blocked, findings)
     scan_explicit_generics(path, lines, ds, generic_map, findings)
     scan_decl_t_suffix(path, ds, lines, findings)

@@ -69,11 +69,11 @@ proc scanBuilder(node: NimNode, acc0: NimNode, body: NimNode, reversed: bool): N
     let ev = stream.next()
     case ev.kind
     of kLeaf:
-      builder.append(acc, verbatim = false)
+      builder.append(acc)
       acc = body.replaceNodes(("acc", acc), ("it", ev.leaf))
     else:
       builder.append(ev)
-  result = builder.emit(0).resultTuple
+  result = builder.emit(0)
   proc reverseTree(n: NimNode): NimNode =
     if n.kind == nnkTupleConstr:
       var items: seq[NimNode]

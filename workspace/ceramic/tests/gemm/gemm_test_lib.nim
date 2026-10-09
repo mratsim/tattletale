@@ -157,12 +157,12 @@ proc testMicrotile*[E](engine: var E; atom: static MmaAtom; label: string) =
 
     # in-place (4-arg)
     var gpuC = newSeq[float32](M * N)
-    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("mmaMicrotileKernel", gpuC, (A, B))
+    engine.run<<(1, toInt(atom.threadCount(opA)))>>("mmaMicrotileKernel", gpuC, (A, B))
     verifyMicrotile(atom, trial, gpuC, A, B, 0.0'f32, "in-place trial " & $trial)
 
     # explicit-output (5-arg), cFrag = 1.0
     var gpuD = newSeq[float32](M * N)
-    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("mmaMicrotileExplicitKernel", gpuD, (A, B))
+    engine.run<<(1, toInt(atom.threadCount(opA)))>>("mmaMicrotileExplicitKernel", gpuD, (A, B))
     verifyMicrotile(atom, trial, gpuD, A, B, 1.0'f32, "explicit trial " & $trial)
 
   echo "  OK: m16n8k8 tf32 microtile matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 16 trials, in-place + explicit)"
@@ -182,7 +182,7 @@ proc testWarp*[E](engine: var E; atom: static MmaAtom; label: string) =
     var refC = newSeq[float32](M * N)
     refC.gemm_tf32_ref(A, B, M, N, Ktotal, 0.0'f32)
     var gpuC = newSeq[float32](M * N)
-    engine.run<<(1, toIntVal(atom.threadCount(opA)))>>("gemmWarpKernel", gpuC, (A, B))
+    engine.run<<(1, toInt(atom.threadCount(opA)))>>("gemmWarpKernel", gpuC, (A, B))
     allClose(gpuC, refC, M, N, "trial " & $trial)
 
   echo "  OK: m16n8k8 tf32 gemm_warp matches reference within 1e-4 (tf32-exact fixture, ", label, " atom, 2 k slices, 16 trials)"
@@ -550,11 +550,11 @@ proc testGemmCtaDynamic*[E](engine: var E; tiled: static TiledMma;
     thrN = tiled.thrN
     thrK = tiled.thrK
     # tile dims follow from the thread layout times the atom
-    TILE_M = thrM * toIntVal(tiled.atom.getM())
-    TILE_N = thrN * toIntVal(tiled.atom.getN())
+    TILE_M = thrM * toInt(tiled.atom.getM())
+    TILE_N = thrN * toInt(tiled.atom.getN())
     blockSize = tiled.threadCount()
   static:
-    doAssert TILE_K mod (thrK * toIntVal(tiled.atom.getK())) == 0,
+    doAssert TILE_K mod (thrK * toInt(tiled.atom.getK())) == 0,
       "testGemmCtaDynamic: the k-tile depth (" & $TILE_K &
       ") must be a multiple of thrK·atomK"
   doAssert kView mod TILE_K == 0,

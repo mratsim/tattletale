@@ -12,21 +12,21 @@ import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 const baselineOverheadMsl = metal:
   proc baselineOverheadKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout(((16, 2), 16), ((1, 16), 4))
-    C[0] = float32 toIntVal size(L)
+    C[0] = float32 toInt size(L)
 
 # make_fragment_like with a (16, 2) V block, feeds the tensor-core fragment call site
 const makeFragmentLikeVMsl = metal:
   proc makeFragmentLikeVKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout(((16, 2), 16), ((1, 16), 4))
     let f = make_fragment_like(L)
-    C[0] = float32 toIntVal size(f)
+    C[0] = float32 toInt size(f)
 
 # make_fragment_like with a broadcast V, feeds the epilogue broadcast-bias call site
 const makeFragmentLikeBroadcastMsl = metal:
   proc makeFragmentLikeBroadcastKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 8), (0, 1))
     let f = make_fragment_like(L)
-    C[0] = float32 toIntVal size(f)
+    C[0] = float32 toInt size(f)
 
 # ── kernel rows ──
 

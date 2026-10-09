@@ -31,10 +31,10 @@ type
 
   IntOrIntTuple* = int | Int | tuple
 
-template toIntVal*(x: int): int = x
-template toIntVal*[V: static int](x: Int[V]): int = V
+template toInt*(x: int): int = x
+template toInt*[V: static int](x: Int[V]): int = V
 
-template `$`*[V: static int](x: Int[V]): string = "Int[" & $V & "]"
+template `$`*[V: static int](x: Int[V]): string = "_" & $V
 
 func `==`*[V: static int](a: Int[V]; b: int): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
@@ -53,15 +53,20 @@ template rank*(t: IntOrIntTuple): static int =
     tupleLen(typeof(t))
 
 # ═══════════════════════════════════════════════════════════════
-#  Int[N] == int, global overloads for tuple comparison
+#  Int[N] ordering, global overloads for tuple comparison
 # ═══════════════════════════════════════════════════════════════
 
-template `<=`*[V: static int](a: Int[V]; b: int): bool = V <= b
-template `<=`*[V: static int](a: int; b: Int[V]): bool = a <= V
-template `>=`*[V: static int](a: Int[V]; b: int): bool = V >= b
-template `>=`*[V: static int](a: int; b: Int[V]): bool = a >= V
-template `<=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V <= U
-template `>=`*[V, U: static int](a: Int[V]; b: Int[U]): static bool = V >= U
+template genCmpOp(op: untyped): untyped =
+  template op*[V, U: static int](a: Int[V], b: Int[U]): static bool = op(V, U)
+  template op*[V: static int](a: Int[V], b: static int): static bool = op(V, b)
+  template op*[V: static int](a: static int, b: Int[V]): static bool = op(a, V)
+  template op*[V: static int](a: Int[V], b: int): bool = op(V, b)
+  template op*[V: static int](a: int, b: Int[V]): bool = op(a, V)
+
+genCmpOp(`<`)
+genCmpOp(`<=`)
+genCmpOp(`>`)
+genCmpOp(`>=`)
 
 # ═══════════════════════════════════════════════════════════════
 #  `===`, deep element-wise comparison across Int[N] and int
@@ -88,6 +93,20 @@ func `===`*[T: tuple, U: tuple](a: T; b: U): bool {.inline.} =
 
 template `===`*[T: tuple](a: T; b: int): bool =
   ## Compare a tuple against an int — only valid for 1-element tuples.
+  when tupleLen(T) == 1:
+    a[0] === b
+  else:
+    false
+
+template `===`*[V: static int](a: Int[V], b: tuple): bool =
+  ## An Int equals a 1-element tuple holding an equal element.
+  when tupleLen(b) == 1:
+    a === b[0]
+  else:
+    false
+
+template `===`*[T: tuple, V: static int](a: T, b: Int[V]): bool =
+  ## A tuple equals an Int only as a 1-element tuple.
   when tupleLen(T) == 1:
     a[0] === b
   else:
@@ -152,6 +171,10 @@ genBinOp(`ceil_div`)
 genBinOp(`gcd`)
 
 template `+=`*[V: static int](a: var int; b: Int[V]) = a += V
+
+# Specialized overloads
+template `*`*(a: Int[0], b: int): Int[0] = Int[0]()
+template `*`*(a: int, b: Int[0]): Int[0] = Int[0]()
 
 # ═══════════════════════════════════════════════════════════════
 #  iteration bounds

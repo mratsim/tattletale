@@ -32,7 +32,7 @@ template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[un
   # and we argue that it's easier for compilers, especially shader compilers that might not be as tuned as LLVM,
   # to do constant folding and common subexpression elimination on an integer expression
   # than through temporaries especially if wrapped in block expressions.
-  make_view(dataBase +% toIntVal(crd2idx(layout, varargs_to_par(coords))), slice(layout, varargs_to_par(coords)))
+  make_view(dataBase +% toInt(crd2idx(layout, varargs_to_par(coords))), slice(layout, varargs_to_par(coords)))
 
 template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
@@ -42,7 +42,7 @@ template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    t.data[toIntVal crd2idx(t.getLayout(), varargs_to_par(args))]
+    t.data[toInt crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(args):
@@ -52,7 +52,7 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    tv.data[toIntVal crd2idx(tv.getLayout(), varargs_to_par(args))]
+    tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `[]` — element access only (underscore rejected)
@@ -61,12 +61,12 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when hasUnderscore(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  t.data[toIntVal crd2idx(t.getLayout(), varargs_to_par(args))]
+  t.data[toInt crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
   when hasUnderscore(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
-  tv.data[toIntVal crd2idx(tv.getLayout(), varargs_to_par(args))]
+  tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   var a = args
@@ -76,7 +76,7 @@ macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
     when hasUnderscore(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
-      `t`.data[toIntVal crd2idx(`t`.getLayout(), `coord`)] = `val`
+      `t`.data[toInt crd2idx(`t`.getLayout(), `coord`)] = `val`
 
 macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   var a = args
@@ -86,7 +86,7 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
     when hasUnderscore(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
-      `tv`.data[toIntVal crd2idx(`tv`.getLayout(), `coord`)] = `val`
+      `tv`.data[toInt crd2idx(`tv`.getLayout(), `coord`)] = `val`
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via underscore dispatch
@@ -122,18 +122,18 @@ macro partitionImpl(tv: typed, zipped: Layout, coord: typed, doInner: static boo
     if doInner:
       # Tile whole first, sliced rest second.
       result.add quote do:
-        make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
           make_layout(concat(`wholeShape`, slice(`slicedShape`, `coord`)),
                       concat(`wholeStride`, slice(`slicedStride`, `coord`))))
     else:
       # Sliced tile first, rest whole second.
       result.add quote do:
-        make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
           make_layout(concat(slice(`slicedShape`, `coord`), `wholeShape`),
                       concat(slice(`slicedStride`, `coord`), `wholeStride`)))
   else:
     result.add quote do:
-      make_view(`tv`.data +% toIntVal(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
+      make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
         make_layout(`wholeShape`, `wholeStride`))
 
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =

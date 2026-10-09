@@ -65,9 +65,9 @@ proc runTest() =
   # atom's tile shape so a config change cannot silently desync the
   # kernel from the harness.
   static:
-    doAssert 32 === tiled.thrM * toIntVal(tiled.atom.getM()) and
-      16 === tiled.thrN * toIntVal(tiled.atom.getN()) and
-      32 mod (tiled.thrK * toIntVal(tiled.atom.getK())) == 0 and
+    doAssert 32 === tiled.thrM * toInt(tiled.atom.getM()) and
+      16 === tiled.thrN * toInt(tiled.atom.getN()) and
+      32 mod (tiled.thrK * toInt(tiled.atom.getK())) == 0 and
       64 mod 32 == 0 and
       128 === tiled.threadCount(),
       "manual_gemm_cta_dynamic: the kernel's tile/block literals (32, 16, 32, 64, 128)" &

@@ -45,7 +45,7 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
 # 32-lane warp must execute it convergently, and 128 = 4 warps.
 const blockSize = 128
 static:
-  doAssert blockSize == toIntVal(tiled.atom.threadCount(opA)) * 2 * 2 * 1
+  doAssert blockSize == toInt(tiled.atom.threadCount(opA)) * 2 * 2 * 1
 
 const kernelCode = opencl:
   # Output-first (C): the OpenCL engine's run binds the output at
@@ -77,11 +77,11 @@ proc runTest() =
   # atom's tile shape so a config change cannot silently desync the
   # kernel from the harness.
   static:
-    doAssert 32 === toIntVal(tiled.threadLayout.shape[0]) * toIntVal(tiled.atom.getM()) and
-      16 === toIntVal(tiled.threadLayout.shape[1]) * toIntVal(tiled.atom.getN()) and
-      32 mod (toIntVal(tiled.threadLayout.shape[2]) * toIntVal(tiled.atom.getK())) == 0 and
+    doAssert 32 === toInt(tiled.threadLayout.shape[0]) * toInt(tiled.atom.getM()) and
+      16 === toInt(tiled.threadLayout.shape[1]) * toInt(tiled.atom.getN()) and
+      32 mod (toInt(tiled.threadLayout.shape[2]) * toInt(tiled.atom.getK())) == 0 and
       64 mod 32 == 0 and
-      128 === toIntVal(tiled.atom.threadCount(opA)) * toIntVal(product(tiled.threadLayout.shape)),
+      128 === toInt(tiled.atom.threadCount(opA)) * toInt(product(tiled.threadLayout.shape)),
       "manual_gemm_cta_dynamic: the kernel's tile/block literals (32, 16, 32, 64, 128)" &
       " must match the atom's coverage"
 

@@ -42,7 +42,7 @@ const tiled = TiledMma[typeof(atom), typeof(make_layout((2, 2, 1)))](
 # 32-lane warp must execute it convergently, and 128 = 4 warps.
 const blockSize = 128
 static:
-  doAssert blockSize == toIntVal(tiled.atom.threadCount(opA)) * 2 * 2 * 1
+  doAssert blockSize == toInt(tiled.atom.threadCount(opA)) * 2 * 2 * 1
 
 const kernelCode = opencl:
   # Epilogue-op state: alpha/beta/C/bias never appear as kernel arguments.

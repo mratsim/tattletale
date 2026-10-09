@@ -13,21 +13,21 @@ const coalesceStaticMsl = metal:
   proc coalesceStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((2, 4, 8), (1, 2, 8))
     let r = coalesce(L)
-    C[0] = float32 toIntVal crd2idx(r, 7)
+    C[0] = float32 toInt crd2idx(r, 7)
 
 # coalesce of a static layout with a stride-0 trailing dimension
 const coalesceZerosMsl = metal:
   proc coalesceZerosKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 1), (1, 0))
     let r = coalesce(L)
-    C[0] = float32 toIntVal crd2idx(r, 2)
+    C[0] = float32 toInt crd2idx(r, 2)
 
 # coalesce of a runtime layout, the copy-chain pattern
 const coalesceDynMsl = metal:
   proc coalesceDynKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
     let p = make_view(C, (int(M), int(N)), (1, int(S)))
     let r = coalesce(p.layout)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # ── kernel rows ──
 

@@ -92,7 +92,7 @@ func toArray*(t: tuple): auto =
   const N = tupleLen(typeof(t))
   var a: array[N, int]
   staticFor i, 0, N:
-    a[i] = t[i].toIntVal()
+    a[i] = t[i].toInt()
   a
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -12,35 +12,35 @@ import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 const baselineOverheadMsl = metal:
   proc baselineOverheadKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, 16))
-    C[0] = float32 toIntVal size(L)
+    C[0] = float32 toInt size(L)
 
 # right_inverse over the baseline input, copyFrom quasi-inverse call-site shape
 const rightInverseMsl = metal:
   proc rightInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, 16))
     let r = right_inverse(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # right_inverse over a runtime-stride rank-2 layout, chain keeps the static-stride run, dynamic stride leaf ends it
 const rightInverseDynStrideMsl = metal:
   proc rightInverseDynStrideKernel(C: ptr UncheckedArray[float32]; M, N, S: int32) {.global.} =
     let L = make_layout((int M, int N), (1, int S))
     let r = right_inverse(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # right_inverse over a fully static layout, compile-time fold path, still emits the inline chain
 const rightInverseStaticMsl = metal:
   proc rightInverseStaticKernel(C: ptr UncheckedArray[float32]) {.global.} =
     let L = make_layout((4, 2), (1, 16))
     let r = right_inverse(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # left_inverse over the same dynamic shape rank-2 layout, all strides static per the divisibility precondition
 const leftInverseMsl = metal:
   proc leftInverseKernel(C: ptr UncheckedArray[float32]; M, N: int32) {.global.} =
     let L = make_layout((int M, int N), (1, 16))
     let r = left_inverse(L)
-    C[0] = float32 toIntVal size(r)
+    C[0] = float32 toInt size(r)
 
 # ── kernel rows ──
 

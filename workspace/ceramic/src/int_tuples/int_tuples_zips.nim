@@ -86,10 +86,10 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
       let mapped = body.replaceNodes(
         ("it_a", aEvent.leaf), ("it_b", bEvent.leaf),
         ("it", nnkPar.newTree(aEvent.leaf, bEvent.leaf)))
-      builder.append(mapped, verbatim = false)
+      builder.append(mapped)
     else:
       builder.append(aEvent)
   if not bStream.done():
     error "zipLeavesWith: `b` has more elements than `a`", b
-  let (resultTuple, _) = builder.emit(0, emitScalarForSize1 = not inputTuple)
+  let resultTuple = builder.emit(0, emitScalarForSize1 = not inputTuple)
   result = newStmtList(resultTuple)

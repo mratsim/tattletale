@@ -39,14 +39,14 @@ const thrfrgAMsl = metal:
   proc thrfrgAKernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
     let L = make_layout((64, 32), (1, 64))
     let f = tma.thrfrg_A(L)
-    C[0] = float32 toIntVal(cosize(f))
+    C[0] = float32 toInt(cosize(f))
 
 # static col-major C tile (32, 16):(1, 32)
 const thrfrgCMsl = metal:
   proc thrfrgCKernel(C: ptr UncheckedArray[float32]; M, N, S, R0, C0: int32) {.global.} =
     let L = make_layout((32, 16), (1, 32))
     let f = tma.thrfrg_C(L)
-    C[0] = float32 toIntVal(cosize(f))
+    C[0] = float32 toInt(cosize(f))
 
 # ── partition: the thread's fragment view of a tensor ──
 

@@ -48,7 +48,7 @@ macro slice*(target: tuple; selector: typed): untyped =
   for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     if selEvent.kind != tgtEvent.kind:
       error "slice: the selector and the target have different structures", selEvent.leaf
-    tgtEvent.onLeaves():
+    builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]
@@ -59,7 +59,7 @@ macro slice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "slice: selector items must be X, Y, or ints", selTy
-  return builder.emit(0).resultTuple
+  return builder.emit(0)
 
 macro dice*(target: tuple; selector: typed): untyped =
   ## Dice a tuple, keep elements where the selector entry is Y, int, or Int.
@@ -72,7 +72,7 @@ macro dice*(target: tuple; selector: typed): untyped =
   for (selEvent, tgtEvent) in sel.tupleStream().zip(target.tupleStream()):
     if selEvent.kind != tgtEvent.kind:
       error "slice: the selector and the target have different structures", selEvent.leaf
-    tgtEvent.onLeaves():
+    builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
       let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]
@@ -83,7 +83,7 @@ macro dice*(target: tuple; selector: typed): untyped =
         discard
       else:
         error "dice: selector items must be X, Y, or ints", selTy
-  return builder.emit(0).resultTuple
+  return builder.emit(0)
 
 template slice*(target: Layout; selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.

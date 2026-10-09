@@ -71,7 +71,7 @@ proc main() =
                              (8, 8), (1, 1)]:
       var expected = 0
       for i in 0 ..< size(tCv):
-        let off = originC + toIntVal(crd2idx(tCv.getLayout(), i))
+        let off = originC + toInt(crd2idx(tCv.getLayout(), i))
         let m = off mod TILE_M
         let n = off div TILE_M
         if m < validM and n < validN:
@@ -96,8 +96,8 @@ proc main() =
     for i in 0 ..< copyUnits:
       let c = tid + i * blockSize
       let (m0, k0) = idx2crd((TILE_M, TILE_K), 4 * c)
-      let expected = toIntVal(m0) + toIntVal(k0) * ldA
-      let got = originA + toIntVal(crd2idx(tAgA.getLayout(), (0, i)))
+      let expected = toInt(m0) + toInt(k0) * ldA
+      let got = originA + toInt(crd2idx(tAgA.getLayout(), (0, i)))
       doAssert got == expected,
         "partition_S: thread " & $tid & " unit " & $i & ": tile offset " & $got &
         ", reference " & $expected
@@ -110,8 +110,8 @@ proc main() =
     for i in 0 ..< copyUnits:
       let c = tid + i * blockSize
       let (m0, k0) = idx2crd((TILE_M, TILE_K), 4 * c)
-      let expected = toIntVal(m0) + toIntVal(k0) * TILE_M
-      let got = originD + toIntVal(crd2idx(tDsD.getLayout(), (0, i)))
+      let expected = toInt(m0) + toInt(k0) * TILE_M
+      let got = originD + toInt(crd2idx(tDsD.getLayout(), (0, i)))
       doAssert got == expected,
         "partition_D: thread " & $tid & " unit " & $i & ": tile offset " & $got &
         ", reference " & $expected

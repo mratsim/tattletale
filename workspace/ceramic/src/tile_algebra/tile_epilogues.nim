@@ -65,7 +65,7 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB, per element.
-  const S = size(tmp).toIntVal()
+  const S = size(tmp).toInt()
   for i in 0 ..< S:
     tmp(i) = AB(i)
 
@@ -76,7 +76,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ## D = AB, per owned slot.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -94,7 +94,7 @@ func apply*[T, Sh, StAB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB), per element.
-  const S = size(tmp).toIntVal()
+  const S = size(tmp).toInt()
   for i in 0 ..< S:
     tmp(i) = max(AB(i), T(0))
 
@@ -105,7 +105,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ## D = max(0, AB), per owned slot.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -133,7 +133,7 @@ func apply*[T, Sh, StAB, StC, StR](
   ## D = α·AB + β·C, per element.
   ## β = 0 skips reading C, saving memory bandwidth
   ## α = 1 skips the multiply.
-  const S = size(tmp).toIntVal()
+  const S = size(tmp).toInt()
   if op.beta == T(0):
     if op.alpha == T(1):
       for i in 0 ..< S:
@@ -155,7 +155,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StC](
   ## D = α·AB + β·C, per owned slot, the C view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   if op.beta == T(0):
     if op.alpha == T(1):
       for n in 0 ..< rowTiles:
@@ -218,7 +218,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ## - C is read at (row, col) with the runtime strides (rsc, csc)
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   if op.beta == T(0):
     if op.alpha == T(1):
       for n in 0 ..< rowTiles:
@@ -264,7 +264,7 @@ func apply*[T; R, C: static int; A: static MmaAtom](
   ##     α = 1 skips the multiply
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   if op.beta == T(0):
     if op.alpha == T(1):
       for n in 0 ..< rowTiles:
@@ -306,7 +306,7 @@ func apply*[T, Sh, StAB, StB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = AB + bias, the bias a column vector broadcast over the tile rows.
-  const S = size(tmp).toIntVal()
+  const S = size(tmp).toInt()
   for i in 0 ..< S:
     tmp(i) = AB(i) + op.bias_gmem(i)
 
@@ -317,7 +317,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ## D = AB + bias, per owned slot, the bias view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -337,7 +337,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ##     on the lanes the masked store drops
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -361,7 +361,7 @@ func apply*[T, Sh, StAB, StB, StR](
     tmp: var (TensorView[T, Sh, StR] or TensorOwned[T, Sh, StR]),
     AB: TensorView[T, Sh, StAB] or TensorOwned[T, Sh, StAB]) {.inline.} =
   ## D = max(0, AB + bias), the bias a column vector broadcast over the tile rows.
-  const S = size(tmp).toIntVal()
+  const S = size(tmp).toInt()
   for i in 0 ..< S:
     tmp(i) = max(AB(i) + op.bias_gmem(i), T(0))
 
@@ -372,7 +372,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ## D = max(0, AB + bias), per owned slot, the bias view the per-lane shard.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:
@@ -387,7 +387,7 @@ func apply*[T; R, C: static int; A: static MmaAtom; Sh, StB](
   ## D = max(0, AB + BiasReg), per owned slot, the bias a bounded register tile with the EpiAddBias register shard contract.
   const rowTiles = R div A.getM()
   const colTiles = C div A.getN()
-  const vpt = A.valuesPerThread(opC).toIntVal()
+  const vpt = A.valuesPerThread(opC).toInt()
   for n in 0 ..< rowTiles:
     for m in 0 ..< colTiles:
       for v in 0 ..< vpt:

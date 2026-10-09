@@ -44,11 +44,11 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
   ## Every tile element appears in exactly `expected` thread fragments,
   ## with no duplicates within one thread group (A ×ThrN, B ×ThrM, C ×ThrK).
   const
-    T = static(mma.atom.threadCount(operand).toIntVal())
-    vCount = static(mma.atom.valuesPerThread(operand).toIntVal())
-    thrM = static(mma.threadLayout.shape[0].toIntVal())
-    thrN = static(mma.threadLayout.shape[1].toIntVal())
-    thrK = static(mma.threadLayout.shape[2].toIntVal())
+    T = static(mma.atom.threadCount(operand).toInt())
+    vCount = static(mma.atom.valuesPerThread(operand).toInt())
+    thrM = static(mma.threadLayout.shape[0].toInt())
+    thrN = static(mma.threadLayout.shape[1].toInt())
+    thrK = static(mma.threadLayout.shape[2].toInt())
     atomLayout = when operand == opA: mma.atom.getLayoutA()
                  elif operand == opB: mma.atom.getLayoutB()
                  else: mma.atom.getLayoutC()
@@ -77,21 +77,21 @@ template verifyFragments*(mma: untyped; tileM, tileK: static int;
           for rm in 0 ..< restM:
             for v in 0 ..< vCount:
               let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-              let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toIntVal()
+              let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toInt()
               counts[off].inc
       elif operand == opB:
         for rk in 0 ..< restK:
           for rn in 0 ..< restN:
             for v in 0 ..< vCount:
               let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-              let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toIntVal()
+              let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toInt()
               counts[off].inc
       else:
         for rn in 0 ..< restN:
           for rm in 0 ..< restM:
             for v in 0 ..< vCount:
               let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-              let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toIntVal()
+              let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toInt()
               counts[off].inc
     checkMultiplicity(counts, expected, $operand)
 
@@ -100,11 +100,11 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
   ## (row, col) coords of thread t's fragment, in fragment order.
   ## (v inner, rest outer, restM fastest), decoded from the partition layout.
   const
-    T = static(mma.atom.threadCount(operand).toIntVal())
-    vCount = static(mma.atom.valuesPerThread(operand).toIntVal())
-    thrM = static(mma.threadLayout.shape[0].toIntVal())
-    thrN = static(mma.threadLayout.shape[1].toIntVal())
-    thrK = static(mma.threadLayout.shape[2].toIntVal())
+    T = static(mma.atom.threadCount(operand).toInt())
+    vCount = static(mma.atom.valuesPerThread(operand).toInt())
+    thrM = static(mma.threadLayout.shape[0].toInt())
+    thrN = static(mma.threadLayout.shape[1].toInt())
+    thrK = static(mma.threadLayout.shape[2].toInt())
     atomLayout = when operand == opA: mma.atom.getLayoutA()
                  elif operand == opB: mma.atom.getLayoutB()
                  else: mma.atom.getLayoutC()
@@ -128,21 +128,21 @@ template fragCoords*(mma: untyped; operand: static MmaOperand;
         for rm in 0 ..< restM:
           for v in 0 ..< vCount:
             let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-            let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toIntVal()
+            let off = crd2idx(p, ((tc, vc), (tm, tk), (rm, rk))).toInt()
             r.add (off mod tileRows, off div tileRows)
     elif operand == opB:
       for rk in 0 ..< restK:
         for rn in 0 ..< restN:
           for v in 0 ..< vCount:
             let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-            let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toIntVal()
+            let off = crd2idx(p, ((tc, vc), (tn, tk), (rn, rk))).toInt()
             r.add (off mod tileRows, off div tileRows)
     else:
       for rn in 0 ..< restN:
         for rm in 0 ..< restM:
           for v in 0 ..< vCount:
             let vc = idx2crd(dimension(atomLayout, 1).shape, v)
-            let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toIntVal()
+            let off = crd2idx(p, ((tc, vc), (tm, tn), (rm, rn))).toInt()
             r.add (off mod tileRows, off div tileRows)
     r
 
@@ -157,9 +157,9 @@ proc runDerivedQuantityTests =
   block:  # tile sizes: atom shape × thread tiling (3×5 tiled)
     #   tile M = ThrM·m = 3·16 = 48, N = ThrN·n = 5·8 = 40, K = ThrK·k = 8
     const mma = tiled(3, 5, 1)
-    doAssert mma.threadLayout.shape[0].toIntVal() * atom.getM() == 48, "tile M"
-    doAssert mma.threadLayout.shape[1].toIntVal() * atom.getN() == 40, "tile N"
-    doAssert mma.threadLayout.shape[2].toIntVal() * atom.getK() == 8,  "tile K"
+    doAssert mma.threadLayout.shape[0].toInt() * atom.getM() == 48, "tile M"
+    doAssert mma.threadLayout.shape[1].toInt() * atom.getN() == 40, "tile N"
+    doAssert mma.threadLayout.shape[2].toInt() * atom.getK() == 8,  "tile K"
     # Compile-time: thread count and values per thread are Int[N], not runtime int.
     check atom.threadCount(opA), 32, Int
     check atom.valuesPerThread(opA), 4, Int
@@ -168,7 +168,7 @@ proc runDerivedQuantityTests =
 
   block:  # K-tiled: tile K = ThrK · kAtom = 2·8 = 16
     const mma = tiled(2, 2, 2)
-    doAssert mma.threadLayout.shape[2].toIntVal() * atom.getK() == 16, "tile K"
+    doAssert mma.threadLayout.shape[2].toInt() * atom.getK() == 16, "tile K"
 
   block:  # fragment size = V × rest per thread (3×5 tiled, rest (7,9,1))
     #   A tile (336, 8):  rest M = 336/48 = 7, rest K = 8/8 = 1 → 4·7 = 28

@@ -27,7 +27,6 @@ type
     ## Tracks modification so an identity stream for a tuple `t` = (11, 22, 33)
     ## can return `t` directly.
     ## Otherwise return tuple would be (t[0], t[1], t[2)), leading to unnecessary temporaries
-    verbatim*: bool #
     path*: seq[int] # index chain root -> here, a top-level leaf = @[i]
     case kind*: TupleStreamEventKind
     of kLeaf:
@@ -75,10 +74,10 @@ func tupleStream*(s: NimNode, reversed = false): TupleStream =
   result.reversed = reversed
   if ty.isTupleTy():
     result.stack.add (ev, ty, idx0, 0, @[])
-    result.pending = TupleStreamEvent(path: @[], kind: kOpen, verbatim: true)
+    result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
     result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0, @[])
-    result.pending = TupleStreamEvent(path: @[], kind: kOpen, verbatim: true)
+    result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   result.hasPending = true
 
 func tupleDimsStream*(s: NimNode): TupleStream =
@@ -95,12 +94,12 @@ func tupleDimsStream*(s: NimNode): TupleStream =
     if ty.len != 0:
       # idx starts at 1, the first leaf is already the pending event
       result.stack.add (ev, ty, 1, 0, @[])
-      result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: getTupleIndex(ev, 0), leafTy: ty[0], verbatim: true)
+      result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: getTupleIndex(ev, 0), leafTy: ty[0])
       result.hasPending = true
     # an empty tuple yields no events
   else:
     # scalars wrap in a size-1 tuple, the single leaf is the whole
-    result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: ev, leafTy: ty, verbatim: true)
+    result.pending = TupleStreamEvent(path: @[0], kind: kLeaf, leaf: ev, leafTy: ty)
     result.hasPending = true
 
 func done*(s: var TupleStream): bool =
@@ -125,13 +124,13 @@ func next*(s: var TupleStream): TupleStreamEvent =
         inc s.stack[^1].idx
       if s.shallow:
         # a shallow stream yields the whole sub-tuple element as one leaf
-        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
+        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT)
       elif childT.isTupleTy():
-        s.pending = TupleStreamEvent(path: childPath, kind: kOpen, verbatim: true)
+        s.pending = TupleStreamEvent(path: childPath, kind: kOpen)
         let idx0 = if s.reversed: childT.len - 1 else: 0
         s.stack.add (childE, childT, idx0, f.depth + 1, childPath)
       else:
-        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT, verbatim: true)
+        s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT)
     else:
       let depth = f.depth
       let path = f.path
@@ -140,7 +139,7 @@ func next*(s: var TupleStream): TupleStreamEvent =
         # the shallow walk opens and closes on the leaves, no root wrapper
         s.hasPending = false
       else:
-        s.pending = TupleStreamEvent(path: path, kind: kClose, verbatim: true)
+        s.pending = TupleStreamEvent(path: path, kind: kClose)
         s.hasPending = true
 
 iterator items*(s: TupleStream): TupleStreamEvent =
@@ -157,49 +156,32 @@ iterator items*(s: TupleStream): TupleStreamEvent =
 type
   TupleBuilderFlat* = object
     accums: seq[seq[NimNode]]
-    verbatim: bool = true
 
 func new*(T: type TupleBuilderFlat, numTuples = 1): T =
   result.accums.newSeq(numTuples)
-  result.verbatim = true
 
 func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
-    if not ev.verbatim:
-      tb.verbatim = false
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
 
-template appendImpl(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], isVerbatim: bool) =
-  # vargards[NimNode] + default arguments doesn't seem to work
+func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
   doAssert tb.accums.len == leafValues.len
-  if not isVerbatim:
-    tb.verbatim = false
   for i, leaf in leafValues:
     tb.accums[i].add leaf
 
-func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
-  tb.appendImpl(leafValues, isVerbatim = false)
-
-func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode], verbatim: bool) =
-  tb.appendImpl(leafValues, isVerbatim = verbatim)
-
 func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
   doAssert tb.accums.len == batches.len
-  tb.verbatim = false
   for i, batch in batches:
     tb.accums[i] = batch & tb.accums[i]
 
-func markNonVerbatim*(tb: var TupleBuilderFlat) =
-  tb.verbatim = false
-
-func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
+func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
   var node = if emitScalarForSize1: nnkPar.newTree()
              else: nnkTupleConstr.newTree()
   for n in tb.accums[id]:
     node.add n
-  result = (node, tb.verbatim)
+  result = node
 
 # ═════ Nested tuple builder ══════════════════════════════════════════
 
@@ -207,20 +189,16 @@ type
   TupleBuilderNested* = object
     accums: seq[seq[NimNode]]
     completed: seq[NimNode]
-    verbatim: bool = true
     dropEmpty: bool = true
 
 func new*(T: type TupleBuilderNested, numTuples = 1, dropEmpty = true): T =
   result.accums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
-  result.verbatim = true
   result.dropEmpty = dropEmpty
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
-    if not ev.verbatim:
-      tb.verbatim = false
     case ev.kind
     of kOpen:
       tb.accums[i].add newNimNode(nnkTupleConstr)
@@ -241,38 +219,26 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
         else:
           tb.accums[i][^1].add node
 
-template appendImpl(tb: var TupleBuilderNested, leafValues: varargs[NimNode], isVerbatim: bool) =
-  # vargards[NimNode] + default arguments doesn't seem to work
+func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
   doAssert tb.accums.len == leafValues.len
-  if not isVerbatim:
-    tb.verbatim = false
   for i, leaf in leafValues:
     if tb.accums[i].len == 0:
       tb.completed[i] = leaf
     else:
       tb.accums[i][^1].add leaf
 
-func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
-  tb.appendImpl(leafValues, isVerbatim = false)
-
-func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode], verbatim: bool) =
-  tb.appendImpl(leafValues, isVerbatim = verbatim)
-
-func markNonVerbatim*(tb: var TupleBuilderNested) =
-  tb.verbatim = false
-
-func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): tuple[resultTuple: NimNode, verbatim: bool] =
+func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
   var node = tb.completed[id]
   if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
     node = node[0]
-  result = (node, tb.verbatim)
+  result = node
 
 # ═══════════════════════════════════════════════════════════════════════
 #  onLeaves, consumer-side event ingest
 # ═══════════════════════════════════════════════════════════════════════
 
-template onLeaves*(event: TupleStreamEvent, body: untyped): untyped =
+template onLeaves*(builder: TupleBuilderFlat or TupleBuilderNested, event: TupleStreamEvent, body: untyped): untyped =
   case event.kind
   of kOpen, kClose:
     builder.append(event)

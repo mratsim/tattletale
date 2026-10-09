@@ -59,12 +59,12 @@ func gemmTiledMicrotile(tma: static TiledMma; threadIdx: int;
   ## Tile geometry: 2×2×1 atoms over the (2,2,1) thread layout.
   const
     TILE_K = 16                  # the full K, one tileK-sized slice (tileK == K)
-    thrM = toIntVal(tma.threadLayout.shape[0])
-    thrN = toIntVal(tma.threadLayout.shape[1])
-    thrK = toIntVal(tma.threadLayout.shape[2])
+    thrM = toInt(tma.threadLayout.shape[0])
+    thrN = toInt(tma.threadLayout.shape[1])
+    thrK = toInt(tma.threadLayout.shape[2])
     TILE_M = thrM * tma.atom.getM()   # 2·16 = 32
     TILE_N = thrN * tma.atom.getN()   # 2·8  = 16
-    blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
+    blockSize = toInt(tma.atom.threadCount(opA)) * thrM * thrN * thrK
   # gmem col-major: A[m + k·32], B[n + k·16], C[m + n·32]
   let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))
   let tB = make_view(B, make_layout((TILE_N, TILE_K), (1, TILE_N)))
@@ -106,12 +106,12 @@ func gemmTiledMicrotileK32(tma: static TiledMma; threadIdx: int;
   ## 128 threads, K = tileK = 32: four k slices in one gemm_tiled pass.
   const
     TILE_K = 32                  # the full K, one tileK-sized slice (tileK == K)
-    thrM = toIntVal(tma.threadLayout.shape[0])
-    thrN = toIntVal(tma.threadLayout.shape[1])
-    thrK = toIntVal(tma.threadLayout.shape[2])
+    thrM = toInt(tma.threadLayout.shape[0])
+    thrN = toInt(tma.threadLayout.shape[1])
+    thrK = toInt(tma.threadLayout.shape[2])
     TILE_M = thrM * tma.atom.getM()   # 2·16 = 32
     TILE_N = thrN * tma.atom.getN()   # 2·8  = 16
-    blockSize = toIntVal(tma.atom.threadCount(opA)) * thrM * thrN * thrK
+    blockSize = toInt(tma.atom.threadCount(opA)) * thrM * thrN * thrK
   # gmem col-major: A[m + k·32], B[n + k·32]
   let tA = make_view(A, make_layout((TILE_M, TILE_K), (1, TILE_M)))
   let tB = make_view(B, make_layout((TILE_N, TILE_K), (1, TILE_N)))

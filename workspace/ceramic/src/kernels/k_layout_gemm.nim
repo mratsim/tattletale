@@ -247,11 +247,11 @@ func gemm_warp*[TD, ShD, StD, TA, ShA, StA, TB, ShB, StB](
       "gemm_warp: B RepeatN (" & $ShB.default[1] & ") != 1. B k slice must be exactly one atom B fragment (V, 1)"
     doAssert ShB.default[2] === kSlices,
       "gemm_warp: B k dimension (" & $ShB.default[2] & ") != A k dimension (" & $kSlices & "). A and B must agree on the k slice count"
-    doAssert dFrag.cosize().toIntVal() === mma.valuesPerThread(opC),
-        "gemm_warp: accumulator size (" & $dFrag.cosize().toIntVal() &
+    doAssert dFrag.cosize() === mma.valuesPerThread(opC),
+        "gemm_warp: accumulator size (" & $dFrag.cosize().toInt() &
         ") != atom valuesPerThread(opC) (" & $mma.valuesPerThread(opC) & ")"
 
-  staticFor kSlice, 0, kSlices.toIntVal():
+  staticFor kSlice, 0, kSlices.toInt():
     gemm_atom(mma, dFrag, aFrag(_, _, kSlice), bFrag(_, _, kSlice))
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -399,7 +399,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   ## K = 0 runs no slices of the K dimension.
   ## The accumulator stays zero and the epilogue stores only its own terms:
   ##   for EpiAXPBY, β·C.
-  const kView = toIntVal(ShA.default[1])
+  const kView = toInt(ShA.default[1])
   const
     tileM = TileShape[0]
     tileN = TileShape[1]
@@ -410,7 +410,7 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
   static:
     doAssert ShA.default[1] === ShB.default[1],
       "gemm_cta: the A and B input views must agree on the allocated K (" & $kView & " vs " &
-      $toIntVal(ShB.default[1]) & "). The K slicing uses the A view's K"
+      $toInt(ShB.default[1]) & "). The K slicing uses the A view's K"
     doAssert kView mod tileK == 0,
       "gemm_cta: the allocated K (" & $kView & ") mod tileK (" & $tileK & ") != 0." &
       " local_tile needs the view K to tile evenly into tileK-sized slices of K"
@@ -466,14 +466,14 @@ func gemm_cta*[TA, ShA, StA, TB, ShB, StB, TD, ShD, StD, Epi](
     for tid in 0 ..< blockSize:
       let p = thrfrg_copy(tileLA, CpAsyncAtom[TA], blockSize)
       for i in 0 ..< unitsA:
-        a[tid * unitsA + i] = idx2crd((tileM, tileK), toIntVal(crd2idx(p, (tid, 0, i))))
+        a[tid * unitsA + i] = idx2crd((tileM, tileK), toInt(crd2idx(p, (tid, 0, i))))
     a
   const unitCoordsB = block:
     var a: array[blockSize * unitsB, (int, int)]
     for tid in 0 ..< blockSize:
       let p = thrfrg_copy(tileLB, CpAsyncAtom[TB], blockSize)
       for i in 0 ..< unitsB:
-        a[tid * unitsB + i] = idx2crd((tileN, tileK), toIntVal(crd2idx(p, (tid, 0, i))))
+        a[tid * unitsB + i] = idx2crd((tileN, tileK), toInt(crd2idx(p, (tid, 0, i))))
     a
 
   let kTiles = K.ceil_div(tileK)
@@ -645,9 +645,9 @@ proc gemm_kernel*[TA, ShA, StA, TB, ShB, StB, TC, ShC, StC, Epi](
     doAssert TC is float32,
       "gemm_kernel: at the moment, float32 accumulation only"
   const
-    M = toIntVal(ShA.default[0])
-    K = toIntVal(ShA.default[1])
-    N = toIntVal(ShB.default[0])
+    M = toInt(ShA.default[0])
+    K = toInt(ShA.default[1])
+    N = toInt(ShB.default[0])
     # Ragged M/N:
     #   the thread layout and the tile cover the input padded up
     # to atom multiples (static, from the view shapes), the tile overhang

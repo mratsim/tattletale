@@ -29,7 +29,7 @@ proc loadTile*[TIn; TOut; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let row = cell mod M
   let col = cell div M
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
@@ -49,7 +49,7 @@ proc loadTile*[TIn; TOut; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let row = cell mod M
   let col = cell div M
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
@@ -73,7 +73,7 @@ proc storeTile*[TIn; TOut; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let row = cell mod M
   let col = cell div M
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))
@@ -93,7 +93,7 @@ proc storeTile*[TIn; TOut; R, C: static int; A: static MmaAtom](
   const colTiles = C div N
   const vpt = A.getVpt()
   let lane = thread_index_in_threadgroup
-  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toIntVal()
+  let cell = crd2idx(A.getLayoutA(), (lane, 0)).toInt()
   let row = cell mod M
   let col = cell div M
   let o = (int(origin[0]), int(origin[1]), int(origin[2]), int(origin[3]))

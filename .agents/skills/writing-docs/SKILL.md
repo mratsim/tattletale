@@ -114,6 +114,7 @@ The final test applies to every sentence, if understanding it requires
 34. **Test docs scale with test complexity, the doubt clause.** When in doubt, cut.
 35. **No justification prose.** State what the code does, never a refusal or lack.
 36. **No justification prose, the tombstone clause.** A deleted check carries no tombstone comment.
+37. **License banner.** The Tattletale license banner is `#` prefixed, never `##` or `///`: fixed legal text is a maintainer comment, not API documentation. The linter flags `##`-prefixed banners (`license-prefix`).
 
 ## Advanced features
 

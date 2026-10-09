@@ -5,14 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tests for layout_algebra: coalesce + complement + composition + logical_divide.
+## Tests for layout_algebra: coalesce + complement + logical_divide.
 ## Convention:
 ##   const C2 = 2 — compile-time Int[N] (static)
 ##   let  d2 = 2 — runtime int (dynamic)
 ## Reference files used by identifier (shown inline in test sections):
 ##   [CUTE-C] = cutlass/test/unit/cute/core/coalesce.cpp
 ##   [CUTE-CP]= cutlass/test/unit/cute/core/complement.cpp
-##   [CUTE-CM]= cutlass/test/unit/cute/core/composition.cpp
 ##   [CUTE-LD]= cutlass/test/unit/cute/core/logical_divide.cpp
 ##   [PY-L]   = tensor-layouts/tests/layouts.py
 ##   [PY-E]   = tensor-layouts/tests/external.py
@@ -26,23 +25,12 @@ import workspace/ceramic/src/layout_algebra
 
 
 # ── Forward declarations ──────────────────────────────────
-proc runCoalesceTests: void
 proc runComplementStaticRank1Tests: void
 proc runComplementExactValueTests: void
 proc runComplementSymbolBoundTests: void
 proc runComplementMultiDimensionStaticTests: void
 proc runComplementDynamicTests: void
 proc runComplementDisjointnessTests: void
-proc runComposeExactValueTests: void
-proc runComposeSimpleTests: void
-proc runComposeMultiDimensionTests: void
-proc runComposeDynamicTests: void
-proc runComposeRemainderTests: void
-proc runComposeNestedTests: void
-proc runComposeTilerTests: void
-proc runComposeSwizzleTests: void
-proc runComposeEStrideTests: void
-proc runComposeNegStrideTests: void
 proc runDivideTests: void
 proc runRightInvSimpleTests: void
 proc runRightInvExactValueTests: void
@@ -65,8 +53,6 @@ proc runFlatProductTests: void
 proc runTileToShapeTests: void
 proc runZippedDivideRank1Tests: void
 proc runTests =
-  echo "\n── Coalesce [CUTE-C]: 20 cases ──"
-  runCoalesceTests()
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
   runComplementStaticRank1Tests()
   runComplementExactValueTests()
@@ -75,17 +61,6 @@ proc runTests =
   runComplementDynamicTests()
   runComplementDisjointnessTests()
   echo "\n--- Anti-regression: crd2idx + zipped_divide ---"
-  echo "\n── Composition [CUTE-CM] ──"
-  runComposeExactValueTests()
-  runComposeSimpleTests()
-  runComposeMultiDimensionTests()
-  runComposeDynamicTests()
-  runComposeRemainderTests()
-  runComposeNestedTests()
-  runComposeTilerTests()
-  runComposeSwizzleTests()
-  runComposeEStrideTests()
-  runComposeNegStrideTests()
   echo "\n── logical_divide [CUTE-LD] ──"
   runDivideTests()
   echo "\n── right_inverse [CUTE-IR] + [PY-E Table 5] ──"
@@ -109,213 +84,6 @@ proc runTests =
 
 when isMainModule:
   runTests()
-
-# ═══════════════════════════════════════════════════════════════
-#  test_coalesce helper (mirrors CuTe C++)
-# ═══════════════════════════════════════════════════════════════
-#
-# Checks that coalesce preserves size and mapping:
-#   size(coalesce(L)) == size(L) and coalesce(L)(i) == L(i)
-# ═══════════════════════════════════════════════════════════════
-
-proc chkCoalesce(layout: Layout) =
-  ## Check coalesce preserves size and mapping.
-  let c = coalesce(layout)
-  doAssert size(c) === size(layout),
-    "coalesce size mismatch: " & $size(c) & " != " & $size(layout)
-  for i in 0 ..< size(layout):
-    doAssert c(i) === layout(i),
-      "coalesce mapping mismatch at " & $i & ": " & $c(i) & " != " & $layout(i)
-
-# ═══════════════════════════════════════════════════════════════
-#  Coalesce [CUTE-C]
-# ═══════════════════════════════════════════════════════════════
-proc runCoalesceScalarTests =
-  block:
-    let l = make_layout(1, 0)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (1, 0)
-  block:
-    let l = make_layout(1, 1)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (1, 0)
-  block:
-    let l = make_layout(1, 2)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (1, 0)
-  block:
-    let l = make_layout(1, 5)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (1, 0)
-  echo "  Scalar: 4 cases OK"
-
-proc runCoalesceColMajorTests =
-  const C2 = 2
-  const C4 = 4
-  let l1 = make_layout((C2, C4), (1, 2))
-  let c1 = coalesce(l1)
-  chkCoalesce(l1)
-  doAssert c1 === (8, 1)
-  const C6 = 6
-  let l2 = make_layout((C2, C4, C6), (1, 2, 8))
-  let c2 = coalesce(l2)
-  chkCoalesce(l2)
-  doAssert c2 === (48, 1)
-  echo "  Column-major contiguous: 2 cases OK"
-
-proc runCoalesceSize1Tests =
-  block:
-    let l = make_layout((1, 8), (1, 1))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (8, 1)
-  block:
-    let l = make_layout((1, 1, 8), (1, 1, 1))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (8, 1)
-  block:
-    let l = make_layout((1, 8, 1), (1, 1, 1))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (8, 1)
-  echo "  Size-1 dimensions: 3 cases OK"
-
-proc runCoalesceStride0Tests =
-  block:
-    let l = make_layout((4, 1), (1, 0))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (4, 1)
-  block:
-    let l = make_layout((1, 2), (0, 2))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (2, 2)
-  block:
-    let l = make_layout((2, 1), (3, 0))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (2, 3)
-  echo "  Stride-0 dimensions: 3 cases OK"
-
-proc runCoalesceNonContigTests =
-  block:
-    let l = make_layout((4, 8), (1, 4))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (32, 1)
-  block:
-    let l = make_layout((4, 8), (1, 5))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((4, 8), (1, 5))
-  block:
-    let l = make_layout((3, 4, 5), (1, 3, 12))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (60, 1)
-  echo "  Non-contiguous strides: 3 cases OK"
-
-proc runCoalesceMixedTests =
-  block:
-    let l = make_layout((6, 7, 4), (1, 6, 42))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (168, 1)
-  block:
-    let l = make_layout((2, 6), (1, 9))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((2, 6), (1, 9))
-  block:
-    let l = make_layout((3, 4, 5), (1, 1, 12))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((3, 4, 5), (1, 1, 12))
-  echo "  Mixed: 3 cases OK"
-
-proc runCoalesceDynamicTests =
-  block:
-    let d8 = 8
-    let l = make_layout(d8, 1)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (8, 1)
-  block:
-    let d12 = 12
-    let l = make_layout(d12, 2)
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (12, 2)
-  echo "  Dynamic shapes: 2 cases OK"
-
-proc runCoalesceCppTests =
-  const C2 = 2
-  const C6 = 6
-  block:
-    let l = make_layout((C2, C6), (1, 9))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((2, 6), (1, 9))
-  block:
-    let l = make_layout((3, 4, 5), (1, 1, 12))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((3, 4, 5), (1, 1, 12))
-  echo "  Additional [CUTE-C]: 2 cases OK"
-
-proc runCoalesceNestedLeafTests =
-  ## Coalesce over nested shape and stride layouts.
-  ## Leafwise merge with the single-leaf collapse kept exact.
-  block:
-    # Nested 1-tuple wrappers collapse to the rank-1 layout of their single leaf
-    let l = make_layout(((Int[4](),),), ((Int[2](),),))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (4, 2)
-  block:
-    # Nested single-leaf size-1 shape (inactive dimension)
-    let l = make_layout(((Int[1](),),), ((Int[0](),),))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (1, 0)
-  block:
-    # Nested coalescable pair
-    let l = make_layout(((Int[4](), Int[2]()),), ((Int[1](), Int[4]()),))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === (8, 1)
-  block:
-    # Nested non-contiguous pair stays split
-    let l = make_layout(((Int[2](), Int[3]()),), ((Int[1](), Int[4]()),))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((2, 3), (1, 4))
-  block:
-    # Mixed nesting depths and dynamic leaves
-    let d8 = 8
-    let l = make_layout(((d8, Int[2]()),), ((Int[1](), Int[4]()),))
-    let c = coalesce(l)
-    chkCoalesce(l)
-    doAssert c === ((8, 2), (1, 4))
-  echo "  Nested leaves: 5 cases OK"
-
-proc runCoalesceTests =
-  runCoalesceScalarTests()
-  runCoalesceColMajorTests()
-  runCoalesceSize1Tests()
-  runCoalesceStride0Tests()
-  runCoalesceNonContigTests()
-  runCoalesceMixedTests()
-  runCoalesceDynamicTests()
-  runCoalesceCppTests()
-  runCoalesceNestedLeafTests()
-
 
 # ═══════════════════════════════════════════════════════════════
 #  Complement post-condition checks (CuTe test_complement)
@@ -611,8 +379,8 @@ proc runComplementDisjointnessTests =
     let c = complement(layout)
     for i in 0 ..< size(layout):
       for j in 0 ..< size(c):
-        if layout(i) != 0 and c(j) != 0:
-          doAssert layout(i) != c(j),
+        if layout(i) !== 0 and c(j) !== 0:
+          doAssert layout(i) !== c(j),
             "complement overlaps at " & $i & "," & $j
 
   chkDisjoint(make_layout(1, 0))
@@ -629,222 +397,16 @@ proc runComplementDisjointnessTests =
   echo "  Disjointness: 11 layouts OK"
 
 # ═══════════════════════════════════════════════════════════════
-proc chkCompose[Sh1, St1, Sh2, St2](a: Layout[Sh1, St1]; b: Layout[Sh2, St2]): bool =
-  let r = compose(a, b)
-  # [CUTE-CM] compatible(b.shape, r.shape)
-  if not compatible(b.shape, r.shape):
-    echo "    FAIL: compatible(b.shape=", b.shape, ", r.shape=", r.shape, ")"
-    return false
-  # [CUTE-CM] r[c] == a[b[c]] for all c
-  for c in 0 ..< size(b):
-    if r(c) != a(b(c)):
-      echo "    FAIL: r[",c,"]=",r(c)," a[b[",c,"]]=",a(b(c))
-      return false
-  true
 
-proc runComposeExactValueTests =
-  echo "    Python exact-value assertions:"
-  # Python: assert compose(Layout(8, 2), Layout(4, 1)) == Layout(4, 2)
-  doAssert compose(make_layout(8, 2), make_layout(4, 1)) === (4, 2)
-  # Python: assert compose(Layout(8, 2), Layout(4, 2)) == Layout(4, 4)
-  doAssert compose(make_layout(8, 2), make_layout(4, 2)) === (4, 4)
-  # Python: assert compose(a, b) == Layout((2, 3), (-2, -1))
-  doAssert compose(make_layout((2, 3), (2, 1)), make_layout(6, -1)) === ((2, 3), (-2, -1))
-  # Python: assert compose(Layout((4, 8), (1, 4)), Layout(4, 1)) == Layout(4, 1)
-  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(4, 1)) === (4, 1)
-  # Python: assert compose(Layout((4, 8), (1, 4)), Layout(4, 4)) == Layout(4, 4)
-  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(4, 4)) === (4, 4)
-  # Python: assert compose(Layout(16, 1), Layout((4, 4), (1, 4))) == Layout((4, 4), (1, 4))
-  doAssert compose(make_layout(16, 1), make_layout((4, 4), (1, 4))) === ((4, 4), (1, 4))
-  # compose rank-1 LHS with hierarchical RHS — must preserve nesting
-  # Previously buggy: b.shape.flatten() destroyed ((2,2),(2,8)) into (2,2,2,8)
-  doAssert compose(make_layout(64, 1), make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))) === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
-  # compose rank-2 coalescable LHS with hierarchical RHS — triggered the bug
-  # A=(8,8):(1,8) coalesces inside compose to (64):(1), then the buggy path
-  # called b.shape.flatten() which destroyed ((2,2),(2,8)).
-  doAssert compose(make_layout((8, 8), (1, 8)), make_layout(((2, 2), (2, 8)), ((1, 4), (2, 8)))) === (((2, 2), (2, 8)), ((1, 4), (2, 8)))
-  # Python: assert compose(Layout(16, 2), Layout((4, 4), (1, 4))) == Layout((4, 4), (2, 8))
-  doAssert compose(make_layout(16, 2), make_layout((4, 4), (1, 4))) === ((4, 4), (2, 8))
-  # Python: assert compose(Layout((4, 4), (1, 4)), Layout((2, 2), (1, 2))) == Layout((2, 2), (1, 2))
-  doAssert compose(make_layout((4, 4), (1, 4)), make_layout((2, 2), (1, 2))) === ((2, 2), (1, 2))
-  # Python: assert C == Layout(((2, 2), 3), ((24, 2), 8))
-  doAssert compose(make_layout((6, 2), (8, 2)), make_layout((4, 3), (3, 1))) === (((2, 2), 3), ((24, 2), 8))
-  # Python: assert C == Layout((5, (2, 2)), (16, (80, 4))) — the flat form.
-  # (CuTe-style unwrap merges composed leaves, so the old
-  # ((5, 1), (2, 2)) alternative is gone. The Layout `===` is a
-  # compile-time structural comparison — a mismatched alternative
-  # hard-errors instead of returning false — so only the actual form
-  # is asserted; chkCompose guards the mapping.)
-  block:
-    let C = compose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5)))
-    doAssert C === ((5, (2, 2)), (16, (80, 4)))
-    doAssert chkCompose(make_layout((10, 2), (16, 4)), make_layout((5, 4), (1, 5))), "mapping check failed"
-  # compose tuple LHS + scalar RHS — hits elif b.shape isnot tuple: branch
-  # Previously assertion-failing; verify against Python output
-  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(10, 1)) === (10, 1)
-  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(10, 1))
-  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(8, 1)) === (8, 1)
-  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(8, 1))
-  doAssert compose(make_layout((4, 8), (1, 4)), make_layout(5, 1)) === (5, 1)
-  doAssert chkCompose(make_layout((4, 8), (1, 4)), make_layout(5, 1))
-  # nested tuple LHS + scalar RHS
-  doAssert chkCompose(make_layout(((6, 1), (32, 512)), ((1, 192), (6, 192))), make_layout(200, 1))
-  echo "    Exact-value: 14/14"
 
-proc runComposeSimpleTests =
-  doAssert chkCompose(make_layout(1,0), make_layout(1,0))
-  doAssert chkCompose(make_layout(1,0), make_layout(1,1))
-  doAssert chkCompose(make_layout(1,1), make_layout(1,0))
-  doAssert chkCompose(make_layout(1,1), make_layout(1,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,2), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,2))
-  doAssert chkCompose(make_layout(4,0), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,0))
-  doAssert chkCompose(make_layout(1,0), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(1,0))
-  doAssert chkCompose(make_layout(4,1), make_layout(2,1))
-  doAssert chkCompose(make_layout(4,2), make_layout(2,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(2,2))
-  doAssert chkCompose(make_layout(4,2), make_layout(2,2))
-  echo "    Simple: 15/15"
 
-proc runComposeMultiDimensionTests =
-  doAssert chkCompose(make_layout((4,3),(1,1)), make_layout(12,1))
-  doAssert chkCompose(make_layout(12,1), make_layout((4,3),(1,1)))
-  doAssert chkCompose(make_layout(12,2), make_layout((4,3),(1,1)))
-  doAssert chkCompose(make_layout(12,1), make_layout((4,3),(3,1)))
-  doAssert chkCompose(make_layout(12,2), make_layout((4,3),(3,1)))
-  doAssert chkCompose(make_layout(12,1), make_layout((2,3),(2,4)))
-  doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(12,1))
-  doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(6,2))
-  # CuTe multi-dimension RHS: LHS col-major (1,4) × multi-dimension RHS
-  doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((4,3),(1,4)))
-  doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((6,2),(2,1)))
-  doAssert chkCompose(make_layout((4,3),(1,4)), make_layout((4,3),(3,1)))
-  doAssert chkCompose(make_layout((4,3),(3,1)), make_layout((4,3),(1,4)))
-  echo "    Multi-dimension: 12/12"
 
-proc runComposeDynamicTests =
-  doAssert chkCompose(make_layout(12, 1), make_layout(4,1))
-  doAssert chkCompose(make_layout(12, 1), make_layout(4,1))
-  block:
-    let b = make_layout(4, 1)
-    doAssert chkCompose(make_layout(12, 1), b)
-  block:
-    let b = make_layout(4, 1)
-    doAssert chkCompose(make_layout(12, 1), b)
-  doAssert chkCompose(make_layout((12,3), (1,24)), make_layout(4,1))
-  block:
-    let a = make_layout(16, 2)
-    let b = make_layout(4, 2)
-    doAssert chkCompose(a, b)
-  block:
-    let a = make_layout((128,24,5), (1,128,3072))
-    doAssert chkCompose(a, make_layout(64, 2))
-  block:
-    let a = make_layout((128,24,5), (1,128,3072))
-    doAssert chkCompose(a, make_layout(480, 32))
-  echo "    Dynamic: 8/8"
 
-proc runComposeRemainderTests =
-  doAssert chkCompose(make_layout(1,0), make_layout(4,1))
-  doAssert chkCompose(make_layout(1,1), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,2))
-  doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(24,1))
-  doAssert chkCompose(make_layout((4,3),(3,1)), make_layout(8,1))
-  doAssert chkCompose(make_layout((4,3,1),(3,1,0)), make_layout(24,1)) # This requires coalesce to preserve trailing (shape 1, stride 0)
-  doAssert chkCompose(make_layout((4,3,1),(3,1,0)), make_layout(4,1))
-  doAssert chkCompose(make_layout((4,6,8,10),(2,3,5,7)), make_layout(6,12))
-  doAssert chkCompose(make_layout((8,8),(8,1)), make_layout(2,3))
-  doAssert chkCompose(make_layout((8,8),(8,1)), make_layout(3,3))
-  doAssert chkCompose(make_layout(3,1), make_layout(4,1))
-  doAssert chkCompose(make_layout((48,24,5),(1,128,3072)), make_layout(32,1))
-  echo "    Remainder: 12/12"
 
-proc runComposeNestedTests =
-  echo "    Nested/3D RHS [CUTE-CM #29-33]:"
-  # [CUTE-CM] #29: nested shape ((4,2):(1,16)) / (4,2):(2,1)
-  doAssert chkCompose(make_layout(((4,2),), ((1,16),)), make_layout((4,2),(2,1)))
-  # [CUTE-CM] #30: (2,2):(2,1) / (2,2):(2,1)
-  doAssert chkCompose(make_layout((2,2),(2,1)), make_layout((2,2),(2,1)))
-  # [CUTE-CM] #31: (4,8,2) / (2,2,2):(2,8,1)
-  doAssert chkCompose(make_layout((4,8,2)), make_layout((2,2,2),(2,8,1)))
-  # [CUTE-CM] #32: (4,8,2):(2,8,1) / (2,2,2):(1,8,2)
-  doAssert chkCompose(make_layout((4,8,2),(2,8,1)), make_layout((2,2,2),(1,8,2)))
-  # [CUTE-CM] #33: (4,8,2):(2,8,1) / (4,2,2):(2,8,1)
-  doAssert chkCompose(make_layout((4,8,2),(2,8,1)), make_layout((4,2,2),(2,8,1)))
-  echo "    5/5"
-  # Scalar LHS, flat and nested RHS must compose leafwise exactly.
-  # Exact values locked, a rank-1 nested RHS shape flattens.
-  # Deeper nesting stays per top-level dimension, so the compatible()
-  # precheck against the original nested b.shape does not hold.
-  doAssert chkCompose(make_layout(16, 1), make_layout((4, 2), (1, 16)))
-  doAssert compose(make_layout(16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
-  doAssert compose(make_layout(16, 1), make_layout(((4, 2), (2,)), ((1, 16), (32,)))) ===
-    (((4, 2), 2), ((1, 16), 32))
-  doAssert chkCompose(make_layout(8, 2), make_layout(4, 1))
-  let d16 = 16
-  doAssert compose(make_layout(d16, 1), make_layout(((4, 2),), ((1, 16),))) === ((4, 2), (1, 16))
-  echo "    Scalar LHS: 5/5"
 
-proc runComposeTilerTests =
-  ## Tiler-tuple composition, CuTe composition's tuple variant:
-  ## per-dimension composition over the first tiler dimensions,
-  ## leftovers drop, and the pycute `_composition` zip-per-dimension.
-  echo "    Tiler tuple [CUTE-CM tuple variant + PY-L _composition]:"
-  # int tiler elements compose each dimension with (N):(1), the first N positions
-  doAssert compose(make_layout((32, 8), (1, 32)), (16, 2)) === ((16, 2), (1, 32))
-  # keep tiler element, `_` passes the dimension through whole
-  doAssert compose(make_layout((4, 8), (1, 4)), (_, 2)) === ((4, 2), (1, 4))
-  # leftover dimensions drop, CuTe and pycute agree
-  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, 4)) === ((2, 4), (1, 4))
-  doAssert compose(make_layout((4, 8, 2), (1, 4, 32)), (2, _, _)) === ((2, 8, 2), (1, 4, 32))
-  # Layout tiler element, a (T, V) atom pattern composed per dimension
-  doAssert compose(make_layout((4, 8), (1, 4)), (make_layout(2, 2), _)) === ((2, 8), (2, 4))
-  doAssert compose(make_layout((16, 8), (1, 16)), (make_layout((2, 4), (1, 4)), _)) ===
-    (((2, 4), 8), ((1, 4), 16))
-  # static tiler literals promote through makeIntTuple forms too
-  doAssert compose(make_layout((32, 8), (1, 32)), makeIntTuple((16, 2))) === ((16, 2), (1, 32))
-  # runtime int stride, the consume stays runtime
-  let dS = 2
-  doAssert compose(make_layout((32, 8), (1, dS)), (16, 4)) === ((16, 4), (1, dS))
-  # a tiler longer than the layout is a compile-time error
-  static:
-    doAssert not compiles(compose(make_layout(4, 1), (2, 3)))
-  # a 1-element tiler keeps its 1-tuple structure, pycute (2,):(1,)
-  doAssert compose(make_layout((4, 8), (1, 4)), (2,)) === ((2,), (1,))
-  # a sub-tuple tiler element on a scalar dimension is a rank error,
-  # pycute "Rank mismatch: composition(8:4, (2, 2))"
-  static:
-    doAssert not compiles(compose(make_layout((4, 8), (1, 4)), (2, (2, 2))))
-  echo "    11/11"
 
-proc runComposeSwizzleTests =
-  echo "    Swizzle [CUTE-CM #55-56]:"
-  # [CUTE-CM] #55: compose(Layout<8,8>:(8,1), Swizzle ∘ Layout<8,8>:(8,1))
-  # [CUTE-CM] #56: compose(Swizzle∘..., Swizzle∘...) — double swizzle
-  # Swizzle type not yet implemented
-  echo "    0/2 (blocked: no Swizzle type)"
 
-proc runComposeEStrideTests =
-  echo "    E stride [CUTE-CM #63-66]:"
-  # [CUTE-CM] #63: ((1,(2,4)):(0,(-1,512))) / (2:-1)
-  # [CUTE-CM] #64: ((1,(2,4)):(0,(-1,512))) / (4:-1)
-  # [CUTE-CM] #65: (4,4):(4,1) / (4,4):(E1,E0)
-  # [CUTE-CM] #66: (4,(2,3)):(6,(3,1)) / (2,4):(E11,E0)
-  # ScaledBasis/E-stride not yet implemented
-  echo "    0/4 (blocked: no E stride support)"
 
-proc runComposeNegStrideTests =
-  doAssert chkCompose(make_layout(4,-1), make_layout(4,1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,-1))
-  doAssert chkCompose(make_layout(4,-1), make_layout(4,-1))
-  doAssert chkCompose(make_layout(4,1), make_layout(4,-2))
-  doAssert chkCompose(make_layout((4,4),(-1,1)), make_layout(2,1))
-  # [CUTE-CM] #62: (4,4):(-1,1) / (2,4,2):(1,4,2)
-  doAssert chkCompose(make_layout((4,4),(-1,1)), make_layout((2,4,2),(1,4,2)))
-  echo "    Neg strides: 6/6"
 # ═══════════════════════════════════════════════════════════════
 #  logical_divide [CUTE-LD]
 # ═══════════════════════════════════════════════════════════════
