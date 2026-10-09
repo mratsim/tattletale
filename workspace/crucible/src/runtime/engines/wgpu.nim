@@ -309,6 +309,7 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
     let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
     var pipeScope = PopErrorScopeData(done: false)
     var pipePopInfo = WGPUPopErrorScopeCallbackInfo(
+      mode: wgpuCallbackModeAllowProcessEvents,
       callback: popErrorScopeCb,
       userdata1: pipeScope.addr,
       userdata2: nil
