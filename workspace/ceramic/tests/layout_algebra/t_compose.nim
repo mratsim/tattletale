@@ -572,6 +572,61 @@ proc runComposeZeroStrideTests =
     check permuted.stride[1], Int[3](), Int[3]
   echo "  zero-stride: 2 cases OK"
 
+# ── symbol-bound zero dispatch ───────────────────────────────
+proc runComposeSymbolZeroTests =
+  ## Statics bound in a symbol's field types drive the dispatch:
+  ## stride-0 and shape-1 RHS dispatch off the field types,
+  ## value expressions are field reads opaque to getStaticInt
+  block:
+    # a symbol-bound stride-0 RHS maps every coordinate to offset 0
+    let b = make_layout(4, 0)
+    let c = compose(make_layout(4, 1), b)
+    check c.shape, 4, Int[4]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(make_layout(4, 1), b)
+  block:
+    let b = make_layout(1, 0)
+    let c = compose(make_layout(4, 1), b)
+    check c.shape, 1, Int[1]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(make_layout(4, 1), b)
+  block:
+    # a symbol-bound shape-1 RHS evaluates the LHS at one point
+    let b = make_layout(1, 2)
+    let c = compose(make_layout(4, 2), b)
+    check c.shape, 1, Int[1]
+    check c.stride, 4, Int[4]
+    assertCompositionProperty(make_layout(4, 2), b)
+  block:
+    let a = make_layout(4, 1)
+    let b = make_layout(4, 0)
+    let c = compose(a, b)
+    check c.shape, 4, Int[4]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(a, b)
+  block:
+    # a symbol-bound stride-0 LHS mode, in-domain RHS
+    let a = make_layout((4, 3, 1), (3, 1, 0))
+    let b = make_layout(4, 1)
+    let c = compose(a, b)
+    check c.shape, 4, Int[4]
+    check c.stride, 3, Int[3]
+    assertCompositionProperty(a, b)
+  block:
+    let a = make_layout((2, 3), (3, 1))
+    let b = make_layout(1, 0)
+    let c = compose(a, b)
+    check c.shape, 1, Int[1]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(a, b)
+  block:
+    let b = make_layout(4, 0)
+    let c = compose(make_layout(12, 1), b)
+    check c.shape, 4, Int[4]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(make_layout(12, 1), b)
+  echo "  symbol zero dispatch: 7 cases OK"
+
 # ── symbol-bound tiler ───────────────────────────────────────
 proc runComposeSymbolTilerTests =
   # a tiler bound to a symbol must match the literal tuple
@@ -692,6 +747,7 @@ runComposeNegStrideTests()
 runComposeTilerTests()
 runComposeDynamicTests()
 runComposeZeroStrideTests()
+runComposeSymbolZeroTests()
 runComposeSymbolTilerTests()
 runComposeCoordStrideTests()
 

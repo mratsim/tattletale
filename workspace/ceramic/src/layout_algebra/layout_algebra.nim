@@ -494,7 +494,10 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   ##
   ## Divisibility is the caller's responsibility, it is not checked.
   result = newStmtList()
-  let mVal = bStride.getStaticInt()
+  var mVal = bStride.getStaticInt()
+  if mVal == DynamicSentinel:
+    # a symbol-bound stride, the static lives in the field's type
+    mVal = bStride.getTypeInst().getStaticInt()
   if mVal == 0:
     result.add make_layout(bShape, IntCT(0))
     return
@@ -513,7 +516,9 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
         modeAst.newDotExpr(ident"stride"))
     result.add builder.emitLayout()
   else:
-    let nVal = bShape.getStaticInt()
+    var nVal = bShape.getStaticInt()
+    if nVal == DynamicSentinel:
+      nVal = bShape.getTypeInst().getStaticInt()
     if nVal == 1:
       # A' evaluated at one point, evaluation is coalesce-invariant
       result.add make_layout(IntCT(1),
