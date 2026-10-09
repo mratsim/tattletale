@@ -1,45 +1,25 @@
-## Phase 6: materializeIndexBuiltinParams pass test
-##
-## MSL device functions have no implicit thread index, so a body that
-## references a canonical coordinate builtin must bind it to a param the caller
-## forwards. The pass computes each function's transitive builtin needs once
-## and appends one param per need into `pParams`, for kernels AND device
-## functions, after the declared params. Each appended param's symbol carries
-## the builtin kind (`ident.symbol.coordBuiltin`), so the Metal printer
-## discriminates the attribute form (kernels) from the plain form (device
-## functions) by that symbol field alone. This test asserts the rewrite on
-## hand-built IR:
-## - builtin params land in `pParams` (kernel + device fn) with
-##   `ident.symbol.coordBuiltin` carrying the kind
-## - declared params keep their positions and types (the buffer-binding order
-##   the printer relies on)
-## - a call site forwards the args in the callee's needs order
-## - a local shadowing a canonical name (gbkNone) is NOT collected
-## - a device fn calling itself terminates and rewrites consistently
-## - a fn registered in both tables is rewritten once
-## - a barrier call is never treated as a callee
+## materializeIndexBuiltinParams appends one param per transitive
+## coordinate-builtin need into `pParams` and rewrites call sites to forward them.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off --debugger:native \
-##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/codegen/ir/test_ir_materializeIndexBuiltinParams.nim
+##     workspace/crucible/tests/ir/legalizations/test_ir_materializeIndexBuiltinParams.nim (from tattletale)
 
 import std / [tables, sequtils]
 import workspace/crucible/src/codegen/ir/gpu_types
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/codegen/passes/passes_metal
 
 # ── IR builders ─────────────────────────────────────────────────────────────
 
-proc builtinIdent(name: string; kind: GpuCoordBuiltinKind): GpuAst =
+proc builtinIdent(name: string, kind: GpuCoordBuiltinKind): GpuAst =
   ## gpuIdent for a canonical coordinate builtin, with its IR kind marked.
   let sym = newSymbol(name, iSym = name & "_sym", symKind = gsBuiltin)
   sym.coordBuiltin = kind
   GpuAst(kind: gpuIdent, symbol: sym)
 
 proc plainIdent(name: string): GpuAst =
-  ## gpuIdent for a plain (non-builtin) name, e.g. a local shadowing a
-  ## canonical builtin name: `coordBuiltin` stays `gbkNone`.
+  ## gpuIdent for a plain (non-builtin) name, e.g. a local shadowing
+  ## a canonical builtin name: `coordBuiltin` stays `gbkNone`.
   GpuAst(kind: gpuIdent, symbol: newSymbol(name, iSym = name & "_local"))
 
 proc makeCall(callee: GpuAst): GpuAst =
@@ -47,8 +27,8 @@ proc makeCall(callee: GpuAst): GpuAst =
   ## (hashed on the symbol) resolves it.
   GpuAst(kind: gpuCall, cName: callee.pName.clone(), cArgs: @[])
 
-proc makeProc(name: string; body: GpuAst; isKernel = false): GpuAst =
-  ## gpuProc with a fresh symbol; the body is a gpuBlock of statements.
+proc makeProc(name: string, body: GpuAst, isKernel = false): GpuAst =
+  ## gpuProc with a fresh symbol, the body is a gpuBlock of statements.
   var fn = GpuAst(kind: gpuProc)
   fn.pName = GpuAst(kind: gpuIdent,
                     symbol: newSymbol(name, iSym = name & "_isym", symKind = gsProc))
@@ -60,18 +40,18 @@ proc makeProc(name: string; body: GpuAst; isKernel = false): GpuAst =
     fn.pAttributes = {attDevice}
   fn
 
-proc makeParam(name: string; typ: GpuType; space: AddressSpace): GpuParam =
+proc makeParam(name: string, typ: GpuType, space: AddressSpace): GpuParam =
   ## Declared param (gbkNone symbol), as a kernel or device fn would carry.
   GpuParam(ident: GpuAst(kind: gpuIdent,
                          symbol: newSymbol(name, iSym = name & "_isym",
                                            symKind = gsGlobalKernelParam)),
            typ: typ, addressSpace: space, passByRef: false)
 
-proc blockOf(stmts: varargs[GpuAst]): GpuAst =
+proc blockStmts(stmts: varargs[GpuAst]): GpuAst =
   ## gpuBlock of statements, the shape every pass body walk expects.
   GpuAst(kind: gpuBlock, statements: @stmts)
 
-proc callArgNames(fn: GpuAst; stmtIdx: int): seq[string] =
+proc callArgNames(fn: GpuAst, stmtIdx: int): seq[string] =
   ## Ident names of the call-site args of `fn`'s `stmtIdx`-th statement.
   let call = fn.pBody.statements[stmtIdx]
   doAssert call.kind == gpuCall, "statement " & $stmtIdx & " is not a call"
@@ -92,7 +72,7 @@ proc paramKinds(fn: GpuAst): seq[GpuCoordBuiltinKind] =
 # 1. Device fn gains the builtin params: canonical name + coordBuiltin kind + type
 # ═══════════════════════════════════════════════════════════════════════════
 block:
-  let body = blockOf(
+  let body = blockStmts(
     builtinIdent("thread_position_in_threadgroup", gbkThreadPositionInThreadgroup),
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup)
   )
@@ -124,9 +104,9 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var callee = makeProc("callee",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockStmts(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var kernel = makeProc("kern",
-    blockOf(
+    blockStmts(
       builtinIdent("threadgroups_per_grid", gbkThreadgroupsPerGrid),
       makeCall(callee)
     ), isKernel = true)
@@ -166,14 +146,14 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var d1 = makeProc("d1",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockStmts(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var d2 = makeProc("d2",
-    blockOf(
+    blockStmts(
       builtinIdent("thread_position_in_threadgroup", gbkThreadPositionInThreadgroup),
       builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup)
     ))
   var kernel = makeProc("kern2",
-    blockOf(makeCall(d1), makeCall(d2)), isKernel = true)
+    blockStmts(makeCall(d1), makeCall(d2)), isKernel = true)
   var ctx = GpuContext()
   ctx.allFnTab[d1.pName] = d1
   ctx.allFnTab[d2.pName] = d2
@@ -192,7 +172,7 @@ block:
     gbkThreadPositionInThreadgroup,
     gbkThreadIndexInThreadgroup
   ]
-  # Call 1 forwards d1's single need; call 2 forwards d2's needs in d2's order.
+  # Call 1 forwards d1's single need, call 2 forwards d2's needs in d2's order.
   doAssert callArgNames(kernel, 0) == @["thread_position_in_grid"],
     "call to d1 must forward exactly d1's need"
   doAssert callArgNames(kernel, 1) == @[
@@ -211,7 +191,7 @@ block:
   let shadow = plainIdent("thread_position_in_grid")
   doAssert shadow.symbol.coordBuiltin == gbkNone,
     "a plain local must carry no coordinate kind"
-  var fn = makeProc("shadow", blockOf(shadow))
+  var fn = makeProc("shadow", blockStmts(shadow))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
@@ -226,7 +206,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   var fn = makeProc("rec", GpuAst(kind: gpuBlock))
-  fn.pBody = blockOf(
+  fn.pBody = blockStmts(
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup),
     makeCall(fn)
   )
@@ -248,9 +228,9 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 block:
   # Pulled-in module-level device fns land in `allFnTab` AND `genericInsts`
-  # under the same symbol; the rewrite must not double-append.
+  # under the same symbol, the rewrite must not double-append.
   var fn = makeProc("both",
-    blockOf(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
+    blockStmts(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
   ctx.genericInsts[fn.pName] = fn
@@ -272,7 +252,7 @@ block:
                            cName: GpuAst(kind: gpuIdent, symbol: barrierSym),
                            cArgs: @[])
   var fn = makeProc("bar",
-    blockOf(barrierCall,
+    blockStmts(barrierCall,
             builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn

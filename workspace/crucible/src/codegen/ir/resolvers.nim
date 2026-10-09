@@ -442,6 +442,11 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     if n.kind == nnkSym and builtinGpuTypeKind(n) != gtVoid:
       return initGpuType(builtinGpuTypeKind(n))
     case n.typeKind
+    of ntyDistinct:
+      # A distinct's getTypeImpl is an nnkDistinctTy wrapper over the base type.
+      # The wrapper's typeKind is ntyDistinct again: recursion on the wrapper
+      # re-enters this branch forever. Peel the wrapper.
+      result = resolveType(reg, n.getTypeImpl()[0])
     of ntyBool, ntyInt .. ntyUint64: # includes all float types
       result = initGpuType(toGpuTypeKind n.typeKind)
     of ntyString: # only supported on some backends!

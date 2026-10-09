@@ -57,9 +57,8 @@ func make_tensor_like*[T, Sh, St, NewT](t: TensorOwned[T, Sh, St]; _: typedesc[N
 
 # ── Non-owning: make_view(ptr, Layout) ─────────────────────────────────
 
-func make_view*[T, Sh, St](data: ptr UncheckedArray[T] or ptr T;
-                           L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline.} =
-  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](data), layout: L)
+template make_view*[T, Sh, St](pD: ptr UncheckedArray[T] or ptr T, L: Layout[Sh, St]): TensorView[T, Sh, St] =
+  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](pD), layout: L)
 
 template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        shape: IntOrIntTuple;

@@ -136,6 +136,30 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   else:
     result = t.kind == kind
 
+proc needsStd430Align8(t: GpuType): bool =
+  ## True when the type tree contains a 64-bit scalar, std430 aligns those
+  ## to 8 bytes and the flat 4-byte packed push-constant block cannot honor
+  ## it. The 64-bit scalars: int64, uint64, float64, size_t.
+  t.containsKind(gtInt64) or t.containsKind(gtUint64) or
+    t.containsKind(gtFloat64) or t.containsKind(gtSize_t)
+
+proc containsPtrFieldDeep(t: GpuType): bool =
+  ## True when a gtPtr sits in the type tree, object fields and array
+  ## element types included.
+  case t.kind
+  of gtPtr: result = true
+  of gtArray:
+    result = containsPtrFieldDeep(t.aTyp)
+  of gtUA:
+    result = containsPtrFieldDeep(t.uaTo)
+  of gtObject:
+    for f in t.oFields:
+      if containsPtrFieldDeep(f.typ): return true
+  of gtGenericInst:
+    for f in t.gFields:
+      if containsPtrFieldDeep(f.typ): return true
+  else: discard
+
 proc usesReductionBuiltin(n: GpuAst): bool =
   ## True when the AST contains a reduction builtin call (the subgroup
   ## shuffles), which needs the GLSL subgroup extensions at module scope.
@@ -486,14 +510,20 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.pOp & ctx.genVulkan(ast.pVal)
 
   of gpuTypeDef:
-    result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-    if ast.tFields.len == 0:
-      # GLSL requires at least one field in a struct.
-      result.add "  uint _padding;\n"
+    if ast.tFields.anyIt(containsPtrFieldDeep(it.typ)):
+      # Pointer-bearing struct values have no GLSL representation, their uses
+      # die in the explodePointerStructParams pass and a survivor fails
+      # loudly on the unknown type name.
+      result = ""
     else:
-      for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-    result.add '}'
+      result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
+      if ast.tFields.len == 0:
+        # GLSL requires at least one field in a struct.
+        result.add "  uint _padding;\n"
+      else:
+        for el in ast.tFields:
+          result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+      result.add '}'
 
   of gpuObjConstr:
     if ast.ocFields.len == 0:
@@ -625,28 +655,44 @@ proc codegen*(ctx: var GpuContext): string =
             canonicalSsbo.add (p.ident.ident(), inner)
           inc ssboIdx
         elif p.addressSpace != asSMEM:
+          if p.typ.needsStd430Align8():
+            error "Vulkan: by-value param '" & p.ident.ident() &
+              "' carries a 64-bit type, the push-constant block packs " &
+              "4-byte aligned and cannot honor the std430 8-byte alignment"
           pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
 
-  # ── Step 2: Emit push-constant block (if any) ──
+  # ── Step 2: Emit struct typedefs the push-constant block references ──
+  # GLSL resolves types at their declaration site. The push-constant block's
+  # struct members need the typedef text above them.
+  for blk in ctx.globalBlocks:
+    if blk.kind in {gpuTypeDef, gpuAlias}:
+      let blkStr = ctx.genVulkan(blk)
+      if blkStr.len > 0:
+        result.add blkStr
+        if blk.kind in {gpuTypeDef, gpuAlias}:
+          result.add ";\n"
+        result.add "\n"
+
+  # ── Step 3: Emit push-constant block (if any) ──
   if pushConstDecls.len > 0:
     result.add "layout(push_constant) uniform KernelParams {\n"
     for decl in pushConstDecls:
       result.add "  " & decl & ";\n"
     result.add "};\n\n"
 
-  # ── Step 3: Emit SSBO declarations by position ──
+  # ── Step 4: Emit SSBO declarations by position ──
   for idx, (name, inner) in canonicalSsbo.pairs:
     result.add genSsboDeclaration(name, inner, idx)
   if canonicalSsbo.len > 0:
     result.add "\n"
 
-  # ── Generate code for the global blocks (types, global vars etc)
+  # ── Generate code for the remaining global blocks (global vars etc) ──
   for blk in ctx.globalBlocks:
+    if blk.kind in {gpuTypeDef, gpuAlias}:
+      continue
     let blkStr = ctx.genVulkan(blk)
     if blkStr.len > 0:
       result.add blkStr
-      if blk.kind in {gpuTypeDef, gpuAlias}:
-        result.add ";\n"
       result.add "\n"
 
   # 3. Workgroup layout for kernel entry points

@@ -5,7 +5,7 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, sequtils, sets, tables]
+import std / [macros, sequtils, sets, strutils, tables]
 import ../ir/gpu_types
 import ./pass_datatypes
 
@@ -684,6 +684,189 @@ proc unwrapBlockInDot(n: var GpuAst) =
     unwrapBlockInDot(n.vInit)
   else:
     discard
+
+proc structFields(t: GpuType): seq[GpuTypeField] =
+  ## Fields of a struct type, declaration order.
+  case t.kind
+  of gtObject: t.oFields
+  of gtGenericInst: t.gFields
+  else: @[]
+
+proc containsPtrDeep(t: GpuType): bool =
+  ## True when a gtPtr sits anywhere in the type tree, array element
+  ## types and unchecked-array element types included.
+  case t.kind
+  of gtPtr: result = true
+  of gtArray:
+    result = containsPtrDeep(t.aTyp)
+  of gtUA:
+    result = containsPtrDeep(t.uaTo)
+  of gtObject:
+    for f in t.oFields:
+      if containsPtrDeep(f.typ): return true
+  of gtGenericInst:
+    for f in t.gFields:
+      if containsPtrDeep(f.typ): return true
+  else: discard
+
+proc isScalarGpuKind(k: GpuTypeKind): bool =
+  k in {gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64,
+        gtInt64, gtFloat32, gtFloat64, gtFloat16, gtBf16, gtSize_t}
+
+proc newExplodedParam(name: string, typ: GpuType, addressSpace: AddressSpace): GpuParam =
+  let sym = newSymbol(name, iSym = name, typ = typ, symKind = gsDeviceKernelParam)
+  GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: typ,
+           addressSpace: addressSpace, passByRef: false)
+
+proc explodeTypeInto(t: GpuType, path: seq[string], name: string,
+                     params: var seq[GpuParam], usedNames: var HashSet[string],
+                     leaves: var Table[seq[string], GpuAst]) =
+  ## Lowers one field type into exploded kernel params, depth-first in field
+  ## order:
+  ## - pointer field -> ptr param (`device T*`, SSBO, storage)
+  ## - scalar/enum field or fixed-size pointer-free array -> by-value
+  ##   param (constant-ref, push const or read-only storage)
+  ## - pointer-free value struct -> by-value struct param
+  ## - struct carrying pointers -> recursion into its fields
+  ## Precondition: `name` is unique among the struct's exploded leaves.
+  ## `leaves` maps each field path from the param root to its leaf param ident,
+  ## keyed as @[rootISym] & path.
+  doAssert name notin usedNames,
+    "explodePointerStructParams: exploded param name collision on '" & name & "'"
+  doAssert path.len > 0
+  usedNames.incl name
+  if t.kind == gtPtr:
+    # Type verbatim: the UA inner type survives for WGSL's runtime array,
+    # MSL decays it to `device T*`.
+    params.add newExplodedParam(name, t, asDevice)
+    leaves[path] = params[^1].ident
+  elif isScalarGpuKind(t.kind):
+    params.add newExplodedParam(name, t, asRMEM)
+    leaves[path] = params[^1].ident
+  elif t.kind in {gtObject, gtGenericInst}:
+    if containsPtrDeep(t):
+      for f in structFields(t):
+        explodeTypeInto(f.typ, path & f.name, name & "_" & f.name, params,
+                        usedNames, leaves)
+    else:
+      params.add newExplodedParam(name, t, asRMEM)
+      leaves[path] = params[^1].ident
+  elif t.kind == gtArray:
+    # Fixed-size array field: one by-value param, never per-element params.
+    # Pointer-bearing elements carry no value representation: the explosion
+    # fails loudly on them.
+    doAssert not containsPtrDeep(t.aTyp),
+      "explodePointerStructParams: array field '" & name &
+      "' carries pointer-bearing elements"
+    params.add newExplodedParam(name, t, asRMEM)
+    leaves[path] = params[^1].ident
+  else:
+    doAssert false, "explodePointerStructParams: unsupported field type " &
+      $t.kind & " at '" & name & "'"
+
+proc rewriteExplodedDots(n: var GpuAst, roots: HashSet[string], leaves: Table[seq[string], GpuAst]) =
+  ## Rewrites `param.field...` chains rooted at an exploded param into
+  ## exploded leaf param idents:
+  ## - whole chain when the leaf path covers it (ptr, scalar, value struct)
+  ## - matched prefix otherwise, fields of an exploded value struct:
+  ##   `dst.layout.shape` -> `dst_layout.shape`
+  case n.kind
+  of gpuDot:
+    var fields: seq[string]
+    var root = n
+    while root.kind == gpuDot:
+      fields.insert(root.dField.ident())
+      root = root.dParent
+    if root.kind == gpuIdent and root.symbol != nil and
+       root.symbol.iSym in roots:
+      var matched = -1
+      for k in countdown(fields.len, 1):
+        if leaves.hasKey(@[root.symbol.iSym] & fields[0 ..< k]):
+          matched = k
+          break
+      doAssert matched > 0,
+        "explodePointerStructParams: no exploded leaf for field chain '" &
+        fields.join(".") & "' of param '" & root.symbol.iSym & "' (whole use)"
+      var replacement = leaves[@[root.symbol.iSym] & fields[0 ..< matched]]
+      for f in fields[matched ..< fields.len]:
+        let fsym = newSymbol(f, iSym = f, typ = nil, symKind = gsNone)
+        replacement = GpuAst(kind: gpuDot, dParent: replacement,
+                             dField: GpuAst(kind: gpuIdent, symbol: fsym))
+      n = replacement
+    else:
+      # the chain roots elsewhere (an indexed or called expression): descend
+      # into the root, its children can still reference an exploded param
+      rewriteExplodedDots(root, roots, leaves)
+  else:
+    for child in mitems(n):
+      rewriteExplodedDots(child, roots, leaves)
+
+proc rejectWholeUse(n: var GpuAst, roots: HashSet[string]) =
+  ## Fails compilation on a bare use of an exploded param: only field
+  ## accesses rewrite onto leaf params, a whole value binds to no param.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.iSym in roots:
+      error "explodePointerStructParams: kernel param '" & n.symbol.iSym &
+        "' is used whole, only field accesses rewrite to exploded leaf params"
+  else:
+    for child in mitems(n):
+      rejectWholeUse(child, roots)
+
+proc explodePointerStructParamsImpl(ctx: var GpuContext) =
+  ## Kernel params of struct types carrying pointer fields, nested anywhere,
+  ## explode depth-first in field order into ptr, scalar,
+  ## pointer-free-value params. Body chains `param.field...` rewrite onto
+  ## the exploded leaf params:
+  ## - no reconstructed local: backends without pointer-bearing struct values
+  ##   (GLSL, WGSL) emit the kernel directly
+  ## - the struct never crosses the launch boundary
+  var done = initHashSet[string]()
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind != gpuProc or not fn.pAttributes.contains(attGlobal):
+      continue
+    let key = fn.pName.symbol.iSym
+    if key in done:
+      continue
+    done.incl key
+    var newParams: seq[GpuParam]
+    var usedNames = initHashSet[string]()
+    var leaves = initTable[seq[string], GpuAst]()
+    var roots = initHashSet[string]()
+    var exploded = false
+    # A generated leaf name must not collide with a retained param, the collision set seeds from the retained names first.
+    var explodes = newSeq[bool](fn.pParams.len)
+    for i, p in fn.pParams:
+      if p.typ != nil and p.typ.kind in {gtObject, gtGenericInst} and
+         containsPtrDeep(p.typ):
+        explodes[i] = true
+        exploded = true
+        roots.incl p.ident.symbol.iSym
+      else:
+        usedNames.incl p.ident.ident()
+    for i, p in fn.pParams:
+      if explodes[i]:
+        explodeTypeInto(p.typ, @[p.ident.symbol.iSym], p.ident.ident(),
+                        newParams, usedNames, leaves)
+      else:
+        newParams.add p
+    if exploded:
+      fn.pParams = newParams
+      rewriteExplodedDots(fn.pBody, roots, leaves)
+      rejectWholeUse(fn.pBody, roots)
+
+proc registerExplodePointerStructParams*(reg: var PassRegistry) =
+  ## Registers the `explodePointerStructParams` pass on `reg`.
+  ## Wiring contract:
+  ## - Metal, Vulkan, WebGPU only
+  ## - CUDA and OpenCL take pointer-bearing structs natively, never wire
+  reg.register("explodePointerStructParams", pkTransform, phaseMain,
+    "Explodes kernel params of structs carrying (nested) pointer fields into ptr/scalar/value params and rewrites body accesses",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      ctx.explodePointerStructParamsImpl()
+  )
 
 proc registerLegalizationPasses*(reg: var PassRegistry) =
   ## Register passes that make the IR well-formed.

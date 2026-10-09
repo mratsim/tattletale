@@ -9,6 +9,7 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/gpu_types
 import ./lang_utils
+import ../passes/passes_opencl
 import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,
@@ -201,16 +202,16 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
-      pp.lowerByrefParamsImpl(ctx, fn)
+      lowerByrefParamsImpl(ctx, fn)
   # insertByrefAddrsImpl: needs to visit call sites in fnTab entries too,
   # because fnTab has clones of top-level kernels from farmTopLevel.
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
-      pp.insertByrefAddrsImpl(ctx, fn)
+      insertByrefAddrsImpl(ctx, fn)
   for fnIdent, fn in ctx.fnTab.mpairs:
     if fn.kind == gpuProc:
-      pp.insertByrefAddrsImpl(ctx, fn)
+      insertByrefAddrsImpl(ctx, fn)
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 

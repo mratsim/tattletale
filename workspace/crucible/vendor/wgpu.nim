@@ -471,6 +471,29 @@ proc wgpuBufferGetMappedRange*(buffer: WGPUBuffer,
 proc wgpuBufferUnmap*(buffer: WGPUBuffer)
   {.importc: "wgpuBufferUnmap", dynlib: libWgpu.}
 
+# --- Compilation diagnostics ---
+type
+  WGPUCompilationMessage* {.bycopy.} = object
+    nextInChain*: ptr WGPUChainedStruct
+    message*: WGPUStringView
+    typ*: cint              ## WGPUCompilationMessageType: 0 = error
+    lineNum*: uint64
+    linePos*: uint64
+    offset*: uint64
+    length*: uint64
+
+  WGPUCompilationInfo* {.bycopy.} = object
+    chain*: WGPUChainedStruct
+    messageCount*: csize_t
+    messages*: ptr WGPUCompilationMessage
+
+  WGPUCompilationInfoCallback* = proc(status: cint;
+      info: ptr WGPUCompilationInfo; userdata: pointer) {.cdecl.}
+
+proc wgpuShaderModuleGetCompilationInfo*(module: WGPUShaderModule;
+    callback: WGPUCompilationInfoCallback; userdata: pointer)
+  {.importc: "wgpuShaderModuleGetCompilationInfo", dynlib: libWgpu.}
+
 # --- Polling ---
 proc wgpuDevicePoll*(device: WGPUDevice,
                       wait: bool,
