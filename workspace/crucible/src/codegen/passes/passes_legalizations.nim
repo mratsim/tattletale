@@ -793,6 +793,10 @@ proc rewriteExplodedDots(n: var GpuAst, roots: HashSet[string], leaves: Table[se
         replacement = GpuAst(kind: gpuDot, dParent: replacement,
                              dField: GpuAst(kind: gpuIdent, symbol: fsym))
       n = replacement
+    else:
+      # the chain roots elsewhere (an indexed or called expression): descend
+      # into the root, its children can still reference an exploded param
+      rewriteExplodedDots(root, roots, leaves)
   else:
     for child in mitems(n):
       rewriteExplodedDots(child, roots, leaves)
