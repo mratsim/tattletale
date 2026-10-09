@@ -801,6 +801,18 @@ proc rewriteExplodedDots(n: var GpuAst, roots: HashSet[string], leaves: Table[se
     for child in mitems(n):
       rewriteExplodedDots(child, roots, leaves)
 
+proc rejectWholeUse(n: var GpuAst, roots: HashSet[string]) =
+  ## Fails compilation on a bare use of an exploded param: only field
+  ## accesses rewrite onto leaf params, a whole value binds to no param.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.iSym in roots:
+      error "explodePointerStructParams: kernel param '" & n.symbol.iSym &
+        "' is used whole, only field accesses rewrite to exploded leaf params"
+  else:
+    for child in mitems(n):
+      rejectWholeUse(child, roots)
+
 proc explodePointerStructParamsImpl(ctx: var GpuContext) =
   ## Kernel params of struct types carrying pointer fields, nested anywhere,
   ## explode depth-first in field order into ptr, scalar,
@@ -842,6 +854,7 @@ proc explodePointerStructParamsImpl(ctx: var GpuContext) =
     if exploded:
       fn.pParams = newParams
       rewriteExplodedDots(fn.pBody, roots, leaves)
+      rejectWholeUse(fn.pBody, roots)
 
 proc registerExplodePointerStructParams*(reg: var PassRegistry) =
   ## Registers the `explodePointerStructParams` pass on `reg`.
