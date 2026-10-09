@@ -60,22 +60,35 @@ func isLayoutTy*(n: NimNode): bool {.compileTime.} =
     (ty.kind == nnkBracketExpr and ty[0].sameType(bindSym"Layout"))
 
 # ═══════════════════════════════════════════════════════════════
-#  Codomain properties
+#  cosize, max offset + 1 of a layout
 # ═══════════════════════════════════════════════════════════════
 
-macro cosizeImpl*(sh, st: typed): untyped =
-  result = IntCT(1)
-  for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
-    if shEv.kind == kLeaf:
-      result = result + (shEv.leaf - IntCT(1)) * abs(stEv.leaf)
+func cosize*(layout: Layout): auto =
+  ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
+  macro cosizeFlat(sh, st: typed): untyped =
+    ## Cosize emit, one term per shape leaf, a scalar stride broadcasts.
+    let one = IntCT(1)
+    var shDims, stDims: seq[NimNode] = @[]
+    for shEv in sh.tupleStream():
+      if shEv.kind == kLeaf:
+        shDims.add shEv.leaf
+    for stEv in st.tupleStream():
+      if stEv.kind == kLeaf:
+        stDims.add stEv.leaf
+    result = one
+    for i in 0 ..< shDims.len:
+      # a scalar stride is one leaf, it broadcasts over every shape leaf
+      let d = if stDims.len == 1: stDims[0] else: stDims[i]
+      let term = (shDims[i] - one) * abs(d)
+      result = result + term
+  cosizeFlat(flatten(layout.shape), flatten(layout.stride))
 
-macro cosize*(layout: Layout): untyped =
-  ## Coshape of the layout, the size of the layout's codomain:
-  ## `cosize = Σᵢ (shᵢ - 1)·|stᵢ| + 1`
-  result = newStmtList()
-  let (shape, strides) = result.destructureLayout(layout)
-  result.add quote do:
-    cosizeImpl(`shape`, `strides`)
+func cosize*[A, B](_: typedesc[Layout[A, B]]): static int {.inline.} =
+  ## Compile-time cosize from the Layout type alone.
+  ## Precondition, the shape and stride are all-static Int[N] leaves.
+  ## Dynamic layouts produce a compile error.
+  var tmp {.noInit.}: Layout[A, B]
+  cosize(tmp).toInt()
 
 macro coprofileImpl*(bStrides: typed): untyped =
   result = IntCT(0)
