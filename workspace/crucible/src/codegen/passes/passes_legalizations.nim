@@ -693,9 +693,14 @@ proc structFields(t: GpuType): seq[GpuTypeField] =
   else: @[]
 
 proc containsPtrDeep(t: GpuType): bool =
-  ## True when a gtPtr sits anywhere in the type tree.
+  ## True when a gtPtr sits anywhere in the type tree, array element
+  ## types and unchecked-array element types included.
   case t.kind
   of gtPtr: result = true
+  of gtArray:
+    result = containsPtrDeep(t.aTyp)
+  of gtUA:
+    result = containsPtrDeep(t.uaTo)
   of gtObject:
     for f in t.oFields:
       if containsPtrDeep(f.typ): return true
@@ -719,8 +724,8 @@ proc explodeTypeInto(t: GpuType, path: seq[string], name: string,
   ## Lowers one field type into exploded kernel params, depth-first in field
   ## order:
   ## - pointer field -> ptr param (`device T*`, SSBO, storage)
-  ## - scalar/enum field -> by-value scalar param: constant-ref, push const
-  ##   or read-only storage
+  ## - scalar/enum field or fixed-size pointer-free array -> by-value
+  ##   param (constant-ref, push const or read-only storage)
   ## - pointer-free value struct -> by-value struct param
   ## - struct carrying pointers -> recursion into its fields
   ## Precondition: `name` is unique among the struct's exploded leaves.
@@ -746,6 +751,15 @@ proc explodeTypeInto(t: GpuType, path: seq[string], name: string,
     else:
       params.add newExplodedParam(name, t, asRMEM)
       leaves[path] = params[^1].ident
+  elif t.kind == gtArray:
+    # Fixed-size array field: one by-value param, never per-element params.
+    # Pointer-bearing elements carry no value representation: the explosion
+    # fails loudly on them.
+    doAssert not containsPtrDeep(t.aTyp),
+      "explodePointerStructParams: array field '" & name &
+      "' carries pointer-bearing elements"
+    params.add newExplodedParam(name, t, asRMEM)
+    leaves[path] = params[^1].ident
   else:
     doAssert false, "explodePointerStructParams: unsupported field type " &
       $t.kind & " at '" & name & "'"
