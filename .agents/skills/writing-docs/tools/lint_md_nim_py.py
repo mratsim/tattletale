@@ -49,6 +49,7 @@ Rule table (rule | trigger | severity):
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
+| inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -186,6 +187,13 @@ NIM_EXPORTED_CALLABLE_RE = re.compile(
 # Call sites and ordinary prose never match, the keyword anchors the shape.
 OF_SUFFIX_DECL_RE = re.compile(
     r"^\s*(?:proc|func|template)\s+\*?([A-Za-z_]\w*)")
+
+# The inbounds-call-syntax rule. Plain call sites of inBounds, the house
+# convention is the method call coord.inBounds(shape). Definitions and
+# the inBoundsImpl internals never match, the name boundary is exact.
+INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
+INBOUNDS_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
 
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
@@ -489,6 +497,8 @@ RULES = {
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
     "decl-of-suffix": Rule("decl-of-suffix", True,
                            "a proc, func or template name ending in Of, name the thing directly"),
+    "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
+                                "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
 }
 
 
@@ -1734,9 +1744,19 @@ def nim_structure_checks(path, text, header_nos, findings):
     - the house doc comment of a proc or func is the first body line
     - exported types are documented by a doc block above them or by the
       ## field docs inside the body, a ## block directly above the
-      declaration is banned (doc-above-type)"""
+      declaration is banned (doc-above-type)
+    - inbounds-call-syntax bans the plain call of inBounds, the house
+      convention is the method call coord.inBounds(shape)"""
     lines = text.splitlines()
     blocked = nim_block_comment_lines(text)
+    for i, raw in enumerate(lines):
+        line = raw.rstrip()
+        if (i + 1) not in blocked and INBOUNDS_PLAIN_CALL_RE.search(line) \
+                and not INBOUNDS_DECL_RE.match(line):
+            findings.append(Finding(
+                path, i + 1, "inbounds-call-syntax",
+                "inBounds in plain call syntax, use the method call "
+                "coord.inBounds(shape)"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)

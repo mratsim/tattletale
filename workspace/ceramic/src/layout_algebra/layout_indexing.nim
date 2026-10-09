@@ -146,6 +146,94 @@ template idx2crd*(shape: IntOrIntTuple, idx: int or Int): untyped =
   idx2crd_gpu(shape, idx)
 
 # ═══════════════════════════════════════════════════════════════
+#  inBounds, coordinate validity against a shape
+# ═══════════════════════════════════════════════════════════════
+
+func inBoundsJoin(a, b: NimNode): NimNode {.compileTime.} =
+  ## Joins one check into the accumulated check, nil is the empty accumulator
+  if a == nil: b
+  else: nnkInfix.newTree(bindSym"and", a, b)
+
+func inBoundsLeaf(x, s: NimNode): NimNode {.compileTime.} =
+  ## `0 <= x and x < s`, both bounds per leaf
+  nnkInfix.newTree(bindSym"and", nnkInfix.newTree(bindSym"<=", newLit(0), x), nnkInfix.newTree(bindSym"<", x, s))
+
+macro inBoundsImpl(coord, shape: typed): untyped =
+  ## Returns true if a coordinate is within bounds of a shape
+
+  var coordStream = TupleStream()
+  if coord.isTupleTy():
+    coordStream = coord.tupleStream()
+  var shapeStream = shape.tupleStream()
+  var ok: NimNode = nil
+  var remaining: NimNode = nil       # the quotient thread, decompose only
+  var pending, pendingFinal: NimNode # the pending check, decompose only
+  var decomposing = false
+  var openDepth = -1        # the decompose subtree opens at this depth
+  if not coord.isTupleTy():
+    # A scalar coord decomposes over the whole shape, the root opens
+    # and closes on the shape, the coord stream holds no leaves.
+    remaining = coord
+    openDepth = shapeStream.next().depth
+    decomposing = true
+  while decomposing or not coordStream.done():
+    if decomposing:
+      let shapeEvent = shapeStream.next()
+      case shapeEvent.kind
+      of kLeaf:
+        if pending != nil:
+          ok = inBoundsJoin(ok, pending)
+        let shapeLeaf = shapeEvent.leaf
+        let oldRemaining = remaining
+        pending = inBoundsLeaf(oldRemaining mod shapeLeaf, shapeLeaf)
+        pendingFinal = inBoundsLeaf(oldRemaining, shapeLeaf)
+        remaining = oldRemaining div shapeLeaf
+      of kClose:
+        if shapeEvent.depth == openDepth:
+          # the excess stays on the last leaf, it keeps the full quotient
+          ok = inBoundsJoin(ok, pendingFinal)
+          pending = nil
+          pendingFinal = nil
+          decomposing = false
+      else:
+        discard
+      continue
+    let coordEvent = coordStream.next()
+    let shapeEvent = shapeStream.next()
+    if coordEvent.kind == kLeaf and shapeEvent.kind == kOpen:
+      # A scalar coord element into a nested dimension, the coord
+      # stream holds still until the subtree closes.
+      remaining = coordEvent.leaf
+      openDepth = shapeEvent.depth
+      pending = nil
+      pendingFinal = nil
+      decomposing = true
+      continue
+    if shapeEvent.kind != coordEvent.kind:
+      error "inBounds: `coord` and `shape` have different structures", shape
+    if coordEvent.kind == kLeaf:
+      ok = inBoundsJoin(ok, inBoundsLeaf(coordEvent.leaf, shapeEvent.leaf))
+  if ok == nil:
+    error "inBounds: empty shape", shape
+  return ok
+
+template inBounds*(coord: int or Int, shape: IntOrIntTuple): auto =
+  ## Returns true if a coordinate is within bounds of a shape
+  inBoundsImpl(coord, shape)
+
+template inBounds*(coord: tuple, shape: IntOrIntTuple): auto =
+  ## Returns true if a coordinate is within bounds of a shape
+  inBoundsImpl(coord, shape)
+
+macro inBounds*(coord: IntOrIntTuple, layout: Layout): auto =
+  ## Returns true if a coordinate is within bounds of a shape
+  result = newStmtList()
+  let (sh, _) = result.destructureLayout(layout)
+  template inBoundsDelegate(c2, sh2) =
+    inBoundsImpl(c2, sh2)
+  result.add getAst(inBoundsDelegate(coord, sh))
+
+# ═══════════════════════════════════════════════════════════════
 #  layout() call syntax
 # ═══════════════════════════════════════════════════════════════
 
