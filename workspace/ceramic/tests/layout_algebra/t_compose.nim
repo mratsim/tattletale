@@ -454,6 +454,12 @@ proc runComposeTilerTests =
     let c = compose(make_layout((16, 8), (1, 16)), (make_layout((2, 4), (1, 4)), _))
     check c.shape, ((2, 4), 8), ((Int[2], Int[4]), Int[8])
     check c.stride, ((1, 4), 16), ((Int[1], Int[4]), Int[16])
+  # a Layout tiler element on a later mode composes with its own mode,
+  # the composed mode pair lands in the layout's flat domain
+  block:
+    let c = compose(make_layout((4, 8), (1, 4)), (_, make_layout(2, 2)))
+    check c.shape, (4, 2), (Int[4], Int[2])
+    check c.stride, (1, 8), (Int[1], Int[8])
   # static tiler literals promote through makeIntTuple forms too
   block:
     let c = compose(make_layout((32, 8), (1, 32)), makeIntTuple((16, 2)))
@@ -465,6 +471,28 @@ proc runComposeTilerTests =
     let c = compose(make_layout((32, 8), (1, dS)), (16, 4))
     check c.shape, (16, 4), (Int[16], Int[4])
     check c.stride, (1, dS), (Int[1], int)
+  # a const stride leaf promotes through makeIntTuple,
+  # the whole result comes out Int-typed
+  block:
+    const dS = 2
+    let c = compose(make_layout((32, 8), (1, dS)), (16, 4))
+    check c.shape, (16, 4), (Int[16], Int[4])
+    check c.stride, (1, dS), (Int[1], Int[2])
+  # the scalar fast path pairs (N, the layout's stride leaf) per mode.
+  # no compose call is emitted, static leaves keep Int markers,
+  # even under a runtime shape leaf
+  block:
+    let dN = 4
+    let c = compose(make_layout((dN, 8), (1, 4)), (2, 2))
+    check c.shape, (2, 2), (Int[2], Int[2])
+    check c.stride, (1, 4), (Int[1], Int[4])
+  # a tiler entry carries the implicit (N):(1) stride.
+  # the resulting stride leaf is the layout's leaf itself,
+  # never a running prefix
+  block:
+    let c = compose(make_layout((4, 8), (2, 3)), (2, 2))
+    check c.shape, (2, 2), (Int[2], Int[2])
+    check c.stride, (2, 3), (Int[2], Int[3])
   # a tiler longer than the layout is a compile-time error
   static:
     doAssert not compiles(compose(make_layout(4, 1), (2, 3)))
@@ -476,7 +504,19 @@ proc runComposeTilerTests =
   # a sub-tuple tiler element on a scalar dimension is a rank error
   static:
     doAssert not compiles(compose(make_layout((4, 8), (1, 4)), (2, (2, 2))))
-  echo "  tiler: 11 cases OK"
+  # a symbol-bound layout reads its modes off the destructured parts,
+  # the tiler path emits bracket reads, static fields stay Int-typed
+  block:
+    let sb = make_layout((4, 8), (1, 4))
+    let c1 = compose(sb, (16, 2))
+    check c1.shape, (16, 2), (Int[16], Int[2])
+    check c1.stride, (1, 4), (Int[1], Int[4])
+  block:
+    let sb = make_layout((4, 8), (1, 4))
+    let c2 = compose(sb, (_, make_layout(2, 2)))
+    check c2.shape, (4, 2), (Int[4], Int[2])
+    check c2.stride, (1, 8), (Int[1], Int[8])
+  echo "  tiler: 17 cases OK"
 
 # ── symbol-bound arguments ───────────────────────────────────
 proc runComposeDynamicTests =

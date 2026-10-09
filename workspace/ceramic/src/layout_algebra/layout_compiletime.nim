@@ -45,6 +45,16 @@ proc appendDimension*(builder: var TupleBuilderNested, pairs: seq[tuple[shape, s
 #  destructureLayout, layout AST -> (shape, stride) expressions
 # ═══════════════════════════════════════════════════════════════
 
+proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTime.} =
+  ## Collect the shape/stride members of a Layout field list, object
+  ## constructor fields and object type fields share the layout
+  for def in fields:
+    if def.kind in {nnkExprColonExpr, nnkIdentDefs} and def.len >= 2:
+      if def[0].eqIdent("shape"):
+        shape = def[1]
+      elif def[0].eqIdent("stride"):
+        strides = def[1]
+
 func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
   ## Destructure a typed Layout into (shape, stride) tuple expressions,
   ## without forcing a Layout materialization when the AST already
@@ -91,12 +101,7 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
     doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
       "destructureLayout: expected a Layout, got " & typ.repr
     if inner.kind == nnkObjConstr:
-      for field in inner:
-        if field.kind == nnkExprColonExpr:
-          if field[0].eqIdent("shape"):
-            result.shape = field[1]
-          elif field[0].eqIdent("stride"):
-            result.strides = field[1]
+      pickShapeStride(inner, result.shape, result.strides)
       # the semchecked constructor fields wrap the base tuples
       # in a hidden conversion, unwrap it.
       while result.shape != nil and result.shape.kind == nnkHiddenSubConv:

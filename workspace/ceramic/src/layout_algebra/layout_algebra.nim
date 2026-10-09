@@ -244,7 +244,7 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
       # the covered span grows by the shape when the stride closes on it
       accSpan *= dim.shape
     if defaultBound:
-      # coshape over the live leaves, invariant under the skip
+      # cosize over the live leaves, invariant under the skip
       b += (dim.shape - 1) * abs(dim.stride)
     allSkipped = false
   if allSkipped:
@@ -327,7 +327,7 @@ macro complement*(layout: Layout): untyped =
   ## Skip semantics:
   ## - a stride-0 dimension maps every coordinate to offset 0,
   ##   a size-1 dimension covers a single offset, neither opens a gap
-  ## - the default bound is coshape(layout), invariant under the skip
+  ## - the default bound is cosize(layout), invariant under the skip
   ##
   ##    offsets  ════ layout ════▶  its offsets, every second slot
   ##    offsets  ──── complement ─▶  the free slots, gap-filled in order
@@ -343,7 +343,7 @@ macro complement*(layout: Layout): untyped =
 
   let originalLayout = if result.len == 0: layout else: result[^1][1]
   result.add bindSym"complementImpl".newCall(
-    sh, st, bindSym"coshape".newCall(originalLayout), newLit(true))
+    sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
@@ -439,7 +439,8 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
       builder.append(
         quote do:
           (if `q` mod `shapeDim` === 0: 1
-           elif `q` >= 1 and `shapeDim` mod `q` === 0: (`shapeDim` div `q`).toInt()
+           elif `q` >= 1 and `shapeDim` mod `q` === 0:
+             (`shapeDim` div `q`).toInt()
            else: `shapeDim`.toInt()),
         quote do: `q` * `strideDim`)
       prefix = quote do: `prefix` * `shapeDim`
@@ -574,7 +575,7 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   ## indexing by hand.
   ##
   ## Returns a layout `R` such that `R(i) = A(B(i))` for all
-  ## `i` in `0 ..< coshape(B)`.
+  ## `i` in `0 ..< cosize(B)`.
   ## The caller is responsible for ensuring divisibility.
   ##
   ##    domain  ──── B ────▶  A's domain  ──── A ────▶  values
@@ -603,54 +604,75 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
     result.add getAst(composeDelegate(aShape, aStride, bShape, bStride))
     return
 
+  template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
+    composeImpl(aSh, aSt, bSh, bSt)
+
   proc isKeepMark(tLeaf, tLeafTy: NimNode): bool {.compileTime.} =
     (tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_") or tLeafTy.hasType"X"
+
+  # the per-mode structure comes from the layout's shape type,
+  # mode values are read off the destructured parts mode by mode
+  let aTy = a.getTypeInst()
+  var aShapeTy, aStrideTy: NimNode
+  if aTy.kind == nnkBracketExpr and aTy.len == 3 and
+      aTy[0].sameType(bindSym"Layout"):
+    aShapeTy = aTy[1]
+    aStrideTy = aTy[2]
+  else:
+    # an alias-typed layout, the resolved object impl carries
+    # concrete field types
+    doAssert a.getTypeImpl()[2].kind == nnkRecList,
+      "compose: cannot recover the layout's mode types from " & aTy.repr
+    pickShapeStride(a.getTypeImpl()[2], aShapeTy, aStrideTy)
+
   var tilerLeaves: seq[NimNode]
   var tilerLeafTys: seq[NimNode]
-  var hasLayoutLeaf = false
   for tEv in tiler.tupleDimsStream():
     let tLeaf = tEv.leaf
     let tLeafTy = tEv.leafTy
     if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and
         tLeafTy.isTupleTy():
       error("nested tiler entries are not supported", tLeaf)
-    if not isKeepMark(tLeaf, tLeafTy) and isLayoutTy(tLeafTy):
-      hasLayoutLeaf = true
     tilerLeaves.add tLeaf
     tilerLeafTys.add tLeafTy
 
   var builder = TupleBuilderFlat.new(2)
   var ti = 0
 
-  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aStLeaf: NimNode) {.compileTime.} =
+  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aStLeaf, aStLeafTy: NimNode) =
     if isKeepMark(tLeaf, tLeafTy):
       builder.append(aShLeaf, aStLeaf)
-    elif isLayoutTy(tLeafTy):
-      let (lSh, lSt) = stmts.destructureLayout(tLeaf)
-      builder.append(lSh, lSt)
-    elif not isScalarTy(tLeafTy):
+    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy):
       error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
+    elif isLayoutTy(tLeafTy) or aStLeafTy.isTupleTy():
+      # a Layout entry, or a scalar entry on a nested mode: the entry
+      # is (B):(1) in the mode's domain, the composed mode pair lands
+      # in the layout's flat domain
+      let (bSh, bSt) = if isLayoutTy(tLeafTy):
+        stmts.destructureLayout(tLeaf)
+      else:
+        (tLeaf, IntCT(1))
+      let modeAlias = ident("composedTilerMode" & $ti)
+      stmts.add bindSym"evalOnceAs".newCall(modeAlias,
+        getAst(composeModeDelegate(aShLeaf, aStLeaf, bSh, bSt)))
+      builder.append(modeAlias.newDotExpr(ident"shape"),
+                     modeAlias.newDotExpr(ident"stride"))
     else:
       builder.append(tLeaf, aStLeaf)
-  if aShape.getTypeInst().isTupleTy():
-    for (shEv, stEv) in aShape.tupleDimsStream().zip(aStride.tupleDimsStream()):
-      if ti >= tilerLeaves.len:
-        break
-      result.tilerMode(tilerLeaves[ti], tilerLeafTys[ti], shEv.leaf, stEv.leaf)
-      inc ti
-  elif tilerLeaves.len > 0:
-    result.tilerMode(tilerLeaves[0], tilerLeafTys[0], aShape, aStride)
-    ti = 1
+
+  let aShapeIsTuple = aShapeTy.isTupleTy()
+  let aStrideIsTuple = aStrideTy.isTupleTy()
+  for (shEv, stEv) in aShapeTy.tupleDimsStream().zip(aStrideTy.tupleDimsStream()):
+    if ti >= tilerLeaves.len:
+      break
+    result.tilerMode(tilerLeaves[ti], tilerLeafTys[ti],
+      (if aShapeIsTuple: aShape.getTupleIndex(ti) else: aShape),
+      (if aStrideIsTuple: aStride.getTupleIndex(ti) else: aStride),
+      stEv.leafTy)
+    inc ti
   if ti < tilerLeaves.len:
     error("tiler has more modes than the layout", tilerLeaves[ti])
-  if not hasLayoutLeaf:
-    result.add builder.emitLayout(emitScalarForSize1 = false)
-    return
-  let bShapeNode = builder.emit(0, emitScalarForSize1 = false)
-  let bStrideNode = builder.emit(1, emitScalarForSize1 = false)
-  template tilerDelegate(aShape, aStride, bShapeNode, bStrideNode: typed): untyped =
-    composeImpl(aShape, aStride, bShapeNode, bStrideNode)
-  result.add getAst(tilerDelegate(aShape, aStride, bShapeNode, bStrideNode))
+  result.add builder.emitLayout(emitScalarForSize1 = false)
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product
@@ -683,7 +705,7 @@ macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
   ##
   ## Returns a rank-2 layout `R` such that `R(t, i) = a(t) + a*(tiler(i))`:
   ## - dimension 0 is the block itself, `R[0] == a`
-  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * coshape(tiler)) ∘ tiler`
+  ## - dimension 1 numbers the copies, `R[1] = complement(a, size(a) * cosize(tiler)) ∘ tiler`
   ## - `size(R) == size(a) * size(tiler)`
   ##
   ## Inverse of logical_divide: the divide factors `a` into tiles
@@ -703,14 +725,14 @@ macro logical_product*[A, B: Layout](a: A, tiler: B): untyped =
   ##    → ((2, 2), (3, 4)):((1, 2), (16, 4))
   ##
   ## Copy-grid semantics:
-  ## - the complement extends to the bound `size(a) * coshape(tiler)`, the span one contiguous copy grid covers
+  ## - the complement extends to the bound `size(a) * cosize(tiler)`, the span one contiguous copy grid covers
   ## - a divisible block stride chain gives distinct, non-overlapping copy slots, one per tiler position
   ## - an under-filling block keeps the largest ordered, disjoint copy grid that fits
 
   template logicalProductDelegate(a_layout, tiler_layout) =
     # Please read "Implementation note for direct AST->AST transformation of constructors"
     # in layout_constructors on why no evalOnceAs
-    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * coshape(tiler_layout)), tiler_layout))
+    logicalProductFinish(a_layout, compose(complement(a_layout, size(a_layout) * cosize(tiler_layout)), tiler_layout))
   result = getAst(logicalProductDelegate(a, tiler))
 
 # ═══════════════════════════════════════════════════════════════
@@ -730,14 +752,14 @@ template zipped_product*(blk: Layout, tiler: auto): auto =
   ## dimensions into two dimensions:
   ## - dimension 0 = the block dimensions, one leaf per tiler element
   ## - dimension 1 = the copy dimensions, each numbered by `blk* ∘ tiler`
-  ##   over its tiler element, `blk* = complement(blk, size(blk) * coshape(tiler))`
+  ##   over its tiler element, `blk* = complement(blk, size(blk) * cosize(tiler))`
   ##
   ## Returns a layout `R` = `((M, N, ...), (TileM, TileN, ...))`,
   ## `size(R) == size(blk) * size(tiler)`.
   ##
   ## `zipped_divide` runs the mirrored gather:
   ## - `zipped_divide(a, b)[0] = compose(a, b)`, the tile sides gathered
-  ## - `zipped_product(a, b)[1] = compose(complement(a, size(a) * coshape(b)), b)`,
+  ## - `zipped_product(a, b)[1] = compose(complement(a, size(a) * cosize(b)), b)`,
   ##   the copy sides gathered
   ##
   ## Example:
