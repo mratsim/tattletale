@@ -63,19 +63,19 @@ func isLayoutTy*(n: NimNode): bool {.compileTime.} =
 #  Codomain properties
 # ═══════════════════════════════════════════════════════════════
 
-macro coshapeImpl*(sh, st: typed): untyped =
+macro cosizeImpl*(sh, st: typed): untyped =
   result = IntCT(1)
   for (shEv, stEv) in sh.tupleStream().zip(st.tupleStream()):
     if shEv.kind == kLeaf:
       result = result + (shEv.leaf - IntCT(1)) * abs(stEv.leaf)
 
-macro coshape*(layout: Layout): untyped =
+macro cosize*(layout: Layout): untyped =
   ## Coshape of the layout, the size of the layout's codomain:
-  ## `coshape = Σᵢ (shᵢ - 1)·|stᵢ| + 1`
+  ## `cosize = Σᵢ (shᵢ - 1)·|stᵢ| + 1`
   result = newStmtList()
   let (shape, strides) = result.destructureLayout(layout)
   result.add quote do:
-    coshapeImpl(`shape`, `strides`)
+    cosizeImpl(`shape`, `strides`)
 
 macro coprofileImpl*(bStrides: typed): untyped =
   result = IntCT(0)

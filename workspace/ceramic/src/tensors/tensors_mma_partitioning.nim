@@ -106,8 +106,8 @@ func thrfrg_A*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
     thrM  = tma.threadLayout.shape[0]
     thrK  = tma.threadLayout.shape[2]
   static:
-    doAssert coshape(aLayout) === atomM * atomK,
-      "thrfrg_A: A fragment layout coshape (" & $coshape(aLayout) &
+    doAssert cosize(aLayout) === atomM * atomK,
+      "thrfrg_A: A fragment layout cosize (" & $cosize(aLayout) &
       ") != atom M·K (" & $atomM & "·" & $atomK & ") — the (T, V) layout must tile the operand"
     doAssert St.default[0] === 1,
       "thrfrg_A: operand must be col-major (stride (1, k-stride)), row-major thread" &
@@ -131,8 +131,8 @@ func thrfrg_B*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
     thrN  = tma.threadLayout.shape[1]
     thrK  = tma.threadLayout.shape[2]
   static:
-    doAssert coshape(bLayout) === atomN * atomK,
-      "thrfrg_B: B fragment layout coshape (" & $coshape(bLayout) &
+    doAssert cosize(bLayout) === atomN * atomK,
+      "thrfrg_B: B fragment layout cosize (" & $cosize(bLayout) &
       ") != atom N·K (" & $atomN & "·" & $atomK & ") — the (T, V) layout must tile the operand"
     doAssert St.default[0] === 1,
       "thrfrg_B: operand must be col-major (stride (1, k-stride)), row-major thread" &
@@ -158,8 +158,8 @@ func thrfrg_C*[Sh, St](tma: static TiledMma; L: Layout[Sh, St]): auto {.inline.}
     thrM  = tma.threadLayout.shape[0]
     thrN  = tma.threadLayout.shape[1]
   static:
-    doAssert coshape(cLayout) === atomM * atomN,
-      "thrfrg_C: C fragment layout coshape (" & $coshape(cLayout) &
+    doAssert cosize(cLayout) === atomM * atomN,
+      "thrfrg_C: C fragment layout cosize (" & $cosize(cLayout) &
       ") != atom M·N (" & $atomM & "·" & $atomN & ") — the (T, V) layout must tile the operand"
   const unitM = thrM * atomM
   const unitN = thrN * atomN

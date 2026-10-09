@@ -118,7 +118,7 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
     wV = when typeof(C.shape) is tuple: toInt(C.shape[0]) else: toInt(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  let spansCover = toInt(size(R)) == toInt(size(srcV))
+  let spansCover = size(R) === size(srcV)
   if spansCover and s0 === 1:
     copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
   else:

@@ -431,35 +431,35 @@ proc runSizeTests =
 #  Cosize tests (ported from Python tensor-layouts test suite)
 # ═══════════════════════════════════════════════════════════════
 #
-#  ⚠ Known discrepancies between implementations of coshape on
-#  COMPOSED layouts (make_layout(l1, l2)):
+#  ⚠ Known discrepancies between implementations of cosize
+#  on COMPOSED layouts (make_layout(l1, l2)):
 #
-#   1. CuTe C++ uses hierarchical (nested) coshape. For a composed
-#      layout Layout<A,B>, coshape = coshape(A) * coshape(B) effectively,
+#   1. CuTe C++ uses hierarchical (nested) cosize. For a composed
+#      layout Layout<A,B>, cosize = cosize(A) * cosize(B) effectively,
 #      incorrect when the outer layout carries non-trivial stride.
 #
 #   2. Meta tensor-layouts (Python) enumerates all offsets to compute
 #      max(L(i)) + 1 in O(size(L)) and covers composed layouts correctly.
-#      CuTe documents the ComposedLayout coshape bug.
+#      CuTe documents the ComposedLayout cosize bug.
 #
 #   3. Our Nim (flat affine) uses the direct formula
 #      1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
-#      matches Python's affine fast-path and CuTe's rank-1 coshape.
+#      matches Python's affine fast-path and CuTe's rank-1 cosize.
 #
 #      ComposedLayout / Swizzle sit unsupported, the layouts stay flat
 #      affine and the sum formula is correct for that class.
 #
 #   Layout                    Affine sum   Cute hier   Python enum (correct)
 #   ───────────────────────   ──────────   ──────────   ─────────────────────
-#   make_layout(4:1,          (4-1)*1 +    coshape(4:1)  enumerate:
+#   make_layout(4:1,          (4-1)*1 +    cosize(4:1)  enumerate:
 #               (2,2):(1,2))   (2-1)*1 +    ×             0+0=0, 2+0=2,
-#                              (2-1)*2 +    coshape(       4+0=4, 6+0=6,
+#                              (2-1)*2 +    cosize(       4+0=4, 6+0=6,
 #                              1 = 6        (2,2):(1,2)   0+1=1, 2+1=3,
 #                                          = 4 * 4 = 16   4+1=5, 6+1=5,
 #                                                         0+2=2, ...
-#                                                         → max=9, coshape=10
+#                                                         → max=9, cosize=10
 #
-#   The sum formula (ours and Python's affine) gives coshape=6,
+#   The sum formula (ours and Python's affine) gives cosize=6,
 #   CuTe hierarchical product gives 16, Python enumeration gives 10.
 #   All three disagree.  CuTe's product is WRONG per the Python docs;
 #   enumeration is the only universally correct method.
@@ -474,34 +474,34 @@ proc runSizeTests =
 proc runCosizeTests =
   let d1 = 1
   block:
-    # coshape(Layout((64, 32), (1, 128))) == 4032
+    # cosize(Layout((64, 32), (1, 128))) == 4032
     let l = make_layout((64, 32), (1, 128))
-    doAssert d1 * coshape(l) === 4032
+    doAssert d1 * cosize(l) === 4032
 
   block:
-    # coshape(Layout((3, 8, 8, 8), (1, 3, 24, 192))) == 1536
+    # cosize(Layout((3, 8, 8, 8), (1, 3, 24, 192))) == 1536
     let l = make_layout((3, 8, 8, 8), (1, 3, 24, 192))
-    doAssert d1 * coshape(l) === 1536
+    doAssert d1 * cosize(l) === 1536
 
   block:
-    # coshape(Layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))) == 311
+    # cosize(Layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))) == 311
     let l = make_layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))
-    doAssert d1 * coshape(l) === 311
+    doAssert d1 * cosize(l) === 311
 
   block:
-    # coshape(Layout(4, -1)) == 4 (uses abs stride)
+    # cosize(Layout(4, -1)) == 4 (uses abs stride)
     let l = make_layout(4, -1)
-    doAssert d1 * coshape(l) === 4
+    doAssert d1 * cosize(l) === 4
 
   block:
-    # coshape(Layout((2, 4), (4, -1))) == 8
+    # cosize(Layout((2, 4), (4, -1))) == 8
     let l = make_layout((2, 4), (4, -1))
-    doAssert d1 * coshape(l) === 8
+    doAssert d1 * cosize(l) === 8
 
   block:
-    # coshape(Layout((2, 2), (-1, -2))) == 4
+    # cosize(Layout((2, 2), (-1, -2))) == 4
     let l = make_layout((2, 2), (-1, -2))
-    doAssert d1 * coshape(l) === 4
+    doAssert d1 * cosize(l) === 4
   echo "  Cosize: 6 Python reference cases OK"
 
 

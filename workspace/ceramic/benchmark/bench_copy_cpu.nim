@@ -59,8 +59,8 @@ proc main() =
   let srcB_zd = zipped_divide(panelB_lay, (1, nr))
   let dstB_zd = make_layout(((1, nr), (kc, npT)), ((1, 1), (nr, nr * kc)))
 
-  var panelA = newSeq[float32](coshape(panelA_lay).toInt())
-  var panelB = newSeq[float32](coshape(panelB_lay).toInt())
+  var panelA = newSeq[float32](cosize(panelA_lay).toInt())
+  var panelB = newSeq[float32](cosize(panelB_lay).toInt())
   randomize(42)
   for i in 0 ..< panelA.len: panelA[i] = rand(1.0'f32)
   for i in 0 ..< panelB.len: panelB[i] = rand(1.0'f32)

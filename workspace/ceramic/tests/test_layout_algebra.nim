@@ -91,30 +91,30 @@ when isMainModule:
 #
 #
 # Checks:
-#   (1) coshape(layout ++ complement) >= size(cotarget)
-#   (2) coshape(complement) <= round_up(size(cotarget), coshape(layout))
+#   (1) cosize(layout ++ complement) >= size(cotarget)
+#   (2) cosize(complement) <= round_up(size(cotarget), cosize(layout))
 #   (3) result[i-1] < result[i]  — ordered
 #   (4) result[i] != layout[j]   — disjoint (tested separately)
-#   (5) size(result) <= coshape(result)
+#   (5) size(result) <= cosize(result)
 #   (9) if static stride, complement(completed) has size 1
 template testComplementProps(layout, result: typed; cotarget: untyped) =
   let rSize = size(result)
-  let lCosize = coshape(layout)
+  let lCosize = cosize(layout)
   let completed = Layout[typeof((layout.shape, result.shape)), typeof((layout.stride, result.stride))](
     shape: (layout.shape, result.shape), stride: (layout.stride, result.stride))
   let cSize = fold(cotarget, 1, acc * it)
   # (1) Lower-bound on codomain of layout ++ complement
-  doAssert coshape(completed) >= cSize,
-    "(1) coshape(completed)=" & $coshape(completed) & " < cSize=" & $cSize & " layout=" & $layout
-  # (2) Upper-bound on coshape of complement
+  doAssert cosize(completed) >= cSize,
+    "(1) cosize(completed)=" & $cosize(completed) & " < cSize=" & $cSize & " layout=" & $layout
+  # (2) Upper-bound on cosize of complement
   let upper = ((cSize + lCosize - 1) div lCosize) * lCosize
-  doAssert coshape(result) <= upper,
-    "(2) coshape(result)=" & $coshape(result) & " > upper=" & $upper & " layout=" & $layout & " cotarget=" & $cotarget
+  doAssert cosize(result) <= upper,
+    "(2) cosize(result)=" & $cosize(result) & " > upper=" & $upper & " layout=" & $layout & " cotarget=" & $cotarget
   # (3) Strictly increasing
   for i in 1 ..< rSize:
     doAssert result(i-1) < result(i)
-  # (5) size <= coshape
-  doAssert rSize <= coshape(result)
+  # (5) size <= cosize
+  doAssert rSize <= cosize(result)
   # (9) If static stride, complement(completed) has size 1
   when typeof(completed.stride) is Int or typeof(completed.stride) is int:
     let cc = complement(completed)
@@ -125,7 +125,7 @@ proc chkComplement[T](layout: Layout; cotarget: T) =
   testComplementProps(layout, r, cotarget)
 
 proc chkComplement(layout: Layout) =
-  chkComplement(layout, coshape(layout))
+  chkComplement(layout, cosize(layout))
 
 # ═══════════════════════════════════════════════════════════════
 #  Complement [CUTE-CP] + [PY-L] + [PY-E]
@@ -412,7 +412,7 @@ proc runComplementDisjointnessTests =
 # ═══════════════════════════════════════════════════════════════
 #
 #  CuTe formula: compose(A, Layout(B, complement(B, shape(coalesce(A)))))
-#  shape() = product of shape elements, NOT coshape().
+#  shape() = product of shape elements, NOT cosize().
 #
 # ═══════════════════════════════════════════════════════════════
 
@@ -866,7 +866,7 @@ proc runBlockedProductTests =
     let R = blocked_product(make_layout(4, 1), make_layout((2, 2), (1, 2)))
     doAssert rank(R) === 2
     doAssert size(R) === 16, "blocked diff-rank size: " & $size(R)
-    # offset sanity: blocked covers [0, coshape)
+    # offset sanity: blocked covers [0, cosize)
     var offsets: seq[int]
     for i in 0 ..< size(R): offsets.add R(i)
     for o in offsets:
@@ -1162,7 +1162,7 @@ proc runTileToShapeTests: void =
     ## Basic: (2,3):(1,2) → (6,12)
     let r = tile_to_shape(make_layout((2, 3), (1, 2)), (6, 12))
     doAssert size(r) === 72
-    doAssert coshape(r) === 72
+    doAssert cosize(r) === 72
     doAssert rank(r) === 2
   block:
     ## Larger: (4,8):(1,4) → (8,16)

@@ -15,8 +15,8 @@ import workspace/ceramic/src/int_tuples
 type
   TensorOwned*[T, Sh, St] = object
     ## Owning tensor — stack-allocated array.
-    ## Requires static shape/stride (compile-time coshape).
-    data*: array[coshape(Layout[Sh, St]), T]
+    ## Requires static shape/stride (compile-time cosize).
+    data*: array[cosize(Layout[Sh, St]), T]
 
   TensorView*[T, Sh, St] = object
     data*: ptr UncheckedArray[T]
@@ -136,9 +136,9 @@ template size*[T, Sh, St](t: TensorOwned[T, Sh, St]): untyped =
   fold(flatten(default(Sh)), Int[1](), acc * it)
 template size*(tv: TensorView): untyped = tv.layout.size()
 
-template cosize*(tv: TensorView): untyped = tv.layout.coshape()
+template cosize*(tv: TensorView): untyped = tv.layout.cosize()
 template cosize*[T, Sh, St](t: TensorOwned[T, Sh, St]): untyped =
-  coshape(make_layout(default(Sh), default(St)))
+  cosize(make_layout(default(Sh), default(St)))
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display

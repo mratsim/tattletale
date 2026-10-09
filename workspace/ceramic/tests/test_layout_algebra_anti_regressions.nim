@@ -173,7 +173,7 @@ proc runComplementInlineSkipTests =
   block:
     ## scalar stride-0 broadcast over a dynamic shape profile: every
     ## coordinate maps to offset 0, the complement is the full bound,
-    ## and the default bound (coshape = 1) collapses it to the (1):(1) mark
+    ## and the default bound (cosize = 1) collapses it to the (1):(1) mark
     let n = 6
     let m = 4
     let r = complement(make_layout((n, m), 0), 32)
