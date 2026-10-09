@@ -823,11 +823,18 @@ proc explodePointerStructParamsImpl(ctx: var GpuContext) =
     var leaves = initTable[seq[string], GpuAst]()
     var roots = initHashSet[string]()
     var exploded = false
-    for p in fn.pParams:
+    # A generated leaf name must not collide with a retained param, the collision set seeds from the retained names first.
+    var explodes = newSeq[bool](fn.pParams.len)
+    for i, p in fn.pParams:
       if p.typ != nil and p.typ.kind in {gtObject, gtGenericInst} and
          containsPtrDeep(p.typ):
+        explodes[i] = true
         exploded = true
         roots.incl p.ident.symbol.iSym
+      else:
+        usedNames.incl p.ident.ident()
+    for i, p in fn.pParams:
+      if explodes[i]:
         explodeTypeInto(p.typ, @[p.ident.symbol.iSym], p.ident.ident(),
                         newParams, usedNames, leaves)
       else:
