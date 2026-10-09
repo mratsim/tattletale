@@ -2,7 +2,7 @@
 ##   kernel_copy, copySameShape_cpu, copyPermuted_cpu, copyFrom (GPU)
 ##
 ## Run:
-##   nim c -r -d:metal workspace/ceramic/tests/kernels/copy_fill/test_kernel_copy.nim
+##   nim c -r -d:metal workspace/ceramic/tests/kernels/copy_fill/t_kernel_copy.nim
 ##
 ## Tests both CPU and GPU copy paths with static and dynamic layouts.
 

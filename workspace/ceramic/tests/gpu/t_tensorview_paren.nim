@@ -4,7 +4,7 @@
 ## Reproduce:
 ##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/ceramic/tests/gpu/test_issue_tensorview_paren.nim
+##     workspace/ceramic/tests/gpu/t_tensorview_paren.nim
 
 import std/[unittest]
 import workspace/crucible

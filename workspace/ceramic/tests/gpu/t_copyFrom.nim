@@ -3,7 +3,7 @@
 ## Run:
 ##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/ceramic/tests/gpu/test_copyFrom.nim
+##     workspace/ceramic/tests/gpu/t_copyFrom.nim
 
 import std/[unittest]
 import workspace/crucible
