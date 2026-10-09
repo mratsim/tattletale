@@ -292,9 +292,11 @@ func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
     b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
 
 proc csScaleCoeffs(kv: int, ta: NimNode): NimNode =
+  if ta.kind notin {nnkTupleConstr, nnkPar}:
+    return newIntLitNode(kv * ta.intVal)
   result = nnkTupleConstr.newTree()
   for i in 0 ..< ta.len:
-    result.add(newIntLitNode(kv * ta[i].intVal))
+    result.add(csScaleCoeffs(kv, ta[i]))
 
 proc csAdd(ta, tb: NimNode): NimNode =
   # Elementwise addition of CoordStride AST
