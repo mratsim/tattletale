@@ -23,6 +23,7 @@ Rule table (rule | trigger | severity):
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "emission")       | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
+| quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
 | bullet-list-length   | a bullet list with 5 or more items                                                                | counted  |
@@ -100,6 +101,7 @@ writing the fixed text back.
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
+| quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
@@ -433,6 +435,7 @@ RULES = {
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
+    "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
                             "a 1-2 word stub line with reflow room on the previous line"),
     "doc-above-type": Rule("doc-above-type", True,
@@ -1196,6 +1199,14 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             path, n, "paren-split",
             "line ends inside an open parenthesis (keep the unit on one line "
             "or end the line before the paren)"))
+    # Quote parity: an odd unescaped-quote count means the line ends inside
+    # a quoted string, the closing quote lands on the next line and the
+    # reader meets the phrase's tail detached from its head. Fenced code
+    # never reaches here, Nim triple-quoted strings stay exempt.
+    if c.replace('\\\"', "").count('"') % 2 == 1:
+        findings.append(Finding(
+            path, n, "quote-split",
+            "line ends inside a quoted string (keep the quoted phrase on one line)"))
 
 
 def _bullet_continuation(entry, lead_indent):

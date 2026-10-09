@@ -3,11 +3,11 @@
 ## Tests contiguity-fused zero-fill (nimSetMem), non-zero fill, strided fill,
 ## and dynamic shapes/stride.
 
-import ../src/int_tuples
-import ../src/layout_algebra
-import ../src/tensors
-import ../src/kernels/k_layout_fillwith_cpu
-import ../src/kernels/k_layout_fillwith_gpu
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 {.experimental: "callOperator".}
 

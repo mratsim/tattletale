@@ -3,7 +3,7 @@
 ##
 ## Run:
 ##   nim c -r -d:metal --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/ceramic/tests/kernels/gemm/m_k_layout_gemm_metal.nim (from tattletale)
+##     workspace/ceramic/tests/kernels/k_gemm/m_k_layout_gemm_metal.nim (from tattletale)
 
 import std/[math, random, strformat]
 import workspace/crucible

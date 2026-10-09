@@ -2,16 +2,16 @@
 ##   kernel_copy, copySameShape_cpu, copyPermuted_cpu, copyFrom (GPU)
 ##
 ## Run:
-##   nim cpp -r tests/test_kernel_copy.nim
+##   nim c -r -d:metal workspace/ceramic/tests/kernels/copy_fill/test_kernel_copy.nim
 ##
 ## Tests both CPU and GPU copy paths with static and dynamic layouts.
 
-import ../src/int_tuples
-import ../src/layout_algebra
-import ../src/tensors
-import ../src/kernels/k_layout_copy_cpu
-import ../src/kernels/k_layout_copy_gpu
-import ../src/hardware/h_copy_dispatch
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/kernels/k_layout_copy_cpu
+import workspace/ceramic/src/kernels/k_layout_copy_gpu
+import workspace/ceramic/src/hardware/h_copy_dispatch
 
 {.experimental: "callOperator".}
 

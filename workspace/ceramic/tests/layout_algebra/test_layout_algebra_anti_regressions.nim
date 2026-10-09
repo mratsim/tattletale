@@ -5,44 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Anti-regressions for layout_algebra: complex cases surfaced by
-## integration (MMA atoms, partition algebra) that the unit tests did
-## not cover. Each section pins the behavior that MUST hold. Asserts use
-## layouts_testutils.check, which verifies BOTH the value (===) and that
-## the shape/stride elements are Int[N] (constant-folded) — a value-only
-## === would not catch a type-level regression (e.g. plain ints leaking
-## out of the static paths).
-##
-## Section 1 — compose nested-RHS under module-scope typeof-alias
-## fixtures:
-##   atoms_nvidia.nim declares its SM80_* fragment layout types as
-##   module-scope `typeof(make_layout(...))` aliases. Any module that
-##   declares such aliases (this one does, below) breaks the nested-RHS
-##   path of `compose` — mapDimensionsWith's getTypeInst(make_layout(
-##   rhsShapes, rhsStrides)) resolves to an nnkSym → "cannot get child
-##   of node kind: nnkSym". The flat-RHS and coalescable-LHS paths are
-##   unaffected.
-##
-##   The layoutTypeArgs helper (nnkSym-safe shape/stride type
-##   extraction) keeps this path working. The file's compose output is
-##   CuTe-flat (single-dimension results unwrapped to scalars), matching the
-##   unwrap in CuTe's composition_impl.
-##
-## Section 3 — complement, multi-dimension layout + compile-time bound:
-##   complement with a compile-time bound must produce the coalesced
-##   result: a statically-1 remainder dimension is dropped by coalesce's
-##   trailing size-1 discard.
-##
-## Section 4 — complement with a runtime shape must produce the same
-##   layout as the identical layout spelled with constants.
-##
-
 {.experimental: "callOperator".}
 
 import std/macros
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/tests/layouts_testutils
+
+template check*(got: untyped, expected: typed, expectedType: typedesc): untyped =
+  block:
+    let tmp = got
+    type TmpType = typeof(tmp)
+    when TmpType is expectedType:
+      doAssert tmp === expected
+    else:
+      {.error: "[ttt] Please check constant-folding: type is " &
+          $TmpType & ", expected " & $expectedType.}
 
 # ── integration fixture: module-scope typeof(make_layout(...)) aliases ──
 # Identical in shape to atoms_nvidia.nim's SM80_16x8x8_A_TF32 / _B_TF32 /
@@ -106,10 +83,9 @@ proc runComplementDynamicShapeTests =
 # ═══════════════════════════════════════════════════════════════
 #  Section 5. make_layout_like / make_tensor_like under the alias
 # ═══════════════════════════════════════════════════════════════
-#  fixture (RID CONS-B-008): the alias path would crash with
-#  "cannot get child of node kind: nnkSym" before layoutTypeArgs
-#  migration — getTypeInst on an aliased typeof(make_layout(...))
-#  returns an nnkSym with no children.
+#  the alias path would crash with "cannot get child of node kind: nnkSym"
+#  before the layoutTypeArgs migration: getTypeInst treats
+#  an aliased typeof(make_layout(...)) as an nnkSym with no children.
 
 proc runMakeLayoutLikeAliasTests =
   block:
