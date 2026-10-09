@@ -1247,6 +1247,27 @@ proc getInnerArrayLengths*(t: GpuType): string =
   else:
     result = ""
 
+const Base58* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  ## Base58 alphabet (no 0, O, I, l for readability and ambiguity avoidance).
+
+func shortHash*(sigHash: int64): string =
+  ## Encode a 64-bit signature hash as a 7-character base58 string.
+  ## 58^7 = 2,204,715,403,072 (~2.2T namespace), sufficient for collision
+  ## avoidance across all symbols in a GPU compilation unit.
+  ##
+  ## Returns: the 7-character string, leading '1' run for short hashes
+  var n = uint64(sigHash)
+  result = newString(7)
+  for i in countdown(6, 0):
+    result[i] = Base58[int(n mod 58)]
+    n = n div 58
+    if n == 0 and i == 0:
+      break
+    if n == 0:
+      for j in 0 ..< i:
+        result[j] = '1'
+      break
+
 proc gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.
   case t.kind
@@ -1263,14 +1284,13 @@ proc gpuTypeToShortString*(t: GpuType): string =
   of gtBf16:    result = "bf16"
   of gtBool:    result = "bool"
   of gtObject:
-    result = $t.name
+    if t.name.startsWith("Tuple_"):
+      result = "Tuple_" & shortHash(int64(hash(t)))
+    else:
+      result = $t.name
   of gtGenericInst:
-    result = t.gName
-    if t.gArgs.len > 0:
-      result.add '_'
-      for i, g in t.gArgs:
-        if i > 0: result.add 'x'
-        result.add gpuTypeToShortString(g)
+    result = if t.gName.startsWith("Tuple_"): "Tuple_" else: t.gName
+    result.add shortHash(int64(hash(t)))
   of gtVoidPtr: result = "void_ptr"
   of gtPtr:
     result = "ptr_" & gpuTypeToShortString(t.to)
@@ -1279,25 +1299,3 @@ proc gpuTypeToShortString*(t: GpuType): string =
   else:
     result = $t.kind # fallback M-bM-^@M-^T safe but verbose
 
-const Base58* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-  ## Base58 alphabet (no 0, O, I, l for readability and ambiguity avoidance).
-
-func shortHash*(sigHash: int64): string =
-  ## Encode a 64-bit signature hash as a 7-character base58 string.
-  ## 58^7 = 2,204,715,403,072 (~2.2T namespace), sufficient for collision
-  ## avoidance across all symbols in a GPU compilation unit.
-  var n = uint64(sigHash)
-  if n == 0:
-    return "1111111"
-  var chars: array[7, char]
-  for i in countdown(6, 0):
-    let rem = int(n mod 58)
-    chars[i] = Base58[rem]
-    n = n div 58
-    if n == 0 and i == 0:
-      break
-    if n == 0:
-      for j in 0 ..< i:
-        chars[j] = '1'
-      break
-  result = cast[string](@chars)

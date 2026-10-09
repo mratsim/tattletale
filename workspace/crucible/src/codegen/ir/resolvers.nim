@@ -442,6 +442,8 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     if n.kind == nnkSym and builtinGpuTypeKind(n) != gtVoid:
       return initGpuType(builtinGpuTypeKind(n))
     case n.typeKind
+    of ntyDistinct:
+      result = resolveType(reg, n.getTypeImpl())
     of ntyBool, ntyInt .. ntyUint64: # includes all float types
       result = initGpuType(toGpuTypeKind n.typeKind)
     of ntyString: # only supported on some backends!
