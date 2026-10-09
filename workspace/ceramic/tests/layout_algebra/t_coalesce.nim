@@ -172,8 +172,8 @@ proc runCoalesceNestedLeafTests =
   echo "  Nested leaves: 5 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Anti-regressions: constant-folding and single-evaluation
-#  corner cases (layouts_testutils.check)
+#  Anti-regressions:
+#    constant-folding and single-evaluation corner cases
 # ═══════════════════════════════════════════════════════════════
 
 # ── coalesce over a const layout ─────────────────────────────

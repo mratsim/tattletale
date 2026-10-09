@@ -1,0 +1,1204 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Tests for int_tuples + layouts.
+##
+## Convention:
+##   const C2 = 2; C4 = 4 — compile-time Int[N] (static)
+##   let  d2 = 2; d4 = 4 — runtime int (dynamic)
+##
+## Reference:
+##   - CuTe C++: layout.hpp, composition.cpp
+##   - Python: tensor-layouts/tests/layouts.py
+##   - POC: poc_coalesce.nim, poc_flatten.nim
+
+import std/macros, std/typetraits
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts {.all.}
+import workspace/ceramic/tests/layout/layouts_testutils
+
+# ═══════════════════════════════════════════════════════════════
+#  make_layout — shape + stride, const correctness, stride order
+# ═══════════════════════════════════════════════════════════════
+
+proc runMakeLayoutTests =
+  let d1 = 1
+
+  # ═══════════════════════════════════════════════════════════════
+  #  1. Scalar layouts — (int, int) → Layout[int, int]
+  # ═══════════════════════════════════════════════════════════════
+
+  block:  # (1,0)
+    doAssert make_layout(1, 0) === (1, 0)
+
+  block:  # (1,1)
+    doAssert make_layout(1, 1) === (1, 1)
+
+  # ═══════════════════════════════════════════════════════════════
+  #  2. Const vs let scalars — verify isConst behavior
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    const C4 = 4
+    let l = make_layout(C4, 0)
+    doAssert l === (4, 0)
+    doAssert isConst(l.shape)
+    doAssert isConst(l.stride)
+
+  block:
+    const C4 = 4
+    let l = make_layout(C4)
+    doAssert l === (4, 1)
+    doAssert isConst(l.shape)
+    doAssert isConst(l.stride)
+
+  block:
+    let d4 = 4
+    doAssert make_layout(d4, 0) === (4, 0)
+
+  # ═══════════════════════════════════════════════════════════════
+  #  3. Const tuple — all fields Int[N]
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    const C2 = 2; const C4 = 4
+    let l = make_layout((C2, C4), (1, 2))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+
+  block:
+    const C2 = 2; const C4 = 4
+    let l = make_layout((C2, C4))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  4. Mixed const/let tuple
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    const C2 = 2; const C4 = 4; let d2 = 2
+    let l = make_layout((d2, C4), (1, 2))
+    echo l
+    echo typeof(l)
+    doAssert l === ((2, 4), (1, 2))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+
+  block:
+    const C2 = 2; const C4 = 4; let d2 = 2
+    let l = make_layout((d2, C4))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
+    doAssert not isConst(l.stride[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  5. Let tuple — all dynamic
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    let d2 = 2; let d4 = 4
+    let l = make_layout((d2, d4), (1, 2))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert not isConst(l.shape[0])
+    doAssert not isConst(l.shape[1])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+
+  block:
+    let d2 = 2; let d4 = 4
+    let l = make_layout((d2, d4))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert not isConst(l.shape[0])
+    doAssert not isConst(l.shape[1])
+    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
+    doAssert not isConst(l.stride[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  6. Tuple assigned to variable — loses static info
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    const C2 = 2; const C4 = 4
+    let shapeTuple = (C2, C4)
+    let l = make_layout(shapeTuple, (1, 2))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert not isConst(l.shape[0])
+    doAssert not isConst(l.shape[1])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  7. Tuple from function — runtime, all dynamic
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    proc mkShape(): auto = (2, 4)
+    doAssert make_layout(mkShape(), (1, 2)) === ((2, 4), (1, 2))
+
+  # ═══════════════════════════════════════════════════════════════
+  #  8. static() — folds to nnkTupleConstr, preserves const
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    proc mkShape(): auto = (2, 4)
+    let l = make_layout(static(mkShape()), (1, 2))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  9. const variable from function — also folds to nnkTupleConstr
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    proc mkShape(): auto = (2, 4)
+    const shape = mkShape()
+    let l = make_layout(shape, (1, 2))
+    doAssert l === ((2, 4), (1, 2))
+    doAssert isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  10. Recursive (nested) tuple — all Int[N] via literals
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    let l = make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32)))
+    doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
+    doAssert isConst(l.shape[0][0])
+    doAssert isConst(l.shape[0][1])
+    doAssert isConst(l.shape[1][0])
+    doAssert isConst(l.shape[1][1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  11. Recursive tuple via variable — all dynamic
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    let nestedShape = ((2, 2), (2, 2))
+    let nestedStride = ((1, 4), (8, 32))
+    let l = make_layout(nestedShape, nestedStride)
+    doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
+    doAssert not isConst(l.shape[0][0])
+    doAssert not isConst(l.shape[0][1])
+    doAssert not isConst(l.shape[1][0])
+    doAssert not isConst(l.shape[1][1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  12. isConst standalone checks
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    const C4 = 4
+    let d4 = 4
+    let lConst = make_layout(C4, 0)
+    let lLet = make_layout(d4, 0)
+    doAssert isConst(lConst.shape)
+    doAssert not isConst(lLet.shape)
+
+  block:
+    const C2 = 2; const C4 = 4
+    let d2 = 2
+    let lMixed = make_layout((d2, C4), (1, 2))
+    doAssert not isConst(lMixed.shape[0])
+    doAssert isConst(lMixed.shape[1])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  13. Stride-order construction — LayoutLeft / LayoutRight
+  # ═══════════════════════════════════════════════════════════════
+
+  block:  # LayoutLeft (default): leftmost dimension contiguous
+    doAssert make_layout((4, 8), LayoutLeft) === ((4, 8), (1, 4))
+
+  block:  # LayoutRight: rightmost dimension contiguous
+    doAssert make_layout((4, 8), LayoutRight) === ((4, 8), (8, 1))
+
+  block:  # LayoutLeft on 3D
+    doAssert make_layout((3, 4, 5), LayoutLeft) === ((3, 4, 5), (1, 3, 12))
+
+  block:  # LayoutRight on 3D
+    doAssert make_layout((3, 4, 5), LayoutRight) === ((3, 4, 5), (20, 5, 1))
+
+  block:  # LayoutLeft mixed: static int literals, no pre-conversion
+    let dN = 2
+    const C3 = 3; const C8 = 8
+    let l = make_layout((dN, C3, C8), LayoutLeft)
+    doAssert l === ((2, 3, 8), (1, 2, 6))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.shape[2])
+    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
+    doAssert not isConst(l.stride[1])
+    doAssert not isConst(l.stride[2])
+
+  block:  # LayoutLeft mixed: static int literals, no pre-conversion
+    let dN = 2
+    const C3 = 3; const C8 = 8
+    let l = make_layout((C8, C3, dN), LayoutLeft)
+    doAssert l === ((8, 3, 2), (1, 8, 24))
+    doAssert isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert not isConst(l.shape[2])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+    doAssert isConst(l.stride[2])
+
+  block:  # LayoutRight mixed: static int literals, no pre-conversion
+    let dN = 2
+    const C3 = 3; const C8 = 8
+    let l = make_layout((dN, C3, C8), LayoutRight)
+    doAssert l === ((2, 3, 8), (24, 8, 1))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.shape[2])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+    doAssert isConst(l.stride[2])
+
+  block:  # Custom strides mixed: all-static shape, explicit strides
+    let dN = 2
+    const C3 = 3; const C8 = 8
+    let l = make_layout((dN, C3, C8), (1, 1, 1))
+    doAssert l === ((2, 3, 8), (1, 1, 1))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.shape[2])
+    doAssert isConst(l.stride[0])
+    doAssert isConst(l.stride[1])
+    doAssert isConst(l.stride[2])
+
+  echo "  make_layout: 23 cases OK"
+
+  # ── Nested tuple make_layout ──
+  block:
+    let l = make_layout(((4, 1), (8, 8)))
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((1, 4), (4, 32))
+  block:
+    let l = make_layout(((1, 4), (8, 4)))
+    doAssert l.shape === ((1, 4), (8, 4)) and l.stride === ((1, 1), (4, 32))
+  block:
+    let mr = 4; let mpT = 8; let kc = 8
+    let l = make_layout(((mr, 1), (mpT, kc)))
+    check crd2idx(l, ((0, 0), (0, 0))), 0, int
+    check crd2idx(l, ((0, 0), (1, 0))), mr, int
+    check crd2idx(l, ((0, 0), (0, 1))), mr * mpT, int
+    check crd2idx(l, ((1, 0), (0, 0))), 1, int
+  block:
+    let l = make_layout(((4, 1), (8, 8)), LayoutRight)
+    doAssert l.shape === ((4, 1), (8, 8)) and l.stride === ((64, 64), (8, 1))
+
+  echo "  Nested make_layout: 4 cases OK"
+
+  # ═══════════════════════════════════════════════════════════════
+  #  product(l.shape) — shape extracted from layout
+  # ═══════════════════════════════════════════════════════════════
+  block:
+    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
+    let r = product(l.shape)
+    doAssert r === 8
+
+  block:
+    let d1 = 1; let d4dyn = 4
+    let l = make_layout((Int[2](), d4dyn), (d1, Int[2]()))
+    let r = product(l.shape)
+    doAssert r === 8
+  echo "  product(l.shape): 2 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Phase 2: flatten
+# ═══════════════════════════════════════════════════════════════
+
+proc runFlattenTests =
+  block:
+    doAssert flatten(5) === 5
+
+  block:
+    let f1 = flatten((1, 2, 3))
+    doAssert f1[0] === 1 and f1[1] === 2 and f1[2] === 3
+
+  block:
+    let f2 = flatten((1, (2, 3), 4))
+    doAssert f2[0] === 1 and f2[1] === 2 and f2[2] === 3 and f2[3] === 4
+
+  block:
+    let f3 = flatten(((1, 2), (3, (4, 5))))
+    doAssert f3[0] === 1 and f3[1] === 2 and f3[2] === 3 and f3[3] === 4 and f3[4] === 5
+
+  block:
+    let d4 = 4
+    let f4 = flatten((d4, (5, 6)))
+    doAssert f4[0] === d4 and f4[1] === 5 and f4[2] === 6
+
+  block:
+    let l = make_layout(((2,2),(2,2)), ((1,4),(8,32)))
+    let f5 = flatten(l.shape)
+    doAssert f5[0] === 2 and f5[1] === 2 and f5[2] === 2 and f5[3] === 2
+  echo "  Flatten: 6 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Phase 2: concat
+# ═══════════════════════════════════════════════════════════════
+
+proc runConcatTests =
+  block:
+    # concat int + tuple
+    let c1 = concat(1, (4, 8))
+    doAssert c1[0] === 1 and c1[1] === 4 and c1[2] === 8
+
+  block:
+    # concat tuple + int
+    let c2 = concat((4, 8), 1)
+    doAssert c2[0] === 4 and c2[1] === 8 and c2[2] === 1
+
+  block:
+    # concat tuple + tuple
+    let c3 = concat((4,), (8, 2))
+    doAssert c3[0] === 4 and c3[1] === 8 and c3[2] === 2
+
+  block:
+    # concat int + int
+    let c4 = concat(4, 8)
+    doAssert c4[0] === 4 and c4[1] === 8
+
+  block:
+    # concat with dynamic variables
+    let a = (4, 8)
+    let b = 1
+    let c5 = concat(a, b)
+    doAssert c5 === (4, 8, 1)
+
+  block:
+    # concat int with dynamic tuple
+    let x = 1
+    let y = (4, 8)
+    let c6 = concat(x, y)
+    doAssert c6 === (1, 4, 8)
+
+  block:
+    # concat with Layout shapes (scalar Int[N] + scalar Int[N])
+    let a = make_layout(3, 1)
+    let b = make_layout(4, 3)
+    let c7 = concat(a.shape, b.shape)
+    doAssert c7[0] === 3 and c7[1] === 4
+
+  block:
+    # concat with Int[N] + dynamic tuple
+    const C1 = 1
+    let dt = (4, 8)
+    let c8 = concat(C1, dt)
+    doAssert c8[0] === 1 and c8[1] === 4 and c8[2] === 8
+  echo "  Concat: 8 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Size tests (ported from Python tensor-layouts test suite)
+# ═══════════════════════════════════════════════════════════════
+
+proc runSizeTests =
+  block:
+    let l = make_layout(31, 1)
+    doAssert size(l) === 31
+
+  block:
+    let l = make_layout((64, 32), (1, 128))
+    doAssert size(l) === 64 * 32
+
+  block:
+    let l = make_layout((3, 8, 8, 8), (1, 3, 24, 192))
+    doAssert size(l) === 3 * 8 * 8 * 8
+
+  block:
+    let l = make_layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))
+    doAssert size(l) === 32
+  echo "  Size: 4 Python reference cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  Cosize tests (ported from Python tensor-layouts test suite)
+# ═══════════════════════════════════════════════════════════════
+#
+#  ⚠ Known discrepancies between implementations of cosize
+#  on COMPOSED layouts (make_layout(l1, l2)):
+#
+#   1. CuTe C++ uses hierarchical (nested) cosize. For a composed
+#      layout Layout<A,B>, cosize = cosize(A) * cosize(B) effectively,
+#      incorrect when the outer layout carries non-trivial stride.
+#
+#   2. Meta tensor-layouts (Python) enumerates all offsets to compute
+#      max(L(i)) + 1 in O(size(L)) and covers composed layouts correctly.
+#      CuTe documents the ComposedLayout cosize bug.
+#
+#   3. Our Nim (flat affine) uses the direct formula
+#      1 + sum((sh_i - 1) * |st_i|) for pure affine layouts, which
+#      matches Python's affine fast-path and CuTe's rank-1 cosize.
+#
+#      ComposedLayout / Swizzle sit unsupported, the layouts stay flat
+#      affine and the sum formula is correct for that class.
+#
+#   Layout                    Affine sum   Cute hier   Python enum (correct)
+#   ───────────────────────   ──────────   ──────────   ─────────────────────
+#   make_layout(4:1,          (4-1)*1 +    cosize(4:1)  enumerate:
+#               (2,2):(1,2))   (2-1)*1 +    ×             0+0=0, 2+0=2,
+#                              (2-1)*2 +    cosize(       4+0=4, 6+0=6,
+#                              1 = 6        (2,2):(1,2)   0+1=1, 2+1=3,
+#                                          = 4 * 4 = 16   4+1=5, 6+1=5,
+#                                                         0+2=2, ...
+#                                                         → max=9, cosize=10
+#
+#   The sum formula (ours and Python's affine) gives cosize=6,
+#   CuTe hierarchical product gives 16, Python enumeration gives 10.
+#   All three disagree.  CuTe's product is WRONG per the Python docs;
+#   enumeration is the only universally correct method.
+#
+#  For our pure affine layouts the sum formula IS correct —
+#  we never create ComposedLayout. The complement post-condition
+#  check (1) from CuTe test_complement cannot be replicated without
+#  either hierarchical product (wrong) or enumeration (expensive),
+#  so we only check "doesn't crash" for complement.
+# ═══════════════════════════════════════════════════════════════
+
+proc runCosizeTests =
+  let d1 = 1
+  block:
+    # cosize(Layout((64, 32), (1, 128))) == 4032
+    let l = make_layout((64, 32), (1, 128))
+    doAssert d1 * cosize(l) === 4032
+
+  block:
+    # cosize(Layout((3, 8, 8, 8), (1, 3, 24, 192))) == 1536
+    let l = make_layout((3, 8, 8, 8), (1, 3, 24, 192))
+    doAssert d1 * cosize(l) === 1536
+
+  block:
+    # cosize(Layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))) == 311
+    let l = make_layout((2, 2, 2, 2, 2), (160, 80, 40, 20, 10))
+    doAssert d1 * cosize(l) === 311
+
+  block:
+    # cosize(Layout(4, -1)) == 4 (uses abs stride)
+    let l = make_layout(4, -1)
+    doAssert d1 * cosize(l) === 4
+
+  block:
+    # cosize(Layout((2, 4), (4, -1))) == 8
+    let l = make_layout((2, 4), (4, -1))
+    doAssert d1 * cosize(l) === 8
+
+  block:
+    # cosize(Layout((2, 2), (-1, -2))) == 4
+    let l = make_layout((2, 2), (-1, -2))
+    doAssert d1 * cosize(l) === 4
+  echo "  Cosize: 6 Python reference cases OK"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  $ — stringify
+# ═══════════════════════════════════════════════════════════════
+
+proc runStringifyTests =
+  block:
+    doAssert make_layout(4, 1).shape === 4 and make_layout(4, 1).stride === 1
+  block:
+    let l = make_layout((4, 8), (1, 4))
+    doAssert l.shape === (4, 8) and l.stride === (1, 4)
+  block:
+    let l = make_layout(31, 1)
+    doAssert l.shape === 31 and l.stride === 1
+  echo "  Stringify: 3 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  rank — number of dimensions
+# ═══════════════════════════════════════════════════════════════
+
+proc runRankTests =
+  block:
+    doAssert rank(make_layout(4, 1)) === 1
+  block:
+    doAssert rank(make_layout((4, 8), (1, 4))) === 2
+  block:
+    doAssert rank(make_layout(Int[4](), Int[1]())) === 1
+  echo "  Rank: 3 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  isCompact — compactness checks
+# ═══════════════════════════════════════════════════════════════
+
+proc runIsCompactTests =
+  block:
+    doAssert isCompact(make_layout((4, 8), (1, 4)))
+  block:
+    doAssert not isCompact(make_layout((4, 8), (8, 1)))
+  block:
+    const C4 = 4; const C8 = 8
+    doAssert isCompact(make_layout((C4, C8), (1, 4)))
+  block:
+    let d4 = 4; let d8 = 8
+    doAssert isCompact(make_layout((d4, d8), (1, 4)))
+  echo "  isCompact: 4 cases OK"
+
+  block:  # Function call returning static int
+    func double(x: static int): static int = x * 2
+    doAssert make_layout(double(3)) === (6, 1)
+    doAssert isConst(make_layout(double(3)).shape)
+    doAssert isConst(make_layout(double(3)).stride)
+
+# ═══════════════════════════════════════════════════════════════
+#  congruent — structural shape comparison
+# ═══════════════════════════════════════════════════════════════
+
+proc runCongruentTests* =
+  block:
+    ## N1: Same rank flat, different types — should be congruent
+    doAssert congruent(1, 2) == true, "N1: int literals"
+  block:
+    ## N2: int vs Int[N]
+    doAssert congruent(1, Int[2]()) == true, "N2: int vs Int[N]"
+  block:
+    ## N3: Int[N] vs Int[N]
+    doAssert congruent(Int[3](), Int[3]()) == true, "N3: Int[N] vs Int[N]"
+  block:
+    ## N4: tuple of ints
+    doAssert congruent((1, 2), (3, 4)) == true, "N4: tuple of ints"
+  block:
+    ## N5: tuple with mixed int/Int
+    doAssert congruent((1, 2), (Int[3](), Int[4]())) == true, "N5: tuple with mixed int/Int"
+  block:
+    ## N6: Int tuple vs int tuple
+    doAssert congruent((Int[5](), Int[6]()), (7, 8)) == true, "N6: Int tuple vs int tuple"
+  block:
+    ## N7: nested tuples
+    doAssert congruent(((1, 2), 3), ((4, 5), 6)) == true, "N7: nested tuples"
+  block:
+    ## N8: nested mixed
+    doAssert congruent(((Int[1](), Int[2]()), Int[3]()), ((4, 5), 6)) == true, "N8: nested mixed"
+  block:
+    ## N9: scalar vs tuple
+    doAssert congruent(1, (1, 2)) == false, "N9: scalar vs tuple"
+  block:
+    ## N10: tuple vs scalar
+    doAssert congruent((1, 2), 3) == false, "N10: tuple vs scalar"
+  block:
+    ## N11: different tuple length
+    doAssert congruent((1, 2), (3, 4, 5)) == false, "N11: different tuple length"
+  block:
+    ## N12: different nesting depth
+    doAssert congruent(((1, 2), 3), (4, 5, 6)) == false, "N12: different nesting depth"
+  block:
+    ## N13: static int literals
+    static:
+      doAssert congruent(1, 2) == true, "N13: static int literals"
+  block:
+    ## N14: static tuple of ints
+    static:
+      doAssert congruent((1, 2), (3, 4)) == true, "N14: static tuple of ints"
+  block:
+    ## N15: static scalar vs tuple
+    static:
+      doAssert congruent(1, (1, 2)) == false, "N15: static scalar vs tuple"
+  block:
+    ## N16: static diff lengths
+    static:
+      doAssert congruent((1, 2), (3, 4, 5)) == false, "N16: static diff lengths"
+  echo "  Congruent: 16 cases OK"
+
+proc runPredicateTests =
+  # ═══════════════════════════════════════════════════════════════
+  #  Predicates — congruent, weakly_congruent, compatible
+  # ═══════════════════════════════════════════════════════════════
+
+  block:
+    doAssert congruent((2, 3), (4, 5))
+    doAssert not congruent((2, 3), (4, 5, 6))
+    doAssert congruent(((2, 3), 4), ((5, 6), 7))
+  block:
+    doAssert weakly_congruent(6, (2, 3))
+    doAssert not weakly_congruent((2, 3), 6)
+    doAssert weakly_congruent((2, 3), (4, 5))
+  block:
+    doAssert compatible(24, (4, 6))
+    doAssert not compatible((4, 6), 24)
+    doAssert compatible((2, 2, 3), (4, 3))
+    doAssert not compatible(24, 32)
+    doAssert compatible(24, ((2, 3), 4))
+  block:
+    doAssert not can_group_a_into_b((2, 3, 4), (4, 3))
+
+  # ═══════════════════════════════════════════════════════════════
+  #  Edge cases from .bak tests
+  # ═══════════════════════════════════════════════════════════════
+  block:
+    # congruent: scalar vs 1-tuple (different structure)
+    doAssert not congruent(3, (3,))
+  block:
+    # congruent: different values, same flat structure
+    doAssert congruent((3, 128, 128), (1, 256, 64))
+  block:
+    # congruent: nested tuples matching (2,(3,4)) vs (5,(6,7))
+    doAssert congruent((2, (3, 4)), (5, (6, 7)))
+  block:
+    # weakly_congruent: scalar matches any structure depth
+    doAssert weakly_congruent(1, ((2, 3), (4, 5)))
+  block:
+    # weakly_congruent: same nesting
+    doAssert weakly_congruent((2, (3, 4)), (5, (6, 7)))
+  block:
+    # weakly_congruent: A flatter than B
+    doAssert weakly_congruent((2, 3), (5, (6, 7)))
+  block:
+    # weakly_congruent: A deeper than B fails
+    doAssert not weakly_congruent((2, (3, 4)), (5, 6))
+  block:
+    # compatible: group into nested target
+    doAssert compatible(24, ((2, 2), 6))
+  block:
+    # not compatible: nested shape into flat target fails
+    doAssert not compatible(((2, 2), 3), (4, 3))
+  echo "    Predicates: 21 checks OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  col_major_strides
+# ═══════════════════════════════════════════════════════════════
+
+proc runColMajorStridesTests =
+  block:
+    doAssert col_major_strides(4) === 1
+  block:
+    doAssert col_major_strides((4, 8)) === (1, 4)
+  block:
+    let cm = col_major_strides((Int[4](), Int[8]())); doAssert cm[0] === 1 and cm[1] === 4
+  block:
+    doAssert col_major_strides((3, 4, 5)) === (1, 3, 12)
+  block:
+    let d3 = 3; let d4 = 4; let d5 = 5
+    doAssert col_major_strides((d3, d4, d5)) === (1, 3, 12)
+  echo "  col_major_strides: 5 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  NCHW mixed static/dynamic layout
+#  (N, C, H, W) — N dynamic, C/H/W static
+#  make_layout deduces column-major strides from the shape
+# ═══════════════════════════════════════════════════════════════
+
+proc runNCHWTests =
+  block:
+    let dN = 2
+    let sh = (dN, Int[3](), Int[8](), Int[8]())
+    let st = col_major_strides(sh)
+    let l = make_layout(sh, st)
+    doAssert l === ((2, 3, 8, 8), (1, 2, 6, 48))
+    doAssert not isConst(l.shape[0])
+    doAssert isConst(l.shape[1])
+    doAssert isConst(l.shape[2])
+    doAssert isConst(l.shape[3])
+    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
+    doAssert not isConst(l.stride[1])
+    doAssert not isConst(l.stride[2])
+    doAssert not isConst(l.stride[3])
+  echo "  NCHW mixed static/dynamic: 1 case OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  zipDimensions — interleave corresponding dimensions pairwise
+# ═══════════════════════════════════════════════════════════════
+
+proc runZipTests =
+  block:
+    # Interleave two rank-2 layouts
+    let a = make_layout((2, 2), (1, 2))
+    let b = make_layout((3, 4), (4, 1))
+    let R = zipDimensions(a, b)
+    doAssert rank(R) === 2
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === ((2, 3), (1, 4)), "zip dim0: " & $m0
+    doAssert m1 === ((2, 4), (2, 1)), "zip dim1: " & $m1
+  block:
+    # Single-element interleave (rank-1 with rank-1)
+    let a = make_layout(4, 1)
+    let b = make_layout(3, 1)
+    let R = zipDimensions(a, b)
+    doAssert rank(R) === 2
+    let m0 = dimension(R, 0); let m1 = dimension(R, 1)
+    doAssert m0 === (4, 1), "zip m0: " & $m0
+    doAssert m1 === (3, 1), "zip m1: " & $m1
+  echo "  zipDimensions: 2 cases OK"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  mapLeavesWith — apply body to each leaf (shape, stride) pair
+# ═══════════════════════════════════════════════════════════════
+proc runMapLeavesWithTests =
+  block:
+    ## Flat: simple
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st)
+    doAssert b.shape === (4, 6)
+    doAssert b.stride === (1, 2)
+  block:
+    ## Flat: let indirection
+    let factor = 10
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a): (it_sh * factor, it_st)
+    doAssert b.shape === (20, 30)
+    doAssert b.stride === (1, 2)
+  block:
+    ## Flat: multi-step
+    let a = make_layout((2, 3))
+    let b = mapLeavesWith(a):
+      let x = it_sh * 10
+      let y = it_st + 7
+      (x * y, x div y)
+    doAssert b.shape === (160, 270)
+    doAssert b.stride === (2, 3)
+  block:
+    ## Nested 2-level
+    let a = make_layout(((2, 3), 5), ((1, 2), 6))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st * 2)
+    doAssert b.shape === ((4, 6), 10)
+    doAssert b.stride === ((2, 4), 12)
+  block:
+    ## Nested 3-level
+    let a = make_layout(((7, (8, 9)), 10), ((1, (2, 3)), 4))
+    let b = mapLeavesWith(a): (it_sh * 3, it_st)
+    doAssert b.shape === ((21, (24, 27)), 30)
+    doAssert b.stride === ((1, (2, 3)), 4)
+  block:
+    ## Flat: dynamic shapes (let variables, not literals)
+    let d2 = 2
+    let d3 = 3
+    let d1 = 1
+    let d2st = 2
+    let a = make_layout((d2, d3), (d1, d2st))
+    let b = mapLeavesWith(a): (it_sh * 10, it_st)
+    doAssert b.shape === (20, 30)
+    doAssert b.stride === (1, 2)
+  block:
+    ## Nested 2-level: dynamic shapes
+    let d2 = 2
+    let d3 = 3
+    let d5 = 5
+    let d1 = 1
+    let d2st = 2
+    let d6st = 6
+    let a = make_layout(((d2, d3), d5), ((d1, d2st), d6st))
+    let b = mapLeavesWith(a): (it_sh * 2, it_st * 2)
+    doAssert b.shape === ((4, 6), 10)
+    doAssert b.stride === ((2, 4), 12)
+  echo "    mapLeavesWith: 7 cases OK"
+
+# ═══════════════════════════════════════════════════════════════
+#  upcast / downcast — ref: tensor-layouts/tests/layouts.py + MoYe.jl
+# ═══════════════════════════════════════════════════════════════
+
+proc runUpcastDowncastTests =
+  # ── Python tensor-layouts: test_upcast_simple_stride1 ──
+  block:
+    ## upcast divides innermost (stride-1) shape by n.
+    ## (32, 32):(32, 1) → upcast<16> → (32, 2):(2, 1)
+    let a = make_layout((32, 32), (32, 1))
+    let b = a.upcast(16)
+    doAssert b.shape === (32, 2), "shape: " & $b.shape
+    doAssert b.stride === (2, 1), "stride: " & $b.stride
+  # ── Python: test_upcast_hierarchical_value_mode ──
+  block:
+    ## upcast handles nested value dimensions.
+    ## SM75_U32x4_LDSM_N dst_layout_bits: (32, (32, 4)):(32, (1, 1024))
+    ## upcast<16> → (32, (2, 4)):(2, (1, 64))
+    let a = make_layout((32, (32, 4)), (32, (1, 1024)))
+    let b = a.upcast(16)
+    doAssert b.shape === (32, (2, 4)), "shape: " & $b.shape
+    doAssert b.stride === (2, (1, 64)), "stride: " & $b.stride
+  # ── Python: test_upcast_transpose_layout ──
+  block:
+    ## upcast handles transpose layouts (innermost stride > 1).
+    ## SM75_U16x2_LDSM_T dst_layout_bits:
+    ##   ((4, 8), (16, 2)):((256, 16), (1, 128))
+    ## upcast<16> → ((4, 8), (1, 2)):((16, 1), (1, 8))
+    let a = make_layout(((4, 8), (16, 2)), ((256, 16), (1, 128)))
+    let b = a.upcast(16)
+    doAssert b.shape === ((4, 8), (1, 2)), "shape: " & $b.shape
+    doAssert b.stride === ((16, 1), (1, 8)), "stride: " & $b.stride
+  # ── Python: test_upcast_identity ──
+  block:
+    ## upcast<1> returns the same layout.
+    let a = make_layout((4, 8), (8, 1))
+    let b = a.upcast(1)
+    doAssert b.shape === (4, 8)
+    doAssert b.stride === (8, 1)
+  # ── Python: test_upcast_broadcast_stride ──
+  block:
+    ## upcast preserves stride-0 (broadcast) dimensions unchanged.
+    let a = make_layout((4, 8), (0, 1))
+    let b = a.upcast(4)
+    doAssert b.stride[0] === 0
+    doAssert b.shape[0] === 4
+  # ── Python: test_downcast_simple ──
+  block:
+    ## downcast multiplies stride-1 shape by n, other strides by n.
+    ## (32, 2):(2, 1) → downcast<16> → (32, 32):(32, 1)
+    let a = make_layout((32, 2), (2, 1))
+    let b = a.downcast(16)
+    doAssert b.shape === (32, 32), "shape: " & $b.shape
+    doAssert b.stride === (32, 1), "stride: " & $b.stride
+  # ── Python: test_upcast_downcast_roundtrip ──
+  block:
+    ## downcast(upcast(layout, n), n) recovers original (innermost size >= n).
+    let l1 = make_layout((32, 32), (32, 1))
+    let r1 = l1.upcast(16).downcast(16)
+    doAssert r1.shape === l1.shape, "r1 shape: " & $r1.shape
+    doAssert r1.stride === l1.stride
+  block:
+    let l2 = make_layout((32, (32, 4)), (32, (1, 1024)))
+    let r2 = l2.upcast(16).downcast(16)
+    doAssert r2.shape === l2.shape, "r2 shape: " & $r2.shape
+    doAssert r2.stride === l2.stride
+  # ── Python: test_downcast_upcast_roundtrip ──
+  block:
+    ## upcast(downcast(layout, n), n) recovers the original.
+    let l1 = make_layout((32, 2), (2, 1))
+    let r1 = l1.downcast(4).upcast(4)
+    doAssert r1.shape === l1.shape, "r1 shape: " & $r1.shape
+    doAssert r1.stride === l1.stride
+  block:
+    let l2 = make_layout((4, 8), (8, 1))
+    let r2 = l2.downcast(4).upcast(4)
+    doAssert r2.shape === l2.shape, "r2 shape: " & $r2.shape
+    doAssert r2.stride === l2.stride
+  # ── MoYe.jl: recast (array.jl) ──
+  block:
+    ## MoYe: recast(Int32, a) on Int8 layout(4,3) → layout(16,3):(1,16).
+    ## sizeof(Int32)/sizeof(Int8)=4 → downcast<4> on (4,3):(1,4)
+    ## Leaf0 sh=4,st=1: |1|==1 → (16,1)     Leaf1 sh=3,st=4: |4|>1 → (3,16)
+    let a = make_layout((4, 3))
+    let b = a.downcast(4)
+    doAssert b.shape === (16, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 16)
+  block:
+    ## MoYe: Float32 layout(4,3) recast to Float64 → (2,3):(1,2).
+    ## sizeof(Float64)/sizeof(Float32)=2 → upcast<2>
+    ## Leaf0 sh=4,st=1: ceil_div(4,ceil_div(2,1))=2, stride=1  → (2,1)
+    ## Leaf1 sh=3,st=4: ceil_div(3,ceil_div(2,4))=3, stride=2  → (3,2)
+    let a = make_layout((4, 3))
+    let b = a.upcast(2)
+    doAssert b.shape === (2, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 2), "stride: " & $b.stride
+  block:
+    ## MoYe: Float32 layout(4,3) recast to Float16 → (8,3):(1,8).
+    ## sizeof(Float16)/sizeof(Float32)=0.5 → downcast<2>
+    ## Leaf0 sh=4,st=1: |1|==1 → (8,1)     Leaf1 sh=3,st=4: |4|>1 → (3,8)
+    let a = make_layout((4, 3))
+    let b = a.downcast(2)
+    doAssert b.shape === (8, 3), "shape: " & $b.shape
+    doAssert b.stride === (1, 8), "stride: " & $b.stride
+  # ── Own: stride-2 / broadcast / N=1 ──
+  block:
+    ## upcast: stride-2 gapped layout
+    let a = make_layout(8, 2)
+    let b = a.upcast(4)
+    doAssert b.shape === 4, "shape: " & $b.shape
+    doAssert b.stride === 1, "stride: " & $b.stride
+  block:
+    ## upcast: broadcast stride 0 unchanged
+    let a = make_layout(8, 0)
+    let b = a.upcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 0
+  block:
+    ## downcast: stride-2 (stride multiplies)
+    let a = make_layout(8, 2)
+    let b = a.downcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 8
+  block:
+    ## downcast: broadcast stride 0 unchanged
+    let a = make_layout(8, 0)
+    let b = a.downcast(4)
+    doAssert b.shape === 8
+    doAssert b.stride === 0
+  block:
+    ## upcast nested layout
+    let a = make_layout(((2, 4), 8), ((1, 2), 4))
+    let b = a.upcast(2)
+    # leaf (2,1): ceil_div(2, ceil_div(2,1))=1, ceil_div(1,2)=1  → (1,1)
+    # leaf (4,2): ceil_div(4, ceil_div(2,2))=4, ceil_div(2,2)=1  → (4,1)
+    # leaf (8,4): ceil_div(8, ceil_div(2,4))=8, ceil_div(4,2)=2  → (8,2)
+    doAssert b.shape === ((1, 4), 8), "shape: " & $b.shape
+    doAssert b.stride === ((1, 1), 2), "stride: " & $b.stride
+  block:
+    ## downcast nested layout
+    let a = make_layout(((2, 4), 8), ((1, 2), 4))
+    let b = a.downcast(2)
+    # leaf (2,1): |1|==1 → (4,1)
+    # leaf (4,2): |2|!=1 → (4,4)
+    # leaf (8,4): |4|!=1 → (8,8)
+    doAssert b.shape === ((4, 4), 8), "shape: " & $b.shape
+    doAssert b.stride === ((1, 4), 8), "stride: " & $b.stride
+  block:
+    ## upcast dynamic strides
+    let d8 = 8; let d1 = 1; let d2 = 2
+    let a = make_layout((d8, d1), (d1, d2))
+    let b = a.upcast(4)
+    doAssert b.shape === (8, 1)
+    doAssert b.stride === (1, 1)
+  block:
+    ## downcast dynamic stride 1 (shape expands)
+    let d8 = 8; let d1 = 1
+    let a = make_layout(d8, d1)
+    let b = a.downcast(4)
+    doAssert b.shape === 32
+    doAssert b.stride === 1
+  echo "    upcast/downcast: 24 cases OK"
+
+
+
+# ═══════════════════════════════════════════════════════════════
+#  make_ordered_layout / make_layout_like — pycute spec
+# ═══════════════════════════════════════════════════════════════
+
+proc runOrderedLayoutTests =
+  # Section 1: scalar shape
+  block:
+    doAssert make_ordered_layout(2, 0) === (2, 1)
+    echo "    1. make_ordered_layout scalar: 1 case OK"
+
+  # Section 2: 2D explicit permutations
+  block:
+    doAssert make_ordered_layout((2,3), (0,1)) === ((2,3), (1,2))
+    doAssert make_ordered_layout((2,3), (1,0)) === ((2,3), (3,1))
+    echo "    2. make_ordered_layout 2D: 2 cases OK"
+
+  # Section 3: 3D explicit permutations
+  block:
+    doAssert make_ordered_layout((2,3,4), (0,1,2)) === ((2,3,4), (1,2,6))
+    doAssert make_ordered_layout((2,3,4), (2,1,0)) === ((2,3,4), (12,4,1))
+    doAssert make_ordered_layout((2,3,4), (0,2,1)) === ((2,3,4), (1,8,2))
+    doAssert make_ordered_layout((2,3,4), (1,2,0)) === ((2,3,4), (4,8,1))
+    doAssert make_ordered_layout((2,3,4), (2,0,1)) === ((2,3,4), (12,1,3))
+    echo "    3. make_ordered_layout 3D: 5 cases OK"
+
+  # Section 4: tied orders keep left-to-right position
+  block:
+    doAssert make_ordered_layout((2,3), (0,0)) === ((2,3), (1,2))
+    doAssert make_ordered_layout((2,3,4,2), (0,2,3,0)) === ((2,3,4,2), (1,4,12,2))
+    echo "    4. make_ordered_layout tied orders: 2 cases OK"
+
+  # CuTe section 5: make_layout_like 2D
+  block:
+    doAssert make_layout_like(make_layout((2,3), (1,2)))  === ((2,3), (1,2))
+    doAssert make_layout_like(make_layout((2,3), (3,1)))  === ((2,3), (3,1))
+    doAssert make_layout_like(make_layout((2,3), (2,1)))  === ((2,3), (3,1))
+    doAssert make_layout_like(make_layout((2,3), (1,10))) === ((2,3), (1,2))
+    doAssert make_layout_like(make_layout((2,3), (0,1)))  === ((2,3), (0,1))
+    doAssert make_layout_like(make_layout((2,3), (0,0)))  === ((2,3), (0,0))
+    echo "    5. make_layout_like 2D: 6 cases OK"
+
+  # CuTe section 6: 3D make_layout_like
+  block:
+    doAssert make_layout_like(make_layout((2,3,4), (0,12,1))) === ((2,3,4), (0,4,1))
+    doAssert make_layout_like(make_layout((2,3,4), (1,0,12))) === ((2,3,4), (1,0,2))
+    doAssert make_layout_like(make_layout((2,3,4), (6,1,2)))  === ((2,3,4), (12,1,3))
+    doAssert make_layout_like(make_layout((2,3,4), (3,6,1)))  === ((2,3,4), (4,8,1))
+    echo "    6. make_layout_like 3D: 4 cases OK"
+
+  # Dimension-reordering rejection
+  block:
+    # make_ordered_layout: dimension i keeps position i, only stride values change
+    let cm = make_ordered_layout((2,3,4), (1,2,0))
+    doAssert cm.stride[0].toInt == 4
+    doAssert cm.stride[1].toInt == 8
+    doAssert cm.stride[2].toInt == 1
+    echo "    7. Dimensions NOT reordered: 3 checks OK"
+
+  block:
+    let l = make_layout_like(make_layout((2,3,4), (3,6,1)))
+    doAssert l.stride[0].toInt == 4
+    doAssert l.stride[1].toInt == 8
+    doAssert l.stride[2].toInt == 1
+    echo "    8. make_layout_like dimension positions: 3 checks OK"
+
+  # Section 9: tuple variables, const symbols, and dynamic entries
+  block:
+    # a tuple variable's Int[N] leaf is an indexing expression whose
+    # static value sits in the leaf's type
+    var shape = (Int[2](), Int[3]())
+    doAssert make_ordered_layout(shape, (0, 1)) === ((2,3), (1,2))
+    # a const symbol's value sits in its const definition, keeping
+    # the order static
+    const order = (1, 0)
+    doAssert make_ordered_layout((2,3), order) === ((2,3), (3,1))
+    # plain-int leaves of a runtime tuple variable are dynamic order
+    # entries ranking after every static entry, left-to-right
+    var ordDyn = (1, 0)
+    doAssert make_ordered_layout((2,3), ordDyn) === ((2,3), (1,2))
+    echo "    9. make_ordered_layout tuple variables: 3 cases OK"
+#  Run all
+# ═══════════════════════════════════════════════════════════════
+proc runTests =
+  echo "--- make_layout ---"
+  runMakeLayoutTests()
+  echo "--- make_ordered_layout / make_layout_like ---"
+  runOrderedLayoutTests()
+  echo "--- Flatten ---"
+  runFlattenTests()
+  echo "--- Concat ---"
+  runConcatTests()
+  echo "--- Size ---"
+  runSizeTests()
+  echo "--- Cosize ---"
+  runCosizeTests()
+  echo "--- Stringify ---"
+  runStringifyTests()
+  echo "--- Rank ---"
+  runRankTests()
+  echo "--- isCompact ---"
+  runIsCompactTests()
+  echo "--- Predicates ---"
+  runPredicateTests()
+  echo "--- col_major_strides ---"
+  runColMajorStridesTests()
+  echo "--- NCHW ---"
+  runNCHWTests()
+  echo "--- zipDimensions ---"
+  runZipTests()
+
+  echo "--- groupDimensions ---"
+  block:
+    ## Python test_append_prepend_replace_group: group(Layout((2,3,5,7)), 0, 2)
+    let a = make_layout((2, 3, 5, 7))
+    doAssert a.shape === (2, 3, 5, 7)
+    doAssert a.stride === (1, 2, 6, 30)
+    let b = a.groupDimensions(0, 2)
+    doAssert b.shape === ((2, 3), 5, 7)
+    doAssert b.stride === ((1, 2), 6, 30)
+    let c = b.groupDimensions(1, 3)
+    doAssert c.shape === ((2, 3), (5, 7))
+    doAssert c.stride === ((1, 2), (6, 30))
+  block:
+    ## group with non-identity strides
+    let a = make_layout((10, 20, 30, 40))
+    let b = a.groupDimensions(1, 3)
+    doAssert rank(b) === 3
+  # block: -- blocked by tuple hash collision, pending https://github.com/nim-lang/Nim/pull/25889
+  #   ## From start (B=0, E=3) — groups 3 elements into sub-tuple
+  #   let a = make_layout((2, 3, 5, 7))
+  #   let b = a.groupDimensions(0, 3)
+  #   doAssert rank(b) === 2
+  echo "    groupDimensions: 8 checks OK"
+
+  echo "--- padRight/padLeft ---"
+  block:
+    ## padRight: append identity dimensions
+    let a = make_layout((3, 4))
+    let b = padRight(a, 3)
+    doAssert b.shape === (3, 4, 1)
+    doAssert b.stride === (1, 3, 0)
+    doAssert rank(b) === 3
+  block:
+    ## padLeft: prepend identity dimensions
+    let a = make_layout((3, 4))
+    let b = padLeft(a, 3)
+    doAssert b.shape === (1, 3, 4)
+    doAssert b.stride === (0, 1, 3)
+    doAssert rank(b) === 3
+  block:
+    ## padRight no-op (already at target rank)
+    let a = make_layout((3, 4))
+    let b = padRight(a, 2)
+    doAssert b.shape === (3, 4)
+    doAssert b.stride === (1, 3)
+  block:
+    ## padLeft no-op (already at target rank)
+    let a = make_layout((3, 4))
+    let b = padLeft(a, 2)
+    doAssert b.shape === (3, 4)
+    doAssert b.stride === (1, 3)
+  block:
+    ## padRight on scalar layout
+    let a = make_layout(5)
+    let b = padRight(a, 3)
+    doAssert b.shape === (5, 1, 1)
+    doAssert b.stride === (1, 0, 0)
+  block:
+    ## padLeft on scalar layout
+    let a = make_layout(5)
+    let b = padLeft(a, 3)
+    doAssert b.shape === (1, 1, 5)
+    doAssert b.stride === (0, 0, 1)
+  echo "    padRight/padLeft: 6 cases OK"
+  echo "--- takeDimensions/selectDimensions ---"
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeDimensions(1, 3)
+    doAssert b.shape === (3, 5)
+    doAssert b.stride === (2, 6)
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectDimensions(0, 3)
+    doAssert b.shape === (2, 7)
+    doAssert b.stride === (1, 30)
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeDimensions(0, 1)
+    doAssert b.shape === 2
+    doAssert b.stride === 1
+  block:
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectDimensions(2)
+    doAssert b.shape === 5
+    doAssert b.stride === 6
+  block:
+    ## const indirection for takeDimensions
+    const B = 1
+    const E = 3
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.takeDimensions(B, E)
+    doAssert b.shape === (3, 5)
+    doAssert b.stride === (2, 6)
+  block:
+    ## const indirection for selectDimensions
+    const I0 = 0
+    const I3 = 3
+    let a = make_layout((2, 3, 5, 7))
+    let b = a.selectDimensions(I0, I3)
+    doAssert b.shape === (2, 7)
+    doAssert b.stride === (1, 30)
+  echo "    takeDimensions/selectDimensions: 6 cases OK"
+
+  echo "--- mapLeavesWith ---"
+  runMapLeavesWithTests()
+  echo "--- upcast/downcast ---"
+  runUpcastDowncastTests()
+
+  echo "--- evalOnceAs shadowing (genSym'd aliases) ---"
+  block:
+    let a = make_layout((3,))
+    let b = make_layout((2, 4))
+    doAssert toInt(a.shape[0]) == 3, "no shadowing: layout (3,)"
+    doAssert toInt(b.shape[0]) == 2, "no shadowing: layout (2,4) shape[0]"
+    doAssert toInt(b.shape[1]) == 4, "no shadowing: layout (2,4) shape[1]"
+    echo "    make_layout: 3 cases OK"
+  echo "--- makeIntTuple ---"
+  block:
+    const a = makeIntTuple((3,))
+    const b = makeIntTuple((2, 4))
+    static:
+      doAssert toInt(a[0]) == 3
+      doAssert toInt(b[0]) == 2
+      doAssert toInt(b[1]) == 4
+    echo "    makeIntTuple: 3 cases OK"
+
+when isMainModule:
+  runTests()
+  runCongruentTests()

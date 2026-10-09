@@ -65,9 +65,8 @@
 ## and the instruction sums them into the owning thread's register.
 ##
 ## Catalog:
-## - 4 universal FMA atoms, the 1×1×1 scalar fallback and the 8×8×8
-##   cross-lane shuffle atoms on f32/f16/bf16
-## - 3 Apple simdgroup atoms, 5 NVIDIA tensor-core atoms (SM80/SM89)
+## - 3 universal FMA atoms, the 1×1×1 scalar fallback (f32, f16, bf16 operands)
+## - 3 Apple simdgroup atoms, 9 NVIDIA tensor-core atoms (SM80/SM89)
 ## The CPU atoms (AMX, SIMD ukernels) are not declared.
 
 import workspace/ceramic/src/layout_algebra
@@ -78,18 +77,7 @@ import ./h_mma_configgen
 #  Reusable layout aliases
 # ═════════════════════════════════════════════════════════════════════════
 
-const Universal8x8_AC_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
-  ## (T32, V2) → (M8, K8) / (M8, N8), A and C fragments
-  ## of the 8×8×8 atoms, col-major offset m + 8·n, V stepping along K (A) or N (C).
-  ##
-  ## A and C share one layout so an accumulator feeds the next mma's
-  ## A operand with zero movement, the attention S→A handoff needs no redistribution.
-  ##
-  ## B strides along N, keeping each lane's two B values inside its own k row.
 
-const Universal8x8_B_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((2, 8, 16, 4, 32), 1))
-  ## (T32, V2) → (N8, K8), B fragment of the 8×8×8 atoms, col-major offset
-  ## n + 8·k, V stepping along N.
 
 const Apple8x8_AC_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
   ## (T32, V2) → (M8, K8) / (M8, N8), the A and C fragments of the Apple
@@ -127,8 +115,8 @@ const
 #  threadCount is 32 for every multi-lane atom, 1 for the 1×1×1 fallback.
 
 declareAtoms:
-  # Universal FMA atoms, the gemm_atom scalar fallback (1×1×1)
-  # and the cross-lane shuffle atoms. instr "" is plain arithmetic, no mnemonic.
+  # Universal FMA atom, the gemm_atom scalar fallback (1×1×1).
+  # instr "" is plain arithmetic, no mnemonic.
   atom UNIVERSAL_1x1x1_F32F32F32F32:
     m: 1
     n: 1
@@ -139,37 +127,35 @@ declareAtoms:
     bLayout: make_layout((1, 1))
     cLayout: make_layout((1, 1))
     instr: ""
-  atom UNIVERSAL_8x8x8_F32F32F32F32:
-    m: 8
-    n: 8
-    k: 8
-    vpt: 2
-    threadCount: 32
-    aLayout: Universal8x8_AC_Layout
-    bLayout: Universal8x8_B_Layout
-    cLayout: Universal8x8_AC_Layout
+    aType: "float"
+    bType: "float"
+    cType: "float"
+  atom UNIVERSAL_1x1x1_F32F16F16F32:
+    m: 1
+    n: 1
+    k: 1
+    vpt: 1
+    threadCount: 1
+    aLayout: make_layout((1, 1))
+    bLayout: make_layout((1, 1))
+    cLayout: make_layout((1, 1))
     instr: ""
-  atom UNIVERSAL_8x8x8_F32F16F16F32:
-    m: 8
-    n: 8
-    k: 8
-    vpt: 2
-    threadCount: 32
-    aLayout: Universal8x8_AC_Layout
-    bLayout: Universal8x8_B_Layout
-    cLayout: Universal8x8_AC_Layout
+    aType: "half"
+    bType: "half"
+    cType: "float"
+  atom UNIVERSAL_1x1x1_F32BF16BF16F32:
+    m: 1
+    n: 1
+    k: 1
+    vpt: 1
+    threadCount: 1
+    aLayout: make_layout((1, 1))
+    bLayout: make_layout((1, 1))
+    cLayout: make_layout((1, 1))
     instr: ""
-  atom UNIVERSAL_8x8x8_F32BF16BF16F32:
-    m: 8
-    n: 8
-    k: 8
-    vpt: 2
-    threadCount: 32
-    aLayout: Universal8x8_AC_Layout
-    bLayout: Universal8x8_B_Layout
-    cLayout: Universal8x8_AC_Layout
-    instr: ""
-
+    aType: "bfloat"
+    bType: "bfloat"
+    cType: "float"
   # Apple simdgroup atoms, the Metal simdgroup_multiply_accumulate intrinsic
   # on simdgroup_float8x8 / simdgroup_half8x8 fragments.
   #
@@ -188,7 +174,9 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
-    elem: "float"
+    aType: "float"
+    bType: "float"
+    cType: "float"
   atom APPLE_8x8x8_F16:
     m: 8
     n: 8
@@ -199,7 +187,9 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
-    elem: "half"
+    aType: "half"
+    bType: "half"
+    cType: "float"
   atom APPLE_8x8x8_BF16:
     m: 8
     n: 8
@@ -210,7 +200,9 @@ declareAtoms:
     bLayout: Apple8x8_B_Layout
     cLayout: Apple8x8_AC_Layout
     instr: "simdgroup_multiply_accumulate"
-    elem: "bfloat"
+    aType: "bfloat"
+    bType: "bfloat"
+    cType: "float"
 
   # NVIDIA tensor-core atoms, the mma.sync extended-asm path.
   # The fp8 atom shares the m16n8k32 int8 layouts.
@@ -224,6 +216,9 @@ declareAtoms:
     bLayout: SM80_16x8x8_B_TF32
     cLayout: SM80_16x8_Row
     instr: "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"
+    aType: "tf32"
+    bType: "tf32"
+    cType: "f32"
   atom SM80_16x8x16_F32BF16BF16F32_TN:
     m: 16
     n: 8
@@ -234,6 +229,9 @@ declareAtoms:
     bLayout: SM80_16x8x16_B
     cLayout: SM80_16x8_Row
     instr: "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
+    aType: "bf16"
+    bType: "bf16"
+    cType: "f32"
   atom SM80_16x8x16_F32F16F16F32_TN:
     m: 16
     n: 8
@@ -244,6 +242,9 @@ declareAtoms:
     bLayout: SM80_16x8x16_B
     cLayout: SM80_16x8_Row
     instr: "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"
+    aType: "f16"
+    bType: "f16"
+    cType: "f32"
   atom SM80_16x8x32_S32S8S8S32_TN:
     m: 16
     n: 8
@@ -254,6 +255,9 @@ declareAtoms:
     bLayout: SM80_16x8x32_B
     cLayout: SM80_16x8_Row
     instr: "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32"
+    aType: "s8"
+    bType: "s8"
+    cType: "s32"
   atom SM89_16x8x32_F32E4M3E4M3F32_TN:
     m: 16
     n: 8
@@ -264,3 +268,61 @@ declareAtoms:
     bLayout: SM80_16x8x32_B
     cLayout: SM80_16x8_Row
     instr: "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"
+    aType: "e4m3"
+    bType: "e4m3"
+    cType: "f32"
+  # The mixed fp8 atoms share the e4m3/e4m3 atom's layouts, the reference
+  # transcription (atoms_nv.py SM89 section): only the operand datatypes
+  # and the mnemonic differ.
+  atom SM89_16x8x32_F32E4M3E5M2F32_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"
+    aType: "e4m3"
+    bType: "e5m2"
+    cType: "f32"
+  atom SM89_16x8x32_F32E5M2E4M3F32_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32"
+    aType: "e5m2"
+    bType: "e4m3"
+    cType: "f32"
+  atom SM89_16x8x32_F16E4M3E5M2F16_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e5m2.f16"
+    aType: "e4m3"
+    bType: "e5m2"
+    cType: "f16"
+  atom SM89_16x8x32_F16E5M2E4M3F16_TN:
+    m: 16
+    n: 8
+    k: 32
+    vpt: 16
+    threadCount: 32
+    aLayout: SM80_16x8x32_A
+    bLayout: SM80_16x8x32_B
+    cLayout: SM80_16x8_Row
+    instr: "mma.sync.aligned.m16n8k32.row.col.f16.e5m2.e4m3.f16"
+    aType: "e5m2"
+    bType: "e4m3"
+    cType: "f16"
