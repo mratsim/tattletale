@@ -21,7 +21,7 @@ Rule table (rule | trigger | severity):
 | article-eol          | a line ends on a dangling article or a stranded possessive                                        | counted  |
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
-| unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,")                   | counted  |
+| unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "emission")       | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
@@ -1073,6 +1073,8 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
         return
     # The unit-split rule fires when a severed continuation opens the line.
     # The previous line holds the subject, this line holds "apply,".
+    # The one-word period shape ("emission" ... "instead.") fires after an
+    # unterminated previous line only, a terminated sentence opens fresh.
     # The two-word shape ("any arity,") fires after an unterminated
     # previous line only, a terminated sentence opens fresh.
     # skill 11: a description never opens on "The", the Returns
@@ -1086,6 +1088,13 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             path, n, "the-opener",
             "description opens with The (open with what the thing is)"))
     if re.match(r"^[a-z]+,", bare.strip()) and prev_text.get(n - 1):
+        findings.append(Finding(
+            path, n, "unit-split",
+            "the line opens on a severed one-word continuation "
+            "(keep the semantic unit on one line)"))
+    elif (re.match(r"^(?!e\.g\.|i\.e\.|etc\.|vs\.)[a-z]{3,}\.", bare.strip())
+          and prev_text.get(n - 1)
+          and not re.search(r"[.:!?]\s*$", prev_text[n - 1].rstrip())):
         findings.append(Finding(
             path, n, "unit-split",
             "the line opens on a severed one-word continuation "

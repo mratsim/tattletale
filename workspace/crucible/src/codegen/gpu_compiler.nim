@@ -10,6 +10,11 @@ import std/[macros, tables]
 
 import ./ir/gpu_types
 import ./targets/targets_lang
+import ./passes/passes_cuda
+import ./passes/passes_wgsl
+import ./passes/passes_opencl
+import ./passes/passes_vulkan
+import ./passes/passes_metal
 import ./ir/nim_to_gpu
 import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
@@ -51,16 +56,7 @@ macro codegenCuda(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
-    "Rejects identifiers that are reserved CUDA keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
-  )
+  reg.registerCudaPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -80,18 +76,7 @@ macro codegenOpenCL(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
-    "Rejects identifiers that are reserved OpenCL C keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
-        "local", "__local", "constant", "__constant",
-        "read_only", "write_only", "read_write"], "OpenCL C")
-  )
+  reg.registerOpenclPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -111,11 +96,7 @@ macro codegenVulkan(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
-    "Rejects identifiers that are reserved GLSL keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
-  )
+  reg.registerVulkanPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -135,11 +116,6 @@ macro codegenWebGpu(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
-    "Rejects identifiers that are reserved WGSL keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
-  )
   reg.registerWgslPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
@@ -160,11 +136,6 @@ macro codegenMetal(body: typed): string =
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.register("rejectMetalKeywords", pkValidation, phaseMain,
-    "Rejects identifiers that are reserved MSL keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
-  )
   reg.registerMetalPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
@@ -190,51 +161,14 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
   reg.registerCommonPasses()
   case backend
   of bkCuda:
-    reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-      "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-      dependsOn = @["ensureBlock"],
-      run = materializePassByRefArgs
-    )
-    reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
-      "Rejects identifiers that are reserved CUDA keywords",
-      proc(ctx: var GpuContext): void =
-        ctx.checkReservedKeywords(["__global__", "__device__", "__shared__", "__constant__"], "CUDA")
-    )
+    reg.registerCudaPasses()
   of bkWGSL:
-    reg.register("rejectWGSLKeywords", pkValidation, phaseEarly,
-      "Rejects identifiers that are reserved WGSL keywords",
-      proc(ctx: var GpuContext): void =
-        ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
-    )
     reg.registerWgslPasses()
   of bkOpenCL:
-    reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-      "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-      dependsOn = @["ensureBlock"],
-      run = materializePassByRefArgs
-    )
-    reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
-      "Rejects identifiers that are reserved OpenCL C keywords",
-      proc(ctx: var GpuContext): void =
-        ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
-          "local", "__local", "constant", "__constant",
-          "read_only", "write_only", "read_write"], "OpenCL C")
-    )
+    reg.registerOpenclPasses()
   of bkVulkan:
-    reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
-      "Rejects identifiers that are reserved GLSL keywords",
-      proc(ctx: var GpuContext): void =
-        ctx.checkReservedKeywords(["extern", "interface", "buffer"], "GLSL")
-    )
+    reg.registerVulkanPasses()
   of bkMetal:
-    # The runtime path fills `genericInsts`, not `allFnTab`, so the keyword pass
-    # above iterates nothing here. Reserved identifiers are rejected at emission
-    # instead. The printer's `checkReservedIdent` guards params, locals, fields, and function names.
-    reg.register("rejectMetalKeywords", pkValidation, phaseMain,
-      "Rejects identifiers that are reserved MSL keywords",
-      proc(ctx: var GpuContext): void =
-        ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
-    )
     reg.registerMetalPasses()
   # Clone IR before running passes — passes mutate in place,
   # so without cloning, one call contaminates later calls for a different backend.

@@ -305,7 +305,22 @@ proc runImpl(engine: WgpuEngine, kernel: string, output: ArgBlob,
       layout: pl,
       compute: computeState
     )
+    wgpuDevicePushErrorScope(device, wgpuErrorFilterValidation)
     let pipeline = wgpuDeviceCreateComputePipeline(device, addr cpDesc)
+    var pipeScope = PopErrorScopeData(done: false)
+    var pipePopInfo = WGPUPopErrorScopeCallbackInfo(
+      callback: popErrorScopeCb,
+      userdata1: pipeScope.addr,
+      userdata2: nil
+    )
+    discard wgpuDevicePopErrorScope(device, pipePopInfo)
+    while not pipeScope.done:
+      if not wgpuDevicePoll(device, true, nil):
+        quit("WebGPU: wgpuDevicePoll failed")
+    if pipeScope.errType != wgpuErrorTypeNoError:
+      let uncaptured = takeUncapturedError()
+      failLoud("WebGPU pipeline creation failed: " & pipeScope.message &
+        (if uncaptured.errType != wgpuErrorTypeNoError: " / " & uncaptured.message else: ""))
     if pipeline == nil:
       quit("WebGPU: failed to create compute pipeline")
     cache = WgpuPipelineCache(

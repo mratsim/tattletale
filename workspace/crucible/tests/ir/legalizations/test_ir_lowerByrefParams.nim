@@ -1,14 +1,13 @@
-## Phase 6: lowerByrefParams pass tests
+## lowerByrefParams renames passByRef params to `_p_` names and deref-wraps
+## the body idents. Hand-built IR, no engine.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off --debugger:native \
-##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/codegen/ir/test_ir_lowerByrefParams.nim
+##     workspace/crucible/tests/ir/legalizations/test_ir_lowerByrefParams.nim (from tattletale)
 
 import std / [tables, sequtils]
 import workspace/crucible/src/codegen/ir/gpu_types
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/codegen/passes/passes_opencl
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. lowerByrefParamsImpl renames passByRef params to _p_ prefix
@@ -27,7 +26,7 @@ block:
 
   doAssert procNode.pParams[0].ident.ident() == "_p_data",
     "Byref param should be renamed to '_p_data', got: '" & procNode.pParams[0].ident.ident() & "'"
-  echo "  OK — passByRef param renamed to _p_data"
+  echo "  OK: passByRef param renamed to _p_data"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. lowerByrefParamsImpl deref-wraps body idents (no deref-init prepend)
@@ -35,7 +34,7 @@ block:
 block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("val", iSym = "val_byref2", typ = int32)
-  # two DISTINCT ident nodes sharing the byref param's symbol — the body is
+  # two DISTINCT ident nodes sharing the byref param's symbol, the body is
   # `val = val` (both sides reference the byref param)
   let identL = GpuAst(kind: gpuIdent, symbol: sym)
   let identR = GpuAst(kind: gpuIdent, symbol: sym)
@@ -49,7 +48,7 @@ block:
 
   ctx.lowerByrefParamsImpl(procNode)
 
-  # the body keeps its original statements — NO deref-init is prepended
+  # the body keeps its original statements, NO deref-init is prepended
   doAssert procNode.pBody.statements.len == 1,
     "Body must keep its original statements (no deref-init prepend), got: " &
     $procNode.pBody.statements.len
@@ -61,7 +60,7 @@ block:
     "LHS ident must be deref-wrapped (t → (*_p_t)), got: " & $stmt.aLeft.kind
   doAssert stmt.aRight.kind == gpuDeref and stmt.aRight.dOf.kind == gpuIdent,
     "RHS ident must be deref-wrapped (t → (*_p_t)), got: " & $stmt.aRight.kind
-  echo "  OK — body idents deref-wrapped (no deref-init prepend)"
+  echo "  OK: body idents deref-wrapped (no deref-init prepend)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Kernel functions are not modified by lowerByrefParamsImpl
@@ -81,7 +80,7 @@ block:
 
   doAssert procNode.pParams[0].ident.ident() == "kernel_data",
     "Kernel byref param should NOT be renamed, got: '" & procNode.pParams[0].ident.ident() & "'"
-  echo "  OK — kernel function params not modified"
+  echo "  OK: kernel function params not modified"
 
 echo ""
 echo "  All lowerByrefParams tests passed."

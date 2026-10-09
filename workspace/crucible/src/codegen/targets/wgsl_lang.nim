@@ -171,6 +171,20 @@ proc determineIdent(arg: GpuAst): GpuAst =
   else:
     raiseAssert "Not implemented to determine ident from node: " & $arg
 
+const WgslReservedMembers = [
+  "layout", "storage", "uniform", "workgroup", "override", "diagnostic",
+  "enable", "requires", "alias", "bitcast", "discard", "push_constant",
+  "readonly", "read_write", "function", "private", "compute", "vertex",
+  "fragment", "type"
+]
+
+proc wgslSafeMember(name: string): string =
+  ## Naga rejects reserved words as struct members, surfacing only an invalid
+  ## shader module. Typedefs and dot accesses sanitize through this one proc
+  ## so both sides agree. Ceramic's TensorView field named `layout` hits it.
+  if name in WgslReservedMembers: result = name & "_wg"
+  else: result = name
+
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
@@ -442,7 +456,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # Component of a u32 WGSL builtin, cast to standard Nim `int` from default u32.
       result = "i32(" & ctx.genWebGpu(ast.dParent) & '.' & ctx.genWebGpu(ast.dField) & ')'
     else:
-      result = ctx.genWebGpu(ast.dParent) & '.' & ctx.genWebGpu(ast.dField)
+      let fieldName = if ast.dField.kind == gpuIdent: wgslSafeMember(ast.dField.ident())
+                      else: ctx.genWebGpu(ast.dField)
+      result = ctx.genWebGpu(ast.dParent) & '.' & fieldName
 
   of gpuIndex:
     result = ctx.genWebGpu(ast.iArr) & '[' & ctx.genWebGpu(ast.iIndex) & ']'
@@ -543,7 +559,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add "  _padding: u32,\n"
     else:
       for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
+        result.add "  " & gpuTypeToString(el.typ, wgslSafeMember(el.name)) & ",\n"
     result.add '}'
 
   of gpuAlias:

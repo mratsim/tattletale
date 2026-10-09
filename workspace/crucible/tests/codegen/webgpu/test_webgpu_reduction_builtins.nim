@@ -14,7 +14,7 @@
 import std/[strutils, macros]
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/passes/pass_datatypes
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/codegen/passes/passes_wgsl
 import workspace/crucible/src/codegen/targets/targets_lang
 import workspace/crucible/src/codegen/ir/nim_to_gpu
 import workspace/crucible/src/codegen/ir/gpu_types

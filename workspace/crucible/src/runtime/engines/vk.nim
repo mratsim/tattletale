@@ -15,9 +15,13 @@
 ## cached on the engine (ingest-once / run-many); blk is shader-baked
 ## (local_size_x):
 ## run's blk is validated against the baked workgroup size and fails loudly
-## on mismatch. grid = vkCmdDispatch group count. By-value scalars (ArgBlob
-## size < 0) are packed into the push-constant range (4-byte only, see
-## runImpl); pointer args get SSBO bindings 1..N, output at binding 0
+## on mismatch. grid = vkCmdDispatch group count.
+## By-value args (ArgBlob size < 0) pack into the push-constant range:
+## - 4-byte-aligned offsets, declaration order, matching glslang's std430
+##   assignment for 4-byte-aligned members
+## - allowed shapes: scalars and structs whose members are all 4-byte scalars, std430 alignment 4, sequential packing exact
+## - anything else fails loudly (see runImpl)
+## Pointer args get SSBO bindings 1..N, output at binding 0
 ## (output first, per CONVENTIONS.md).
 ##
 ## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
@@ -235,13 +239,10 @@ proc runImpl(engine: VulkanEngine, kernel: string, output: ArgBlob,
   for i in 0 ..< blobs.len:
     if blobs[i].size < 0:
       let sz = -blobs[i].size
-      # Strict contract: 4-byte scalars only (std430 push-constant block
-      # members are 4-byte aligned). Vec/struct by-value args would need a
-      # real std430 layout computation — fail loudly rather than misalign.
-      if sz != 4:
-        quit("Vulkan by-value (push-constant) args must be 4-byte scalars, got " &
-             $sz & " bytes")
-      for j in 0 ..< 4:
+      if sz mod 4 != 0:
+        quit("Vulkan by-value (push-constant) args must be 4-byte-aligned " &
+             "std430 types, got " & $sz & " bytes")
+      for j in 0 ..< sz:
         pushConstBytes.add cast[ptr UncheckedArray[byte]](blobs[i].data)[j]
     else:
       var buf = vctx.allocBuffer(blobs[i].size)

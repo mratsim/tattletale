@@ -1,14 +1,13 @@
-## Phase 6: lowerSsboParams pass tests
+## lowerSsboParams scans kernels, builds the canonical SSBO list and renames
+## body and param idents to the canonical names. Hand-built IR, no engine.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off --debugger:native \
-##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/codegen/ir/test_ir_lowerSsbo.nim
+##     workspace/crucible/tests/ir/legalizations/test_ir_lowerSsbo.nim (from tattletale)
 
 import std / [tables, sequtils]
 import workspace/crucible/src/codegen/ir/gpu_types
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/codegen/passes/passes_vulkan
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. lowerSsboParamsImpl builds canonical SSBO list from kernel params
