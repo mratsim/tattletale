@@ -136,6 +136,13 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   else:
     result = t.kind == kind
 
+proc needsStd430Align8(t: GpuType): bool =
+  ## True when the type tree contains a 64-bit scalar, std430 aligns those
+  ## to 8 bytes and the flat 4-byte packed push-constant block cannot honor
+  ## it. The 64-bit scalars: int64, uint64, float64, size_t.
+  t.containsKind(gtInt64) or t.containsKind(gtUint64) or
+    t.containsKind(gtFloat64) or t.containsKind(gtSize_t)
+
 proc containsPtrFieldDeep(t: GpuType): bool =
   ## True when a gtPtr sits in the type tree, object fields and array
   ## element types included.
@@ -648,6 +655,10 @@ proc codegen*(ctx: var GpuContext): string =
             canonicalSsbo.add (p.ident.ident(), inner)
           inc ssboIdx
         elif p.addressSpace != asSMEM:
+          if p.typ.needsStd430Align8():
+            error "Vulkan: by-value param '" & p.ident.ident() &
+              "' carries a 64-bit type, the push-constant block packs " &
+              "4-byte aligned and cannot honor the std430 8-byte alignment"
           pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
 
   # ── Step 2: Emit struct typedefs the push-constant block references ──
