@@ -34,7 +34,7 @@ type
 template toInt*(x: int): int = x
 template toInt*[V: static int](x: Int[V]): int = V
 
-template `$`*[V: static int](x: Int[V]): string = "Int[" & $V & "]"
+template `$`*[V: static int](x: Int[V]): string = "_" & $V
 
 func `==`*[V: static int](a: Int[V]; b: int): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
 func `==`*[V: static int](a: int; b: Int[V]): bool {.error: "`==` is not defined for Int. If this comparison is intentional, please use `===`".}
