@@ -137,9 +137,14 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
     result = t.kind == kind
 
 proc containsPtrFieldDeep(t: GpuType): bool =
-  ## True when a gtPtr sits in the type tree, object fields included.
+  ## True when a gtPtr sits in the type tree, object fields and array
+  ## element types included.
   case t.kind
   of gtPtr: result = true
+  of gtArray:
+    result = containsPtrFieldDeep(t.aTyp)
+  of gtUA:
+    result = containsPtrFieldDeep(t.uaTo)
   of gtObject:
     for f in t.oFields:
       if containsPtrFieldDeep(f.typ): return true
