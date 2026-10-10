@@ -117,27 +117,30 @@ template zero*(T: typedesc): untyped =
 # ── coordinate strides, by composition ──────────────────────────────
 
 template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
-  # Returns (TVCrdLayout, tileShape). Both fully compile-time per
+  # Returns (TVCrdLayout, tileShape, lift). All compile-time per
   # (atom, MT, NT, KT, op). A is (M,K), B is (N,K) implicit-transpose,
   # C is (M,N).
   #
-  # The threadMap's atom strides are shard-flat, so the atom part converts
-  # through the shard's identity layout (the p.74 shard x TV composition)
-  # and the cell strides are tile-flat, so the cell part uses
-  # the tile's identity layout
+  # The p.74 slide formulation T o (t,v). The atom's fragment layout is
+  # shard-flat while the cell strides are tile-flat, so no single identity
+  # converts the raw thread map, 16 in tile-flat is 16@0 and in shard-flat
+  # 2@1. The atom part is pre-lifted to tile-flat once, the thread map
+  # assembles uniformly tile-flat, and ONE coordinate-stride identity
+  # composition converts everything
   const threadMap = mma.getMatmulThreadmap(op)
   const cellOuter = (when op == opB: mma.atom.getN() else: mma.atom.getM())
   const cellLast = (when op == opC: mma.atom.getN() else: mma.atom.getK())
   const repOuter = (when op == opB: mma.NT else: mma.MT) div cellOuter
   const repLast = (when op == opC: mma.NT else: mma.KT) div cellLast
-  const shard = (cellOuter, cellLast)
   const tileShape = (cellOuter * repOuter, cellLast * repLast)
   const atomMap = make_layout(threadMap.shape[0], threadMap.stride[0])
-  const atomCrd = compose(make_identity_layout(shard), atomMap)
-  const cellsCrd = compose(make_identity_layout(tileShape),
-                           make_layout(threadMap.shape[1], threadMap.stride[1]))
-  const tvcrd = make_layout((atomCrd.shape, cellsCrd.shape),
-                            (atomCrd.stride, cellsCrd.stride))
+  const atomCrd = compose(make_identity_layout((cellOuter, cellLast)), atomMap)
+  const atomT = compose(make_layout((cellOuter * repOuter, cellLast * repLast),
+                                    (1, cellOuter * repOuter)), atomCrd)
+  const threadMapT = make_layout((atomT.shape, (repOuter, repLast)),
+                                 (atomT.stride, (cellOuter,
+                                                 cellOuter * repOuter * cellLast)))
+  const tvcrd = compose(make_identity_layout(tileShape), threadMapT)
   # the corner lift as E-atoms, the rest strides of the coordinate divide.
   # Rest mode k's stride is one tileShape[k] step in tile coordinate mode k
   const lift = (ism_coord_strides.E(cellOuter * repOuter, 0),

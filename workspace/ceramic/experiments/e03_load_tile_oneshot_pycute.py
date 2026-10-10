@@ -38,29 +38,40 @@ APPLE_AC_STRIDE = ((16, 1, 2, 32, 4), 8)
 MT, KT = 32, 16  # the A operand tile (M, K)
 
 
+def get_atom_tile_flat():
+    """Atom layout in tile-flat space, a one-time static per-atom
+    conversion (registry material), integer strides only.
+
+    Returns the atom layout, shape ((2,2,2,2,2),2)
+    """
+    atom_map = Layout(APPLE_AC_SHAPE, APPLE_AC_STRIDE)
+    cell_outer, cell_last = 8, 8  # the atom's (M, K)
+    # identity layouts map a flat index to its coordinate, the integer
+    # -> coordinate step. The flat layout maps it back in tile-flat space
+    shard_id = Layout((cell_outer, cell_last), (E(0), E(1)))
+    atom_crd = composition(shard_id, atom_map)
+    flat_tile = Layout((MT, KT), (1, MT))
+    return composition(flat_tile, atom_crd)
+
+
 def get_tv_crd_layout():
-    """Build the TVCrdLayout for opA, same steps as e03's getTVCrdLayout:
-    - atom part through the shard identity layout
-    - cell part through the tile identity layout
-    - the p.74 slide form, integer thread map -> coordinate strides
+    """Build the TVCrdLayout for opA, the p.74 slide formulation
+    T o (t,v). The thread map assembles uniformly tile-flat, the atom
+    part pre-lifted and the cell strides already tile-flat, then ONE
+    coordinate-stride identity composition converts everything.
 
     Returns the tvcrd layout, shape (((2,2,2,2,2),2),(4,2)) with E-atom
     strides over the (M, K) tile modes
     """
-    atom_map = Layout(APPLE_AC_SHAPE, APPLE_AC_STRIDE)
+    atomT = get_atom_tile_flat()
     cell_outer, cell_last = 8, 8  # the atom's (M, K)
     rep_outer, rep_last = MT // cell_outer, KT // cell_last
     tile_outer = cell_outer * rep_outer
-    # getMatmulThreadmap: ((atom leaves, vpt), (rep_outer, rep_last))
-    cell_map = Layout((rep_outer, rep_last), (cell_outer, tile_outer * cell_last))
-    # identity layouts map a flat index to its coordinate, the integer
-    # -> coordinate step of the slide construction
-    shard_id = Layout((cell_outer, cell_last), (E(0), E(1)))
-    tile_id = Layout((cell_outer * rep_outer, cell_last * rep_last), (E(0), E(1)))
-    atom_crd = composition(shard_id, atom_map)
-    cells_crd = composition(tile_id, cell_map)
-    return Layout((atom_crd.shape, cells_crd.shape),
-                  (atom_crd.stride, cells_crd.stride))
+    # getMatmulThreadmap with the converted atom part
+    thread_map_t = Layout((atomT.shape, (rep_outer, rep_last)),
+                          (atomT.stride, (cell_outer, tile_outer * cell_last)))
+    tile_id = Layout((MT, KT), (E(0), E(1)))
+    return composition(tile_id, thread_map_t)
 
 
 def make_world(M, K, s0, s1):
