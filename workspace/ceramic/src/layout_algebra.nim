@@ -48,6 +48,7 @@ export layout_constructors.col_major_strides
 export layout_constructors.make_layout
 export layout_constructors.make_ordered_layout
 export layout_constructors.make_layout_like
+export layout_constructors.make_identity_layout
 export layout_constructors.make_fragment_like
 
 # ═══════════════════════════════════════════════════════════════
