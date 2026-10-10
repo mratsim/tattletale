@@ -13,13 +13,13 @@ proc hostCopyChecks: bool =
         var buf = newSeq[float32](max(M*s0, K*s1) + 64)
         for i in 0 ..< buf.len: buf[i] = float32(i mod 251)
         let src = make_view(cast[ptr UncheckedArray[float32]](addr buf[0]),
-                            makeIntTuple((int32(M), int32(K))),
-                            makeIntTuple((int32(s0), int32(s1))))
+                            makeIntTuple((M, K)),
+                            makeIntTuple((s0, s1)))
         for tid in [0, 7, 31]:
           for tm in 0 ..< (M + 31) div 32:
             for tk in 0 ..< (K + 15) div 16:
               var rA = rt(float32, mma.getMmaLayout(opA))
-              rA.loadTile(src, mma.getMatmulThreadmap(opA), tid, (int32(tm), int32(tk)))
+              rA.loadTile(src, mma.getMatmulThreadmap(opA), tid, (tm, tk))
               let rV = view(rA)
               for i in 0 ..< size(rA.getLayout().shape):
                 let (v, repC) = idx2crd(rA.getLayout().shape, i)
@@ -39,8 +39,8 @@ proc hostCopyChecks: bool =
         let rV = view(rC)
         for i in 0 ..< size(rC.getLayout().shape): rV(i) = float32(1000 + i)
         let dst = make_view(cast[ptr UncheckedArray[float32]](addr buf[0]),
-                            makeIntTuple((int32(M), int32(N))),
-                            makeIntTuple((int32(s0), int32(s1))))
+                            makeIntTuple((M, N)),
+                            makeIntTuple((s0, s1)))
         for tid in [0, 7, 31]:
           for tm in 0 ..< (M + 31) div 32:
             for tn in 0 ..< (N + 31) div 32:
@@ -54,7 +54,7 @@ proc hostCopyChecks: bool =
                 let gn = cellCrd[1] + 8*repC[1] + 32*tn
                 if gm < M and gn < N:
                   expect[gm*s0 + gn*s1] = float32(1000 + i)
-              dst.storeTile(rC, mma.getMatmulThreadmap(opC), tid, (int32(tm), int32(tn)))
+              dst.storeTile(rC, mma.getMatmulThreadmap(opC), tid, (tm, tn))
               for m in 0 ..< M:
                 for n in 0 ..< N:
                   if buf[m*s0 + n*s1] != expect[m*s0 + n*s1]:
@@ -72,13 +72,13 @@ block identity:
       var buf = newSeq[float32](max(M*s0, K*s1) + 64)
       for i in 0 ..< buf.len: buf[i] = float32(i mod 251)
       let src = make_view(cast[ptr UncheckedArray[float32]](addr buf[0]),
-                          makeIntTuple((int32(M), int32(K))),
-                          makeIntTuple((int32(s0), int32(s1))))
+                          makeIntTuple((M, K)),
+                          makeIntTuple((s0, s1)))
       for tid in [0, 7, 31]:
         for tm in 0 ..< (M + 31) div 32:
           for tk in 0 ..< (K + 15) div 16:
             var rA = rt(float32, mma.getMmaLayout(opA))
-            rA.loadTileIdentity(src, mma.getMatmulThreadmap(opA), tid, (int32(tm), int32(tk)))
+            rA.loadTileIdentity(src, mma.getMatmulThreadmap(opA), tid, (tm, tk))
             let rV = view(rA)
             for i in 0 ..< size(rA.getLayout().shape):
               let (v, repC) = idx2crd(rA.getLayout().shape, i)

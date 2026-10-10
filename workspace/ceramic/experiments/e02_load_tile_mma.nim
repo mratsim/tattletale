@@ -10,9 +10,6 @@
 import std/[macros, math, typetraits]
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_streams
-import ./basis_layouts
-export basis_layouts
-
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/hardware/h_mma_configgen

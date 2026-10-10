@@ -69,9 +69,9 @@ func fp16ToFp32(h: uint16): float32 =
   return cast[float32](sign or (uint32(e + 112) shl 23) or (uint32(m) shl 13))
 
 const gemmMsl = metal:
-  proc gemmK(D: TensorView[float32, (int32, int32), (int32, int32)],
-             A: TensorView[float16, (int32, int32), (int32, int32)],
-             B: TensorView[float16, (int32, int32), (int32, int32)]) {.global.} =
+  proc gemmK(D: TensorView[float32, (int, int), (int, int)],
+             A: TensorView[float16, (int, int), (int, int)],
+             B: TensorView[float16, (int, int), (int, int)]) {.global.} =
     gemm(tiledMma(float32, float16, float16, 32, 32, 16), D, A, B)
 
 proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
@@ -97,14 +97,14 @@ proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
 
   let
     aView = make_view(cast[ptr UncheckedArray[float16]](aBuf.data),
-                      makeIntTuple((int32(M), int32(K))),
-                      makeIntTuple((int32(sA[0]), int32(sA[1]))))
+                      makeIntTuple((M, K)),
+                      makeIntTuple((sA[0], sA[1])))
     bView = make_view(cast[ptr UncheckedArray[float16]](bBuf.data),
-                      makeIntTuple((int32(N), int32(K))),
-                      makeIntTuple((int32(sB[0]), int32(sB[1]))))
+                      makeIntTuple((N, K)),
+                      makeIntTuple((sB[0], sB[1])))
     cView = make_view(cast[ptr UncheckedArray[float32]](dBuf.data),
-                      makeIntTuple((int32(M), int32(N))),
-                      makeIntTuple((int32(sC[0]), int32(sC[1]))))
+                      makeIntTuple((M, N)),
+                      makeIntTuple((sC[0], sC[1])))
   var dArg = PtrArg[float32](buf: cast[ptr UncheckedArray[float32]](dBuf.data), len: M * N, off: 0)
   engine.run << (grid: (gridX, gridY), blk: (32, 1)) >>
     (which, dArg,
