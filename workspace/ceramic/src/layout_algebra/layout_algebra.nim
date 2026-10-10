@@ -8,6 +8,7 @@
 ## Layout algebra: coalesce, complement, compose, divide, inverses, products.
 
 import std/macros
+import std/algorithm
 import std/sequtils
 import std/typetraits
 import workspace/ceramic/src/int_tuples
@@ -23,6 +24,20 @@ import ./layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #  getIndicesSortedByStride
 # ═══════════════════════════════════════════════════════════════
+
+proc strideHasCoordStride(layout: NimNode): bool {.compileTime.} =
+  ## True when the layout's stride type carries a CoordStride leaf
+  var ty = layout.getTypeInst()
+  if ty.kind == nnkBracketExpr and ty.len == 3 and $ty[0] == "Layout":
+    ty = ty[2]
+  proc walk(n: NimNode): bool {.compileTime.} =
+    if n.kind in {nnkTupleConstr, nnkTupleTy, nnkPar}:
+      for i in 0 ..< n.len:
+        if walk(n[i]):
+          return true
+      return false
+    return isCoordStride(n)
+  result = walk(ty)
 
 proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
   ## Return indices sorted by stride ascending.
@@ -268,15 +283,114 @@ func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], 
   result = bindSym"coalesce".newCall(make_layout(
     nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
 
+proc complementCoordFold(coordDims: seq[tuple[axis, scale, extent: int]], bound: NimNode, defaultBound: bool): NimNode {.compileTime.} =
+  ## Per-axis gap-fill walk over single-term coordinate strides.
+  ##
+  ## - same loop as the integer fold, the descriptor supplies axis
+  ##   and scale: gapShape = scale // covered[axis], then covered
+  ##   grows to scale * size per axis
+  ## - result strides are E-atoms, one per codomain axis, pycute
+  ##   emits these through tiler_to_layout, here TupleBuilder output is direct
+  ## - leaves sort colex, for one-hot atoms that is axis ascending
+  ##   then scale ascending, pycute's (0, stride) key with _colex_lt
+  var sorted = coordDims
+  sorted.sort(proc(a, b: tuple[axis, scale, extent: int]): int =
+    if a.axis != b.axis: cmp(a.axis, b.axis)
+    else: cmp(a.scale, b.scale))
+  var axes: seq[int]
+  for d in sorted:
+    if d.axis notin axes:
+      axes.add d.axis
+  axes.sort(system.cmp[int])
+  var covered = newSeq[int](axes.len)
+  for i in 0 ..< axes.len:
+    covered[i] = 1
+  # per-axis ordered (gapShape, coveredBefore) modes
+  var axisModes: seq[seq[tuple[shape, stride: int]]]
+  axisModes.setLen(axes.len)
+  for d in sorted:
+    if d.scale == 0 or d.extent == 1:
+      # a stride-0 atom maps every coordinate to the zero coordinate,
+      # a size-1 dimension covers a single offset, neither opens a gap
+      continue
+    let k = axes.find(d.axis)
+    if d.scale < covered[k]:
+      error "complement: non-injective layout, stride " & $d.scale &
+        "@" & $d.axis & " overlaps the covered span " & $covered[k]
+    let gapShape = d.scale div covered[k]
+    axisModes[k].add (gapShape, covered[k])
+    covered[k] = d.scale * d.extent
+
+  # extend: grow the terminal shape per axis to cover the cotarget
+  var boundAxis: seq[int]
+  if not defaultBound:
+    for bEv in bound.tupleStream():
+      if bEv.kind == kLeaf:
+        let v = if bEv.leaf.kind in {nnkIntLit .. nnkInt64Lit}: int(bEv.leaf.intVal)
+                else: bEv.leafTy.getStaticInt()
+        doAssert v != DynamicSentinel,
+          "complement: coordinate strides extend by a static shape tuple"
+        boundAxis.add v
+    doAssert boundAxis.len == axes.len,
+      "complement: cotarget rank " & $boundAxis.len & " != codomain rank " & $axes.len
+
+  var gapNodes, curNodes: seq[NimNode]
+  for k in 0 ..< axes.len:
+    # size-1 gap modes drop at emission, an all-1 chain
+    # collapses to its terminal stride (pycute's per-axis _coalesce_z)
+    for i in 0 ..< axisModes[k].len:
+      if axisModes[k][i].shape == 1:
+        continue
+      gapNodes.add IntCT(axisModes[k][i].shape)
+      curNodes.add nnkCall.newTree(
+        bindSym"E", newIntLitNode(axisModes[k][i].stride), newIntLitNode(axes[k]))
+    # the terminal mode covers the last gap, the extend grows it
+    # to ceil(cotarget[axis] / covered_final), pycute's observed
+    # per-axis growth (RC rest shapes (3, 12) over the (96, 192) world)
+    var termShape = 1
+    if not defaultBound:
+      termShape = ceil_div(boundAxis[k], covered[k])
+    gapNodes.add IntCT(termShape)
+    curNodes.add nnkCall.newTree(
+      bindSym"E", newIntLitNode(covered[k]), newIntLitNode(axes[k]))
+
+  # the per-axis modes are emitted post-collapse, size-1 gaps drop above,
+  # no global coalesce: pycute assembles the axes as they are
+  result = make_layout(nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes))
+
 macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): untyped =
   var shDims: seq[tuple[shape, depth: int, leaf: NimNode]]
   var stDims: seq[tuple[stride: int, leaf: NimNode]]
+  var stTys: seq[NimNode]
   for shEv in sh.tupleStream():
     if shEv.kind == kLeaf:
       shDims.add (shEv.leafTy.getStaticInt(), shEv.depth, shEv.leaf)
   for stEv in st.tupleStream():
     if stEv.kind == kLeaf:
       stDims.add (stEv.leafTy.getStaticInt(), stEv.leaf)
+      stTys.add stEv.leafTy
+
+  # coordinate strides branch before regime classification, the integer
+  # walk reads scalar strides only
+  var coordCount = 0
+  for ty in stTys:
+    if isCoordStride(ty):
+      inc coordCount
+  if coordCount > 0:
+    if coordCount != stTys.len:
+      error "complement: mixed integer and coordinate strides not supported"
+    var coordDims: seq[tuple[axis, scale, extent: int]]
+    for i in 0 ..< shDims.len:
+      let desc = getCoordStrideDescriptor(stTys[i])
+      if desc.kind == caMulti:
+        error "complement: multi-term coordinate strides not supported"
+      if desc.kind == caNone:
+        error "complement: expected a coordinate stride"
+      if shDims[i].shape == DynamicSentinel:
+        error "complement: coordinate strides need static shapes"
+      coordDims.add (desc.path[^1], desc.scale, shDims[i].shape)
+    result = complementCoordFold(coordDims, bound, defaultBound)
+    return
 
   let boundExpr =
     if bound.getTypeInst().kind == nnkTupleConstr:
@@ -325,7 +439,7 @@ macro complement*(layout: Layout): untyped =
   ## Contract:
   ## - strictly ordered, `result(i-1) < result(i)`, the result is unique
   ## - when the stride chain divides, the pair
-  ##   `make_layout(layout, result)` is a bijection
+  ##   `make_layout(layout, complement)` is a bijection
   ##   onto a contiguous range, otherwise it under-fills:
   ##   the largest ordered, disjoint layout that fits
   ##
@@ -345,10 +459,15 @@ macro complement*(layout: Layout): untyped =
   ##    (2, 2):(1, 4) with 16   → (2, 2):(2, 8)
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-
   let originalLayout = if result.len == 0: layout else: result[^1][1]
-  result.add bindSym"complementImpl".newCall(
-    sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
+  if strideHasCoordStride(layout):
+    # a coordinate-strided layout has no integer cosize, the per-axis
+    # walk needs no bound, gap shapes are 1, extension uses
+    # explicit shape-tuple cotargets
+    result.add bindSym"complementImpl".newCall(sh, st, IntCT(0), newLit(true))
+  else:
+    result.add bindSym"complementImpl".newCall(
+      sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
@@ -948,10 +1067,10 @@ template tile_to_shape*(blk: Layout, target_shape: typed, ord_shape: static Stri
 # ═══════════════════════════════════════════════════════════════
 
 template divideFormula(shA, stA, shB, stB) =
-  compose(make_layout(shA, stA),
-          make_layout(
-            (shB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).shape),
-            (stB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).stride)))
+  # the cotarget is A's shape tuple, per-axis dims, pycute passes
+  # extend=shape(A). The integer path folds it through product(),
+  # the coordinate path reads the per-axis dims directly
+  compose(make_layout(shA, stA), make_layout((shB, complement(make_layout(shB, stB), shA).shape), (stB, complement(make_layout(shB, stB), shA).stride)))
 
 template divideRank1(l, t) =
   when l.shape isnot tuple:
