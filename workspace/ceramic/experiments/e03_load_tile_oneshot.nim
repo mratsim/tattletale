@@ -132,14 +132,14 @@ template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
   const cellLast = (when op == opC: mma.atom.getN() else: mma.atom.getK())
   const tileShape = ((when op == opB: mma.NT else: mma.MT),
                      (when op == opC: mma.NT else: mma.KT))
-  const atomMap = make_layout(threadMap.shape[0], threadMap.stride[0])
+  const atomMap = threadMap.selectDimensions(0)
   const atomCrd = compose(make_identity_layout((cellOuter, cellLast)), atomMap)
   # the atom part in tile-flat space, a one-time static per-atom lift
   const atomT = compose(make_layout(tileShape, (1, tileShape[0])), atomCrd)
   # the rep counts and cell strides are the rest modes of the tile
   # divided by the atom, no hand division, already in tile-flat space
   const tiledTile = zipped_divide(make_layout(tileShape), (cellOuter, cellLast))
-  const cellMap = make_layout(tiledTile.shape[1], tiledTile.stride[1])
+  const cellMap = tiledTile.selectDimensions(1)
   const threadMapT = make_layout((atomT.shape, cellMap.shape),
                                  (atomT.stride, cellMap.stride))
   const tvcrd = compose(make_identity_layout(tileShape), threadMapT)
@@ -226,7 +226,7 @@ template loadTileOneStep*[T, ShD, StD, ShS, StS](
   let cellsShape = tvcrd.shape[1]
   let sel = (((thrBits, X()), repeatLike(cellsShape, X())), tidN)
   let fragWrapped = slice(R, sel)
-  let frag = make_layout(fragWrapped.shape[0], fragWrapped.stride[0])
+  let frag = fragWrapped.selectDimensions(0)
   let fragOff = crd2idx(R, sel)
   # the coordinate divide: the tv modes carry the tile-coordinate
   # strides and the rest modes carry the corner lift as E-atoms, one
@@ -263,7 +263,7 @@ template storeTileOneStep*[T, ShD, StD, ShS, StS](
   let cellsShape = tvcrd.shape[1]
   let sel = (((thrBits, X()), repeatLike(cellsShape, X())), tidN)
   let fragWrapped = slice(R, sel)
-  let frag = make_layout(fragWrapped.shape[0], fragWrapped.stride[0])
+  let frag = fragWrapped.selectDimensions(0)
   let fragOff = crd2idx(R, sel)
   # the coordinate divide: the tv modes carry the tile-coordinate
   # strides and the rest modes carry the corner lift as E-atoms, one
