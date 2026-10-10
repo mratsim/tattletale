@@ -1,7 +1,7 @@
-## Test: layout_indexing, crd2idx idx2crd
+# Test: layout_indexing, crd2idx idx2crd
 # Run: nim c -r workspace/ceramic/tests/layout/t_layout_indexing.nim
-##
-## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
+#
+# Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
 import workspace/ceramic/src/layout_algebra
 import std/typetraits
@@ -22,6 +22,11 @@ block:
   # Tuple coord
   check crd2idx(make_layout((3, 4), (2, 8)), (2, 2)), 20, Int
   check crd2idx(make_layout((3, 4), (2, 8)), (1, 3)), 26, Int
+  # A keep-mark coordinate has no index, the term drops from the sum
+  # (pycute: idx2crd(None, shape) == 0s like shape)
+  check crd2idx(make_layout((4, 8), (1, 4)), (2, X())), 2, Int
+  check crd2idx(make_layout((4, 8), (1, 4)), (X(), 3)), 12, Int
+  check crd2idx(make_layout((4, 8), (1, 4)), (X(), X())), 0, Int
   check crd2idx(make_layout((3, 4), (2, 8)), (3, 4)), 38, Int
 
 block:

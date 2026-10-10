@@ -462,6 +462,28 @@ proc runComposeTilerTests =
     let c = compose(make_layout((4, 8), (1, 4)), (_, make_layout(2, 2)))
     check c.shape, (4, 2), (Int[4], Int[2])
     check c.stride, (1, 8), (Int[1], Int[8])
+  # an all-keep tiler is the identity
+  block:
+    let c = compose(make_layout((4, 8), (1, 4)), (_, _))
+    check c.shape, (4, 8), (Int[4], Int[8])
+    check c.stride, (1, 4), (Int[1], Int[4])
+  # keep-marks on a runtime layout keep the runtime strides verbatim
+  block:
+    let dS = 4
+    let c = compose(make_layout((4, 8), (1, dS)), (make_layout(4, 1), _))
+    check c.shape, (4, 8), (Int[4], Int[8])
+    check c.stride, (1, dS), (Int[1], int)
+  block:
+    let dS = 4
+    let c = compose(make_layout((4, 8), (1, dS)), (_, 2))
+    check c.shape, (4, 2), (Int[4], Int[2])
+    check c.stride, (1, dS), (Int[1], int)
+  block:
+    let dS0 = 1
+    let dS1 = 4
+    let c = compose(make_layout((4, 8), (dS0, dS1)), (_, _))
+    check c.shape, (4, 8), (Int[4], Int[8])
+    check c.stride, (dS0, dS1), (int, int)
   # static tiler literals promote through makeIntTuple forms too
   block:
     let c = compose(make_layout((32, 8), (1, 32)), makeIntTuple((16, 2)))
@@ -518,7 +540,7 @@ proc runComposeTilerTests =
     let c2 = compose(sb, (_, make_layout(2, 2)))
     check c2.shape, (4, 2), (Int[4], Int[2])
     check c2.stride, (1, 8), (Int[1], Int[8])
-  echo "  tiler: 17 cases OK"
+  echo "  tiler: 24 cases OK"
 
 # ── symbol-bound arguments ───────────────────────────────────
 proc runComposeDynamicTests =
