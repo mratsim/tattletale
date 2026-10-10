@@ -40,6 +40,8 @@ func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
 proc unwrapTypedesc(n: NimNode): NimNode
 proc csAdd*(ta, tb: NimNode): NimNode
 proc csScaleCoeffs*(kv: int, ta: NimNode): NimNode
+proc csEvalVec*(k: NimNode, ta: NimNode): NimNode
+proc csZipAdd*(ta, tb, sha, shb: NimNode): NimNode
 
 macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   result = nnkCall.newTree(nnkBracketExpr.newTree(
@@ -54,30 +56,109 @@ macro `*`*[A: CoordStride](a: A, k: typed): untyped =
     bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
 
 macro `+`*[A: CoordStride](a: A, k: typed): untyped =
+  ## Static int on the right: building direction, the scalar mixed
+  ## into the stride.
+  ## Runtime tuple on the right: eval direction, the stride atom read
+  ## as a constant coordinate and zipped in.
   let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
            else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride",
-    csAdd(a.getTypeInst[1], nnkTupleConstr.newTree(newIntLitNode(kv)))))
+  if kv != DynamicSentinel:
+    result = nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride",
+      csAdd(a.getTypeInst[1], nnkTupleConstr.newTree(newIntLitNode(kv)))))
+  else:
+    doAssert k.getTypeInst().isTupleTy(),
+      "CoordStride +: expected a static int or a coordinate tuple"
+    result = csZipAdd(k, a.getTypeInst[1], k.getTypeInst, a.getTypeInst[1])
 
 macro `+`*[A: CoordStride](k: typed, a: A): untyped =
+  ## Symmetric to `+`(a: CoordStride, k: typed).
   let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
            else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride",
-    csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), a.getTypeInst[1])))
+  if kv != DynamicSentinel:
+    result = nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride",
+      csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), a.getTypeInst[1])))
+  else:
+    doAssert k.getTypeInst().isTupleTy(),
+      "CoordStride +: expected a static int or a coordinate tuple"
+    result = csZipAdd(k, a.getTypeInst[1], k.getTypeInst, a.getTypeInst[1])
 
 macro `*`*[A: CoordStride](k: typed, a: A): untyped =
+  ## Static scalar on the left: building direction, the stride
+  ## scaled by `kv`, still a coordinate stride.
+  ## Runtime leaf on the left: eval direction, the coordinate
+  ## contribution with one term per codomain mode.
   let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
            else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride *: cannot scale by a runtime value", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
+  if kv != DynamicSentinel:
+    result = nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
+  else:
+    result = csEvalVec(k, a.getTypeInst[1])
+
+# ═══════════════════════════════════════════════════════════════
+#   Evaluation: runtime coordinate leaf x coordinate stride
+# ═══════════════════════════════════════════════════════════════
+
+proc csEvalVec(k: NimNode, ta: NimNode): NimNode =
+  ## Runtime coordinate leaf `k` times a coordinate-stride coeff vector:
+  ## contributes `coeff * k` to codomain mode i. Zero coefficients stay
+  ## literal 0 so the tuple shape, and mode positions, are preserved.
+  if ta.kind in {nnkTupleConstr, nnkPar}:
+    result = nnkTupleConstr.newTree()
+    for i in 0 ..< ta.len:
+      result.add(csEvalVec(k, ta[i]))
+  elif ta.intVal == 0:
+    result = newIntLitNode(0)
+  else:
+    result = nnkInfix.newTree(ident"*", k, newIntLitNode(ta.intVal))
+
+proc csZipAdd(ta, tb, sha, shb: NimNode): NimNode =
+  ## Leafwise addition of two coordinate tuple expressions.
+  ##
+  ## - zero-filled to the longer rank: an atom covers a few codomain
+  ##   modes and the sum spans the union, the same zero fill
+  ##   `csAdd` applies when merging strides at build time
+  ## - a scalar against a tuple broadcasts to every mode
+  let la = if sha.isTupleTy(): sha.len else: 0
+  let lb = if shb.isTupleTy(): shb.len else: 0
+  if la == 0 and lb == 0:
+    result = nnkInfix.newTree(ident"+", ta, tb)
+  else:
+    result = nnkTupleConstr.newTree()
+    for i in 0 ..< max(la, lb):
+      # a scalar side broadcasts, a shorter tuple side zero-fills
+      let ea = if la == 0: ta
+               elif i < la: nnkBracketExpr.newTree(ta, newIntLitNode(i))
+               else: newIntLitNode(0)
+      let eb = if lb == 0: tb
+               elif i < lb: nnkBracketExpr.newTree(tb, newIntLitNode(i))
+               else: newIntLitNode(0)
+      let sa = if la == 0: sha
+               elif i < la: sha[i]
+               else: newIntLitNode(0)
+      let sb = if lb == 0: shb
+               elif i < lb: shb[i]
+               else: newIntLitNode(0)
+      result.add(csZipAdd(ea, eb, sa, sb))
+
+macro `+`*(a, b: tuple): untyped =
+  ## Semimodule completion, evaluation side: leafwise
+  ## coordinate-tuple addition. This evaluates at runtime what
+  ## `csAdd` merges into strides at layout-building time.
+  ##
+  ## - each side is bound once before indexing and then addressed
+  ##   element by element through the bound symbols
+  ## - the shape comes from the static types, macro arguments arrive
+  ##   unexpanded so element structure is not walkable directly
+  let lhs = genSym(nskLet, "csZipLhs")
+  let rhs = genSym(nskLet, "csZipRhs")
+  let stmts = nnkStmtList.newTree(
+    nnkLetSection.newTree(nnkIdentDefs.newTree(lhs, newEmptyNode(), a)),
+    nnkLetSection.newTree(nnkIdentDefs.newTree(rhs, newEmptyNode(), b)),
+    csZipAdd(lhs, rhs, a.getTypeInst, b.getTypeInst))
+  result = nnkPar.newTree(stmts)
 
 # ═══════════════════════════════════════════════════════════════
 #   Constructors
