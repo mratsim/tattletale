@@ -28,7 +28,7 @@ _root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."
 sys.path.insert(0, os.path.join(_root, "_references_research", "NVlabs-CuTe"))
 
 from pycute import (E, ImplicitAccessor, Layout, Ptr, Tensor, composition,
-                    idx2crd, in_bounds, size, zipped_divide)
+                    idx2crd, in_bounds, repeat_like, size, zipped_divide)
 
 # ── the Apple 8x8x8 MMA atom, verbatim from h_mma_registry.nim ──────
 
@@ -65,11 +65,13 @@ def get_tv_crd_layout():
     """
     atomT = get_atom_tile_flat()
     cell_outer, cell_last = 8, 8  # the atom's (M, K)
-    rep_outer, rep_last = MT // cell_outer, KT // cell_last
-    tile_outer = cell_outer * rep_outer
+    # the rep counts and cell strides are the rest modes of the tile
+    # divided by the atom, no hand division, already in tile-flat space
+    tiled_tile = zipped_divide(Layout((MT, KT)), (cell_outer, cell_last))
+    cell_map = Layout(tiled_tile.shape[1], tiled_tile.stride[1])
     # getMatmulThreadmap with the converted atom part
-    thread_map_t = Layout((atomT.shape, (rep_outer, rep_last)),
-                          (atomT.stride, (cell_outer, tile_outer * cell_last)))
+    thread_map_t = Layout((atomT.shape, cell_map.shape),
+                          (atomT.stride, cell_map.stride))
     tile_id = Layout((MT, KT), (E(0), E(1)))
     return composition(tile_id, thread_map_t)
 
@@ -110,6 +112,13 @@ def load_tile_one_step(data, world, tvcrd, tile_id, thr, fill=0.0):
              slice(None)),
             (slice(None), slice(None))),
            rest)
+    # the selector from the shape tree of R itself: dice the atom leaves
+    # with the thread coords, keep the cells, dice the rest with the tile
+    # coords. The nesting is R.shape's own, no rank literals
+    thr_crd = idx2crd(thr, R.shape[0][0][0])
+    cells_keep = repeat_like(slice(None), R.shape[0][1])
+    rest_crd = idx2crd(tile_id, R.shape[1])
+    sel = (((thr_crd, slice(None)), cells_keep), rest_crd)
     frag = Tensor(Ptr(data), R)[sel]
     cfrag = Tensor(ImplicitAccessor(0), RC)[sel]
     out = []
@@ -164,12 +173,10 @@ def fragment_positions(world, tvcrd, tile_id, thr):
     """
     C = Layout(world.shape, (E(0), E(1)))
     RC = zipped_divide(C, tvcrd)
-    thr_crd = idx2crd(thr, tvcrd.shape[0][0])
+    thr_crd = idx2crd(thr, RC.shape[0][0][0])
+    cells_keep = repeat_like(slice(None), RC.shape[0][1])
     rest = idx2crd(tile_id, RC.shape[1])
-    sel = ((((thr_crd[0], thr_crd[1], thr_crd[2], thr_crd[3], thr_crd[4]),
-             slice(None)),
-            (slice(None), slice(None))),
-           rest)
+    sel = (((thr_crd, slice(None)), cells_keep), rest)
     cfrag = Tensor(ImplicitAccessor(0), RC)[sel]
     # same colex element order as the loader: (vpt, cell0, cell1)
     return [tuple(cfrag[tuple(idx2crd(i, cfrag.layout.shape))])
