@@ -478,6 +478,17 @@ proc runComplementCoordStrideTests =
     let rc = zipped_divide(cworld, tv)
     check rc.stride[1][0], ism_coord_strides.E(32, 0), ism_coord_strides.CoordStride[(32,)]
     check rc.stride[1][1], ism_coord_strides.E(16, 1), ism_coord_strides.CoordStride[(0, 16)]
+  block:
+    ## dynamic cotarget: a runtime world mode extends its terminal
+    ## shape by runtime ceil_div, the static mode folds, the paired
+    ## static run over (96, 192) gives rest shape (3, 12)
+    let M = 96
+    let cworldDyn = make_layout((M, 192), (ism_coord_strides.E(0), ism_coord_strides.E(1)))
+    let rcDyn = zipped_divide(cworldDyn, tv)
+    check rcDyn.stride[1][0], ism_coord_strides.E(32, 0), ism_coord_strides.CoordStride[(32,)]
+    check rcDyn.stride[1][1], ism_coord_strides.E(16, 1), ism_coord_strides.CoordStride[(0, 16)]
+    check rcDyn.shape[1][1], 12, Int[12]
+    check rcDyn.shape[1][0], ceil_div(M, 32), int
   echo "  Coordinate strides: 4 cases OK"
 
 # ═══════════════════════════════════════════════════════════════

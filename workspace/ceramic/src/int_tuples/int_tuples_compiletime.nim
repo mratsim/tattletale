@@ -29,8 +29,7 @@ template isConst*(a: tuple): bool = false
 
 func IntCT*(val: int): NimNode {.compileTime.} =
   ## Shorthand: Int[val]() AST node.
-  newNimNode(nnkObjConstr).add(
-    newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
+  newNimNode(nnkObjConstr).add(newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
 
 func divmod*(a, b: int): (int, int) {.compileTime.} =
   ## Quotient and remainder of `a` divided by `b`.
@@ -133,6 +132,9 @@ func abs*(a: NimNode): NimNode {.compileTime.} =
 
 func min*(a, b: NimNode): NimNode {.compileTime.} =
   bindSym"min".newCall(a, b)
+
+func max*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"max".newCall(a, b)
 
 func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
   bindSym"ceil_div".newCall(a, b)

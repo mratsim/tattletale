@@ -1,0 +1,184 @@
+# e04_load_tile_oneshot_check_gemm: device GEMM result check, one-step loader
+# Run: nim c -r -d:release workspace/ceramic/experiments/e04_load_tile_oneshot_check_gemm.nim
+#
+# Runs the e03 gemm on Metal, the loadTileOneStep and storeTileOneStep
+# legs over the Apple 8x8x8 MMA atom. Every output element is compared
+# against a host fp32 reference over the ragged-shape and stride-order set.
+
+import std/[strformat, math]
+
+import workspace/crucible
+import workspace/crucible/src/runtime/exec/metal_runtime
+import workspace/crucible/src/runtime/engines/arg_blobs
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/tensors
+import ./e04_load_tile_oneshot
+
+{.experimental: "callOperator".}
+
+func fp32ToFp16(x: float32): uint16 =
+  ## IEEE-754 binary32 to binary16 bit pattern, round-to-nearest-even
+  let u = cast[uint32](x)
+  let sign = uint16((u shr 16) and 0x8000'u32)
+  let aexp = int32((u shr 23) and 0xFF)
+  let mant = u and 0x7FFFFF'u32
+  if aexp == 0xFF:
+    if mant == 0: return sign or 0x7C00'u16
+    return sign or 0x7C00'u16 or 0x0200'u16
+  var bexp = aexp - 127 + 15
+  if bexp >= 31:
+    return sign or 0x7C00'u16
+  if bexp <= 0:
+    if bexp < -10: return sign
+    let m2 = mant or 0x800000'u32
+    let shift = uint32(126 - aexp)
+    let half = 1'u32 shl (shift - 1)
+    var r = m2 shr shift
+    let rem = m2 and ((1'u32 shl shift) - 1)
+    if rem > half or (rem == half and (r and 1) == 1):
+      r += 1
+    return sign or uint16(r)
+  let half = 0x1000'u32
+  var r = mant shr 13
+  let rem = mant and 0x1FFF'u32
+  if rem > half or (rem == half and (r and 1) == 1):
+    r += 1
+    if r == 0x400:
+      bexp += 1
+      r = 0
+      if bexp >= 31:
+        return sign or 0x7C00'u16
+  return sign or uint16(bexp shl 10) or uint16(r)
+
+func fp16ToFp32(h: uint16): float32 =
+  ## Exact binary16 to binary32, every fp16 value is representable in fp32
+  let sign = uint32(h and 0x8000'u16) shl 16
+  let e = (h shr 10) and 0x1F'u16
+  let m = h and 0x3FF'u16
+  if e == 0:
+    if m == 0: return cast[float32](sign)
+    var m2 = uint32(m)
+    var e2 = 113
+    while (m2 and 0x400'u32) == 0:
+      m2 = m2 shl 1
+      dec e2
+    return cast[float32](sign or (uint32(e2) shl 23) or ((m2 and 0x3FF'u32) shl 13))
+  if e == 0x1F:
+    return cast[float32](sign or 0x7F800000'u32 or (uint32(m) shl 13))
+  return cast[float32](sign or (uint32(e + 112) shl 23) or (uint32(m) shl 13))
+
+# raw pointers + int scalars only: layout structs exceed the 16-byte
+# constant-buffer slot (the marshaling finding), the views build in-kernel
+const gemmMsl = metal:
+  proc gemmK(C, A, B: ptr UncheckedArray[float32], M, N, K: int, sA0, sA1, sB0, sB1, sC0, sC1: int) {.global.} =
+    const mma = tiledMma(float32, float16, float16, 32, 32, 16)
+    let aView = make_view(cast[ptr UncheckedArray[float16]](A),
+                          makeIntTuple((M, K)), makeIntTuple((sA0, sA1)))
+    let bView = make_view(cast[ptr UncheckedArray[float16]](B),
+                          makeIntTuple((N, K)), makeIntTuple((sB0, sB1)))
+    let cView = make_view(C, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
+    let cGeom = zipped_divide(cView.getLayout(), (32, 32))
+    # plain arithmetic for the fleet walk. The crd2idx tuple path
+    # treats runtime coordinate symbols as keep-marks, the static-fold
+    # part3 finding, so every threadgroup computed tile (0, 0)
+    let gx = int(threadgroup_position_in_grid.x)
+    let gy = int(threadgroup_position_in_grid.y)
+    let gz = int(threadgroup_position_in_grid.z)
+    let tileID = gx + int(threadgroups_per_grid.x) * gy +
+                 int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * gz
+    let threadIdx = thread_index_in_threadgroup
+    gemm(mma, cView, aView, bView, tileID, threadIdx)
+
+proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
+    M, N, K: int, sA, sB, sC: (int, int), gxMul = 1, gyMul = 1): bool =
+  ## One device GEMM against the host reference, worst |d| report
+  let
+    gridX = ((M + 31) div 32) * gxMul
+    gridY = ((N + 31) div 32) * gyMul
+  var
+    dBuf = allocBuffer(metalCtx.device, M * N * sizeof(float32))
+    aBuf = allocBuffer(metalCtx.device, M * K * sizeof(uint16))
+    bBuf = allocBuffer(metalCtx.device, K * N * sizeof(uint16))
+  let
+    A = cast[ptr UncheckedArray[uint16]](aBuf.data)
+    B = cast[ptr UncheckedArray[uint16]](bBuf.data)
+    C = cast[ptr UncheckedArray[float32]](dBuf.data)
+  for m in 0 ..< M:
+    for k in 0 ..< K:
+      A[m * K + k] = fp32ToFp16(float32(1 + (2 * m + 7 * k) mod 13))
+  for k in 0 ..< K:
+    for n in 0 ..< N:
+      B[k * N + n] = fp32ToFp16(float32(1 + (3 * k + 11 * n) mod 17))
+
+  let
+    aView = make_view(cast[ptr UncheckedArray[float16]](aBuf.data),
+                      makeIntTuple((M, K)),
+                      makeIntTuple((sA[0], sA[1])))
+    bView = make_view(cast[ptr UncheckedArray[float16]](bBuf.data),
+                      makeIntTuple((N, K)),
+                      makeIntTuple((sB[0], sB[1])))
+    cView = make_view(cast[ptr UncheckedArray[float32]](dBuf.data),
+                      makeIntTuple((M, N)),
+                      makeIntTuple((sC[0], sC[1])))
+  var dArg = PtrArg[float32](buf: cast[ptr UncheckedArray[float32]](dBuf.data),
+                             len: M * N, off: 0)
+  engine.run << (grid: (gridX, gridY), blk: (32, 1)) >>
+    (which,
+     dArg,
+     (PtrArg[float16](buf: cast[ptr UncheckedArray[float16]](aBuf.data),
+                      len: M * K, off: 0),
+      PtrArg[float16](buf: cast[ptr UncheckedArray[float16]](bBuf.data),
+                      len: K * N, off: 0),
+      M, N, K,
+      sA[0], sA[1], sB[0], sB[1],
+      sC[0], sC[1]))
+
+  var bad = 0
+  var worst = 0.0'f32
+  var first = ""
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      var acc = 0.0'f32
+      for k in 0 ..< K:
+        acc += fp16ToFp32(A[m * sA[0] + k * sA[1]]) * fp16ToFp32(B[n * sB[0] + k * sB[1]])
+      let want = acc
+      let got = C[m * sC[0] + n * sC[1]]
+      let d = abs(got - want)
+      worst = max(worst, d)
+      if d > 1e-3'f32:
+        inc bad
+        if bad == 1: first = &"({m},{n}): got {got} want {want}"
+  let pass = bad == 0
+  echo (if pass: &"  {label} {M}x{N}x{K} A{sA} B{sB} C{sC}: PASS worst |d| = {worst}"
+        else: &"  {label} {M}x{N}x{K} A{sA} B{sB} C{sC}: FAIL {bad} bad, e.g. {first}, worst {worst}")
+  releaseBuffer(dBuf)
+  releaseBuffer(aBuf)
+  releaseBuffer(bBuf)
+  return pass
+
+proc main =
+  var engine = bkMetal.init()
+  engine.ingest(gemmMsl)
+  let metalCtx = initMetal()
+  var ok = true
+  # the square base case, both stride orders per operand
+  for sA in [(32, 1), (1, 32)]:
+    for sB in [(1, 32), (32, 1)]:
+      for sC in [(32, 1), (1, 32)]:
+        ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 32, 32, sA, sB, sC) and ok
+  # ragged shapes, M/N/K edges exercise the inBounds guards on device
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 32, 41, (41, 1), (1, 32), (32, 1)) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 40, 32, 32, (32, 1), (1, 32), (32, 1)) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 45, 32, (32, 1), (1, 45), (45, 1)) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 40, 45, 41, (41, 1), (1, 45), (45, 1)) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 100, (100, 1), (1, 50), (50, 1)) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 96, (96, 1), (1, 50), (50, 1)) and ok
+  # oversize grids, parked excess blocks exercise the tileID guard
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 64, 64, 64, (64, 1), (1, 64), (64, 1), gxMul = 3, gyMul = 2) and ok
+  ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 100, (100, 1), (1, 50), (50, 1), gxMul = 2, gyMul = 3) and ok
+  if ok: echo "e04 check_gemm: all green"
+  else: quit 1
+
+when isMainModule:
+  main()

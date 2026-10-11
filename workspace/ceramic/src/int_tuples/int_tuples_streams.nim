@@ -35,7 +35,7 @@ type
       discard
 
 func depth*(ev: TupleStreamEvent): int {.inline.} =
-  result = ev.path.len
+  return ev.path.len
 
 func unwrapStmtListExpr*(node: NimNode): NimNode =
   if node.kind == nnkStmtListExpr:
@@ -181,7 +181,7 @@ func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
              else: nnkTupleConstr.newTree()
   for n in tb.accums[id]:
     node.add n
-  result = node
+  return node
 
 # ═════ Nested tuple builder ══════════════════════════════════════════
 
@@ -232,7 +232,7 @@ func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode
   var node = tb.completed[id]
   if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
     node = node[0]
-  result = node
+  return node
 
 # ═══════════════════════════════════════════════════════════════════════
 #  onLeaves, consumer-side event ingest
@@ -285,6 +285,44 @@ iterator items*(z: TupleZip): tuple[a, b: TupleStreamEvent] =
   var w = z
   while not w.done():
     yield w.next()
+
+# ═════════════════════════════════════════════════════════════════════
+#  Zip longest
+# ═════════════════════════════════════════════════════════════════════
+
+# ═════ Zip-longest walk over two tuple trees of different ranks ═════
+
+type
+  TupleZipLongest* = object
+    a, b: TupleStream
+
+func zipLongest*(a, b: TupleStream): TupleZipLongest =
+  ## Zips two tuple streams longest-first.
+  ##
+  ## Contract:
+  ## - both streams share one event structure, events pair one to one
+  ## - a side out of leaves repeats the other side's event, nil leaf
+  ## - the consumer decides the fill value for a nil leaf
+  TupleZipLongest(a: a, b: b)
+
+func done*(z: var TupleZipLongest): bool =
+  ## True once both streams are exhausted
+  z.a.done() and z.b.done()
+
+func next*(z: var TupleZipLongest): tuple[a, b: TupleStreamEvent] =
+  ## Pairs the next event of each side, a side without leaves
+  ## left gets the other side's event with a nil leaf
+  if z.a.done():
+    result.b = z.b.next()
+    result.a = result.b
+    result.a.leaf = nil
+  elif z.b.done():
+    result.a = z.a.next()
+    result.b = result.a
+    result.b.leaf = nil
+  else:
+    result.a = z.a.next()
+    result.b = z.b.next()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Filters
