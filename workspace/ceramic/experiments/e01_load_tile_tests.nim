@@ -4,6 +4,7 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import ./e01_load_tile
 {.experimental: "callOperator".}
+
 proc refTile(M, K, bm, bk, tileM, tileK: int): seq[float32] =
   result = newSeq[float32](tileM * tileK)
   for j in 0 ..< tileK:
@@ -14,6 +15,7 @@ proc refTile(M, K, bm, bk, tileM, tileK: int): seq[float32] =
           float32(100 * m + k)
         else:
           0'f32
+
 proc refTileChunked(M, K, bm, bk, tileM, tileK, chunkElems: int): seq[float32] =
   result = refTile(M, K, bm, bk, tileM, tileK)
   for c in 0 ..< result.len div chunkElems:
@@ -27,10 +29,12 @@ proc refTileChunked(M, K, bm, bk, tileM, tileK, chunkElems: int): seq[float32] =
     if straddles:
       for e in 0 ..< chunkElems:
         result[c * chunkElems + e] = 0'f32
+
 proc checkTile(got, want: seq[float32], name: string) =
   for i in 0 ..< want.len:
     doAssert got[i] == want[i],
       name & ": element " & $i & " got " & $got[i] & " want " & $want[i]
+
 proc runElementLoad(M, K, bm, bk: int, name: string) =
   let (worldData, world) = makeWorld(M, K)
   const tileM = 8
@@ -39,6 +43,7 @@ proc runElementLoad(M, K, bm, bk: int, name: string) =
   var tile = make_view(addr buf[0], make_layout((tileM, tileK), (1, tileM)))
   tile.loadTile(addr worldData[0], world, (bm * tileM, bk * tileK))
   checkTile(buf, refTile(M, K, bm, bk, tileM, tileK), name)
+
 proc runChunkedLoad(M, K, bm, bk: int, name: string) =
   let (worldData, world) = makeWorld(M, K)
   const tileM = 8
@@ -49,6 +54,7 @@ proc runChunkedLoad(M, K, bm, bk: int, name: string) =
   let preds = chunkPredicates(world, tileM, tileK, chunkW, (bm * tileM, bk * tileK))
   tile.loadTileChunked(addr worldData[0], world, (bm * tileM, bk * tileK), preds, chunkW)
   checkTile(buf, refTileChunked(M, K, bm, bk, tileM, tileK, chunkW), name & " (chunked)")
+
 proc runGranularityContrast(M, K, bm, bk: int) =
   let (worldData, world) = makeWorld(M, K)
   const tileM = 8

@@ -3,6 +3,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 {.experimental: "callOperator".}
+
 proc loadTile*[T, ShT, StT](tile: var TensorView[T, ShT, StT], worldData: ptr T, world: Layout, blockOrigin: tuple) =
   let w = cast[ptr UncheckedArray[T]](worldData)
   let worldShape = world.shape
@@ -14,6 +15,7 @@ proc loadTile*[T, ShT, StT](tile: var TensorView[T, ShT, StT], worldData: ptr T,
       tile.data[dstOff] = w[toInt(crd2idx(world, worldCrd))]
     else:
       tile.data[dstOff] = default(T)
+
 proc chunkPredicates*(world: Layout, tileM, tileK, chunkElems: int, blockOrigin: tuple): seq[bool] =
   let worldShape = world.shape
   let numChunks = tileM * tileK div chunkElems
@@ -26,6 +28,7 @@ proc chunkPredicates*(world: Layout, tileM, tileK, chunkElems: int, blockOrigin:
       let worldCrd = zipDimensionsWith(tileCrd, blockOrigin): it_a + it_b
       all = all and worldCrd.inBounds(worldShape)
     result[c] = all
+
 proc loadTileChunked*[T, ShT, StT](tile: var TensorView[T, ShT, StT],
                         worldData: ptr T,
                         world: Layout,
@@ -43,6 +46,7 @@ proc loadTileChunked*[T, ShT, StT](tile: var TensorView[T, ShT, StT],
       tile.data[dstOff] = w[toInt(crd2idx(world, worldCrd))]
     else:
       tile.data[dstOff] = default(T)
+
 proc makeWorld*(M, K: int): auto =
   var data = newSeq[float32](M * K)
   for m in 0 ..< M:

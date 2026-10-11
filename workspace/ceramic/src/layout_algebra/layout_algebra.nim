@@ -145,10 +145,11 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
     appendChain()
   elif pending.isNil:
     builder.append(IntCT(1), IntCT(0))
-  elif not dropTrailing or builder.count == 0:
+  if not pending.isNil and pending.kind != nnkEmpty:
     # the discard drops the trailing size-1 mode only when other
     # modes precede it, a lone size-1 result stays
-    builder.append(IntCT(1), (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
+    if not dropTrailing or builder.count == 0:
+      builder.append(IntCT(1), (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
   return builder.emitLayout()
 
 macro coalesce*(layout: Layout): untyped =

@@ -4,9 +4,11 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import ./e01_load_tile
 {.experimental: "callOperator".}
+
 const TileM = 128
 const TileK = 128
 const ChunkW = 4
+
 proc makeWorldLayout(M, K: int, kind: static string): auto =
   when kind == "row-major":
     make_layout((M, K), (K, 1))
@@ -14,11 +16,13 @@ proc makeWorldLayout(M, K: int, kind: static string): auto =
     make_layout((M, K), (1, M))
   else:
     make_layout((M, K), (1, K + 7))
+
 proc makeData(M, K, stM, stK: int): seq[float32] =
   result = newSeq[float32](stM * (M - 1) + stK * (K - 1) + 1)
   for m in 0 ..< M:
     for k in 0 ..< K:
       result[m * stM + k * stK] = float32(m + k)
+
 proc bench(name: string, M, K: int, kind: static string, chunked: bool) =
   const edgeM = 3
   const edgeK = 5

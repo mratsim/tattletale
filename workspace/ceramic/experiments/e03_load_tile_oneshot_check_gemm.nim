@@ -6,7 +6,18 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import ./e03_load_tile_oneshot
+import workspace/ceramic/src/int_tuples/int_tuples_streams
+import workspace/ceramic/src/layout_algebra/ism_coord_strides
+import workspace/ceramic/src/layout_algebra/layout_compiletime
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
+import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
+import workspace/ceramic/src/macros/static_for
 {.experimental: "callOperator".}
+
 func fp32ToFp16(x: float32): uint16 =
   let u = cast[uint32](x)
   let sign = uint16((u shr 16) and 0x8000'u32)
@@ -39,6 +50,7 @@ func fp32ToFp16(x: float32): uint16 =
       if bexp >= 31:
         return sign or 0x7C00'u16
   return sign or uint16(bexp shl 10) or uint16(r)
+
 func fp16ToFp32(h: uint16): float32 =
   let sign = uint32(h and 0x8000'u16) shl 16
   let e = (h shr 10) and 0x1F'u16
@@ -54,6 +66,7 @@ func fp16ToFp32(h: uint16): float32 =
   if e == 0x1F:
     return cast[float32](sign or 0x7F800000'u32 or (uint32(m) shl 13))
   return cast[float32](sign or (uint32(e + 112) shl 23) or (uint32(m) shl 13))
+
 const gemmMsl = metal:
   proc gemmK(C, A, B: ptr UncheckedArray[float32], M, N, K: int, sA0, sA1, sB0, sB1, sC0, sC1: int) {.global.} =
     const mma = tiledMma(float32, float16, float16, 32, 32, 16)
@@ -70,6 +83,7 @@ const gemmMsl = metal:
                  int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * gz
     let threadIdx = thread_index_in_threadgroup
     gemm(mma, cView, aView, bView, tileID, threadIdx)
+
 proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
     M, N, K: int, sA, sB, sC: (int, int), gxMul = 1, gyMul = 1): bool =
   let
@@ -133,6 +147,7 @@ proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
   releaseBuffer(aBuf)
   releaseBuffer(bBuf)
   return pass
+
 proc main =
   var engine = bkMetal.init()
   engine.ingest(gemmMsl)
@@ -152,5 +167,6 @@ proc main =
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 100, (100, 1), (1, 50), (50, 1), gxMul = 2, gyMul = 3) and ok
   if ok: echo "e03 check_gemm: all green"
   else: quit 1
+
 when isMainModule:
   main()

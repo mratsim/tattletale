@@ -13,8 +13,7 @@ import workspace/crucible
 import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 import workspace/ceramic/src/macros/static_for
-export int_tuples, layout_algebra, tensors, h_mma_configgen, h_mma_registry,
-       h_mma_properties, h_mma_dispatch, k_layout_gemm, k_layout_fillwith_gpu
+
 proc getMmaAtom*(TAcc, TA, TB: typedesc): static MmaAtom {.inline.} =
   static:
     doAssert TAcc is float32, "the picked atoms accumulate in fp32"
@@ -33,8 +32,10 @@ proc getMmaAtom*(TAcc, TA, TB: typedesc): static MmaAtom {.inline.} =
     elif TAcc is float32 and TA is bfloat16 and TB is bfloat16:
       UNIVERSAL_1x1x1_F32BF16BF16F32
     else: {.error: "no MMA atom for the requested element types".}
+
 type TiledMma*[TAcc, TA, TB; MT, NT, KT: static int] = object
   atom*: MmaAtom
+
 proc tiledMma*[TAcc, TA, TB](
       _: typedesc[TAcc], _: typedesc[TA], _: typedesc[TB],
       MT, NT, KT: static int
@@ -44,6 +45,7 @@ proc tiledMma*[TAcc, TA, TB](
     result = TiledMma[TAcc, TA, TB, MT, NT, KT](atom: atom)
   else:
     {.error: "the tile dimensions are not multiples of the resolved atom's cell dimensions".}
+
 template getMmaLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
   const
     vpt = mma.atom.valuesPerThread(op)
@@ -52,6 +54,7 @@ template getMmaLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
     repOuter = (when op == opB: mma.NT else: mma.MT) div cellOuter
     repLast = (when op == opC: mma.NT else: mma.KT) div cellLast
   make_layout((vpt, (repOuter, repLast)))
+
 template getMatmulThreadmap*(mma: static TiledMma, op: static MmaOperand): untyped =
   const
     atomMap = mma.atom.getLayout(op)
@@ -62,24 +65,31 @@ template getMatmulThreadmap*(mma: static TiledMma, op: static MmaOperand): untyp
     tileOuter = cellOuter * repOuter
   make_layout((atomMap.shape, (repOuter, repLast)),
               (atomMap.stride, (cellOuter, tileOuter * cellLast)))
+
 template atomThreads*(mma: static TiledMma): int =
   toInt(mma.atom.threadCount(opA))
+
 template rt*(T: typedesc, dims: IntOrIntTuple): untyped =
   make_tensor(T, makeIntTuple(dims))
+
 template rt*(T: typedesc, L: Layout): untyped =
   make_tensor(T, L)
+
 macro repeatLike*(guide: tuple, elem: untyped): untyped =
   var builder = TupleBuilderNested.new(1, dropEmpty = false)
   for event in guide.tupleStream():
     builder.onLeaves(event):
       builder.append(elem)
   result = builder.emit(0, emitScalarForSize1 = false)
+
 template size*(t: IntOrIntTuple): auto =
   fold(t, Int[1](), acc * it)
+
 template zero*(T: typedesc): untyped =
   when T is float16: cast[T](0'u16)
   elif T is bfloat16: cast[T](0'u16)
   else: T(0)
+
 template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
   const threadMap = mma.getMatmulThreadmap(op)
   const cellOuter = (when op == opB: mma.atom.getN() else: mma.atom.getM())
@@ -97,6 +107,7 @@ template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
   const lift = (ism_coord_strides.E(toInt(tileShape[0]), 0),
                 ism_coord_strides.E(toInt(tileShape[1]), 1))
   (tvcrd, tileShape, lift)
+
 macro evalTileCoord*(layout: typed, coords: typed): untyped =
   var ty = layout.getTypeInst()
   var st: NimNode
@@ -138,10 +149,12 @@ macro evalTileCoord*(layout: typed, coords: typed): untyped =
       if flat[k] != 0:
         addTerm(k, nnkInfix.newTree(bindSym"*", newLit(flat[k]), x))
   result = if acc.len == 1: acc[0] else: nnkPar.newTree(acc)
+
 template divideByTVCrd*(world, tvcrd, tileShape: untyped): untyped =
   let Rtv = compose(world, tvcrd)
   let tiled = zipped_divide(world, tileShape)
   make_layout((tvcrd.shape, tiled.shape[1]), (Rtv.stride, tiled.stride[1]))
+
 template loadTileOneStep*[T, ShD, StD, ShS, StS](
     dst: var TensorOwned[T, ShD, StD], src: TensorView[T, ShS, StS],
     cfg: untyped, threadIdx: untyped, tileID: IntOrIntTuple,
@@ -171,6 +184,7 @@ template loadTileOneStep*[T, ShD, StD, ShS, StS](
         (cellC[0], cellC[1])), (tidN[0], tidN[1])))
     if worldC.inBounds(worldShape):
       dst.data[i] = src.data[fragOff + crd2idx(frag, i)]
+
 template storeTileOneStep*[T, ShD, StD, ShS, StS](
     dst: TensorView[T, ShD, StD], src: TensorOwned[T, ShS, StS],
     cfg: untyped, threadIdx: int, tileID: IntOrIntTuple) =
@@ -196,6 +210,7 @@ template storeTileOneStep*[T, ShD, StD, ShS, StS](
         (cellC[0], cellC[1])), (tidN[0], tidN[1])))
     if worldC.inBounds(worldShape):
       dst.data[fragOff + crd2idx(frag, i)] = src.data[i]
+
 template gemm*(mma: static TiledMma, C, A, B: untyped, tileID: untyped, threadIdx: untyped) =
   const cfgA = mma.getTVCrdLayout(opA)
   const cfgB = mma.getTVCrdLayout(opB)

@@ -1,6 +1,20 @@
 import std/[sequtils, sugar, strformat]
 import workspace/crucible
 import ./e03_load_tile_oneshot
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_streams
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/ism_coord_strides
+import workspace/ceramic/src/layout_algebra/layout_compiletime
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
+import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
+import workspace/ceramic/src/macros/static_for
+
 proc hostOneStepChecks: bool =
   const mma = e03_load_tile_oneshot.TiledMma[float32, float32, float32, 32, 32, 16](
       atom: APPLE_8x8x8_F32)
