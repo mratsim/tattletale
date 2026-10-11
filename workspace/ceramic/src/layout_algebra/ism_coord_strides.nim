@@ -393,3 +393,60 @@ proc unwrapTypedesc(n: NimNode): NimNode =
   if t.kind == nnkSym:
     return t.getImpl[2][1]
   error("CoordStride: not an CoordStride instantiation: " & t.repr, n)
+
+# ═══════════════════════════════════════════════════════════════
+#  strided divide/modulo mode arithmetic
+# ═══════════════════════════════════════════════════════════════
+#
+#  qᵢ = M div pᵢ, 1 when the running prefix exhausts M
+
+template stridedDiv*[S, B, P: int or Int](s: S, M: B, prefix: P): auto =
+  ## Mode shape of A' / M, qᵢ = M div pᵢ, 1 when exhausted
+  ##
+  ## Returns:
+  ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
+  ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
+  ##            = sᵢ             otherwise, the remainder is trimmed by % N
+  when S is Int and B is Int and P is Int:
+    const q = M div prefix + int(M div prefix === 0)
+    when q mod s === 0:
+      Int[1]()
+    elif q >= 1 and s mod q === 0:
+      Int[(s div q).toInt()]()
+    else:
+      Int[s.toInt()]()
+  else:
+    let m = M.toInt()
+    let p = prefix.toInt()
+    let q = m div p + int(m div p == 0)
+    let sv = s.toInt()
+    if q mod sv == 0: 1
+    elif q >= 1 and sv mod q == 0: sv div q
+    else: sv
+
+template stridedMod*[S, B, P: int or Int](s: S, N: B, prefix: P): auto =
+  ## Strided % N, mode shapeᵢ = min(sᵢ, max(1, N div pᵢ))
+  when S is Int and B is Int and P is Int:
+    const m = max(1, N div prefix)
+    when s < m:
+      Int[s.toInt()]()
+    else:
+      Int[m.toInt()]()
+  else:
+    let sv = s.toInt()
+    let n = N.toInt()
+    let p = prefix.toInt()
+    min(sv, max(1, n div p))
+
+template stridedMod*[B, P: int or Int](N: B, prefix: P): auto =
+  ## Last-mode quotient: max(1, N div p_last), truncation decays to size-1 modes
+  when B is Int and P is Int:
+    Int[max(1, N div prefix).toInt()]()
+  else:
+    let n = N.toInt()
+    let p = prefix.toInt()
+    max(1, n div p)
+
+# ═══════════════════════════════════════════════════════════════
+#  iteration bounds
+# ═══════════════════════════════════════════════════════════════

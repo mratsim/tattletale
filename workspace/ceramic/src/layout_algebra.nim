@@ -28,6 +28,7 @@ import
   workspace/ceramic/src/layout_algebra/layout_compiletime,
   workspace/ceramic/src/layout_algebra/layouts,
   workspace/ceramic/src/layout_algebra/layout_indexing,
+  workspace/ceramic/src/layout_algebra/ism_coord_strides,
   workspace/ceramic/src/layout_algebra/layout_algebra
 
 # ═══════════════════════════════════════════════════════════════
@@ -39,6 +40,7 @@ import
 # the Layout type, its predicates and its selectors.
 export int_tuples
 export layouts_datatypes
+export ism_coord_strides
 
 # ═══════════════════════════════════════════════════════════════
 #  Construction, the constructors only

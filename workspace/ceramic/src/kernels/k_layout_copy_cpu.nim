@@ -399,8 +399,8 @@ macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped 
   let bs = blockSize
 
   # ── Extract data pointers and layout references ──
-  let dstData = bindSym"elems".newCall(dst)
-  let srcData = bindSym"elems".newCall(src)
+  let dstData = newTree(nnkDotExpr, dst, ident"data")
+  let srcData = newTree(nnkDotExpr, src, ident"data")
   let srcLay = newTree(nnkCall, ident"getLayout", src)
   let dstLay = newTree(nnkCall, ident"getLayout", dst)
 
@@ -443,8 +443,8 @@ macro copyPermutedImpl[Rank: static int](
   let rawSrcSt = toSeqStaticInts(tvSrc[3])
   let R = Rank
   let bs = blockSize
-  let dstData = bindSym"elems".newCall(dst)
-  let srcData = bindSym"elems".newCall(src)
+  let dstData = newTree(nnkDotExpr, dst, ident"data")
+  let srcData = newTree(nnkDotExpr, src, ident"data")
   let dstLay = newTree(nnkCall, ident"getLayout", dst)
   let srcLay = newTree(nnkCall, ident"getLayout", src)
 

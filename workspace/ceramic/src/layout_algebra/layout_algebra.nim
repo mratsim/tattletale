@@ -443,13 +443,9 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
     builder.onLeaves(shapeEv):
       let shapeDim = shapeEv.leaf
       let strideDim = strideEv.leaf
-      let q = quote do: `M` div `prefix` + ord(`M` div `prefix` === 0)
       builder.append(
-        quote do:
-          (if `q` mod `shapeDim` === 0: IntCT(1)
-           elif `q` >= 1 and `shapeDim` mod `q` === 0: `shapeDim` div `q`
-           else: `shapeDim`),
-        quote do: `q` * `strideDim`)
+        quote do: stridedDiv(`shapeDim`, `M`, `prefix`),
+        quote do: (`M` div `prefix` + int(`M` div `prefix` === 0)) * `strideDim`)
       prefix = quote do: `prefix` * `shapeDim`
   result.add builder.emitLayout()
 
@@ -465,19 +461,21 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
-  var modes: seq[tuple[shapeDim, strideDim: NimNode]]
-  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    modes.add (shapeEv.leaf, strideEv.leaf)
   var builder = TupleBuilderFlat.new(2)
   var prefix = IntCT(1)
-  for i, mode in modes:
-    if i < modes.len - 1:
+  var pendingShape, pendingStride: NimNode
+  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    let shapeDim = shapeEv.leaf
+    if not pendingShape.isNil:
       builder.append(
-        quote do: min(`mode.shapeDim`, max(1, `N` div `prefix`)),
-        mode.strideDim)
-    else:
-      builder.append(quote do: max(1, `N` div `prefix`), mode.strideDim)
-    prefix = quote do: `prefix` * `mode.shapeDim`
+        quote do: stridedMod(`pendingShape`, `N`, `prefix`),
+        pendingStride)
+      prefix = quote do: `prefix` * `pendingShape`
+    pendingShape = shapeDim
+    pendingStride = strideEv.leaf
+  if not pendingShape.isNil:
+    # the last mode carries the running quotient, its shape ignores s
+    builder.append(quote do: stridedMod(`N`, `prefix`), pendingStride)
   result.add builder.emitLayout()
 
 proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =

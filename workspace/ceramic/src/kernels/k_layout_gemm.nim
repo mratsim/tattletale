@@ -17,9 +17,6 @@ import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/macros/static_for
 
-import std/importutils
-privateAccess(TensorOwned)
-privateAccess(TensorView)
 
 {.experimental: "callOperator".}
 {.experimental: "dynamicBindSym".}
