@@ -16,10 +16,10 @@ type
   TensorOwned*[T, Sh, St] = object
     ## Owning tensor — stack-allocated array.
     ## Requires static shape/stride (compile-time cosize).
-    data*: array[cosize(Layout[Sh, St]), T]
+    data: array[cosize(Layout[Sh, St]), T]
 
   TensorView*[T, Sh, St] = object
-    data*: ptr UncheckedArray[T]
+    data: ptr UncheckedArray[T]
     layout: Layout[Sh, St]
 
 type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or TensorOwned[T, Sh, St]
@@ -68,6 +68,16 @@ template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
 template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
     data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
+
+template slice*[T, Sh, St](t: AnyTensor[T, Sh, St], R: Layout, sel: untyped): auto =
+  ## Register view: layout sliced by sel, data anchored at the diced offset,
+  ## the tile coordinate baked into the pointer
+  make_view(addr t.data[crd2idx(R, sel)], slice(R, sel))
+
+template elems*[T, Sh, St](t: AnyTensor[T, Sh, St]): auto =
+  ## Raw storage: the owning array or the view pointer, for kernels
+  ## and macro-generated code
+  t.data
 
 
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────

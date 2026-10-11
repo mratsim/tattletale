@@ -22,7 +22,7 @@ proc hostOneStepChecks: bool =
             for tk in 0 ..< (K + 15) div 16:
               var rE = rt(float32, mma.getMmaLayout(opA))
               rE.loadTile(src, cfgA, tid, (tm, tk))
-              # ground truth: naive gather over the fragment
+              # ground truth: naive gather over the register
               let rV = view(rE)
               for i in 0 ..< size(rE.getLayout().shape):
                 let (v, repC) = idx2crd(rE.getLayout().shape, i)

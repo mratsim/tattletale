@@ -2,7 +2,7 @@
 #
 # GPU Mode 114 p.74: the tiler and the thread-value map are one composition.
 # The TV layout carries coordinate strides (E-atoms over the tile modes).
-# One divide of the layout by TVCrdLayout yields the fragment addressing
+# One divide of the layout by TVCrdLayout yields the register addressing
 # and the tile grid together in one structure.
 #
 # The e03 shims are gone:
@@ -11,7 +11,7 @@
 # - the rest-coordinate map is one call too,
 #   zipped_divide(coordinate identity, TVCrdLayout), the corner
 #   lift lands in the rest strides
-# - the source coordinate per fragment element is crd2idx over
+# - the source coordinate per register element is crd2idx over
 #   the coordinate layout (BOM-1), no eval shim
 #
 # ThreadMap atom strides are shard-flat strides, colex basis
@@ -152,20 +152,20 @@ proc loadTile*[T, ShD, StD, ShS, StS](
   let thrBits = idx2crd(tvcrd.shape[0][0], threadIdx)
   let cellsShape = tvcrd.shape[1]
   let sel = (((thrBits, _), repeatLike(cellsShape, _)), tileID)
-  let regShape = slice(R, sel).selectDimensions(0).shape
+  # the register view: layout sliced by sel, the diced offset baked in
+  let srcReg = src.slice(R, sel)
+  let reg = srcReg.getLayout()
   # the rest-coordinate map: the identity layout (slide 76, shape:(e0,e1))
-  # divided by the tvcrd, one crd2idx answers the whole source coordinate
+  # divided by the tvcrd, sliced identically, one crd2idx per element
+  # answers the source coordinate
   let RC = zipped_divide(make_identity_layout(srcLayout.shape), tvcrd)
+  let regC = slice(RC, sel)
   let srcShape = srcLayout.shape
-  for i in 0 ..< size(regShape):
-    # fragment element i -> (vpt, cell) coords over the static reg shape
-    let (vpt, cellC) = idx2crd(regShape, i)
-    let crd = (((thrBits, vpt), cellC), tileID)
-    let srcC = crd2idx(RC, crd)
-    if srcC.inBounds(srcShape):
-      dst.data[i] = src.data[crd2idx(R, crd)]
+  for i in 0 ..< size(reg):
+    if crd2idx(regC, i).inBounds(srcShape):
+      dst[i] = srcReg[i]
     else:
-      dst.data[i] = padWith
+      dst[i] = padWith
 
 proc storeTile*[T, ShD, StD, ShS, StS](
     dst: TensorView[T, ShD, StD], src: TensorOwned[T, ShS, StS],
@@ -175,15 +175,15 @@ proc storeTile*[T, ShD, StD, ShS, StS](
   let thrBits = idx2crd(tvcrd.shape[0][0], threadIdx)
   let cellsShape = tvcrd.shape[1]
   let sel = (((thrBits, _), repeatLike(cellsShape, _)), tileID)
-  let regShape = slice(R, sel).selectDimensions(0).shape
+  # the register view: layout sliced by sel, the diced offset baked in
+  let dstReg = dst.slice(R, sel)
+  let reg = dstReg.getLayout()
   let RC = zipped_divide(make_identity_layout(dstLayout.shape), tvcrd)
+  let regC = slice(RC, sel)
   let dstShape = dstLayout.shape
-  for i in 0 ..< size(regShape):
-    let (vpt, cellC) = idx2crd(regShape, i)
-    let crd = (((thrBits, vpt), cellC), tileID)
-    let dstC = crd2idx(RC, crd)
-    if dstC.inBounds(dstShape):
-      dst.data[crd2idx(R, crd)] = src.data[i]
+  for i in 0 ..< size(reg):
+    if crd2idx(regC, i).inBounds(dstShape):
+      dstReg[i] = src[i]
 
 # ── the GEMM driver ─────────────────────────────────────────────────
 
@@ -208,7 +208,7 @@ template gemm*(mma: static TiledMma, C, A, B: untyped, tileID: untyped, threadId
     # direct fill: TensorOwned.fillWith reconstructs the layout through
     # default(Sh) on device, the crucible finding from e02
     for i in 0 ..< size(cLayout.shape):
-      rC.data[i] = zero(C.T)
+      rC[i] = zero(C.T)
     for k in 0 ..< kTiles:
       rA.loadTile(A, tvcrdA, thr, (m, k))
       rB.loadTile(B, tvcrdB, thr, (n, k))

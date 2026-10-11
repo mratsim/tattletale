@@ -15,6 +15,10 @@ import workspace/ceramic/src/macros/varargs_to_par
 import workspace/ceramic/src/int_tuples
 import ./tensor_datatypes
 
+import std/importutils
+privateAccess(TensorOwned)
+privateAccess(TensorView)
+
 
 proc pop(tree: var NimNode): NimNode {.compileTime.} =
   result = tree[tree.len-1]

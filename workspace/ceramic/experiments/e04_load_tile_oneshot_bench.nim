@@ -26,7 +26,7 @@ proc benchLoad(name: static string, M, K, s0, s1: int, reps: int) =
           for tid in 0 ..< 32:
             var rA = rt(float32, mma.getMmaLayout(opA))
             rA.loadTile(src, cfgA, tid, (tm, tk))
-            acc += rA.data[0]
+            acc += rA[0]
     let ns = inNanoseconds(getMonotime() - t0)
     lastNs = ns
     let dt = ns.float / 1e9

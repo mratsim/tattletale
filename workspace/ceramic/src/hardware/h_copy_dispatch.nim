@@ -12,6 +12,11 @@ import ./h_copy_registry
 import ./h_copy_configgen
 import ./h_copy_properties
 import workspace/crucible
+import workspace/ceramic/src/tensors/tensor_datatypes
+
+import std/importutils
+privateAccess(TensorOwned)
+privateAccess(TensorView)
 
 {.experimental: "dynamicBindSym".}
 
@@ -57,9 +62,9 @@ proc copyBody(atomName: string;
     result = newStmtList(
       newLetStmt(ident"srcSize", srcSize),
       newLetStmt(ident"smemInt",
-        newCall(bindSym"cvtaGenericToShared", newDotExpr(dstView, ident"data"))),
+        bindSym"cvtaGenericToShared".newCall(bindSym"elems".newCall(dstView))),
       newLetStmt(ident"gmemPtr",
-        newDotExpr(srcView, ident"data")),
+        bindSym"elems".newCall(srcView)),
       newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr)))
 
 macro copyIf*(atom: static CopyAtom;
@@ -67,10 +72,10 @@ macro copyIf*(atom: static CopyAtom;
               chunkElems: static int): untyped =
   template chunkCopy(dstView, srcView: untyped; chunkElems: int) =
     for i in 0 ..< chunkElems:
-      dstView.data[i] = srcView.data[i]
+      dstView.elems[i] = srcView.elems[i]
   template chunkZeroFill(dstView: untyped; chunkElems: int) =
     for i in 0 ..< chunkElems:
-      dstView.data[i] = 0
+      dstView.elems[i] = 0
   template predicatedChunk(dstView, srcView, pred: untyped; chunkElems: int) =
     if pred:
       chunkCopy(dstView, srcView, chunkElems)

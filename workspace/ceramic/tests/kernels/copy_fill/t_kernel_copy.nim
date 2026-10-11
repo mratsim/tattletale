@@ -363,7 +363,7 @@ proc testCopyFromOwnedDst() =
   var own = make_tensor(float32, make_layout((32, 16), (1, 32)))
   copyFrom(own, srcTV)
   for i in 0 ..< 512:
-    doAssert own.data[i] == float32(i), "TensorOwned destination"
+    doAssert own[i] == float32(i), "TensorOwned destination"
 
 proc testCopyFromGuardRejectsAmbiguousMultiWrite() =
   ## write-disjointness guard, ambiguous multi-write is a compile-time error

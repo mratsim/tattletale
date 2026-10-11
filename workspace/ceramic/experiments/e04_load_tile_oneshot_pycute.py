@@ -8,12 +8,12 @@ Run: uv run python e04_load_tile_oneshot_pycute.py, any cwd works
   pre-lifted to tile-flat, the cell strides from the tile/atom divide,
   then ONE coordinate-stride identity composition (T o (t,v))
 - built for every operand: A (M, K), B (N, K) implicit-transpose, C (M, N)
-- the fragment is the (thr, cell) Tensor slice of R, the tile modes
+- the register is the (thr, cell) Tensor slice of R, the tile modes
   diced away by tile_id, the diced offset baked into the accessor
 - the guard is coordinate-space only: a coordinate tensor
   zipped_divide(identity, TVCrdLayout) carries the tile-corner lift
   in its rest strides. Slicing it identically yields the world
-  coordinate per fragment element, OOB takes the fill
+  coordinate per register element, OOB takes the fill
 
 Evaluating the TV layout at a coordinate is a plain layout call,
 `tvcrd(coord)`. The Nim evalTileCoord macro is the shim for crd2idx
@@ -101,7 +101,7 @@ def make_world(shape, s0, s1):
     return data, layout
 
 
-def fragment_sel(R, thr, tile_id):
+def reg_sel(R, thr, tile_id):
     """Zipped-divide slice selector, dice/keep by mode:
     - atom leaves: diced with the thread coords
     - cells: kept
@@ -125,22 +125,22 @@ def load_tile_one_step(data, world, tvcrd, tile_shape, tile_id, thr, fill=0.0):
     Element offsets: the sliced Tensor's accessor.
     World coordinates: the sliced coordinate Tensor.
 
-    Returns fragment values in colex element order
+    Returns register values in colex element order
     """
     # the coordinate map of the world: reading a flat index yields
     # the (m, k) coordinate
     C = Layout(world.shape, (E(0), E(1)))
     R = zipped_divide(world, tvcrd)
     RC = zipped_divide(C, tvcrd)
-    sel = fragment_sel(R, thr, tile_id)
-    frag = Tensor(Ptr(data), R)[sel]
-    cfrag = Tensor(ImplicitAccessor(0), RC)[sel]
+    sel = reg_sel(R, thr, tile_id)
+    reg = Tensor(Ptr(data), R)[sel]
+    creg = Tensor(ImplicitAccessor(0), RC)[sel]
     out = []
-    for i in range(size(frag.layout.shape)):
-        # the natural coordinate passes straight through, any fragment rank, no leaf unpacking
-        crd = idx2crd(i, frag.layout.shape)
-        if in_bounds(cfrag[crd], world.shape):
-            out.append(frag[crd])
+    for i in range(size(reg.layout.shape)):
+        # the natural coordinate passes straight through, any register rank, no leaf unpacking
+        crd = idx2crd(i, reg.layout.shape)
+        if in_bounds(creg[crd], world.shape):
+            out.append(reg[crd])
         else:
             out.append(fill)
     return out
@@ -157,22 +157,22 @@ def check(got, want, name):
     return ok
 
 
-def fragment_positions(world, tvcrd, tile_id, thr):
-    """World positions for one thread's fragment, the sliced
+def reg_positions(world, tvcrd, tile_id, thr):
+    """World positions for one thread's register, the sliced
     coordinate Tensor read elementwise, no TV eval repeated here.
 
     Returns (m, k) positions in colex element order
     """
     C = Layout(world.shape, (E(0), E(1)))
     RC = zipped_divide(C, tvcrd)
-    sel = fragment_sel(RC, thr, tile_id)
-    cfrag = Tensor(ImplicitAccessor(0), RC)[sel]
-    return [tuple(cfrag[idx2crd(i, cfrag.layout.shape)])
-            for i in range(size(cfrag.layout.shape))]
+    sel = reg_sel(RC, thr, tile_id)
+    creg = Tensor(ImplicitAccessor(0), RC)[sel]
+    return [tuple(creg[idx2crd(i, creg.layout.shape)])
+            for i in range(size(creg.layout.shape))]
 
 
 def run_world(shape, s0, s1, tvcrd, tile_shape):
-    """Gather every tile's every thread fragment and compare each against
+    """Gather every tile's every thread register and compare each against
     an independently recomputed guarded read"""
     data, world = make_world(shape, s0, s1)
     tiles = ((shape[0] + tile_shape[0] - 1) // tile_shape[0],
@@ -183,11 +183,11 @@ def run_world(shape, s0, s1, tvcrd, tile_shape):
             for thr in range(32):
                 got = load_tile_one_step(data, world, tvcrd, tile_shape,
                                          tm + tiles[0] * tk, thr)
-                # the fragment's world positions, recomputed independently
-                frag_positions = fragment_positions(world, tvcrd,
+                # the register world positions, recomputed independently
+                reg_positions = reg_positions(world, tvcrd,
                                                     tm + tiles[0] * tk, thr)
                 want = [data[world(p)] if in_bounds(p, shape) else 0.0
-                        for p in frag_positions]
+                        for p in reg_positions]
                 if not check(got, want, f"tile ({tm},{tk}) thr {thr:2d}"):
                     all_ok = False
     return all_ok
