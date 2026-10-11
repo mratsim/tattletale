@@ -1,8 +1,6 @@
-# Host checks for e03_load_tile_oneshot: the one-step loader vs the naive gather, CPU only
 import std/[sequtils, sugar, strformat]
 import workspace/crucible
 import ./e03_load_tile_oneshot
-
 proc hostOneStepChecks: bool =
   const mma = e03_load_tile_oneshot.TiledMma[float32, float32, float32, 32, 32, 16](
       atom: APPLE_8x8x8_F32)
@@ -22,7 +20,6 @@ proc hostOneStepChecks: bool =
             for tk in 0 ..< (K + 15) div 16:
               var rE = rt(float32, mma.getMmaLayout(opA))
               rE.loadTileOneStep(src, cfgA, tid, (tm, tk))
-              # ground truth: naive gather over the fragment
               let rV = view(rE)
               for i in 0 ..< size(rE.getLayout().shape):
                 let (v, repC) = idx2crd(rE.getLayout().shape, i)
@@ -67,6 +64,5 @@ proc hostOneStepChecks: bool =
                     ok = false
   echo "[OK] host one-step: loadTileOneStep/storeTileOneStep"
   ok
-
 doAssert hostOneStepChecks()
 echo "e03 one-step checks: all green"

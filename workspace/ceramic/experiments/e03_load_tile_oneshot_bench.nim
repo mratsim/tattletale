@@ -1,13 +1,8 @@
-# Short bench: e03 one-step tile loads, CPU.
-# Small world, few reps, best of 3. Absolute numbers are CPU-gather scale,
-# the stride-order ratios are the signal.
 import std/[monotimes, strformat, times]
 import workspace/crucible
 import ./e03_load_tile_oneshot
-
 const mma = TiledMma[float32, float32, float32, 32, 32, 16](atom: APPLE_8x8x8_F32)
 const cfgA = mma.getTVCrdLayout(opA)
-
 proc benchLoad(name: static string, M, K, s0, s1: int, reps: int) =
   var buf = newSeq[float32](M*K + 64)
   for i in 0 ..< buf.len: buf[i] = float32(i mod 251)
@@ -33,7 +28,6 @@ proc benchLoad(name: static string, M, K, s0, s1: int, reps: int) =
     let bytes = float(reps * tilesM * tilesK * 32 * 16 * 4)
     best = min(best, bytes / dt / 1e9)
   echo &"  {name} {M}x{K} s({s0},{s1}): {best:.2f} GB/s, rep {lastNs} ns, acc {acc:.0f}"
-
 echo "e03 bench (short runs, one-step only):"
 benchLoad("one-step", 1024, 1024, 1024, 1, 4)
 benchLoad("one-step", 1024, 1024, 1, 1024, 4)

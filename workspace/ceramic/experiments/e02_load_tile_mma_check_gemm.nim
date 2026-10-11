@@ -1,12 +1,4 @@
-# e02_load_tile_mma_check_gemm: device GEMM result check for e02_load_tile_mma
-# Run: nim c -r -d:release workspace/ceramic/experiments/e02_load_tile_mma_check_gemm.nim
-#
-# Runs the e02 gemm (ta2_08's loadTile/storeTile legs over the Apple
-# 8x8x8 MMA atom) on Metal and compares every output element against
-# the host fp32 reference over the ragged-shape and stride-order set.
-
 import std/[strformat, math]
-
 import workspace/crucible
 import workspace/crucible/src/runtime/exec/metal_runtime
 import workspace/crucible/src/runtime/engines/arg_blobs
@@ -14,11 +6,8 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import ./e02_load_tile_mma
-
 {.experimental: "callOperator".}
-
 func fp32ToFp16(x: float32): uint16 =
-  ## IEEE-754 binary32 to binary16 bit pattern, round-to-nearest-even
   let u = cast[uint32](x)
   let sign = uint16((u shr 16) and 0x8000'u32)
   let aexp = int32((u shr 23) and 0xFF)
@@ -50,9 +39,7 @@ func fp32ToFp16(x: float32): uint16 =
       if bexp >= 31:
         return sign or 0x7C00'u16
   return sign or uint16(bexp shl 10) or uint16(r)
-
 func fp16ToFp32(h: uint16): float32 =
-  ## Exact binary16 to binary32, every fp16 value is representable in fp32
   let sign = uint32(h and 0x8000'u16) shl 16
   let e = (h shr 10) and 0x1F'u16
   let m = h and 0x3FF'u16
@@ -67,16 +54,13 @@ func fp16ToFp32(h: uint16): float32 =
   if e == 0x1F:
     return cast[float32](sign or 0x7F800000'u32 or (uint32(m) shl 13))
   return cast[float32](sign or (uint32(e + 112) shl 23) or (uint32(m) shl 13))
-
 const gemmMsl = metal:
   proc gemmK(D: TensorView[float32, (int, int), (int, int)],
              A: TensorView[float16, (int, int), (int, int)],
              B: TensorView[float16, (int, int), (int, int)]) {.global.} =
     gemm(tiledMma(float32, float16, float16, 32, 32, 16), D, A, B)
-
 proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
     M, N, K: int, sA, sB, sC: (int, int), gxMul = 1, gyMul = 1): bool =
-  ## One device GEMM against the host reference, worst |d| report
   let
     gridX = ((M + 31) div 32) * gxMul
     gridY = ((N + 31) div 32) * gyMul
@@ -94,7 +78,6 @@ proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
   for k in 0 ..< K:
     for n in 0 ..< N:
       B[k * N + n] = fp32ToFp16(float32(1 + (3 * k + 11 * n) mod 17))
-
   let
     aView = make_view(cast[ptr UncheckedArray[float16]](aBuf.data),
                       makeIntTuple((M, K)),
@@ -111,7 +94,6 @@ proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
       (cView.getLayout(),
        PtrArg[float16](buf: aView.data, len: M * K, off: 0), aView.getLayout(),
        PtrArg[float16](buf: bView.data, len: K * N, off: 0), bView.getLayout()))
-
   var bad = 0
   var worst = 0.0'f32
   var first = ""
@@ -134,29 +116,24 @@ proc checkMatmul(engine: HwEngine, metalCtx: MetalCtx, which, label: string,
   releaseBuffer(aBuf)
   releaseBuffer(bBuf)
   return pass
-
 proc main =
   var engine = bkMetal.init()
   engine.ingest(gemmMsl)
   let metalCtx = initMetal()
   var ok = true
-  # the square base case, both stride orders per operand
   for sA in [(32, 1), (1, 32)]:
     for sB in [(1, 32), (32, 1)]:
       for sC in [(32, 1), (1, 32)]:
         ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 32, 32, sA, sB, sC) and ok
-  # ragged shapes, M/N/K edges exercise the inBounds guards on device
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 32, 41, (41, 1), (1, 32), (32, 1)) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 40, 32, 32, (32, 1), (1, 32), (32, 1)) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 32, 45, 32, (32, 1), (1, 45), (45, 1)) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 40, 45, 41, (41, 1), (1, 45), (45, 1)) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 100, (100, 1), (1, 50), (50, 1)) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 96, (96, 1), (1, 50), (50, 1)) and ok
-  # oversize grids, parked excess blocks exercise the tileID guard
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 64, 64, 64, (64, 1), (1, 64), (64, 1), gxMul = 3, gyMul = 2) and ok
   ok = engine.checkMatmul(metalCtx, "gemmK", "gemm", 70, 50, 100, (100, 1), (1, 50), (50, 1), gxMul = 2, gyMul = 3) and ok
   if ok: echo "e02 check_gemm: all green"
   else: quit 1
-
 when isMainModule:
   main()

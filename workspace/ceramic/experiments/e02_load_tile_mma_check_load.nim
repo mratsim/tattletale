@@ -1,9 +1,6 @@
-# Host copy checks for e02_load_tile_mma: loadTile/storeTile and the
-# identity variants vs the naive gather, CPU only
 import std/[sequtils, sugar, strformat]
 import workspace/crucible
 import ./e02_load_tile_mma
-
 proc hostCopyChecks: bool =
   const mma = TiledMma[float32, float32, float32, 32, 32, 16](atom: APPLE_8x8x8_F32)
   var ok = true
@@ -62,9 +59,7 @@ proc hostCopyChecks: bool =
                     ok = false
   echo "[OK] host copy: loadTile/storeTile vs naive gather"
   ok
-
 block identity:
-  # loadTileIdentity/storeTileIdentity, same checks, the Apple atom
   const mma = TiledMma[float32, float32, float32, 32, 32, 16](atom: APPLE_8x8x8_F32)
   var ok = true
   for (M, K) in [(32, 32), (70, 50), (33, 16)]:
@@ -92,6 +87,5 @@ block identity:
                 ok = false
   echo "[OK] host identity: loadTileIdentity vs naive gather"
   doAssert ok
-
 doAssert hostCopyChecks()
 echo "e02 checks: all green"
