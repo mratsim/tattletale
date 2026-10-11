@@ -176,6 +176,10 @@ func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
   for i, batch in batches:
     tb.accums[i] = batch & tb.accums[i]
 
+func count*(tb: TupleBuilderFlat): int =
+  ## Number of appended leaves.
+  tb.accums[0].len
+
 func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
   var node = if emitScalarForSize1: nnkPar.newTree()
              else: nnkTupleConstr.newTree()

@@ -73,11 +73,8 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #     the size is unchanged and every input integer maps to the
 #     same output integer
 
-proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
+macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
-  ##
-  ## A size-1 dimension is dropped except the last one.
-  ## An empty input is mapped to (1, 0)
   var builder = TupleBuilderFlat.new(2)
   var span = 0                 # the open chain's shape product, 0 = no open chain
   var headTy: NimNode          # the open chain's head stride type
@@ -101,17 +98,6 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
     let strideVal = strideEv.leafTy.getStaticInt()
     let headVal = if headTy.isNil: DynamicSentinel else: headTy.getStaticInt()
 
-    # size-1 dimension
-    if shapeVal == 1:
-      if not headTy.isNil and strideVal != DynamicSentinel and
-          headVal != DynamicSentinel and span * headVal == strideVal:
-        pending = nil
-        pendingVal = DynamicSentinel
-      else:
-        pending = strideEv.leaf
-        pendingVal = strideVal
-      continue
-
     let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
     let headCrd = if headTy.isNil: CoordStrideDescriptor(kind: caNone)
                   else: headTy.getCoordStrideDescriptor()
@@ -127,6 +113,18 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
       span *= shapeVal
       pending = nil
       pendingVal = DynamicSentinel
+    elif shapeVal == 1:
+      if strideCrd.kind != caNone:
+        if not headTy.isNil:
+          appendChain()
+        builder.append(IntCT(1), strideEv.leaf)
+        span = 0
+        headTy = nil
+        pending = newEmptyNode()
+        pendingVal = DynamicSentinel
+      else:
+        pending = strideEv.leaf
+        pendingVal = strideVal
 
     else: # Flush
       if not headTy.isNil:
@@ -147,26 +145,11 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
     appendChain()
   elif pending.isNil:
     builder.append(IntCT(1), IntCT(0))
-  if not pending.isNil and pending.kind != nnkEmpty:
-    builder.append(IntCT(1),
-      (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
+  elif not dropTrailing or builder.count == 0:
+    # the discard drops the trailing size-1 mode only when other
+    # modes precede it, a lone size-1 result stays
+    builder.append(IntCT(1), (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
   return builder.emitLayout()
-
-macro coalesceImpl(sh, st: typed): untyped =
-  ## Size-1-preserving coalesce
-  result = newStmtList()
-  result.add coalesceFoldImpl(sh, st)
-
-macro coalesceDropImpl(sh, st: typed): untyped =
-  result = newStmtList()
-  result.add coalesceFoldImpl(sh, st)
-  let shapeTuple = result[0][1]
-  let strideTuple = result[0][2]
-  if shapeTuple.kind in {nnkTupleConstr, nnkPar} and shapeTuple.len > 1:
-    let lastShapeVal = shapeTuple[^1].getStaticInt()
-    if lastShapeVal == 1:
-      shapeTuple.del(shapeTuple.len - 1)
-      strideTuple.del(strideTuple.len - 1)
 
 macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
@@ -182,7 +165,7 @@ macro coalesce*(layout: Layout): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
   template coalesceDelegate(shape, stride: typed): untyped =
-    coalesceDropImpl(shape, stride)
+    coalesceImpl(shape, stride, dropTrailing = true)
   result.add getAst(coalesceDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
@@ -192,8 +175,8 @@ macro coalesce*(layout: Layout): untyped =
 proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
     strideNode, strideTy, shapeNode: NimNode]], bound: NimNode, defaultBound: bool): NimNode {.compileTime.} =
   ## Fills the gaps a layout leaves uncovered in its address range,
-  ## over every stride leaf, integer strides and coordinate strides
-  ## alike (the pycute _complement).
+  ## over every stride leaf, integer strides and coordinate strides,
+  ## each codomain axis filled independently.
   ##
   ## - one entry per stride leaf, the leaf's own node carries the kind:
   ##   an integer stride or an E(scale, axis) coordinate stride,
@@ -215,7 +198,10 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   var covScalar = newSeq[NimNode](axes.len)
   var covStride = newSeq[NimNode](axes.len)
   var covStatic = newSeq[bool](axes.len)
-  var anyAtom = newSeq[bool](axes.len)
+  var atomAxis = newSeq[bool](axes.len)
+  for l in sorted:
+    if isCoordStride(l.strideTy):
+      atomAxis[axes.find(l.axis)] = true
   for i in 0 ..< axes.len:
     covVal[i] = 1
     covScalar[i] = IntCT(1)
@@ -230,12 +216,21 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       # dimension covers a single offset, neither opens a gap
       continue
     let k = axes.find(l.axis)
-    if l.strideVal != DynamicSentinel and covStatic[k] and l.strideVal < covVal[k]:
+    if not isCoordStride(l.strideTy) and
+        l.strideVal != DynamicSentinel and covStatic[k] and l.strideVal < covVal[k]:
       error "complement: non-injective layout, stride " & $l.strideVal &
         " overlaps the covered span " & $covVal[k]
     let covDiv = if covStatic[k]: IntCT(covVal[k]) else: covScalar[k]
-    axisModes[k].add (l.strideNode div covDiv, covStride[k])
-    anyAtom[k] = anyAtom[k] or isCoordStride(l.strideTy)
+    let covDivN = if covStatic[k]: newLit(covVal[k]) else: covDiv
+    if isCoordStride(l.strideTy):
+      let gap = l.strideVal div covVal[k]
+      if gap == 0:
+        error "complement: coordinate strides collide, scale " & $l.strideVal &
+          " inside the covered span " & $covVal[k] & " on axis " & $l.axis
+      if gap > 1:
+        axisModes[k].add (IntCT(gap), covStride[k])
+    else:
+      axisModes[k].add (l.strideNode div covDivN, covStride[k])
     if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and covStatic[k]:
       covVal[k] = l.strideVal * l.shapeVal
       covScalar[k] = IntCT(covVal[k])
@@ -243,7 +238,7 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
     else:
       covStatic[k] = false
       covScalar[k] = l.strideNode * l.shapeNode
-      covStride[k] = covStride[k] * l.shapeNode
+      covStride[k] = l.strideNode * l.shapeNode
     if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
       b += (l.shapeVal - 1) * abs(l.strideVal)
 
@@ -270,17 +265,13 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       builder.append(m.gap, m.stride)
     # the free complement extends integer axes to the layout's cosize, atom axes stay unextended
     let boundNode = if defaultBound:
-                      IntCT(if anyAtom[k]: 1 else: b)
+                      IntCT(if atomAxis[k]: 1 else: b)
                     else:
                       boundLeafs[k].leaf
     builder.append(ceil_div(boundNode, covScalar[k]), covStride[k])
 
-  let layout = builder.emitLayout()
-  # size-1 gap modes drop in coalesce, the merge is a no-op for atom strides, pycute assembles the atom axes as they are
-  result = if true in anyAtom:
-             layout
-           else:
-             bindSym"coalesce".newCall(layout)
+  let layout = builder.emitLayout(emitScalarForSize1 = false)
+  return layout
 
 macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): untyped =
   var shDims: seq[tuple[shape, depth: int, leaf: NimNode]]
@@ -312,6 +303,9 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
         strideTy: stTys[j],
         shapeNode: shDims[i].leaf)
   result = complementGenericFold(leaves, bound, defaultBound)
+
+  template coalesceTyped(x: typed): untyped = coalesce(x)
+  return getAst(coalesceTyped(result))
 
 macro complement*(layout: Layout): untyped =
   ## Layout complement, the codomain gap filler.

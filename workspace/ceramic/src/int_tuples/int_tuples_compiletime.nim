@@ -49,13 +49,24 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
   of nnkCall, nnkBracketExpr:
-    if t[0].eqIdent("Int"):
+    # the typed-delegate path hands out typeDesc[Int[V]] wrappers
+    if t[0].eqIdent("typeDesc"):
+      t[1].getStaticInt()
+    # TODO: a non-literal Int construction such as Int[ceil_div(a, b)]()
+    # is not auto-folded by Nim before getStaticInt, it's mapped to DynamicSentinel
+    elif t[0].eqIdent("Int") and t[1].kind in {nnkIntLit, nnkUIntLit}:
       int(t[1].intVal)
     else:
       DynamicSentinel
   of nnkObjConstr:
     if t[0][0].eqIdent("Int"):
       t[0].getStaticInt()
+    else:
+      DynamicSentinel
+  of nnkSym:
+    let ti = t.getTypeInst()
+    if ti.kind != nnkSym:
+      ti.getStaticInt()
     else:
       DynamicSentinel
   else:
