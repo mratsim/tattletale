@@ -1,7 +1,7 @@
 # e04_load_tile_oneshot_check_gemm: device GEMM result check, one-step loader
 # Run: nim c -r -d:release workspace/ceramic/experiments/e04_load_tile_oneshot_check_gemm.nim
 #
-# Runs the e03 gemm on Metal, the loadTileOneStep and storeTileOneStep
+# Runs the e03 gemm on Metal, the loadTile and storeTile
 # legs over the Apple 8x8x8 MMA atom. Every output element is compared
 # against a host fp32 reference over the ragged-shape and stride-order set.
 

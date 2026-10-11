@@ -1,4 +1,4 @@
-# Host checks for e04_load_tile_oneshot: the one-step loader vs the naive gather, CPU only
+# Host checks for e04_load_tile_oneshot: the loader vs the naive gather, CPU only
 import std/[sequtils, sugar, strformat]
 import workspace/crucible
 import ./e04_load_tile_oneshot
@@ -21,7 +21,7 @@ proc hostOneStepChecks: bool =
           for tm in 0 ..< (M + 31) div 32:
             for tk in 0 ..< (K + 15) div 16:
               var rE = rt(float32, mma.getMmaLayout(opA))
-              rE.loadTileOneStep(src, cfgA, tid, (tm, tk))
+              rE.loadTile(src, cfgA, tid, (tm, tk))
               # ground truth: naive gather over the fragment
               let rV = view(rE)
               for i in 0 ..< size(rE.getLayout().shape):
@@ -58,15 +58,15 @@ proc hostOneStepChecks: bool =
                 let gn = cellCrd[1] + 8*repC[1] + 32*tn
                 if gm < M and gn < N:
                   expect[gm*s0 + gn*s1] = float32(1000 + i)
-              dst.storeTileOneStep(rC, cfgC, tid, (tm, tn))
+              dst.storeTile(rC, cfgC, tid, (tm, tn))
               for m in 0 ..< M:
                 for n in 0 ..< N:
                   if buf[m*s0 + n*s1] != expect[m*s0 + n*s1]:
                     echo &"  storeOneStep C {M}x{N} s({s0},{s1}) tid{tid} tile({tm},{tn}) cell({m},{n}):",
                          &" got {buf[m*s0 + n*s1]} want {expect[m*s0 + n*s1]}"
                     ok = false
-  echo "[OK] host one-step: loadTileOneStep/storeTileOneStep"
+  echo "[OK] host: loadTile/storeTile"
   ok
 
 doAssert hostOneStepChecks()
-echo "e04 one-step checks: all green"
+echo "e04 checks: all green"

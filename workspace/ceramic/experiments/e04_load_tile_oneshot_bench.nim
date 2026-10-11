@@ -1,5 +1,5 @@
-# Short bench: e04 one-step tile loads, CPU.
-# Small world, few reps, best of 3. Absolute numbers are CPU-gather scale,
+# Short bench: e04 tile loads, CPU.
+# Small layout, few reps, best of 3. Absolute numbers are CPU-gather scale,
 # the stride-order ratios are the signal.
 import std/[monotimes, strformat, times]
 import workspace/crucible
@@ -25,7 +25,7 @@ proc benchLoad(name: static string, M, K, s0, s1: int, reps: int) =
         for tk in 0 ..< tilesK:
           for tid in 0 ..< 32:
             var rA = rt(float32, mma.getMmaLayout(opA))
-            rA.loadTileOneStep(src, cfgA, tid, (tm, tk))
+            rA.loadTile(src, cfgA, tid, (tm, tk))
             acc += rA.data[0]
     let ns = inNanoseconds(getMonotime() - t0)
     lastNs = ns
@@ -34,7 +34,7 @@ proc benchLoad(name: static string, M, K, s0, s1: int, reps: int) =
     best = min(best, bytes / dt / 1e9)
   echo &"  {name} {M}x{K} s({s0},{s1}): {best:.2f} GB/s, rep {lastNs} ns, acc {acc:.0f}"
 
-echo "e04 bench (short runs, one-step only):"
+echo "e04 bench (short runs, load only):"
 benchLoad("one-step", 1024, 1024, 1024, 1, 4)
 benchLoad("one-step", 1024, 1024, 1, 1024, 4)
 benchLoad("one-step", 1024, 1024, 7, 3, 4)
