@@ -189,172 +189,98 @@ macro coalesce*(layout: Layout): untyped =
 #  complement
 # ═══════════════════════════════════════════════════════════════
 
-type ComplementRegime = enum
-  crStatic, crDynMulti, crDynRank1Zero, crDynRank1
-
-func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
-                      stDims: seq[tuple[stride: int, leaf: NimNode]]): ComplementRegime =
-  # Handles every complement limitations, the case branches stay pure processing:
-  # - one stride per shape dimension, or one stride broadcasted over the shape
-  # - multi-dimensional complements need compile-time strides, parity with CuTe
-  # - the multi-dimension walk indexes flat leaves only
-  if stDims.len != shDims.len and stDims.len != 1:
-    error "complement: expected one stride per shape dimension, got " &
-      $stDims.len & " strides for " & $shDims.len & " shape dimensions"
-  # Injectivity: strides must cover the range
-  # We can only check static strides as it's not possible to assert at runtime on a GPU
-  var span = 1
-  var spanTrusted = true
-  var walkStrides: seq[int]
-  for i in 0 ..< shDims.len:
-    walkStrides.add (if stDims.len == 1: stDims[0].stride else: stDims[i].stride)
-  if DynamicSentinel notin walkStrides:
-    for idx in getIndicesSortedByStride(walkStrides):
-      let (stride, shape) = (walkStrides[idx], shDims[idx].shape)
-      if stride == 0 or shape == 1:
-        continue
-      if spanTrusted and stride < span:
-        error "complement: non-injective layout, stride " & $stride &
-          " overlaps the covered span " & $span
-      if shape == DynamicSentinel:
-        spanTrusted = false
-      else:
-        span *= shape
-  if DynamicSentinel notin shDims.mapIt(it.shape) and
-      DynamicSentinel notin stDims.mapIt(it.stride):
-    return crStatic
-  if shDims.len == 1:
-    # rank-1 runtime, the formula or the zero collapse
-    if stDims[0].stride == 0:
-      return crDynRank1Zero
-    return crDynRank1
-  if DynamicSentinel in stDims.mapIt(it.stride):
-    error "complement: multi-dimension with dynamic strides not supported"
-  for i in 0 ..< shDims.len:
-    if shDims[i].depth > 1:
-      error "complement: non-flat shape at index " & $i
-  crDynMulti
-
-func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, boundStatic: int, defaultBound: bool): NimNode =
-  var gapNodes, curNodes: seq[NimNode]
-  var curNode = IntCT(1)
-  var b = 1
-  var allSkipped = true
-  var accSpan = 1
-  var fullCoverage = true
-  for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
-    let dim = dims[idx]
-    if dim.stride == 0 or dim.shape == 1:
-      # a stride-0 dimension maps every coordinate to offset 0,
-      # a size-1 dimension covers a single offset, neither joins
-      # the gap-fill chain
-      continue
-    let s = IntCT(dim.stride)
-    gapNodes.add max(IntCT(1), s div curNode)
-    curNodes.add curNode
-    if dim.shape == DynamicSentinel:
-      # past a dynamic shape leaf the frontier is runtime arithmetic
-      fullCoverage = false
-      curNode = s * dim.leaf
-    else:
-      if dim.stride != accSpan:
-        fullCoverage = false
-      curNode = IntCT(dim.stride * dim.shape)
-      # the covered span grows by the shape when the stride closes on it
-      accSpan *= dim.shape
-    if defaultBound:
-      # cosize over the live leaves, invariant under the skip
-      b += (dim.shape - 1) * abs(dim.stride)
-    allSkipped = false
-  if allSkipped:
-    # every leaf skipped, the complement collapses to (bound):(1)
-    return make_layout(
-      (if defaultBound: IntCT(b) else: bound), newLit(1))
-  let boundVal = if defaultBound: b else: boundStatic
-  if fullCoverage and boundVal != DynamicSentinel and boundVal <= accSpan:
-    # the layout already covers the bound, no gaps to fill, the complement
-    # is a lone (1):(coverage) dimension
-    return make_layout(IntCT(1), IntCT(accSpan))
-  curNodes.add curNode
-  gapNodes.add ceil_div(if defaultBound: IntCT(b) else: bound, curNode)
-  # coalesce is a macro and folds when the call site expands
-  result = bindSym"coalesce".newCall(make_layout(
-    nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
-
-type ComplementLeaf = object
-  ## One flat stride leaf of the complemented layout, integer or atom
-  axis*: int      # codomain axis: the descriptor axis for atoms, the linear axis for ints
-  scale*: int     # stride value: the descriptor scale for atoms, the stride for ints
-  shape*: int     # static shape of the leaf's dimension
-  isAtom*: bool   # emission world: E(scale, axis) vs IntCT(scale)
-
-proc complementGenericFold(leaves: seq[ComplementLeaf], bound: NimNode, defaultBound: bool): NimNode {.compileTime.} =
-  ## One gap-fill fold over stride leaves, integer and coordinate alike
-  ## (pycute _complement):
+proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
+    strideNode, strideTy, shapeNode: NimNode]], bound: NimNode, defaultBound: bool): NimNode {.compileTime.} =
+  ## Fills the gaps a layout leaves uncovered in its address range,
+  ## over every stride leaf, integer strides and coordinate strides
+  ## alike (the pycute _complement).
   ##
-  ## - colex sort on (axis, scale), int leaves project to axis 0,
-  ##   the single linear axis, ordered by stride value
-  ## - per axis: gap = stride div covered, covered = stride * shape
-  ## - size-1 gap modes drop at emission, the terminal extend mode
-  ##   ceil_div(bound[axis], covered[axis]) always emits
-  ## - stride node kinds come off the leaf's own descriptor, atoms emit
-  ##   E(v, axis), ints emit IntCT(v). One make_layout, no global coalesce
+  ## - one entry per stride leaf, the leaf's own node carries the kind:
+  ##   an integer stride or an E(scale, axis) coordinate stride,
+  ##   coordinate strides need static shapes
+  ## - `bound` sets the fill limit, one value per axis or a scalar
+  ##   for a single-axis result
+  ## - the result covers the addresses the input misses, in order, without overlap, size-1 modes removed by coalesce
+  ## - without `bound` the integer axes fill up to the input's size,
+  ##   coordinate axes stay as they are
   var sorted = leaves
-  sorted.sort(proc(a, b: ComplementLeaf): int =
-    cmp((a.axis, a.scale), (b.axis, b.scale)))
+  sorted.sort(proc(a, b: tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode]): int =
+    cmp((a.axis, a.strideVal == DynamicSentinel, a.strideVal),
+        (b.axis, b.strideVal == DynamicSentinel, b.strideVal)))
   var axes: seq[int]
   for l in sorted:
     if l.axis notin axes:
       axes.add l.axis
-  var covered = newSeq[int](axes.len)
+  var covVal = newSeq[int](axes.len)
+  var covScalar = newSeq[NimNode](axes.len)
+  var covStride = newSeq[NimNode](axes.len)
+  var covStatic = newSeq[bool](axes.len)
   var anyAtom = newSeq[bool](axes.len)
   for i in 0 ..< axes.len:
-    covered[i] = 1
-  # per-axis ordered (gapShape, coveredBefore, world) modes
-  var axisModes: seq[seq[tuple[gap, covBefore: int, isAtom: bool]]]
+    covVal[i] = 1
+    covScalar[i] = IntCT(1)
+    covStride[i] = IntCT(1)
+    covStatic[i] = true
+  var axisModes: seq[seq[tuple[gap, stride: NimNode]]]
   axisModes.setLen(axes.len)
+  var b = 1
   for l in sorted:
-    if l.scale == 0 or l.shape == 1:
+    if l.strideVal == 0 or l.shapeVal == 1:
       # a stride-0 leaf maps every coordinate to offset 0, a size-1
       # dimension covers a single offset, neither opens a gap
       continue
     let k = axes.find(l.axis)
-    if l.scale < covered[k]:
-      error "complement: non-injective layout, stride " & $l.scale &
-        (if l.isAtom: "@" & $l.axis else: "") &
-        " overlaps the covered span " & $covered[k]
-    axisModes[k].add (l.scale div covered[k], covered[k], l.isAtom)
-    anyAtom[k] = anyAtom[k] or l.isAtom
-    covered[k] = l.scale * l.shape
-
-  template strideNode(v: int, isAtom: bool, axis: int): NimNode =
-    if isAtom: nnkCall.newTree(bindSym"E", newIntLitNode(v), newIntLitNode(axis))
-    else: IntCT(v)
+    if l.strideVal != DynamicSentinel and covStatic[k] and l.strideVal < covVal[k]:
+      error "complement: non-injective layout, stride " & $l.strideVal &
+        " overlaps the covered span " & $covVal[k]
+    let covDiv = if covStatic[k]: IntCT(covVal[k]) else: covScalar[k]
+    axisModes[k].add (l.strideNode div covDiv, covStride[k])
+    anyAtom[k] = anyAtom[k] or isCoordStride(l.strideTy)
+    if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and covStatic[k]:
+      covVal[k] = l.strideVal * l.shapeVal
+      covScalar[k] = IntCT(covVal[k])
+      covStride[k] = l.strideNode * IntCT(l.shapeVal)
+    else:
+      covStatic[k] = false
+      covScalar[k] = l.strideNode * l.shapeNode
+      covStride[k] = covStride[k] * l.shapeNode
+    if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
+      b += (l.shapeVal - 1) * abs(l.strideVal)
 
   var boundLeafs: seq[tuple[leaf, leafTy: NimNode]]
   if not defaultBound:
-    for bEv in bound.tupleStream():
-      if bEv.kind == kLeaf:
-        boundLeafs.add (bEv.leaf, bEv.leafTy)
-    doAssert boundLeafs.len == axes.len,
-      "complement: cotarget rank " & $boundLeafs.len & " != codomain rank " & $axes.len
+    if axes.len == 1:
+      # a scalar cotarget fills the linear axis, a tuple's product
+      # does the same for the integer codomain
+      let boundNode = if bound.getTypeInst().kind == nnkTupleConstr:
+                        bindSym"product".newCall(bound)
+                      else:
+                        bound
+      boundLeafs.add (boundNode, bound.getTypeInst())
+    else:
+      for bEv in bound.tupleStream():
+        if bEv.kind == kLeaf:
+          boundLeafs.add (bEv.leaf, bEv.leafTy)
+      doAssert boundLeafs.len == axes.len,
+        "complement: cotarget rank " & $boundLeafs.len & " != codomain rank " & $axes.len
 
   var builder = TupleBuilderFlat.new(2)
   for k in 0 ..< axes.len:
     for m in axisModes[k]:
-      if m.gap == 1:
-        continue
-      builder.append(IntCT(m.gap), strideNode(m.covBefore, m.isAtom, axes[k]))
-    # the terminal mode covers the last gap, the extend grows it
-    # to ceil(cotarget[axis] / covered_final), static bounds fold
-    # through the ceil_div overloads, dynamic bounds emit runtime
-    let termShape = if defaultBound: IntCT(1)
-                    else: ceil_div(boundLeafs[k].leaf, IntCT(covered[k]))
-    builder.append(termShape, strideNode(covered[k], anyAtom[k], axes[k]))
+      builder.append(m.gap, m.stride)
+    # the free complement extends integer axes to the layout's cosize, atom axes stay unextended
+    let boundNode = if defaultBound:
+                      IntCT(if anyAtom[k]: 1 else: b)
+                    else:
+                      boundLeafs[k].leaf
+    builder.append(ceil_div(boundNode, covScalar[k]), covStride[k])
 
-  # size-1 gap modes drop above, the per-axis modes are emitted
-  # post-collapse, no global coalesce: pycute assembles the axes as they are
-  result = builder.emitLayout()
+  let layout = builder.emitLayout()
+  # size-1 gap modes drop in coalesce, the merge is a no-op for atom strides, pycute assembles the atom axes as they are
+  result = if true in anyAtom:
+             layout
+           else:
+             bindSym"coalesce".newCall(layout)
 
 macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): untyped =
   var shDims: seq[tuple[shape, depth: int, leaf: NimNode]]
@@ -368,74 +294,24 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): un
       stDims.add (stEv.leafTy.getStaticInt(), stEv.leaf)
       stTys.add stEv.leafTy
 
-  # atom strides branch before regime classification, the integer
-  # walk reads scalar strides only. The atom fold is the generic loop,
-  # int leaves project to its single linear axis
-  var hasAtom = false
-  for ty in stTys:
-    if isCoordStride(ty):
-      hasAtom = true
-      break
-  if hasAtom:
-    if stDims.len != shDims.len:
-      error "complement: expected one stride per shape dimension, got " &
-        $stDims.len & " strides for " & $shDims.len & " shape dimensions"
-    var leaves: seq[ComplementLeaf]
-    for i in 0 ..< shDims.len:
-      let desc = getCoordStrideDescriptor(stTys[i])
-      case desc.kind
-      of caMulti:
-        error "complement: multi-term coordinate strides not supported"
-      of caSingle:
-        if shDims[i].shape == DynamicSentinel:
-          error "complement: coordinate strides need static shapes"
-        leaves.add ComplementLeaf(
-          axis: desc.path[^1], scale: desc.scale,
-          shape: shDims[i].shape, isAtom: true)
-      of caNone:
-        if stDims[i].stride == DynamicSentinel:
-          error "complement: mixed integer and coordinate strides need static int strides"
-        if shDims[i].shape == DynamicSentinel:
-          error "complement: mixed integer and coordinate strides need static shapes"
-        leaves.add ComplementLeaf(
-          axis: 0, scale: stDims[i].stride,
-          shape: shDims[i].shape, isAtom: false)
-    result = complementGenericFold(leaves, bound, defaultBound)
-    return
-
-  let boundExpr =
-    if bound.getTypeInst().kind == nnkTupleConstr:
-      bindSym"product".newCall(bound)
-    else:
-      bound
-  let boundDyn = if defaultBound: bound else: boundExpr
-  let boundStatic =
-    if defaultBound: DynamicSentinel
-    else: bound.getTypeInst().getStaticInt()
-
-  # one stride leaf broadcasts over the shape
-  var dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]]
+  var leaves: seq[tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode]]
   for i in 0 ..< shDims.len:
     let j = if stDims.len == 1: 0 else: i
-    dims.add (stDims[j].stride, shDims[i].shape, shDims[i].depth, shDims[i].leaf)
-
-  case complementRegime(shDims, stDims)
-  of crStatic:
-    result = complementFold(dims, boundExpr, boundStatic, defaultBound)
-  of crDynMulti:
-    # the fold emits runtime arithmetic for dynamic shape leaves
-    result = complementFold(dims, boundDyn, DynamicSentinel, defaultBound = false)
-  of crDynRank1Zero:
-    # a static zero stride, every coordinate maps to offset 0
-    result = make_layout(boundDyn, newLit(1))
-  of crDynRank1:
-    # rank-1, runtime gap formula
-    let stLeaf = stDims[0].leaf
-    let shLeaf = shDims[0].leaf
-    result = quote do:
-      coalesce(make_layout(
-        (max(Int[1](), `stLeaf`), ceil_div(`boundDyn`, `stLeaf` * `shLeaf`)),
-        (1, `stLeaf` * `shLeaf`)))
+    let desc = getCoordStrideDescriptor(stTys[j])
+    case desc.kind
+    of caMulti:
+      error "complement: multi-term coordinate strides not supported"
+    else:
+      if desc.kind == caSingle and shDims[i].shape == DynamicSentinel:
+        error "complement: coordinate strides need static shapes"
+      leaves.add (
+        axis: if desc.kind == caSingle: desc.path[^1] else: 0,
+        strideVal: if desc.kind == caSingle: desc.scale else: stDims[j].stride,
+        shapeVal: shDims[i].shape,
+        strideNode: stDims[j].leaf,
+        strideTy: stTys[j],
+        shapeNode: shDims[i].leaf)
+  result = complementGenericFold(leaves, bound, defaultBound)
 
 macro complement*(layout: Layout): untyped =
   ## Layout complement, the codomain gap filler.
@@ -1187,7 +1063,7 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result.add getAst(divideTupleDelegate(sh, st, tiler))
 
 template zipped_divide*(layout: Layout, tiler: auto): auto =
-  ## Divides layout by tiler, zips tile/rest dimensions into a rank-2 result.
+  ## Divides layout by tiler, zips tile/rest dimensions into rank-2 result.
   ##
   ## Say a kernel level needs the tile and the rest at once, one
   ## index into dimension 1 selects which tile, dimension 0 walks

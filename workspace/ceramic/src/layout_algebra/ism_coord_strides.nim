@@ -124,6 +124,15 @@ macro `+`*[A: CoordStride](k: tuple, a: A): untyped =
 macro `*`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   error("CoordStride *: cannot scale by a coordinate stride", b)
 
+macro `div`*[A: CoordStride](a: A, k: static int): untyped =
+  ## Divides a coordinate stride's coeffs by a static scalar
+  var builder = TupleBuilderNested.new(1)
+  for ev in a.getTypeInst[1].tupleStream():
+    builder.onLeaves(ev):
+      builder.append(newIntLitNode(ev.leaf.intVal.int div k))
+  return nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", builder.emit(0)))
+
 macro `*`*[A: CoordStride](k: typed, a: A): untyped =
   let ta = a.getTypeInst[1]
   if not ta.isTupleTy():
