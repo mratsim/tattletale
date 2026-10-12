@@ -9,17 +9,23 @@ import std/macros
 import workspace/ceramic/src/int_tuples
 import std/importutils
 import ./layouts_unsanctioned_helpers
+import ./layouts_datatypes
+
+export layouts_unsanctioned_helpers
+export layouts_datatypes
 import ./ism_coord_strides
 
 # ═══════════════════════════════════════════════════════════════
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
+
 proc emitLayoutLit*(shapeVal, shapeTy, strideVal, strideTy: NimNode): NimNode {.compileTime.} =
   ## Layout[shapeTy, strideTy](shape: shapeVal, stride: strideVal),
   ## all parts already literal nodes.
+  let LayoutSym = bindSym"Layout"
   result = quote do:
-    Layout[`shapeTy`, `strideTy`](shape: `shapeVal`, stride: `strideVal`)
+    `LayoutSym`[`shapeTy`, `strideTy`](shape: `shapeVal`, stride: `strideVal`)
 
 func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil, emitScalarForSize1 = true): NimNode {.compileTime.} =
   ## Emit a flat layout from an arity-2 tuple builder.
@@ -37,90 +43,6 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
                            st, tb.emitTy(1, emitScalarForSize1 = emitScalarForSize1))
   else:
     result = ctor.newCall(sh, st)
-
-# ═══════════════════════════════════════════════════════════════
-#  destructureLayout, layout AST -> (shape, stride) expressions
-# ═══════════════════════════════════════════════════════════════
-
-
-proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTime.} =
-  ## Collect the shape/stride members of a Layout field list, object
-  ## constructor fields and object type fields share the layout
-  for def in fields:
-    if def.kind in {nnkExprColonExpr, nnkIdentDefs} and def.len >= 2:
-      if def[0].eqIdent("shape"):
-        shape = def[1]
-      elif def[0].eqIdent("stride"):
-        strides = def[1]
-
-func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
-  ## Destructure a typed Layout into (shape, stride) tuple expressions,
-  ## without forcing a Layout materialization when the AST already
-  ## carries the base tuples:
-  ## - lvalue emits `layout.shape` / `layout.stride` field reads
-  ## - Layout object constructor, possibly wrapped in a StmtListExpr:
-  ##   strips it, the base tuples pass through as-is
-  ## - layout-valued call or a `typeof(make_layout(...))` alias-typed
-  ##   value materializes once through evalOnceAs, the binding is
-  ##   appended to `resultStmt`
-  ##
-  ## Args:
-  ##   - resultStmt
-  ##     statement list extended with materialization bindings
-  ##   - layoutAst
-  ##     a typed Layout expression
-  ## Returns:
-  ##   - shape, carries the shape tuple expression of the destructured layout
-  ##   - strides, carries the stride tuple expression of the destructured layout
-  ## Pattern:
-  ##   - a one-line template and getAst delegate the (shape, stride) pair to a typed macro, right after the call
-  ##   - the Impl walks the pair's leaves with tupleStream, `leafTy` carries each leaf's type
-  ##   - an unexpanded make_layout(shape, stride) call, say a getAst expansion, strips to its base tuple arguments, no type needed
-  ## Precondition:
-  ##   - layoutAst semantically type-checks as a Layout, unless it is an unexpanded make_layout(shape, stride) call
-  var inner = layoutAst
-  while inner.kind in {nnkStmtList, nnkStmtListExpr, nnkBlockExpr}:
-    inner = inner[^1]
-  if inner.kind == nnkCall and inner[0].eqIdent("make_layout") and inner.len == 3:
-    result.shape = inner[1]
-    result.strides = inner[2]
-    return
-  if layoutAst.kind in {nnkCall, nnkCommand, nnkBracketExpr}:
-    # Deferred call in case the call hasn't been semchecked yet,
-    # e.g. a `t[0]` element read of a symbol-bound tiler
-    let alias = ident("destructuredLayout")
-    resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
-    result.shape = alias.newDotExpr(ident"shape")
-    result.strides = alias.newDotExpr(ident"stride")
-    return
-  if layoutAst.kind notin {nnkSym, nnkIdent}:
-    let typ = layoutAst.getTypeInst()
-    let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
-    doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].eqIdent("Layout")) or layoutTy.kind == nnkSym,
-      "destructureLayout: expected a Layout, got " & typ.repr
-    if inner.kind == nnkObjConstr:
-      pickShapeStride(inner, result.shape, result.strides)
-      # the semchecked constructor fields wrap the base tuples
-      # in a hidden conversion, unwrap it.
-      while result.shape != nil and result.shape.kind == nnkHiddenSubConv:
-        result.shape = result.shape[^1]
-      while result.strides != nil and result.strides.kind == nnkHiddenSubConv:
-        result.strides = result.strides[^1]
-      doAssert result.shape != nil and result.strides != nil,
-        "destructureLayout: Layout constructor without shape/stride fields"
-      return
-    if layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
-        inner.kind in {nnkCall, nnkCommand}:
-      # A layout-valued call, or a value typed through
-      # a `typeof(make_layout(...))` alias symbol.
-      let alias = ident("destructuredLayout")
-      resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
-      result.shape = alias.newDotExpr(ident"shape")
-      result.strides = alias.newDotExpr(ident"stride")
-      return
-
-  result.shape = layoutAst.newDotExpr(ident"shape")
-  result.strides = layoutAst.newDotExpr(ident"stride")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -296,8 +218,7 @@ macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): unty
   let (shapeLeaves, shapeTys, strideLeaves, strideTys, dimCount) = streamDims(sh, st)
   doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
   if B <= 0 and E >= dimCount:
-    result = originalLayout
-    return
+    return originalLayout
   var builder = TupleBuilderFlat.new(2)
   for i in B ..< min(E, dimCount):
     builder.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
@@ -316,4 +237,4 @@ func basisReprStream*(stride: NimNode): TupleStream =
     result.pending = TupleStreamEvent(path: @[], kind: kLeaf, leaf: stride, leafTy: ty)
     result.hasPending = true
   else:
-    result = csDesc.coeffs.tupleStream()
+    return csDesc.coeffs.tupleStream()

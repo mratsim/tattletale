@@ -10,9 +10,9 @@ import std/algorithm
 import workspace/ceramic/src/int_tuples
 import ./layouts_datatypes
 import ./layout_compiletime
+import ./layouts_unsanctioned_helpers
 import ./ism_coord_strides
 export ism_coord_strides
-
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides, canonical column-major strides
 # ═══════════════════════════════════════════════════════════════
@@ -69,8 +69,9 @@ macro make_layout*(shape, stride: untyped): untyped =
   if stride.kind == nnkIdent:
     # an unresolved local carries no type until sem, the spelling
     # resolves it in the caller's scope, all members stay dynamic
+    let LayoutSym = bindSym"Layout"
     result = quote do:
-      Layout[typeof(`shape`), typeof(`stride`)](shape: `shape`, stride: `stride`)
+      `LayoutSym`[typeof(`shape`), typeof(`stride`)](shape: `shape`, stride: `stride`)
     return
   let strideTyInst = stride.getTypeOf()
   if strideTyInst.isCoordStride():

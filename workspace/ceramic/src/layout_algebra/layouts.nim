@@ -69,8 +69,7 @@ macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
                    (strideEvent.leaf, strideEvent.leafTy))
     inc dimCount
   if dimCount >= rank:
-    result = originalLayout
-    return
+    return originalLayout
   for i in dimCount ..< rank:
     builder.append((IntCT(1), intTy(1)), (IntCT(0), intTy(0)))
   result = builder.emitLayout()
@@ -92,8 +91,7 @@ macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
                    (strideEvent.leaf, strideEvent.leafTy))
     inc dimCount
   if dimCount >= rank:
-    result = originalLayout
-    return
+    return originalLayout
   var padShape, padStride: seq[tuple[val, ty: NimNode]]
   for i in dimCount ..< rank:
     padShape.add (IntCT(1), intTy(1))
@@ -280,8 +278,7 @@ macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): unty
   doAssert B >= 0, "groupDimensions: B must be a valid dimension index"
   let endIdx = min(E, dimCount)
   if B == 0 and endIdx == dimCount:
-    result = originalLayout
-    return
+    return originalLayout
   var builder = TupleBuilderNested.new(2)
   let openEvent = TupleStreamEvent(path: @[], kind: kOpen)
   let closeEvent = TupleStreamEvent(path: @[], kind: kClose)
@@ -336,8 +333,7 @@ macro selectDimensionsImpl(originalLayout, sh, st: typed, Is: varargs[int]{lit|`
     if Is[i].intVal != i:
       whole = false
   if whole:
-    result = originalLayout
-    return
+    return originalLayout
   let shTy = sh.getTypeOf()
   let stTy = st.getTypeOf()
   var builder = TupleBuilderFlat.new(2)

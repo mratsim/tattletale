@@ -12,7 +12,7 @@ import std/typetraits
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra/ism_coord_strides
-import workspace/ceramic/src/layout_algebra/layout_compiletime
+import ./layouts_unsanctioned_helpers
 
 # ═══════════════════════════════════════════════════════════════
 #  Layout[Sh, St], typed shape + stride pair
@@ -23,6 +23,90 @@ type Layout*[Sh, St] = object
   ## Both Sh and St can be int, Int[N], or tuples thereof.
   shape*: Sh
   stride*: St
+
+# ═══════════════════════════════════════════════════════════════
+#  destructureLayout, layout AST -> (shape, stride) expressions
+# ═══════════════════════════════════════════════════════════════
+
+proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTime.} =
+  ## Collect the shape/stride members of a Layout field list, object
+  ## constructor fields and object type fields share the layout
+  for def in fields:
+    if def.kind in {nnkExprColonExpr, nnkIdentDefs} and def.len >= 2:
+      if def[0].eqIdent("shape"):
+        shape = def[1]
+      elif def[0].eqIdent("stride"):
+        strides = def[1]
+
+func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
+  ## Destructure a typed Layout into (shape, stride) tuple expressions,
+  ## without forcing a Layout materialization when the AST already
+  ## carries the base tuples:
+  ## - lvalue emits `layout.shape` / `layout.stride` field reads
+  ## - Layout object constructor, possibly wrapped in a StmtListExpr:
+  ##   strips it, the base tuples pass through as-is
+  ## - layout-valued call or a `typeof(make_layout(...))` alias-typed
+  ##   value materializes once through evalOnceAs, the binding is
+  ##   appended to `resultStmt`
+  ##
+  ## Args:
+  ##   - resultStmt
+  ##     statement list extended with materialization bindings
+  ##   - layoutAst
+  ##     a typed Layout expression
+  ## Returns:
+  ##   - shape, carries the shape tuple expression of the destructured layout
+  ##   - strides, carries the stride tuple expression of the destructured layout
+  ## Pattern:
+  ##   - a one-line template and getAst delegate the (shape, stride) pair to a typed macro, right after the call
+  ##   - the Impl walks the pair's leaves with tupleStream, `leafTy` carries each leaf's type
+  ##   - an unexpanded make_layout(shape, stride) call, say a getAst expansion, strips to its base tuple arguments, no type needed
+  ## Precondition:
+  ##   - layoutAst semantically type-checks as a Layout, unless it is an unexpanded make_layout(shape, stride) call
+  var inner = layoutAst
+  while inner.kind in {nnkStmtList, nnkStmtListExpr, nnkBlockExpr}:
+    inner = inner[^1]
+  if inner.kind == nnkCall and inner[0].eqIdent("make_layout") and inner.len == 3:
+    result.shape = inner[1]
+    result.strides = inner[2]
+    return
+  if layoutAst.kind in {nnkCall, nnkCommand, nnkBracketExpr}:
+    # Deferred call in case the call hasn't been semchecked yet,
+    # e.g. a `t[0]` element read of a symbol-bound tiler
+    let alias = ident("destructuredLayout")
+    resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
+    result.shape = alias.newDotExpr(ident"shape")
+    result.strides = alias.newDotExpr(ident"stride")
+    return
+  if layoutAst.kind notin {nnkSym, nnkIdent}:
+    let typ = layoutAst.getTypeInst()
+    let layoutTy = if typ.kind == nnkVarTy: typ[0] else: typ
+    doAssert (layoutTy.kind == nnkBracketExpr and layoutTy[0].sameType(bindSym"Layout")) or layoutTy.kind == nnkSym,
+      "destructureLayout: expected a Layout, got " & typ.repr
+    if inner.kind == nnkObjConstr:
+      pickShapeStride(inner, result.shape, result.strides)
+      # the semchecked constructor fields wrap the base tuples
+      # in a hidden conversion, unwrap it.
+      while result.shape != nil and result.shape.kind == nnkHiddenSubConv:
+        result.shape = result.shape[^1]
+      while result.strides != nil and result.strides.kind == nnkHiddenSubConv:
+        result.strides = result.strides[^1]
+      doAssert result.shape != nil and result.strides != nil,
+        "destructureLayout: Layout constructor without shape/stride fields"
+      return
+    if layoutTy.kind == nnkSym or layoutAst.kind in {nnkCall, nnkCommand} or
+        inner.kind in {nnkCall, nnkCommand}:
+      # A layout-valued call, or a value typed through
+      # a `typeof(make_layout(...))` alias symbol.
+      let alias = ident("destructuredLayout")
+      resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
+      result.shape = alias.newDotExpr(ident"shape")
+      result.strides = alias.newDotExpr(ident"stride")
+      return
+
+  result.shape = layoutAst.newDotExpr(ident"shape")
+  result.strides = layoutAst.newDotExpr(ident"stride")
+
 
 func `===`*(a: Layout, b: tuple): bool {.inline.} =
   ## Deep comparison against a (shape, stride) tuple.

@@ -92,4 +92,4 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
   if not bStream.done():
     error "zipLeavesWith: `b` has more elements than `a`", b
   let resultTuple = builder.emit(0, emitScalarForSize1 = not inputTuple)
-  result = newStmtList(resultTuple)
+  return newStmtList(resultTuple)

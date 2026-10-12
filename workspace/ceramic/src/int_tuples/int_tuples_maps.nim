@@ -77,4 +77,4 @@ macro mapDimensionsWith*(t: tuple; body: untyped): untyped =
   for event in t.tupleDimsStream():
     builder.onLeaves(event):
       builder.append((body.replaceNodes(("it", event.leaf)), event.leafTy))
-  result = builder.emit(0)
+  return builder.emit(0)

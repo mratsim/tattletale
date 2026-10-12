@@ -125,8 +125,9 @@ proc update(a: var ProductAccum, ev: TupleStreamEvent) =
         a.flushing = true
         a.astAcc = newLit(a.staticAcc) * ev.leaf
     else:
-      # the chain is runtime, its outputs are ints
-      a.builder.append((a.astAcc, bindSym"int"))
+      # the chain's products spell their own types, the pair never disagrees,
+      # Nim folds the value expression when the emitted tree instantiates
+      a.builder.append((a.astAcc, nnkCall.newTree(ident"typeof", a.astAcc)))
       if v != DynamicSentinel:
         a.astAcc = a.astAcc * newLit(v)
       else:
@@ -206,4 +207,4 @@ macro suffix_product_scan*(t: typed, seed: typed): untyped =
   ##    suffix_product_scan(((4, 1), (8, 8)), Int[1]())
   ##        -> ((64, 64), (8, 1))
   let (val, _) = suffixProductScan(t, seed)
-  result = val
+  return val
