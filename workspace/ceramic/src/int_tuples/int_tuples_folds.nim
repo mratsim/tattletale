@@ -110,18 +110,90 @@ proc productImpl*(n: NimNode): NimNode {.compileTime.} =
   else:
     result = IntCT(a.staticAcc)
 
-proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
+proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.}
+proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.}
+
+proc scanPerMode(container, seed, seedTy: NimNode, scan: proc (container, seed: NimNode, seedTy: NimNode): tuple[val, ty: NimNode]): tuple[val, ty: NimNode] {.compileTime.} =
+  ## Per-mode base recursion on a (shape, seed) pair, pycute prefix_product
+  ##
+  ## Returns: the (val, ty) tuple of the recursed scan
+  ##
+  ## A scalar seed under a tuple shape mode is that mode's base,
+  ## congruent scalar pairs pass through verbatim
+  doAssert seed.kind == nnkTupleConstr and seedTy != nil and
+    seedTy.kind == nnkTupleConstr
+  doAssert seed.len == seedTy.len
+
+  # the container's top-level modes as (val, ty) subtrees
+  var modeVals, modeTys: seq[NimNode]
+  var modeIsTuple: seq[bool]
+  var modeBuilder = TupleBuilderNested.new(1)
+  for ev in container.tupleStream():
+    if ev.path.len == 0:
+      continue
+    if ev.path.len == 1:
+      case ev.kind
+      of kLeaf:
+        modeVals.add ev.leaf
+        modeTys.add ev.leafTy
+        modeIsTuple.add false
+      of kOpen:
+        modeBuilder = TupleBuilderNested.new(1)
+        modeBuilder.append(TupleStreamEvent(path: @[], kind: kOpen))
+      of kClose:
+        modeBuilder.append(TupleStreamEvent(path: @[], kind: kClose))
+        modeVals.add modeBuilder.emit(0)
+        modeTys.add modeBuilder.emitTy(0)
+        modeIsTuple.add true
+    else:
+      modeBuilder.append(ev)
+
+  doAssert modeVals.len == seed.len,
+    "prefixProductScan: seed arity " & $seed.len &
+    " does not match the shape's " & $modeVals.len
+
+  var assembled = TupleBuilderNested.new(1)
+  assembled.append(TupleStreamEvent(path: @[], kind: kOpen))
+  for i in 0 ..< modeVals.len:
+    let seedChild = seed[i]
+    let seedTyChild = seedTy[i]
+    if modeIsTuple[i]:
+      if seedChild.kind == nnkTupleConstr:
+        let (v, t) = scanPerMode(modeVals[i], seedChild, seedTyChild, scan)
+        assembled.append((v, t))
+      else:
+        let (v, t) = scan(modeVals[i], seedChild, seedTyChild)
+        assembled.append((v, t))
+    else:
+      doAssert seedChild.kind != nnkTupleConstr,
+        "prefixProductScan: tuple seed leaf under a scalar shape mode"
+      assembled.append((seedChild, seedTyChild))
+  assembled.append(TupleStreamEvent(path: @[], kind: kClose))
+  result = (assembled.emit(0), assembled.emitTy(0))
+
+proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
   ## Prefix product scan on nodes: each leaf's value is the seed times the leaves before it
+  ##
+  ## A tuple seed recurses per shape mode, a scalar seed under
+  ## a tuple shape mode expands as that mode's base, congruent
+  ## scalar pairs pass through verbatim
   ##
   ##  Examples:
   ##    prefixProductScan(newLit((2, 3, 4)), newLit(1))
   ##        -> ((Int[1](), Int[2](), Int[6]()), (Int[1], Int[2], Int[6]))
   ##    prefixProductScan(newLit(5), newLit(1))
   ##        -> (Int[1](), Int[1])
+  ##    prefixProductScan(newLit(((2, 3), 4)), newLit((8, 1)))
+  ##        -> (((Int[8](), Int[16]()), Int[1]()), ((Int[8], Int[16]), Int[1]))
   if seedTy != nil and seedTy.kind == nnkTupleConstr:
+    if container.isTupleTy():
+      return scanPerMode(container, seed, seedTy, prefixProductScan)
     return (seed, seedTy)
   if seedTy.isNil and seed.kind == nnkTupleConstr:
-    return makeIntTuple(seed)
+    let (sv, st) = makeIntTuple(seed)
+    if container.isTupleTy():
+      return scanPerMode(container, sv, st, prefixProductScan)
+    return (sv, st)
   if seedTy.isNil and seed.getTypeInst().isTupleTy():
     return (seed, seed.getTypeInst())
   var accu: ProductAccum
@@ -139,9 +211,14 @@ proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[
   ##    suffixProductScan(newLit(5), newLit(1))
   ##        -> (Int[1](), Int[1])
   if seedTy != nil and seedTy.kind == nnkTupleConstr:
+    if container.isTupleTy():
+      return scanPerMode(container, seed, seedTy, suffixProductScan)
     return (seed, seedTy)
   if seedTy.isNil and seed.kind == nnkTupleConstr:
-    return makeIntTuple(seed)
+    let (sv, st) = makeIntTuple(seed)
+    if container.isTupleTy():
+      return scanPerMode(container, sv, st, suffixProductScan)
+    return (sv, st)
   if seedTy.isNil and seed.getTypeInst().isTupleTy():
     return (seed, seed.getTypeInst())
   var accu: ProductAccum

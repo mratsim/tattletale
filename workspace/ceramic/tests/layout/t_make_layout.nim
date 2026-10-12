@@ -403,6 +403,70 @@ proc runMakeLayoutTests =
 
   echo "  Strided by 2: 4 cases OK"
 
+proc runGivenStrideTests =
+  echo "--- make_layout given strides (verbatim congruent, base expansion) ---"
+
+  # ═══════════════════════════════════════════════════════════════
+  #  Congruent given strides pass through verbatim, gaps,
+  #  stride-1 and stride-0 modes included
+  # ═══════════════════════════════════════════════════════════════
+
+  block:  # given strides kept as written
+    let l = make_layout((4, 8), (8, 1))
+    check l.shape, (4, 8), (Int[4], Int[8])
+    check l.stride, (8, 1), (Int[8], Int[1])
+
+  block:  # gaps: non-compact strides stay
+    let l = make_layout((4, 8), (2, 5))
+    check l.stride, (2, 5), (Int[2], Int[5])
+
+  block:  # stride 1s stay
+    let l = make_layout((2, 3), (1, 1))
+    check l.stride, (1, 1), (Int[1], Int[1])
+
+  block:  # stride 0 stays
+    let l = make_layout((2, 3), (0, 1))
+    check l.stride, (0, 1), (Int[0], Int[1])
+
+  block:  # nested congruent strides stay nested verbatim
+    let l = make_layout((2, (3, 4)), (1, (2, 8)))
+    check l.stride, (1, (2, 8)), (Int[1], (Int[2], Int[8]))
+
+  # ═══════════════════════════════════════════════════════════════
+  #  A scalar stride seeds prefix products, pycute prefix_product
+  # ═══════════════════════════════════════════════════════════════
+
+  block:  # scalar broadcast
+    let l = make_layout((2, 3), 4)
+    check l.stride, (4, 8), (Int[4], Int[8])
+
+  block:  # scalar broadcast of 1
+    let l = make_layout((2, 3), 1)
+    check l.stride, (1, 2), (Int[1], Int[2])
+
+  # ═══════════════════════════════════════════════════════════════
+  #  A scalar stride under a tuple mode is that mode's base,
+  #  pycute prefix_product(((2,3),4), (8,1)) == ((8,16),1)
+  # ═══════════════════════════════════════════════════════════════
+
+  block:  # base expansion
+    let l = make_layout(((2, 3), 4), (8, 1))
+    check l.shape, ((2, 3), 4), ((Int[2], Int[3]), Int[4])
+    check l.stride, ((8, 16), 1), ((Int[8], Int[16]), Int[1])
+
+  block:  # per-mode bases
+    let l = make_layout(((2, 3), (4, 5)), (1, 100))
+    check l.stride, ((1, 2), (100, 400)), ((Int[1], Int[2]), (Int[100], Int[400]))
+
+  block:  # dynamic base, static tail
+    let s = 8
+    let l = make_layout(((2, 3), 4), (s, 1))
+    check l.stride[0][0], s, int
+    check l.stride[0][1], 16, int
+    check l.stride[1], 1, Int[1]
+
+  echo "  Given strides: 10 cases OK"
+
 proc runEvalOnceShadowingTests =
   echo "--- evalOnceAs shadowing (genSym'd aliases) ---"
   block:
@@ -415,4 +479,5 @@ proc runEvalOnceShadowingTests =
 
 when isMainModule:
   runMakeLayoutTests()
+  runGivenStrideTests()
   runEvalOnceShadowingTests()
