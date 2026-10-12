@@ -216,7 +216,7 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
     covStride[i] = IntCT(1)
     covStrideTy[i] = intTy(1)
     covStatic[i] = true
-  var axisModes: seq[seq[tuple[gap, gapTy, stride: NimNode]]]
+  var axisModes: seq[seq[tuple[gap, gapTy, stride, strideTy: NimNode]]]
   axisModes.setLen(axes.len)
   var b = 1
   for l in sorted:
@@ -237,20 +237,20 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
         error "complement: coordinate strides collide, scale " & $l.strideVal &
           " inside the covered span " & $covVal[k] & " on axis " & $l.axis
       if gap > 1:
-        axisModes[k].add (IntCT(gap), intTy(gap), covStride[k])
+        axisModes[k].add (IntCT(gap), intTy(gap), covStride[k], covStrideTy[k])
     else:
-      let gapTy = if covStatic[k]: l.strideTy else: bindSym"int"
-      axisModes[k].add (l.strideNode div covDivN, gapTy, covStride[k])
+      let gapExpr = l.strideNode div covDivN
+      axisModes[k].add (gapExpr, nnkCall.newTree(ident"typeof", gapExpr), covStride[k], covStrideTy[k])
     if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and covStatic[k]:
       covVal[k] = l.strideVal * l.shapeVal
       covScalar[k] = IntCT(covVal[k])
       covStride[k] = l.strideNode * IntCT(l.shapeVal)
-      covStrideTy[k] = l.strideTy
+      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
     else:
       covStatic[k] = false
       covScalar[k] = l.strideNode * l.shapeNode
       covStride[k] = l.strideNode * l.shapeNode
-      covStrideTy[k] = bindSym"int"
+      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
     if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
       b += (l.shapeVal - 1) * abs(l.strideVal)
 
@@ -274,7 +274,7 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   var builder = TupleBuilderFlat.new(2)
   for k in 0 ..< axes.len:
     for m in axisModes[k]:
-      builder.append((m.gap, m.gapTy), (m.stride, covStrideTy[k]))
+      builder.append((m.gap, m.gapTy), (m.stride, m.strideTy))
     # the free complement extends integer axes to the layout's cosize, atom axes stay unextended
     let boundNode = if defaultBound:
                       IntCT(if atomAxis[k]: 1 else: b)
@@ -286,7 +286,8 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       let cd = (boundVal + covVal[k] - 1) div covVal[k]
       builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
     else:
-      builder.append((bindSym"ceil_div".newCall(boundNode, covScalar[k]), bindSym"int"),
+      let cdExpr = bindSym"ceil_div".newCall(boundNode, covScalar[k])
+      builder.append((cdExpr, nnkCall.newTree(ident"typeof", cdExpr)),
                      (covStride[k], covStrideTy[k]))
 
   let layout = builder.emitLayout(emitScalarForSize1 = false)
@@ -458,7 +459,7 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
       let strideDim = strideEv.leaf
       let divShape = quote do: stridedDiv(`shapeDim`, `M`, `prefix`)
       let divStride = quote do: (`M` div `prefix` + int(`M` div `prefix` === 0)) * `strideDim`
-      builder.append((divShape, shapeEv.leafTy), (divStride, strideEv.leafTy))
+      builder.append((divShape, nnkCall.newTree(ident"typeof", divShape)), (divStride, nnkCall.newTree(ident"typeof", divStride)))
       prefix = quote do: `prefix` * `shapeDim`
   result.add builder.emitLayout()
 
@@ -490,7 +491,7 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   if not pendingShape.isNil:
     # the last mode carries the running quotient, its shape ignores s
     let lastMod = quote do: stridedMod(`N`, `prefix`)
-    builder.append((lastMod, bindSym"int"), (pendingStride, pendingStrideTy))
+    builder.append((lastMod, nnkCall.newTree(ident"typeof", lastMod)), (pendingStride, pendingStrideTy))
   result.add builder.emitLayout()
 
 proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
@@ -1227,7 +1228,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
                      else: intTy(dim.shape)
       let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                    else: IntCT(dim.prefix)
-      let stLeafTy = if dim.prefix == DynamicSentinel: bindSym"int"
+      let stLeafTy = if dim.prefix == DynamicSentinel: nnkCall.newTree(ident"typeof", dim.prefixNode)
                      else: intTy(dim.prefix)
       builder.append((shLeaf, shLeafTy), (stLeaf, stLeafTy))
       if dim.shape == DynamicSentinel:
@@ -1303,7 +1304,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
     if gap != 1:
       let prevStLeaf = if prevPrefix == DynamicSentinel: prevPrefixNode
                        else: IntCT(prevPrefix)
-      let prevStLeafTy = if prevPrefix == DynamicSentinel: bindSym"int"
+      let prevStLeafTy = if prevPrefix == DynamicSentinel: nnkCall.newTree(ident"typeof", prevPrefixNode)
                          else: intTy(prevPrefix)
       builder.append((IntCT(gap), intTy(gap)), (prevStLeaf, prevStLeafTy))
     sizeSoFar = dim.stride
@@ -1319,7 +1320,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
                    else: intTy(dim.shape)
     let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                  else: IntCT(dim.prefix)
-    let stLeafTy = if dim.prefix == DynamicSentinel: bindSym"int"
+    let stLeafTy = if dim.prefix == DynamicSentinel: nnkCall.newTree(ident"typeof", dim.prefixNode)
                    else: intTy(dim.prefix)
     builder.append((shLeaf, shLeafTy), (stLeaf, stLeafTy))
   return bindSym"coalesce".newCall(builder.emitLayout())
