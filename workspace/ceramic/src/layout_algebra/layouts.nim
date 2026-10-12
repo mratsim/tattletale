@@ -338,8 +338,8 @@ macro selectDimensionsImpl(originalLayout, sh, st: typed, Is: varargs[int]{lit|`
   if whole:
     result = originalLayout
     return
-  let shTy = sh.getTypeInst()
-  let stTy = st.getTypeInst()
+  let shTy = sh.getTypeOf()
+  let stTy = st.getTypeOf()
   var builder = TupleBuilderFlat.new(2)
   for i in 0 ..< Is.len:
     builder.append((getTupleIndex(sh, Is[i].intVal), getTupleIndex(shTy, Is[i].intVal)),

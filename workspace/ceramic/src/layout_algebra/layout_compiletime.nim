@@ -15,9 +15,15 @@ import ./ism_coord_strides
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
+proc emitLayoutLit*(shapeVal, shapeTy, strideVal, strideTy: NimNode): NimNode {.compileTime.} =
+  ## Layout[shapeTy, strideTy](shape: shapeVal, stride: strideVal),
+  ## all parts already literal nodes.
+  result = quote do:
+    Layout[`shapeTy`, `strideTy`](shape: `shapeVal`, stride: `strideVal`)
+
 func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil, emitScalarForSize1 = true): NimNode {.compileTime.} =
   ## Emit a flat layout from an arity-2 tuple builder.
-  ## If no `ctor` is passed, "make_layout(accumulated_shape, accumulated_stride)" will be emitted
+  ## If no `ctor` is passed, the constructor is spelled directly from the accumulated values and member types
   ##
   ## An empty builder emits make_layout(1, 0).
   let sh = tb.emit(0, emitScalarForSize1 = emitScalarForSize1)
@@ -25,7 +31,10 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
   if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
     result = ident"make_layout".newCall(IntCT(1), newLit(0))
   elif ctor.isNil():
-    result = ident"make_layout".newCall(sh, st)
+    # the builder carries the member types, the constructor is spelled directly,
+    # no make_layout re-walk and no getTypeInst on built trees
+    result = emitLayoutLit(sh, tb.emitTy(0, emitScalarForSize1 = emitScalarForSize1),
+                           st, tb.emitTy(1, emitScalarForSize1 = emitScalarForSize1))
   else:
     result = ctor.newCall(sh, st)
 
@@ -43,12 +52,6 @@ proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTim
         shape = def[1]
       elif def[0].eqIdent("stride"):
         strides = def[1]
-
-proc emitLayoutLit*(shapeVal, shapeTy, strideVal, strideTy: NimNode): NimNode {.compileTime.} =
-  ## Layout[shapeTy, strideTy](shape: shapeVal, stride: strideVal),
-  ## all parts already literal nodes.
-  result = quote do:
-    Layout[`shapeTy`, `strideTy`](shape: `shapeVal`, stride: `strideVal`)
 
 func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
   ## Destructure a typed Layout into (shape, stride) tuple expressions,
@@ -307,7 +310,7 @@ macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): unty
 func basisReprStream*(stride: NimNode): TupleStream =
   ## Unified stream for strides, regular scalars or coordinate strides
   privateAccess(TupleStream)
-  let ty = stride.getTypeInst()
+  let ty = stride.getTypeOf()
   let csDesc = ty.getCoordStrideDescriptor()
   if csDesc.kind == caNone:
     result.pending = TupleStreamEvent(path: @[], kind: kLeaf, leaf: stride, leafTy: ty)

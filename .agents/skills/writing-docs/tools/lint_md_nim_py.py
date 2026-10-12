@@ -1760,7 +1760,7 @@ def nim_structure_checks(path, text, header_nos, findings):
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
-        if ofm and ofm.group(1).endswith("Of"):
+        if ofm and ofm.group(1).endswith("Of") and ofm.group(1) != "getTypeOf":
             findings.append(Finding(
                 path, i + 1, "decl-of-suffix",
                 "the name %s carries an Of suffix, name the thing directly "

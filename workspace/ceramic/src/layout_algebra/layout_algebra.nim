@@ -498,7 +498,7 @@ proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
   ## absorbs the rest of the path, it is its own single mode
   result = node
   for i in path:
-    if result.getTypeInst().isTupleTy():
+    if result.getTypeOf().isTupleTy():
       result = nnkBracketExpr.newTree(result, newLit(i))
     else:
       break
@@ -516,11 +516,11 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   var mVal = bStride.getStaticInt()
   if mVal == DynamicSentinel:
     # a symbol-bound stride, the static lives in the field's type
-    mVal = bStride.getTypeInst().getStaticInt()
+    mVal = bStride.getTypeOf().getStaticInt()
   if mVal == 0:
     result.add make_layout(bShape, IntCT(0))
     return
-  if bShape.getTypeInst().isTupleTy():
+  if bShape.getTypeOf().isTupleTy():
     template composeMode(aSh, aSt, bSh, bSt: typed): untyped =
       composeImpl(aSh, aSt, bSh, bSt)
     var builder = TupleBuilderFlat.new(2)
@@ -538,7 +538,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   else:
     var nVal = bShape.getStaticInt()
     if nVal == DynamicSentinel:
-      nVal = bShape.getTypeInst().getStaticInt()
+      nVal = bShape.getTypeOf().getStaticInt()
     if nVal == 1:
       # A' evaluated at one point, evaluation is coalesce-invariant
       result.add make_layout(IntCT(1),
@@ -546,7 +546,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
     else:
       var aSh, aSt: NimNode
       let stmts = newStmtList()
-      if not isCoordStride(bStride.getTypeInst()):
+      if not isCoordStride(bStride.getTypeOf()):
         stmts.add quote do:
           evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
         (aSh, aSt) = result.destructureLayout(ident"aPrime")
@@ -1040,9 +1040,9 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
     logical_divide(make_layout(dsh, dst), dtl).shape
   template divideTupleDimStride(dsh, dst, dtl) =
     logical_divide(make_layout(dsh, dst), dtl).stride
-  let shTy = sh.getTypeInst()
+  let shTy = sh.getTypeOf()
   let layoutRank = if shTy.kind == nnkTupleConstr: shTy.len else: 1
-  let tilerRank = tiler.getTypeInst().len
+  let tilerRank = tiler.getTypeOf().len
   if tilerRank > layoutRank:
     error "logical_divide: tiler has more dimensions (" & $tilerRank &
       ") than the layout (" & $layoutRank & ")"
@@ -1080,7 +1080,7 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result = e
     while result.kind == nnkStmtListExpr:
       result = result[^1]
-  if unwrapSLE(tiler).getTypeInst().len == 0:
+  if unwrapSLE(tiler).getTypeOf().len == 0:
     # an empty tiler divides nothing, the layout passes through verbatim
     result = newStmtList()
     result.add layout

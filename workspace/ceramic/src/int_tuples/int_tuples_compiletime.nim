@@ -98,6 +98,37 @@ func tupleTypeWithoutNames(t: NimNode): NimNode {.compileTime.} =
       fields.add f
   result = nnkTupleTy.newTree(fields)
 
+func getTypeOf*(n: NimNode): NimNode {.compileTime.} =
+  case n.kind
+  of nnkStmtListExpr:
+    result = getTypeOf(n[^1])
+  of nnkCall, nnkObjConstr:
+    if n[0].kind == nnkBracketExpr:
+      result = n[0]
+    elif n[0].eqIdent("E"):
+      # a CoordStride atom constructor, the type spells from the arguments
+      var coords = nnkPar.newTree()
+      for i in 1 ..< n.len:
+        coords.add n[i]
+      result = nnkBracketExpr.newTree(ident"CoordStride", coords)
+    else:
+      result = n.getTypeInst()
+  of nnkPar, nnkTupleConstr:
+    if n.kind == nnkPar and n.len == 1:
+      result = getTypeOf(n[0])
+    else:
+      result = nnkTupleTy.newTree()
+      for child in n:
+        result.add getTypeOf(child)
+  of nnkBracketExpr:
+    let base = getTypeOf(n[0])
+    if base.kind in {nnkTupleTy, nnkTupleConstr} and n[1].kind in {nnkIntLit .. nnkUInt64Lit}:
+      result = base[int(n[1].intVal)]
+    else:
+      result = n.getTypeInst()
+  else:
+    result = n.getTypeInst()
+
 func getTupleType*(n: NimNode): NimNode {.compileTime.} =
   ## Returns a tuple of corresponding types
   if n.kind == nnkTupleTy:
@@ -117,6 +148,12 @@ func isTupleTy*(t: NimNode): bool {.compileTime.} =
     true
   of nnkPar:
     t.len != 1 # A single elem in parenthesis is not a tuple
+  of nnkCall, nnkObjConstr:
+    if t[0].kind == nnkBracketExpr:
+      # an Int[v]() / Layout[A, B](...) constructor is a scalar value
+      false
+    else:
+      t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
   of nnkIntLit, nnkInt64Lit, nnkFloatLit, nnkCharLit, nnkStrLit,
      nnkNilLit, nnkEmpty:
     # fresh macro nodes, no type to resolve and never tuples

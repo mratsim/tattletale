@@ -72,7 +72,7 @@ macro make_layout*(shape, stride: untyped): untyped =
     result = quote do:
       Layout[typeof(`shape`), typeof(`stride`)](shape: `shape`, stride: `stride`)
     return
-  let strideTyInst = stride.getTypeInst()
+  let strideTyInst = stride.getTypeOf()
   if strideTyInst.isCoordStride():
     let (shapeVal, shapeTy) = makeIntTuple(shape)
     result = quote do:
