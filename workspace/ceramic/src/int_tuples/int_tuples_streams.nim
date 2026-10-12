@@ -124,6 +124,7 @@ func next*(s: var TupleStream): TupleStreamEvent =
         dec s.stack[^1].idx
       else:
         inc s.stack[^1].idx
+      s.hasPending = true
       if s.shallow:
         # a shallow stream yields the whole sub-tuple element as one leaf
         s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT)
@@ -367,9 +368,27 @@ func done*(z: var TupleZipLongest): bool =
   ## True once both streams are exhausted
   z.a.done() and z.b.done()
 
+func atClose(s: TupleStream): bool =
+  ## True when the stream's next event closes the current subtree
+  if s.hasPending:
+    return s.pending.kind == kClose
+  if s.stack.len == 0:
+    return false
+  let f = s.stack[^1]
+  if f.ty == nil:
+    result = if s.reversed: f.idx < 0 else: f.idx >= 1
+  elif s.reversed:
+    result = f.idx < 0
+  else:
+    result = f.idx >= f.ty.len
+
 func next*(z: var TupleZipLongest): tuple[a, b: TupleStreamEvent] =
-  ## Pairs the next event of each side, a side without leaves
-  ## left gets the other side's event with a nil leaf
+  ## Pairs the next event of each side, a side without leaves left
+  ## gets the other side's event with a nil leaf, a side whose next
+  ## event is kClose pads with nil leaves until the other side closes
+  ##
+  ## Returns:
+  ##     The paired (a, b) events, the padded side's leaf is nil
   if z.a.done():
     result.b = z.b.next()
     result.a = result.b
@@ -380,6 +399,14 @@ func next*(z: var TupleZipLongest): tuple[a, b: TupleStreamEvent] =
     result.b = result.a
     if result.b.kind == kLeaf:
       result.b.leaf = nil
+  elif z.a.atClose() and not z.b.atClose():
+    result.b = z.b.next()
+    result.a = TupleStreamEvent(path: result.b.path, kind: kLeaf,
+                                leaf: nil, leafTy: nil)
+  elif z.b.atClose() and not z.a.atClose():
+    result.a = z.a.next()
+    result.b = TupleStreamEvent(path: result.a.path, kind: kLeaf,
+                                leaf: nil, leafTy: nil)
   else:
     result.a = z.a.next()
     result.b = z.b.next()

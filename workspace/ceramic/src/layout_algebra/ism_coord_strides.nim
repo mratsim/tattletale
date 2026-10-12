@@ -45,15 +45,24 @@ macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   if not ta.isTupleTy() and not tb.isTupleTy():
     return nnkCall.newTree(nnkBracketExpr.newTree(
       bindSym"CoordStride", newIntLitNode(ta.intVal.int + tb.intVal.int)))
-  var zip = zipLongest(ta.tupleStream(), tb.tupleStream())
   var builder = TupleBuilderNested.new(1)
-  while not zip.done():
-    let (ev, other) = zip.next()
-    builder.onLeaves(ev):
-      let v = if ev.leaf.isNil: 0 else: ev.leaf.intVal.int
-      let w = if other.leaf.isNil: 0 else: other.leaf.intVal.int
-      let c = v + w
-      builder.append((newIntLitNode(c), intTy(c)))
+  if not ta.isTupleTy() or not tb.isTupleTy():
+    # a scalar coordinate stride broadcasts over the other's coefficients
+    let scalar = if ta.isTupleTy(): tb else: ta
+    let tupleSide = if ta.isTupleTy(): ta else: tb
+    for ev in tupleSide.tupleStream():
+      builder.onLeaves(ev):
+        let c = ev.leaf.intVal.int + scalar.intVal.int
+        builder.append((newIntLitNode(c), intTy(c)))
+  else:
+    var zip = zipLongest(ta.tupleStream(), tb.tupleStream())
+    while not zip.done():
+      let (ev, other) = zip.next()
+      builder.onLeaves(ev):
+        let v = if ev.leaf.isNil: 0 else: ev.leaf.intVal.int
+        let w = if other.leaf.isNil: 0 else: other.leaf.intVal.int
+        let c = v + w
+        builder.append((newIntLitNode(c), intTy(c)))
   return nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", builder.emit(0)))
 

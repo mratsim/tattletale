@@ -50,12 +50,17 @@ macro slice*(target: tuple; selector: typed): untyped =
       error "slice: the selector and the target have different structures", selEvent.leaf
     builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
-      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
+      # a literal selector leaf carries no type, it is an int by construction
+      let selTy = if raw == nil: nil
+                  elif raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]
                   else: raw
-      if selTy.hasType"X":
+      if selTy == nil or selTy.kind in {nnkIntLit .. nnkUInt64Lit}:
+        discard
+      elif selTy.hasType"X":
         builder.append(tgtEvent)
-      elif selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
+      elif selTy.hasType"Y" or selTy.hasType"int" or
+          (selTy.kind == nnkBracketExpr and selTy[0].isIntTyHead()):
         discard
       else:
         error "slice: selector items must be X, Y, or ints", selTy
@@ -74,10 +79,15 @@ macro dice*(target: tuple; selector: typed): untyped =
       error "slice: the selector and the target have different structures", selEvent.leaf
     builder.onLeaves(tgtEvent):
       let raw = selEvent.leafTy
-      let selTy = if raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
+      # a literal selector leaf carries no type, it is an int by construction
+      let selTy = if raw == nil: nil
+                  elif raw.kind == nnkBracketExpr and raw[0].eqIdent("typeDesc"):
                     raw[1]
                   else: raw
-      if selTy.hasType"Y" or selTy.hasType"int" or (selTy.kind == nnkBracketExpr and selTy[0].hasType"Int"):
+      if selTy == nil or selTy.kind in {nnkIntLit .. nnkUInt64Lit}:
+        builder.append(tgtEvent)
+      elif selTy.hasType"Y" or selTy.hasType"int" or
+          (selTy.kind == nnkBracketExpr and selTy[0].isIntTyHead()):
         builder.append(tgtEvent)
       elif selTy.hasType"X":
         discard

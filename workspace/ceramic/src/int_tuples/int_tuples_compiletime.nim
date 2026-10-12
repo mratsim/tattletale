@@ -175,10 +175,15 @@ func isTupleTy*(t: NimNode): bool {.compileTime.} =
   else:
     t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
 
+func isIntTyHead*(n: NimNode): bool {.compileTime.} =
+  ## Head symbol of an Int[V] type node, sameType misses internal
+  ## instantiation syms getTypeImpl produces
+  n.kind == nnkSym and (n.sameType(bindSym"Int") or $n == "Int")
+
 func isScalarTy*(t: NimNode): bool {.compileTime.} =
   t.kind == nnkIntLit or
-    (t.kind == nnkBracketExpr and t[0].sameType(bindSym"Int")) or
-    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].sameType(bindSym"Int")) or
+    (t.kind == nnkBracketExpr and t[0].isIntTyHead()) or
+    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].isIntTyHead()) or
     (t.kind == nnkSym and t.sameType(bindSym"int"))
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =

@@ -159,8 +159,16 @@ macro zippedToTiledPairImpl*(tileShape, restShape, tileStride, restStride: typed
   let restStrideType = restStride.getTypeInst()
   if restShapeType.kind in {nnkTupleTy, nnkTupleConstr} and restShapeType.len > 0:
     for i in 0 ..< restShapeType.len:
-      builder.append((getTupleIndex(restShape, i), getTupleIndex(restShapeType, i)),
-                     (getTupleIndex(restStride, i), getTupleIndex(restStrideType, i)))
+      # the rest's static fields carry literal types, lifted to Int[v]
+      # so the ty tuple stays uniform with the tile's Int brackets
+      let shTyI = getTupleIndex(restShapeType, i)
+      let stTyI = getTupleIndex(restStrideType, i)
+      builder.append((getTupleIndex(restShape, i),
+                      if shTyI.kind in {nnkIntLit .. nnkUInt64Lit}: intTy(shTyI.intVal.int)
+                      else: shTyI),
+                     (getTupleIndex(restStride, i),
+                      if stTyI.kind in {nnkIntLit .. nnkUInt64Lit}: intTy(stTyI.intVal.int)
+                      else: stTyI))
   else:
     builder.append((restShape, restShapeType), (restStride, restStrideType))
   result.add builder.emitLayout()

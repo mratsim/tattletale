@@ -84,7 +84,7 @@ proc update(a: var ProductAccum, ev: TupleStreamEvent) =
         a.staticAcc = a.staticAcc * v
       else:
         a.flushing = true
-        a.astAcc = newLit(a.staticAcc) * ev.leaf
+        a.astAcc = IntCT(a.staticAcc) * ev.leaf
     else:
       # the chain's products spell their own types, the pair never disagrees,
       # Nim folds the value expression when the emitted tree instantiates

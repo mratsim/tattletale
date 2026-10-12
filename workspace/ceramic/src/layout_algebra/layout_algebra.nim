@@ -117,6 +117,8 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
       pendingVal = DynamicSentinel
     elif shapeVal == 1:
       if strideCrd.kind != caNone:
+        # a size-1 mode with a coordinate stride keeps its axis corner,
+        # the complement's per-axis lift needs it
         if not headTy.isNil:
           appendChain()
         builder.append((IntCT(1), intTy(1)), (strideEv.leaf, strideEv.leafTy))
@@ -125,6 +127,8 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
         pending = newEmptyNode()
         pendingVal = DynamicSentinel
       else:
+        # a size-1 int-stride dimension pops, a lone surviving mode
+        # is re-added below
         pending = strideEv.leaf
         pendingTy = strideEv.leafTy
         pendingVal = strideVal
@@ -480,8 +484,13 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
     let shapeDim = shapeEv.leaf
     if not pendingShape.isNil:
-      let modShape = quote do: stridedMod(`pendingShape`, `N`, `prefix`)
-      builder.append((modShape, pendingShapeTy), (pendingStride, pendingStrideTy))
+      # each mode's mod call gets its own block scope, the template's
+      # static-branch bodies share gensyms across instantiations
+      let modShape = quote do: (block: stridedMod(`pendingShape`, `N`, `prefix`))
+      # the member types resolve at type resolution of the constructor,
+      # spelled as typeof so the modded shape and its type slot agree
+      builder.append((modShape, quote do: typeof(`modShape`)),
+                     (pendingStride, pendingStrideTy))
       prefix = quote do: `prefix` * `pendingShape`
     pendingShape = shapeDim
     pendingShapeTy = shapeEv.leafTy
@@ -489,7 +498,7 @@ macro stridedMod(strided: Layout, N: typed): untyped =
     pendingStrideTy = strideEv.leafTy
   if not pendingShape.isNil:
     # the last mode carries the running quotient, its shape ignores s
-    let lastMod = quote do: stridedMod(`N`, `prefix`)
+    let lastMod = quote do: (block: stridedMod(`N`, `prefix`))
     builder.appendTyped((lastMod, nil), (pendingStride, pendingStrideTy))
   result.add builder.emitLayout()
 
@@ -620,7 +629,15 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 
   result = newStmtList()
   let (aShape, aStride) = result.destructureLayout(a)
-  let tilerTy = tiler.getTypeInst()
+  # an un-inlined tuple producer (template call, mapped expression)
+  # is evaluated once, the leaf walk reads the value through the alias
+  var tilerEval = tiler
+  if tiler.getTypeOf().isTupleTy() and
+      tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
+    let tilerAlias = ident("tilerEval")
+    result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
+    tilerEval = tilerAlias
+  let tilerTy = tilerEval.getTypeOf()
   if not tilerTy.isTupleTy():
     # a layout tiler: destructured and handed to composeImpl as-is
     let (bShape, bStride) = result.destructureLayout(tiler)
@@ -652,7 +669,7 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 
   var tilerLeaves: seq[NimNode]
   var tilerLeafTys: seq[NimNode]
-  for tEv in tiler.tupleDimsStream():
+  for tEv in tilerEval.tupleDimsStream():
     let tLeaf = tEv.leaf
     let tLeafTy = tEv.leafTy
     if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and
@@ -667,7 +684,8 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aShLeafTy, aStLeaf, aStLeafTy: NimNode) =
     if isKeepMark(tLeaf, tLeafTy):
       builder.append((aShLeaf, aShLeafTy), (aStLeaf, aStLeafTy))
-    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy):
+    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy) and
+        tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
       error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
     elif isLayoutTy(tLeafTy) or aStLeafTy.isTupleTy():
       # a Layout entry, or a scalar entry on a nested mode: the entry
@@ -687,7 +705,13 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
       let modeStTy = quote do: typeof(`modeSt`)
       builder.append((modeSh, modeShTy), (modeSt, modeStTy))
     else:
-      builder.append((tLeaf, tLeafTy), (aStLeaf, aStLeafTy))
+      # a scalar tiler element composes (B):(1), a static int B is
+      # lifted to Int[B] like make_layout does
+      if tLeafTy == nil and tLeaf.kind in {nnkIntLit .. nnkUInt64Lit}:
+        builder.append((IntCT(tLeaf.intVal), intTy(tLeaf.intVal)),
+                       (aStLeaf, aStLeafTy))
+      else:
+        builder.appendTyped((tLeaf, tLeafTy), (aStLeaf, aStLeafTy))
 
   let aShapeIsTuple = aShapeTy.isTupleTy()
   let aStrideIsTuple = aStrideTy.isTupleTy()
@@ -1041,8 +1065,9 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
   template divideTupleDimStride(dsh, dst, dtl) =
     logical_divide(make_layout(dsh, dst), dtl).stride
   let shTy = sh.getTypeOf()
-  let layoutRank = if shTy.kind == nnkTupleConstr: shTy.len else: 1
-  let tilerRank = tiler.getTypeOf().len
+  let layoutRank = if shTy.isTupleTy(): shTy.len else: 1
+  let tilerTy = tiler.getTypeOf()
+  let tilerRank = if tilerTy.isTupleTy(): tilerTy.len else: 1
   if tilerRank > layoutRank:
     error "logical_divide: tiler has more dimensions (" & $tilerRank &
       ") than the layout (" & $layoutRank & ")"
