@@ -123,7 +123,7 @@ macro `+`*[A: CoordStride](a: A, k: tuple): untyped =
           builder.append((newIntLitNode(sum), intTy(sum)))
         else:
           let sumExpr = kExpr + c
-          builder.append((sumExpr, nnkCall.newTree(ident"typeof", sumExpr)))
+          builder.appendTyped(sumExpr)
   return builder.emit(0)
 
 macro `+`*[A: CoordStride](k: tuple, a: A): untyped =
@@ -174,7 +174,7 @@ macro `+`*(a, b: tuple): untyped =
         builder.append((newIntLitNode(sum), intTy(sum)))
       else:
         let sumExpr = x + y
-        builder.append((sumExpr, nnkCall.newTree(ident"typeof", sumExpr)))
+        builder.appendTyped(sumExpr)
   return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════

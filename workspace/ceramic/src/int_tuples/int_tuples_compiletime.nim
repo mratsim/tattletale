@@ -59,10 +59,15 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
     # the typed-delegate path hands out typeDesc[Int[V]] wrappers
     if t[0].eqIdent("typeDesc"):
       t[1].getStaticInt()
-    # TODO: a non-literal Int construction such as Int[ceil_div(a, b)]()
-    # is not auto-folded by Nim before getStaticInt, it's mapped to DynamicSentinel
-    elif t[0].eqIdent("Int") and t[1].kind in {nnkIntLit, nnkUIntLit}:
-      int(t[1].intVal)
+    elif t[0].eqIdent("Int"):
+      t[1].getStaticInt()
+    elif t[0].eqIdent("ceil_div") and t.len == 3 and
+        t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
+      # domain arithmetic folds at compile time, matching the static
+      # int semantics Nim applies during type resolution
+      let a = t[1].intVal.int
+      let b = t[2].intVal.int
+      if b == 0: DynamicSentinel else: (a + b - 1) div b
     else:
       DynamicSentinel
   of nnkObjConstr:
@@ -127,6 +132,8 @@ func getTypeOf*(n: NimNode): NimNode {.compileTime.} =
     else:
       result = n.getTypeInst()
   else:
+    when defined(DEBUG_TY):
+      {.cast(noSideEffect).}: echo "getTypeOf else: ", n.repr
     result = n.getTypeInst()
 
 func getTupleType*(n: NimNode): NimNode {.compileTime.} =

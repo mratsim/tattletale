@@ -287,8 +287,8 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
     else:
       let cdExpr = bindSym"ceil_div".newCall(boundNode, covScalar[k])
-      builder.append((cdExpr, nnkCall.newTree(ident"typeof", cdExpr)),
-                     (covStride[k], covStrideTy[k]))
+      builder.appendTyped(cdExpr)
+      builder.append((covStride[k], covStrideTy[k]))
 
   let layout = builder.emitLayout(emitScalarForSize1 = false)
   return layout
@@ -459,7 +459,8 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
       let strideDim = strideEv.leaf
       let divShape = quote do: stridedDiv(`shapeDim`, `M`, `prefix`)
       let divStride = quote do: (`M` div `prefix` + int(`M` div `prefix` === 0)) * `strideDim`
-      builder.append((divShape, nnkCall.newTree(ident"typeof", divShape)), (divStride, nnkCall.newTree(ident"typeof", divStride)))
+      builder.appendTyped(divShape)
+      builder.appendTyped(divStride)
       prefix = quote do: `prefix` * `shapeDim`
   result.add builder.emitLayout()
 
@@ -491,7 +492,8 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   if not pendingShape.isNil:
     # the last mode carries the running quotient, its shape ignores s
     let lastMod = quote do: stridedMod(`N`, `prefix`)
-    builder.append((lastMod, nnkCall.newTree(ident"typeof", lastMod)), (pendingStride, pendingStrideTy))
+    builder.appendTyped(lastMod)
+    builder.append((pendingStride, pendingStrideTy))
   result.add builder.emitLayout()
 
 proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =

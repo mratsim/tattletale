@@ -127,7 +127,7 @@ proc update(a: var ProductAccum, ev: TupleStreamEvent) =
     else:
       # the chain's products spell their own types, the pair never disagrees,
       # Nim folds the value expression when the emitted tree instantiates
-      a.builder.append((a.astAcc, nnkCall.newTree(ident"typeof", a.astAcc)))
+      a.builder.appendTyped(a.astAcc)
       if v != DynamicSentinel:
         a.astAcc = a.astAcc * newLit(v)
       else:

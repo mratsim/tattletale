@@ -316,6 +316,8 @@ def _probe_exempt(line):
 BANNED = [
     (r"\bpast the\b",
      None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
+    (r"\bsems?\b",
+     None, "name the phase directly, type resolution, instantiation, or the checker"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
      r"|\bno longer\b|\bused to \b|\bas of \b",

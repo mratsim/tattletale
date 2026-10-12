@@ -182,6 +182,12 @@ func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[tuple[val, ty:
       tb.accums[i].insert(batch[j].val, 0)
       tb.tyAccums[i].insert(batch[j].ty, 0)
 
+func appendTyped*(tb: var TupleBuilderFlat, v: NimNode) =
+  ## Append the value as written, its type spelled as typeof(v),
+  ## resolved when the emitted tree is type-checked
+  tb.accums[0].add v
+  tb.tyAccums[0].add nnkCall.newTree(ident"typeof", v)
+
 func count*(tb: TupleBuilderFlat): int =
   ## Number of appended leaves.
   tb.accums[0].len
@@ -256,6 +262,16 @@ func append*(tb: var TupleBuilderNested, leaves: varargs[tuple[val, ty: NimNode]
     else:
       tb.accums[i][^1].add leaf.val
       tb.tyAccums[i][^1].add leaf.ty
+
+func appendTyped*(tb: var TupleBuilderNested, v: NimNode) =
+  ## Append the value as written, its type spelled as typeof(v),
+  ## resolved when the emitted tree is type-checked
+  if tb.accums[0].len == 0:
+    tb.completed[0] = v
+    tb.tyCompleted[0] = nnkCall.newTree(ident"typeof", v)
+  else:
+    tb.accums[0][^1].add v
+    tb.tyAccums[0][^1].add nnkCall.newTree(ident"typeof", v)
 
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
