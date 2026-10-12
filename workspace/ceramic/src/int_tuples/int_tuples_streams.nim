@@ -63,7 +63,7 @@ type
     reversed: bool
 
 func resolveAliasTy(ty: NimNode): NimNode {.compileTime.} =
-  if ty.kind in {nnkSym, nnkTupleTy}: ty.getTupleType() else: ty
+  if ty != nil and ty.kind in {nnkSym, nnkTupleTy}: ty.getTupleType() else: ty
 
 func tupleStream*(s: NimNode, reversed = false): TupleStream =
   let ev = unwrapStmtListExpr(s)
@@ -76,7 +76,8 @@ func tupleStream*(s: NimNode, reversed = false): TupleStream =
     result.stack.add (ev, ty, idx0, 0, @[])
     result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
-    result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0, @[])
+    let frameTy = if ty != nil: nnkTupleTy.newTree(ty) else: nil
+    result.stack.add (nnkTupleConstr.newTree(ev), frameTy, 0, 0, @[])
     result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   result.hasPending = true
 
@@ -112,11 +113,12 @@ func next*(s: var TupleStream): TupleStreamEvent =
   # Prepare the next pending event.
   if s.stack.len != 0:
     let f = s.stack[^1]
-    let exhausted = if s.reversed: f.idx < 0
+    let exhausted = if f.ty == nil: f.idx >= 1
+                    elif s.reversed: f.idx < 0
                     else: f.idx >= f.ty.len
     if not exhausted:
       let childE = getTupleIndex(f.elem, f.idx)
-      let childT = f.ty[f.idx]
+      let childT = if f.ty == nil: nil else: f.ty[f.idx]
       let childPath = f.path & f.idx
       if s.reversed:
         dec s.stack[^1].idx
@@ -175,18 +177,21 @@ func append*(tb: var TupleBuilderFlat, leaves: varargs[tuple[val, ty: NimNode]])
     tb.accums[i].add leaf.val
     tb.tyAccums[i].add leaf.ty
 
+func appendTyped*(tb: var TupleBuilderFlat, leaves: varargs[tuple[val, ty: NimNode]]) =
+  ## Append one leaf per slot, a nil type slot spells typeof(val),
+  ## a stated type is kept as written
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
+    tb.accums[i].add leaf.val
+    tb.tyAccums[i].add (if leaf.ty == nil: nnkCall.newTree(ident"typeof", leaf.val)
+                        else: leaf.ty)
+
 func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[tuple[val, ty: NimNode]]]) =
   doAssert tb.accums.len == batches.len
   for i, batch in batches:
     for j in countdown(batch.len - 1, 0):
       tb.accums[i].insert(batch[j].val, 0)
       tb.tyAccums[i].insert(batch[j].ty, 0)
-
-func appendTyped*(tb: var TupleBuilderFlat, v: NimNode) =
-  ## Append the value as written, its type spelled as typeof(v),
-  ## resolved when the emitted tree is type-checked
-  tb.accums[0].add v
-  tb.tyAccums[0].add nnkCall.newTree(ident"typeof", v)
 
 func count*(tb: TupleBuilderFlat): int =
   ## Number of appended leaves.

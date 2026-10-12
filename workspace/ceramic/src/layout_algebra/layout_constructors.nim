@@ -54,7 +54,7 @@ proc make_layout*(shape, stride: NimNode): NimNode {.compileTime.} =
   ## make_layout(shape, stride) as a compile-time node
   ident"make_layout".newCall(shape, stride)
 
-macro make_layout*(shape: untyped, order: static StrideOrder = LayoutLeft): untyped =
+macro make_layout*(shape: typed, order: static StrideOrder = LayoutLeft): untyped =
   ## (doc kept from the template)
   let (shapeVal, shapeTy) = makeIntTuple(shape)
   var strideVal, strideTy: NimNode
@@ -64,17 +64,10 @@ macro make_layout*(shape: untyped, order: static StrideOrder = LayoutLeft): unty
     (strideVal, strideTy) = suffixProductScan(shape, IntCT(1), IntCT(1)[0])
   result = emitLayoutLit(shapeVal, shapeTy, strideVal, strideTy)
 
-macro make_layout*(shape, stride: untyped): untyped =
+macro make_layout*(shape, stride: typed): untyped =
   ## (doc kept from the template)
-  if stride.kind == nnkIdent:
-    # an unresolved local carries no type until sem, the spelling
-    # resolves it in the caller's scope, all members stay dynamic
-    let LayoutSym = bindSym"Layout"
-    result = quote do:
-      `LayoutSym`[typeof(`shape`), typeof(`stride`)](shape: `shape`, stride: `stride`)
-    return
   let strideTyInst = stride.getTypeOf()
-  if strideTyInst.isCoordStride():
+  if strideTyInst != nil and strideTyInst.isCoordStride():
     let (shapeVal, shapeTy) = makeIntTuple(shape)
     result = quote do:
       Layout[`shapeTy`, `strideTyInst`](shape: `shapeVal`, stride: `stride`)

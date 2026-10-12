@@ -319,7 +319,9 @@ type
     coeffs*: NimNode # caMulti: the coefficient tuple, values as int literals
 
 proc isCoordStride*(leafTy: NimNode): bool =
-  ## True when the type is a coordinate stride instantiation
+  ## True when the type is a coordinate stride instantiation, false for nil
+  if leafTy == nil:
+    return false
   var t = leafTy
   if t.kind == nnkSym:
     let impl = t.getImpl

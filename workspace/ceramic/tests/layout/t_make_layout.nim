@@ -32,22 +32,22 @@ proc runMakeLayoutTests =
     doAssert make_layout(1, 1) === (1, 1)
 
   # ═══════════════════════════════════════════════════════════════
-  #  2. Const vs let scalars — verify isConst behavior
+  #  2. Const vs let scalars — folding verified by type
   # ═══════════════════════════════════════════════════════════════
 
   block:
     const C4 = 4
     let l = make_layout(C4, 0)
     doAssert l === (4, 0)
-    doAssert isConst(l.shape)
-    doAssert isConst(l.stride)
+    check l.shape, 4, Int[4]
+    check l.stride, 0, Int[0]
 
   block:
     const C4 = 4
     let l = make_layout(C4)
     doAssert l === (4, 1)
-    doAssert isConst(l.shape)
-    doAssert isConst(l.stride)
+    check l.shape, 4, Int[4]
+    check l.stride, 1, Int[1]
 
   block:
     let d4 = 4
@@ -61,19 +61,19 @@ proc runMakeLayoutTests =
     const C2 = 2; const C4 = 4
     let l = make_layout((C2, C4), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.shape[0], 2, Int[2]
+    check l.shape[1], 4, Int[4]
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 2, Int[2]
 
   block:
     const C2 = 2; const C4 = 4
     let l = make_layout((C2, C4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.shape[0], 2, Int[2]
+    check l.shape[1], 4, Int[4]
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 2, Int[2]
 
   # ═══════════════════════════════════════════════════════════════
   #  4. Mixed const/let tuple
@@ -85,19 +85,19 @@ proc runMakeLayoutTests =
     echo l
     echo typeof(l)
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.shape[0], 2, int
+    check l.shape[1], 4, Int[4]
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 2, Int[2]
 
   block:
     const C2 = 2; const C4 = 4; let d2 = 2
     let l = make_layout((d2, C4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
+    check l.shape[0], 2, int
+    check l.shape[1], 4, Int[4]
+    check l.stride[0], 1, Int[1]      # always 1 (Int[1]) for column-major
+    check l.stride[1], 2, int
 
   # ═══════════════════════════════════════════════════════════════
   #  5. Let tuple — all dynamic
@@ -107,19 +107,19 @@ proc runMakeLayoutTests =
     let d2 = 2; let d4 = 4
     let l = make_layout((d2, d4), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.shape[0], 2, int
+    check l.shape[1], 4, int
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 2, Int[2]
 
   block:
     let d2 = 2; let d4 = 4
     let l = make_layout((d2, d4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
+    check l.shape[0], 2, int
+    check l.shape[1], 4, int
+    check l.stride[0], 1, Int[1]      # always 1 (Int[1]) for column-major
+    check l.stride[1], 2, int
 
   # ═══════════════════════════════════════════════════════════════
   #  6. Tuple assigned to variable — loses static info
@@ -130,10 +130,10 @@ proc runMakeLayoutTests =
     let shapeTuple = (C2, C4)
     let l = make_layout(shapeTuple, (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.shape[0], 2, int
+    check l.shape[1], 4, int
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 2, Int[2]
 
   # ═══════════════════════════════════════════════════════════════
   #  7. Tuple from function — runtime, all dynamic
@@ -151,8 +151,8 @@ proc runMakeLayoutTests =
     proc mkShape(): auto = (2, 4)
     let l = make_layout(static(mkShape()), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
+    check l.shape[0], 2, Int[2]
+    check l.shape[1], 4, Int[4]
 
   # ═══════════════════════════════════════════════════════════════
   #  9. const variable from function — also folds to nnkTupleConstr
@@ -163,8 +163,8 @@ proc runMakeLayoutTests =
     const shape = mkShape()
     let l = make_layout(shape, (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
+    check l.shape[0], 2, Int[2]
+    check l.shape[1], 4, Int[4]
 
   # ═══════════════════════════════════════════════════════════════
   #  10. Recursive (nested) tuple — all Int[N] via literals
@@ -173,10 +173,10 @@ proc runMakeLayoutTests =
   block:
     let l = make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32)))
     doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
-    doAssert isConst(l.shape[0][0])
-    doAssert isConst(l.shape[0][1])
-    doAssert isConst(l.shape[1][0])
-    doAssert isConst(l.shape[1][1])
+    check l.shape[0][0], 2, Int[2]
+    check l.shape[0][1], 2, Int[2]
+    check l.shape[1][0], 2, Int[2]
+    check l.shape[1][1], 2, Int[2]
 
   # ═══════════════════════════════════════════════════════════════
   #  11. Recursive tuple via variable — all dynamic
@@ -187,13 +187,13 @@ proc runMakeLayoutTests =
     let nestedStride = ((1, 4), (8, 32))
     let l = make_layout(nestedShape, nestedStride)
     doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
-    doAssert not isConst(l.shape[0][0])
-    doAssert not isConst(l.shape[0][1])
-    doAssert not isConst(l.shape[1][0])
-    doAssert not isConst(l.shape[1][1])
+    check l.shape[0][0], 2, int
+    check l.shape[0][1], 2, int
+    check l.shape[1][0], 2, int
+    check l.shape[1][1], 2, int
 
   # ═══════════════════════════════════════════════════════════════
-  #  12. isConst standalone checks
+  #  12. Folding checks on standalone layouts
   # ═══════════════════════════════════════════════════════════════
 
   block:
@@ -201,15 +201,15 @@ proc runMakeLayoutTests =
     let d4 = 4
     let lConst = make_layout(C4, 0)
     let lLet = make_layout(d4, 0)
-    doAssert isConst(lConst.shape)
-    doAssert not isConst(lLet.shape)
+    check lConst.shape, 4, Int[4]
+    check lLet.shape, 4, int
 
   block:
     const C2 = 2; const C4 = 4
     let d2 = 2
     let lMixed = make_layout((d2, C4), (1, 2))
-    doAssert not isConst(lMixed.shape[0])
-    doAssert isConst(lMixed.shape[1])
+    check lMixed.shape[0], 2, int
+    check lMixed.shape[1], 4, Int[4]
 
   # ═══════════════════════════════════════════════════════════════
   #  13. Stride-order construction — LayoutLeft / LayoutRight
@@ -232,48 +232,48 @@ proc runMakeLayoutTests =
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), LayoutLeft)
     doAssert l === ((2, 3, 8), (1, 2, 6))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
-    doAssert not isConst(l.stride[2])
+    check l.shape[0], 2, int
+    check l.shape[1], 3, Int[3]
+    check l.shape[2], 8, Int[8]
+    check l.stride[0], 1, Int[1]      # always 1 (Int[1]) for column-major
+    check l.stride[1], 2, int
+    check l.stride[2], 6, int
 
   block:  # LayoutLeft mixed: static int literals, no pre-conversion
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((C8, C3, dN), LayoutLeft)
     doAssert l === ((8, 3, 2), (1, 8, 24))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert not isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
+    check l.shape[0], 8, Int[8]
+    check l.shape[1], 3, Int[3]
+    check l.shape[2], 2, int
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 8, Int[8]
+    check l.stride[2], 24, Int[24]
 
   block:  # LayoutRight mixed: static int literals, no pre-conversion
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), LayoutRight)
     doAssert l === ((2, 3, 8), (24, 8, 1))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
+    check l.shape[0], 2, int
+    check l.shape[1], 3, Int[3]
+    check l.shape[2], 8, Int[8]
+    check l.stride[0], 24, Int[24]
+    check l.stride[1], 8, Int[8]
+    check l.stride[2], 1, Int[1]
 
   block:  # Custom strides mixed: all-static shape, explicit strides
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), (1, 1, 1))
     doAssert l === ((2, 3, 8), (1, 1, 1))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
+    check l.shape[0], 2, int
+    check l.shape[1], 3, Int[3]
+    check l.shape[2], 8, Int[8]
+    check l.stride[0], 1, Int[1]
+    check l.stride[1], 1, Int[1]
+    check l.stride[2], 1, Int[1]
 
   echo "  make_layout: 23 cases OK"
 
@@ -321,8 +321,8 @@ proc runMakeLayoutTests =
     let s1 = 1; let s2 = 2
     let l = make_layout((d2, d4), (s1, s2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.stride[0])
-    doAssert not isConst(l.stride[1])
+    check l.stride[0], 1, int
+    check l.stride[1], 2, int
     check crd2idx(l, (1, 1)), 3, int
     check crd2idx(l, (0, 3)), 6, int
 
@@ -331,8 +331,8 @@ proc runMakeLayoutTests =
     let s1 = 1
     let l = make_layout((d2, C4), (s1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
+    check l.stride[0], 1, int
+    check l.stride[1], 2, Int[2]
     check crd2idx(l, (1, 1)), 3, int
 
   block:  # runtime scalar stride, nonzero
@@ -340,14 +340,14 @@ proc runMakeLayoutTests =
     let ds = 3
     let l = make_layout(d4, ds)
     doAssert l === (4, 3)
-    doAssert not isConst(l.stride)
+    check l.stride, 3, int
     check crd2idx(l, 2), 6, int
 
   block:  # runtime nested strides
     let mr = 4; let mpT = 8; let kc = 8
     let sa = 1; let sb = 4; let sc = 8; let sd = 32
     let l = make_layout(((mr, 1), (mpT, kc)), ((sa, sb), (sc, sd)))
-    doAssert not isConst(l.stride)
+    check l.stride, ((1, 4), (8, 32)), ((int, int), (int, int))
     check crd2idx(l, ((0, 0), (0, 0))), 0, int
     check crd2idx(l, ((1, 0), (0, 0))), 1, int
     check crd2idx(l, ((0, 1), (0, 0))), 4, int
@@ -364,7 +364,8 @@ proc runMakeLayoutTests =
     const C4 = 4; const C8 = 8
     let l = make_layout((C4, C8), (2, 2))
     doAssert l === ((4, 8), (2, 2))
-    doAssert isConst(l.stride[0]) and isConst(l.stride[1])
+    check l.stride[0], 2, Int[2]
+    check l.stride[1], 2, Int[2]
     check crd2idx(l, (0, 0)), 0, Int
     check crd2idx(l, (1, 0)), 2, Int
     check crd2idx(l, (3, 0)), 6, Int
@@ -375,8 +376,9 @@ proc runMakeLayoutTests =
   block:  # runtime shape, static strides of 2
     let d4 = 4; let d8 = 8
     let l = make_layout((d4, d8), (2, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.stride[0]) and isConst(l.stride[1])
+    check l.shape[0], 4, int
+    check l.stride[0], 2, Int[2]
+    check l.stride[1], 2, Int[2]
     check crd2idx(l, (2, 1)), 6, Int
     check crd2idx(l, (3, 3)), 12, Int
 
@@ -384,8 +386,8 @@ proc runMakeLayoutTests =
     let d4 = 4; let d8 = 8
     let s2 = 2
     let l = make_layout((d4, d8), (s2, s2))
-    doAssert not isConst(l.stride[0])
-    doAssert not isConst(l.stride[1])
+    check l.stride[0], 2, int
+    check l.stride[1], 2, int
     check crd2idx(l, (1, 0)), 2, int
     check crd2idx(l, (3, 2)), 10, int
 
@@ -394,8 +396,8 @@ proc runMakeLayoutTests =
     let d4 = 4
     let s2 = 2
     let l = make_layout((d4, C8), (2, s2))
-    doAssert isConst(l.stride[0])
-    doAssert not isConst(l.stride[1])
+    check l.stride[0], 2, Int[2]
+    check l.stride[1], 2, int
     check crd2idx(l, (3, 1)), 8, int
     check crd2idx(l, (1, 4)), 10, int
 

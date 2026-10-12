@@ -67,9 +67,13 @@ proc appendLeaf(b: var TupleBuilderNested, ev: TupleStreamEvent) =
   of kOpen, kClose:
     b.append(ev)
   of kLeaf:
-    let v = ev.leaf.getStaticInt()
+    let v = if ev.leaf.kind == nnkSym and ev.leafTy == nil: DynamicSentinel
+            else: ev.leaf.getStaticInt()
     if v != DynamicSentinel:
       b.append((IntCT(v), intTy(v)))
+    elif ev.leafTy == nil:
+      # no type known here, the spelling resolves in the caller's scope
+      b.appendTyped(ev.leaf)
     else:
       b.append((ev.leaf, ev.leafTy))
 
@@ -113,8 +117,9 @@ proc update(a: var ProductAccum, ev: TupleStreamEvent) =
   of kOpen, kClose:
     a.builder.append(ev)
   of kLeaf:
-    var v = ev.leaf.getStaticInt()
-    if v == DynamicSentinel:
+    var v = if ev.leaf.kind == nnkSym and ev.leafTy == nil: DynamicSentinel
+            else: ev.leaf.getStaticInt()
+    if v == DynamicSentinel and ev.leafTy != nil:
       # a static-typed leaf carries its value in the slot type
       v = ev.leafTy.getStaticInt()
     if not a.flushing:
