@@ -113,7 +113,7 @@ func next*(s: var TupleStream): TupleStreamEvent =
   # Prepare the next pending event.
   if s.stack.len != 0:
     let f = s.stack[^1]
-    let exhausted = if f.ty == nil: f.idx >= 1
+    let exhausted = if f.ty == nil: (if s.reversed: f.idx < 0 else: f.idx >= 1)
                     elif s.reversed: f.idx < 0
                     else: f.idx >= f.ty.len
     if not exhausted:

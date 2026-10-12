@@ -91,7 +91,7 @@ macro isolate*(guide: tuple, d: static int): untyped =
   result = builder.emit(0, emitScalarForSize1 = false)
 
 func size*(t: IntOrIntTuple): auto {.inline.} =
-  fold(t, Int[1](), acc * it)
+  product(t)
 
 func zero*(T: typedesc): T {.inline.} =
   when T is float16: 0'u16.asFp16()

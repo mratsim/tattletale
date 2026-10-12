@@ -46,7 +46,7 @@ template testComplementProps(layout, result: typed, cotarget: untyped) =
   let lCosize = cosize(layout)
   let completed = Layout[typeof((layout.shape, result.shape)), typeof((layout.stride, result.stride))](
     shape: (layout.shape, result.shape), stride: (layout.stride, result.stride))
-  let cSize = fold(cotarget, 1, acc * it)
+  let cSize = toInt(product(cotarget))
   # (1) Lower-bound on codomain of layout ++ complement
   doAssert cosize(completed) >= cSize,
     "(1) cosize(completed)=" & $cosize(completed) & " < cSize=" & $cSize & " layout=" & $layout

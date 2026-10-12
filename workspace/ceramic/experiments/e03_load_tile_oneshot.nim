@@ -83,7 +83,7 @@ macro repeatLike*(guide: tuple, elem: untyped): untyped =
   result = builder.emit(0, emitScalarForSize1 = false)
 
 template size*(t: IntOrIntTuple): auto =
-  fold(t, Int[1](), acc * it)
+  product(t)
 
 template zero*(T: typedesc): untyped =
   when T is float16: cast[T](0'u16)

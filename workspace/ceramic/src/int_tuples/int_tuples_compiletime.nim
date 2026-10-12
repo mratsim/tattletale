@@ -154,8 +154,7 @@ func getTupleType*(n: NimNode): NimNode {.compileTime.} =
   result = inner.getTypeImpl().tupleTypeWithoutNames()
 
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
-  ## True for tuple values and tuple types, false for nil and nodes
-  ## with no type, only a resolved symbol reads its type
+  ## True for tuple values and tuple types, false for nil
   if t == nil:
     return false
   case t.kind
@@ -163,12 +162,18 @@ func isTupleTy*(t: NimNode): bool {.compileTime.} =
     true
   of nnkPar:
     t.len != 1 # A single elem in parenthesis is not a tuple
-  of nnkSym:
-    t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
-  else:
-    # constructors, calls, literals, idents: scalars, no type is
-    # read off a node that never reached type checking
+  of nnkCall, nnkObjConstr:
+    if t[0].kind == nnkBracketExpr:
+      # an Int[v]() / Layout[A, B](...) constructor is a scalar value
+      false
+    else:
+      t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
+  of nnkIntLit, nnkInt64Lit, nnkFloatLit, nnkCharLit, nnkStrLit,
+     nnkNilLit, nnkEmpty:
+    # fresh macro nodes, no type to resolve and never tuples
     false
+  else:
+    t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
 
 func isScalarTy*(t: NimNode): bool {.compileTime.} =
   t.kind == nnkIntLit or

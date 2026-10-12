@@ -72,17 +72,9 @@ template suffix_product*(shape: IntOrIntTuple): untyped =
 #  reductions
 # ═══════════════════════════════════════════════════════════════
 
-func product*(t: IntOrIntTuple): auto =
+macro product*(t: typed): untyped =
   ## Product of all leaves (like size for shapes). Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[1](), acc * it)
-
-func max*(t: IntOrIntTuple): auto =
-  ## Maximum leaf value. Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[low(int)](), max(acc, it))
-
-func min*(t: IntOrIntTuple): auto =
-  ## Minimum leaf value. Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[high(int)](), min(acc, it))
+  productImpl(t)
 
 # ═══════════════════════════════════════════════════════════════
 #  product_each, product of each top-level tuple element

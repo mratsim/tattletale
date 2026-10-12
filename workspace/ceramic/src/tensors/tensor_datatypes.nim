@@ -137,7 +137,7 @@ template rank*(tv: TensorView): untyped = tv.layout.rank()
 
 template size*[T, Sh, St](t: TensorOwned[T, Sh, St]): untyped =
   ## size folds the shape leaves only.
-  fold(flatten(default(Sh)), Int[1](), acc * it)
+  product(default(Sh))
 template size*(tv: TensorView): untyped = tv.layout.size()
 
 template cosize*(tv: TensorView): untyped = tv.layout.cosize()

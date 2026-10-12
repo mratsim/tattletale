@@ -132,10 +132,10 @@ template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of dimensions in a layout type (compile-time constant).
   rank(Sh)
 
-func size*(layout: Layout): auto {.inline.} =
-  ## Number of logical elements: fold over all shape leaves.
+template size*(layout: Layout): auto =
+  ## Number of logical elements: product over all shape leaves.
   ## Returns Int[N] for all-static shapes, int otherwise.
-  fold(flatten(layout.shape), Int[1](), acc * it)
+  product(layout.shape)
 
 func isLayoutTy*(n: NimNode): bool {.compileTime.} =
   ## True for Layout values, the generic head carries the match
@@ -254,14 +254,14 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
 func can_group_a_into_b_impl[A, B](a: A; aStartIdx: int; b: B): int =
   ## Find consecutive dimensions in `a` from `aStartIdx` whose product equals `b`.
   static: doAssert a isnot int, "scalar a should be handled by caller"
-  let bVal = fold(b, 1, acc * it)
+  let bVal = product(b).toInt()
   var acc = 1
   var aIdx = aStartIdx
   block accLoop:
     staticFor i, 0, rank(a):
       if i >= aStartIdx:
         if acc < bVal:
-          acc *= fold(a[i], 1, acc * it)
+          acc *= product(a[i]).toInt()
           aIdx = i + 1
         else:
           aIdx = i
@@ -285,8 +285,8 @@ func compatible*[A, B: IntOrIntTuple](a: A; b: B): bool =
   ## True if `a` is structurally compatible with `b`: same total size, and
   ## a's nesting can address into b's structure.
   ## Supports grouping: (2,2,3) is compatible with (4,3).
-  let aSize = fold(a, 1, acc * it)
-  let bSize = fold(b, 1, acc * it)
+  let aSize = product(a).toInt()
+  let bSize = product(b).toInt()
   if aSize != bSize:
     return false
   when a is int or a is Int:

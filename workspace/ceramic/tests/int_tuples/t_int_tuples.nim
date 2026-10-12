@@ -14,64 +14,7 @@ import workspace/ceramic/src/int_tuples {.all.}
 
 # ═══════════════════════════════════════════════════════════════
 #  fold tests
-# ═══════════════════════════════════════════════════════════════
 
-proc runFoldTests =
-  block:
-    let r = fold(5, 1, acc * it)
-    doAssert r === 5
-    doAssert typeof(r) is int
-
-  block:
-    let r = fold(5, 10, acc + it)
-    doAssert r === 15
-
-  block:
-    let r = fold(Int[7](), 1, acc * it)
-    doAssert r === 7
-    doAssert typeof(r) is int
-
-  block:
-    let r = fold(Int[7](), 10, acc + it)
-    doAssert r === 17
-
-  block:
-    let r = fold((2, 3, 4), 1, acc * it)
-    doAssert r === 24
-
-  block:
-    let r = fold((Int[2](), Int[3](), Int[4]()), 1, acc * it)
-    doAssert r === 24
-
-  block:
-    let d4 = 4
-    let r = fold((Int[2](), d4, Int[3]()), 1, acc * it)
-    doAssert r === 24
-    doAssert typeof(r) is int
-
-  block:
-    let r = fold(((2, 3), 4), 1, acc * it)
-    doAssert r === 24
-
-  block:
-    let d7 = 7
-    let r = fold(((Int[2](), d7), Int[3]()), 1, acc * it)
-    doAssert r === 42
-
-  block:
-    let r = fold((Int[7](),), 1, acc * it)
-    doAssert r === 7
-
-  block:
-    let r = fold((1, 2, 3, 4, 5), 0, acc + it)
-    doAssert r === 15
-
-  block:
-    let r = fold((3, 7, 2, 9, 1), 0, max(acc, it))
-    doAssert r === 9
-  echo "  Fold: 12 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  product tests
 # ═══════════════════════════════════════════════════════════════
 
@@ -79,7 +22,7 @@ proc runProductTests =
   block:
     const r = product(42)
     doAssert r === 42
-    doAssert typeof(r) is int
+    doAssert typeof(r) is Int[42]
 
   block:
     const r = product(Int[5]())
@@ -89,7 +32,7 @@ proc runProductTests =
   block:
     let r = product((2, 3, 4))
     doAssert r === 24
-    doAssert typeof(r) is int
+    doAssert typeof(r) is Int[24]
 
   block:
     const r = product((Int[2](), Int[3](), Int[4]()))
@@ -107,76 +50,8 @@ proc runProductTests =
   echo "  Product: 6 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  max tests
-# ═══════════════════════════════════════════════════════════════
 
-proc runMaxTests =
-  block:
-    let r = max(42)
-    doAssert r === 42
 
-  block:
-    const r = max(Int[42]())
-    doAssert r === 42
-
-  block:
-    let r = max((3, 7, 2, 9, 1))
-    doAssert r === 9
-
-  block:
-    let r = max((Int[3](), Int[7](), Int[2](), Int[9](), Int[1]()))
-    doAssert r === 9
-
-  block:
-    let d7 = 7; let d9 = 9
-    let r = max((Int[3](), d7, Int[2](), d9, Int[1]()))
-    doAssert r === 9
-
-  block:
-    let r = max((-5, -2, -9, -1))
-    doAssert r === -1
-
-  block:
-    let r = max(((3, 7), (9, 1)))
-    doAssert r === 9
-  echo "  Max: 7 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  min tests
-# ═══════════════════════════════════════════════════════════════
-
-proc runMinTests =
-  block:
-    let r = min(42)
-    doAssert r === 42
-
-  block:
-    const r = min(Int[42]())
-    doAssert r === 42
-
-  block:
-    let r = min((3, 7, 2, 9, 1))
-    doAssert r === 1
-
-  block:
-    let r = min((Int[3](), Int[7](), Int[2](), Int[9](), Int[1]()))
-    doAssert r === 1
-
-  block:
-    let d7 = 7; let d9 = 9
-    let r = min((Int[3](), d7, Int[2](), d9, Int[1]()))
-    doAssert r === 1
-
-  block:
-    let r = min((-5, -2, -9, -1))
-    doAssert r === -9
-
-  block:
-    let r = min(((3, 7), (9, 1)))
-    doAssert r === 1
-  echo "  Min: 7 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  Int[N] comparison overloads (==, <=, >=)
 # ═══════════════════════════════════════════════════════════════
 
@@ -200,22 +75,22 @@ proc runIntCmpTests =
 
 proc runScanTests =
   block:
-    doAssert prefix_product_scan(5, 1) === 1
+    doAssert prefix_product(5) === 1
   block:
-    doAssert prefix_product_scan(Int[5](), 1) === 1
+    doAssert prefix_product(Int[5]()) === 1
   block:
-    doAssert prefix_product_scan((2, 3, 4), 1) === (1, 2, 6)
+    doAssert prefix_product((2, 3, 4)) === (1, 2, 6)
   block:
-    doAssert prefix_product_scan(((4, 1), (8, 8)), Int[1]()) === ((1, 4), (4, 32))
+    doAssert prefix_product(((4, 1), (8, 8))) === ((1, 4), (4, 32))
 
   block:
-    doAssert suffix_product_scan(5, 1) === 1
+    doAssert suffix_product(5) === 1
   block:
-    doAssert suffix_product_scan(Int[5](), 1) === 1
+    doAssert suffix_product(Int[5]()) === 1
   block:
-    doAssert suffix_product_scan((2, 3, 4), 1) === (12, 4, 1)
+    doAssert suffix_product((2, 3, 4)) === (12, 4, 1)
   block:
-    doAssert suffix_product_scan(((4, 1), (8, 8)), Int[1]()) === ((64, 64), (8, 1))
+    doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
   echo "  Scan: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
@@ -256,7 +131,7 @@ proc runProductScanTests =
 
   # ── prefix_product_scan with nested tuples ──
   block:
-    let s = prefix_product_scan(((4, 1), (8, 8)), Int[1]())
+    let s = prefix_product(((4, 1), (8, 8)))
     doAssert s[0][0] === 1 and s[0][1] === 4
     doAssert s[1][0] === 4 and s[1][1] === 32
 
@@ -274,7 +149,7 @@ proc runProductScanTests =
 
   # ── suffix_product_scan with nested tuples ──
   block:
-    let s = suffix_product_scan(((4, 1), (8, 8)), Int[1]())
+    let s = suffix_product(((4, 1), (8, 8)))
     doAssert s[0][0] === 64 and s[0][1] === 64
     doAssert s[1][0] === 8 and s[1][1] === 1
 
@@ -321,15 +196,7 @@ proc runFoldWrapperTests =
     doAssert product((3, 4, 5)) === 60
   block:
     doAssert product(((2, 3), 4)) === 24
-  block:
-    doAssert max(42) === 42
-  block:
-    doAssert max((3, 7, 2)) === 7
-  block:
-    doAssert min(42) === 42
-  block:
-    doAssert min((5, 3, 8)) === 3
-  echo "  Fold wrappers: 7 cases OK"
+  echo "  Product wrappers: 3 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  flatten / concat — extra cases
@@ -637,10 +504,7 @@ proc runSelectTests* =
 
 proc runTests* =
   echo "── Int tuples ──"
-  runFoldTests()
   runProductTests()
-  runMaxTests()
-  runMinTests()
   runIntCmpTests()
   runScanTests()
   runProductScanTests()

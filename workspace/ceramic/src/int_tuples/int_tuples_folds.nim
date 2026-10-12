@@ -14,50 +14,6 @@ import ./int_tuples_transforms
 import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════
-#  fold, left-fold reduction with Int[N] support
-# ═══════════════════════════════════════════════════════════════
-
-macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
-  ## Fold over all leaves of t with an accumulator.
-  ##
-  ## The accumulator is called `acc` and the iteration variable `it`
-  ##
-  ##  Examples:
-  ##    fold(5, 1, acc * it)            → 5
-  ##    fold(Int[5](), 1, acc * it)     → 5  (Int[V] extracted via * overload)
-  ##    fold((2,3,4), 1, acc * it)      → 24
-  ##    fold((2,(3,4)), 1, acc * it)    → 24
-  let accTy = startingAcc.getTypeInst()
-  let intStart = accTy.sameType(bindSym"int")
-  var leaves: seq[NimNode]
-
-  if t.isTupleTy():
-    var stream = t.tupleStream()
-    while not stream.done():
-      let event = stream.next()
-      if event.kind == kLeaf:
-        leaves.add event.leaf
-  else:
-    leaves.add t
-  if leaves.len == 0:
-    return newStmtList(startingAcc)
-
-  var chain: NimNode = nil
-  var acc: NimNode = if intStart: ident"acc" else: startingAcc
-
-  for leaf in leaves:
-    chain = body.replaceNodes(("acc", acc), ("it", leaf))
-    acc = chain
-
-  if intStart:
-    result = quote do:
-      block:
-        let acc {.inject.} = `startingAcc`
-        `chain`
-  else:
-    result = newStmtList(chain)
-
-# ═══════════════════════════════════════════════════════════════
 #  makeIntTuple, promotion to Int[V]() with value and type
 # ═══════════════════════════════════════════════════════════════
 
@@ -141,6 +97,18 @@ proc update(a: var ProductAccum, ev: TupleStreamEvent) =
 proc finish(a: var ProductAccum, emitScalarForSize1 = false): tuple[val, ty: NimNode] =
   result.val = a.builder.emit(0, emitScalarForSize1)
   result.ty = a.builder.emitTy(0, emitScalarForSize1)
+
+proc productImpl*(n: NimNode): NimNode {.compileTime.} =
+  ## Product of all leaves as one node, an Int[N]() constructor if
+  ## every leaf folds, the verbatim chain otherwise
+  var a: ProductAccum
+  a.init(IntCT(1), IntCT(1)[0])
+  for ev in n.tupleStream():
+    a.update(ev)
+  if a.flushing:
+    result = a.astAcc
+  else:
+    result = IntCT(a.staticAcc)
 
 proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
   ## Prefix product scan on nodes: each leaf's value is the seed times the leaves before it
