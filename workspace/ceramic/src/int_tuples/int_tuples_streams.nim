@@ -156,25 +156,31 @@ iterator items*(s: TupleStream): TupleStreamEvent =
 type
   TupleBuilderFlat* = object
     accums: seq[seq[NimNode]]
+    tyAccums: seq[seq[NimNode]]
 
 func new*(T: type TupleBuilderFlat, numTuples = 1): T =
   result.accums.newSeq(numTuples)
+  result.tyAccums.newSeq(numTuples)
 
 func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
+      tb.tyAccums[i].add ev.leafTy
 
-func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
-  doAssert tb.accums.len == leafValues.len
-  for i, leaf in leafValues:
-    tb.accums[i].add leaf
+func append*(tb: var TupleBuilderFlat, leaves: varargs[tuple[val, ty: NimNode]]) =
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
+    tb.accums[i].add leaf.val
+    tb.tyAccums[i].add leaf.ty
 
-func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
+func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[tuple[val, ty: NimNode]]]) =
   doAssert tb.accums.len == batches.len
   for i, batch in batches:
-    tb.accums[i] = batch & tb.accums[i]
+    for j in countdown(batch.len - 1, 0):
+      tb.accums[i].insert(batch[j].val, 0)
+      tb.tyAccums[i].insert(batch[j].ty, 0)
 
 func count*(tb: TupleBuilderFlat): int =
   ## Number of appended leaves.
@@ -187,17 +193,28 @@ func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
     node.add n
   return node
 
+func emitTy*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
+  var node = if emitScalarForSize1: nnkPar.newTree()
+             else: nnkTupleConstr.newTree()
+  for n in tb.tyAccums[id]:
+    node.add n
+  return node
+
 # ═════ Nested tuple builder ══════════════════════════════════════════
 
 type
   TupleBuilderNested* = object
     accums: seq[seq[NimNode]]
+    tyAccums: seq[seq[NimNode]]
     completed: seq[NimNode]
+    tyCompleted: seq[NimNode]
     dropEmpty: bool = true
 
 func new*(T: type TupleBuilderNested, numTuples = 1, dropEmpty = true): T =
   result.accums.newSeq(numTuples)
+  result.tyAccums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
+  result.tyCompleted.newSeq(numTuples)
   result.dropEmpty = dropEmpty
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
@@ -206,34 +223,50 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
     case ev.kind
     of kOpen:
       tb.accums[i].add newNimNode(nnkTupleConstr)
+      tb.tyAccums[i].add newNimNode(nnkTupleConstr)
     of kLeaf:
       if tb.accums[i].len == 0:
         tb.completed[i] = ev.leaf
+        tb.tyCompleted[i] = ev.leafTy
       else:
         tb.accums[i][^1].add ev.leaf
+        tb.tyAccums[i][^1].add ev.leafTy
     of kClose:
       var node = tb.accums[i].pop()
+      var tyNode = tb.tyAccums[i].pop()
       if node.len == 0 and tb.dropEmpty:
         # every child of the subtree was dropped, keep nothing in the parent
         if tb.accums[i].len == 0:
           tb.completed[i] = nnkTupleConstr.newTree()
+          tb.tyCompleted[i] = nnkTupleConstr.newTree()
       else:
         if tb.accums[i].len == 0:
           tb.completed[i] = node
+          tb.tyCompleted[i] = tyNode
         else:
           tb.accums[i][^1].add node
+          tb.tyAccums[i][^1].add tyNode
 
-func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
-  doAssert tb.accums.len == leafValues.len
-  for i, leaf in leafValues:
+func append*(tb: var TupleBuilderNested, leaves: varargs[tuple[val, ty: NimNode]]) =
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
     if tb.accums[i].len == 0:
-      tb.completed[i] = leaf
+      tb.completed[i] = leaf.val
+      tb.tyCompleted[i] = leaf.ty
     else:
-      tb.accums[i][^1].add leaf
+      tb.accums[i][^1].add leaf.val
+      tb.tyAccums[i][^1].add leaf.ty
 
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
   var node = tb.completed[id]
+  if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
+    node = node[0]
+  return node
+
+func emitTy*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
+  doAssert id < tb.tyCompleted.len and tb.tyCompleted[id] != nil, "emitTy: slot not completed"
+  var node = tb.tyCompleted[id]
   if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
     node = node[0]
   return node

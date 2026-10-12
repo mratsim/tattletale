@@ -52,7 +52,8 @@ macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
     builder.onLeaves(ev):
       let v = if ev.leaf.isNil: 0 else: ev.leaf.intVal.int
       let w = if other.leaf.isNil: 0 else: other.leaf.intVal.int
-      builder.append(newIntLitNode(v + w))
+      let c = v + w
+      builder.append((newIntLitNode(c), intTy(c)))
   return nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", builder.emit(0)))
 
@@ -64,7 +65,8 @@ macro `*`*[A: CoordStride](a: A, k: static int): untyped =
   var builder = TupleBuilderNested.new(1)
   for ev in ta.tupleStream():
     builder.onLeaves(ev):
-      builder.append(newIntLitNode(k * ev.leaf.intVal.int))
+      let c = k * ev.leaf.intVal.int
+      builder.append((newIntLitNode(c), intTy(c)))
   return nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", builder.emit(0)))
 
@@ -86,7 +88,8 @@ macro `+`*[A: CoordStride](a: A, k: static int): untyped =
   var first = true
   for ev in ta.tupleStream():
     builder.onLeaves(ev):
-      builder.append(newIntLitNode(ev.leaf.intVal.int + (if first: k else: 0)))
+      let c = ev.leaf.intVal.int + (if first: k else: 0)
+      builder.append((newIntLitNode(c), intTy(c)))
       first = false
   return nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", builder.emit(0)))
@@ -107,7 +110,7 @@ macro `+`*[A: CoordStride](a: A, k: tuple): untyped =
     # a scalar k broadcasts over every coeff leaf
     for ev in ta.tupleStream():
       builder.onLeaves(ev):
-        builder.append(k + ev.leaf)
+        builder.append((k + ev.leaf, k.getTypeInst()))
   else:
     var zip = zipLongest(ta.tupleStream(), k.tupleStream())
     while not zip.done():
@@ -115,7 +118,11 @@ macro `+`*[A: CoordStride](a: A, k: tuple): untyped =
       builder.onLeaves(ea):
         let c = if ea.leaf.isNil: newIntLitNode(0) else: ea.leaf
         let kExpr = if eb.leaf.isNil: newIntLitNode(0) else: eb.leaf
-        builder.append(kExpr + c)
+        if kExpr.kind == nnkIntLit and c.kind == nnkIntLit:
+          let sum = kExpr.intVal.int + c.intVal.int
+          builder.append((newIntLitNode(sum), intTy(sum)))
+        else:
+          builder.append((kExpr + c, bindSym"int"))
   return builder.emit(0)
 
 macro `+`*[A: CoordStride](k: tuple, a: A): untyped =
@@ -129,7 +136,8 @@ macro `div`*[A: CoordStride](a: A, k: static int): untyped =
   var builder = TupleBuilderNested.new(1)
   for ev in a.getTypeInst[1].tupleStream():
     builder.onLeaves(ev):
-      builder.append(newIntLitNode(ev.leaf.intVal.int div k))
+      let c = ev.leaf.intVal.int div k
+      builder.append((newIntLitNode(c), intTy(c)))
   return nnkCall.newTree(nnkBracketExpr.newTree(
     bindSym"CoordStride", builder.emit(0)))
 
@@ -140,7 +148,7 @@ macro `*`*[A: CoordStride](k: typed, a: A): untyped =
   var builder = TupleBuilderNested.new(1)
   for ev in ta.tupleStream():
     builder.onLeaves(ev):
-      builder.append(k * ev.leaf)
+      builder.append((k * ev.leaf, k.getTypeInst()))
   return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════
@@ -160,7 +168,11 @@ macro `+`*(a, b: tuple): untyped =
     builder.onLeaves(ea):
       let x = if ea.leaf.isNil: newIntLitNode(0) else: ea.leaf
       let y = if eb.leaf.isNil: newIntLitNode(0) else: eb.leaf
-      builder.append(x + y)
+      if x.kind == nnkIntLit and y.kind == nnkIntLit:
+        let sum = x.intVal.int + y.intVal.int
+        builder.append((newIntLitNode(sum), intTy(sum)))
+      else:
+        builder.append((x + y, bindSym"int"))
   return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════
@@ -230,8 +242,10 @@ macro make_basis_like*(profile: typed): untyped =
   var builder = TupleBuilderNested.new(1)
   for ev in profile.tupleStream():
     builder.onLeaves(ev):
-      builder.append(nnkCall.newTree(
-        nnkBracketExpr.newTree(bindSym"CoordStride", ev.path.getCoordinates())))
+      let coords = ev.path.getCoordinates()
+      builder.append((nnkCall.newTree(
+        nnkBracketExpr.newTree(bindSym"CoordStride", coords)),
+        nnkBracketExpr.newTree(bindSym"CoordStride", coords)))
   return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════

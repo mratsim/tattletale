@@ -86,7 +86,7 @@ macro zipLeavesWith*(a, b: typed, body: untyped): untyped =
       let mapped = body.replaceNodes(
         ("it_a", aEvent.leaf), ("it_b", bEvent.leaf),
         ("it", nnkPar.newTree(aEvent.leaf, bEvent.leaf)))
-      builder.append(mapped)
+      builder.append((mapped, aEvent.leafTy))
     else:
       builder.append(aEvent)
   if not bStream.done():

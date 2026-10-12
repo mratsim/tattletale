@@ -18,7 +18,9 @@ import workspace/ceramic/src/macros/replace_nodes
 # ═══════════════════════════════════════════════════════════════
 
 macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
-  ## Fold over all leaves of t with an accumulator, `acc` binds before the element, `it` is the element
+  ## Fold over all leaves of t with an accumulator.
+  ##
+  ## The accumulator is called `acc` and the iteration variable `it`
   ##
   ##  Examples:
   ##    fold(5, 1, acc * it)            → 5
@@ -59,33 +61,17 @@ macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
 #  makeIntTuple, promotion to Int[V]() with value and type
 # ═══════════════════════════════════════════════════════════════
 
-type VTAccum = object
-  val: TupleBuilderNested
-  ty: TupleBuilderNested
-
-proc init(a: var VTAccum, numTuples = 1) =
-  a.val = TupleBuilderNested.new(numTuples)
-  a.ty = TupleBuilderNested.new(numTuples)
-
-proc update(a: var VTAccum, v, t: NimNode) =
-  a.val.append(v)
-  a.ty.append(if t.isNil: bindSym"int" else: t)
-
-proc update(a: var VTAccum, ev: TupleStreamEvent) =
+proc appendLeaf(b: var TupleBuilderNested, ev: TupleStreamEvent) =
+  ## Static leaves fold to Int[V] values, dynamic leaves carry their slot type
   case ev.kind
   of kOpen, kClose:
-    a.val.append(ev)
-    a.ty.append(ev)
+    b.append(ev)
   of kLeaf:
     let v = ev.leaf.getStaticInt()
     if v != DynamicSentinel:
-      a.update(IntCT(v), IntCT(v)[0])
+      b.append((IntCT(v), intTy(v)))
     else:
-      a.update(ev.leaf, ev.leafTy)
-
-proc finish(a: var VTAccum, emitScalarForSize1 = false): tuple[val, ty: NimNode] =
-  result.val = a.val.emit(0, emitScalarForSize1)
-  result.ty = a.ty.emit(0, emitScalarForSize1)
+      b.append((ev.leaf, ev.leafTy))
 
 proc makeIntTuple*(n: NimNode): tuple[val, ty: NimNode] {.compileTime.} =
   ## makeIntTuple on nodes: static leaves become Int[V]() constructors, dynamic leaves pass through and type as int
@@ -95,11 +81,10 @@ proc makeIntTuple*(n: NimNode): tuple[val, ty: NimNode] {.compileTime.} =
   ##        -> ((Int[2](), Int[3]()), (Int[2], Int[3]))
   ##    makeIntTuple(newLit(5))
   ##        -> (Int[5](), Int[5])
-  var acc: VTAccum
-  acc.init()
+  var acc = TupleBuilderNested.new(1)
   for ev in n.tupleStream():
-    acc.update(ev)
-  result = acc.finish(emitScalarForSize1 = not n.isTupleTy())
+    acc.appendLeaf(ev)
+  result = (acc.emit(0, not n.isTupleTy()), acc.emitTy(0, not n.isTupleTy()))
 
 # ═══════════════════════════════════════════════════════════════
 #  prefix and suffix product scans, value and type in one pass
@@ -109,55 +94,47 @@ type ProductAccum = object
   staticAcc: int
   flushing: bool
   astAcc: NimNode
-  val: TupleBuilderNested
-  ty: TupleBuilderNested
+  builder: TupleBuilderNested
 
-proc init(a: var ProductAccum, seed: NimNode) =
-  a.val = TupleBuilderNested.new(1)
-  a.ty = TupleBuilderNested.new(1)
+proc init(a: var ProductAccum, seed: NimNode, seedTy: NimNode) =
+  a.builder = TupleBuilderNested.new(1)
   var v = seed.getStaticInt()
-  if v == DynamicSentinel and seed.kind == nnkSym:
-    v = seed.getTypeInst().getStaticInt()
+  if v == DynamicSentinel and seedTy != nil:
+    # a static-typed seed carries its value in the slot type
+    v = seedTy.getStaticInt()
   if v != DynamicSentinel:
     a.staticAcc = v
   else:
     a.flushing = true
     a.astAcc = seed
 
-proc update(a: var ProductAccum, leaf: NimNode) =
-  var v = leaf.getStaticInt()
-  if v == DynamicSentinel and leaf.kind == nnkSym:
-    v = leaf.getTypeInst().getStaticInt()
-  if not a.flushing:
-    let outLeaf = IntCT(a.staticAcc)
-    a.val.append(outLeaf)
-    a.ty.append(outLeaf[0])
-    if v != DynamicSentinel:
-      a.staticAcc = a.staticAcc * v
-    else:
-      a.flushing = true
-      a.astAcc = newLit(a.staticAcc) * leaf
-  else:
-    # the chain is runtime, its outputs are ints
-    a.val.append(a.astAcc)
-    a.ty.append(bindSym"int")
-    if v != DynamicSentinel:
-      a.astAcc = a.astAcc * newLit(v)
-    else:
-      a.astAcc = a.astAcc * leaf
-
 proc update(a: var ProductAccum, ev: TupleStreamEvent) =
   case ev.kind
   of kOpen, kClose:
-    a.val.append(ev)
-    a.ty.append(ev)
+    a.builder.append(ev)
   of kLeaf:
-    a.update(ev.leaf)
-
+    var v = ev.leaf.getStaticInt()
+    if v == DynamicSentinel:
+      # a static-typed leaf carries its value in the slot type
+      v = ev.leafTy.getStaticInt()
+    if not a.flushing:
+      a.builder.append((IntCT(a.staticAcc), intTy(a.staticAcc)))
+      if v != DynamicSentinel:
+        a.staticAcc = a.staticAcc * v
+      else:
+        a.flushing = true
+        a.astAcc = newLit(a.staticAcc) * ev.leaf
+    else:
+      # the chain is runtime, its outputs are ints
+      a.builder.append((a.astAcc, bindSym"int"))
+      if v != DynamicSentinel:
+        a.astAcc = a.astAcc * newLit(v)
+      else:
+        a.astAcc = a.astAcc * ev.leaf
 
 proc finish(a: var ProductAccum, emitScalarForSize1 = false): tuple[val, ty: NimNode] =
-  result.val = a.val.emit(0, emitScalarForSize1)
-  result.ty = a.ty.emit(0, emitScalarForSize1)
+  result.val = a.builder.emit(0, emitScalarForSize1)
+  result.ty = a.builder.emitTy(0, emitScalarForSize1)
 
 proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
   ## Prefix product scan on nodes: each leaf's value is the seed times the leaves before it
@@ -174,7 +151,7 @@ proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[
   if seedTy.isNil and seed.getTypeInst().isTupleTy():
     return (seed, seed.getTypeInst())
   var accu: ProductAccum
-  accu.init(seed)
+  accu.init(seed, seedTy)
   for ev in container.tupleStream():
     accu.update(ev)
   result = accu.finish(emitScalarForSize1 = not container.isTupleTy())
@@ -194,7 +171,7 @@ proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[
   if seedTy.isNil and seed.getTypeInst().isTupleTy():
     return (seed, seed.getTypeInst())
   var accu: ProductAccum
-  accu.init(seed)
+  accu.init(seed, seedTy)
   for ev in container.tupleStream(true):
     accu.update(ev)
   proc reverseTree(n: NimNode): NimNode {.compileTime.} =

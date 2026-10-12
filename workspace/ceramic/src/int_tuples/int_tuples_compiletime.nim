@@ -31,6 +31,10 @@ func IntCT*(val: int): NimNode {.compileTime.} =
   ## Shorthand: Int[val]() AST node.
   newNimNode(nnkObjConstr).add(newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
 
+func intTy*(val: int): NimNode {.compileTime.} =
+  ## Int[val] bracket for the compile-time value `val`
+  IntCT(val)[0]
+
 func divmod*(a, b: int): (int, int) {.compileTime.} =
   ## Quotient and remainder of `a` divided by `b`.
   (a div b, a mod b)

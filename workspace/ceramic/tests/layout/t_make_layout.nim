@@ -5,7 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tests for make_layout: shape + stride, const correctness, stride order.
+# Test: make_layout, shape + stride, const correctness, stride order
+# Run: nim c -r workspace/ceramic/tests/layout/t_make_layout.nim
 
 import std/macros, std/typetraits
 import workspace/ceramic/src/int_tuples

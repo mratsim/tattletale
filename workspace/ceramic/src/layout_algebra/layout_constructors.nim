@@ -54,7 +54,7 @@ proc make_layout*(shape, stride: NimNode): NimNode {.compileTime.} =
   ## make_layout(shape, stride) as a compile-time node
   ident"make_layout".newCall(shape, stride)
 
-macro make_layout*(shape: untyped; order: static StrideOrder = LayoutLeft): untyped =
+macro make_layout*(shape: untyped, order: static StrideOrder = LayoutLeft): untyped =
   ## (doc kept from the template)
   let (shapeVal, shapeTy) = makeIntTuple(shape)
   var strideVal, strideTy: NimNode
@@ -66,6 +66,12 @@ macro make_layout*(shape: untyped; order: static StrideOrder = LayoutLeft): unty
 
 macro make_layout*(shape, stride: untyped): untyped =
   ## (doc kept from the template)
+  if stride.kind == nnkIdent:
+    # an unresolved local carries no type until sem, the spelling
+    # resolves it in the caller's scope, all members stay dynamic
+    result = quote do:
+      Layout[typeof(`shape`), typeof(`stride`)](shape: `shape`, stride: `stride`)
+    return
   let strideTyInst = stride.getTypeInst()
   if strideTyInst.isCoordStride():
     let (shapeVal, shapeTy) = makeIntTuple(shape)
@@ -74,7 +80,9 @@ macro make_layout*(shape, stride: untyped): untyped =
     return
   let (shapeVal, shapeTy) = makeIntTuple(shape)
   let (strideVal, strideTy) = makeIntTuple(stride)
-  result = emitLayoutLit(shapeVal, shapeTy, strideVal, strideTy)
+  let (strideFolded, strideFoldedTy) =
+    prefixProductScan(shape, strideVal, strideTy)
+  result = emitLayoutLit(shapeVal, shapeTy, strideFolded, strideFoldedTy)
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
   ## Assign compact strides in ascending order-value order, ties keep
@@ -189,7 +197,7 @@ macro make_ordered_layout*(shape, order: typed): untyped =
   let strides = compactOrderStridesImpl(shVals, compactOrderDynamicSubstitution(ordVals))
   var builder = TupleBuilderFlat.new(1)
   for s in strides:
-    builder.append(newLit(s))
+    builder.append((IntCT(s), intTy(s)))
   result = make_layout(
     shape,
     builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()))
@@ -217,7 +225,7 @@ macro make_layout_likeImpl(sh, st: typed): untyped =
   let strides = compactLikeStrides(shVals, stVals)
   var builder = TupleBuilderFlat.new(1)
   for s in strides:
-    builder.append(newLit(s))
+    builder.append((IntCT(s), intTy(s)))
   result = make_layout(
     sh,
     builder.emit(0, emitScalarForSize1 = not shapeIsTuple))

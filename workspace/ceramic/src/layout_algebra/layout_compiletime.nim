@@ -23,27 +23,16 @@ func emitLayout*(tb: TupleBuilderFlat or TupleBuilderNested, ctor: NimNode = nil
   let sh = tb.emit(0, emitScalarForSize1 = emitScalarForSize1)
   let st = tb.emit(1, emitScalarForSize1 = emitScalarForSize1)
   if sh.kind in {nnkPar, nnkTupleConstr} and sh.len == 0:
-    ident"make_layout".newCall(IntCT(1), newLit(0))
+    result = ident"make_layout".newCall(IntCT(1), newLit(0))
   elif ctor.isNil():
-    ident"make_layout".newCall(sh, st)
+    result = ident"make_layout".newCall(sh, st)
   else:
-    ctor.newCall(sh, st)
-
-proc appendDimension*(builder: var TupleBuilderNested, pairs: seq[tuple[shape, stride: NimNode]]) {.compileTime.} =
-  ## Append a fold's pair set as one dimension slot.
-  if pairs.len == 1:
-    builder.append(pairs[0].shape, pairs[0].stride)
-    return
-  builder.append(TupleStreamEvent(path: @[], kind: kOpen),
-                 TupleStreamEvent(path: @[], kind: kOpen))
-  for p in pairs:
-    builder.append(p.shape, p.stride)
-  builder.append(TupleStreamEvent(path: @[], kind: kClose),
-                 TupleStreamEvent(path: @[], kind: kClose))
+    result = ctor.newCall(sh, st)
 
 # ═══════════════════════════════════════════════════════════════
 #  destructureLayout, layout AST -> (shape, stride) expressions
 # ═══════════════════════════════════════════════════════════════
+
 
 proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTime.} =
   ## Collect the shape/stride members of a Layout field list, object
@@ -130,6 +119,7 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
   result.shape = layoutAst.newDotExpr(ident"shape")
   result.strides = layoutAst.newDotExpr(ident"stride")
 
+
 # ═══════════════════════════════════════════════════════════════
 #  hier_unzip, split a layout dimension by dimension, gather tiles and rest
 # ═══════════════════════════════════════════════════════════════
@@ -207,13 +197,18 @@ macro hier_unzip*(splitter: untyped, layout: typed, tiler: typed): untyped =
       # while when composed, the whole AST can be discarded if unused.
       let lsh = huzProj("shape", dsh, dst, ev.leaf)
       let lst = huzProj("stride", dsh, dst, ev.leaf)
-      tileParts.append(getTupleIndex(lsh, 0), getTupleIndex(lst, 0))
-      restParts.append(getTupleIndex(lsh, 1), getTupleIndex(lst, 1))
+      template splitTy(fld: string): NimNode =
+        quote do: typeof(`lsh`.newDotExpr(ident(fld)))
+      tileParts.append((getTupleIndex(lsh, 0), splitTy("shape")),
+                       (getTupleIndex(lst, 0), splitTy("stride")))
+      restParts.append((getTupleIndex(lsh, 1), splitTy("shape")),
+                       (getTupleIndex(lst, 1), splitTy("stride")))
     of kClose:
       # dimensions past the tiler at this level pass through whole
       let lvl = levelState.pop()
       for j in lvl.tilerLen ..< lvl.arity:
-        restParts.append(huzAt(sh, shapeTy, ev.path & j), huzAt(st, strideTy, ev.path & j))
+        restParts.append((huzAt(sh, shapeTy, ev.path & j), huzTyAt(shapeTy, ev.path & j)),
+                         (huzAt(st, strideTy, ev.path & j), huzTyAt(strideTy, ev.path & j)))
       tileParts.append(ev, ev)
       restParts.append(ev, ev)
 
@@ -233,14 +228,16 @@ macro zippedToTiledPairImpl*(tileShape, restShape, tileStride, restStride: typed
   ## - the rest part unpacked one level, a scalar kept whole
   result = newStmtList()
   var builder = TupleBuilderFlat.new(2)
-  builder.append(tileShape, tileStride)
+  builder.append((tileShape, tileShape.getTypeInst()),
+                 (tileStride, tileStride.getTypeInst()))
   let restShapeType = restShape.getTypeInst()
+  let restStrideType = restStride.getTypeInst()
   if restShapeType.kind in {nnkTupleTy, nnkTupleConstr} and restShapeType.len > 0:
     for i in 0 ..< restShapeType.len:
-      builder.append(getTupleIndex(restShape, i),
-                     getTupleIndex(restStride, i))
+      builder.append((getTupleIndex(restShape, i), getTupleIndex(restShapeType, i)),
+                     (getTupleIndex(restStride, i), getTupleIndex(restStrideType, i)))
   else:
-    builder.append(restShape, restStride)
+    builder.append((restShape, restShapeType), (restStride, restStrideType))
   result.add builder.emitLayout()
 
 macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed): untyped =
@@ -249,10 +246,12 @@ macro zippedToFlatPairImpl*(tileShape, restShape, tileStride, restStride: typed)
   var builder = TupleBuilderFlat.new(2)
   for (shapeEvent, strideEvent) in tileShape.tupleDimsStream().zip(tileStride.tupleDimsStream()):
     builder.onLeaves(shapeEvent):
-      builder.append(shapeEvent.leaf, strideEvent.leaf)
+      builder.append((shapeEvent.leaf, shapeEvent.leafTy),
+                     (strideEvent.leaf, strideEvent.leafTy))
   for (shapeEvent, strideEvent) in restShape.tupleDimsStream().zip(restStride.tupleDimsStream()):
     builder.onLeaves(shapeEvent):
-      builder.append(shapeEvent.leaf, strideEvent.leaf)
+      builder.append((shapeEvent.leaf, shapeEvent.leafTy),
+                     (strideEvent.leaf, strideEvent.leafTy))
   result.add builder.emitLayout()
 
 macro zippedToTiledImpl*(zipped: typed): untyped =
@@ -277,25 +276,28 @@ macro zippedToFlatImpl*(zipped: typed): untyped =
 #  streamDims, takeDimensionsImpl, outer-dimension streams and slices
 # ═══════════════════════════════════════════════════════════════
 
-proc streamDims*(sh, st: NimNode): tuple[shapes, strides: seq[NimNode], count: int] {.compileTime.} =
+proc streamDims*(sh, st: NimNode): tuple[
+    shapes, shapeTys, strides, strideTys: seq[NimNode], count: int] {.compileTime.} =
   var shapeStream = sh.tupleDimsStream()
   var strideStream = st.tupleDimsStream()
   while not shapeStream.done():
     let shapeEvent = shapeStream.next()
     let strideEvent = strideStream.next()
     result.shapes.add shapeEvent.leaf
+    result.shapeTys.add shapeEvent.leafTy
     result.strides.add strideEvent.leaf
+    result.strideTys.add strideEvent.leafTy
   result.count = result.shapes.len
 
 macro takeDimensionsImpl*(originalLayout, sh, st: typed, B, E: static int): untyped =
-  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  let (shapeLeaves, shapeTys, strideLeaves, strideTys, dimCount) = streamDims(sh, st)
   doAssert B >= 0, "takeDimensions: B must be a valid dimension index"
   if B <= 0 and E >= dimCount:
     result = originalLayout
     return
   var builder = TupleBuilderFlat.new(2)
   for i in B ..< min(E, dimCount):
-    builder.append(shapeLeaves[i], strideLeaves[i])
+    builder.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
   result = builder.emitLayout()
 
 # ═══════════════════════════════════════════════════════════════
