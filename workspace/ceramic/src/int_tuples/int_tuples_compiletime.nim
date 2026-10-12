@@ -48,6 +48,9 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   case t.kind
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
+  of nnkStmtListExpr:
+    # evalOnceAs caching, `const q = X; X`, the trailing value is static
+    t[^1].getStaticInt()
   of nnkCall, nnkBracketExpr:
     # the typed-delegate path hands out typeDesc[Int[V]] wrappers
     if t[0].eqIdent("typeDesc"):

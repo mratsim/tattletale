@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Tests for int_tuples.nim: Int[N], fold, product, max, min,
-## prefix_scanIt, suffix_scanIt, prefix_product, suffix_product.
+## prefix_product_scan, suffix_product_scan, prefix_product, suffix_product.
 
 import std/macros
 import std/algorithm
@@ -195,37 +195,28 @@ proc runIntCmpTests =
   echo "  Int[N] cmp: 10 checks OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  prefix_scanIt / suffix_scanIt
+#  prefix_product_scan / suffix_product_scan
 # ═══════════════════════════════════════════════════════════════
 
 proc runScanTests =
   block:
-    doAssert prefix_scanIt(5, 1, acc * it) === 1
+    doAssert prefix_product_scan(5, 1) === 1
   block:
-    doAssert prefix_scanIt(Int[5](), 1, acc * it) === 1
+    doAssert prefix_product_scan(Int[5](), 1) === 1
   block:
-    doAssert prefix_scanIt((2, 3, 4), 1, acc * it) === (1, 2, 6)
+    doAssert prefix_product_scan((2, 3, 4), 1) === (1, 2, 6)
+  block:
+    doAssert prefix_product_scan(((4, 1), (8, 8)), Int[1]()) === ((1, 4), (4, 32))
 
   block:
-    doAssert suffix_scanIt(5, 1, acc * it) === 1
+    doAssert suffix_product_scan(5, 1) === 1
   block:
-    doAssert suffix_scanIt(Int[5](), 1, acc * it) === 1
+    doAssert suffix_product_scan(Int[5](), 1) === 1
   block:
-    doAssert suffix_scanIt((2, 3, 4), 1, acc * it) === (12, 4, 1)
-
+    doAssert suffix_product_scan((2, 3, 4), 1) === (12, 4, 1)
   block:
-    # prefix_scanIt with max operation
-    doAssert prefix_scanIt((3, 5, 2), low(int), max(acc, it)) === (low(int), 3, 5)
-  block:
-    # prefix_scanIt with addition (sum so far)
-    doAssert prefix_scanIt((1, 2, 3), 0, acc + it) === (0, 1, 3)
-  block:
-    # suffix_scanIt single-element tuple with addition
-    doAssert suffix_scanIt((5,), 10, acc + it) === (10,)
-  block:
-    # suffix_scanIt with sum
-    doAssert suffix_scanIt((1, 2, 3), 0, acc + it) === (5, 3, 0)
-  echo "  Scan: 10 cases OK"
+    doAssert suffix_product_scan(((4, 1), (8, 8)), Int[1]()) === ((64, 64), (8, 1))
+  echo "  Scan: 8 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  prefix_product / suffix_product
@@ -263,9 +254,9 @@ proc runProductScanTests =
   block:
     doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
 
-  # ── prefix_scanIt with nested tuples ──
+  # ── prefix_product_scan with nested tuples ──
   block:
-    let s = prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    let s = prefix_product_scan(((4, 1), (8, 8)), Int[1]())
     doAssert s[0][0] === 1 and s[0][1] === 4
     doAssert s[1][0] === 4 and s[1][1] === 32
 
@@ -281,23 +272,11 @@ proc runProductScanTests =
   block:
     doAssert suffix_product(((4, 1), (8, 8))) === ((64, 64), (8, 1))
 
-  # ── suffix_scanIt with nested tuples ──
+  # ── suffix_product_scan with nested tuples ──
   block:
-    let s = suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
+    let s = suffix_product_scan(((4, 1), (8, 8)), Int[1]())
     doAssert s[0][0] === 64 and s[0][1] === 64
     doAssert s[1][0] === 8 and s[1][1] === 1
-
-  # ── prefix_scanIt with addition (prefix sum) on nested tuples ──
-  block:
-    let s = prefix_scanIt(((1, 2), (3, 4)), 0, acc + it)
-    doAssert s[0][0] === 0 and s[0][1] === 1
-    doAssert s[1][0] === 3 and s[1][1] === 6
-
-  # ── suffix_scanIt with addition (suffix sum) on nested tuples ──
-  block:
-    let s = suffix_scanIt(((1, 2), (3, 4)), 0, acc + it)
-    doAssert s[0][0] === 9 and s[0][1] === 7
-    doAssert s[1][0] === 4 and s[1][1] === 0
 
   echo "  Nested tuple scan: 8 cases OK"
   echo "  Product scan: 13 cases OK"

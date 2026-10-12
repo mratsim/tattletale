@@ -54,45 +54,27 @@ proc make_layout*(shape, stride: NimNode): NimNode {.compileTime.} =
   ## make_layout(shape, stride) as a compile-time node
   ident"make_layout".newCall(shape, stride)
 
-template make_layout*(shapeArg: IntOrIntTuple; order: static StrideOrder = LayoutLeft): auto =
-  # Implementation note:
-
-  when order == LayoutLeft:
-    Layout[typeof(makeIntTuple(shapeArg)),
-           typeof(prefix_product(makeIntTuple(shapeArg)))](
-      shape: makeIntTuple(shapeArg),
-      stride: prefix_product(makeIntTuple(shapeArg))
-    )
+macro make_layout*(shape: untyped; order: static StrideOrder = LayoutLeft): untyped =
+  ## (doc kept from the template)
+  let (shapeVal, shapeTy) = makeIntTuple(shape)
+  var strideVal, strideTy: NimNode
+  if order == LayoutLeft:
+    (strideVal, strideTy) = prefixProductScan(shape, IntCT(1), IntCT(1)[0])
   else:
-    Layout[typeof(makeIntTuple(shapeArg)),
-           typeof(suffix_product(makeIntTuple(shapeArg)))](
-      shape: makeIntTuple(shapeArg),
-      stride: suffix_product(makeIntTuple(shapeArg))
-    )
+    (strideVal, strideTy) = suffixProductScan(shape, IntCT(1), IntCT(1)[0])
+  result = emitLayoutLit(shapeVal, shapeTy, strideVal, strideTy)
 
-template make_layout*[ShT, StT: IntOrIntTuple or CoordStride](shapeArg: ShT, strideArg: StT): auto =
-  when StT is CoordStride:
-    Layout[typeof(makeIntTuple(shapeArg)), StT](
-      shape: makeIntTuple(shapeArg),
-      stride: strideArg
-    )
-  elif StT is int or StT is Int:
-    Layout[typeof(makeIntTuple(shapeArg)),
-           typeof(prefix_scanIt(makeIntTuple(shapeArg),
-                                makeIntTuple(strideArg), acc * it))](
-      shape: makeIntTuple(shapeArg),
-      stride: prefix_scanIt(makeIntTuple(shapeArg),
-                            makeIntTuple(strideArg), acc * it)
-    )
-  else:
-    Layout[typeof(makeIntTuple(shapeArg)), typeof(makeIntTuple(strideArg))](
-      shape: makeIntTuple(shapeArg),
-      stride: makeIntTuple(strideArg)
-    )
-
-# ═══════════════════════════════════════════════════════════════
-#  make_ordered_layout, strides following a dimension ordering
-# ═══════════════════════════════════════════════════════════════
+macro make_layout*(shape, stride: untyped): untyped =
+  ## (doc kept from the template)
+  let strideTyInst = stride.getTypeInst()
+  if strideTyInst.isCoordStride():
+    let (shapeVal, shapeTy) = makeIntTuple(shape)
+    result = quote do:
+      Layout[`shapeTy`, `strideTyInst`](shape: `shapeVal`, stride: `stride`)
+    return
+  let (shapeVal, shapeTy) = makeIntTuple(shape)
+  let (strideVal, strideTy) = makeIntTuple(stride)
+  result = emitLayoutLit(shapeVal, shapeTy, strideVal, strideTy)
 
 proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
   ## Assign compact strides in ascending order-value order, ties keep

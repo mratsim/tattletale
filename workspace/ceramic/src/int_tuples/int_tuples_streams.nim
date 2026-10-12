@@ -319,11 +319,13 @@ func next*(z: var TupleZipLongest): tuple[a, b: TupleStreamEvent] =
   if z.a.done():
     result.b = z.b.next()
     result.a = result.b
-    result.a.leaf = nil
+    if result.a.kind == kLeaf:
+      result.a.leaf = nil
   elif z.b.done():
     result.a = z.a.next()
     result.b = result.a
-    result.b.leaf = nil
+    if result.b.kind == kLeaf:
+      result.b.leaf = nil
   else:
     result.a = z.a.next()
     result.b = z.b.next()

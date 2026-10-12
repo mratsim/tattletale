@@ -55,6 +55,12 @@ proc pickShapeStride*(fields: NimNode, shape, strides: var NimNode) {.compileTim
       elif def[0].eqIdent("stride"):
         strides = def[1]
 
+proc emitLayoutLit*(shapeVal, shapeTy, strideVal, strideTy: NimNode): NimNode {.compileTime.} =
+  ## Layout[shapeTy, strideTy](shape: shapeVal, stride: strideVal),
+  ## all parts already literal nodes.
+  result = quote do:
+    Layout[`shapeTy`, `strideTy`](shape: `shapeVal`, stride: `strideVal`)
+
 func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shape, strides: NimNode] =
   ## Destructure a typed Layout into (shape, stride) tuple expressions,
   ## without forcing a Layout materialization when the AST already

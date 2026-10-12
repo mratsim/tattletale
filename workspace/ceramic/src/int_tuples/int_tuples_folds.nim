@@ -18,9 +18,7 @@ import workspace/ceramic/src/macros/replace_nodes
 # ═══════════════════════════════════════════════════════════════
 
 macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
-  ## Fold over all leaves of t with an accumulator.
-  ##
-  ## The accumulator is called `acc` and the iteration variable `it`
+  ## Fold over all leaves of t with an accumulator, `acc` binds before the element, `it` is the element
   ##
   ##  Examples:
   ##    fold(5, 1, acc * it)            → 5
@@ -58,23 +56,148 @@ macro fold*(t: typed, startingAcc: typed, body: untyped): untyped =
     result = newStmtList(chain)
 
 # ═══════════════════════════════════════════════════════════════
-#  prefix_scanIt and suffix_scanIt, scans preserving constness
+#  makeIntTuple, promotion to Int[V]() with value and type
 # ═══════════════════════════════════════════════════════════════
 
-proc scanBuilder(node: NimNode, acc0: NimNode, body: NimNode, reversed: bool): NimNode =
-  var stream = node.tupleStream(reversed)
-  var builder = TupleBuilderNested.new(1)
-  var acc = acc0
-  while not stream.done():
-    let ev = stream.next()
-    case ev.kind
-    of kLeaf:
-      builder.append(acc)
-      acc = body.replaceNodes(("acc", acc), ("it", ev.leaf))
+type VTAccum = object
+  val: TupleBuilderNested
+  ty: TupleBuilderNested
+
+proc init(a: var VTAccum, numTuples = 1) =
+  a.val = TupleBuilderNested.new(numTuples)
+  a.ty = TupleBuilderNested.new(numTuples)
+
+proc update(a: var VTAccum, v, t: NimNode) =
+  a.val.append(v)
+  a.ty.append(if t.isNil: bindSym"int" else: t)
+
+proc update(a: var VTAccum, ev: TupleStreamEvent) =
+  case ev.kind
+  of kOpen, kClose:
+    a.val.append(ev)
+    a.ty.append(ev)
+  of kLeaf:
+    let v = ev.leaf.getStaticInt()
+    if v != DynamicSentinel:
+      a.update(IntCT(v), IntCT(v)[0])
     else:
-      builder.append(ev)
-  result = builder.emit(0)
-  proc reverseTree(n: NimNode): NimNode =
+      a.update(ev.leaf, ev.leafTy)
+
+proc finish(a: var VTAccum, emitScalarForSize1 = false): tuple[val, ty: NimNode] =
+  result.val = a.val.emit(0, emitScalarForSize1)
+  result.ty = a.ty.emit(0, emitScalarForSize1)
+
+proc makeIntTuple*(n: NimNode): tuple[val, ty: NimNode] {.compileTime.} =
+  ## makeIntTuple on nodes: static leaves become Int[V]() constructors, dynamic leaves pass through and type as int
+  ##
+  ##  Examples:
+  ##    makeIntTuple(newLit((2, 3)))
+  ##        -> ((Int[2](), Int[3]()), (Int[2], Int[3]))
+  ##    makeIntTuple(newLit(5))
+  ##        -> (Int[5](), Int[5])
+  var acc: VTAccum
+  acc.init()
+  for ev in n.tupleStream():
+    acc.update(ev)
+  result = acc.finish(emitScalarForSize1 = not n.isTupleTy())
+
+# ═══════════════════════════════════════════════════════════════
+#  prefix and suffix product scans, value and type in one pass
+# ═══════════════════════════════════════════════════════════════
+
+type ProductAccum = object
+  staticAcc: int
+  flushing: bool
+  astAcc: NimNode
+  val: TupleBuilderNested
+  ty: TupleBuilderNested
+
+proc init(a: var ProductAccum, seed: NimNode) =
+  a.val = TupleBuilderNested.new(1)
+  a.ty = TupleBuilderNested.new(1)
+  var v = seed.getStaticInt()
+  if v == DynamicSentinel and seed.kind == nnkSym:
+    v = seed.getTypeInst().getStaticInt()
+  if v != DynamicSentinel:
+    a.staticAcc = v
+  else:
+    a.flushing = true
+    a.astAcc = seed
+
+proc update(a: var ProductAccum, leaf: NimNode) =
+  var v = leaf.getStaticInt()
+  if v == DynamicSentinel and leaf.kind == nnkSym:
+    v = leaf.getTypeInst().getStaticInt()
+  if not a.flushing:
+    let outLeaf = IntCT(a.staticAcc)
+    a.val.append(outLeaf)
+    a.ty.append(outLeaf[0])
+    if v != DynamicSentinel:
+      a.staticAcc = a.staticAcc * v
+    else:
+      a.flushing = true
+      a.astAcc = newLit(a.staticAcc) * leaf
+  else:
+    # the chain is runtime, its outputs are ints
+    a.val.append(a.astAcc)
+    a.ty.append(bindSym"int")
+    if v != DynamicSentinel:
+      a.astAcc = a.astAcc * newLit(v)
+    else:
+      a.astAcc = a.astAcc * leaf
+
+proc update(a: var ProductAccum, ev: TupleStreamEvent) =
+  case ev.kind
+  of kOpen, kClose:
+    a.val.append(ev)
+    a.ty.append(ev)
+  of kLeaf:
+    a.update(ev.leaf)
+
+
+proc finish(a: var ProductAccum, emitScalarForSize1 = false): tuple[val, ty: NimNode] =
+  result.val = a.val.emit(0, emitScalarForSize1)
+  result.ty = a.ty.emit(0, emitScalarForSize1)
+
+proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
+  ## Prefix product scan on nodes: each leaf's value is the seed times the leaves before it
+  ##
+  ##  Examples:
+  ##    prefixProductScan(newLit((2, 3, 4)), newLit(1))
+  ##        -> ((Int[1](), Int[2](), Int[6]()), (Int[1], Int[2], Int[6]))
+  ##    prefixProductScan(newLit(5), newLit(1))
+  ##        -> (Int[1](), Int[1])
+  if seedTy != nil and seedTy.kind == nnkTupleConstr:
+    return (seed, seedTy)
+  if seedTy.isNil and seed.kind == nnkTupleConstr:
+    return makeIntTuple(seed)
+  if seedTy.isNil and seed.getTypeInst().isTupleTy():
+    return (seed, seed.getTypeInst())
+  var accu: ProductAccum
+  accu.init(seed)
+  for ev in container.tupleStream():
+    accu.update(ev)
+  result = accu.finish(emitScalarForSize1 = not container.isTupleTy())
+
+proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
+  ## Suffix product scan on nodes: each leaf's value is the seed times the leaves after it
+  ##
+  ##  Examples:
+  ##    suffixProductScan(newLit((2, 3, 4)), newLit(1))
+  ##        -> ((Int[12](), Int[4](), Int[1]()), (Int[12], Int[4], Int[1]))
+  ##    suffixProductScan(newLit(5), newLit(1))
+  ##        -> (Int[1](), Int[1])
+  if seedTy != nil and seedTy.kind == nnkTupleConstr:
+    return (seed, seedTy)
+  if seedTy.isNil and seed.kind == nnkTupleConstr:
+    return makeIntTuple(seed)
+  if seedTy.isNil and seed.getTypeInst().isTupleTy():
+    return (seed, seed.getTypeInst())
+  var accu: ProductAccum
+  accu.init(seed)
+  for ev in container.tupleStream(true):
+    accu.update(ev)
+  proc reverseTree(n: NimNode): NimNode {.compileTime.} =
     if n.kind == nnkTupleConstr:
       var items: seq[NimNode]
       for i in countdown(n.len - 1, 0):
@@ -82,51 +205,28 @@ proc scanBuilder(node: NimNode, acc0: NimNode, body: NimNode, reversed: bool): N
       result = nnkTupleConstr.newTree(items)
     else:
       result = n
-  if reversed:
-    result = reverseTree(result)
+  let (val, ty) = accu.finish(emitScalarForSize1 = not container.isTupleTy())
+  result.val = reverseTree(val)
+  result.ty = reverseTree(ty)
 
-macro prefix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
-  ## Left-to-right prefix scan over all leaves of t with an accumulator.
-  ##
-  ## The accumulator is called `acc` and the iteration variable `it`,
-  ## `acc` binds the value before the element in scan direction
+macro prefix_product_scan*(t: typed, seed: typed): untyped =
+  ## Prefix product scan over all leaves of t: each leaf's value is `seed` times the leaves before it, the seed itself first.
   ##
   ##  Examples:
-  ##    prefix_scanIt(5, 1, acc * it)              → 1
-  ##    prefix_scanIt((2, 3, 4), 1, acc * it)      → (1, 2, 6)
-  ##    prefix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
-  ##        → ((1, 4), (4, 32))
-  if t.isTupleTy():
-    let scanned = t.scanBuilder(startingAcc, body, false)
-    if startingAcc.getTypeInst().sameType(bindSym"int"):
-      result = quote do:
-        block:
-          let acc {.inject.} = `startingAcc`
-          `scanned`
-    else:
-      result = newStmtList(scanned)
-  else:
-    result = newStmtList(startingAcc)
+  ##    prefix_product_scan(5, 1)              -> 1
+  ##    prefix_product_scan((2, 3, 4), 1)      -> (1, 2, 6)
+  ##    prefix_product_scan(((4, 1), (8, 8)), Int[1]())
+  ##        -> ((1, 4), (4, 32))
+  let (val, _) = prefixProductScan(t, seed)
+  result = val
 
-macro suffix_scanIt*(t: typed, startingAcc: typed, body: untyped): untyped =
-  ## Right-to-left suffix scan over all leaves of t with an accumulator.
-  ##
-  ## The accumulator is called `acc` and the iteration variable `it`,
-  ## `acc` binds the value before the element in scan direction
+macro suffix_product_scan*(t: typed, seed: typed): untyped =
+  ## Suffix product scan over all leaves of t: each leaf's value is `seed` times the leaves after it
   ##
   ##  Examples:
-  ##    suffix_scanIt(5, 1, acc * it)              → 1
-  ##    suffix_scanIt((2, 3, 4), 1, acc * it)      → (12, 4, 1)
-  ##    suffix_scanIt(((4, 1), (8, 8)), Int[1](), acc * it)
-  ##        → ((64, 64), (8, 1))
-  if t.isTupleTy():
-    let scanned = t.scanBuilder(startingAcc, body, true)
-    if startingAcc.getTypeInst().sameType(bindSym"int"):
-      result = quote do:
-        block:
-          let acc {.inject.} = `startingAcc`
-          `scanned`
-    else:
-      result = newStmtList(scanned)
-  else:
-    result = newStmtList(startingAcc)
+  ##    suffix_product_scan(5, 1)              -> 1
+  ##    suffix_product_scan((2, 3, 4), 1)      -> (12, 4, 1)
+  ##    suffix_product_scan(((4, 1), (8, 8)), Int[1]())
+  ##        -> ((64, 64), (8, 1))
+  let (val, _) = suffixProductScan(t, seed)
+  result = val
