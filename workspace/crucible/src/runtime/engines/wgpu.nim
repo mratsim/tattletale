@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[math, monotimes, os, strutils, tables, times]
+import std/[monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 import ../exec/wgpu_runtime
@@ -198,13 +198,13 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
       argShapes.add (false, 0, 0)
     elif typeof(f) is bool:
       let v = int32(f)
-      let offset = align(scalarBytes.len, ScalarSlotAlign)
+      let offset = (scalarBytes.len + ScalarSlotAlign - 1) div ScalarSlotAlign * ScalarSlotAlign
       scalarBytes.setLen(offset)
       argShapes.add (true, sizeof(int32), offset)
       for j in 0 ..< sizeof(int32):
         scalarBytes.add cast[ptr UncheckedArray[byte]](v.addr)[j]
     else:
-      let offset = align(scalarBytes.len, ScalarSlotAlign)
+      let offset = (scalarBytes.len + ScalarSlotAlign - 1) div ScalarSlotAlign * ScalarSlotAlign
       scalarBytes.setLen(offset)
       argShapes.add (true, sizeof(f), offset)
       for j in 0 ..< sizeof(f):
@@ -304,10 +304,12 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
 
   let totalBindings = argShapes.len + 1
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
+  # wgpu-native rejects a zero binding size, whole-buffer bindings carry the
+  # buffer's queried size.
   bgEntries[0] = WGPUBindGroupEntry(
     binding: 0.cuint,
     buffer: output,
-    size: 0
+    size: wgpuBufferGetSize(output).csize_t
   )
   for i, a in argShapes:
     bgEntries[i + 1] = WGPUBindGroupEntry(
@@ -322,6 +324,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   for f in fields(argsCopy):
     when typeof(f) is WGPUBuffer:
       bgEntries[ai + 1].buffer = f
+      bgEntries[ai + 1].size = wgpuBufferGetSize(f).csize_t
     inc ai
   var bgDesc = WGPUBindGroupDescriptor(
     layout: cache.bindGroupLayout,
@@ -378,70 +381,70 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   if uncaptured.errType != wgpuErrorTypeNoError:
     failLoud("WebGPU uncaptured error: " & uncaptured.message)
 
-  proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
-    ## Storage buffer of n bytes, readable and writable by copy, release via freeDevice.
-    let device = engine.ctx.ctx.device
-    var desc = WGPUBufferDescriptor(
-      usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
-             wgpuBufferUsageCopyDst,
-      size: n.csize_t,
-      mappedAtCreation: false)
-    result = wgpuDeviceCreateBuffer(device, addr desc)
-    if result == nil:
-      quit("WebGPU: failed to create a " & $n & "-byte device buffer")
+proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
+  ## Storage buffer of n bytes, readable and writable by copy, release via freeDevice.
+  let device = engine.ctx.ctx.device
+  var desc = WGPUBufferDescriptor(
+    usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
+           wgpuBufferUsageCopyDst,
+    size: n.csize_t,
+    mappedAtCreation: false)
+  result = wgpuDeviceCreateBuffer(device, addr desc)
+  if result == nil:
+    quit("WebGPU: failed to create a " & $n & "-byte device buffer")
 
-  proc freeDevice*(engine: WgpuEngine, h: WGPUBuffer) =
-    wgpuBufferRelease(h)
+proc freeDevice*(engine: WgpuEngine, h: WGPUBuffer) =
+  wgpuBufferRelease(h)
 
-  proc copyToDeviceFromHost*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
-    wgpuQueueWriteBuffer(engine.ctx.ctx.queue, dst, 0, src, n.csize_t)
+proc copyToDeviceFromHost*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
+  wgpuQueueWriteBuffer(engine.ctx.ctx.queue, dst, 0, src, n.csize_t)
 
-  proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
-    ## Staging copy + map: WebGPU storage buffers are not host-mappable.
-    let device = engine.ctx.ctx.device
-    let queue  = engine.ctx.ctx.queue
-    var stagingDesc = WGPUBufferDescriptor(
-      usage: wgpuBufferUsageMapRead or wgpuBufferUsageCopyDst,
-      size: n.csize_t,
-      mappedAtCreation: false)
-    let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
-    if stagingBuf == nil:
-      quit("WebGPU: failed to create the staging buffer")
-    defer:
-      wgpuBufferRelease(stagingBuf)
-    let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
-    if encoder == nil:
-      quit("WebGPU: failed to create command encoder")
-    defer:
-      wgpuCommandEncoderRelease(encoder)
-    wgpuCommandEncoderCopyBufferToBuffer(encoder, src, 0, stagingBuf, 0, n.csize_t)
-    let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
-    wgpuQueueSubmit(queue, 1, cmdBuf.addr)
-    defer:
-      wgpuCommandBufferRelease(cmdBuf)
-    let mapData = create(MapDoneData)
-    mapData[] = MapDoneData(done: false, resultBytes: n,
-                            status: wgpuBufferMapAsyncStatusUnknown)
-    defer:
-      dealloc(mapData)
-    var mapCbInfo = WGPUBufferMapCallbackInfo(
-      mode: wgpuCallbackModeAllowProcessEvents,
-      callback: bufferMapCb,
-      userdata1: mapData,
-      userdata2: nil
-    )
-    discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, n.csize_t, mapCbInfo)
-    if not wgpuDevicePoll(device, true, nil):
+proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
+  ## Staging copy + map: WebGPU storage buffers are not host-mappable.
+  let device = engine.ctx.ctx.device
+  let queue  = engine.ctx.ctx.queue
+  var stagingDesc = WGPUBufferDescriptor(
+    usage: wgpuBufferUsageMapRead or wgpuBufferUsageCopyDst,
+    size: n.csize_t,
+    mappedAtCreation: false)
+  let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
+  if stagingBuf == nil:
+    quit("WebGPU: failed to create the staging buffer")
+  defer:
+    wgpuBufferRelease(stagingBuf)
+  let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
+  if encoder == nil:
+    quit("WebGPU: failed to create command encoder")
+  defer:
+    wgpuCommandEncoderRelease(encoder)
+  wgpuCommandEncoderCopyBufferToBuffer(encoder, src, 0, stagingBuf, 0, n.csize_t)
+  let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
+  wgpuQueueSubmit(queue, 1, cmdBuf.addr)
+  defer:
+    wgpuCommandBufferRelease(cmdBuf)
+  let mapData = create(MapDoneData)
+  mapData[] = MapDoneData(done: false, resultBytes: n,
+                          status: wgpuBufferMapAsyncStatusUnknown)
+  defer:
+    dealloc(mapData)
+  var mapCbInfo = WGPUBufferMapCallbackInfo(
+    mode: wgpuCallbackModeAllowProcessEvents,
+    callback: bufferMapCb,
+    userdata1: mapData,
+    userdata2: nil
+  )
+  discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, n.csize_t, mapCbInfo)
+  if not wgpuDevicePoll(device, true, nil):
+    quit("WebGPU: wgpuDevicePoll failed")
+  let deadline = getMonoTime() + initDuration(seconds = 5)
+  while not mapData.done:
+    if not wgpuDevicePoll(device, false, nil):
       quit("WebGPU: wgpuDevicePoll failed")
-    let deadline = getMonoTime() + initDuration(seconds = 5)
-    while not mapData.done:
-      if not wgpuDevicePoll(device, false, nil):
-        quit("WebGPU: wgpuDevicePoll failed")
-      if deadline <= getMonoTime():
-        quit("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
-      sleep(2)
-    check mapData.status
-    let mappedPtr = wgpuBufferGetMappedRange(stagingBuf, 0, mapData.resultBytes.csize_t)
-    if mappedPtr != nil and n > 0:
-      copyMem(dst, mappedPtr, n)
-    wgpuBufferUnmap(stagingBuf)
+    if deadline <= getMonoTime():
+      quit("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
+    sleep(2)
+  check mapData.status
+  let mappedPtr = wgpuBufferGetMappedRange(stagingBuf, 0, mapData.resultBytes.csize_t)
+  if mappedPtr != nil and n > 0:
+    copyMem(dst, mappedPtr, n)
+  wgpuBufferUnmap(stagingBuf)

@@ -542,3 +542,6 @@ proc wgpuCommandBufferRelease*(cmdBuf: WGPUCommandBuffer)
 
 proc wgpuBufferRelease*(buf: WGPUBuffer)
   {.importc: "wgpuBufferRelease", dynlib: libWgpu.}
+
+proc wgpuBufferGetSize*(buf: WGPUBuffer): uint64
+  {.importc: "wgpuBufferGetSize", dynlib: libWgpu.}
