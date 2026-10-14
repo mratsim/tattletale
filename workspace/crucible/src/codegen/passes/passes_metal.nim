@@ -89,8 +89,8 @@ proc fnBuiltinNeeds(ctx: GpuContext, fn: GpuAst): seq[(string, GpuCoordBuiltinKi
 
 proc builtinParamType(kind: GpuCoordBuiltinKind): GpuType =
   ## IR type of a coordinate builtin bound as a param. The flat thread index
-  ## binds as scalar `uint32`, everything else as the MSL `uint3` vector spelling.
-  ## `uint3` is a synthetic generic name carrying the printer's native spelling,
+  ## binds as scalar `uint32`, everything else as the MSL `uint3` vector type.
+  ## `uint3` is a synthetic generic name carrying the printer's native form,
   ## no struct is ever registered for it.
   if kind == gbkThreadIndexInThreadgroup:
     GpuType(kind: gtUint32)

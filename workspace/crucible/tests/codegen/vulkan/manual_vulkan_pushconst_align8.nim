@@ -8,8 +8,8 @@
 ##
 # Run (expected FAIL, compile only):
 #   nim c --hints:off --warnings:off workspace/crucible/tests/codegen/vulkan/manual_vulkan_pushconst_align8.nim
-# Expect: "Vulkan: by-value param 'x' carries a 64-bit type, the push-constant
-# block packs 4-byte aligned and cannot honor the std430 8-byte alignment"
+# Expect: the by-value 64-bit param is rejected, the push-constant block packs
+# 4-byte aligned and cannot honor the std430 8-byte alignment
 
 import workspace/crucible
 

@@ -4,22 +4,6 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-##
-## OpenCL runtime execution DSL.
-##
-## Provides a high-level wrapper around the OpenCL C API for compiling
-## and executing OpenCL C compute kernels.
-##
-## Example (engine API):
-##   import workspace/crucible
-##   const code = opencl:
-##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-##       output[0] = a[0] + b[0]
-##   var engine = bkOpenCL.init()
-##   engine.ingest(code)
-##   var out: array[1, uint32]
-##   engine.run("addKernel", out, ([1'u32], [2'u32]))
-
 
 import workspace/crucible/src/abis/cl_abi
 
@@ -141,8 +125,6 @@ proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
-
-
 proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   ## Raw readback into a caller-provided buffer (used by the engines).
   if size > buffer.size:
@@ -150,7 +132,6 @@ proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   check buffer.ctx.commands.enqueueReadBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
-
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
   result.ctx = ctx
@@ -188,7 +169,6 @@ proc destroyKernel*(kernel: var OpenCLKernel) =
 
 proc setArg*(kernel: var OpenCLKernel, index: int, buffer: OpenCLBuffer) =
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(sizeof(Pmem)), buffer.mem.unsafeAddr)
-
 
 proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[cl_size_t]) =
   if globalWorkSize.len == 0:

@@ -4,24 +4,6 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-## Metal engine: runtime MSL compilation and launch.
-##
-## | API                        | contract                                                                                                                 |
-## | -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-## | ingest                     | compiles the MSL source into a library, cached by source                                                                 |
-## | run                        | pipeline state per kernel name, cached by name, then dispatches `dispatchThreadgroups(grid, blk)`                        |
-## | buffers                    | shared allocation, memcpy in before launch, memcpy back after `waitUntilCompleted`                                       |
-## | pointers                   | passed as-is, no copy and no probing, the caller is responsible for a valid target, on-device or unified-memory-resident |
-## | scalars (ArgBlob size < 0) | packed into one shared constant buffer, 16-byte slots, bound via `setBuffer:offset:atIndex:`                             |
-## | blk                        | validated against the Apple Silicon 1024-thread limit at dispatch                                                        |
-##
-## macOS only:
-## - the implementation is `when defined(macosx)`-guarded
-## - on other platforms `newMetalEngine` exists and quits at construction
-##
-## The device context (`initMetal`) lives in `exec/metal_runtime`.
-
 import std/[strutils, tables]
 
 import workspace/crucible/src/abis/objc_abi as objc
@@ -30,7 +12,6 @@ import ../exec/metal_runtime
 export metal_runtime
 
 when defined(macosx):
-  import ./arg_blobs
   import ../chevrons
 # ═════════════════════════════════════════════════
 # ▸ Types
@@ -41,22 +22,15 @@ type
     ctx: MetalCtx
 
   MetalCache = object
-    ## Four per-engine caches: the compiled library, the compute pipeline states,
-    ## the no-copy wrapper table, the packed-scalar buffer.
-    ## Three per-engine caches:
+    ## Two per-engine caches:
     ## - library, keyed by source, replaced by re-ingest
     ## - pipeline states, keyed by kernel name, cleared by re-ingest
-    ## - scalarBuf, packed scalar args, contents memcpy'd in per run,
-    ##   capacity grown on demand
     library: objc.ID
     psos: Table[string, objc.ID]
-    scalarBuf: MetalBuffer
-    scalarCap: int
 
   MetalEngine* = ref object
-    ## `source` plus the RAII value fields `ctx` (device + queue) and `cache`
-    ## (library, pipeline states, wrapper table, scalar buffer), which release
-    ## their +1 Objective-C objects when the engine ref is destroyed.
+    ## A Metal engine, build with `bkMetal.init()`: runtime-compiled MSL kernels
+    ## on one GPU. All Objective-C resources release when the engine dies.
     source: string
     ctx: MetalDeviceCtx
     cache: MetalCache   # after ctx: released before ctx shutdown
@@ -71,11 +45,6 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   const
-    ## Constant-buffer slot stride for packed scalar args, in bytes.
-    ## Verified on-device: 16-byte alignment on Apple Silicon.
-    ScalarSlotStride = 16
-
-  const
     ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
     ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
     MTLCommandBufferStatusCompleted = 4
@@ -84,6 +53,14 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ Constructors/destructors
   # ─────────────────────────────────────────────────────────────────────────
+
+  proc newMetalCtx(): MetalCtx =
+    ## Engine context: the default device plus its command queue, both +1
+    ## under Create/new ownership rules and released by the ctx =destroy.
+    result.device = defaultMetalDevice()
+    result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
+    if objc.isNil(result.queue):
+      failLoud("newCommandQueue returned nil")
 
   proc `=destroy`(ctx: var MetalDeviceCtx) =
     ## Releases the +1 device and command queue (queue first, the reverse of creation order).
@@ -99,16 +76,12 @@ when defined(macosx):
       for pso in cache.psos.values:
         objc.release(pso)
       cache.psos.clear()
-      var sb = cache.scalarBuf
-      releaseBuffer(sb)
-      cache.scalarBuf = MetalBuffer(buffer: objc.ID(nil), data: nil)
-      cache.scalarCap = 0
 
   proc newMetalEngine*(): MetalEngine =
     ## Factory reached by engines.nim via `import {.all.}`.
     objc.withMemPool:
       result = MetalEngine(
-        ctx: MetalDeviceCtx(ctx: initMetal()),
+        ctx: MetalDeviceCtx(ctx: newMetalCtx()),
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
@@ -137,7 +110,6 @@ when defined(macosx):
     engine.source
 
   proc deviceName*(engine: MetalEngine): string =
-    ## The Metal device name (e.g. "Apple M4 Max").
     objc.withMemPool:
       result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
 
@@ -145,8 +117,41 @@ when defined(macosx):
   # ▸ PRIVATE run path
   # ─────────────────────────────────────────────────────────────────────────
 
-  proc runImpl(engine: MetalEngine, kernel: string, output: ArgBlob,
-               blobs: seq[ArgBlob], cfg: LaunchConfig) =
+  proc bufferContents(h: objc.ID): pointer =
+    ## [buffer contents], the host address of a shared-storage allocation.
+    ## Engine-internal: public host access is the two copy procs only.
+    result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
+    if result == nil:
+      failLoud("contents() returned nil for a shared buffer")
+
+  proc allocDevice*(engine: MetalEngine, n: int): objc.ID =
+    if n <= 0:
+      failLoud("allocDevice: size must be positive, got " & $n)
+    result = objc.msgSend(engine.ctx.ctx.device, objc.`$$`("newBufferWithLength:options:"),
+                          objc.NSUInteger(n), SharedUntrackedOptions)
+    if objc.isNil(result):
+      failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
+
+  proc freeDevice*(engine: MetalEngine, h: objc.ID) =
+    if not objc.isNil(h):
+      objc.release(h)
+
+  proc copyToDeviceFromHost*(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
+    if n <= 0:
+      failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
+    copyMem(bufferContents(dst), src, n)
+
+  proc copyToHostFromDevice*(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+    if n <= 0:
+      failLoud("copyToHostFromDevice: n must be positive, got " & $n)
+    copyMem(dst, bufferContents(src), n)
+
+
+  proc run*(engine: MetalEngine, kernel: string, output: objc.ID, args: tuple, cfg = LaunchConfig()) =
+    ## Runs `kernel` on the engine's GPU.
+    ##
+    ## Usage:
+    ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -176,64 +181,25 @@ when defined(macosx):
                                    engine.cache.library, kernel)
         engine.cache.psos[kernel] = pso
 
-      let outSize = output.size
-      var outBuf = allocBuffer(engine.ctx.ctx.device, outSize)
-      if outSize > 0:
-        copyMem(outBuf.data, output.data, outSize)
-      defer:
-        releaseBuffer(outBuf)
-
-      var inputBuffers = newSeq[MetalBuffer](blobs.len)
-      var perCallBuffers = newSeq[MetalBuffer]()
-      var scalarCount = 0
-      for i in 0 ..< blobs.len:
-        if blobs[i].size >= 0:
-          inputBuffers[i] = allocBuffer(engine.ctx.ctx.device, blobs[i].size)
-          perCallBuffers.add inputBuffers[i]
-          copyMem(inputBuffers[i].data, blobs[i].data, blobs[i].size)
-        else:
-          inc scalarCount
-      defer:
-        for b in mitems(perCallBuffers):
-          releaseBuffer(b)
-
-      var scalarBuf: MetalBuffer
-      if scalarCount > 0:
-        let needed = scalarCount * ScalarSlotStride
-        if needed > engine.cache.scalarCap:
-          var old = engine.cache.scalarBuf
-          releaseBuffer(old)
-          engine.cache.scalarBuf = allocBuffer(engine.ctx.ctx.device, needed)
-          engine.cache.scalarCap = needed
-        scalarBuf = engine.cache.scalarBuf
-        let dst = cast[ptr UncheckedArray[byte]](scalarBuf.data)
-        var slot = 0
-        for i in 0 ..< blobs.len:
-          if blobs[i].size < 0:
-            let sz = -blobs[i].size
-            if sz > ScalarSlotStride:
-              failLoud("Metal run: scalar arg " & $i & " is " & $sz &
-                       " bytes, exceeds the " & $ScalarSlotStride &
-                       "-byte constant-buffer slot")
-            copyMem(addr dst[slot * ScalarSlotStride], blobs[i].data, sz)
-            inc slot
-
-      # Encode: pipeline, buffers, dispatch, commit, wait.
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"), outBuf.buffer,
-                      objc.NSUInteger(0), objc.NSUInteger(0))
-      var slot = 0
-      for i in 0 ..< blobs.len:
-        if blobs[i].size >= 0:
+      discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                      output, objc.NSUInteger(0), objc.NSUInteger(0))
+      var idx = 1
+      var argsCopy = args
+      for f in fields(argsCopy):
+        when typeof(f) is objc.ID:
           discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          inputBuffers[i].buffer, objc.NSUInteger(blobs[i].off),
-                          objc.NSUInteger(i + 1))
+                          f, objc.NSUInteger(0), objc.NSUInteger(idx))
+        elif typeof(f) is bool:
+          var v = int32(f)
+          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
+                          addr v, objc.NSUInteger(sizeof(int32)), objc.NSUInteger(idx))
         else:
-          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          scalarBuf.buffer, objc.NSUInteger(slot * ScalarSlotStride), objc.NSUInteger(i + 1))
-          inc slot
+          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
+                          addr f, objc.NSUInteger(sizeof(f)), objc.NSUInteger(idx))
+        inc idx
       let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),
                          depth: objc.NSUInteger(cfg.grid.z))
@@ -256,9 +222,6 @@ when defined(macosx):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status &
                  " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
-
-      if outSize > 0:
-        copyMem(output.data, outBuf.data, outSize)
 
 # ═════════════════════════════════════════════════
 # ▸ Non-macOS entry point

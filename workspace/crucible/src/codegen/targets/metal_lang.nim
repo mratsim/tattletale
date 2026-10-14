@@ -6,19 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Metal Shading Language (MSL) printer for the `bkMetal` backend.
-##
-## Lowers the shared GPU IR to MSL, modeled on the CUDA printer with Metal's ABI rules:
-##   - kernel arguments are buffers (`device` pointers for arrays, `constant` references for scalars)
-##   - coordinate builtins sit in the param list: the `materializeIndexBuiltinParams` pass
-##     appends one param per referenced builtin, marked on the symbol's `coordBuiltin`.
-##     Kernels emit the attribute-qualified form (`uint3 name [[name]]`), device functions
-##     the plain form, and call sites forward the names
-##     (MSL device functions have no implicit thread index)
-##   - the threadgroup size stays host-side (dispatch-time) and is never baked into the shader.
-##
-## `MetalReservedKeywords` is the MSL reserved-word table minus the boolean literals
-## `true`/`false` (emitted as valid MSL tokens), plus the `metal` namespace.
-## It is a defensible superset of the MSL reserved words, not a hand-picked sample.
 
 import std / [macros, strformat, strutils, sequtils, tables]
 
@@ -42,7 +29,7 @@ const MetalReservedKeywords = [
   "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
   "vertex", "virtual", "void", "volatile", "wchar_t", "while", "xor",
   "xor_eq",
-  # MSL address-space qualifiers and the printer's scalar spellings
+  # MSL address-space qualifiers and the printer's scalar type names
   # `threadgroup` repeats the C++ group above: it is both a C++ keyword and an MSL address space.
   "kernel", "device", "constant", "threadgroup", "uchar", "ushort", "ulong",
   # `metal` is the MSL namespace, not a keyword
@@ -52,16 +39,14 @@ const MetalReservedKeywords = [
   ## rejects them with parser errors that do not name the cause, so the printer
   ## raises with a rename hint instead.
 
-proc checkReservedIdent(name: string; what: string) =
+proc checkReservedIdent(name: string, what: string) =
   ## Raises when `name` is a reserved MSL keyword, so the shader source never contains a colliding identifier.
   if name == "metal":
     raiseAssert "'" & name & "' collides with the MSL `metal::` namespace. Rename the " & what & "."
   elif name in MetalReservedKeywords:
     raiseAssert "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
 
-proc gpuTypeToString*(t: GpuType,
-                      ident: string = "",
-                      allowEmptyIdent = false): string
+proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string
 
 proc getInnerArrayType(t: GpuType): string =
   ## Returns the name of the innermost type for a nested array.
@@ -72,9 +57,7 @@ proc getInnerArrayType(t: GpuType): string =
     result = gpuTypeToString(t)
 
 proc gpuTypeToString*(t: GpuTypeKind): string =
-  ## MSL spelling of a scalar type kind. MSL 64-bit integers are `long`
-  ## and `ulong`, 8 bytes each. The compiler rejects the C `long long` spelling.
-  ## fp64 does not exist on Metal and is rejected loudly, like the WGSL printer does.
+  ## MSL name of a scalar type kind (`long`/`ulong` for 64-bit, fp64 rejected loudly).
   case t
   of gtBool: "bool"
   of gtUint8: "uchar"
@@ -87,8 +70,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat32: "float"
   of gtFloat16: "half"
   of gtBf16: "bfloat"
-  of gtFloat64:
-    raiseAssert "The Metal target does not support 64-bit floating point (gtFloat64): " & $t
+  of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "size_t"
   of gtPtr: "*"
@@ -100,9 +82,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToString*(t: GpuType, ident: string = "",
-                      allowEmptyIdent = false): string =
-  ## MSL spelling of `t`, with `ident` appended for array types, which require an identifier in the emitted declaration.
+proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string =
+  ## MSL name of `t`, with `ident` appended for array types, which require an identifier in the emitted declaration.
   ## `allowEmptyIdent` permits the identifier to be omitted (function return types and casts).
   ## Without it, an array type with an empty `ident` raises.
   var skipIdent = false
@@ -141,8 +122,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "",
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
   of gtGenericInst:
-    # NOTE: We turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
-    # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
+    # NOTE: `foo[float32, uint32]` becomes `foo_f32_u32`,
+    # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
     checkReservedIdent(t.gName, "type")
     result = t.gName
     for i, g in t.gArgs:
@@ -161,7 +142,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "",
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   ## Function declaration with its return type. Pointers to statically sized arrays
-  ## use the `(*fn(args))[N]` spelling. Everything else is a plain `RetType fn(args)`.
+  ## use the `(*fn(args))[N]` form. Everything else is a plain `RetType fn(args)`.
   if typ.kind == gtPtr and typ.to.kind == gtArray:
     # Syntax to return a pointer to a statically sized array:
     # `Foo (*fnName(fnArgs))[ArrayLen]`
@@ -218,23 +199,16 @@ proc genLit*(ast: GpuAst): string =
     of gtInt16, gtUint16, gtUint8, gtBool:
       result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
     of gtFloat64:
-      raiseAssert "The Metal target does not support 64-bit floating point (gtFloat64 literal): " & ast.lValue
+      result = ast.lValue
     else:
       result = ast.lValue
 
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
-  ## MSL kernel parameter list:
-  ## - buffer params: `device T*`, never const — matches device-fn params, and
-  ##   MSL accepts non-const input buffers
-  ## - scalars: `constant T&`
-  ## - a param whose symbol carries a coordinate builtin kind emits the
-  ##   attribute form (`uint3 name [[name]]`, scalar `uint` for the flat thread
-  ##   index): no `[[buffer(n)]]` binding, and it does not advance the buffer
-  ##   index. The `materializeIndexBuiltinParams` pass appends these after the
-  ##   declared params, so declared params keep their `[[buffer(n)]]` positions.
-  ## The workgroup size is dispatch-time, hence no baked threadgroup-size attribute.
-  ## Scalars stay 4 bytes on the host (arg_blobs blobOf), so scalar `bool` is declared `int`.
-  ## Buffer elements marshal at their Nim width, so bool buffers declare `bool` (1 byte).
+  ## Emits the kernel's MSL parameter list:
+  ## - pointers: `device T* name [[buffer(n)]]`, the index counts pointers only
+  ## - scalars: `constant T& name`, unattributed, set inline via setBytes at the argument position
+  ## - coordinate builtins emit `uint3 name [[name]]`, the flat thread index emits `uint`, no binding and no index
+  ##   `materializeIndexBuiltinParams` appends them
   var params: seq[string]
   var bufferIdx = 0
   for p in fn.pParams:
@@ -247,19 +221,18 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
         "uint" else: "uint3"
       params.add attrType & " " & name & " [[" & name & "]]"
       continue
-    let binding = " [[buffer(" & $bufferIdx & ")]]"
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
       if inner.kind == gtUA:
         inner = inner.uaTo
       var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-      params.add "device " & elem & "* " & name & binding
+      params.add "device " & elem & "* " & name & " [[buffer(" & $bufferIdx & ")]]"
+      inc bufferIdx
     else:
       var elem = gpuTypeToString(p.typ, allowEmptyIdent = true)
       if p.typ.kind == gtBool:
         elem = "int"
-      params.add "constant " & elem & "& " & name & binding
-    inc bufferIdx
+      params.add "constant " & elem & "& " & name
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
@@ -295,20 +268,18 @@ proc addrSpaceToMsl(space: AddressSpace): string =
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string
 
-proc structVariantName(ctx: GpuContext, t: GpuType,
-                       spaces: seq[AddressSpace]): string =
-  ## MSL struct name of a space tuple: base name for the first observed
-  ## tuple, otherwise base name suffixed with the tuple's space tags.
+proc structVariantName(ctx: GpuContext, t: GpuType, spaces: seq[AddressSpace]): string =
+  ## MSL struct name of a space tuple, the base name for the first observed tuple,
+  ## otherwise the base name suffixed with the tuple's space tags.
   result = gpuTypeToString(t, allowEmptyIdent = true)
   if ctx.ptrFieldVariants.getOrDefault(t, @[]).find(spaces) > 0:
     result.add pp.variantSuffix(spaces)
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  ## MSL-specific IR preprocessing before codegen, mirroring the CUDA pipeline.
-  ## Type definitions land before any global that uses them.
-  ## MSL is a C-family language, and types come first.
-  ## Global functions fill `fnTab`. Reachable device functions are harvested
-  ## via `scanFunctions`.
+  ## MSL-specific IR preprocessing before codegen:
+  ## - type definitions land before any global that uses them, MSL is a C-family language, types come first
+  ## - global functions fill `fnTab`, reachable device functions are
+  ##   harvested via `scanFunctions`
   # 1. Add all data from `genericInsts` and `types` tables.
   #    In MSL the types have to appear before any global variables using them.
   for k, v in pairs(ctx.genericInsts):
@@ -328,7 +299,7 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     ctx.scanFunctions(fn)
 
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
-  ## The actual MSL code generator.
+  ## Generates the MSL for one AST node.
   let indentStr = "  ".repeat(indent)
   case ast.kind
   of gpuDiscard: return # nothing to emit
@@ -455,9 +426,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
     of gbkThreadgroupBarrier:
-      # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this kind reaches the IR.
-      # MSL spells the barrier with its memory flags.
+      # Every backend lowers the barrier to an alias template that instantiates
+      # to the canonical call, so only this kind reaches the IR.
+      # MSL takes the barrier with its memory flags.
       result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
     of gbkThreadgroupBarrierDevice:
       # mem_device orders device-memory accesses, `mem_threadgroup` does not.
@@ -510,7 +481,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
        gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup, gbkThreadgroupsPerGrid:
       # Whole-value use: MSL attr params are uint3 and the canonical Nim type is
-      # int3 (distinct C++ struct types, no implicit conversion) — construct.
+      # int3 (distinct C++ struct types, no implicit conversion), construct.
       let n = ast.ident()
       result = "int3((int)" & n & ".x, (int)" & n & ".y, (int)" & n & ".z)"
     of gbkNone:
@@ -548,19 +519,10 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       else:
         for el in ast.tFields:
           checkReservedIdent(el.name, "field")
-          # MSL has no string type: every gtString field of every struct
-          # is dropped here, not just the tile layer's atom descriptors.
-          # The invariant is that a struct reaching MSL emission carries
-          # no runtime string data, because the drop shifts every later
-          # field's offset and a consumer would silently read the next
-          # field. The MmaAtom name/instr strings are compile-time-only:
-          # the atom travels as a static generic param and its struct is
-          # emitted for type-name completeness but never instantiated,
-          # so the dropped fields carry no runtime data.
+          # MSL has no string type, gtString fields drop at emission (no runtime strings reach MSL)
           if el.typ.kind == gtString:
             continue
-          # MSL requires an explicit address-space qualifier on pointer-typed
-          # fields.
+          # MSL requires an explicit address-space qualifier on pointer-typed fields
           if el.typ.kind == gtPtr:
             let fi = ptrNames.find(el.name)
             let space = if fi >= 0 and fi < spaces.len: spaces[fi] else: asRMEM
@@ -575,15 +537,14 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         result.add ";\n"
 
   of gpuAlias:
-    # Aliases come from `ctx.types`. MSL spells them as C++11 `using`
+    # Aliases come from `ctx.types`, MSL emits them as C++11 `using`
     result = "using " & gpuTypeToString(ast.aTyp) & " = " &
              ctx.genMetalImpl(ast.aTo, 0) & ';'
 
   of gpuObjConstr:
-    # Braced init list: TypeName{val1, val2, ...}
-    # Using `TypeName{...}` (functional-style cast) instead of bare `{val}`
-    # ensures the result is a valid C++ expression. Bare braced-init-lists
-    # are not expressions and cannot be used with member access (gpuDot).
+    # Braced init list: `TypeName{val1, val2, ...}` is a functional-style cast, a valid C++
+    # expression usable with member access (gpuDot). A bare `{val}` braced-init-list
+    # is not an expression.
     result = ctx.structVariantName(ast.ocType, pp.siteSpaceTuple(ctx, ast)) & "{"
     for i, el in ast.ocFields:
       if el.value.kind == gpuDiscard:
@@ -595,24 +556,24 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result.add '}'
 
   of gpuInlineAsm:
-    # Raw MSL statement: the gpuBlock loop appends the `;` terminator
-    # (CUDA/OpenCL/Vulkan wrap the body in `asm(...)`; MSL has no such
-    # wrapper — the simdgroup intrinsics are plain statements).
+    # Raw MSL statement, the gpuBlock loop appends the `;` terminator.
+    # CUDA/OpenCL/Vulkan wrap the body in `asm(...)`, MSL has no such wrapper,
+    # the simdgroup intrinsics are plain statements.
     result = indentStr & genAsmStmt(ast).strip
 
   of gpuEmit:
     # Self-terminating raw text: the gpuBlock loop appends no `;`
     # (the emitted text owns its own terminators).
     result = genEmitStmt(ctx, ast,
-      proc(c: var GpuContext; n: GpuAst): string = c.genMetalImpl(n, 0))
+      proc(c: var GpuContext, n: GpuAst): string = c.genMetalImpl(n, 0))
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"
 
   of gpuConv:
     var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
-    # Pointer-typed casts need an explicit address-space qualifier. The
-    # space is resolved from the cast operand's value (`asRMEM` default).
+    # Pointer-typed casts need an explicit address-space qualifier, the space
+    # is resolved from the cast operand's value (`asRMEM` default).
     if ast.convTo.kind == gtPtr:
       castTyp = addrSpaceToMsl(pp.resolveValueAddressSpace(ctx, ast.convExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
@@ -629,8 +590,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = "(*" & ctx.genMetalImpl(ast.dOf, 0) & ')'
 
   of gpuConstexpr:
-    ## MSL supports C++14 `constexpr` variables. Arrays need the length in the type.
-    ## Hence the two emission shapes (mirrors the CUDA printer).
+    ## Emits a C++14 `constexpr` variable, MSL supports them. Array types need
+    ## the length in the type, hence the two emission shapes.
     let cInit =
       if ast.cValue.kind == gpuDiscard: "{}"
       else: ctx.genMetalImpl(ast.cValue, 0)
@@ -654,8 +615,8 @@ proc codegen*(ctx: var GpuContext): string =
   ## - the `metal_stdlib` header
   ## - the global blocks (types, global variables)
   ## - forward declarations for device functions, then every function body.
-  # Resolve the value-level address spaces (var pragmas and struct pointer
-  # fields) before any spelling needs them.
+  # Resolve the value-level address spaces from the var pragmas and struct
+  # pointer fields before any emission needs them.
   pp.collectValueAddressSpaces(ctx)
   result.add "#include <metal_stdlib>\n"
   result.add "using namespace metal;\n\n"
@@ -667,9 +628,8 @@ proc codegen*(ctx: var GpuContext): string =
     if code.len > 0:
       result.add code & ";\n\n"
 
-  # 2. Generate forward declarations for the device functions
-  #    so that kernels defined before the functions they call still compile.
-  #    Kernels need no forward declaration, since nothing calls a kernel from inside a shader.
+  # 2. Forward declarations for the device functions, a kernel may precede its callees.
+  #    Kernels need no forward declaration, no shader code calls a kernel.
   let fns = toSeq(ctx.fnTab.pairs)
   for (fnIdent, fn) in fns:
     if attGlobal in fn.pAttributes:

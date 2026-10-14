@@ -23,6 +23,7 @@ Rule table (rule | trigger | severity):
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
+| quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
 | doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
 | bullet-list-length   | a bullet list with 5 or more items                                                                | counted  |
@@ -48,6 +49,7 @@ Rule table (rule | trigger | severity):
 | except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
+| inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -100,6 +102,7 @@ writing the fixed text back.
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
+| quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
 Leftover findings print tagged, [mechanical] for a class the transform
@@ -184,6 +187,24 @@ NIM_EXPORTED_CALLABLE_RE = re.compile(
 # Call sites and ordinary prose never match, the keyword anchors the shape.
 OF_SUFFIX_DECL_RE = re.compile(
     r"^\s*(?:proc|func|template)\s+\*?([A-Za-z_]\w*)")
+
+# The inbounds-call-syntax rule. Plain call sites of inBounds, the house
+# convention is the method call coord.inBounds(shape). Definitions and
+# the inBoundsImpl internals never match, the name boundary is exact.
+# The pair-name rule. A callable whose name carries `pair` says
+# nothing its signature does not, name the thing it returns instead.
+# The quote-field-access rule. A backtick splice wrapping a field
+# access, `x.field`, splices the base object and drops the field,
+# name the field access outside the backticks
+QUOTE_FIELD_ACCESS_RE = re.compile(
+    r"`\s*[A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*\s*`")
+
+PAIR_DECL_RE = re.compile(
+    r"^\s*(?:proc|func|macro|template|iterator|converter)\s+\w*[Pp][Aa][Ii][Rr]\w*\s*[\*\[\(:=]")
+
+INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
+INBOUNDS_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
 
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
@@ -306,6 +327,10 @@ def _probe_exempt(line):
 BANNED = [
     (r"\bpast the\b",
      None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
+    (r"\bsems?\b",
+     None, "name the phase directly, type resolution, instantiation, or the checker"),
+    (r"\bspells?\b|\bspelled\b|\bspelling\b",
+     None, "state the type or wording directly, spell prose is banned"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
      r"|\bno longer\b|\bused to \b|\bas of \b",
@@ -433,6 +458,7 @@ RULES = {
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
+    "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
                             "a 1-2 word stub line with reflow room on the previous line"),
     "doc-above-type": Rule("doc-above-type", True,
@@ -486,6 +512,12 @@ RULES = {
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
     "decl-of-suffix": Rule("decl-of-suffix", True,
                            "a proc, func or template name ending in Of, name the thing directly"),
+    "quote-field-access": Rule("quote-field-access", True,
+                               "a backtick splice wraps a field access"),
+    "pair-name": Rule("pair-name", True,
+                      "a callable whose name carries `pair`"),
+    "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
+                                "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
 }
 
 
@@ -1196,6 +1228,14 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             path, n, "paren-split",
             "line ends inside an open parenthesis (keep the unit on one line "
             "or end the line before the paren)"))
+    # Quote parity: an odd unescaped-quote count means the line ends inside
+    # a quoted string, the closing quote lands on the next line and the
+    # reader meets the phrase's tail detached from its head. Fenced code
+    # never reaches here, Nim triple-quoted strings stay exempt.
+    if c.replace('\\\"', "").count('"') % 2 == 1:
+        findings.append(Finding(
+            path, n, "quote-split",
+            "line ends inside a quoted string (keep the quoted phrase on one line)"))
 
 
 def _bullet_continuation(entry, lead_indent):
@@ -1567,6 +1607,29 @@ SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func|macro|template|iterator|converter)\b
 SIG_WRAP_MAX = 140
 
 
+def nim_pair_name_checks(path, text, findings):
+    """Flags a callable whose name carries `pair`."""
+    for i, raw in enumerate(text.splitlines()):
+        if PAIR_DECL_RE.match(raw):
+            findings.append(Finding(
+                path, i + 1, "pair-name",
+                "a callable named with `pair` names nothing, name what it returns"))
+
+
+def nim_quote_field_access_checks(path, text, findings):
+    """Flags a backtick splice wrapping a field access, the splice
+    takes the base object, the field never lands in the tree."""
+    for i, raw in enumerate(text.splitlines()):
+        stripped = raw.lstrip()
+        if stripped.startswith("#"):
+            continue
+        line = raw.split("#", 1)[0]
+        if QUOTE_FIELD_ACCESS_RE.search(line):
+            findings.append(Finding(
+                path, i + 1, "quote-field-access",
+                "a backtick splice wraps a field access, splice a local instead"))
+
+
 def nim_sig_wrap_checks(path, text, findings):
     """Flags a callable signature (proc, func, macro, template, iterator,
     converter) wrapped across lines while the joined single-line form fits
@@ -1723,13 +1786,23 @@ def nim_structure_checks(path, text, header_nos, findings):
     - the house doc comment of a proc or func is the first body line
     - exported types are documented by a doc block above them or by the
       ## field docs inside the body, a ## block directly above the
-      declaration is banned (doc-above-type)"""
+      declaration is banned (doc-above-type)
+    - inbounds-call-syntax bans the plain call of inBounds, the house
+      convention is the method call coord.inBounds(shape)"""
     lines = text.splitlines()
     blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(lines):
         line = raw.rstrip()
+        if (i + 1) not in blocked and INBOUNDS_PLAIN_CALL_RE.search(line) \
+                and not INBOUNDS_DECL_RE.match(line):
+            findings.append(Finding(
+                path, i + 1, "inbounds-call-syntax",
+                "inBounds in plain call syntax, use the method call "
+                "coord.inBounds(shape)"))
+    for i, raw in enumerate(lines):
+        line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
-        if ofm and ofm.group(1).endswith("Of"):
+        if ofm and ofm.group(1).endswith("Of") and ofm.group(1) != "getTypeOf":
             findings.append(Finding(
                 path, i + 1, "decl-of-suffix",
                 "the name %s carries an Of suffix, name the thing directly "
@@ -1768,13 +1841,18 @@ def nim_structure_checks(path, text, header_nos, findings):
             if body is not None and body < len(lines) \
                     and lines[body].strip().startswith("##"):
                 prose = []
+                has_bullet = False
                 j = body
                 while j < len(lines) and lines[j].strip().startswith("##"):
                     c = lines[j].strip()[2:].strip()
                     if c and not structural(c):
                         prose.append(c)
+                    if BULLET_RE.match(c):
+                        has_bullet = True
                     j += 1
-                if (len(prose) >= 3
+                # a doc that bullets its contract satisfies this rule, the
+                # bulleted list is the contract marker the message prescribes
+                if (len(prose) >= 3 and not has_bullet
                         and not any(CONTRACT_MARKER_RE.search(c)
                                     for c in prose)):
                     findings.append(Finding(
@@ -1892,6 +1970,8 @@ def scan(path, text, findings):
                     break
             nim_structure_checks(path, text, header_nos, findings)
             nim_sig_wrap_checks(path, text, findings)
+            nim_pair_name_checks(path, text, findings)
+            nim_quote_field_access_checks(path, text, findings)
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)

@@ -4,33 +4,12 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-## CudaEngine — NVRTC JIT + CUDA driver execution (moved from codegen/nvrtc.nim).
-##
-## The NVRTC JIT driver helpers (initNvrtc/compile/getPtx/load) are private
-## engine internals: `ingest` compiles via NVRTC and `runImpl` loads the
-## module and launches. Launch dims come from the chevron `LaunchConfig`
-## (grid/blk are full 3D Dim3) — there is no public low-level `execute`
-## entry point. This module imports no codegen modules. Kernels travel as
-## source strings.
-##
-## The engine is a `ref object` with fields directly (no XxxObj indirection).
-## Resources live in RAII value fields (`NVRTC` carries its own `=destroy`)
-## because Nim 2.2.10 refuses `=destroy` on ref types. `init` creates the
-## CUDA context once. Re-ingest replaces only the program and module. The
-## context is released by `=destroy` when the engine dies.
-##
-## Structure: PUBLIC API block first (exported `*`); PRIVATE machinery below
-## (no `*`). `{.experimental: "codeReordering".}` lifts Nim's
-## declaration-before-use rule so the private types/helpers may follow the
-## public surface that calls them.
 {.experimental: "codeReordering".}
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/c_abi
 
 import ../exec/cuda_runtime
-import ./arg_blobs
 import ../chevrons
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -47,8 +26,8 @@ type
     moduleLoaded: bool
 
   CudaEngine* = ref object
-    ## Fields directly (no Obj indirection); resources in the RAII `NVRTC`
-    ## value field (fires `=destroy` when the ref dies or is re-ingested).
+    ## A CUDA engine, build with `bkCuda.init()`: NVRTC-compiled kernels on one GPU.
+    ## The context and compiled module release when the engine dies.
     ptx: string
     nvrtc: NVRTC
 
@@ -64,7 +43,7 @@ proc `=destroy`(nvrtc: NVRTC) =
     check cuCtxDestroy nvrtc.context
 
 proc newCudaEngine(): CudaEngine =
-  ## Private factory — engines.nim reaches it via `import {.all.}`.
+  ## Private factory, engines.nim reaches it via `import {.all.}`.
   ## `init` semantics: live CUDA context, no kernel yet.
   result = CudaEngine()
   result.nvrtc = initNvrtc()
@@ -74,19 +53,18 @@ proc newCudaEngine(): CudaEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
-  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact
-  ## and program, while the CUDA context stays alive (created once at init).
+  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact and program, the CUDA context stays alive (created once at init).
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
   engine.ptx = engine.nvrtc.ptx
 
 proc getArtifact*(engine: CudaEngine): string =
-  ## The compiled PTX.
+  ## Returns the compiled PTX.
   engine.ptx
 
 proc deviceName*(engine: CudaEngine): string {.inline.} =
-  ## The CUDA device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  ## Returns the CUDA device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   var name = newString(256)
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
@@ -98,8 +76,8 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
 
 
 proc initNvrtc(): NVRTC =
-  ## CUDA context + device handle, no program yet. `ingest` builds the
-  ## NVRTC program from the source (createProgram) and compiles it.
+  ## CUDA context + device handle, no program yet, `ingest` builds the NVRTC
+  ## program from the source and compiles it.
   var
     context: CUcontext
     device: CUdevice
@@ -134,8 +112,8 @@ proc log(nvrtc: var NVRTC) =
 
 proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) =
   # Compile the program. The arch defaults to the queried device capability
-  # (compute_120 on a 12.0 GPU) so pre-sm_120 hardware still JIT-lowers the
-  # PTX. NVRTC rejects archs below compute_75 with a loud compile error
+  # (compute_120 on a 12.0 GPU), pre-sm_120 hardware still JIT-lowers the PTX.
+  # NVRTC rejects archs below compute_75 with a loud compile error
   # listing the valid targets.
   let arch = "--gpu-architecture=compute_" & $compute_capability
   var options = @[
@@ -161,7 +139,7 @@ proc getPtx(nvrtc: var NVRTC) =
   var ptx = newString(int ptxSize)
   check nvrtcGetPTX(nvrtc.prog, ptx)
 
-  check nvrtcDestroyProgram(nvrtc.prog) # Destroy the program.
+  check nvrtcDestroyProgram(nvrtc.prog)
   nvrtc.ptx = ptx
 
 proc load(nvrtc: var NVRTC) =
@@ -174,17 +152,14 @@ proc load(nvrtc: var NVRTC) =
 
   nvrtc.moduleLoaded = true
 
-proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
-             blobs: seq[ArgBlob], cfg: LaunchConfig) =
-  ## Lazy cuModuleLoadData + cuLaunchKernel with ArgBlob marshalling:
-  ##   size >= 0 → device buffer (cuMemAlloc + H2D, param = CUdeviceptr)
-  ##   size <  0 → by-value scalar (param = host pointer, CUDA reads -size bytes)
-  ## The output is always a device buffer, uploaded before launch and read
-  ## back after (in-place β·C works). The output is the kernel's first
-  ## parameter (binding 0 — output first, per CONVENTIONS.md).
-  ## The driver API operates on the thread-local current context, so the
-  ## engine's context is made current explicitly on every launch (with 2+
-  ## engines alive the wrong context could otherwise be targeted).
+
+proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
+  ## Runs `kernel` on the engine's GPU, loading the module on first use.
+  ##
+  ## Usage:
+  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  # the context is made current per launch, several engines can coexist
+  # the launch synchronizes before returning
   check cuCtxSetCurrent(engine.nvrtc.context)
   doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
     "CUDA grid dims must have every axis > 0, got " &
@@ -196,46 +171,14 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
-  let outSize = abs(output.size)
-
-  # Allocate + upload device buffers for every non-scalar arg
-  var devPtrs = newSeq[CUdeviceptr](blobs.len + 1)
-  var di = 0
-  var allocated = 0
-  for b in blobs:
-    if b.size >= 0:
-      if b.size > 0:
-        check cuMemAlloc(devPtrs[di], csize_t(b.size))
-        check cuMemcpyHtoD(devPtrs[di], b.data, csize_t(b.size))
-        inc allocated
-      inc di
-  if outSize > 0:
-    check cuMemAlloc(devPtrs[di], csize_t(outSize))
-    check cuMemcpyHtoD(devPtrs[di], output.data, csize_t(outSize))
-  let outDev = devPtrs[di]
-  defer:
-    # Free exactly the slots that were allocated (the shared run layer
-    # rejects size-0 blobs, so allocated == di here; tracking separately
-    # keeps the defer safe even if that invariant is ever relaxed).
-    for i in 0 ..< allocated:
-      check cuMemFree(devPtrs[i])
-    if outSize > 0:
-      check cuMemFree(devPtrs[di])
-
-  # Assemble the kernel param array: output first (binding 0), then each
-  # blob — device ptr value for buffers, host data ptr for scalars.
-  var params = newSeq[pointer](blobs.len + 1)
-  params[0] = addr outDev
-  var bi = 0   # buffer index into devPtrs
-  for i, b in blobs:
-    if b.size >= 0:
-      params[i + 1] = addr devPtrs[bi]
-      inc bi
-    else:
-      params[i + 1] = b.data
+  # every parameter passes by value as its address, CUDA copies at launch
+  var outVal = output
+  var params: seq[pointer] = @[addr outVal]
+  var argsCopy = args
+  for f in fields(argsCopy):
+    params.add addr f
 
   let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
-
   check cuLaunchKernel(
     engine.nvrtc.kernel,
     uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
@@ -246,6 +189,14 @@ proc runImpl(engine: CudaEngine, kernel: string, output: ArgBlob,
 
   check cuCtxSynchronize()
 
-  # Read the output back
-  if outSize > 0:
-    check cuMemcpyDtoH(output.data, outDev, csize_t(outSize))
+  proc allocDevice*(engine: CudaEngine, n: int): CUdeviceptr =
+    check cuMemAlloc(result, csize_t(n))
+
+  proc freeDevice*(engine: CudaEngine, h: CUdeviceptr) =
+    check cuMemFree(h)
+
+  proc copyToDeviceFromHost*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
+    check cuMemcpyHtoD(dst, src, csize_t(n))
+
+  proc copyToHostFromDevice*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
+    check cuMemcpyDtoH(dst, src, csize_t(n))
