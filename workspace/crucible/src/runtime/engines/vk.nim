@@ -263,19 +263,21 @@ proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tupl
                  if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
                  pushConstBytes.len)
 
-  proc allocDevice*(engine: VulkanEngine, n: int): VulkanBuffer =
-    var vctx = engine.ctx.ctx
-    vctx.allocBuffer(n)
+proc allocDevice*(engine: VulkanEngine, n: int): VulkanBuffer =
+  var vctx = engine.ctx.ctx
+  vctx.allocBuffer(n)
 
-  proc freeDevice*(engine: VulkanEngine, h: VulkanBuffer) =
-    var vctx = engine.ctx.ctx
-    h.dealloc(vctx)
+proc freeDevice*(engine: VulkanEngine, h: VulkanBuffer) =
+  var h = h
+  var vctx = engine.ctx.ctx
+  h.dealloc(vctx)
 
-  proc copyToDeviceFromHost*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
-    var vctx = engine.ctx.ctx
-    vctx.writeBuffer(dst, src, n)
+proc copyToDeviceFromHost*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
+  var dst = dst
+  var vctx = engine.ctx.ctx
+  vctx.writeBuffer(dst, src, n)
 
-  proc copyToHostFromDevice*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
-    var vctx = engine.ctx.ctx
-    let res = readBuffer[byte](vctx, src)
-    copyMem(dst, res[0].addr, n)
+proc copyToHostFromDevice*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
+  var vctx = engine.ctx.ctx
+  let res = readBuffer[byte](vctx, src)
+  copyMem(dst, res[0].addr, n)

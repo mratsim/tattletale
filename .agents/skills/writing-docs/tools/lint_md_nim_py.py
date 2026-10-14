@@ -1609,7 +1609,8 @@ SIG_WRAP_MAX = 140
 
 def nim_pair_name_checks(path, text, findings):
     """Flags a callable whose name carries `pair`."""
-    for i, raw in enumerate(text.splitlines()):
+    masked = nim_mask_tokens(text).splitlines()
+    for i, raw in enumerate(masked):
         if PAIR_DECL_RE.match(raw):
             findings.append(Finding(
                 path, i + 1, "pair-name",
@@ -1619,12 +1620,9 @@ def nim_pair_name_checks(path, text, findings):
 def nim_quote_field_access_checks(path, text, findings):
     """Flags a backtick splice wrapping a field access, the splice
     takes the base object, the field never lands in the tree."""
-    for i, raw in enumerate(text.splitlines()):
-        stripped = raw.lstrip()
-        if stripped.startswith("#"):
-            continue
-        line = raw.split("#", 1)[0]
-        if QUOTE_FIELD_ACCESS_RE.search(line):
+    masked = nim_mask_tokens(text).splitlines()
+    for i, raw in enumerate(masked):
+        if QUOTE_FIELD_ACCESS_RE.search(raw):
             findings.append(Finding(
                 path, i + 1, "quote-field-access",
                 "a backtick splice wraps a field access, splice a local instead"))
@@ -1693,6 +1691,108 @@ def nim_block_comment_lines(text):
             out.add(i)
             inside = "]#" not in s
     return out
+
+
+def nim_mask_tokens(text):
+    """Returns the text with the content of block comments, line comments,
+    and string or char literals replaced by spaces, every line keeps its
+    length and position, so the token scans never read a code token out of
+    a comment or a literal."""
+    out = []
+    in_block = False
+    in_triple = False
+    for raw in text.splitlines():
+        buf = list(raw)
+        n = len(raw)
+        i = 0
+        while i < n:
+            if in_triple:
+                end = raw.find('"""', i)
+                if end < 0:
+                    for k in range(i, n):
+                        buf[k] = " "
+                    i = n
+                else:
+                    for k in range(i, end + 3):
+                        buf[k] = " "
+                    i = end + 3
+                    in_triple = False
+                continue
+            if in_block:
+                end = raw.find("]#", i)
+                if end < 0:
+                    for k in range(i, n):
+                        buf[k] = " "
+                    i = n
+                else:
+                    for k in range(i, end + 2):
+                        buf[k] = " "
+                    i = end + 2
+                    in_block = False
+                continue
+            c = raw[i]
+            if raw.startswith("#[", i):
+                in_block = True
+                continue
+            if c == "#":
+                for k in range(i, n):
+                    buf[k] = " "
+                i = n
+                continue
+            if c == '"':
+                if raw.startswith('"""', i):
+                    end = raw.find('"""', i + 3)
+                    if end < 0:
+                        for k in range(i, n):
+                            buf[k] = " "
+                        i = n
+                        in_triple = True
+                    else:
+                        for k in range(i, end + 3):
+                            buf[k] = " "
+                        i = end + 3
+                    continue
+                j = i + 1
+                while j < n:
+                    if raw[j] == "\\":
+                        j += 2
+                        continue
+                    if raw[j] == '"':
+                        break
+                    j += 1
+                for k in range(i, min(j + 1, n)):
+                    buf[k] = " "
+                i = min(j + 1, n)
+                continue
+            if c == "r" and raw[i:i + 2] == 'r"' and \
+                    (i == 0 or not (raw[i - 1].isalnum() or raw[i - 1] == "_")):
+                # raw string, no escapes, a doubled quote is a literal quote
+                j = i + 2
+                while j < n:
+                    if raw[j] == '"':
+                        if j + 1 < n and raw[j + 1] == '"':
+                            j += 2
+                            continue
+                        break
+                    j += 1
+                for k in range(i, min(j + 1, n)):
+                    buf[k] = " "
+                i = min(j + 1, n)
+                continue
+            if c == "'" and (i == 0 or not (raw[i - 1].isalnum() or raw[i - 1] == "_")):
+                # char literal, an apostrophe after an alphanumeric is a
+                # numeric literal suffix such as `42'u32`
+                if i + 1 < n and raw[i + 1] == "\\":
+                    j = i + 3
+                else:
+                    j = i + 2
+                for k in range(i, min(j + 1, n)):
+                    buf[k] = " "
+                i = min(j + 1, n)
+                continue
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
 
 
 def nim_design_narration_checks(path, text, findings):
@@ -1790,11 +1890,11 @@ def nim_structure_checks(path, text, header_nos, findings):
     - inbounds-call-syntax bans the plain call of inBounds, the house
       convention is the method call coord.inBounds(shape)"""
     lines = text.splitlines()
+    masked = nim_mask_tokens(text).splitlines()
     blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(lines):
+    for i, raw in enumerate(masked):
         line = raw.rstrip()
-        if (i + 1) not in blocked and INBOUNDS_PLAIN_CALL_RE.search(line) \
-                and not INBOUNDS_DECL_RE.match(line):
+        if INBOUNDS_PLAIN_CALL_RE.search(line) and not INBOUNDS_DECL_RE.match(lines[i]):
             findings.append(Finding(
                 path, i + 1, "inbounds-call-syntax",
                 "inBounds in plain call syntax, use the method call "
@@ -2315,7 +2415,7 @@ def lint_text(text, filename):
 # Every other class needs judgment about what the prose should say.
 MECHANICAL_RULES = frozenset((
     "article-eol", "stray-fragment", "single-word-eol",
-    "unit-split", "table-alignment",
+    "unit-split", "table-alignment", "quote-split",
 ))
 
 # wall-no-air joins the transform triggers for the one-sentence merge but
@@ -2335,7 +2435,9 @@ _FIX_ROUND_CAP = 1000
 
 # Wrap tokens split on whitespace with one backticked span kept whole
 # as one token, a None entry marks a hard break the rewrap keeps.
-_SPAN_TOKEN_RE = re.compile(r"`[^`]*`[.,;:()'\"*]?|\S+")
+# A double-quoted span is kept whole too, the rewrap never splits a
+# quoted phrase across lines (quote parity).
+_SPAN_TOKEN_RE = re.compile(r"`[^`]*`[.,;:()'*]?|\"[^\"\n]*\"[.,;:()'*]?|\S+")
 
 # A noqa comment lead, tooling metadata the prose rules skip
 NOQA_RE = re.compile(r"\s*noqa\b")

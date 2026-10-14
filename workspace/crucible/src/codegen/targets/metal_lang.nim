@@ -70,7 +70,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat32: "float"
   of gtFloat16: "half"
   of gtBf16: "bfloat"
-  of gtFloat64: "double"
+  of gtFloat64:
+    raiseAssert "Metal has no fp64 kernel type, MSL rejects `double`, rework the kernel on fp32/fp16"
   of gtVoid: "void"
   of gtSize_t: "size_t"
   of gtPtr: "*"
@@ -199,7 +200,7 @@ proc genLit*(ast: GpuAst): string =
     of gtInt16, gtUint16, gtUint8, gtBool:
       result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
     of gtFloat64:
-      result = ast.lValue
+      raiseAssert "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
     else:
       result = ast.lValue
 

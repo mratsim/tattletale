@@ -111,14 +111,15 @@ proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tupl
   let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
   kern.runKernel(globalSize, localSize)
 
-  proc allocDevice*(engine: OpenCLEngine, n: int): OpenCLBuffer =
-    engine.ctx.ctx.allocBuffer(n)
+proc allocDevice*(engine: OpenCLEngine, n: int): OpenCLBuffer =
+  engine.ctx.ctx.allocBuffer(n)
 
-  proc freeDevice*(engine: OpenCLEngine, h: OpenCLBuffer) =
-    h.dealloc()
+proc freeDevice*(engine: OpenCLEngine, h: OpenCLBuffer) =
+  var h = h
+  h.dealloc()
 
-  proc copyToDeviceFromHost*(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
-    dst.writeBuffer(src, n)
+proc copyToDeviceFromHost*(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
+  dst.writeBuffer(src, n)
 
-  proc copyToHostFromDevice*(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
-    src.readBuffer(dst, n)
+proc copyToHostFromDevice*(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
+  src.readBuffer(dst, n)

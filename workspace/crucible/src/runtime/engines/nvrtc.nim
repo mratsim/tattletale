@@ -189,14 +189,14 @@ proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, 
 
   check cuCtxSynchronize()
 
-  proc allocDevice*(engine: CudaEngine, n: int): CUdeviceptr =
-    check cuMemAlloc(result, csize_t(n))
+proc allocDevice*(engine: CudaEngine, n: int): CUdeviceptr =
+  check cuMemAlloc(result, csize_t(n))
 
-  proc freeDevice*(engine: CudaEngine, h: CUdeviceptr) =
-    check cuMemFree(h)
+proc freeDevice*(engine: CudaEngine, h: CUdeviceptr) =
+  check cuMemFree(h)
 
-  proc copyToDeviceFromHost*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
-    check cuMemcpyHtoD(dst, src, csize_t(n))
+proc copyToDeviceFromHost*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
+  check cuMemcpyHtoD(dst, src, csize_t(n))
 
-  proc copyToHostFromDevice*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
-    check cuMemcpyDtoH(dst, src, csize_t(n))
+proc copyToHostFromDevice*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
+  check cuMemcpyDtoH(dst, src, csize_t(n))

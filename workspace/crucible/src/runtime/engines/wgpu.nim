@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[monotimes, os, strutils, tables, times]
+import std/[math, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 import ../exec/wgpu_runtime
@@ -190,16 +190,23 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   type ArgShape = tuple[isScalar: bool, width: int, offset: int]
   var argShapes: seq[ArgShape]
   var argsCopy = args
+  # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
+  # the device keeps the spec-default limits, the spec-default alignment is 256.
+  const ScalarSlotAlign = 256
   for f in fields(argsCopy):
     when typeof(f) is WGPUBuffer:
       argShapes.add (false, 0, 0)
     elif typeof(f) is bool:
       let v = int32(f)
-      argShapes.add (true, sizeof(int32), scalarBytes.len)
+      let offset = align(scalarBytes.len, ScalarSlotAlign)
+      scalarBytes.setLen(offset)
+      argShapes.add (true, sizeof(int32), offset)
       for j in 0 ..< sizeof(int32):
         scalarBytes.add cast[ptr UncheckedArray[byte]](v.addr)[j]
     else:
-      argShapes.add (true, sizeof(f), scalarBytes.len)
+      let offset = align(scalarBytes.len, ScalarSlotAlign)
+      scalarBytes.setLen(offset)
+      argShapes.add (true, sizeof(f), offset)
       for j in 0 ..< sizeof(f):
         scalarBytes.add cast[ptr UncheckedArray[byte]](f.addr)[j]
 
@@ -212,7 +219,10 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
     scratch = wgpuDeviceCreateBuffer(device, addr scratchDesc)
     if scratch == nil:
       quit("WebGPU: failed to create the scalar scratch buffer")
-    defer:
+  # Released with the launch, not with the allocation block, the bind group
+  # and the queue upload below still use it.
+  defer:
+    if scratch != nil:
       wgpuBufferRelease(scratch)
 
   var argShapeKey = newSeq[int](argShapes.len)
@@ -306,11 +316,13 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
       offset: a.offset.cuint,
       size: (if a.isScalar: a.width else: 0).csize_t
     )
-  var bi = 0
+  # Buffer args land at their declaration position, the scalar slots above
+  # already claim the binding of every non-buffer arg.
+  var ai = 0
   for f in fields(argsCopy):
     when typeof(f) is WGPUBuffer:
-      bgEntries[bi + 1].buffer = f
-      inc bi
+      bgEntries[ai + 1].buffer = f
+    inc ai
   var bgDesc = WGPUBindGroupDescriptor(
     layout: cache.bindGroupLayout,
     entryCount: totalBindings.csize_t,
