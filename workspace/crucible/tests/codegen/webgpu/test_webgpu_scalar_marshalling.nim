@@ -1,24 +1,9 @@
-## Test: WebGPU scalar by-value marshalling
-##
-## Covers the ArgBlob negative-size path (runtime/engines/arg_blobs.nim):
-## by-value scalar args are flattened as `size = -sizeof(T)` blobs and the
-## wgpu engine (runtime/engines/wgpu.nim) turns them into small storage
-## buffers. This is the first test that actually RUNS kernels with scalar
-## (non-pointer) params through `engine.run` instead of only echoing WGSL.
-##
-## Scalar inputs bind read-only (`WGPUBufferBindingTypeReadOnlyStorage`) to
-## match the WGSL backend, which emits `var<storage, read>` for non-pointer
-## params (codegen/targets/wgsl_lang.nim `genGlobal`); ptr inputs stay
-## read-write (`var<storage, read_write>` → Storage binding).
-##
-## A Nim `bool` arg marshals as a 4-byte i32 (arg_blobs.nim `blobOf`), the
-## width every shader backend declares: WGSL cannot use bool storage
-## variables and emits i32, OpenCL C has no bool and emits int, while
-## CUDA/GLSL 1-byte `bool` kernels still read the right value from byte 0.
+## WebGPU: scalar by-value marshalling through the engine's 256-byte-aligned scalar scratch buffer,
+## each scalar kernel param binds as read-only storage.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_scalar_marshalling.nim
 
 import std/[unittest, strformat]
@@ -54,34 +39,47 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkWGSL.init()
       engine.ingest(kernelI32)
       echo kernelI32
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarI32Kernel", oDev, (-42'i32,))
       var res: array[1, uint32]
-      engine.run("scalarI32Kernel", res, (-42'i32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == uint32(-42'i32)
 
     test "uint32 by value (4-byte blob)":
       var engine = bkWGSL.init()
       engine.ingest(kernelU32)
       echo kernelU32
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarU32Kernel", oDev, (7'u32,))
       var res: array[1, uint32]
-      engine.run("scalarU32Kernel", res, (7'u32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 7
 
     test "float32 by value (4-byte blob)":
       var engine = bkWGSL.init()
       engine.ingest(kernelF32)
       echo kernelF32
+      let oDev = engine.allocDevice(sizeof(float32))
+      engine.run("scalarF32Kernel", oDev, (1.5'f32,))
       var res: array[1, float32]
-      engine.run("scalarF32Kernel", res, (1.5'f32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.freeDevice(oDev)
       check res[0] == 1.5'f32
 
     test "bool by value (widened to i32 on the host)":
       var engine = bkWGSL.init()
       engine.ingest(kernelBool)
       echo kernelBool
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarBoolKernel", oDev, (true,))
       var res: array[1, uint32]
-      engine.run("scalarBoolKernel", res, (true,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       check res[0] == 1
-      engine.run("scalarBoolKernel", res, (false,))
+      engine.run("scalarBoolKernel", oDev, (false,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
 
 when isMainModule:

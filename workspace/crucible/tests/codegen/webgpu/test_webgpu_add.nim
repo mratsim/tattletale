@@ -1,11 +1,9 @@
-## WebGPU: generate WGSL via `webgpu:` macro, validate syntax, and execute on CPU.
+## WebGPU: generate WGSL via the `webgpu:` macro and execute on the device,
+## buffer args uploaded and read back through the typed engine surface.
 ##
-## Run with:
+## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/webgpu/test_webgpu_add.nim
-##
-## For full execution (requires libwgpu_native.so):
-##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_add.nim
 
 import workspace/crucible
@@ -66,7 +64,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo maxWgsl
   echo ""
 
-  # ── Optional execution via wgpu-native ─────────────────────────────────────
+  # ── Execution via wgpu-native ─────────────────────────────────────────────
 
   echo "=== wgpu-native execution ===\n"
 
@@ -78,7 +76,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[2, uint32] = [1'u32, 2'u32]
     var out32: array[2, uint32]
 
-    engine.run("addKernel", out32, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(out32.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
     doAssert out32[1] == 22
@@ -92,7 +100,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[2, uint32] = [3'u32, 4'u32]
     var out32: array[2, uint32]
 
-    engine.run("vec2AddKernel", out32, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(out32.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("vec2AddKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
     doAssert out32[1] == 204
@@ -106,7 +124,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[1, uint32] = [17'u32]
     var outVal: array[1, uint32]
 
-    engine.run("maxKernel", outVal, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(outVal.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("maxKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, outVal.len * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42
     echo "  OK"

@@ -1,10 +1,8 @@
-## Test: let-block-RHS with evalOnceAs pattern (WebGPU WGSL)
-##
-## Verifies that `let L = block: const tmp; tmp` generates valid WGSL.
-## The constexpr must be lifted before the let, not inlined into the RHS.
+## WebGPU: let-block-RHS with the evalOnceAs pattern, the constexpr lifts to a binding ahead of the let.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_let_block_rhs.nim
 
 import std/[unittest, strformat]
@@ -44,7 +42,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelDirect)
       echo kernelDirect
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern B — const + let":
@@ -52,7 +53,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -60,7 +64,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelBlock)
       echo kernelBlock
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
 when isMainModule:

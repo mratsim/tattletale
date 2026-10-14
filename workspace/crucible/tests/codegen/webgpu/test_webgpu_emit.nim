@@ -1,26 +1,6 @@
-## WebGPU: `{.emit.}` raw WGSL injection through the GPU DSL, end to end.
-##
-## Covered:
-## - the argument-form matrix: single string, comma form, backticks,
-##   triple-quoted multiline
-## - the not-silently-dropped regression for both emit spellings
-## - the insertResult exclusion
-## - self-termination: the emitted text carries its own `;` and the printer
-##   appends none. WGSL has no preprocessor, so the byte-exact probe
-##   targets the statement line itself, not a `#define`
-## - a multi-emit pragma rendering every item in order
-## - a non-emit statement pragma mapping to gpuDiscard
-##
-## Emits are supported inside proc bodies and render at the statement position.
-## The emit is self-terminating: the printer appends no `;`, so the injected
-## text must carry its own `;` where WGSL requires one.
-## Kernels carry `{.global, workgroup: (1, 1, 1).}` because the workgroup size
-## is baked into the shader at codegen time.
-## Every kernel runs through `engine.run()` and the outputs are asserted,
-## never print-only.
+## WebGPU: `{.emit.}` raw WGSL injection through the GPU DSL, end to end: every emit form runs on device and asserts its output.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_emit.nim
@@ -134,7 +114,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
       var res: array[1, uint32]
-      engine.run("t1Kernel", res, (a, b))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let bDev = engine.allocDevice(b.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      engine.run("t1Kernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
@@ -146,7 +135,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "(&A)[0] + 1;" in src
       var a: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t2Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.run("t2Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
@@ -154,7 +149,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t3Wgsl)
       var a: array[1, uint32] = [20'u32]
       var res: array[1, uint32]
-      engine.run("t3Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.run("t3Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
@@ -162,7 +163,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t4Wgsl)
       var a: array[1, uint32] = [40'u32]
       var res: array[1, uint32]
-      engine.run("t4Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.run("t4Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -171,7 +178,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
       var res: array[2, uint32]
-      engine.run("t5Kernel", res, (a, b))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let bDev = engine.allocDevice(b.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      engine.run("t5Kernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
@@ -179,7 +195,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkWGSL.init()
       engine.ingest(t6Wgsl)
       var res: array[1, uint32]
-      engine.run("t6Kernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("t6Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
@@ -187,7 +206,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t7Wgsl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t7Kernel", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      engine.run("t7Kernel", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
@@ -195,21 +220,33 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t8Wgsl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t8Kernel", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      engine.run("t8Kernel", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
       var engine = bkWGSL.init()
       engine.ingest(t10Wgsl)
       var res: array[1, uint32]
-      engine.run("t10Kernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("t10Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
       var engine = bkWGSL.init()
       engine.ingest(t12Wgsl)
       var res: array[1, uint32]
-      engine.run("t12Kernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("t12Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "emitted statement carries exactly one terminator (no `;` appended)":
@@ -231,14 +268,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkWGSL.init()
       engine.ingest(t15Wgsl)
       var res: array[1, uint32]
-      engine.run("t15Kernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("t15Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
       var engine = bkWGSL.init()
       engine.ingest(t16Wgsl)
       var res: array[1, uint32]
-      engine.run("t16Kernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("t16Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:
