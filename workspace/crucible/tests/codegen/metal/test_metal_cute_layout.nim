@@ -2,11 +2,7 @@
 ## live inside the `metal:` block. The kernel reads tile elements through tileAt
 ## and computes two GEMM-style dot products with local coefficients.
 ## Slots 0..2 cover tileAt reads, and slots 4..5 cover the dot products.
-## The kernel never writes slot 3. The engine uploads the output's current bytes
-## before launch, so it reads back 0, pinning the in-place β·C upload path.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Slot 3 is never written, so it reads back 0.
 ##
 ## Run:
 ##   cd tattletale
@@ -43,7 +39,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelMsl)
       var res: array[6, uint32]
-      engine.run("cuteKernel", res, ())
+      let oDev = engine.allocDevice(6 * sizeof(uint32))
+      engine.copyToDeviceFromHost(oDev, addr res[0], 6 * sizeof(uint32))
+      engine.run("cuteKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 6 * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 10
       check res[1] == 20
       check res[2] == 60

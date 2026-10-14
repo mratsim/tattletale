@@ -39,9 +39,15 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(viewCastMsl)
       var A = [uint16(10), 20, 30, 40, 50, 60, 70, 80]
+      let aDev = engine.allocDevice(A.len * sizeof(uint16))
+      engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(uint16))
+      let oDev = engine.allocDevice(sizeof(uint32))
       var res: array[1, uint32]
       # baseOff = 2 * strideRow + strideCol = 2 * 3 + 1 = 7
-      engine.run("viewCastKernel", res, (A, int32(4), int32(3)))
+      engine.run("viewCastKernel", oDev, (aDev, int32(4), int32(3)))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == uint32(A[7])
 
 when isMainModule:

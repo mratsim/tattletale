@@ -1,3 +1,5 @@
+## Metal: if/elif/else statement lowering, branch selection on the device.
+##
 ## Run:
 ##   cd tattletale
 ##   nim cpp -r --hints:off --warnings:off \
@@ -43,19 +45,31 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         doAssert v in elifMsl
       var engine = bkMetal.init()
       engine.ingest(elifMsl)
+      let xDev = engine.allocDevice(sizeof(int32))
+      let oDev = engine.allocDevice(sizeof(int32))
       var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 10
       x[0] = 1
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 20
       x[0] = 2
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 30
       x[0] = 3
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 40
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
 
     test "no else in source emits no else block":
       # The elif chain is emitted (`else if`), but no else-BLOCK: the source
@@ -64,16 +78,26 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert "else {" notin noElseMsl
       var engine = bkMetal.init()
       engine.ingest(noElseMsl)
+      let xDev = engine.allocDevice(sizeof(int32))
+      let oDev = engine.allocDevice(sizeof(int32))
       var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 1
       x[0] = 1
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 2
       x[0] = 2
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 99  # no branch matched: sentinel preserved
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

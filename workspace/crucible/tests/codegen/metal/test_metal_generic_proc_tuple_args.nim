@@ -33,8 +33,11 @@ proc runTest() =
     test "scaleBox lowers with one type name for the tuple args":
       var engine = bkMetal.init()
       engine.ingest(kernelMsl)
+      let oDev = engine.allocDevice(2 * sizeof(float32))
+      engine.run("repro", oDev, ())
       var res: array[2, float32]
-      engine.run("repro", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(float32))
+      engine.freeDevice(oDev)
       check res[0] == 6.0'f32
       check res[1] == 9.0'f32
 

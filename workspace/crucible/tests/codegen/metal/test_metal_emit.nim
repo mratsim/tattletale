@@ -1,22 +1,7 @@
 ## Metal: `{.emit.}` raw MSL injection through the GPU DSL, end to end.
-##
-## Covered:
-## - the argument-form matrix: single string, comma form, backticks,
-##   triple-quoted multiline
-## - the not-silently-dropped regression for both emit spellings
-## - the insertResult exclusion
-## - generic-instantiation cloning
-## - `#define`-style payload byte-exactness
-## - a multi-emit pragma rendering every item in order
-## - a non-emit statement pragma mapping to gpuDiscard
-##
-## Emits are supported inside proc bodies and render at the statement position.
-## Top-level emits (outside any proc body) are out of scope.
-## Every kernel runs through `engine.run()` and the outputs are asserted,
-## never print-only.
-##
-## The emit is self-terminating: the printer appends no `;`, so the injected text
-## must carry its own terminator where MSL requires one.
+## Covers the argument-form matrix (single string, comma form, backticks, triple-quoted multiline),
+## insertResult exclusion, generic-instantiation cloning, `#define`-style payload
+## byte-exactness, multi-item emits, and non-emit statement pragmas mapping to gpuDiscard.
 ##
 ## Run:
 ##   cd tattletale
@@ -151,32 +136,59 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t1Msl)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let bDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t1Kernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.run("t1Kernel", res, (a, b))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
       var engine = bkMetal.init()
       engine.ingest(t2Msl)
       var a: array[1, uint32] = [41'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t2Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.run("t2Kernel", res, (a,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
       var engine = bkMetal.init()
       engine.ingest(t3Msl)
       var a: array[1, uint32] = [20'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t3Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.run("t3Kernel", res, (a,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
       var engine = bkMetal.init()
       engine.ingest(t4Msl)
       var a: array[1, uint32] = [40'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t4Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.run("t4Kernel", res, (a,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -184,54 +196,90 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t5Msl)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
+      let aDev = engine.allocDevice(2 * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], 2 * sizeof(uint32))
+      let bDev = engine.allocDevice(2 * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], 2 * sizeof(uint32))
+      let oDev = engine.allocDevice(2 * sizeof(uint32))
+      engine.run("t5Kernel", oDev, (aDev, bDev))
       var res: array[2, uint32]
-      engine.run("t5Kernel", res, (a, b))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
     test "emit is not silently dropped (must override the DSL write)":
       var engine = bkMetal.init()
       engine.ingest(t6Msl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t6Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t6Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
       var engine = bkMetal.init()
       engine.ingest(t7Msl)
       var x: array[1, uint32] = [41'u32]
+      let xDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t7Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.run("t7Kernel", res, (x,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
       var engine = bkMetal.init()
       engine.ingest(t8Msl)
       var x: array[1, uint32] = [41'u32]
+      let xDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t8Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.run("t8Kernel", res, (x,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
       var engine = bkMetal.init()
       engine.ingest(t10Msl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t10Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t10Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "emit survives generic instantiation (clone path)":
       var engine = bkMetal.init()
       engine.ingest(t11Msl)
       var a: array[1, uint32] = [42'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t11Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.run("t11Kernel", res, (a,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
       var engine = bkMetal.init()
       engine.ingest(t12Msl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t12Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t12Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
@@ -240,8 +288,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let msl = engine.getArtifact()
       check "#define MSL_EMIT_TILE 32" in msl
       check "#define MSL_EMIT_TILE 32;" notin msl
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t14Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t14Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
@@ -253,15 +304,21 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "multi-item emit dropped an item:\n" & t15Msl
       var engine = bkMetal.init()
       engine.ingest(t15Msl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t15Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t15Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
       var engine = bkMetal.init()
       engine.ingest(t16Msl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t16Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("t16Kernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

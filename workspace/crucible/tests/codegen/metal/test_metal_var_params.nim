@@ -1,11 +1,7 @@
 ## Metal: `var T` params in device fns (thread-space pointers).
-## `setPair` writes two fields through a `var Pair`; `swap` exchanges two
-## `var uint32` locals. Both exercise the printer's `thread` address-space
-## emission for implicit `var T` params. Runs through `engine.run()` and
-## asserts the output byte-exact.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## `setPair` writes two fields through a `var Pair`, and `swap` exchanges
+## two `var uint32` locals, exercising the printer's `thread` address-space
+## emission for implicit `var T` params.
 ##
 ## Run:
 ##   cd tattletale
@@ -51,8 +47,11 @@ proc runTest() =
       check "uint b = 1;" in msl
       check "Pair p;" in msl
       check "thread uint a" notin msl
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run("varParamKernel", oDev, ())
       var res: array[4, uint32]
-      engine.run("varParamKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 10'u32
       check res[1] == 20'u32
       check res[2] == 2'u32

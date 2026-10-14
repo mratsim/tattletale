@@ -1,16 +1,10 @@
-## Metal attribute-param semantics: the five attribute params appended by the printer
-## carry real thread-space values, and the Apple-documented identity
+## Metal attribute-param semantics: the five coordinate builtins carry real
+## thread-space values and the Apple-documented identity
 ## thread_position_in_grid == threadgroup_position_in_grid * threads_per_threadgroup
-## + thread_position_in_threadgroup holds per axis. A grid (2,2,2) × blk (2,2,2)
-## dispatch runs 64 work-items, and each thread writes its own 6-slot region keyed by its global position.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## + thread_position_in_threadgroup holds per axis for all 64 work-items.
 ##
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_attr_semantics.nim
 
 import std/unittest
@@ -21,12 +15,12 @@ const attrSemMsl = metal:
     let gx = thread_position_in_grid.x
     let gy = thread_position_in_grid.y
     let gz = thread_position_in_grid.z
-    let base = ((gz * 4'u32 + gy) * 4'u32 + gx) * 6'u32
-    C[base + 0] = gx
-    C[base + 1] = threadgroup_position_in_grid.x
-    C[base + 2] = threads_per_threadgroup.x
-    C[base + 3] = threadgroups_per_grid.x
-    C[base + 4] = thread_position_in_threadgroup.x
+    let base = ((gz * 4 + gy) * 4 + gx) * 6
+    C[base + 0] = uint32(gx)
+    C[base + 1] = uint32(threadgroup_position_in_grid.x)
+    C[base + 2] = uint32(threads_per_threadgroup.x)
+    C[base + 3] = uint32(threadgroups_per_grid.x)
+    C[base + 4] = uint32(thread_position_in_threadgroup.x)
     # per-axis identity: global == tg * tpt + local (0 when true, 1 when broken)
     let tgx = threadgroup_position_in_grid.x
     let tgy = threadgroup_position_in_grid.y
@@ -49,8 +43,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "all five attribute params bind to real thread-space values":
       var engine = bkMetal.init()
       engine.ingest(attrSemMsl)
+      let oDev = engine.allocDevice(64 * 6 * sizeof(uint32))
+      engine.run<<(grid: (2, 2, 2), blk: (2, 2, 2))>>("attrSem", oDev, ())
       var res: array[64 * 6, uint32]
-      engine.run<<(grid: (2, 2, 2), blk: (2, 2, 2))>>("attrSem", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 64 * 6 * sizeof(uint32))
+      engine.freeDevice(oDev)
       # global (0,0,0): tg=(0,0,0), tpt=(2,2,2), tpg=(2,2,2), local=(0,0,0)
       check res[0] == 0'u32          # global x
       check res[1] == 0'u32          # tg x

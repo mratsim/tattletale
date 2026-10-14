@@ -1,10 +1,5 @@
-## Metal: `while` loop emission.
-## A single-thread kernel writes `output[i] = i` for `i in 0 ..< 4` via a
-## `while` loop with a manually incremented counter. Runs through
-## `engine.run()` and asserts the output byte-exact.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: `while` loop emission. A single-thread kernel writes
+## `output[i] = i` for `i in 0 ..< 4` via a `while` loop with a manually incremented counter.
 ##
 ## Run:
 ##   cd tattletale
@@ -27,8 +22,11 @@ proc runTest() =
     test "output[i] = i for i in 0..<4":
       var engine = bkMetal.init()
       engine.ingest(whileMsl)
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run("whileKernel", oDev, ())
       var res: array[4, uint32]
-      engine.run("whileKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 4:
         check res[i] == uint32(i)
 

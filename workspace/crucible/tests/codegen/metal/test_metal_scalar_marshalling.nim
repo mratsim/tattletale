@@ -1,22 +1,15 @@
-## Metal: scalar by-value marshalling through the engine's packed constant buffer.
-## The printer emits each scalar kernel param as the MSL constant-ref form
-## `constant T& name [[buffer(n)]]`. The engine packs the 4-byte host values
-## into one shared constant buffer at 16-byte slots, bound per index.
-## A Nim `bool` arg marshals as a 4-byte i32 on the host, and the printer
-## declares it `int` in MSL, matching every backend's buffer width.
-## Every kernel runs through `engine.run()` with byte-exact asserts.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: scalar by-value marshalling through the engine's packed constant buffer,
+## each scalar kernel param emits as `constant T& name`, a Nim `bool` marshals as a 4-byte i32 `int` in MSL.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_scalar_marshalling.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 # ── Kernels: one scalar param each, echoed into the output ─────────────────
 
@@ -48,34 +41,47 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelI32)
       echo kernelI32
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarI32Kernel", oDev, (-42'i32,))
       var res: array[1, uint32]
-      engine.run("scalarI32Kernel", res, (-42'i32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == uint32(-42'i32)
 
     test "uint32 by value (4-byte blob)":
       var engine = bkMetal.init()
       engine.ingest(kernelU32)
       echo kernelU32
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarU32Kernel", oDev, (7'u32,))
       var res: array[1, uint32]
-      engine.run("scalarU32Kernel", res, (7'u32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 7
 
     test "float32 by value (4-byte blob)":
       var engine = bkMetal.init()
       engine.ingest(kernelF32)
       echo kernelF32
+      let oDev = engine.allocDevice(sizeof(float32))
+      engine.run("scalarF32Kernel", oDev, (1.5'f32,))
       var res: array[1, float32]
-      engine.run("scalarF32Kernel", res, (1.5'f32,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.freeDevice(oDev)
       check res[0] == 1.5'f32
 
     test "bool by value (widened to i32 on the host)":
       var engine = bkMetal.init()
       engine.ingest(kernelBool)
       echo kernelBool
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("scalarBoolKernel", oDev, (true,))
       var res: array[1, uint32]
-      engine.run("scalarBoolKernel", res, (true,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       check res[0] == 1
-      engine.run("scalarBoolKernel", res, (false,))
+      engine.run("scalarBoolKernel", oDev, (false,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
 
 when isMainModule:

@@ -1,19 +1,5 @@
-## Metal: constexpr temporaries leaking into expression slots.
-## The liftConstexprFrom pass hoists a constexpr declaration out of an expression slot
-## (gpuVar.vInit, gpuDot.dParent, binop operands) into a preceding statement,
-## because `constexpr` is a declaration, not an expression value. Six patterns
-## execute on the device:
-##   A: constexpr tuple in a let RHS
-##   B: constexpr Int values in arithmetic
-##   C: template with a block `{ const tmp; yield tmp }`
-##   D: let-tuple bracket access
-##   E: block with two constexprs and tuple field access
-##   F: constexpr tuple field access (tup[0] as gpuDot.dParent)
-## Every kernel writes a compile-time-derived value that is asserted
-## byte-exact after `engine.run()`.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: constexpr temporaries leaking into expression slots, six patterns
+## exercised on the device (A-F): constexpr tuple RHS, arithmetic, template block, bracket access, block temp and tuple field access.
 ##
 ## Run:
 ##   cd tattletale
@@ -92,38 +78,56 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "Pattern A — constexpr tuple in let RHS":
       var engine = bkMetal.init()
       engine.ingest(kernelA)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testA", oDev, ())
       var res: array[1, uint32]
-      engine.run("testA", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
     test "Pattern B — constexpr in arithmetic":
       var engine = bkMetal.init()
       engine.ingest(kernelB)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testB", oDev, ())
       var res: array[1, uint32]
-      engine.run("testB", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 128
     test "Pattern C — template wrapConst":
       var engine = bkMetal.init()
       engine.ingest(kernelC)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testC", oDev, ())
       var res: array[1, uint32]
-      engine.run("testC", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
     test "Pattern D — tuple bracket access":
       var engine = bkMetal.init()
       engine.ingest(kernelD)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testD", oDev, ())
       var res: array[1, uint32]
-      engine.run("testD", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern E — block with constexpr temp":
       var engine = bkMetal.init()
       engine.ingest(kernelE)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testE", oDev, ())
       var res: array[1, uint32]
-      engine.run("testE", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern F — constexpr tuple field access":
       var engine = bkMetal.init()
       engine.ingest(kernelF)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testF", oDev, ())
       var res: array[1, uint32]
-      engine.run("testF", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

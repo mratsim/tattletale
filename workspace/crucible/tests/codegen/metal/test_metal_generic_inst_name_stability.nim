@@ -73,7 +73,13 @@ proc runKernel(artifact: string, launcher: string): seq[float32] =
   var inp = newSeq[float32](1)
   inp[0] = 1.0'f32
   var outp = newSeq[float32](1)
-  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, outp, (inp,))
+  let iDev = engine.allocDevice(sizeof(float32))
+  engine.copyToDeviceFromHost(iDev, addr inp[0], sizeof(float32))
+  let oDev = engine.allocDevice(sizeof(float32))
+  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
+  engine.copyToHostFromDevice(addr outp[0], oDev, sizeof(float32))
+  engine.freeDevice(iDev)
+  engine.freeDevice(oDev)
   result = outp
 
 proc runTest() =

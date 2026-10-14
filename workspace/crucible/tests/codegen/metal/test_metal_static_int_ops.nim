@@ -1,18 +1,7 @@
 ## Metal: `+`/`*` on Int[N] with compile-time and dynamic int operands.
 ## Int[N] is a CuTe-style compile-time integer whose value lives in the type parameter.
-## The overload set below mirrors ceramic's int_tuples_datatypes:
-##   - both operands Int[N] types: Int[V]() + Int[U]() -> Int[V+U]() (Nim compile time)
-##   - literal on the right:       Int[V]() + 1 -> Int[V+1]()
-##   - literal on the left:        2 + Int[V]() -> Int[2+V]()
-##   - runtime value on the right: Int[V]() + h -> V + h (plain int)
-##   - runtime value on the left:  h + Int[V]() -> h + V (plain int)
-## Static-int results (cases 1-3) are verified via toIntVal
-## (compile-time extraction from the type). Dynamic results (cases 4-5)
-## are plain ints computed from the input buffer on the device.
-## All ten outputs are asserted byte-exact after `engine.run()`.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Static-int results (Int-typed operands and literal operands) verify via toIntVal,
+## dynamic results are plain ints from the input buffer.
 ##
 ## Run:
 ##   cd tattletale
@@ -20,8 +9,10 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_static_int_ops.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 # ── static-int type + genBinOp overload set (mirrors ceramic) ────────────
 type Int*[V: static int] = object
@@ -78,8 +69,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var dynArr: array[1, int32] = [100'i32]
       var engine = bkMetal.init()
       engine.ingest(kernelCode)
+      let dDev = engine.allocDevice(dynArr.len * sizeof(int32))
+      engine.copyToDeviceFromHost(dDev, addr dynArr[0], dynArr.len * sizeof(int32))
+      let oDev = engine.allocDevice(10 * sizeof(int32))
+      engine.run("staticIntOps", oDev, (dDev,))
       var out32: array[10, int32]
-      engine.run("staticIntOps", out32, (dynArr))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(int32))
+      engine.freeDevice(dDev)
+      engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

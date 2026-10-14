@@ -1,12 +1,5 @@
 ## Arithmetic array lengths: `array[A * B, T]` resolves its length.
 ##
-## Anti-regression for `resolveArrayLength` (the `evalConstInt` rewrite):
-## the length node of a statically sized array is not always a `0..N` range —
-## `getTypeInst` keeps product expressions like `2 * 2` unfolded, and the
-## old resolver doAsserted on any length whose range start was not 0.
-## The pulled-in-proc signature typing reaches the array type, so the
-## arithmetic length must evaluate.
-##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
@@ -33,8 +26,11 @@ proc runTest() =
     test "array[2 * 2, T] resolves its length in a pulled-in proc signature":
       var engine = bkMetal.init()
       engine.ingest(kernelMsl)
+      let oDev = engine.allocDevice(sizeof(float32))
+      engine.run("repro", oDev, ())
       var res: array[1, float32]
-      engine.run("repro", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.freeDevice(oDev)
       check res[0] == 3.0'f32
 
 when isMainModule:
