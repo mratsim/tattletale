@@ -1,6 +1,8 @@
+## Vulkan: if/elif/else statement lowering, every branch reached on device.
+##
 ## Run:
 ##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_if_elif.nim
 
@@ -42,35 +44,45 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         doAssert v in elifGlsl
       var engine = bkVulkan.init()
       engine.ingest(elifGlsl)
-      var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifDispatch", res, (x,))
-      check res[0] == 10
-      x[0] = 1
-      engine.run("elifDispatch", res, (x,))
-      check res[0] == 20
-      x[0] = 2
-      engine.run("elifDispatch", res, (x,))
-      check res[0] == 30
-      x[0] = 3
-      engine.run("elifDispatch", res, (x,))
-      check res[0] == 40
+      let xDev = engine.allocDevice(sizeof(int32))
+      let oDev = engine.allocDevice(sizeof(int32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      var res: array[1, int32]
+      const cases: array[4, (int32, int32)] = [(0'i32, 10'i32), (1'i32, 20'i32), (2'i32, 30'i32), (3'i32, 40'i32)]
+      for (v, want) in cases:
+        x[0] = v
+        engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+        engine.run("elifDispatch", oDev, (xDev,))
+        engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
+        check res[0] == want
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
 
     test "no else in source emits no else block":
       doAssert "else if ((x[0] == 1)) {" in noElseGlsl
       doAssert "else {" notin noElseGlsl
       var engine = bkVulkan.init()
       engine.ingest(noElseGlsl)
-      var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifNoElse", res, (x,))
-      check res[0] == 1
-      x[0] = 1
-      engine.run("elifNoElse", res, (x,))
-      check res[0] == 2
+      let xDev = engine.allocDevice(sizeof(int32))
+      let oDev = engine.allocDevice(sizeof(int32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      var res: array[1, int32]
+      const cases: array[2, (int32, int32)] = [(0'i32, 1'i32), (1'i32, 2'i32)]
+      for (v, want) in cases:
+        x[0] = v
+        engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+        engine.run("elifNoElse", oDev, (xDev,))
+        engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
+        check res[0] == want
       x[0] = 2
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 99  # no branch matched: sentinel preserved
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

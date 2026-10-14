@@ -1,14 +1,10 @@
 ## Vulkan end-to-end: struct typedefs with array fields.
 ##
-## - the pointer scan keeps pointer-free typedefs alive
-## - a pointer-free struct with an array field compiles under glslangValidator
-##   and computes on the device
-## - a pointer-bearing struct behind an array field has no valid emission:
-##   as a kernel param the explosion pass fails compilation:
-##   manual_explode_array_ptr_field.nim covers that case
-##
 ## Run:
-##   nim c -r --hints:off --warnings:off workspace/crucible/tests/codegen/vulkan/test_vulkan_typedef_ptr_array.nim (from tattletale)
+##   cd tattletale && \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_typedef_ptr_array.nim
 
 import std/strformat
 import workspace/crucible
@@ -33,8 +29,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:
     var engine = bkVulkan.init()
     engine.ingest(kernelCode)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("k", oDev, ())
     var res: array[1, uint32]
-    engine.run("k", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     doAssert res[0] == 27, &"edges[1] + band.hi + m: {res[0]} != 27"
     echo "  OK — struct with array field through a device function (Vulkan)"
 

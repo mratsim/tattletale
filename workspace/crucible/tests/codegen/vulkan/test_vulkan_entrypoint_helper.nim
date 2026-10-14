@@ -1,24 +1,19 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
 ## Vulkan: entry-point parse with a void-returning device helper.
-##
-## The codegen emits a forward declaration for every device function before
-## the kernels (`void helper(uint x);`). parseEntryPoint must return the FIRST
-## KERNEL's name, the `void <name>` that follows the first
-## `layout(local_size_x ...) in;` preamble, not the first bare `void ` in the
-## source. Otherwise ingest hands the helper name to glslangValidator's `-e`
-## flag and the compile fails loudly (`'helper' : function cannot take any
-## parameter(s)`), and even when it survives, the `kernel == entryPoint` fast
-## path never fires.
+## parseEntryPoint must return the first kernel's name, never a device-helper name.
+## Each kernel opens with its own `layout(local_size_x ...) in;` preamble.
+## Entry point resolution anchors on that preamble, not on the first bare `void `.
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip_compb001 \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_entrypoint_helper.nim
 
 import std/[strformat, strutils]
@@ -57,7 +52,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   # silently recompiles per launch; correct output proves the fast path parsed
   # the kernel name.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
-  engine.run("entryKernel", gpuOut, ())
+  let oDev = engine.allocDevice(sizeof(uint32))
+  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], sizeof(uint32))
+  engine.run("entryKernel", oDev, ())
+  engine.copyToHostFromDevice(addr gpuOut[0], oDev, sizeof(uint32))
+  engine.freeDevice(oDev)
   echo &"  entryKernel: got {gpuOut[0]}, expected 42"
   doAssert gpuOut[0] == 42, &"entryKernel: got {gpuOut[0]}, expected 42"
 

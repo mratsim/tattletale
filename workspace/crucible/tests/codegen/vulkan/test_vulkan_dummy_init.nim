@@ -1,10 +1,10 @@
-## Test: Vulkan GLSL codegen for structs with dummy/empty fields
+## Vulkan: GLSL codegen for structs with dummy/empty fields.
+## Object constructors of field-less structs (padded with `char _`) must emit a valid initializer.
 ##
-## When a struct has no fields (crucible pads it with `char _`),
-## the object constructor must emit a valid initializer, not empty braces.
-##
-## To compile and run:
+## Run:
+##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_dummy_init.nim
 
 import std/[unittest, strformat]
@@ -29,16 +29,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkVulkan.init()
       engine.ingest(kernelCode)
       echo kernelCode
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "tuple of dummy structs const":
       var engine = bkVulkan.init()
       engine.ingest(kernelCode2)
       echo kernelCode2
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

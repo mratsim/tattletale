@@ -1,13 +1,16 @@
-## Vulkan generic device procs instantiated at multiple static-parameter
-## values must emit one body per instantiation, since `signatureHash` erases
-## static bindings and dedups all instantiations.
+## Vulkan: generic device procs instantiated at multiple static-parameter values
+## emit one body per instantiation.
 ##
-## Vulkan device procs here take scalars and return values because SSBO
-## lowering does not apply to non-global device procs, and kernels carry
-## `{.workgroup: (32, 1, 1).}` to match the launch `blk`.
+## - `signatureHash` erases static bindings and would dedup all instantiations
+## - device procs here take scalars and return values: SSBO lowering never applies
+##   to non-global device procs
+## - kernels carry `{.workgroup: (32, 1, 1).}` to match the launch `blk`
 ##
 ## Run:
-##   nim c -r --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/vulkan/test_vulkan_generic_inst_dedup.nim
+##   cd tattletale && \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_generic_inst_dedup.nim
 
 import std/unittest
 import workspace/crucible
@@ -61,8 +64,14 @@ proc runScale(launcher: string, inpVal = 1.0'f32): float32 =
   engine.ingest(dedupSrc)
   var inp = newSeq[float32](1)
   inp[0] = inpVal
+  let iDev = engine.allocDevice(sizeof(float32))
+  engine.copyToDeviceFromHost(iDev, addr inp[0], sizeof(float32))
+  let oDev = engine.allocDevice(sizeof(float32))
+  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
   var outp = newSeq[float32](1)
-  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, outp, (inp,))
+  engine.copyToHostFromDevice(addr outp[0], oDev, sizeof(float32))
+  engine.freeDevice(iDev)
+  engine.freeDevice(oDev)
   result = outp[0]
 
 proc runTest() =

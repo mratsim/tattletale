@@ -1,12 +1,11 @@
-## User-defined operators: basic types (int32) and struct types (Wrapper, Wrapper2)
-##
-## Basic types: gpuBinOp → `(a + b)` — compiles and runs on all backends.
-## Struct types: gpuCall with operator syntax `a + b`.
-## Wrapper2 tests name collision handling for sanitized operator names.
+## User-defined operators: basic types (int32) and struct types (Wrapper, Wrapper2).
+## Basic types lower to gpuBinOp `(a + b)`, struct types to gpuCall with operator syntax.
+## Wrapper2 exercises sanitized operator-name collision handling.
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_user_defined_operator.nim
 
 import workspace/crucible
@@ -116,10 +115,16 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     var a: array[1, int32] = [13'i32]
     var b: array[1, int32] = [5'i32]
+    let aDev = engine.allocDevice(a.len * sizeof(int32))
+    let bDev = engine.allocDevice(b.len * sizeof(int32))
+    let oDev = engine.allocDevice(10 * sizeof(int32))
 
     echo "--- basicKernel ---"
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
+    engine.run("basicKernel", oDev, (aDev, bDev))
     var out32: array[10, int32]
-    engine.run("basicKernel", out32, (a, b))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(int32))
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
     doAssert out32[0] == 18
@@ -138,8 +143,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(structVk)
     a[0] = 7
     b[0] = 3
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
+    engine.run("structKernel", oDev, (aDev, bDev))
     var out32b: array[10, int32]
-    engine.run("structKernel", out32b, (a, b))
+    engine.copyToHostFromDevice(addr out32b[0], oDev, 10 * sizeof(int32))
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
     doAssert out32b[0] == 10
@@ -158,8 +166,14 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(structVk2)
     a[0] = 14
     b[0] = 3
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
+    engine.run("structKernel2", oDev, (aDev, bDev))
     var out32c: array[10, int32]
-    engine.run("structKernel2", out32c, (a, b))
+    engine.copyToHostFromDevice(addr out32c[0], oDev, 10 * sizeof(int32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17
