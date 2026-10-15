@@ -11,9 +11,8 @@ import workspace/crucible
 
 const kernel2d = webgpu:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
-    # inline use — a local `let gid = global_id` emits a wrong type
-    # annotation (WgslGridDim vs the builtin's vec3<u32>)
-    C[global_id.y * 8'u32 + global_id.x] = global_id.y * 8'u32 + global_id.x
+    let flat = global_id.y * 8 + global_id.x
+    C[flat] = uint32(flat)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernel2d

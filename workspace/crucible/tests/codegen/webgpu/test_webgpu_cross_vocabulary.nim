@@ -12,11 +12,11 @@ const kernel2d = webgpu:
   proc crossVocab2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     # CUDA idiom in a WebGPU kernel. With grid (2,4) × blk (4,2), the flat
     # global id is gy * 8 + gx.
-    let gx = blockIdx.x * 4'u32 + threadIdx.x
-    let gy = blockIdx.y * 2'u32 + threadIdx.y
-    C[gy * 8'u32 + gx] = gy * 8'u32 + gx
+    let gx = blockIdx.x * 4 + threadIdx.x
+    let gy = blockIdx.y * 2 + threadIdx.y
+    C[gy * 8 + gx] = uint32(gy * 8 + gx)
     # canonical flat local index -> native local_invocation_index
-    C[64'u32 + thread_index_in_threadgroup] = thread_index_in_threadgroup
+    C[64 + thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     syncthreads()
 
 block:

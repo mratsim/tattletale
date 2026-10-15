@@ -25,7 +25,7 @@ const addressSpaceWgsl = webgpu:
 
   proc smemAliasKernel(output: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 1, 1).} =
     let tid = thread_position_in_threadgroup.x
-    scratch[tid] = tid * 3'u32
+    scratch[tid] = uint32(tid * 3)
     let p = addr scratch[tid]
     output[tid] = p[]
 

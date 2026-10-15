@@ -524,15 +524,16 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           "only the `@workgroup_size` attribute, never a `workgroup_size` " &
           "builtin, so the threadgroup size is not addressable from WGSL."
       of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
-         gbkThreadgroupsPerGrid:
-        # Canonical vector coordinates map to the injected `@builtin` param
-        # names (global_id, workgroup_id, num_workgroups), u32 in WGSL,
-        # whole-value use constructs the int vector.
+         gbkThreadgroupsPerGrid, gbkThreadPositionInThreadgroup:
+        # Canonical vector coordinates map to the injected `@builtin` param names,
+        # u32 in WGSL (global_id, workgroup_id, num_workgroups, local_invocation_id).
+        # Whole-value use constructs the int vector, so a component read
+        # nests inside the wrapper.
         let n = wgslBuiltinParamName(ast.ident())
         result = "vec3<i32>(i32(" & n & ".x), i32(" & n & ".y), i32(" & n & ".z))"
-      of gbkThreadPositionInThreadgroup, gbkThreadIndexInThreadgroup:
-        # Scalar spellings cast into the int canonical domain.
-        result = "i32(" & wgslBuiltinParamName(ast.ident()) & ')' 
+      of gbkThreadIndexInThreadgroup:
+        # `local_invocation_index` is u32 in WGSL, cast to the int domain.
+        result = "i32(" & wgslBuiltinParamName(ast.ident()) & ')'
     else:
       result = ast.ident()
 
