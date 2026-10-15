@@ -65,13 +65,13 @@ macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
   var builder = TupleBuilderFlat.new(2)
   var dimCount = 0
   for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    builder.append(shapeEvent.leaf, strideEvent.leaf)
+    builder.append((shapeEvent.leaf, shapeEvent.leafTy),
+                   (strideEvent.leaf, strideEvent.leafTy))
     inc dimCount
   if dimCount >= rank:
-    result = originalLayout
-    return
+    return originalLayout
   for i in dimCount ..< rank:
-    builder.append(IntCT(1), IntCT(0))
+    builder.append((IntCT(1), intTy(1)), (IntCT(0), intTy(0)))
   result = builder.emitLayout()
 
 macro padRight*(layout: Layout; rank: static int): untyped =
@@ -87,15 +87,15 @@ macro padLeftImpl(originalLayout, sh, st: typed, rank: static int): untyped =
   var builder = TupleBuilderFlat.new(2)
   var dimCount = 0
   for (shapeEvent, strideEvent) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    builder.append(shapeEvent.leaf, strideEvent.leaf)
+    builder.append((shapeEvent.leaf, shapeEvent.leafTy),
+                   (strideEvent.leaf, strideEvent.leafTy))
     inc dimCount
   if dimCount >= rank:
-    result = originalLayout
-    return
-  var padShape, padStride: seq[NimNode]
+    return originalLayout
+  var padShape, padStride: seq[tuple[val, ty: NimNode]]
   for i in dimCount ..< rank:
-    padShape.add IntCT(1)
-    padStride.add IntCT(0)
+    padShape.add (IntCT(1), intTy(1))
+    padStride.add (IntCT(0), intTy(0))
   builder.prependBatch(padShape, padStride)
   result = builder.emitLayout()
 
@@ -239,7 +239,8 @@ macro zipDimensionsImpl(ash, ast, bsh, bst: typed): untyped =
       of kOpen, kClose:
         builder.append(ea)
       of kLeaf:
-        builder.append(nnkTupleConstr.newTree(ea.leaf, eb.leaf))
+        builder.append((nnkTupleConstr.newTree(ea.leaf, eb.leaf),
+                        nnkTupleConstr.newTree(ea.leafTy, eb.leafTy)))
     builder.emit(0)
   if ash.isTupleTy() != bsh.isTupleTy():
     error "zipDimensions: the layouts have different ranks, " &
@@ -273,24 +274,24 @@ macro zipDimensions*[A, B: Layout](a: A, b: B): untyped =
 
 macro groupDimensionsImpl(originalLayout, sh, st: typed, B, E: static int): untyped =
   ## Wrap outer dimensions `[B, E)` into one nested sub-tuple, pass the rest whole.
-  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  let (shapeLeaves, shapeTys, strideLeaves, strideTys, dimCount) = streamDims(sh, st)
   doAssert B >= 0, "groupDimensions: B must be a valid dimension index"
   let endIdx = min(E, dimCount)
   if B == 0 and endIdx == dimCount:
-    result = originalLayout
-    return
+    return originalLayout
   var builder = TupleBuilderNested.new(2)
   let openEvent = TupleStreamEvent(path: @[], kind: kOpen)
   let closeEvent = TupleStreamEvent(path: @[], kind: kClose)
   builder.append(openEvent, openEvent)
   for i in 0 ..< B:
-    builder.append(shapeLeaves[i], strideLeaves[i])
+    builder.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
   var grouped = TupleBuilderFlat.new(2)
   for i in B ..< endIdx:
-    grouped.append(shapeLeaves[i], strideLeaves[i])
-  builder.append(grouped.emit(0), grouped.emit(1))
+    grouped.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
+  builder.append((grouped.emit(0), grouped.emitTy(0)),
+                 (grouped.emit(1), grouped.emitTy(1)))
   for i in endIdx ..< dimCount:
-    builder.append(shapeLeaves[i], strideLeaves[i])
+    builder.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
   builder.append(closeEvent, closeEvent)
   result = builder.emitLayout()
 
@@ -332,11 +333,13 @@ macro selectDimensionsImpl(originalLayout, sh, st: typed, Is: varargs[int]{lit|`
     if Is[i].intVal != i:
       whole = false
   if whole:
-    result = originalLayout
-    return
+    return originalLayout
+  let shTy = sh.getTypeOf()
+  let stTy = st.getTypeOf()
   var builder = TupleBuilderFlat.new(2)
   for i in 0 ..< Is.len:
-    builder.append(getTupleIndex(sh, Is[i].intVal), getTupleIndex(st, Is[i].intVal))
+    builder.append((getTupleIndex(sh, Is[i].intVal), getTupleIndex(shTy, Is[i].intVal)),
+                   (getTupleIndex(st, Is[i].intVal), getTupleIndex(stTy, Is[i].intVal)))
   result = builder.emitLayout()
 
 macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped =
@@ -352,14 +355,14 @@ macro selectDimensions*(layout: Layout, Is: varargs[int]{lit|`const`}): untyped 
 
 macro replaceDimensionImpl(sh, st, xShape, xStride: typed, N: static int): untyped =
   ## Slot `N` takes the replacement's dimension, every other slot passes whole.
-  let (shapeLeaves, strideLeaves, dimCount) = streamDims(sh, st)
+  let (shapeLeaves, shapeTys, strideLeaves, strideTys, dimCount) = streamDims(sh, st)
   doAssert N < dimCount, "replaceDimension: slot out of range"
   var builder = TupleBuilderFlat.new(2)
   for i in 0 ..< dimCount:
     if i == N:
-      builder.append(xShape, xStride)
+      builder.append((xShape, xShape.getTypeInst()), (xStride, xStride.getTypeInst()))
     else:
-      builder.append(shapeLeaves[i], strideLeaves[i])
+      builder.append((shapeLeaves[i], shapeTys[i]), (strideLeaves[i], strideTys[i]))
   return builder.emitLayout()
 
 macro replaceDimension*(layout: Layout; x: typed; N: static int): untyped =

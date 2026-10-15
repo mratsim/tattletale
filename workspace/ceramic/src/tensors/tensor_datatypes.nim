@@ -69,6 +69,8 @@ template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
     data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
 
+template slice*[T, Sh, St](t: AnyTensor[T, Sh, St], R: Layout, sel: untyped): auto =
+  make_view(addr t.data[crd2idx(R, sel)], slice(R, sel))
 
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────
 
@@ -132,7 +134,7 @@ template rank*(tv: TensorView): untyped = tv.layout.rank()
 
 template size*[T, Sh, St](t: TensorOwned[T, Sh, St]): untyped =
   ## size folds the shape leaves only.
-  fold(flatten(default(Sh)), Int[1](), acc * it)
+  product(default(Sh))
 template size*(tv: TensorView): untyped = tv.layout.size()
 
 template cosize*(tv: TensorView): untyped = tv.layout.cosize()

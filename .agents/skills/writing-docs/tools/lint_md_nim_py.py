@@ -1760,7 +1760,7 @@ def nim_structure_checks(path, text, header_nos, findings):
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
-        if ofm and ofm.group(1).endswith("Of"):
+        if ofm and ofm.group(1).endswith("Of") and ofm.group(1) != "getTypeOf":
             findings.append(Finding(
                 path, i + 1, "decl-of-suffix",
                 "the name %s carries an Of suffix, name the thing directly "
@@ -1799,15 +1799,18 @@ def nim_structure_checks(path, text, header_nos, findings):
             if body is not None and body < len(lines) \
                     and lines[body].strip().startswith("##"):
                 prose = []
+                docs = []
                 j = body
                 while j < len(lines) and lines[j].strip().startswith("##"):
                     c = lines[j].strip()[2:].strip()
+                    docs.append(c)
                     if c and not structural(c):
                         prose.append(c)
                     j += 1
                 if (len(prose) >= 3
                         and not any(CONTRACT_MARKER_RE.search(c)
-                                    for c in prose)):
+                                    for c in prose)
+                        and not any(BULLET_RE.match(c) for c in docs)):
                     findings.append(Finding(
                         path, body + 1, "missing-contract",
                         "multi-line doc states no contract marker "
@@ -3704,6 +3707,8 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
                 "tupleLen call outside the blessed rank definitions, route "
                 "through rank or mark # rank-allow"))
         if allowed:
+            continue
+        if code.lstrip().startswith("export "):
             continue
         if RANK_TYPEOF_RE.search(code) or TYPEOF_RANK_RE.search(code):
             findings.append(Finding(

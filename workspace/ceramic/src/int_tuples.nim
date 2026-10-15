@@ -53,8 +53,8 @@ template prefix_product*(shape: IntOrIntTuple): untyped =
   ##
   ## Identical to CuTe's prefix_product / make_seq.
   ##
-  ## See also: suffix_product, prefix_scanIt
-  prefix_scanIt(shape, Int[1](), acc * it)
+  ## See also: suffix_product, prefix_product_scan
+  prefix_product_scan(shape, Int[1]())
 
 template suffix_product*(shape: IntOrIntTuple): untyped =
   ## Cumulative right-to-left product scan.
@@ -65,24 +65,16 @@ template suffix_product*(shape: IntOrIntTuple): untyped =
   ##
   ## The last output is always 1 (identity over zero elements).
   ##
-  ## See also: prefix_product, suffix_scanIt
-  suffix_scanIt(shape, Int[1](), acc * it)
+  ## See also: prefix_product, suffix_product_scan
+  suffix_product_scan(shape, Int[1]())
 
 # ═══════════════════════════════════════════════════════════════
 #  reductions
 # ═══════════════════════════════════════════════════════════════
 
-func product*(t: IntOrIntTuple): auto =
+macro product*(t: typed): untyped =
   ## Product of all leaves (like size for shapes). Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[1](), acc * it)
-
-func max*(t: IntOrIntTuple): auto =
-  ## Maximum leaf value. Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[low(int)](), max(acc, it))
-
-func min*(t: IntOrIntTuple): auto =
-  ## Minimum leaf value. Returns Int[N] for all-Int, int otherwise.
-  fold(t, Int[high(int)](), min(acc, it))
+  productImpl(t)
 
 # ═══════════════════════════════════════════════════════════════
 #  product_each, product of each top-level tuple element

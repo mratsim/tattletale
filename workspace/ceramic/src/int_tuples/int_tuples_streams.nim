@@ -35,7 +35,7 @@ type
       discard
 
 func depth*(ev: TupleStreamEvent): int {.inline.} =
-  result = ev.path.len
+  return ev.path.len
 
 func unwrapStmtListExpr*(node: NimNode): NimNode =
   if node.kind == nnkStmtListExpr:
@@ -63,11 +63,11 @@ type
     reversed: bool
 
 func resolveAliasTy(ty: NimNode): NimNode {.compileTime.} =
-  if ty.kind in {nnkSym, nnkTupleTy}: ty.getTupleType() else: ty
+  if ty != nil and ty.kind in {nnkSym, nnkTupleTy}: ty.getTupleType() else: ty
 
 func tupleStream*(s: NimNode, reversed = false): TupleStream =
   let ev = unwrapStmtListExpr(s)
-  let ty = s.getTypeInst().resolveAliasTy()
+  let ty = s.getTypeOf().resolveAliasTy()
   let idx0 = if reversed and ty.isTupleTy():
                 ty.len - 1
               else: 0
@@ -76,7 +76,8 @@ func tupleStream*(s: NimNode, reversed = false): TupleStream =
     result.stack.add (ev, ty, idx0, 0, @[])
     result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   else: # Scalars enter wrapped in a size-1 tuple, the stream is always tuple-shaped
-    result.stack.add (nnkTupleConstr.newTree(ev), nnkTupleTy.newTree(ty), 0, 0, @[])
+    let frameTy = if ty != nil: nnkTupleTy.newTree(ty) else: nil
+    result.stack.add (nnkTupleConstr.newTree(ev), frameTy, 0, 0, @[])
     result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   result.hasPending = true
 
@@ -88,7 +89,7 @@ func tupleDimsStream*(s: NimNode): TupleStream =
   ## - scalars wrap in a size-1 tuple
   ## - no root wrapper, the walk opens and closes on the leaves
   let ev = unwrapStmtListExpr(s)
-  let ty = s.getTypeInst().resolveAliasTy()
+  let ty = s.getTypeOf().resolveAliasTy()
   result.shallow = true
   if ty.isTupleTy():
     if ty.len != 0:
@@ -112,16 +113,18 @@ func next*(s: var TupleStream): TupleStreamEvent =
   # Prepare the next pending event.
   if s.stack.len != 0:
     let f = s.stack[^1]
-    let exhausted = if s.reversed: f.idx < 0
+    let exhausted = if f.ty == nil: (if s.reversed: f.idx < 0 else: f.idx >= 1)
+                    elif s.reversed: f.idx < 0
                     else: f.idx >= f.ty.len
     if not exhausted:
       let childE = getTupleIndex(f.elem, f.idx)
-      let childT = f.ty[f.idx]
+      let childT = if f.ty == nil: nil else: f.ty[f.idx]
       let childPath = f.path & f.idx
       if s.reversed:
         dec s.stack[^1].idx
       else:
         inc s.stack[^1].idx
+      s.hasPending = true
       if s.shallow:
         # a shallow stream yields the whole sub-tuple element as one leaf
         s.pending = TupleStreamEvent(path: childPath, kind: kLeaf, leaf: childE, leafTy: childT)
@@ -156,44 +159,84 @@ iterator items*(s: TupleStream): TupleStreamEvent =
 type
   TupleBuilderFlat* = object
     accums: seq[seq[NimNode]]
+    tyAccums: seq[seq[NimNode]]
 
 func new*(T: type TupleBuilderFlat, numTuples = 1): T =
   result.accums.newSeq(numTuples)
+  result.tyAccums.newSeq(numTuples)
 
 func append*(tb: var TupleBuilderFlat, streamEvents: varargs[TupleStreamEvent]) =
   doAssert tb.accums.len == streamEvents.len
   for i, ev in streamEvents:
     if ev.kind == kLeaf:
       tb.accums[i].add ev.leaf
+      # an empty tuple value in a ty slot becomes tuple[],
+      # () reads as the empty value in type context
+      tb.tyAccums[i].add (if ev.leafTy.kind in {nnkTupleConstr, nnkPar} and
+          ev.leafTy.len == 0: nnkTupleTy.newTree() else: ev.leafTy)
 
-func append*(tb: var TupleBuilderFlat, leafValues: varargs[NimNode]) =
-  doAssert tb.accums.len == leafValues.len
-  for i, leaf in leafValues:
-    tb.accums[i].add leaf
+func append*(tb: var TupleBuilderFlat, shape, stride: NimNode) =
+  ## Append one mode's value pair, the type slots stay empty, types
+  ## derive downstream at the make_layout emission
+  tb.accums[0].add shape
+  tb.accums[1].add stride
 
-func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[NimNode]]) =
+func append*(tb: var TupleBuilderFlat, leaves: varargs[tuple[val, ty: NimNode]]) =
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
+    tb.accums[i].add leaf.val
+    tb.tyAccums[i].add (if leaf.ty.kind in {nnkTupleConstr, nnkPar} and
+        leaf.ty.len == 0: nnkTupleTy.newTree() else: leaf.ty)
+
+func appendTyped*(tb: var TupleBuilderFlat, leaves: varargs[tuple[val, ty: NimNode]]) =
+  ## Append one leaf per slot, a nil type slot spells typeof(val),
+  ## a stated type is kept as written
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
+    tb.accums[i].add leaf.val
+    tb.tyAccums[i].add (if leaf.ty == nil: nnkCall.newTree(ident"typeof", leaf.val)
+                        else: leaf.ty)
+
+func prependBatch*(tb: var TupleBuilderFlat, batches: varargs[seq[tuple[val, ty: NimNode]]]) =
   doAssert tb.accums.len == batches.len
   for i, batch in batches:
-    tb.accums[i] = batch & tb.accums[i]
+    for j in countdown(batch.len - 1, 0):
+      tb.accums[i].insert(batch[j].val, 0)
+      tb.tyAccums[i].insert(batch[j].ty, 0)
+
+func count*(tb: TupleBuilderFlat): int =
+  ## Number of appended leaves.
+  tb.accums[0].len
 
 func emit*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
   var node = if emitScalarForSize1: nnkPar.newTree()
              else: nnkTupleConstr.newTree()
   for n in tb.accums[id]:
     node.add n
-  result = node
+  return node
+
+func emitTy*(tb: TupleBuilderFlat, id: int, emitScalarForSize1 = false): NimNode =
+  var node = if emitScalarForSize1: nnkPar.newTree()
+             else: nnkTupleConstr.newTree()
+  for n in tb.tyAccums[id]:
+    node.add n
+  return node
 
 # ═════ Nested tuple builder ══════════════════════════════════════════
 
 type
   TupleBuilderNested* = object
     accums: seq[seq[NimNode]]
+    tyAccums: seq[seq[NimNode]]
     completed: seq[NimNode]
+    tyCompleted: seq[NimNode]
     dropEmpty: bool = true
 
 func new*(T: type TupleBuilderNested, numTuples = 1, dropEmpty = true): T =
   result.accums.newSeq(numTuples)
+  result.tyAccums.newSeq(numTuples)
   result.completed.newSeq(numTuples)
+  result.tyCompleted.newSeq(numTuples)
   result.dropEmpty = dropEmpty
 
 func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]) =
@@ -202,37 +245,70 @@ func append*(tb: var TupleBuilderNested, streamEvents: varargs[TupleStreamEvent]
     case ev.kind
     of kOpen:
       tb.accums[i].add newNimNode(nnkTupleConstr)
+      tb.tyAccums[i].add newNimNode(nnkTupleConstr)
     of kLeaf:
       if tb.accums[i].len == 0:
         tb.completed[i] = ev.leaf
+        tb.tyCompleted[i] = (if ev.leafTy.kind in {nnkTupleConstr, nnkPar} and
+            ev.leafTy.len == 0: nnkTupleTy.newTree() else: ev.leafTy)
       else:
         tb.accums[i][^1].add ev.leaf
+        tb.tyAccums[i][^1].add (if ev.leafTy.kind in {nnkTupleConstr, nnkPar} and
+            ev.leafTy.len == 0: nnkTupleTy.newTree() else: ev.leafTy)
     of kClose:
       var node = tb.accums[i].pop()
+      var tyNode = tb.tyAccums[i].pop()
+      if node.len == 0:
+        # an empty mode kept verbatim, its type becomes tuple[]
+        tyNode = nnkTupleTy.newTree()
       if node.len == 0 and tb.dropEmpty:
         # every child of the subtree was dropped, keep nothing in the parent
         if tb.accums[i].len == 0:
           tb.completed[i] = nnkTupleConstr.newTree()
+          tb.tyCompleted[i] = nnkTupleTy.newTree()
       else:
         if tb.accums[i].len == 0:
           tb.completed[i] = node
+          tb.tyCompleted[i] = tyNode
         else:
           tb.accums[i][^1].add node
+          tb.tyAccums[i][^1].add tyNode
 
-func append*(tb: var TupleBuilderNested, leafValues: varargs[NimNode]) =
-  doAssert tb.accums.len == leafValues.len
-  for i, leaf in leafValues:
+func append*(tb: var TupleBuilderNested, leaves: varargs[tuple[val, ty: NimNode]]) =
+  doAssert tb.accums.len == leaves.len
+  for i, leaf in leaves:
     if tb.accums[i].len == 0:
-      tb.completed[i] = leaf
+      tb.completed[i] = leaf.val
+      tb.tyCompleted[i] = (if leaf.ty.kind in {nnkTupleConstr, nnkPar} and
+          leaf.ty.len == 0: nnkTupleTy.newTree() else: leaf.ty)
     else:
-      tb.accums[i][^1].add leaf
+      tb.accums[i][^1].add leaf.val
+      tb.tyAccums[i][^1].add (if leaf.ty.kind in {nnkTupleConstr, nnkPar} and
+          leaf.ty.len == 0: nnkTupleTy.newTree() else: leaf.ty)
+
+func appendTyped*(tb: var TupleBuilderNested, v: NimNode) =
+  ## Append the value as written, its type spelled as typeof(v),
+  ## resolved when the emitted tree is type-checked
+  if tb.accums[0].len == 0:
+    tb.completed[0] = v
+    tb.tyCompleted[0] = nnkCall.newTree(ident"typeof", v)
+  else:
+    tb.accums[0][^1].add v
+    tb.tyAccums[0][^1].add nnkCall.newTree(ident"typeof", v)
 
 func emit*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
   doAssert id < tb.completed.len and tb.completed[id] != nil, "emit: slot not completed"
   var node = tb.completed[id]
   if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
     node = node[0]
-  result = node
+  return node
+
+func emitTy*(tb: TupleBuilderNested, id: int, emitScalarForSize1 = false): NimNode =
+  doAssert id < tb.tyCompleted.len and tb.tyCompleted[id] != nil, "emitTy: slot not completed"
+  var node = tb.tyCompleted[id]
+  if emitScalarForSize1 and node.kind == nnkTupleConstr and node.len == 1:
+    node = node[0]
+  return node
 
 # ═══════════════════════════════════════════════════════════════════════
 #  onLeaves, consumer-side event ingest
@@ -285,6 +361,72 @@ iterator items*(z: TupleZip): tuple[a, b: TupleStreamEvent] =
   var w = z
   while not w.done():
     yield w.next()
+
+# ═════════════════════════════════════════════════════════════════════
+#  Zip longest
+# ═════════════════════════════════════════════════════════════════════
+
+# ═════ Zip-longest walk over two tuple trees of different ranks ═════
+
+type
+  TupleZipLongest* = object
+    a, b: TupleStream
+
+func zipLongest*(a, b: TupleStream): TupleZipLongest =
+  ## Zips two tuple streams longest-first.
+  ##
+  ## Contract:
+  ## - both streams share one event structure, events pair one to one
+  ## - a side out of leaves repeats the other side's event, nil leaf
+  ## - the consumer decides the fill value for a nil leaf
+  TupleZipLongest(a: a, b: b)
+
+func done*(z: var TupleZipLongest): bool =
+  ## True once both streams are exhausted
+  z.a.done() and z.b.done()
+
+func atClose(s: TupleStream): bool =
+  ## True when the stream's next event closes the current subtree
+  if s.hasPending:
+    return s.pending.kind == kClose
+  if s.stack.len == 0:
+    return false
+  let f = s.stack[^1]
+  if f.ty == nil:
+    result = if s.reversed: f.idx < 0 else: f.idx >= 1
+  elif s.reversed:
+    result = f.idx < 0
+  else:
+    result = f.idx >= f.ty.len
+
+func next*(z: var TupleZipLongest): tuple[a, b: TupleStreamEvent] =
+  ## Pairs the next event of each side, a side without leaves left
+  ## gets the other side's event with a nil leaf, a side whose next
+  ## event is kClose pads with nil leaves until the other side closes
+  ##
+  ## Returns:
+  ##     The paired (a, b) events, the padded side's leaf is nil
+  if z.a.done():
+    result.b = z.b.next()
+    result.a = result.b
+    if result.a.kind == kLeaf:
+      result.a.leaf = nil
+  elif z.b.done():
+    result.a = z.a.next()
+    result.b = result.a
+    if result.b.kind == kLeaf:
+      result.b.leaf = nil
+  elif z.a.atClose() and not z.b.atClose():
+    result.b = z.b.next()
+    result.a = TupleStreamEvent(path: result.b.path, kind: kLeaf,
+                                leaf: nil, leafTy: nil)
+  elif z.b.atClose() and not z.a.atClose():
+    result.a = z.a.next()
+    result.b = TupleStreamEvent(path: result.a.path, kind: kLeaf,
+                                leaf: nil, leafTy: nil)
+  else:
+    result.a = z.a.next()
+    result.b = z.b.next()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Filters
