@@ -1,7 +1,7 @@
-## CuTe GEMM single-tile — NVRTC (CUDA) backend
-## A(2×3) * B(3×2) = C(2×2)
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_gemm.nim
+## CuTe GEMM single-tile, NVRTC (CUDA) backend: A(2x3) * B(3x2) = C(2x2).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_gemm.nim
 import std/strformat
 import workspace/crucible
 
@@ -35,7 +35,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run<<(1, 1)>>("gemmKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("gemmKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   let expected = [58'u32, 64, 139, 154]
   for i in 0 ..< 4:
     doAssert buf[i] == expected[i], &"C[{i}]: {buf[i]} != {expected[i]}"

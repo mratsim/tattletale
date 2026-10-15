@@ -1,17 +1,9 @@
-## Minimal repro: evalOnceAs-generated constexpr leaks into let RHS
-##
-## Suspect pattern (what make_layout's evalOnceAs expands to):
-##   let L =
-##     const tmp {.genSym.} = (Int[8](), Int[16]())
-##     tmp
-##
-## Crucible may emit this as:
-##   Layout_... L = constexpr Tuple_... tmp = {{}, {}};
+## evalOnceAs-generated constexpr values resolve inside let RHS across three
+## declaration shapes: direct tuple, const + let, and a const-yielding block.
 ##
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_repro_tensorview_codegen.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_let_block_rhs.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -53,7 +45,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelDirect)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oA = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oA, ())
+      engine.copyToHostFromDevice(addr output[0], oA, sizeof(output))
+      engine.freeDevice(oA)
       check output[0] == 1
 
     test "Pattern B — const + let":
@@ -61,7 +56,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oB = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oB, ())
+      engine.copyToHostFromDevice(addr output[0], oB, sizeof(output))
+      engine.freeDevice(oB)
       check output[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -69,7 +67,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oC = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oC, ())
+      engine.copyToHostFromDevice(addr output[0], oC, sizeof(output))
+      engine.freeDevice(oC)
       check output[0] == 1
 
 when isMainModule:

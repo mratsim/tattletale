@@ -1,49 +1,9 @@
-## NVRTC: `max` on Int[N] — ambiguous builtin name with the +/*-style overload set
-##
-## Int[N] is a CuTe-style compile-time integer: its value lives in the type
-## parameter. The max overload set is recreated below (mirroring ceramic's
-## int_tuples_datatypes.nim) so this test is self-contained — no ceramic
-## dependency. Two cases:
-##   - compile-time int (a static-int type or an int literal): the result is a
-##     static-int type (max(Int[5](), 7) -> Int[7]); everything is handled at
-##     the Nim level and the C compiler can optimize the code away.
-##   - dynamic int (a runtime value): the codegen materializes the type-level
-##     integer into a literal int (max(Int[5](), h) -> max(5, h)).
-##
-## The five cases tested:
-##   1. both operands Int[N] types:  max(Int[V](), Int[U]()) -> Int[max(V,U)]() (resolved at Nim compile time)
-##   2. literal on the right:        max(Int[V](), 1)       -> Int[max(V,1)]()
-##   3. literal on the left:         max(1, Int[V]())       -> Int[max(1,V)]()
-##   4. runtime value on the right:  max(Int[V](), h)       -> max(V, h) (plain int)
-##   5. runtime value on the left:   max(h, Int[V]())       -> max(h, V) (plain int)
-## Static-int results (cases 1-3) are verified via toIntVal (compile-time
-## extraction from the type); dynamic results (cases 4-5) are plain ints.
-##
-## What this tests / detects / prevents:
-## max (like min and abs) is an "ambiguous builtin": both Nim and the GPU
-## languages define it, so crucible registers it name-only and forwards calls
-## to the backend's native max. That is correct for basic operands — the case
-## CUDA/OpenCL/Vulkan/WebGPU support natively. But the name-only forwarding
-## must not swallow library-defined overloads: with an empty Int[N] operand
-## (the value lives only in the type parameter) the call must resolve to the
-## overloads below and compile through the same body-parsed path as +/* —
-## never reach the backend's native max, which has no overload for an empty
-## struct:
-##     Int10 gap = max(1, Int10{});
-##     no instance of overloaded function "max" matches the argument list
-## This test pins that contract for all five shapes. It is currently RED on
-## the compile step: ambiguous-builtin overload bodies are not parsed, so the
-## Int[N] calls are forwarded and NVRTC rejects them. Once the parser accepts
-## both if-expression branch forms (ElifExpr/ElseExpr and ElifBranch/Else),
-## ambiguous builtins follow the same rules as +/* — their overload bodies
-## parse, and this suite goes green.
+## NVRTC: `max` over the Int[N] compile-time-integer overload set, the library
+## overloads body-parse like `+`/`*`, all five operand shapes resolve.
 ##
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
-##     nim cpp -r --hints:off --warnings:off \
-##       --outdir:build/tests/nvrtc --nimcache:nimcache/tests/nvrtc \
-##       workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_int_ambiguous_builtins.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_int_ambiguous_builtins.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -99,7 +59,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var dynArr: array[1, int32] = [100'i32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("staticIntMax", buf, (dynArr,))
+      let iDev = engine.allocDevice(sizeof(dynArr))
+      engine.copyToDeviceFromHost(iDev, addr dynArr[0], sizeof(dynArr))
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("staticIntMax", oDev, (iDev,))
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(iDev)
+      engine.freeDevice(oDev)
       check buf[0] == 7    # max(Int[5](), 7)
       check buf[1] == 7    # max(7, Int[5]())
       check buf[2] == 5    # max(Int[5](), 3)

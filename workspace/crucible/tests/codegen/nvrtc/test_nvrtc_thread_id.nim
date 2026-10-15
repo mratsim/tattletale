@@ -1,27 +1,10 @@
-## NVRTC: 1D/2D/3D thread & block addressing via the engine API
+## NVRTC: 1D/2D/3D thread and block addressing, every thread records its linear
+## global id and the raw blockIdx/threadIdx/blockDim components, the grid dims
+## and block dims stay distinct per axis.
 ##
-## For 1D, 2D and 3D this test launches a grid/block of the matching rank on the
-## GPU through the HwEngine (bkCuda.init + chevron launch config), then verifies
-## that every thread wrote its exact linear global id -- computed from
-## blockIdx.x/y/z, threadIdx.x/y/z and blockDim.x/y/z -- plus the raw value of
-## each coordinate component. The 2D and 3D cases use y/z extents > 1 so that a
-## coordinate that is ignored, collapsed or defaulted changes the emitted buffer
-## and fails a doAssert.
-##
-## Extents are chosen with a distinct value on every distinguishing axis (grid vs
-## block along x; y vs z within both grid and block), so that an axis swap in the
-## launch plumbing -- e.g. grid and block exchanged, or blockIdx.y/z transposed --
-## also changes the emitted buffer and fails a doAssert.
-##
-## The chevron LaunchConfig accepts ints OR tuples for grid/blk: the 1D cases use
-## the plain int form, the 2D/3D cases pass named tuple extents that the `<<`
-## macro normalizes to full (x, y, z) Dim3.
-##
-## Run (from tattletale/, CUDA 12 available):
-##   export CUDA_HOME=/usr/local/cuda
-##   export LD_LIBRARY_PATH=/usr/local/cuda/lib64
-##   nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_thread_id.nim
 
 import std/strutils
 import workspace/crucible
@@ -110,7 +93,10 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     var engine = bkCuda.init(kernelScalar)
     echo "PTX: ", engine.getArtifact().len, " bytes"
     var buf: array[4, uint32]
-    engine.run<<(1, 1)>>("threadIdKernel", buf, ())
+    let o0 = engine.allocDevice(sizeof(buf))
+    engine.run<<(1, 1)>>("threadIdKernel", o0, ())
+    engine.copyToHostFromDevice(addr buf[0], o0, sizeof(buf))
+    engine.freeDevice(o0)
     doAssert buf[0] == 0
     doAssert buf[1] == 0
     doAssert buf[2] == 0
@@ -121,7 +107,10 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
          # grid vs block so an exchange of the two extents is caught)
     var engine = bkCuda.init(kernel1d)
     var rec: array[3 * 5 * recordLen, uint32]
-    engine.run<<(3, 5)>>("threadState1d", rec, ())
+    let o1 = engine.allocDevice(sizeof(rec))
+    engine.run<<(3, 5)>>("threadState1d", o1, ())
+    engine.copyToHostFromDevice(addr rec[0], o1, sizeof(rec))
+    engine.freeDevice(o1)
     for b in 0 ..< 3:
       for t in 0 ..< 5:
         let gid = b * 5 + t
@@ -136,7 +125,10 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const by = 2
     var engine = bkCuda.init(kernel2d)
     var rec: array[gx * gy * bx * by * recordLen, uint32]
-    engine.run<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", rec, ())
+    let o2 = engine.allocDevice(sizeof(rec))
+    engine.run<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
+    engine.copyToHostFromDevice(addr rec[0], o2, sizeof(rec))
+    engine.freeDevice(o2)
     for byy in 0 ..< gy:
       for bxx in 0 ..< gx:
         let blockId = byy * gx + bxx
@@ -159,7 +151,10 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const bz = 3
     var engine = bkCuda.init(kernel3d)
     var rec: array[gx * gy * gz * bx * by * bz * recordLen, uint32]
-    engine.run<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", rec, ())
+    let o3 = engine.allocDevice(sizeof(rec))
+    engine.run<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
+    engine.copyToHostFromDevice(addr rec[0], o3, sizeof(rec))
+    engine.freeDevice(o3)
     for bzz in 0 ..< gz:
       for byy in 0 ..< gy:
         for bxx in 0 ..< gx:

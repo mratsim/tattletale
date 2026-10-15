@@ -1,7 +1,7 @@
-## NVRTC: nnkCall in nnkTypeDef (constructor type definitions)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_constructor.nim
-##
-## Coverage: nim_to_gpu.nim:1356-1358
+## NVRTC: nnkCall inside nnkTypeDef (constructor type definitions).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_constructor.nim
 import std/strformat
 import workspace/crucible
 
@@ -20,7 +20,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("typeConstructorKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("typeConstructorKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10
   doAssert buf[1] == 20
   echo "  OK (test_nvrtc_type_constructor)"

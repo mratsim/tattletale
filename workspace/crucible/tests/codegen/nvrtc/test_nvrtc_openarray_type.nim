@@ -1,19 +1,9 @@
-## Regression: `ntyOpenArray` not supported in type resolver
-##
-## Two kernels, both calling an external func with `openArray[T]`:
-##
-##   kernel 1 — double a full openArray
-##   kernel 2 — double a half-view via the `+%` template
-##              (ceramic's ptr_arithmetic.nim), which expands to
-##              toOpenArray(data, off, data.len - 1)
-##
-## Bug: resolvers.nim `resolveType` has no `of ntyOpenArray:` arm.
+## ntyOpenArray resolves in the type resolver: two kernels call an external
+## func taking `openArray[T]`, one over a full array, one over a `+%` half-view.
 ##
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_openarray_type.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_openarray_type.nim
 import std/strformat
 import workspace/crucible
 
@@ -65,7 +55,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var fullBuf: array[4, float32]
   var engine1 = bkCuda.init()
   engine1.ingest(kernel1)
-  engine1.run<<(1, 1)>>("kernelFull", fullBuf, (fullIn, 4'i32))
+  let iDev1 = engine1.allocDevice(sizeof(fullIn))
+  engine1.copyToDeviceFromHost(iDev1, addr fullIn[0], sizeof(fullIn))
+  let oDev1 = engine1.allocDevice(sizeof(fullBuf))
+  engine1.run<<(1, 1)>>("kernelFull", oDev1, (iDev1, 4'i32))
+  engine1.copyToHostFromDevice(addr fullBuf[0], oDev1, sizeof(fullBuf))
+  engine1.freeDevice(iDev1)
+  engine1.freeDevice(oDev1)
   for i in 0 .. 3:
     let expected = float32(i + 1) * 2.0'f32
     echo &"full[{i}]: {fullBuf[i]} (expected {expected})"
@@ -76,7 +72,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var halfBuf: array[2, float32]
   var engine2 = bkCuda.init()
   engine2.ingest(kernel2)
-  engine2.run<<(1, 1)>>("kernelHalf", halfBuf, (halfIn, 4'i32))
+  let iDev2 = engine2.allocDevice(sizeof(halfIn))
+  engine2.copyToDeviceFromHost(iDev2, addr halfIn[0], sizeof(halfIn))
+  let oDev2 = engine2.allocDevice(sizeof(halfBuf))
+  engine2.run<<(1, 1)>>("kernelHalf", oDev2, (iDev2, 4'i32))
+  engine2.copyToHostFromDevice(addr halfBuf[0], oDev2, sizeof(halfBuf))
+  engine2.freeDevice(iDev2)
+  engine2.freeDevice(oDev2)
   for i in 0 .. 1:
     let expected = float32(i + 3) * 2.0'f32
     echo &"half[{i}]: {halfBuf[i]} (expected {expected})"

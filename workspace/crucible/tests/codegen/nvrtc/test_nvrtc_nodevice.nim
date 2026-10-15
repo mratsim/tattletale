@@ -1,8 +1,9 @@
-## NVRTC: calling functions WITHOUT {.device.} set explicitly
+## NVRTC: functions defined outside the `cuda` block are auto-annotated with
+## `attDevice` when pulled into a kernel.
 ##
-## Functions defined outside the `cuda` block are auto-annotated with
-## `attDevice` in `nim_to_gpu.nim` (~line 832: `fn.pAttributes.incl attDevice`).
-## This test verifies the mechanism works for externally-pulled functions.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_nodevice.nim
 
 import std/strformat
 import workspace/crucible
@@ -37,7 +38,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[8, int32]
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 4 threads explicitly.
-  engine.run<<(1, 4)>>("nodeviceKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 4)>>("nodeviceKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
 
   doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
   doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"

@@ -1,11 +1,9 @@
-## Test: crucible type resolution edge cases
+## Type resolution edge case: an ObjConstr with an Empty type child, a generic
+## type instance in const context losing the BracketExpr type node.
 ##
-## Exercises patterns where Nim's AST representation diverges from the
-## canonical form. Uses crucible-only types — NO ceramic dependency.
-##
-##   - ObjConstr with Empty type child — generic type instance in
-##     const context loses the BracketExpr type node.
-##     (resolvers.nim:initGpuGenericInst, nnkObjConstr branch)
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_resolution.nim
 
 import std/[unittest, strformat]
 import workspace/crucible
@@ -25,7 +23,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

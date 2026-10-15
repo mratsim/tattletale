@@ -1,10 +1,7 @@
-## gpuBlock(isExpr) with trailing gpuCall — assigned to output
-##
+## gpuBlock(isExpr) with a trailing gpuCall assigned to the output.
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_block_call_trail.nim 2>&1
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_block_call_trail.nim
 
 import std/strformat
 import workspace/crucible
@@ -44,7 +41,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var outBuf: array[1, float32]
   var engine = bkCuda.init()
   engine.ingest(kernel)
-  engine.run<<(1, 1)>>("reproKernel", outBuf, (data, 4'i32))
+  let iDev = engine.allocDevice(sizeof(data))
+  engine.copyToDeviceFromHost(iDev, addr data[0], sizeof(data))
+  let oDev = engine.allocDevice(sizeof(outBuf))
+  engine.run<<(1, 1)>>("reproKernel", oDev, (iDev, 4'i32))
+  engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
+  engine.freeDevice(iDev)
+  engine.freeDevice(oDev)
   doAssert abs(outBuf[0] - data[0]) < 1e-5, "output[0] = " & $outBuf[0] & " (expected " & $data[0] & ")"
   echo "  OK (test_nvrtc_hoist_block_call_trail)"
 

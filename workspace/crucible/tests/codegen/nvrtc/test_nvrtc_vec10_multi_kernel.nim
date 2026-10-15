@@ -1,6 +1,7 @@
-## Multi-kernel Vec10 add/mul — NVRTC (CUDA) backend
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_vec10_multi_kernel.nim
+## Multi-kernel Vec10 add/mul, NVRTC (CUDA) backend.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_vec10_multi_kernel.nim
 import workspace/crucible
 
 const kernelCode = cuda:
@@ -28,12 +29,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var b: array[10, uint32] = [10'u32, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
   var buf: array[10, uint32]
-  engine.run<<(1, 10)>>("vec10_add", buf, (a, b))
+  let aDev = engine.allocDevice(sizeof(a))
+  engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(a))
+  let bDev = engine.allocDevice(sizeof(b))
+  engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 10)>>("vec10_add", oDev, (aDev, bDev))
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   echo "  vec10_add: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] + b[i]
 
-  engine.run<<(1, 10)>>("vec10_mul", buf, (a, b))
+  engine.run<<(1, 10)>>("vec10_mul", oDev, (aDev, bDev))
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(oDev)
   echo "  vec10_mul: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] * b[i]

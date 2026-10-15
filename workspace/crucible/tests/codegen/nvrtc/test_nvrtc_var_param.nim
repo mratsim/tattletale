@@ -1,6 +1,7 @@
-## NVRTC: var T (byref) param via codegen pipeline
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_var_param.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
+## NVRTC: `var T` byref params on device procs via the codegen pipeline.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_var_param.nim
 import workspace/crucible
 
 const kernelCode = cuda:
@@ -30,7 +31,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("varParamKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("varParamKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  p.x=", buf[0], " p.y=", buf[1], " a=", buf[2], " b=", buf[3]
   doAssert buf[0] == 10
   doAssert buf[1] == 20

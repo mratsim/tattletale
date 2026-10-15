@@ -1,12 +1,7 @@
-## Crucible: DotExpr in generic type resolution
-##
-## tv(0,0) → crd2idx(tv.layout, (0,0)) produces nnkBracketExpr(DotExpr, IntLit)
-## which crucible's getGenericTypeName can't handle.
-##
+## nnkBracketExpr(DotExpr, IntLit) nodes resolve in generic type names during `cuda:` codegen.
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensorview_paren.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensorview_paren.nim
 
 import std/[unittest, macros]
 import workspace/crucible
@@ -58,7 +53,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 0.0
 
 when isMainModule:
