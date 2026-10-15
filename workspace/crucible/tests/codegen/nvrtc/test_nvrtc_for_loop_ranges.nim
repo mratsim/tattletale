@@ -1,10 +1,6 @@
 ## NVRTC: for-loop range parsing (nnkForStmt)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_for_loop_ranges.nim
-##
-## Exercises the range parsing at nim_to_gpu.nim ~line 1116:
-##   - Infix range: `0 .. N`
-##   - Generic bound
-##   - Body access via node[^1]
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_for_loop_ranges.nim
 import std/strformat
 import workspace/crucible
 
@@ -22,7 +18,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kInfix)
-    engine.run<<(1, 4)>>("infixRangeKernel", buf1, ())
+    let oDev = engine.allocDevice(sizeof(buf1))
+    engine.run<<(1, 4)>>("infixRangeKernel", oDev, ())
+    engine.copyToHostFromDevice(addr buf1[0], oDev, sizeof(buf1))
+    engine.freeDevice(oDev)
   doAssert buf1[0] == 10, &"range [0]: got {buf1[0]}"
   doAssert buf1[1] == 11, &"range [1]: got {buf1[1]}"
   doAssert buf1[2] == 12, &"range [2]: got {buf1[2]}"
@@ -38,7 +37,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kBodyAccess)
-    engine.run<<(1, 2)>>("bodyAccessKernel", buf2, ())
+    let oDev = engine.allocDevice(sizeof(buf2))
+    engine.run<<(1, 2)>>("bodyAccessKernel", oDev, ())
+    engine.copyToHostFromDevice(addr buf2[0], oDev, sizeof(buf2))
+    engine.freeDevice(oDev)
   doAssert buf2[0] == 200, &"body access [0]: got {buf2[0]}"
   doAssert buf2[1] == 201, &"body access [1]: got {buf2[1]}"
   doAssert buf2[2] == 202, &"body access [2]: got {buf2[2]}"
@@ -55,7 +57,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kVarBound)
-    engine.run<<(1, 2)>>("varBoundKernel", buf3, ())
+    let oDev = engine.allocDevice(sizeof(buf3))
+    engine.run<<(1, 2)>>("varBoundKernel", oDev, ())
+    engine.copyToHostFromDevice(addr buf3[0], oDev, sizeof(buf3))
+    engine.freeDevice(oDev)
   doAssert buf3[0] == 300, &"var bound [0]: got {buf3[0]}"
   doAssert buf3[1] == 300, &"var bound [1]: got {buf3[1]}"
 

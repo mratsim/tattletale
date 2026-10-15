@@ -1,9 +1,6 @@
 ## NVRTC: external functions pulled from outside the `cuda` block
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-##
-## Tests the PR #565 feature: functions defined outside the `cuda` block
-## are pulled in automatically when called from GPU code.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn.nim
 import workspace/crucible
 
 # ── External device functions (defined outside the `cuda` block) ────────────
@@ -41,7 +38,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
-  engine.run("externalFnKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("externalFnKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  addThree(10,20,30)  = ", buf[0]
   echo "  scaleAndAdd(5,2,3)  = ", buf[1]
   echo "  selectValue(isEven(42), 100, 200) = ", buf[2]

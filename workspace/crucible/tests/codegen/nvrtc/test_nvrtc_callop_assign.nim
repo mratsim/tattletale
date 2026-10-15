@@ -1,19 +1,6 @@
-## Minimal reproduction of fillWith on TensorView inside cuda:
-## without any ceramic dependency.
-##
-## Issue: for-loop with `()` operator assignment on TensorView inside cuda: block
-##        — codegen emits `tv.data[pos]; = val;` (extra semicolon before `=`).
-##
-## Root cause: `()` template produces a stmt-list-expr with `let` bindings
-##   followed by `tv.data[pos]`. The codegen emits the `let` statements
-##   with `;` and then `tv.data[pos];` (statement not lvalue), breaking
-##   the subsequent `= val`.
-##
+## fillWith on TensorView inside cuda: (minimal reproduction)
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_assign.nim
-
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_assign.nim
 import std/[unittest, macros]
 import workspace/crucible
 
@@ -74,7 +61,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[128, float32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 42.0'f32
       check buf[127] == 42.0'f32
 

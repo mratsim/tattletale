@@ -1,21 +1,6 @@
-## gpuBinOp self-carried result type (bType) — end-to-end NVRTC oracle
-##
-## A fold do-block (`acc * it`, `acc + it_a * it_b`) is pulled into device
-## procs from OUTSIDE the cuda block. The fold body lowers to a block
-## expression whose tail is a primitive gpuBinOp. Pre-fix, blitting that
-## tail crashed the compiler: "getExprType: unhandled node kind gpuBinOp".
-##
-## This test is MANDATORY: it runs the crash path through the full pipeline
-## via execute() and additionally asserts the fold-tail IR node is a
-## primitive gpuBinOp carrying its own gtInt32 result type. The fold element
-## is the proc parameter, so the kernel result genuinely depends on its input.
-##
+## gpuBinOp self-carried result type (bType): end-to-end NVRTC test
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/tests/nvrtc --nimcache:nimcache/tests/nvrtc \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
-
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
 import std/[unittest]
 import workspace/crucible
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
@@ -75,7 +60,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[2, int32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.copyToDeviceFromHost(oDev, addr output[0], sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
       check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2
 

@@ -1,8 +1,6 @@
 ## CuTe: static division for tile sizing (B06)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_div.nim
-##
-## Note: uses separate type names because gtObject struct naming
-## doesn't yet differentiate generic params.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_static_div.nim
 import std/strformat
 import workspace/crucible
 
@@ -42,7 +40,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("divTileKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("divTileKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 1,   &"tile[0]: {buf[0]}"
   doAssert buf[1] == 64,  &"tile[63]: {buf[1]}"
   doAssert buf[2] == 100, &"perWarp[0]: {buf[2]}"

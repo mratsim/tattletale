@@ -1,10 +1,6 @@
 ## NVRTC: external functions + external types + kernel chaining
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn_type.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-##
-## Tests the PR #565 feature end-to-end: functions AND types defined
-## entirely outside the `cuda` block, only called/used from within.
-## Also tests that multiple kernels sharing the same external code work.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn_type.nim
 import workspace/crucible
 
 # ── External types ──────────────────────────────────────────────────────────
@@ -58,13 +54,19 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   # Kernel 1: tripletSum
   var buf1: array[1, uint32]
-  engine.run("sumKernel", buf1, ())
+  let oDev1 = engine.allocDevice(sizeof(buf1))
+  engine.run("sumKernel", oDev1, ())
+  engine.copyToHostFromDevice(addr buf1[0], oDev1, sizeof(buf1))
+  engine.freeDevice(oDev1)
   echo "  sumKernel (100+200+300) = ", buf1[0]
   doAssert buf1[0] == 600
 
   # Kernel 2: compose + reduce
   var buf2: array[3, uint32]
-  engine.run("maxKernel", buf2, ())
+  let oDev2 = engine.allocDevice(sizeof(buf2))
+  engine.run("maxKernel", oDev2, ())
+  engine.copyToHostFromDevice(addr buf2[0], oDev2, sizeof(buf2))
+  engine.freeDevice(oDev2)
   echo "  maxKernel compose(1,2,3) = ", buf2[0]
   echo "  maxKernel t.a+b+c        = ", buf2[1]
   echo "  maxKernel reduceMax      = ", buf2[2]

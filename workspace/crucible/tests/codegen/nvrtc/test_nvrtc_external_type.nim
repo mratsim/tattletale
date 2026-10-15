@@ -1,9 +1,6 @@
 ## NVRTC: external types pulled from outside the `cuda` block
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_type.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
-##
-## Tests the PR #565 feature: types defined outside the `cuda` block
-## are pulled in automatically when used by GPU code.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_type.nim
 import workspace/crucible
 
 # ── External types (defined outside the `cuda` block) ───────────────────────
@@ -53,7 +50,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
-  engine.run("externalTypeKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("externalTypeKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
   echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]
   echo "  sum(Vec4(1,2,3,4))  = ", buf[3]

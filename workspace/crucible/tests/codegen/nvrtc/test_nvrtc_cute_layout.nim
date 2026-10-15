@@ -1,5 +1,6 @@
-## CuTe Layout + Tile dot products — NVRTC (CUDA) backend
-## Run with: nim c -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cute_layout.nim
+## CuTe Layout + Tile dot products (NVRTC CUDA backend)
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cute_layout.nim
 import std/strformat
 import workspace/crucible
 
@@ -28,7 +29,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run<<(1, 1)>>("cuteKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("cuteKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"tile[0,0]: {buf[0]}"
   doAssert buf[1] == 20, &"tile[0,1]: {buf[1]}"
   doAssert buf[2] == 60, &"tile[1,2]: {buf[2]}"

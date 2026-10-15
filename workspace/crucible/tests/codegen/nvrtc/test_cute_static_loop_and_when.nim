@@ -1,8 +1,6 @@
 ## CuTe scaling: static int in loops + compile-time branching
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_loop_and_when.nim
-##
-## CuTe dispatches tile sizes at compile time: different
-## unroll factors, loop bounds, and type selection per GPU arch.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_static_loop_and_when.nim
 import std/strformat
 import workspace/crucible
 
@@ -26,7 +24,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("staticLoopKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("staticLoopKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
   doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
   doAssert buf[2] == 30, &"loop[2]: {buf[2]}"

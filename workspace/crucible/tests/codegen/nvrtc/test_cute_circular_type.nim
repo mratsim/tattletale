@@ -1,12 +1,6 @@
 ## CuTe: forward-referenced types (B23)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_circular_type.nim
-##
-## Tests that types referencing each other (defined in order at Nim level)
-## resolve correctly in GPU codegen. True circular types (A contains B
-## contains A) have infinite size and are caught by the Nim compiler.
-##
-## Note: `ref` and GC types don't exist on GPU, so pointer-based cycles
-## use `ptr` (raw CUDA pointer) instead.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_circular_type.nim
 import std/strformat
 import workspace/crucible
 
@@ -25,7 +19,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("fwdRefKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("fwdRefKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"fwd ref: {buf[0]}"
   echo "  OK — forward-referenced types (B23)"
 

@@ -173,7 +173,7 @@ proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, 
 
   # every parameter passes by value as its address, CUDA copies at launch
   var outVal = output
-  var params: seq[pointer] = @[addr outVal]
+  var params: seq[pointer] = @[pointer(addr outVal)]
   var argsCopy = args
   for f in fields(argsCopy):
     params.add addr f

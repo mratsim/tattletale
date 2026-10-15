@@ -1,7 +1,6 @@
-## NVRTC: empty struct gpuTypeDef (char _; fallback)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_empty_struct_gpu.nim
-##
-## Coverage: cuda_lang.nim:410-412
+## NVRTC: empty struct gpuTypeDef (char _ fallback)
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_empty_struct_gpu.nim
 import std/strformat
 import workspace/crucible
 
@@ -18,7 +17,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("emptyStructKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("emptyStructKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42
   echo "  OK (test_nvrtc_empty_struct_gpu)"
 

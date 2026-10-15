@@ -1,14 +1,6 @@
-## Reproduce: duplicate struct definitions in generated CUDA
-##
-## A simple tuple constructor `(Int[8](), Int[16]())` generates
-## duplicate type definitions. The first has 4 fields (doubled),
-## the second has 2 fields (correct).
-##
+## duplicate struct definitions in generated CUDA (tuple constructor)
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dup_typedef.nim
-
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dup_typedef.nim
 import std/[unittest]
 import workspace/crucible
 
@@ -27,7 +19,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 1.0
 
 when isMainModule:

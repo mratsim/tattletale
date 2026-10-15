@@ -1,7 +1,6 @@
 ## CuTe: pointer stride + computed indexing (B15, B20)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_ptr_stride.nim
-##
-## CuTe kernels compute offsets from thread/block IDs and strides.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_ptr_stride.nim
 import std/strformat
 import workspace/crucible
 
@@ -31,7 +30,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run<<(1, 1)>>("stridedKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("stridedKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10,  &"s.data[0]: {buf[0]}"
   doAssert buf[5] == 70,  &"s.data[1*4+2]: {buf[5]}"
   doAssert buf[6] == 6,   &"offset calc: {buf[6]}"

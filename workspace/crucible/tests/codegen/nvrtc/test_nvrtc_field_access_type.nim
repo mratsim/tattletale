@@ -1,17 +1,6 @@
-## Crucible type resolver edge cases
-##
-## When tracing the TensorView `()` operator, several gaps were found
-## in how crucible handles type expressions involving field access.
-##
-## Cases:
-##   1. generic call with DotExpr arg — works (regression guard)
-##   2. typeof field access in typedef — crashes parseTypeFields
-##
+## crucible type resolver edge cases (field access)
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_field_access_type.nim
-
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_field_access_type.nim
 import std/[unittest]
 import workspace/crucible
 
@@ -51,7 +40,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 1
 
     test "Case 2 — typeof field access in type definition":
@@ -59,7 +51,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 1
 
 when isMainModule:

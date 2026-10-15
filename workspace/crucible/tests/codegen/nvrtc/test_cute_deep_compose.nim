@@ -1,9 +1,6 @@
 ## CuTe: deep generic composition (B11, B12, B13)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_deep_compose.nim
-##
-## B11: 3-level generic nesting
-## B12: Type alias chain (5+ aliases)
-## B13: 8+ generic params (GEMM config)
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_deep_compose.nim
 import std/strformat
 import workspace/crucible
 
@@ -56,7 +53,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("deepComposeKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("deepComposeKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 0,   &"alias[0]: {buf[0]}"
   doAssert buf[1] == 15,  &"alias[15]: {buf[1]}"
   doAssert buf[2] == 42,  &"nested val: {buf[2]}"

@@ -1,10 +1,6 @@
 ## CuTe: when branches producing different types (B26)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_when_types.nim
-##
-## CuTe dispatches tile types per GPU arch via compile-time branching.
-## `when` is evaluated by Nim at compile time during generic instantiation.
-## Inside `cuda:`, generic procs with `when` are instantiated by Crucible,
-## which receives the AST with when already resolved by Nim.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_when_types.nim
 import std/strformat
 import workspace/crucible
 
@@ -37,7 +33,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("whenTypesKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("whenTypesKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"small tile: {buf[0]}"
   doAssert buf[1] == 43, &"large tile: {buf[1]}"
   echo "  OK — when dispatch types (B26)"

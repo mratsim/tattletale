@@ -1,9 +1,6 @@
-## Test: crucible CUDA codegen for structs with dummy/empty fields
-##
-## When a struct has no fields (crucible pads it with `char _`),
-## the object constructor must emit a valid initializer, not empty braces.
-## The NVRTC compiler validates the generated code.
-
+## crucible CUDA codegen for structs with dummy/empty fields
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dummy_init.nim
 import std/[unittest, strformat]
 import workspace/crucible
 
@@ -26,14 +23,20 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "tuple of dummy structs const":
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode2)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

@@ -1,11 +1,6 @@
 ## NVRTC: tuple with generic types (key CuTe pattern)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bracket_in_tuple.nim
-##
-## Coverage: nim_to_gpu.nim:507-519 — nnkBracketExpr + else branch
-## in parseTypeFields for tuple constructors.
-##
-## Important for CuTe: shapes, strides, and coordinates are tuples
-## of generic types like `(Int<M>, Int<N>)` or `(float32, float32)`.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bracket_in_tuple.nim
 import std/strformat
 import workspace/crucible
 
@@ -32,7 +27,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("tupleGenericKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("tupleGenericKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
   doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"
   doAssert buf[2] == 99, &"tuple[1]: got {buf[2]}"

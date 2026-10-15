@@ -1,14 +1,6 @@
-## When `..<` expands to Slice[int] inside cuda: block, the for-loop
-## codegen emits `for(int i = Slicei32{0, N}; ...)` instead of decomposing
-## the Slice into start/end ints — the nnkForStmt handler only checks
-## for nnkInfix range expressions.
-##
+## NVRTC: for-loop over a `..<` Slice[int] range inside cuda:
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_forloop_slice_range.nim
-
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_forloop_slice_range.nim
 import std/[unittest, macros]
 import workspace/crucible
 
@@ -34,7 +26,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[128, float32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 1.0'f32
       check buf[127] == 1.0'f32
 
