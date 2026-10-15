@@ -1,15 +1,9 @@
-## Metal: shared memory + `syncthreads` barrier.
-## A 64-thread threadgroup fills a `{.smem.}` scratch array, barriers, then
-## reads it back reversed through `thread_position_in_threadgroup`.
-## Runs through `engine.run()` and asserts byte-exact output.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: shared memory + `syncthreads` barrier. A 64-thread threadgroup
+## fills a `{.smem.}` scratch array, barriers, then reads it back reversed
+## through `thread_position_in_threadgroup`, the output is byte-exact.
 ##
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_shared_memory.nim
 
 import std/unittest
@@ -18,17 +12,21 @@ import workspace/crucible
 const sharedMsl = metal:
   proc sharedKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     var scratch {.smem.}: array[64, uint32]
-    scratch[thread_position_in_threadgroup.x] = thread_position_in_threadgroup.x
+    let t = thread_position_in_threadgroup.x
+    scratch[t] = uint32(t)
     syncthreads()
-    output[thread_position_in_threadgroup.x] = scratch[63'u32 - thread_position_in_threadgroup.x]
+    output[t] = scratch[63 - t]
 
 proc runTest() =
   suite "Metal - shared memory + barrier":
     test "64 threads reverse-fill through threadgroup memory":
       var engine = bkMetal.init()
       engine.ingest(sharedMsl)
+      let oDev = engine.allocDevice(64 * sizeof(uint32))
+      engine.run<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", oDev, ())
       var res: array[64, uint32]
-      engine.run<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 64 * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(63 - i)
 

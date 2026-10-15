@@ -1,8 +1,7 @@
 ## CuTe scaling: codegen patterns (B15-B21)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_codegen.nim
-##
-## Real GPU kernel patterns: grid-stride loops, pointer stride,
-## shared memory, syncthreads, computed indexing.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_codegen.nim
 import std/strformat
 import workspace/crucible
 
@@ -35,7 +34,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run<<(1, 4)>>("codegenKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 4)>>("codegenKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 100, &"tid0: {buf[0]}"
   doAssert buf[3] == 103, &"tid3: {buf[3]}"
   doAssert buf[4] == 6,   &"idx(1,2,4): {buf[4]} (expected 1*4+2=6)"

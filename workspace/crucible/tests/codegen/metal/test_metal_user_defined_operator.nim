@@ -1,13 +1,6 @@
 ## Metal: user-defined operators. Basic uint32 operands lower to gpuBinOp
-## (C-family `+ - * / % << >> & | ^` in MSL). Struct operands lower
-## to gpuCall with operator syntax (`x + y` on a Wrapper). Wrapper2
-## covers the sanitized-operator name-collision handling.
-## Each overload set gets its own mangled fn name. All three kernels run
-## on the device with byte-exact asserts, including the full 10-binop basicKernel set
-## that the printer compile gate deliberately left to the execution suite.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## (C-family `+ - * / % << >> & | ^` in MSL), struct operands to gpuCall using
+## operator syntax. Wrapper2 covers sanitized-operator name collisions.
 ##
 ## Run:
 ##   cd tattletale
@@ -111,8 +104,17 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(basicMsl)
       var a: array[1, uint32] = [13'u32]
       var b: array[1, uint32] = [5'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let bDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      engine.run("basicKernel", oDev, (aDev, bDev))
       var out32: array[10, uint32]
-      engine.run("basicKernel", out32, (a, b))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check out32[0] == 18
       check out32[1] == 8
       check out32[2] == 65
@@ -130,8 +132,17 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo structMsl
       var a: array[1, uint32] = [7'u32]
       var b: array[1, uint32] = [3'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let bDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      engine.run("structKernel", oDev, (aDev, bDev))
       var out32b: array[10, uint32]
-      engine.run("structKernel", out32b, (a, b))
+      engine.copyToHostFromDevice(addr out32b[0], oDev, 10 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check out32b[0] == 10
       check out32b[1] == 4
       check out32b[2] == 21
@@ -149,8 +160,17 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo structMsl2
       var a: array[1, uint32] = [14'u32]
       var b: array[1, uint32] = [3'u32]
+      let aDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      let bDev = engine.allocDevice(sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      engine.run("structKernel2", oDev, (aDev, bDev))
       var out32c: array[10, uint32]
-      engine.run("structKernel2", out32c, (a, b))
+      engine.copyToHostFromDevice(addr out32c[0], oDev, 10 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check out32c[0] == 17
       check out32c[1] == 11
       check out32c[2] == 42

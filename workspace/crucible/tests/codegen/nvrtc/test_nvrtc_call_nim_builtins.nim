@@ -1,14 +1,7 @@
-## Tests that registerGenericInstOrExternalProc handles:
-##   1. system.* as nnkCall for int32, int64, int16, float32, float64, uint32
-##   2. User-defined `*` on struct as nnkCall — non-magic pull-in
-##
-## Self-contained — no ceramic dependency.
-##
+## registerGenericInstOrExternalProc: system `*` as nnkCall plus user-defined `*` on a struct
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
-
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
 import std/[unittest]
 import workspace/crucible
 
@@ -24,7 +17,10 @@ template runIntKernel(t: typedesc; expected0, expected1: float32) =
     var buf: array[2, float32]
     var engine = bkCuda.init()
     engine.ingest(k)
-    engine.run<<(1, 1)>>("kernel", buf, ())
+    let oDev = engine.allocDevice(sizeof(buf))
+    engine.run<<(1, 1)>>("kernel", oDev, ())
+    engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+    engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -46,7 +42,10 @@ template runFloatKernel(t: typedesc; expected0, expected1: float32) =
     var buf: array[2, float32]
     var engine = bkCuda.init()
     engine.ingest(k)
-    engine.run<<(1, 1)>>("kernel", buf, ())
+    let oDev = engine.allocDevice(sizeof(buf))
+    engine.run<<(1, 1)>>("kernel", oDev, ())
+    engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+    engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -89,7 +88,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[2, float32]
       var engine = bkCuda.init()
       engine.ingest(wrapperKernel)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
       check buf[0] == 12'f32
       check buf[1] == 16'f32
 

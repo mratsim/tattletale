@@ -1,10 +1,6 @@
-## Metal: int64/uint64 buffer arithmetic.
-## `int64Kernel` adds two `int64` elements and doubles a `uint64` element with
-## a 10^12 constant. Runs through `engine.run()` and asserts the output
-## byte-exact — proving 8-byte buffer elements marshal at their Nim width.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: int64/uint64 buffer arithmetic. `int64Kernel` adds two `int64`
+## elements and doubles a `uint64` element with a 10^12 constant, proving
+## 8-byte buffer elements marshal at their Nim width.
 ##
 ## Run:
 ##   cd tattletale
@@ -31,8 +27,17 @@ proc runTest() =
       engine.ingest(int64Msl)
       var a: array[2, int64] = [-5'i64, 12'i64]
       var b: array[2, uint64] = [3'u64, 0'u64]
+      let aDev = engine.allocDevice(a.len * sizeof(int64))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int64))
+      let bDev = engine.allocDevice(b.len * sizeof(uint64))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint64))
+      let oDev = engine.allocDevice(2 * sizeof(uint64))
+      engine.run("int64Kernel", oDev, (aDev, bDev))
       var res: array[2, uint64]
-      engine.run("int64Kernel", res, (a, b))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint64))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 7'u64
       check res[1] == 1000000000006'u64
 

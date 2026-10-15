@@ -1,14 +1,8 @@
-## Test: WebGPU WGSL codegen for structs with dummy/empty fields
+## WebGPU: WGSL codegen for structs with dummy/empty fields, the object constructor emits a valid initializer.
 ##
-## When a struct has no fields (crucible pads it with `char _`),
-## the object constructor must emit a valid initializer, not empty braces.
-##
-## To compile and run:
+## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/webgpu/test_webgpu_dummy_init.nim
-##
-## For full execution (requires libwgpu_native.so):
-##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_dummy_init.nim
 
 import std/[unittest, strformat]
@@ -34,7 +28,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelCode)
       echo kernelCode
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
 
@@ -43,7 +40,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelCode2)
       echo kernelCode2
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
 when isMainModule:

@@ -1,7 +1,13 @@
-## CuTe GEMM single-tile — Vulkan (GLSL/SPIR-V) backend
-## A(2×3) * B(3×2) = C(2×2)
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/vulkan/test_vulkan_gemm.nim
+## Vulkan (GLSL): CuTe GEMM single tile, A(2×3) * B(3×2) = C(2×2).
+## Tile type, tileAt device fn, and kernel all live inside the `vulkan:` block.
+## A and B are tile constants in the body.
+##
+## Run:
+##   cd tattletale && \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_gemm.nim
+
 import std/strformat
 import workspace/crucible
 
@@ -36,8 +42,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkVulkan.init()
     engine.ingest(kernelCode)
+    let oDev = engine.allocDevice(4 * sizeof(uint32))
+    engine.run("gemmKernel", oDev, ())
     var res: array[4, uint32]
-    engine.run("gemmKernel", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+    engine.freeDevice(oDev)
     let expected = [58'u32, 64, 139, 154]
     for i in 0 ..< 4:
       doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"

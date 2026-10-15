@@ -1,8 +1,7 @@
 ## CuTe: generic proc returning a composed generic type (B10)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_tuple_return.nim
-##
-## In CuTe, factory procs like make_layout() return composed types.
-## This tests that a generic proc returning another generic type works.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_tuple_return.nim
 import std/strformat
 import workspace/crucible
 
@@ -25,7 +24,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("pairReturnKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("pairReturnKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"a[0]: {buf[0]}"
   doAssert buf[1] == 42, &"a[3]: {buf[1]}"
   echo "  OK — generic return type (B10)"

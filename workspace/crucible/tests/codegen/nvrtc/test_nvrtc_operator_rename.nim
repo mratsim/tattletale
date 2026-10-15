@@ -1,17 +1,9 @@
-## Minimal repro: operators via `template body: untyped` with do-block
-##
-## In ceramic, foldZipWith captures the loop body as `body: untyped`.
-## The call uses Nim's do-block syntax:
-##   foldZipWith(a, b, init):
-##     acc + it_a * it_b
-##
-## This test checks whether +/* inside a do-block body are resolved
-## as nnkInfix (gpuBinOp, correct) or nnkCall (gpuCall, →add/mul).
+## `+`/`*` inside a do-block template body resolve as nnkInfix (gpuBinOp),
+## not as nnkCall gpuCall dispatch.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_operator_rename.nim
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_operator_rename.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -86,21 +78,30 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelDo)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let o1 = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", o1, ())
+      engine.copyToHostFromDevice(addr output[0], o1, sizeof(output))
+      engine.freeDevice(o1)
       check output[0] == 16.0'f32
 
     test "chained template with state":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelChain)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let o2 = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", o2, ())
+      engine.copyToHostFromDevice(addr output[0], o2, sizeof(output))
+      engine.freeDevice(o2)
       check output[0] == 16.0'f32
 
     test "recursive fold (2 iterations)":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelRec)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let o3 = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", o3, ())
+      engine.copyToHostFromDevice(addr output[0], o3, sizeof(output))
+      engine.freeDevice(o3)
       # iter0: 0 + 8*2 = 16
       # iter1: 16 + 3*4 = 28
       check output[0] == 28.0'f32

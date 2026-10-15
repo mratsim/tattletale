@@ -1,16 +1,10 @@
-## NVRTC: `max` on basic types (float32, uint32, int) — codegen inspection + run
+## NVRTC: `max` on float32, uint32, and int, an ambiguous builtin resolved
+## per overload: non-magic overloads body-parse into device fns, the int magic
+## overload forwards to the native max.
 ##
-## max is an "ambiguous builtin": both Nim and the GPU languages define it.
-## Crucible registers the compiler-magic overloads name-only (forwarded to the
-## backend's native max) and body-parses the non-magic ones like +/*:
-##   - max(float32, float32) -> system's `{.inline.}` overload (no magic) ->
-##     parsed body `if y <= x or y != y: x else: y` -> device fn with a ternary
-##   - max(uint32, uint32)   -> generic `max*[T: not SomeFloat]` (no magic) ->
-##     same: parsed body -> device fn with a ternary
-##   - max(int, int)         -> magic MaxI -> plain `max` call (CUDA native)
-##
-## This file echoes the emitted CUDA so the codegen is visible, then runs the
-## kernel and verifies the values.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_max_basic_types.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -42,7 +36,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("maxBasic", buf, (dynArr,))
+      let iDev = engine.allocDevice(sizeof(dynArr))
+      engine.copyToDeviceFromHost(iDev, addr dynArr[0], sizeof(dynArr))
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("maxBasic", oDev, (iDev,))
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(iDev)
+      engine.freeDevice(oDev)
       check buf[0] == 9.0    # max(2.5, 9.0)
       check buf[1] == 7.25   # max(3.5, 7.25)
       check buf[2] == 9.0    # max(9.0, 2.5)

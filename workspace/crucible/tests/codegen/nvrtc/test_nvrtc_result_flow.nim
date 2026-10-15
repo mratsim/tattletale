@@ -7,7 +7,9 @@
 ## before writing (e.g. `result = result + expr`) depend on undefined behavior.
 ## Use explicit `result = 0` or assign before reading.
 ##
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_result_flow.nim
 import std/strformat
 import workspace/crucible
 
@@ -63,7 +65,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[7, uint32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  engine.run<<(1, 1)>>("resultFlowKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("resultFlowKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10,  &"plain(5): {buf[0]}"
   doAssert buf[1] == 10,  &"ifElse(true): {buf[1]}"
   doAssert buf[2] == 20,  &"ifElse(false): {buf[2]}"

@@ -1,15 +1,7 @@
-## A `()` call-operator template expands to a nnkStmtListExpr (let binding +
-## final expression), which Crucible converts to gpuBlock(isExpr: true).
-## When such a block appears as a function-call argument, the backend
-## appends `;` after every statement in the block — including the final
-## value-producing one — leaking the semicolon inside the call parens.
-##
+## NVRTC: `()` call-operator template as a call argument (block expression)
 ## Run:
-##   cd tattletale
-##   CUDA_HOME=... PATH=... nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
-
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
 import std/[unittest, macros]
 import workspace/crucible
 
@@ -42,7 +34,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[8, float32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

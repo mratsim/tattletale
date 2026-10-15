@@ -1,10 +1,9 @@
-## WebGPU 2D dispatch — the `{.workgroup: (X, Y).}` annotation bakes a 3D
-## @workgroup_size into the WGSL, and the `<<(grid, blk)>>` chevrons drive
-## dispatchWorkgroups group counts (blk must match the baked size, validated).
+## WebGPU 2D dispatch, the `{.workgroup: (X, Y).}` annotation bakes the workgroup size
+## and the chevron form drives the dispatchWorkgroups group counts.
 ##
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_ndrange2d.nim
 
 import std/[unittest]
@@ -12,9 +11,8 @@ import workspace/crucible
 
 const kernel2d = webgpu:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
-    # inline use — a local `let gid = global_id` emits a wrong type
-    # annotation (WgslGridDim vs the builtin's vec3<u32>)
-    C[global_id.y * 8'u32 + global_id.x] = global_id.y * 8'u32 + global_id.x
+    let flat = global_id.y * 8 + global_id.x
+    C[flat] = uint32(flat)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernel2d
@@ -25,7 +23,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkWGSL.init()
       engine.ingest(kernel2d)
       var res: array[64, uint32]
-      engine.run<<(grid: (2, 4), blk: (4, 2))>>("grid2d", res, ())
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.run<<(grid: (2, 4), blk: (4, 2))>>("grid2d", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
 

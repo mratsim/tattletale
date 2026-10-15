@@ -1,9 +1,7 @@
 ## CuTe: factory functions returning composed types (B14)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
-##
-## CuTe composes layouts through generic factory functions.
-## Note: for-loop bounds use 0 .. M-1 / 0 .. N-1 (Nim inclusive range)
-##       which generates i<M / i<N in C codegen.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
 import std/strformat
 import workspace/crucible
 
@@ -29,7 +27,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("factoryKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("factoryKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"factory[0]: {buf[0]}"
   doAssert buf[1] == 42, &"factory[5]: {buf[1]}"
   echo "  OK — factory pattern"

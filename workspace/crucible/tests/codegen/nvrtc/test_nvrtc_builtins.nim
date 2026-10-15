@@ -1,9 +1,7 @@
 ## NVRTC: cross-platform GPU builtins (min, max, abs)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
-##
-## min, max, abs are available on all 4 backends (CUDA, OpenCL, GLSL, WGSL).
-## Registered as known builtins in addProcToGenericInsts to avoid parsing
-## Nim's system module body (which has if-expressions the codegen can't handle).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
 import std/strformat
 import workspace/crucible
 
@@ -17,7 +15,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[3, uint32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  engine.run<<(1, 1)>>("builtinKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("builtinKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"min: {buf[0]}"
   doAssert buf[1] == 30, &"max: {buf[1]}"
   doAssert buf[2] == 5, &"abs: {buf[2]}"

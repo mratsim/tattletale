@@ -1,7 +1,9 @@
 ## CuTe GEMM single-tile — WebGPU (WGSL) backend
 ## A(2×3) * B(3×2) = C(2×2)
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/webgpu/test_webgpu_gemm.nim
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/webgpu/test_webgpu_gemm.nim
 import std/strformat
 import workspace/crucible
 
@@ -37,7 +39,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkWGSL.init()
     engine.ingest(kernelCode)
     var res: array[4, uint32]
-    engine.run("gemmKernel", res, ())
+    let oDev = engine.allocDevice(res.len * sizeof(uint32))
+    engine.run("gemmKernel", oDev, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+    engine.freeDevice(oDev)
     let expected = [58'u32, 64, 139, 154]
     for i in 0 ..< 4:
       doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"

@@ -1,7 +1,7 @@
-## NVRTC: hidden subtype conversions (nnkHiddenSubConv)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hidden_subconv.nim
-##
-## Coverage: nim_to_gpu.nim:1454-1456
+## NVRTC: hidden subtype conversions (nnkHiddenSubConv).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hidden_subconv.nim
 import std/strformat
 import workspace/crucible
 
@@ -15,7 +15,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("hiddenSubConvKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("hiddenSubConvKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"hiddenSubConv: got {buf[0]}"
   echo "  OK (test_nvrtc_hidden_subconv)"
 

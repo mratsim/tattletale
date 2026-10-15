@@ -1,22 +1,15 @@
-## Metal: output readback straight from the shared-storage buffer's `contents()`
-## after `waitUntilCompleted`. The Metal engine has no staging buffer
-## and no map path. The output buffer uses `ResourceStorageModeShared | HazardTrackingModeUntracked`, so the CPU
-## and GPU share one allocation and the readback is a plain memcpy
-## from `contents()`. This test is the rework of the webgpu `map_readback`
-## test, which exercised the staging/map path this backend intentionally deletes.
-## The kernel is the same elementwise double. Only the readback mechanism differs.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: output readback straight from the shared-storage buffer, the CPU and GPU
+## share one allocation. The readback is a plain memcpy from `contents()` after `waitUntilCompleted`.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_readback.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 # ── Kernel: elementwise double of a 4-element uint32 buffer ──────────────────
 
@@ -38,8 +31,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelCode)
       echo kernelCode
       var input = [1'u32, 2'u32, 3'u32, 4'u32]
+      let iDev = engine.allocDevice(input.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(iDev, addr input[0], input.len * sizeof(uint32))
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run("mapReadbackKernel", oDev, (iDev,))
       var res: array[4, uint32]
-      engine.run("mapReadbackKernel", res, (input,))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(iDev)
+      engine.freeDevice(oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

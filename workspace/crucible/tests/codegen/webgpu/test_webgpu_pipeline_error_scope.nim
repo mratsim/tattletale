@@ -1,13 +1,9 @@
-## WebGPU pipeline creation pops a validation error scope around
-## wgpuDeviceCreateComputePipeline:
-##
-## - the pop callback info must carry a valid WGPUCallbackMode
-## - mode 0 is wgpuCallbackModeInvalid, a conforming wgpu-native build can
-##   then never call the callback, hanging every pipeline cache miss
-## - the dispatch scope already set the mode, the pipeline scope matches it
+## WebGPU: pipeline creation pops a validation error scope around wgpuDeviceCreateComputePipeline, a cache miss must not hang the callback.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off workspace/crucible/tests/codegen/webgpu/test_webgpu_pipeline_error_scope.nim (from tattletale)
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/webgpu/test_webgpu_pipeline_error_scope.nim
 
 import workspace/crucible
 
@@ -24,7 +20,13 @@ proc runTest() =
   engine.ingest(kernelDouble)
   var res: array[4, uint32]
   var a = [1'u32, 2'u32, 3'u32, 4'u32]
-  engine.run("doubleKernel", res, (a,))
+  let aDev = engine.allocDevice(a.len * sizeof(uint32))
+  let oDev = engine.allocDevice(res.len * sizeof(uint32))
+  engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+  engine.run("doubleKernel", oDev, (aDev,))
+  engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+  engine.freeDevice(aDev)
+  engine.freeDevice(oDev)
   doAssert res == [2'u32, 4, 6, 8], $res
 
 when isMainModule:

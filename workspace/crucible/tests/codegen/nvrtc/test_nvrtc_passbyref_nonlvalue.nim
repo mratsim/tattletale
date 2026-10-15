@@ -5,8 +5,12 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
-## NVRTC: passByRef with non-lvalue arguments — execution test.
-## Large struct passed by const& — tests that temporaries work at call sites.
+## NVRTC: passByRef with non-lvalue arguments, a large struct passed by const&
+## accepts temporaries at call sites.
+##
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_passbyref_nonlvalue.nim
 
 import std/strformat
 import workspace/crucible
@@ -27,7 +31,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var buf: array[1, uint32]
     var engine = bkCuda.init()
     engine.ingest(kernelInline)
-    engine.run("kernelMain", buf, ())
+    let o1 = engine.allocDevice(sizeof(buf))
+    engine.run("kernelMain", o1, ())
+    engine.copyToHostFromDevice(addr buf[0], o1, sizeof(buf))
+    engine.freeDevice(o1)
     doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
     echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
 
@@ -44,7 +51,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var buf: array[1, uint32]
     var engine = bkCuda.init()
     engine.ingest(kernelFnRet)
-    engine.run("kernelMain", buf, ())
+    let o2 = engine.allocDevice(sizeof(buf))
+    engine.run("kernelMain", o2, ())
+    engine.copyToHostFromDevice(addr buf[0], o2, sizeof(buf))
+    engine.freeDevice(o2)
     doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"
     echo "  ✅ Test 2 — function return arg: ", buf[0]
 

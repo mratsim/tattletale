@@ -1,15 +1,9 @@
-## NVRTC: if-expressions (nnkIfExpr) in GPU code
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_if_expr.nim
+## NVRTC: if-expressions (nnkIfExpr) in GPU code, nnkIfStmt is the statement
+## form and is not covered here.
 ##
-## Tests the nnkIfExpr handler (nim_to_gpu.nim ~line 1089).
-## Catches:
-##   BUG-B-001: nnkElse vs nnkElseExpr — else branch silently dropped
-##   BUG-A-001: hardcoded "result" as assignment target
-##
-## An if-expression is any `if cond: a else: b` that produces a value
-## (as opposed to an if-statement). In Nim both use different AST nodes:
-##   nnkIfStmt  → statement (not tested here)
-##   nnkIfExpr  → expression (tested here)
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_if_expr.nim
 import std/strformat
 import workspace/crucible
 
@@ -21,7 +15,10 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   ## level, which would keep every context alive until program exit.
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  engine.run(kernelName, buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run(kernelName, oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
 
 # ═════════════════════════════════════════════════════════════════════
 # Test 1: Basic if-else expression via let binding
@@ -88,7 +85,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kIfExprCond)
-    engine.run<<(1, 4)>>("ifExprCondKernel", buf5, ())
+    let o5 = engine.allocDevice(sizeof(buf5))
+    engine.run<<(1, 4)>>("ifExprCondKernel", o5, ())
+    engine.copyToHostFromDevice(addr buf5[0], o5, sizeof(buf5))
+    engine.freeDevice(o5)
   doAssert buf5[0] == 100, &"if-expr cond (tid=0): got {buf5[0]}, expected 100"
   doAssert buf5[1] == 100, &"if-expr cond (tid=1): got {buf5[1]}, expected 100"
   doAssert buf5[2] == 200, &"if-expr cond (tid=2): got {buf5[2]}, expected 200"
@@ -125,7 +125,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kIfElifElse)
-    engine.run<<(1, 4)>>("ifElifElseKernel", buf7, ())
+    let o7 = engine.allocDevice(sizeof(buf7))
+    engine.run<<(1, 4)>>("ifElifElseKernel", o7, ())
+    engine.copyToHostFromDevice(addr buf7[0], o7, sizeof(buf7))
+    engine.freeDevice(o7)
   doAssert buf7[0] == 100, &"if-elif-else (tid=0): got {buf7[0]}, expected 100"
   doAssert buf7[1] == 200, &"if-elif-else (tid=1): got {buf7[1]}, expected 200"
   doAssert buf7[2] == 300, &"if-elif-else (tid=2): got {buf7[2]}, expected 300"

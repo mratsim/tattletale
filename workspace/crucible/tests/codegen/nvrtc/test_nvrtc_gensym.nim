@@ -1,11 +1,7 @@
-## Test: crucible handles genSym'd temporaries from `{.genSym.}` pragma
-##
-## `{.genSym.}` appears when ceramic's `evalOnceAs` macro creates
-## internal constants/variables with `{.genSym.}` pragma (see
-## int_tuples_compiletime.nim:315). The pragma wraps the const/let
-## identifier in a `nnkPragmaExpr`, which crucible must unwind.
-##
-## Related: https://github.com/nim-lang/Nim/blob/version-2-2/lib/system/macros.nim#L747
+## NVRTC: `{.genSym.}` pragmas on const/let/var inside kernels unwind to ordinary identifiers.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_gensym.nim
 
 import std/[unittest, strformat]
 import workspace/crucible
@@ -23,7 +19,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel_const", buf, ())
+      let o0 = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel_const", o0, ())
+      engine.copyToHostFromDevice(addr buf[0], o0, sizeof(buf))
+      engine.freeDevice(o0)
       check buf[0] == 42
 
     ## gensym'd let with {.genSym.} pragma — runtime branch of evalOnceAs
@@ -36,7 +35,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel_let", buf, (7'u32,))
+      let o1 = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel_let", o1, (7'u32,))
+      engine.copyToHostFromDevice(addr buf[0], o1, sizeof(buf))
+      engine.freeDevice(o1)
       check buf[0] == 7
 
     ## genSym'd var in a for loop — pattern from fillWith / gemm kernels
@@ -50,7 +52,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[5, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 5)>>("kernel_var", buf, ())
+      let o2 = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 5)>>("kernel_var", o2, ())
+      engine.copyToHostFromDevice(addr buf[0], o2, sizeof(buf))
+      engine.freeDevice(o2)
       for i in 0 ..< 5:
         check buf[i] == uint32(i * 3)
 
@@ -65,7 +70,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel_eoa", buf, (41'u32,))
+      let o3 = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel_eoa", o3, (41'u32,))
+      engine.copyToHostFromDevice(addr buf[0], o3, sizeof(buf))
+      engine.freeDevice(o3)
       check buf[0] == 42
 
     ## Multiple gensym consts working together in arithmetic
@@ -80,7 +88,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      engine.run<<(1, 1)>>("kernel_multi", buf, ())
+      let o4 = engine.allocDevice(sizeof(buf))
+      engine.run<<(1, 1)>>("kernel_multi", o4, ())
+      engine.copyToHostFromDevice(addr buf[0], o4, sizeof(buf))
+      engine.freeDevice(o4)
       check buf[0] == 53
 
 when isMainModule:

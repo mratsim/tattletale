@@ -1,16 +1,7 @@
-## OpenCL: cross-vocabulary coordinate + barrier kernel (GEMM-idiom slice).
-##
-## A single kernel written in foreign idioms runs on the OpenCL backend:
-##   - CUDA idiom `blockIdx.x * blockDim.x + threadIdx.x` for the global id
-##   - `syncthreads()` (CUDA barrier alias)
-##   - `thread_index_in_threadgroup` (canonical flat local index), lowered
-##     to the x-major linearization of get_local_id / get_local_size,
-##     since OpenCL has no native flat local index.
-## The host compares both the global flat id and the flat local index.
-##
+## OpenCL: cross-vocabulary coordinate + barrier kernel (GEMM-idiom slice),
+## CUDA idiom, syncthreads, and the flat local index all run on the backend.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_cross_vocabulary.nim
 
 import std/[strutils, unittest]
@@ -37,7 +28,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkOpenCL.init()
       engine.ingest(kernel2d)
       var res: array[64 + 8, uint32]
-      engine.run<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", res, ())
+      let oDev = engine.allocDevice((64 + 8) * sizeof(uint32))
+      engine.run<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, (64 + 8) * sizeof(uint32))
+      engine.freeDevice(oDev)
       # global flat id = gy * 8 + gx for each of the 64 work-items
       for i in 0 ..< 64:
         check res[i] == uint32(i)

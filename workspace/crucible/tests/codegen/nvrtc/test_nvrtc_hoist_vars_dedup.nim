@@ -1,12 +1,9 @@
-## Verifies that hoistFromExprs correctly hoists preambles from expression
-## blocks without producing duplicate variable declarations.
-## Chained `()` calls: v(X2(), Y2())(i) in a for-loop.
+## hoistFromExprs hoists preambles from expression blocks without producing
+## duplicate variable declarations across chained `()` calls in a for-loop.
 ##
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_vars_dedup.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_hoist_vars_dedup.nim
 
 import std/macros
 import workspace/crucible
@@ -69,7 +66,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var outBuf: array[1, float32]
   var engine = bkCuda.init()
   engine.ingest(kernel)
-  engine.run<<(1, 1)>>("gemmKernel", outBuf, (128'i32, 64'i32))
+  let oDev = engine.allocDevice(sizeof(outBuf))
+  engine.run<<(1, 1)>>("gemmKernel", oDev, (128'i32, 64'i32))
+  engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
+  engine.freeDevice(oDev)
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_nvrtc_hoist_vars_dedup)"
 

@@ -1,17 +1,9 @@
-## {.inject.} let-bindings from recursive template expansion:
-## repeated declarations in the same scope after block flattening.
-##
-## Without the fix: unnest pass flattens blocks but doesn't deduplicate
-## {.inject.} variable names across iterations — `acc` / `it_a` / `it_b`
-## get declared twice in the same scope.
-##
-## With the fix: shared usedNames set across recursive unnest calls
-## renames duplicates to `acc_4`, `it_a_5`, etc.
+## {.inject.} let-bindings from recursive template expansion stay unique
+## after block flattening, duplicates rename to `acc_4`, `it_a_5`, etc.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_inject_dedup.nim
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_inject_dedup.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -47,7 +39,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, int32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       # 10*1 + 20*2 + 30*3 = 10 + 40 + 90 = 140
       check output[0] == 140
 

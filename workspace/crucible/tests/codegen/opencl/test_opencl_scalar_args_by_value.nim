@@ -1,21 +1,6 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
-##
-## OpenCL: scalar kernel arguments must be bound by value.
-## The engine's run API flattens non-buffer args via ArgBlob (negative
-## size = by-value scalar) and binds them with setKernelArg(index, size,
-## data) instead of treating them as cl_mem buffers. Previously scalar
-## coefficients (alpha/beta) were passed as cl_mem, which fails with
-## CL_INVALID_ARG_SIZE. This test passes a float32 and an int32 scalar by
-## value alongside a buffer argument, and checks the computed result.
-##
+## OpenCL: scalar kernel arguments (alpha/beta) bind by value next to a buffer argument, not as cl_mem handles.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_scalar_args_by_value.nim
 
 import workspace/crucible
@@ -37,7 +22,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var alpha = 3.0'f32
     var beta = 4'i32
     var output: array[1, float32]
-    engine.run("scaleKernel", output, (a, alpha, beta))
+    let aDev = engine.allocDevice(a.len * sizeof(float32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(float32))
+    let oDev = engine.allocDevice(sizeof(float32))
+    engine.run("scaleKernel", oDev, (aDev, alpha, beta))
+    engine.copyToHostFromDevice(addr output[0], oDev, sizeof(float32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(oDev)
     doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
     echo "  OK"
 

@@ -1,15 +1,9 @@
-## Test: WebGPU pipeline cache (ingest-once / run-many)
-##
-## Exercises the WgpuPipelineCache in runImpl (runtime/engines/wgpu.nim):
-## the shader module, bind group layout, pipeline layout and compute
-## pipeline are created once and reused across runs with the same
-## (kernel, arg-shape) key. Running the same kernel twice with different
-## input arrays proves cache reuse; re-ingesting a new source and running
-## again proves cache invalidation.
+## WebGPU pipeline cache (ingest-once / run-many): the pipeline artifacts survive repeated runs
+## with the same (kernel, arg-shape) key and are invalidated by re-ingest.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_pipeline_cache.nim
 
 import std/[unittest, strformat]
@@ -43,14 +37,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      engine.run("doubleKernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.run("doubleKernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6
       check res[3] == 8
       var b = [10'u32, 20'u32, 30'u32, 40'u32]
-      engine.run("doubleKernel", res, (b,))
+      engine.copyToDeviceFromHost(aDev, addr b[0], b.len * sizeof(uint32))
+      engine.run("doubleKernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 20
       check res[1] == 40
       check res[2] == 60
@@ -61,13 +63,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      engine.run("doubleKernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.run("doubleKernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       check res[0] == 2
       check res[1] == 4
       engine.ingest(kernelTriple)
       echo kernelTriple
-      engine.run("tripleKernel", res, (a,))
+      engine.run("tripleKernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 3
       check res[1] == 6
       check res[2] == 9

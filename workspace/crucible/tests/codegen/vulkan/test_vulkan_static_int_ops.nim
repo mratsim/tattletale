@@ -1,28 +1,13 @@
-## Vulkan: `+`/`*` on Int[N] with compile-time and dynamic int operands
-##
-## Int[N] is a CuTe-style compile-time integer: its value lives in the type
-## parameter (crucible-only — the overloads below are hand-written to mirror
-## ceramic's int_tuples_datatypes.nim). Two cases:
-##   - compile-time int (a static-int type or an int literal): the result is a
-##     static-int type (Int[10]() + 1 -> Int[11]); everything is handled at the
-##     Nim level and the C compiler can optimize the code away.
-##   - dynamic int (a runtime value): the codegen materializes the type-level
-##     integer into a literal int (Int[10]() + h -> 10 + h).
-##
-## The five cases tested, for both + and *:
-##   1. both operands Int[N] types:  Int[V]() + Int[U]()  -> Int[V+U]() (resolved at Nim compile time)
-##   2. literal on the right:        Int[V]() + 1         -> Int[V+1]()
-##   3. literal on the left:         2 + Int[V]()         -> Int[2+V]()
-##   4. runtime value on the right:  Int[V]() + h         -> V + h (plain int)
-##   5. runtime value on the left:   h + Int[V]()         -> h + V (plain int)
-## Static-int results (cases 1-3) are verified via toIntVal (compile-time
-## extraction from the type); dynamic results (cases 4-5) are plain ints.
+## Vulkan: `+`/`*` on Int[N] with compile-time and dynamic int operands.
+## Static-int results fold at Nim compile time (verified via toIntVal),
+## dynamic operands materialize `Int[V]()` as the literal V in plain int arithmetic.
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##   --outdir:build/tests/vulkan --nimcache:nimcache/tests/vulkan \
-##   workspace/crucible/tests/codegen/vulkan/test_vulkan_static_int_ops.nim
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_static_int_ops.nim
+
 import std/[unittest]
 import workspace/crucible
 
@@ -80,8 +65,14 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var dynArr: array[1, int32] = [100'i32]
       var engine = bkVulkan.init()
       engine.ingest(kernelCode)
+      let dynDev = engine.allocDevice(sizeof(int32))
+      engine.copyToDeviceFromHost(dynDev, addr dynArr[0], sizeof(int32))
+      let oDev = engine.allocDevice(10 * sizeof(int32))
+      engine.run("staticIntOps", oDev, (dynDev,))
       var out32: array[10, int32]
-      engine.run("staticIntOps", out32, (dynArr))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(int32))
+      engine.freeDevice(dynDev)
+      engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

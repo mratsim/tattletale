@@ -1,13 +1,7 @@
-## NVRTC: inline asm with backtick identifiers — Nim's native asm symbol
-## mechanism (backticked names resolve to Sym nodes).
-## The gemm_mma macro generates `asm "..." : "=f"(`d0`) : "r"(`a0`)...`
-## so crucible must walk the interleaved StrLit/Sym node list.
-##
+## NVRTC: inline asm with backtick identifiers (Nim native asm symbols)
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
 import workspace/crucible
 
 const kernelCode = cuda:
@@ -33,7 +27,10 @@ proc runTest() =
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("asmBacktickKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("asmBacktickKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]
   doAssert buf[0] == 8
   doAssert buf[1] == 300

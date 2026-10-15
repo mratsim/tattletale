@@ -1,12 +1,6 @@
 ## Metal: CuTe GEMM single tile, A(2×3) * B(3×2) = C(2×2).
-## The Tile type, the tileAt device fn, and the kernel all live
-## inside the `metal:` block and mirror the printer-compile gate's gemm shape.
-## The kernel takes no input buffers. A and B are tile constants
-## in the body, and the result is written to the output buffer,
-## then asserted byte-exact on the host after `engine.run()`.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Tile type, tileAt device fn, and kernel all live inside the `metal:` block.
+## A and B are tile constants in the body.
 ##
 ## Run:
 ##   cd tattletale
@@ -44,8 +38,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "A(2×3) * B(3×2) = C(2×2) on the device":
       var engine = bkMetal.init()
       engine.ingest(kernelCode)
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run("gemmKernel", oDev, ())
       var res: array[4, uint32]
-      engine.run("gemmKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(oDev)
       let expected = [58'u32, 64, 139, 154]
       for i in 0 ..< 4:
         check res[i] == expected[i]

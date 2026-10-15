@@ -1,7 +1,7 @@
-## NVRTC: multiple kernels via codegen pipeline
-## Run with:
-##   nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_multi_kernel.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
+## NVRTC: several kernels in one module, a device proc called from a global kernel.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_multi_kernel.nim
 import workspace/crucible
 
 const kernelCode = cuda:
@@ -22,13 +22,23 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   var buf: array[8, uint32]
-  engine.run<<(1, 8)>>("setConstantKernel", buf, (42'u32))
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 8)>>("setConstantKernel", oDev, (42'u32,))
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   echo "  setConstant(42): ", buf
   for i in 0..7: doAssert buf[i] == 42
 
   var a, b: array[8, uint32]
   for i in 0..7: a[i] = uint32(i); b[i] = uint32(i * 10)
-  engine.run<<(1, 8)>>("addKernel", buf, (a, b))
+  let aDev = engine.allocDevice(sizeof(a))
+  engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(a))
+  let bDev = engine.allocDevice(sizeof(b))
+  engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
+  engine.run<<(1, 8)>>("addKernel", oDev, (aDev, bDev))
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(oDev)
   echo "  add: ", buf
   for i in 0..7: doAssert buf[i] == uint32(i + i*10)
   echo "  OK (test_nvrtc_multi_kernel)"

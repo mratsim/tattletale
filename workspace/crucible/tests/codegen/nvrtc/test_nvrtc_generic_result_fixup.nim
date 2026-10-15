@@ -1,10 +1,9 @@
-## NVRTC: maybeInsertResult generic fixup loop
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_result_fixup.nim
+## NVRTC: maybeInsertResult converts a generic device proc single-expression
+## body into a `result =` assignment.
 ##
-## Coverage: nim_to_gpu.nim:898-912
-##
-## Generic proc with single-expression body (no explicit `result =`)
-## to trigger the fixup loop that converts `x * 2` into `result = x * 2`.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_result_fixup.nim
 import std/strformat
 import workspace/crucible
 
@@ -20,7 +19,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("resultFixupKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("resultFixupKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"result fixup: got {buf[0]}"
   echo "  OK (test_nvrtc_generic_result_fixup)"
 

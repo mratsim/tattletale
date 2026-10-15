@@ -1,9 +1,7 @@
-## NVRTC: ClosedSymChoice overload resolution via bind
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_sym_choice.nim
-##
-## Tests overload resolution with `bind` creating a ClosedSymChoice.
-## The symchoice handler in initGpuGenericInst is currently dead code
-## but this test ensures it stays harmless if the code path activates.
+## NVRTC: ClosedSymChoice overload resolution via `bind`.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_sym_choice.nim
 import std/strformat
 import workspace/crucible
 
@@ -23,7 +21,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[2, uint32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  engine.run<<(1, 1)>>("symChoiceKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("symChoiceKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  output: [", buf[0], ", ", buf[1], "]"
   doAssert buf[0] == 11, &"uint32 addOne: {buf[0]} != 11"
   doAssert buf[1] == 22, &"uint64 addOne: {buf[1]} != 22"

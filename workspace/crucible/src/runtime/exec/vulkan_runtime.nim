@@ -4,34 +4,6 @@
 ##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
-##
-## Vulkan compute execution DSL.
-##
-## Provides a high-level wrapper over the Vulkan compute API.
-## SPIR-V compilation via glslangValidator.
-## Uses the standard Vulkan loader (libvulkan.so.1) — ICD discovery and
-## dispatch are delegated to the loader, same as ash/vulkano.
-##
-## Tested ABI (macOS, 2026-08-17):
-##   - vulkan-loader 1.4.357 + MoltenVK 1.4.2 ICD
-##     (`/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json`)
-##   - driver: MoltenVK on Apple Silicon (portability driver — the instance
-##     must opt in via VK_KHR_portability_enumeration, see initVulkan)
-##   - host: macOS 26.6.1, Nim 2.2.10
-##   - loader lookup: dlopen by name, then `/opt/homebrew/lib` fallback
-##
-## Example (engine API):
-##   import workspace/crucible
-##   const code = vulkan:
-##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-##       output[0] = a[0] + b[0]
-##   var engine = bkVulkan.init()
-##   engine.ingest(code)
-##   var out: array[1, uint32]
-##   engine.run("addKernel", out, ([1'u32], [2'u32]))
-
-## Used by the VulkanEngine (engines/vk.nim) — this module is internal; the
-## public surface is the engine's run/ingest/getArtifact.
 
 import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
 import workspace/crucible/src/abis/vulkan_abi as vk

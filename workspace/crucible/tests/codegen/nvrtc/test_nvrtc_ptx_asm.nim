@@ -1,6 +1,7 @@
-## NVRTC: PTX inline asm via codegen pipeline
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ptx_asm.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
+## NVRTC: PTX inline asm (`asm` statements with add/addc carry chains).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_ptx_asm.nim
 import workspace/crucible
 
 const kernelCode = cuda:
@@ -25,7 +26,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("ptxAsmKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("ptxAsmKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1]
   doAssert buf[0] == 8
   doAssert buf[1] == 30

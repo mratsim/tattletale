@@ -1,24 +1,15 @@
-## Metal: let-block-RHS with the evalOnceAs pattern. `let L = block:
-## const tmp; tmp` must emit valid MSL with the constexpr lifted
-## before the let, never inlined into the RHS. Three shapes execute
-## on the device:
-##   A: direct constructor in the let
-##   B: separate const + let
-##   C: block with a const then a yield (evalOnceAs)
-## Each kernel writes the constexpr value of the let's `f0` field,
-## asserted byte-exact after `engine.run()`.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: let-block-RHS with the evalOnceAs pattern, a block-RHS `let` emits
+## its lifted constexpr before the let, never inlined into the RHS.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_let_block_rhs.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 type
   Int*[V: static int] = object
@@ -56,24 +47,33 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelDirect)
       echo kernelDirect
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
 
     test "Pattern B — const + let":
       var engine = bkMetal.init()
       engine.ingest(kernelConstLet)
       echo kernelConstLet
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
 
     test "Pattern C — block with const then yield":
       var engine = bkMetal.init()
       engine.ingest(kernelBlock)
       echo kernelBlock
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("dummyKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

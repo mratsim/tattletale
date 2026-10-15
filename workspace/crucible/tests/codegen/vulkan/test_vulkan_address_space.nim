@@ -1,13 +1,10 @@
 ## Vulkan (GLSL): address-space emission for locals.
-##
-## An unannotated local is an automatic variable: the printer emits no
-## qualifier (`private` is not a valid GLSL storage qualifier). `{.smem.}`
-## keeps `shared`, at module scope because GLSL allows `shared` only there.
+## Unannotated locals emit no qualifier, `{.smem.}` keeps `shared` (module scope, GLSL allows `shared` only there).
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/vulkan --nimcache:nimcache/tests/vulkan \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_address_space.nim
 
 import std/[strutils, unittest]
@@ -29,8 +26,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "shared uint scratch[8];" in addressSpaceVk
       var engine = bkVulkan.init()
       engine.ingest(addressSpaceVk)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run<<(grid: (1, 1), blk: (4, 2))>>("addressSpaceKernel", oDev, ())
       var res: array[1, uint32]
-      engine.run<<(grid: (1, 1), blk: (4, 2))>>("addressSpaceKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 7'u32
 
 when isMainModule:

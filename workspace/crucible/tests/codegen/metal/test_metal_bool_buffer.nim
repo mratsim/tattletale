@@ -1,14 +1,6 @@
 ## Metal: bool buffer marshalling through the engine.
 ## Bool buffer elements marshal at their Nim width (1 byte/element).
-## The printer declares buffer bool params `device bool*`
-## (MSL bool is 1 byte in the device address space), matching the host blobs.
-## Scalar bools stay 4-byte i32 on the host and are covered by
-## test_metal_scalar_marshalling.nim.
-## Reads and writes round-trip on-device with byte-exact asserts.
-## A seq[bool] input exercises the same 1-byte blob path as array[bool].
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Scalar bools stay 4-byte i32 on the host (test_metal_scalar_marshalling.nim).
 ##
 ## Run:
 ##   cd tattletale
@@ -43,24 +35,42 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBoolRead)
       let flags = [true, false, true, false]
+      let fDev = engine.allocDevice(flags.len * sizeof(bool))
+      engine.copyToDeviceFromHost(fDev, unsafeAddr flags[0], flags.len * sizeof(bool))
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.run<<(grid: (4, 1))>>("boolReadKernel", res, (flags,))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(fDev)
+      engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "seq[bool] input reads 1-byte elements":
       var engine = bkMetal.init()
       engine.ingest(kernelBoolRead)
       let flags = @[true, false, true, false]
+      let fDev = engine.allocDevice(flags.len * sizeof(bool))
+      engine.copyToDeviceFromHost(fDev, addr flags[0], flags.len * sizeof(bool))
+      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      engine.run<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.run<<(grid: (4, 1))>>("boolReadKernel", res, (flags,))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.freeDevice(fDev)
+      engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "array[bool] output writes 1-byte elements":
       var engine = bkMetal.init()
       engine.ingest(kernelBoolWrite)
       let vals = [1'u32, 0'u32, 1'u32, 0'u32]
+      let vDev = engine.allocDevice(vals.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(vDev, unsafeAddr vals[0], vals.len * sizeof(uint32))
+      let oDev = engine.allocDevice(4 * sizeof(bool))
+      engine.run<<(grid: (4, 1))>>("boolWriteKernel", oDev, (vDev,))
       var outBools: array[4, bool]
-      engine.run<<(grid: (4, 1))>>("boolWriteKernel", outBools, (vals,))
+      engine.copyToHostFromDevice(addr outBools[0], oDev, 4 * sizeof(bool))
+      engine.freeDevice(vDev)
+      engine.freeDevice(oDev)
       check outBools == [true, false, true, false]
 
 when isMainModule:

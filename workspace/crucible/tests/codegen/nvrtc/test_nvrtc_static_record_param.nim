@@ -1,14 +1,9 @@
-## NVRTC: func with a `static` record param called from a `cuda:` kernel
-## Run with: nim cpp -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
-##   workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_record_param.nim
+## NVRTC: a `static` record param drops from the kernel signature, its fields
+## evaluate at Nim compile time, like a typedesc param.
 ##
-## A `static T` param of record type is compile-time only: the instantiated
-## proc type carries the VALUE in place of the type (e.g. `static MiniAtom`
-## -> `MiniAtom(dtype: ..., k: ...)`), which has no CUDA value and whose
-## fields (enums) resolveType cannot lower. Crucible must drop the param from
-## the signature and the matching argument at the call site, like typedesc
-## params. Regression test: without the fix this file fails to compile inside
-## the `cuda:` macro ("Type: ntyEnum not supported yet").
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_static_record_param.nim
 import workspace/crucible
 
 type
@@ -36,7 +31,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("staticParamKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("staticParamKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  [0]=", buf[0]
   doAssert buf[0] == 8.0'f32
   echo "  OK (test_nvrtc_static_record_param)"

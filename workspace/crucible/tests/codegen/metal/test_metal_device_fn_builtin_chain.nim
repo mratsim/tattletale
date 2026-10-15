@@ -1,16 +1,8 @@
 ## Metal: coordinate builtins thread transitively through device-fn call chains.
-## `bump` reads `thread_index_in_threadgroup`; `mid` reads
-## `thread_position_in_threadgroup.x` and calls `bump`; the kernels call them.
-## The kernels receive the attribute params and forward them through every
-## level, so the body identifiers bind at each depth. The second kernel also
-## references the builtin itself: one attribute param serves both the kernel
-## body and the forwarding args (dedup) — a duplicate param would fail MSL
-## compilation at ingest.
+## One threadgroup of 32 threads runs per kernel, every slot holds its lane index + 100.
 ##
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_device_fn_builtin_chain.nim
 
 import std/unittest
@@ -22,7 +14,7 @@ proc bump(p: ptr UncheckedArray[uint32]) {.device.} =
 
 proc mid(p: ptr UncheckedArray[uint32]) {.device.} =
   let x = thread_position_in_threadgroup.x
-  p[x] = x
+  p[x] = uint32(x)
   bump(p)
 
 const chainMsl = metal:
@@ -31,7 +23,7 @@ const chainMsl = metal:
 
   proc directKernel(o: ptr UncheckedArray[uint32]) {.global.} =
     let t = thread_index_in_threadgroup
-    o[t] = t
+    o[t] = uint32(t)
     bump(o)
 
 proc runTest() =
@@ -39,16 +31,22 @@ proc runTest() =
     test "two-level chain forwards both builtins (kernel -> mid -> bump)":
       var engine = bkMetal.init()
       engine.ingest(chainMsl)
+      let oDev = engine.allocDevice(32 * sizeof(uint32))
+      engine.run<<(grid: (1, 1), blk: (32, 1))>>("chainKernel", oDev, ())
       var res: array[32, uint32]
-      engine.run<<(grid: (1, 1), blk: (32, 1))>>("chainKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 32 * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 
     test "kernel own ref and the chain share one attribute param":
       var engine = bkMetal.init()
       engine.ingest(chainMsl)
+      let oDev = engine.allocDevice(32 * sizeof(uint32))
+      engine.run<<(grid: (1, 1), blk: (32, 1))>>("directKernel", oDev, ())
       var res: array[32, uint32]
-      engine.run<<(grid: (1, 1), blk: (32, 1))>>("directKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 32 * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 

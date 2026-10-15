@@ -1,11 +1,7 @@
-## Test: OpenCL kernel cache - same engine across multiple runs and re-ingest
-##
-## The engine compiles each kernel once per ingest and reuses the cached
-## kernel across runs; re-ingesting new source must invalidate the cache so
-## a later run uses the freshly ingested source.
-##
-## To compile and run:
-##   nim c -r --hints:off --warnings:off \
+## OpenCL: kernel cache - same engine across multiple runs and re-ingest,
+## a cached kernel reused across runs, re-ingesting new source invalidates it.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_kernel_cache.nim
 
 import workspace/crucible
@@ -33,12 +29,24 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     var b: array[1, uint32] = [1'u32]
     var outVal: array[1, uint32]
 
-    engine.run("addKernel", outVal, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     doAssert outVal[0] == 11
 
     a = [100'u32]
     b = [200'u32]
-    engine.run("addKernel", outVal, (a, b))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
     doAssert outVal[0] == 300
     echo "  OK - cached kernel reused across runs"
 
@@ -50,11 +58,21 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     var b: array[1, uint32] = [2'u32]
     var outVal: array[1, uint32]
 
-    engine.run("addKernel", outVal, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     doAssert outVal[0] == 3
 
     engine.ingest(kernelCode2)
-    engine.run("addKernel", outVal, (a, b))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
     doAssert outVal[0] == 1003
     echo "  OK - re-ingest invalidated cached kernel"
 

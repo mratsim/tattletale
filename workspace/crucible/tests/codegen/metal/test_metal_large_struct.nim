@@ -1,14 +1,6 @@
-## Metal: large structs passed to device functions by value. The struct
-## is 32 bytes, above the passByRef threshold, so the printer emits the device-fn param
-## as `thread const T&`. The gpuMaterialize pass wraps the call-site value.
-## Two shapes execute on the device:
-##   - an inline constructor as the call arg (code1)
-##   - a device fn return value as the call arg (code2)
-## Both kernels write a verifiable sum and run through `engine.run()`,
-## confirming the by-value struct path is safe on AGX.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## Metal: large structs passed to device functions by value. The struct is
+## 32 bytes, above the passByRef threshold, so the printer emits the device-fn
+## param as `thread const T&`. Two call-arg shapes run on the device.
 ##
 ## Run:
 ##   cd tattletale
@@ -46,16 +38,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "inline constructor arg":
       var engine = bkMetal.init()
       engine.ingest(code1)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("kernelMain", oDev, ())
       var res: array[1, uint32]
-      engine.run("kernelMain", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 30
 
     test "function return arg":
       var engine = bkMetal.init()
       engine.ingest(code2)
       echo code2
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("kernelMain", oDev, ())
       var res: array[1, uint32]
-      engine.run("kernelMain", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

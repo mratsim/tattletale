@@ -1,9 +1,6 @@
 ## Metal: a device fn whose declared param is named like a coordinate builtin.
-## `echoParam` declares `thread_index_in_threadgroup: uint32` and writes it
-## through. The printer must distinguish the param by symbol (gbkNone) from the
-## builtin, so no hidden param is injected and the name binds to the declared
-## param. A collision would fail MSL compilation at ingest with a duplicate
-## parameter error.
+## A declared param named like a builtin binds by symbol: no hidden param is
+## injected and the name binds to the declared param.
 ##
 ## Run:
 ##   cd tattletale
@@ -27,8 +24,11 @@ proc runTest() =
     test "the declared param binds; no hidden param collides":
       var engine = bkMetal.init()
       engine.ingest(paramMsl)
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("paramKernel", oDev, ())
       var res: array[1, uint32]
-      engine.run("paramKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42'u32
 
 when isMainModule:

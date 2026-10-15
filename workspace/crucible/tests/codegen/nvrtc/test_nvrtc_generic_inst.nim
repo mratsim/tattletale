@@ -1,10 +1,9 @@
-## NVRTC: generic function instantiation for GPU code
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_inst.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
+## NVRTC: generic functions defined outside the `cuda` block are instantiated
+## for GPU code, one body per instantiation.
 ##
-## Tests the PR #565 feature: Nim generic functions defined outside the `cuda`
-## block are automatically instantiated for use inside GPU code. One function
-## is emitted for each generic instantiation.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_inst.nim
 import workspace/crucible
 
 # ── Generic functions (defined outside the `cuda` block) ────────────────────
@@ -62,7 +61,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
-  engine.run("genericInstUint32", buf32, ())
+  let o32 = engine.allocDevice(sizeof(buf32))
+  engine.run("genericInstUint32", o32, ())
+  engine.copyToHostFromDevice(addr buf32[0], o32, sizeof(buf32))
+  engine.freeDevice(o32)
   echo "  maxGeneric[uint32](10,20)       = ", buf32[0]
   echo "  minGeneric[uint32](30,5)        = ", buf32[1]
   echo "  clampGeneric[uint32](50,0,25)   = ", buf32[2]
@@ -76,7 +78,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # ── Host code: int32 generic ────────────────────────────────────────────────
 
   var bufI32: array[3, int32]
-  engine.run("genericInstInt32", bufI32, ())
+  let oI32 = engine.allocDevice(sizeof(bufI32))
+  engine.run("genericInstInt32", oI32, ())
+  engine.copyToHostFromDevice(addr bufI32[0], oI32, sizeof(bufI32))
+  engine.freeDevice(oI32)
   echo "  maxGeneric[int32](1,-5)         = ", bufI32[0]
   echo "  minGeneric[int32](-10,20)       = ", bufI32[1]
   echo "  sumThree[int32](100,200,300)    = ", bufI32[2]

@@ -1,13 +1,9 @@
-## NVRTC: typedesc-argument erasure end-to-end
+## NVRTC: typedesc-argument erasure, a type passed as a value to a generic
+## helper erases the argument and the matching callee param from the signature.
 ##
-## A generic helper that takes a `typedesc[T]` param is called from a CUDA
-## kernel with a TYPE passed as a value (`scaleType(float32, ...)`). The
-## frontend must erase the typedesc argument and the matching callee param so
-## the emitted CUDA compiles under NVRTC and computes the right result.
-## This is the same pattern that produced `identifier "T" is undefined` in
-## the sgemm_1 port via make_tensor_like → make_tensor(T, L).
-##
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_typedesc_arg.nim
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_typedesc_arg.nim
 import std/strformat
 import workspace/crucible
 
@@ -35,7 +31,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[4, float32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  engine.run<<(1, 1)>>("typedescKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run<<(1, 1)>>("typedescKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"
   doAssert buf[1] == 6.0, &"scaleType(float32, 3.0, 2.0): {buf[1]}"
   doAssert buf[2] == 5.75, &"mixArgs(2.0, float32, 2.5, 1.5): {buf[2]}"

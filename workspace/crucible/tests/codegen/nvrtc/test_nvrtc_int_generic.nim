@@ -1,5 +1,7 @@
-## NVRTC: test Int[N] generic struct inside cuda: block
-## Run: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_int_generic.nim
+## NVRTC: Int[N] generic structs instantiate inside a `cuda:` block.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_int_generic.nim
 import workspace/crucible
 
 type
@@ -25,7 +27,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("testIntGeneric", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("testIntGeneric", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 1
   echo "  OK (test_nvrtc_int_generic)"
 

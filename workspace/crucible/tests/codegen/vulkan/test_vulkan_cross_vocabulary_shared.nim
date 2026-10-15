@@ -1,18 +1,11 @@
 ## Vulkan: shared-memory scratch + barrier with neighbor-slot semantics.
-##
-## The kernel stages values in `{.smem.}` scratch (GLSL `shared`), runs the Vulkan-idiom
-## `barrier()`, then each work-item reads a slot written by a different work-item.
-## The neighbor read verifies the staged values are visible after the barrier.
-## The scratch is module-level because GLSL allows `shared` only at global scope.
-## The emitted-text assertions pin the shared-array emission and the barrier
-## lowering; a missing barrier can pass by scheduling luck on this hardware,
-## as in test_metal_cross_vocabulary, so the barrier assert is the effective
-## barrier check.
+## Work-items stage values in `{.smem.}` scratch (GLSL `shared`, module scope),
+## run `barrier()`, then each work-item reads a slot written by a different work-item.
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/vulkan --nimcache:nimcache/tests/vulkan \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_cross_vocabulary_shared.nim
 
 import std/strutils
@@ -36,11 +29,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   var engine = bkVulkan.init()
   engine.ingest(kernelCode)
-  var res: array[8, uint32]
+  let oDev = engine.allocDevice(8 * sizeof(uint32))
   # 2 work-groups of (4, 2). Each group stages identical values, so the
   # group count is not pinned by this test; the neighbor-slot dependency
   # is within-group.
-  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", res, ())
+  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
+  var res: array[8, uint32]
+  engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
+  engine.freeDevice(oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32
     doAssert res[i] == expected,

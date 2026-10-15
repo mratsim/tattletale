@@ -1,9 +1,7 @@
 ## CuTe scaling: generic composition (B08-B14)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_compose_generic.nim
-##
-## CuTe composes layouts through generic functions that return
-## complex types. This tests generic proc chains, nested generics,
-## type aliases, and many-parameter types.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_compose_generic.nim
 import std/strformat
 import workspace/crucible
 
@@ -50,7 +48,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("composeKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("composeKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 1, &"layout[0]: {buf[0]}"
   doAssert buf[1] == 6, &"layout[5]: {buf[1]}"
   echo "  OK — generic composition"

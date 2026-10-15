@@ -1,13 +1,9 @@
-## User-defined operators: basic types (int32) and struct types (Wrapper, Wrapper2)
-##
-## Basic types: gpuBinOp → `(a + b)` — compiles and runs on all backends.
-## Struct types: gpuCall with operator syntax `a + b`.
-## Wrapper2 tests name collision handling for sanitized operator names.
+## User-defined operators: basic types lower through gpuBinOp, struct types
+## through gpuCall with operator syntax, Wrapper2 covers sanitized-name collisions.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_user_defined_operator.nim
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_user_defined_operator.nim
 
 import std/[unittest]
 import workspace/crucible
@@ -35,7 +31,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelBasic)
-      engine.run<<(1, 1)>>("kernelBasic", output, ())
+      let oB = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernelBasic", oB, ())
+      engine.copyToHostFromDevice(addr output[0], oB, sizeof(output))
+      engine.freeDevice(oB)
       check output[0] == 18
       check output[1] == 8
       check output[2] == 65
@@ -122,7 +121,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelStruct)
-      engine.run<<(1, 1)>>("kernelStruct", output, ())
+      let oS = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernelStruct", oS, ())
+      engine.copyToHostFromDevice(addr output[0], oS, sizeof(output))
+      engine.freeDevice(oS)
       check output[0] == 10
       check output[1] == 4
       check output[2] == 21
@@ -138,7 +140,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelStruct2)
-      engine.run<<(1, 1)>>("kernelStruct2", output, ())
+      let oS2 = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernelStruct2", oS2, ())
+      engine.copyToHostFromDevice(addr output[0], oS2, sizeof(output))
+      engine.freeDevice(oS2)
       check output[0] == 17
       check output[1] == 11
       check output[2] == 42
@@ -154,7 +159,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[2, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelBoth)
-      engine.run<<(1, 1)>>("kernelBoth", output, ())
+      let oBoth = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernelBoth", oBoth, ())
+      engine.copyToHostFromDevice(addr output[0], oBoth, sizeof(output))
+      engine.freeDevice(oBoth)
       check output[0] == 10
       check output[1] == 17
 

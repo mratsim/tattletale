@@ -1,10 +1,6 @@
 ## Metal: device fn taking `ptr UncheckedArray` + a runtime length.
 ## `fillArray` writes `p[i] = i + 10` through a `ptr UncheckedArray[uint32]`
-## param passed from the kernel. Runs through `engine.run()` and asserts the
-## output byte-exact.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## param passed from the kernel.
 ##
 ## Run:
 ##   cd tattletale
@@ -12,8 +8,10 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_ptr_unchecked_device_fn.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 const fillMsl = metal:
   proc fillArray(p: ptr UncheckedArray[uint32]; n: uint32) {.device.} =
@@ -27,8 +25,11 @@ proc runTest() =
     test "fillArray writes i + 10 into the kernel output buffer":
       var engine = bkMetal.init()
       engine.ingest(fillMsl)
+      let oDev = engine.allocDevice(8 * sizeof(uint32))
+      engine.run("fillKernel", oDev, ())
       var res: array[8, uint32]
-      engine.run("fillKernel", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
+      engine.freeDevice(oDev)
       for i in 0 ..< 8:
         check res[i] == uint32(i + 10)
 

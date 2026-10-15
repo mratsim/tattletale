@@ -1,9 +1,8 @@
-## OpenCL generic device procs instantiated at multiple static-parameter
-## values must emit one body per instantiation, since `signatureHash`
-## erases static bindings and dedups instantiations into one body.
-##
+## OpenCL: generic device procs at multiple static-parameter values emit one
+## body per instantiation, `signatureHash` must not dedup them into one body.
 ## Run:
-##   nim c -r --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/opencl/test_opencl_generic_inst_dedup.nim
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/opencl/test_opencl_generic_inst_dedup.nim
 
 import std/unittest
 import workspace/crucible
@@ -64,7 +63,13 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
   for i in 0 ..< width:
     inp[i] = float32(i + 1)
   var outp = newSeq[float32](outW)
-  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, outp, (inp,))
+  let iDev = engine.allocDevice(width * sizeof(float32))
+  engine.copyToDeviceFromHost(iDev, addr inp[0], width * sizeof(float32))
+  let oDev = engine.allocDevice(outW * sizeof(float32))
+  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
+  engine.copyToHostFromDevice(addr outp[0], oDev, outW * sizeof(float32))
+  engine.freeDevice(iDev)
+  engine.freeDevice(oDev)
   result = outp
 
 proc runTest() =

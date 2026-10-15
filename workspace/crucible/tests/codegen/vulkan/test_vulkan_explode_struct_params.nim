@@ -1,8 +1,11 @@
-## Kernel params of structs carrying (nested) pointer fields lower to per-field params,
-## the kernel runs end-to-end, byte-exact vs the closed form.
+## Kernel params of structs carrying (nested) pointer fields lower to per-field
+## params and the kernel runs end-to-end, byte-exact vs the closed form.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off workspace/crucible/tests/codegen/vulkan/test_vulkan_explode_struct_params.nim (from tattletale)
+##   cd tattletale && \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_explode_struct_params.nim
 
 import workspace/crucible
 
@@ -54,17 +57,16 @@ proc axpbyReference(expected: var array[N, float32], x, c: array[N, float32], al
     expected[i] = if storeAll: alpha * x[i] + beta * c[i] else: 0.0'f32
 
 # ── Kernel launch over the recreated struct params ──────────────────────────
+# The struct params explode to per-field params. The pointer fields take device
+# buffers (declaration order), the remaining value fields pass by value
+# in the args tuple: x, epi.c.data, dst.layout, epi.alpha, epi.beta, epi.c.layout, epi.storeMask.
 
-proc launchAxpbY[E](engine: var E, dstArr: var array[N, float32], x, c: array[N, float32], alpha, beta: float32, mask: StoreMask) =
-  var dstArg = PtrArg[float32](
-    buf: cast[ptr UncheckedArray[float32]](addr dstArr[0]), len: N, off: 0)
-  engine.run << (grid: (1, 1), blk: (1, 1)) >> ("axpbyKernel", dstArg, (
+proc launchAxpbY[E](engine: var E, dstDev, xDev, cDev: auto, alpha, beta: float32, mask: StoreMask) =
+  engine.run << (grid: (1, 1), blk: (1, 1)) >> ("axpbyKernel", dstDev, (
+    xDev,
+    cDev,
     mkLayout(2, 3, 3, 1),
-    PtrArg[float32](
-      buf: cast[ptr UncheckedArray[float32]](unsafeAddr x[0]), len: N, off: 0),
     alpha, beta,
-    PtrArg[float32](
-      buf: cast[ptr UncheckedArray[float32]](unsafeAddr c[0]), len: N, off: 0),
     mkLayout(2, 3, 3, 1),
     mask))
 
@@ -74,10 +76,18 @@ proc runTest() =
 
   let x = [1.0'f32, 2, 3, 4, 5, 6]
   let c = [10.0'f32, 20, 30, 40, 50, 60]
+  let xDev = engine.allocDevice(N * sizeof(float32))
+  engine.copyToDeviceFromHost(xDev, unsafeAddr x[0], N * sizeof(float32))
+  let cDev = engine.allocDevice(N * sizeof(float32))
+  engine.copyToDeviceFromHost(cDev, unsafeAddr c[0], N * sizeof(float32))
 
   block storeAll:
     var dst: array[N, float32] = [7.0'f32, 7, 7, 7, 7, 7]
-    engine.launchAxpbY(dst, x, c, 2.5'f32, 0.5'f32, smStoreAll)
+    let dstDev = engine.allocDevice(N * sizeof(float32))
+    engine.copyToDeviceFromHost(dstDev, addr dst[0], N * sizeof(float32))
+    engine.launchAxpbY(dstDev, xDev, cDev, 2.5'f32, 0.5'f32, smStoreAll)
+    engine.copyToHostFromDevice(addr dst[0], dstDev, N * sizeof(float32))
+    engine.freeDevice(dstDev)
     var expected: array[N, float32]
     axpbyReference(expected, x, c, 2.5'f32, 0.5'f32, true)
     for i in 0 ..< N:
@@ -87,11 +97,18 @@ proc runTest() =
 
   block storeNone:
     var dst: array[N, float32] = [7.0'f32, 7, 7, 7, 7, 7]
-    engine.launchAxpbY(dst, x, c, 2.5'f32, 0.5'f32, smStoreNone)
+    let dstDev = engine.allocDevice(N * sizeof(float32))
+    engine.copyToDeviceFromHost(dstDev, addr dst[0], N * sizeof(float32))
+    engine.launchAxpbY(dstDev, xDev, cDev, 2.5'f32, 0.5'f32, smStoreNone)
+    engine.copyToHostFromDevice(addr dst[0], dstDev, N * sizeof(float32))
+    engine.freeDevice(dstDev)
     for i in 0 ..< N:
       let actual = dst[i]
       doAssert actual == 0.0'f32,
         "smStoreNone: actual[" & $i & "]=" & $actual & " expected=0.0"
+
+  engine.freeDevice(xDev)
+  engine.freeDevice(cDev)
 
 when isMainModule:
   runTest()

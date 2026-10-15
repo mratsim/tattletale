@@ -1,28 +1,10 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
-## WebGPU (wgpu-native) execution DSL.
-##
-## Provides a Nim wrapper around `webgpu.h` (wgpu-native C API) for
-## compiling and executing WGSL compute shaders on CPU (via SwiftShader/
-## wgpu CPU backend) or GPU — no GPU required for CI.
-##
-## Library:  libwgpu_native.so  (https://github.com/gfx-rs/wgpu-native)
-##
-## Example (engine API):
-##   import workspace/crucible
-##   const code = webgpu:
-##     proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-##       output[0] = a[0] + b[0]
-##   var engine = bkWGSL.init()
-##   engine.ingest(code)
-##   var out: array[1, uint32]
-##   engine.run("addKernel", out, ([1'u32], [2'u32]))
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Types and procs follow the standard webgpu.h conventions.
 import std/monotimes
 import std/times
 import std/os
@@ -41,29 +23,29 @@ type
     device: WGPUDevice
     done: bool
   MapDoneData* = object
-    ## Map-callback state — captured by `bufferMapCb` for the engine's poll loop.
+    ## Map-callback state, captured by `bufferMapCb` for the engine's poll loop.
     done*: bool
     resultBytes*: int
     status*: WGPUBufferMapAsyncStatus
   PopErrorScopeData* = object
-    ## Pop-error-scope callback state — captured by `popErrorScopeCb`.
+    ## Pop-error-scope callback state, captured by `popErrorScopeCb`.
     done*: bool
     errType*: WGPUErrorType
     message*: string
   UncapturedErrorData* = object
-    ## Uncaptured device error — recorded by `uncapturedErrorCb`;
+    ## Uncaptured device error, recorded by `uncapturedErrorCb`.
     ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
     errType*: WGPUErrorType
     message*: string
   WgpuContext* = object
-    ## The live wgpu handles (instance → adapter → device → queue).
+    ## Live wgpu handles, instance → adapter → device → queue.
     instance*: WGPUInstance
     adapter*: WGPUAdapter
     device*: WGPUDevice
     queue*: WGPUQueue
 
 proc deviceName*(ctx: WgpuContext): string =
-  ## The WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
+  ## Returns the WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
   var info: WGPUAdapterInfo
   wgpuAdapterGetInfo(ctx.adapter, addr info)
   if info.device.data != nil and info.device.length > 0:
@@ -90,10 +72,7 @@ proc deviceCb(status: WGPURequestDeviceStatus,
   if status == wgpuRequestDeviceStatusSuccess:
     cast[ptr DeviceCallbackData](userdata1).device = device
   cast[ptr DeviceCallbackData](userdata1).done = true
-proc bufferMapCb*(status: WGPUBufferMapAsyncStatus,
-                  message: WGPUStringView,
-                  userdata1: pointer,
-                  userdata2: pointer) {.cdecl.} =
+proc bufferMapCb*(status: WGPUBufferMapAsyncStatus, message: WGPUStringView, userdata1, userdata2: pointer) {.cdecl.} =
   ## Records the map result into the caller's MapDoneData (userdata1).
   cast[ptr MapDoneData](userdata1).status = status
   cast[ptr MapDoneData](userdata1).done = true
@@ -122,7 +101,6 @@ proc uncapturedErrorCb*(device: ptr WGPUDevice, errType: WGPUErrorType,
 
 {.pop.}
 
-
 proc takeUncapturedError*(): UncapturedErrorData =
   ## Returns and clears the recorded uncaptured device error.
   ## `errType` is `wgpuErrorTypeNoError` when none was recorded.
@@ -130,10 +108,10 @@ proc takeUncapturedError*(): UncapturedErrorData =
   gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
 
 # Waits for an instance-level request callback to fire.
-# wgpu-native stubs WGPUFuture/WaitAnyOnly so wgpuInstanceWaitAny is
-# unavailable, and wgpuDevicePoll needs a device handle that only exists
-# after the callback fires. Poll the non-blocking wgpuInstanceProcessEvents
-# with a deadline and a short sleep instead of spinning at 100% CPU.
+# wgpu-native stubs WGPUFuture/WaitAnyOnly, wgpuInstanceWaitAny is missing.
+# wgpuDevicePoll needs a device handle that only appears after the callback.
+# Poll the non-blocking wgpuInstanceProcessEvents on a deadline, with a short
+# sleep between polls.
 proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
   let deadline = getMonoTime() + initDuration(seconds = 5)
   while not done:
@@ -169,8 +147,8 @@ proc initWgpu*(): WgpuContext =
     userdata1: dd.addr,
     userdata2: nil
   )
-  # Install the uncaptured-error callback (safety net for errors outside
-  # any error scope, e.g. dispatch validation reported at submit time).
+  # The uncaptured-error callback receives errors outside any pushed error scope,
+  # e.g. dispatch validation reported at submit time.
   var deviceDesc = WGPUDeviceDescriptor(
     uncapturedErrorCallbackInfo: WGPUUncapturedErrorCallbackInfo(
       callback: uncapturedErrorCb,
@@ -190,7 +168,7 @@ proc initWgpu*(): WgpuContext =
     queue: queue
   )
 proc shutdown*(ctx: var WgpuContext) =
-  ## Releases all wgpu resources. Idempotent; the engine's `=destroy` calls it.
+  ## Releases all wgpu resources. Idempotent, the engine's `=destroy` calls it.
   if ctx.instance != nil:
     wgpuDeviceRelease(ctx.device)
     wgpuAdapterRelease(ctx.adapter)

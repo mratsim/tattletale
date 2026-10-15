@@ -1,11 +1,6 @@
 ## Metal: multi-kernel source, one `metal:` block emits two kernels
-## (vec10_add, vec10_mul). One ingest compiles the whole library.
-## Each run gets its own pipeline state from the engine's level-2 cache,
-## keyed by (kernel, argSizes). The same engine dispatches both kernels,
-## and the 10-element outputs are asserted byte-exact.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## (vec10_add, vec10_mul). One ingest compiles the whole library, each run
+## gets its own pipeline state from the engine's level-2 cache.
 ##
 ## Run:
 ##   cd tattletale
@@ -38,11 +33,21 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "vec10_add and vec10_mul from one library":
       var engine = bkMetal.init()
       engine.ingest(code)
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let bDev = engine.allocDevice(b.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      let oDev = engine.allocDevice(10 * sizeof(uint32))
       var res: array[10, uint32]
-      engine.run("vec10_add", res, (a, b))
+      engine.run("vec10_add", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, 10 * sizeof(uint32))
       for i in 0 ..< 10:
         check res[i] == a[i] + b[i]
-      engine.run("vec10_mul", res, (a, b))
+      engine.run("vec10_mul", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, 10 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       for i in 0 ..< 10:
         check res[i] == a[i] * b[i]
 

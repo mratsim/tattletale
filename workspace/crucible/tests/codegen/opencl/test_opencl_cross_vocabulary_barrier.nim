@@ -1,18 +1,7 @@
-## OpenCL: Vulkan-idiom `barrier()` in an OpenCL kernel, with shared
-## memory semantics.
-##
-## The zero-arg `barrier()` (Vulkan idiom) expands to the canonical
-## `threadgroup_barrier` call. The OpenCL printer lowers it to `barrier(CLK_LOCAL_MEM_FENCE)`.
-## The kernel stages values in `{.smem.}` scratch (`__local`), barriers,
-## then each work-item reads a slot written by a different work-item:
-## the barrier is what makes the staged values visible.
-## The emitted-text assertion is the effective barrier check.
-## A missing barrier can pass by scheduling luck, as in test_metal_cross_vocabulary.
-##
+## OpenCL: Vulkan-idiom zero-arg `barrier()` lowers to `barrier(CLK_LOCAL_MEM_FENCE)`
+## and gives `{.smem.}` scratch its shared-memory visibility across work-items.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/opencl --nimcache:nimcache/tests/opencl \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_cross_vocabulary_barrier.nim
 
 import std/strutils
@@ -38,7 +27,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   # 2 work-groups of (4, 2). Each group stages identical values, so the
   # group count is not pinned by this test; the neighbor-slot dependency
   # is within-group.
-  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabBarrierKernel", res, ())
+  let oDev = engine.allocDevice(8 * sizeof(uint32))
+  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabBarrierKernel", oDev, ())
+  engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
+  engine.freeDevice(oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32
     doAssert res[i] == expected,

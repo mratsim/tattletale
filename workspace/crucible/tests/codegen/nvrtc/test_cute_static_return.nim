@@ -1,8 +1,7 @@
 ## CuTe: generic proc with when dispatch (B07, B26)
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_cute_static_return.nim
-##
-## CuTe dispatches tile sizes per GPU arch at compile time.
-## Uses `when` for compile-time branching on static params.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_static_return.nim
 import std/strformat
 import workspace/crucible
 
@@ -23,7 +22,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("staticWhenKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("staticWhenKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 16, &"Tile[16,8]: {buf[0]}"
   doAssert buf[1] == 32, &"Tile[32,16]: {buf[1]}"
   echo "  OK — static dispatch"

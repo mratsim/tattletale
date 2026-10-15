@@ -1,14 +1,9 @@
-## NVRTC: generic → non-generic fallback in initGpuGenericInst
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_non_generic_fallback.nim
+## NVRTC: generic to non-generic fallback in initGpuGenericInst for a generic
+## object with a static-int-sized array.
 ##
-## Exercises the early return guard at nim_to_gpu.nim ~line 118:
-##   if t.typeKind notin {ntyGenericInst}:
-##     if t.typeKind != ntyNone:
-##       return ctx.nimToGpuType(t.getTypeInst())
-##
-## This path is defensive fallback when a type expected to be generic
-## resolves to a non-generic type. Uses a generic object with a
-## static-int-sized array (triggers non-trivial type resolution).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_generic_non_generic_fallback.nim
 import std/strformat
 import workspace/crucible
 
@@ -28,7 +23,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
-  engine.run("sizedKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("sizedKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 1, &"Sized[4].data[0]: got {buf[0]}, expected 1"
   doAssert buf[1] == 4, &"Sized[4].data[3]: got {buf[1]}, expected 4"
 

@@ -1,7 +1,8 @@
 ## Vulkan: fp16 SSBO arithmetic through the GPU DSL, end to end.
+## Needs a driver with VK_KHR_shader_float16_int8 + 16-bit storage (MoltenVK on Apple Silicon qualifies).
 ##
-## Requires a driver with VK_KHR_shader_float16_int8 + 16-bit storage
-## (MoltenVK on Apple Silicon). Run from the tattletale root:
+## Run:
+##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/test_vulkan_f16.nim
@@ -60,7 +61,16 @@ proc runTest() =
     A[i] = f16OfInt(rng.rand(-15 .. 15))
     B[i] = f16OfInt(rng.rand(-15 .. 15))
   var C = newSeq[uint16](N)
-  engine.run("f16MulKernel", C, (A, B))
+  let aDev = engine.allocDevice(N * sizeof(uint16))
+  let bDev = engine.allocDevice(N * sizeof(uint16))
+  let cDev = engine.allocDevice(N * sizeof(uint16))
+  engine.copyToDeviceFromHost(aDev, addr A[0], N * sizeof(uint16))
+  engine.copyToDeviceFromHost(bDev, addr B[0], N * sizeof(uint16))
+  engine.run("f16MulKernel", cDev, (aDev, bDev))
+  engine.copyToHostFromDevice(addr C[0], cDev, N * sizeof(uint16))
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(cDev)
   # Products ≤ 225 are exact in f16 and f32: the gate is bit-exact.
   for i in 0 ..< N:
     let refVal = f16ToF32(A[i]) * f16ToF32(B[i])

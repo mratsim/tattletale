@@ -1,15 +1,9 @@
 ## NVRTC: `var array` and `var openArray` params passed a tensor's data
 ## FIELD (`gpuAddr(gpuDot)`) with inline-asm operands.
-## Run with: nim cpp -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
-##   workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensor_data_field_asm.nim
 ##
-## Regression: normalizeArraySpanBody only rewrote `gpuAddr(gpuIdent)`
-## call args for var-array params — a FIELD arg (`t.data`) stayed
-## `&t.data` = `float (*)[4]` and NVRTC rejected the asm operand
-## ("asm operand type size(8) does not match ... constraint 'f'").
-## The rewrite must also handle `gpuAddr(gpuDot)`: the bare field access
-## C-decays to `T*`. Companion to test_nvrtc_var_array_asm (the ident
-## case). Fails without the fix, bit-exact with it.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_tensor_data_field_asm.nim
 import workspace/crucible
 
 type MiniTensor = object
@@ -46,7 +40,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("tensorDataAsmKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("tensorDataAsmKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2], " [3]=", buf[3], " [4]=", buf[4], " [5]=", buf[5]
   doAssert buf[0] == 6.0'f32   # 1 + 5
   doAssert buf[1] == 7.0'f32   # 2 + 5

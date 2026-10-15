@@ -1,6 +1,7 @@
+## WebGPU: if/elif/else statement lowering, the chain reaches the device with distinct branch values.
+##
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_if_elif.nim
 
@@ -45,16 +46,28 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(elifWgsl)
       var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifDispatch", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(int32))
+      let oDev = engine.allocDevice(res.len * sizeof(int32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
       check res[0] == 10
       x[0] = 1
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
       check res[0] == 20
       x[0] = 2
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
       check res[0] == 30
       x[0] = 3
-      engine.run("elifDispatch", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifDispatch", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 40
 
     test "no else in source emits no else block":
@@ -64,13 +77,23 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(noElseWgsl)
       var res: array[1, int32]
       var x = [0'i32]
-      engine.run("elifNoElse", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(int32))
+      let oDev = engine.allocDevice(res.len * sizeof(int32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
       check res[0] == 1
       x[0] = 1
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
       check res[0] == 2
       x[0] = 2
-      engine.run("elifNoElse", res, (x,))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
+      engine.run("elifNoElse", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(int32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 99  # no branch matched: sentinel preserved
 
 when isMainModule:

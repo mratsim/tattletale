@@ -1,7 +1,7 @@
-## NVRTC: ntyProc / ntyStatic branches in nimToGpuType
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_proc_and_static.nim
-##
-## Coverage: nim_to_gpu.nim:431-449
+## NVRTC: ntyProc and ntyStatic branches in nimToGpuType.
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_type_proc_and_static.nim
 import std/strformat
 import workspace/crucible
 
@@ -28,7 +28,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  engine.run("typeBranchesKernel", buf, ())
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.run("typeBranchesKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
   doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
   doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
   echo "  OK (test_nvrtc_type_proc_and_static)"

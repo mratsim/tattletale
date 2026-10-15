@@ -1,23 +1,8 @@
-## OpenCL: `max` on basic types (float32, uint32, int) — codegen inspection + run
-##
-## max is an "ambiguous builtin": both Nim and the GPU languages define it.
-## Crucible registers the compiler-magic overloads name-only (forwarded to the
-## backend's native max) and body-parses the non-magic ones like +/*:
-##   - max(float32, float32) -> system's `{.inline.}` overload (no magic) ->
-##     parsed body `if y <= x or y != y: x else: y` -> device fn with a ternary
-##   - max(uint32, uint32)   -> generic `max*[T: not SomeFloat]` (no magic) ->
-##     same: parsed body -> device fn with a ternary
-##   - max(int, int)         -> magic MaxI -> plain `max` call (native)
-##
-## The fold pass (foldMaxMinToBuiltins) rewrites the ternary to the backend
-## native max. On OpenCL C the integer `max`/`min` builtins are INTEGER-ONLY
-## (spec §6.12.3) — floats require `fmax`/`fmin` (§6.12.2). The fold must
-## lower float max/min to `fmax`/`fmin`: OpenCL C's `max` on float args
-## compiles but applies integer semantics to the float bit patterns, so the
-## result is silently wrong (e.g. 0.0 instead of 9.0).
-##
-## This file echoes the emitted OpenCL C so the codegen is visible, then runs
-## the kernel and verifies the values.
+## OpenCL: `max`/`min` on float32, uint32, and int.
+## Float max/min lower to `fmax`/`fmin` (OpenCL C's max/min are integer-only, §6.12.3).
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/opencl/test_opencl_max_basic_types.nim
 
 import std/[unittest, strutils]
 import workspace/crucible
@@ -59,7 +44,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkOpenCL.init()
       engine.ingest(kernelCode)
       var out32: array[9, float32]
-      engine.run("maxBasic", out32, (dynArr))
+      let dDev = engine.allocDevice(dynArr.len * sizeof(float32))
+      engine.copyToDeviceFromHost(dDev, addr dynArr[0], dynArr.len * sizeof(float32))
+      let oDev = engine.allocDevice(9 * sizeof(float32))
+      engine.run("maxBasic", oDev, (dDev,))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 9 * sizeof(float32))
+      engine.freeDevice(dDev)
+      engine.freeDevice(oDev)
       check out32[0] == 9.0    # max(2.5, 9.0)
       check out32[1] == 7.25   # max(3.5, 7.25)
       check out32[2] == 9.0    # max(9.0, 2.5)

@@ -1,14 +1,8 @@
-## Test: WebGPU output readback through the staging-buffer map path
-##
-## Exercises runImpl's section 9-10 (runtime/engines/wgpu.nim): the output
-## buffer is copied to a MapRead staging buffer, wgpuBufferMapAsync fires the
-## bufferMapCb callback into a heap MapDoneData, and the mapped bytes are
-## copied back into the host output array. A multi-element uint32 output
-## covers the full MapDoneData round trip (done, status, resultBytes).
+## WebGPU: output readback through the staging-buffer map path, a multi-element uint32 output covers the full round trip.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/test_webgpu_map_readback.nim
 
 import std/[unittest, strformat]
@@ -35,7 +29,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelCode
       var input = [1'u32, 2'u32, 3'u32, 4'u32]
       var res: array[4, uint32]
-      engine.run("mapReadbackKernel", res, (input,))
+      let iDev = engine.allocDevice(input.len * sizeof(uint32))
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(iDev, addr input[0], input.len * sizeof(uint32))
+      engine.run("mapReadbackKernel", oDev, (iDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(iDev)
+      engine.freeDevice(oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

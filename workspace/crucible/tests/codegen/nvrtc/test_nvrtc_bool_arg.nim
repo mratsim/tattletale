@@ -1,6 +1,7 @@
-## NVRTC: bool/uint32 kernel args via codegen pipeline
-## Run with: nim cpp -r workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
-##   Note: `cuda:` macro always generates CUDA now; `-d:cuda` only needed for NVRTC runtime
+## NVRTC: bool/uint32 kernel args via the codegen pipeline
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
 import workspace/crucible
 
 # NOTE: res gets prepended → output MUST be first kernel param
@@ -29,25 +30,38 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var a, b, r: array[8, uint32]
   for i in 0..7: a[i] = uint32(i + 1); b[i] = uint32((i + 1) * 2)
 
+  let aDev = engine.allocDevice(sizeof(a))
+  let bDev = engine.allocDevice(sizeof(b))
+  let rDev = engine.allocDevice(sizeof(r))
+  engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(a))
+  engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
+
   # res=r → kernel gets (c=r, a, b, useAdd=true)
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 8 threads explicitly.
-  engine.run<<(1, 8)>>("condAdd", r, (a, b, true))
+  engine.run<<(1, 8)>>("condAdd", rDev, (aDev, bDev, true))
+  engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  condAdd(true): ", r
   for i in 0..7: doAssert r[i] == a[i] + b[i]
 
-  engine.run<<(1, 8)>>("condAdd", r, (a, b, false))
+  engine.run<<(1, 8)>>("condAdd", rDev, (aDev, bDev, false))
+  engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  condAdd(false): ", r
   for i in 0..7: doAssert r[i] == a[i] - b[i]
 
-  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, false))
+  engine.run<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, false))
+  engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  scale(3, false): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
 
-  engine.run<<(1, 8)>>("scale", r, (a, 3'i32, true))
+  engine.run<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, true))
+  engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  scale(3, true): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
 
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(rDev)
   echo "  OK (test_nvrtc_bool_arg)"
 
 when isMainModule:

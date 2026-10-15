@@ -1,11 +1,7 @@
 ## Metal: ternary expression lowering. The DSL funnels `if cond: a else: b`
-## in an expression slot through the ternary IR shape. The MSL printer
-## emits the C-style `(cond ? a : b)` form. The kernel covers a compile-time constant condition
-## and a data-dependent condition, so the device executes a real branch,
-## and both outputs are asserted byte-exact.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## in an expression slot through the ternary IR shape, emitted as the C-style
+## ternary form `(cond ? a : b)`, covering a compile-time constant condition
+## and a data-dependent condition.
 ##
 ## Run:
 ##   cd tattletale
@@ -13,8 +9,10 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/test_metal_ternary.nim
 
-import std/unittest
+
 import workspace/crucible
+
+import std/unittest
 
 const code = metal:
   proc ternaryKernel(output: ptr UncheckedArray[uint32];
@@ -30,15 +28,27 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "data-dependent and constant ternaries":
       var engine = bkMetal.init()
       engine.ingest(code)
-      var res: array[2, uint32]
       var a = [7'u32]
       var b = [3'u32]
-      engine.run("ternaryKernel", res, (a, b))
+      let aDev = engine.allocDevice(sizeof(uint32))
+      let bDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(2 * sizeof(uint32))
+      var res: array[2, uint32]
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      engine.run("ternaryKernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
       check res[0] == 7
       check res[1] == 1
       a[0] = 2
       b[0] = 9
-      engine.run("ternaryKernel", res, (a, b))
+      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      engine.run("ternaryKernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 9
       check res[1] == 1
 

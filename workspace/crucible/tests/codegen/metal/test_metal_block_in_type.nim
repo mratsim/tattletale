@@ -1,12 +1,7 @@
 ## Metal: gpuBlock(isExpr) in symbol/mutability helpers. The `` `()` ``
 ## template on MySpan expands to a block with local temps and a result value,
 ## which the frontend lowers to an expression-shaped gpuBlock.
-## The device fn reads `.idx` off the block value. The kernel writes the resulting value
-## into the output buffer, verifying the block-in-type lowering on the device
-## rather than only in the printed MSL.
-##
-## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
+## A device fn reads `.idx` off the block value.
 ##
 ## Run:
 ##   cd tattletale
@@ -53,8 +48,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "block-valued `()` inside a device fn executes on the device":
       var engine = bkMetal.init()
       engine.ingest(kernel)
+      let oDev = engine.allocDevice(sizeof(float32))
+      engine.run("reproKernel", oDev, (7'i32, 3'i32))
       var res: array[1, float32]
-      engine.run("reproKernel", res, (7'i32, 3'i32))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.freeDevice(oDev)
       check res[0] == 7.0'f32
 
 when isMainModule:

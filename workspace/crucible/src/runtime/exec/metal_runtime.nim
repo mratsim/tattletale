@@ -5,27 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal (MSL) runtime execution primitives for the `bkMetal` engine.
-##
-## Every public engine call wraps its body in an `NSAutoreleasePool`
-## (`objc.withMemPool`). Metal methods return autoreleased objects
-## (command buffers, encoders) that a pool drain releases.
-## The objects the engine caches (device, queue, library, pipeline states)
-## come from `new*`/Create methods and are +1 owned.
-## They survive the drain without a `retain` and must be `release`d by the owner.
-##
-## Tested ABI (macOS, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
-## Nim 2.2.10, MSL 4.0.
-##
-## The Objective-C bridge lives in `objc_abi`, imported here as `objc`.
-## This module keeps only its own concerns: compile options, buffers,
-## and the `failLoud` error policy.
-##
-## The execution primitives are `when defined(macosx)`-guarded. On other
-## platforms, only the platform-neutral constants and `failLoud` remain,
-## along with the `MetalCtx`/`MetalBuffer` records. The engine entry point
-## (`newMetalEngine` in `runtime/engines/metal`) quits loudly there.
-
 import std/os
 import workspace/crucible/src/abis/objc_abi as objc
 
@@ -64,12 +43,6 @@ type
     device*: objc.ID
     queue*: objc.ID
 
-  MetalBuffer* = object
-    ## Shared-storage buffer: CPU and GPU share one memory region.
-    ## `contents()` is therefore directly CPU-visible after `waitUntilCompleted`.
-    buffer*: objc.ID
-    data*: pointer   # `contents()`, valid for the buffer's lifetime
-
 # ═════════════════════════════════════════════════
 # macOS-only execution primitives
 # ═════════════════════════════════════════════════
@@ -93,11 +66,9 @@ when defined(macosx):
   proc mslLanguageVersion*(): objc.NSUInteger =
     ## MSL language version for this OS, from the `uname()` release ladder.
     ## `uname()` reports the Darwin kernel release (25.6.0 on macOS 26.6.1),
-    ## not the marketing version, so the ladder maps Darwin majors:
+    ## not the marketing version, the ladder maps Darwin majors:
     ## < 24 → 3.1 (macOS < 15), 24 → 3.2 (macOS 15), ≥ 25 → 4.0 (macOS ≥ 26).
-    ## This reproduces MLX's marketing-version ladder.
-    ## `NSProcessInfo.operatingSystemVersion` is banned because it returns a 24-byte struct
-    ## through the x8 sret register, which is UB for the ID-returning objc.msgSend family.
+    ## `NSProcessInfo.operatingSystemVersion` returns a 24-byte sret struct, UB for the ID-returning objc.msgSend family.
     var uts: UtSName
     if uname(addr uts) != 0:
       failLoud("uname failed, cannot determine the MSL language version")
@@ -128,7 +99,7 @@ when defined(macosx):
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
     result = objc.msgSend(objc.ID(cls), objc.`$$`("alloc"))
-    # `init` may return a different object than `alloc` — keep the init result.
+    # `init` may return a different object than `alloc`, keep the init result.
     result = objc.msgSend(result, objc.`$$`("init"))
     discard objc.msgSend(result, objc.`$$`("setFastMathEnabled:"), objc.BOOL(0))
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), mslLanguageVersion())
@@ -147,8 +118,8 @@ when defined(macosx):
 
   proc compilePipelineState*(device, library: objc.ID, kernel: string): objc.ID =
     ## Creates the compute pipeline state for `kernel` via `newComputePipelineStateWithFunction:error:`.
-    ## The function object is +1 from `newFunctionWithName:` and is released here.
-    ## The pipeline state retains it internally.
+    ## Returns the +1 pipeline state, the function object (+1 from `newFunctionWithName:`)
+    ## is released here, the pipeline state retains it internally.
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"), objc.nsStringFromNimString(kernel))
     if objc.isNil(fn):
       failLoud("newFunctionWithName(" & kernel & ") returned nil")
@@ -167,40 +138,15 @@ when defined(macosx):
   # Device, command queue, buffers
   # ═════════════════════════════════════════════════
 
-  proc initMetal*(): MetalCtx =
-    ## The default Metal device and its command queue.
-    ## Both are +1 (Create/new ownership rules) and survive the caller's autorelease-pool drain.
-    ## Release them via `objc.release`.
-    result.device = objc.MTLCreateSystemDefaultDevice()
-    if objc.isNil(result.device):
+  proc defaultMetalDevice*(): objc.ID =
+    ## Returns the default Metal device, +1 (Create ownership rules), survives
+    ## the caller's autorelease-pool drain, release via `objc.release`.
+    ## A lookup, not an init: the engine owns its context construction.
+    result = objc.MTLCreateSystemDefaultDevice()
+    if objc.isNil(result):
       failLoud("default Metal device lookup returned nil (no Metal device)")
-    result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
-    if objc.isNil(result.queue):
-      failLoud("newCommandQueue returned nil")
-
-  proc allocBuffer*(device: objc.ID, size: int): MetalBuffer =
-    ## Allocates a shared|untracked buffer of `size` bytes (options 256).
-    ## Returns a +1 object. The caller releases it via `releaseBuffer`.
-    if size <= 0:
-      failLoud("allocBuffer: size must be positive, got " & $size)
-    result.buffer = objc.msgSend(device, objc.`$$`("newBufferWithLength:options:"),
-                                 objc.NSUInteger(size), SharedUntrackedOptions)
-    if objc.isNil(result.buffer):
-      failLoud("newBufferWithLength:options: returned nil (length " & $size & ")")
-    result.data = cast[pointer](objc.msgSend(result.buffer, objc.`$$`("contents")))
-    if result.data == nil:
-      failLoud("contents() returned nil for a shared buffer")
-
-  proc releaseBuffer*(buffer: var MetalBuffer) {.inline.} =
-    ## Releases the +1 buffer object. Nil-safe.
-    ## Inlined: called per dispatch for the output and every input buffer.
-    if not objc.isNil(buffer.buffer):
-      objc.release(buffer.buffer)
-      buffer.buffer = objc.ID(nil)
-      buffer.data = nil
 
   proc getpagesize(): cint {.importc: "getpagesize", header: "<unistd.h>".}
-
 
   proc hostPageSize*(): int =
     ## Host page size (16 KiB on Apple Silicon).

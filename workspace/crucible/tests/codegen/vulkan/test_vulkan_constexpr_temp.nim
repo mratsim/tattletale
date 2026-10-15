@@ -1,34 +1,12 @@
-## Vulkan (GLSL): constexpr temporaries leaking into expression slots
-##
-## Two bugs fixed:
-##
-## Bug 1: ObjConstr used as dot-parent
-##   Nim constant-folds `const tup = (a, b)` so `tup[0]` becomes a
-##   `gpuDot(dParent = gpuObjConstr(...), field=Field0)` in the IR.
-##   The codegen emitted bare `{val}.Field0` — invalid.
-##   Fix (Vulkan/GLSL): GLSL constructors TypeName(val) are valid
-##   expressions, so `TypeName(val).Field0` works unchanged.
-##
-## Bug 2: Constexpr declarations used as expression values
-##   A `const` inside the kernel block becomes a `gpuConstexpr` node. If
-##   this node ends up in an expression slot (gpuVar.vInit, gpuDot.dParent,
-##   etc.), the codegen emits `Type x = constexpr Type tmp = {};` which
-##   is invalid — `constexpr` is a declaration, not an expression value.
-##   Fix: `liftConstexprFrom` pass recursively walks expression children
-##   of every statement. When it finds a `gpuConstexpr` in an expression
-##   slot, it lifts it to a preceding standalone statement and replaces
-##   it with a reference to the constexpr's identifier.
-##
-## Pattern A: const + let in same scope — constexpr lifts to preceding stmt.
-## Pattern B: constexpr Int values in arithmetic — pass lifts before binop.
-## Pattern C: template with block { const tmp; yield tmp } — block-init lift.
-## Pattern D: let-tuple bracket access D[0] — gpuObjConstr in expression.
-## Pattern E: block with two constexprs and tuple field access — pass lift.
-## Pattern F: constexpr tuple tup[0] — gpuObjConstr as gpuDot.dParent.
+## Vulkan (GLSL): constexpr temporaries leaking into expression slots.
+## Patterns A-F exercise the constexpr-lift pass positions:
+## let RHS, arithmetic, template block, tuple bracket and field access.
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/vulkan/test_vulkan_constexpr_temp.nim
 
 import std/[unittest, strformat]
 import workspace/crucible
@@ -105,38 +83,56 @@ suite "Vulkan - constexpr tuple init":
   test "Pattern A — constexpr tuple in let RHS":
     var engine = bkVulkan.init()
     engine.ingest(kernelA)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testA", oDev, ())
     var res: array[1, uint32]
-    engine.run("testA", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern B — constexpr in arithmetic":
     var engine = bkVulkan.init()
     engine.ingest(kernelB)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testB", oDev, ())
     var res: array[1, uint32]
-    engine.run("testB", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 128
   test "Pattern C — template wrapConst":
     var engine = bkVulkan.init()
     engine.ingest(kernelC)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testC", oDev, ())
     var res: array[1, uint32]
-    engine.run("testC", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern D — tuple bracket access":
     var engine = bkVulkan.init()
     engine.ingest(kernelD)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testD", oDev, ())
     var res: array[1, uint32]
-    engine.run("testD", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern E — block with constexpr temp":
     var engine = bkVulkan.init()
     engine.ingest(kernelE)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testE", oDev, ())
     var res: array[1, uint32]
-    engine.run("testE", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern F — constexpr tuple field access":
     var engine = bkVulkan.init()
     engine.ingest(kernelF)
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("testF", oDev, ())
     var res: array[1, uint32]
-    engine.run("testF", res, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     check res[0] == 8
 
 when isMainModule:

@@ -1,40 +1,7 @@
 ## NVRTC: constexpr temporaries leaking into expression slots
-##
-## Two bugs fixed:
-##
-## Bug 1: ObjConstr used as dot-parent
-##   Nim constant-folds `const tup = (a, b)` so `tup[0]` becomes
-##   `nnkBracketExpr(nnkTupleConstr(a, b), 0)`. Crucible converts this to
-##   `gpuDot(dParent = gpuObjConstr(...), field=Field0)`.
-##   The codegen emitted bare `{val}.Field0` which is invalid C++ because
-##   a braced-init-list `{val}` is not an expression — you can't access
-##   members on it.
-##   Fix: emit `TypeName{val}.Field0` (C++ functional-style cast).
-##
-## Bug 2: Constexpr declarations used as expression values
-##   A `const` inside the cuda: block becomes a `gpuConstexpr` node in the
-##   IR. If this node ends up in an expression slot (e.g. as the RHS of a
-##   `gpuVar.vInit` or as `gpuDot.dParent`), the codegen emits:
-##     `Int_0 x = constexpr Type tmp = {};`
-##   This is invalid because `constexpr Type tmp = {}` is a declaration
-##   statement, not an expression — it can't be inlined.
-##   Fix: the `liftConstexprFrom` pass recursively walks every statement's
-##   expression children. When it finds a `gpuConstexpr` in an expression
-##   slot, it lifts the constexpr to a preceding standalone statement and
-##   replaces it with a reference to the constexpr's identifier.
-##
-## Patterns:
-##   A — const + let in same scope — constexpr lifts to preceding stmt.
-##   B — constexpr Int values in arithmetic — pass lifts before binop.
-##   C — template with block { const tmp; yield tmp } — block-init lift.
-##   D — let-tuple bracket access D[0] — gpuObjConstr in expression.
-##   E — block with two constexprs and tuple field access — pass lift.
-##   F — constexpr tuple tup[0] — gpuObjConstr as gpuDot.dParent.
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_constexpr_temp.nim
-
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_constexpr_temp.nim
 import std/[unittest, macros]
 import workspace/crucible
 
@@ -114,42 +81,60 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelA)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 1.0'f32
 
     test "Pattern B — constexpr in arithmetic expression":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelB)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 128.0'f32
 
     test "Pattern C — template wrapConst (block with constexpr)":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelC)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 1.0'f32
 
     test "Pattern D — tuple bracket access on let":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelD)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 0.0'f32
 
     test "Pattern E — block with constexpr temp (evalOnceAs sim)":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelE)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 0.0'f32
 
     test "Pattern F — constexpr tuple field access":
       var output: array[1, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelF)
-      engine.run<<(1, 1)>>("kernel", output, ())
+      let oDev = engine.allocDevice(sizeof(output))
+      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.freeDevice(oDev)
       check output[0] == 8.0'f32
 
 when isMainModule:

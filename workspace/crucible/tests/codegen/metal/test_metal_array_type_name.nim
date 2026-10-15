@@ -1,11 +1,5 @@
 ## Array types inside pulled-in proc signatures name without recursing.
 ##
-## Anti-regression for the `assignTypeName` array case (`Array_N_T`):
-## naming a type that contains an array (here a tuple field) recursed
-## through the `array` symbol — whose type inst is the array itself — until
-## the VM call-depth limit. Array types must name from their length and
-## element type instead.
-##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
@@ -32,8 +26,11 @@ proc runTest() =
     test "a tuple-of-array param names without recursion":
       var engine = bkMetal.init()
       engine.ingest(kernelMsl)
+      let oDev = engine.allocDevice(sizeof(int32))
+      engine.run("repro", oDev, ())
       var res: array[1, int32]
-      engine.run("repro", res, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
+      engine.freeDevice(oDev)
       check res[0] == 8'i32
 
 when isMainModule:

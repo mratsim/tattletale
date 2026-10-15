@@ -1,15 +1,7 @@
 ## NVRTC: address-space emission for locals.
-##
-## An unannotated local is an automatic variable: register storage is the
-## default declaration form, so the printer emits no qualifier (`__local__`
-## is not a CUDA keyword). `{.smem.}` keeps `__shared__`.
-##
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
-##     --outdir:build/tests/nvrtc --nimcache:nimcache/tests/nvrtc \
-##     workspace/crucible/tests/codegen/nvrtc/test_nvrtc_address_space.nim
-
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_address_space.nim
 import std/[strutils, unittest]
 import workspace/crucible
 
@@ -30,7 +22,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "unsigned int x = 7;" in src
       check "__shared__ unsigned int scratch[8];" in src
       var res: array[1, uint32]
-      engine.run("addressSpaceKernel", res, ())
+      let oDev = engine.allocDevice(sizeof(res))
+      engine.run("addressSpaceKernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(res))
+      engine.freeDevice(oDev)
       check res[0] == 7'u32
 
 when isMainModule:
