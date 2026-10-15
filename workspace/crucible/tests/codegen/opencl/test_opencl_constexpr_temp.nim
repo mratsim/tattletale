@@ -1,35 +1,7 @@
-## OpenCL: constexpr temporaries leaking into expression slots
-##
-## Two bugs fixed:
-##
-## Bug 1: ObjConstr used as dot-parent
-##   Nim constant-folds `const tup = (a, b)` so `tup[0]` becomes
-##   `nnkBracketExpr(nnkTupleConstr(a, b), 0)`. Crucible converts this to
-##   `gpuDot(dParent = gpuObjConstr(...), field=Field0)`.
-##   The codegen emitted bare `{val}.Field0` — invalid because braced-
-##   init-lists are not expressions and can't use member access.
-##   Fix (OpenCL): emit `(struct Type){val}.Field0` (C99 compound literal).
-##
-## Bug 2: Constexpr declarations used as expression values
-##   A `const` inside the kernel block becomes a `gpuConstexpr` node. If
-##   this node ends up in an expression slot (gpuVar.vInit, gpuDot.dParent,
-##   etc.), the codegen emits `Type x = constexpr Type tmp = {};` which
-##   is invalid — `constexpr` is a declaration, not an expression value.
-##   Fix: `liftConstexprFrom` pass recursively walks expression children
-##   of every statement. When it finds a `gpuConstexpr` in an expression
-##   slot, it lifts it to a preceding standalone statement and replaces
-##   it with a reference to the constexpr's identifier.
-##
-## Pattern A: const + let in same scope — constexpr lifts to preceding stmt.
-## Pattern B: constexpr Int values in arithmetic — pass lifts before binop.
-## Pattern C: template with block { const tmp; yield tmp } — block-init lift.
-## Pattern D: let-tuple bracket access D[0] — gpuObjConstr in expression.
-## Pattern E: block with two constexprs and tuple field access — pass lift.
-## Pattern F: constexpr tuple tup[0] — gpuObjConstr as gpuDot.dParent.
-##
+## OpenCL: constexpr temporaries leaking into expression slots, six patterns
+## (const+let, arithmetic, block lift, bracket access, block with two constexprs, tuple field access).
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_constexpr_temp.nim
 
 import std/[unittest]
@@ -102,42 +74,60 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkOpenCL.init()
       engine.ingest(kernelA)
       var res: array[1, uint32]
-      engine.run("testA", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testA", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern B — constexpr in arithmetic":
       var engine = bkOpenCL.init()
       engine.ingest(kernelB)
       var res: array[1, uint32]
-      engine.run("testB", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testB", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 128
 
     test "Pattern C — template wrapConst":
       var engine = bkOpenCL.init()
       engine.ingest(kernelC)
       var res: array[1, uint32]
-      engine.run("testC", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testC", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern D — tuple bracket access":
       var engine = bkOpenCL.init()
       engine.ingest(kernelD)
       var res: array[1, uint32]
-      engine.run("testD", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testD", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
 
     test "Pattern E — block with constexpr temp":
       var engine = bkOpenCL.init()
       engine.ingest(kernelE)
       var res: array[1, uint32]
-      engine.run("testE", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testE", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 0
 
     test "Pattern F — constexpr tuple field access":
       var engine = bkOpenCL.init()
       engine.ingest(kernelF)
       var res: array[1, uint32]
-      engine.run("testF", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("testF", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

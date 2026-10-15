@@ -1,10 +1,7 @@
-## Test: let-block-RHS with evalOnceAs pattern (OpenCL)
-##
-## Verifies that `let L = block: const tmp; tmp` generates valid OpenCL C.
-## The constexpr must be lifted before the let, not inlined into the RHS.
-##
+## OpenCL: `let L = block: const tmp; tmp` (evalOnceAs pattern) generates valid
+## OpenCL C, the constexpr lifted before the let, not inlined into the RHS.
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_let_block_rhs.nim
 
 import std/[unittest, strformat]
@@ -44,7 +41,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelDirect)
       echo kernelDirect
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "Pattern B — const + let":
@@ -52,7 +52,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -60,7 +63,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelBlock)
       echo kernelBlock
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

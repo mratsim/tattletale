@@ -1,10 +1,7 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-##   nim c -r --hints:off --warnings:off \
+## OpenCL: add, vec2-add, and generic-max kernels generate OpenCL C
+## through the `opencl:` macro and run on the device via `engine.run()`.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_add.nim
 
 import workspace/crucible
@@ -77,7 +74,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[2, uint32] = [1'u32, 2'u32]
     var out32: array[2, uint32]
 
-    engine.run("addKernel", out32, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(2 * sizeof(uint32))
+    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
     doAssert out32[1] == 22
@@ -91,7 +98,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[2, uint32] = [3'u32, 4'u32]
     var out32: array[2, uint32]
 
-    engine.run("vec2AddKernel", out32, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(2 * sizeof(uint32))
+    engine.run("vec2AddKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
     doAssert out32[1] == 204
@@ -105,7 +122,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var b: array[1, uint32] = [17'u32]
     var outVal: array[1, uint32]
 
-    engine.run("maxKernel", outVal, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("maxKernel", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
+
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42
     echo "  OK"

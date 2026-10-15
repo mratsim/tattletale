@@ -1,7 +1,9 @@
-## CuTe GEMM single-tile — OpenCL backend
-## A(2×3) * B(3×2) = C(2×2)
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/opencl/test_opencl_gemm.nim
+## OpenCL: CuTe GEMM single tile, A(2×3) * B(3×2) = C(2×2), tile type
+## and tileAt device fn inside the `opencl:` block.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/opencl/test_opencl_gemm.nim
+
 import std/strformat
 import workspace/crucible
 
@@ -37,7 +39,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var res: array[4, uint32]
-    engine.run("gemmKernel", res, ())
+    let oDev = engine.allocDevice(4 * sizeof(uint32))
+    engine.run("gemmKernel", oDev, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+    engine.freeDevice(oDev)
     let expected = [58'u32, 64, 139, 154]
     for i in 0 ..< 4:
       doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"

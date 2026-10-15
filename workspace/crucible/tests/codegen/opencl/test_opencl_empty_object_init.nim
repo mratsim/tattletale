@@ -1,20 +1,7 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
-##
-## OpenCL: empty-object construction must emit `{0}`, never `{}`.
-## OpenCL C is C99 and rejects an empty initializer list for a struct
-## ("scalar initializer cannot be empty"). A stateless object with no
-## fields previously emitted `(struct X){}`, which fails to build on the
-## device. This test compiles and executes a kernel that constructs an
-## empty object, and pins the emitted initializer text.
-##
+## OpenCL: empty-object construction emits `{0}`, never `{}`, and the kernel
+## building such an object compiles and runs on the device.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_empty_object_init.nim
 
 import std/strutils
@@ -42,7 +29,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var outVal: array[1, uint32]
-    engine.run("kernelMain", outVal, ())
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.run("kernelMain", oDev, ())
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
     doAssert outVal[0] == 42
     echo "  OK"
 

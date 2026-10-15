@@ -1,25 +1,8 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-## compound-assign `a[i] += v` / `acc += k` — read-modify-write store-back (OpenCL roundtrip)
-##
-## The compound-assign rewrite is registered as a COMMON pass (all backends),
-## so OpenCL must desugar `x += y` → `x = x + y` and execute correctly.
-## Two shapes are covered: an indexed write followed by indexed `+=` (proves
-## store-back on a real lvalue) and a kernel-local `var acc` accumulator.
-##
+## OpenCL: compound-assign `a[i] += v` desugars to read-modify-write
+## and executes on the device (indexed write and a kernel-local accumulator).
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/opencl --nimcache:nimcache/tests/opencl \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_compound_assign.nim
-##
-##   cd workspace/crucible
-##   nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip \
-##     tests/codegen/opencl/test_opencl_compound_assign.nim
 
 import std/strutils
 import workspace/crucible
@@ -57,7 +40,14 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var a: array[2, uint32] = [10'u32, 20'u32]
     var out32: array[2, uint32]
 
-    engine.run("accKernel", out32, (a))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    let oDev = engine.allocDevice(2 * sizeof(uint32))
+    engine.run("accKernel", oDev, (aDev,))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(oDev)
+
     echo "  accKernel: output = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 17  # 10 + 6 + 1
     doAssert out32[1] == 27  # 20 + 6 + 1

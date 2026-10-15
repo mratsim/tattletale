@@ -1,24 +1,7 @@
 ## OpenCL: `{.emit.}` raw OpenCL C injection through the GPU DSL, end to end.
-##
-## Covered:
-## - the argument-form matrix: single string, comma form, backticks,
-##   triple-quoted multiline
-## - the not-silently-dropped regression for both emit spellings
-## - the insertResult exclusion
-## - `#define`-style payload byte-exactness
-## - a multi-emit pragma rendering every item in order
-## - a non-emit statement pragma mapping to gpuDiscard
-##
-## Emits are supported inside proc bodies and render at the statement position.
-## The emit is self-terminating: the printer appends no `;`, so the injected
-## text must carry its own terminator where OpenCL C requires one.
-## Every kernel runs through `engine.run()` and the outputs are asserted,
-## never print-only.
-##
+## Covers every argument form, insertResult exclusion, and multi-item emits.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_emit.nim
 
 import std/[strutils, unittest]
@@ -138,7 +121,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
       var res: array[1, uint32]
-      engine.run("t1Kernel", res, (a, b))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let bDev = engine.allocDevice(b.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t1Kernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
@@ -146,7 +138,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t2Cl)
       var a: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t2Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t2Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
@@ -154,7 +152,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t3Cl)
       var a: array[1, uint32] = [20'u32]
       var res: array[1, uint32]
-      engine.run("t3Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t3Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
@@ -162,7 +166,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t4Cl)
       var a: array[1, uint32] = [40'u32]
       var res: array[1, uint32]
-      engine.run("t4Kernel", res, (a,))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t4Kernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -171,7 +181,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
       var res: array[2, uint32]
-      engine.run("t5Kernel", res, (a, b))
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      let bDev = engine.allocDevice(b.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      let oDev = engine.allocDevice(2 * sizeof(uint32))
+      engine.run("t5Kernel", oDev, (aDev, bDev))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(bDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
@@ -179,7 +198,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkOpenCL.init()
       engine.ingest(t6Cl)
       var res: array[1, uint32]
-      engine.run("t6Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t6Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
@@ -187,7 +209,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t7Cl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t7Kernel", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t7Kernel", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
@@ -195,21 +223,33 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t8Cl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
-      engine.run("t8Kernel", res, (x,))
+      let xDev = engine.allocDevice(x.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t8Kernel", oDev, (xDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(xDev)
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
       var engine = bkOpenCL.init()
       engine.ingest(t10Cl)
       var res: array[1, uint32]
-      engine.run("t10Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t10Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
       var engine = bkOpenCL.init()
       engine.ingest(t12Cl)
       var res: array[1, uint32]
-      engine.run("t12Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t12Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
@@ -219,7 +259,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "#define OPENCL_EMIT_TILE 32" in src
       check "#define OPENCL_EMIT_TILE 32;" notin src
       var res: array[1, uint32]
-      engine.run("t14Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t14Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
@@ -232,14 +275,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkOpenCL.init()
       engine.ingest(t15Cl)
       var res: array[1, uint32]
-      engine.run("t15Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t15Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
       var engine = bkOpenCL.init()
       engine.ingest(t16Cl)
       var res: array[1, uint32]
-      engine.run("t16Kernel", res, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("t16Kernel", oDev, ())
+      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

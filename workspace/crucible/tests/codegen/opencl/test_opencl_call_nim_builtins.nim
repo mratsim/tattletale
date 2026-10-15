@@ -1,9 +1,6 @@
-## Tests that registerGenericInstOrExternalProc handles
-## system.* called as nnkCall on the OpenCL backend.
-##
+## OpenCL: system.* called as nnkCall goes through registerGenericInstOrExternalProc.
 ## Run:
-##   cd tattletale
-##   nim cpp -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_call_nim_builtins.nim
 
 import std/[unittest]
@@ -21,7 +18,10 @@ template runMulKernel(t: typedesc; expected0, expected1: float32) =
     var engine = bkOpenCL.init()
     engine.ingest(k)
     var res: array[2, float32]
-    engine.run("mulKernel", res, ())
+    let oDev = engine.allocDevice(2 * sizeof(float32))
+    engine.run("mulKernel", oDev, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(float32))
+    engine.freeDevice(oDev)
     check res[0] == expected0
     check res[1] == expected1
 
@@ -37,7 +37,10 @@ template runFloatMulKernel(t: typedesc; expected0, expected1: float32) =
     var engine = bkOpenCL.init()
     engine.ingest(k)
     var res: array[2, float32]
-    engine.run("mulKernel", res, ())
+    let oDev = engine.allocDevice(2 * sizeof(float32))
+    engine.run("mulKernel", oDev, ())
+    engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(float32))
+    engine.freeDevice(oDev)
     check res[0] == expected0
     check res[1] == expected1
 

@@ -1,21 +1,7 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
-##
-## OpenCL: an object constructor that omits a field must zero-initialize it.
-## OpenCL C is C99: `{}` is invalid for a scalar ("scalar initializer cannot
-## be empty"). A constructor such as `WorkItem(value: 7)` omits the array
-## field and the pointer field. The fix emits `{0}` for array/object fields
-## and `0` for scalar/pointer fields, so the object is fully zero-initialized
-## and still valid C99. This test executes a kernel that builds such an
-## object and checks that the omitted fields are zeroed.
-##
+## OpenCL: an object constructor that omits a field must zero-initialize it,
+## emitting `{0}` for array/object fields and `0` for scalars, never `{}`.
 ## Run:
-##   cd tattletale
-##   nim c -r --hints:off --warnings:off \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_missing_field_init.nim
 
 import std/strutils
@@ -50,7 +36,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var out32: array[4, uint32]
-    engine.run("kernelMain", out32, ())
+    let oDev = engine.allocDevice(4 * sizeof(uint32))
+    engine.run("kernelMain", oDev, ())
+    engine.copyToHostFromDevice(addr out32[0], oDev, 4 * sizeof(uint32))
+    engine.freeDevice(oDev)
     doAssert out32[0] == 7, "set field must keep its value"
     doAssert out32[1] == 0, "omitted array field must be zeroed"
     doAssert out32[2] == 0, "omitted array field must be zeroed"

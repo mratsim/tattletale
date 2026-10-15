@@ -1,6 +1,8 @@
-## Multi-kernel Vec10 add/mul — OpenCL backend
-## Run with:
-##   nim c -r workspace/crucible/tests/codegen/opencl/test_vec10_multi_kernel.nim
+## OpenCL: multi-kernel Vec10 add and mul in one ingested source.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/opencl/test_opencl_vec10_multi_kernel.nim
+
 import workspace/crucible
 
 const kernelCode = opencl:
@@ -26,7 +28,16 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var res: array[10, uint32]
-    engine.run("vec10_add", res, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(10 * sizeof(uint32))
+    engine.run("vec10_add", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr res[0], oDev, 10 * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
     for i in 0 ..< 10:
       doAssert res[i] == a[i] + b[i]
     echo "  OK — vec10_add"
@@ -36,7 +47,16 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var res: array[10, uint32]
-    engine.run("vec10_mul", res, (a, b))
+    let aDev = engine.allocDevice(a.len * sizeof(uint32))
+    let bDev = engine.allocDevice(b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let oDev = engine.allocDevice(10 * sizeof(uint32))
+    engine.run("vec10_mul", oDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr res[0], oDev, 10 * sizeof(uint32))
+    engine.freeDevice(aDev)
+    engine.freeDevice(bDev)
+    engine.freeDevice(oDev)
     for i in 0 ..< 10:
       doAssert res[i] == a[i] * b[i]
     echo "  OK — vec10_mul"

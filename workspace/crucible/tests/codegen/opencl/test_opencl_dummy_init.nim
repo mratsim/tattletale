@@ -1,10 +1,7 @@
-## Test: OpenCL codegen for structs with dummy/empty fields
-##
-## When a struct has no fields (crucible pads it with `char _`),
-## the object constructor must emit a valid initializer, not empty braces.
-##
-## To compile and run:
-##   nim c -r --hints:off --warnings:off \
+## OpenCL: structs with no fields (padded with `char _`) must emit a valid
+## object-constructor initializer, not empty braces.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_dummy_init.nim
 
 import std/[unittest, strformat]
@@ -32,7 +29,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelCode
       echo "===="
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "tuple of dummy structs const":
@@ -42,7 +42,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelCode2
       echo "===="
       var buf: array[1, uint32]
-      engine.run("dummyKernel", buf, ())
+      let oDev = engine.allocDevice(sizeof(uint32))
+      engine.run("dummyKernel", oDev, ())
+      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:
