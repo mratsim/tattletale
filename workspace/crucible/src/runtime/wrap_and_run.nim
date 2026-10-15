@@ -39,6 +39,50 @@ proc isStaticFormal(f: NimNode): bool =
   ptype.kind == nnkStaticTy or
     (ptype.kind == nnkCommand and $ptype[0] == "static")
 
+proc isConstantTy(t: NimNode): bool =
+  ## Whether the type node has no scalar leaf: only tuples and generic
+  ## instantiations of fieldless objects, a compile-time constant
+  ## crossing the launch boundary as no bytes
+  case t.kind
+  of nnkIntLit..nnkFloat128Lit:
+    # a static parameter carries its value in the type
+    result = true
+  of nnkBracketExpr:
+    # a generic instantiation, constant iff every argument is
+    result = true
+    for e in t[1 ..< t.len]:
+      if not isConstantTy(e):
+        return false
+  of nnkTupleTy:
+    result = true
+    for d in t:
+      if d.kind == nnkIdentDefs and not isConstantTy(d[^2]):
+        return false
+  of nnkPar, nnkTupleConstr:
+    result = true
+    for e in t:
+      if not isConstantTy(e):
+        return false
+  else:
+    result = false
+
+proc constantValue(t: NimNode): NimNode =
+  ## Builds the compile-time value of a constant type node: nested
+  ## fieldless objects and tuples constructed from their argument types
+  if t.kind == nnkBracketExpr:
+    return nnkCall.newTree(t.copy())
+  if t.kind in {nnkTupleTy, nnkPar, nnkTupleConstr}:
+    var r = nnkTupleConstr.newTree()
+    if t.kind == nnkTupleTy:
+      for d in t:
+        if d.kind == nnkIdentDefs:
+          r.add(constantValue(d[^2]))
+    else:
+      for e in t:
+        r.add(constantValue(e))
+    return r
+  error "constantValue: not a constant type node: " & t.repr
+
 proc isBindMany(t: NimNode): bool =
   if t.kind == nnkDistinctTy: return true
   if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
@@ -58,7 +102,7 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
     let argType = if useFormal: formalTypes[i] else: vtype
     let obj = if useFormal: formalTypes[i].getTypeImpl() else: valueImpls[i]
     if obj.kind == nnkObjectTy:
-      var leaves: seq[NimNode] = @[]
+      var reconFields: seq[NimNode] = @[]
       for k in 2 ..< obj.len:
         let recList = obj[k]
         doAssert recList.kind in {nnkRecList, nnkIdentDefs},
@@ -72,14 +116,19 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
           doAssert fldType.kind != nnkObjectTy,
             "buildGlobalFn: nested pointer structs are not supported: " & vtype.repr
           for m in 0 ..< d.len - 2:
-            let pname = ident("cru" & valueNames[i] & "_" & $d[m])
-            params.add(nnkIdentDefs.newTree(pname, fldType.copy(), newEmptyNode()))
-            leaves.add(pname)
-      doAssert leaves.len == 2,
-        "buildGlobalFn: expected a data+layout view, got " & vtype.repr
-      bridgeArgs.add(nnkObjConstr.newTree(argType.copy(),
-        nnkExprColonExpr.newTree(ident"data", leaves[0]),
-        nnkExprColonExpr.newTree(ident"layout", leaves[1])))
+            if isConstantTy(fldType):
+              # a constant field crosses the launch boundary as no bytes,
+              # the kernel reads its value from the type
+              reconFields.add(nnkExprColonExpr.newTree(d[m].copy(),
+                constantValue(fldType)))
+            else:
+              let pname = ident("cru" & valueNames[i] & "_" & $d[m])
+              params.add(nnkIdentDefs.newTree(pname, fldType.copy(), newEmptyNode()))
+              reconFields.add(nnkExprColonExpr.newTree(d[m].copy(), pname))
+      var recon = nnkObjConstr.newTree(argType.copy())
+      for rf in reconFields:
+        recon.add(rf)
+      bridgeArgs.add(recon)
     else:
       let pname = ident("cru" & valueNames[i])
       params.add(nnkIdentDefs.newTree(pname, argType.copy(), newEmptyNode()))

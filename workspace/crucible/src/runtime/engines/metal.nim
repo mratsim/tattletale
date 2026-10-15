@@ -161,6 +161,16 @@ when defined(macosx):
           return true
     # otherwise false via the default result
 
+  func isConstantTree[T](): bool {.compileTime.} =
+    ## Whether T is a tree of fieldless objects, a compile-time constant
+    ## subtree that crosses the launch boundary as no bytes
+    when typeof(default(T)) is object|tuple:
+      result = true
+      for f in fields(default(T)):
+        if not isConstantTree[typeof(f)]():
+          return false
+    # a scalar leaf (int, float, ptr) is not constant
+
   proc packBytes(x: auto, bytes: var seq[byte]) =
     ## Appends one value tree in launch-blob byte order: scalars pack
     ## at the crucible-lowered width (`int`/`uint` lower to 32-bit),
@@ -194,7 +204,12 @@ when defined(macosx):
     elif typeof(x) is object|tuple and hasPtrField[typeof(x)]():
       var copy = x
       for f in fields(copy):
-        bindLeaves(f, bufs, bytes, chunks)
+        when isConstantTree[typeof(f)]():
+          # a fully static subtree carries no bytes, the kernel reads
+          # its values as compile-time constants
+          discard
+        else:
+          bindLeaves(f, bufs, bytes, chunks)
     else:
       let off = bytes.len
       packBytes(x, bytes)
