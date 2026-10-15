@@ -1,9 +1,9 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 {.experimental: "callOperator".}
 
@@ -17,6 +17,7 @@ import ./layout_indexing_gpu
 import ./layout_indexing_slicedice
 import ./layouts
 import ./layouts_unsanctioned_helpers
+import ./ism_coord_strides
 import ./layout_compiletime
 import workspace/ceramic/src/macros/varargs_to_par
 
@@ -95,6 +96,21 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
     let shapeEvent = shapeStream.next()
     let strideEvent = strideStream.next()
     if coordEvent.kind == kLeaf and shapeEvent.kind == kOpen:
+      # a wildcard coord leaf swallows the nested mode, it contributes nothing
+      if coordEvent.leafTy != nil and coordEvent.leafTy.hasType"X":
+        var depth = 1
+        while true:
+          let shapeSub = shapeStream.next()
+          discard strideStream.next()
+          case shapeSub.kind
+          of kOpen:
+            depth.inc
+          of kClose:
+            depth.dec
+            if depth == 0: break
+          else:
+            discard
+        continue
       # A scalar coord element into a nested dimension, the coord
       # stream holds still until the subtree closes.
       remaining = coordEvent.leaf
@@ -224,6 +240,13 @@ template inBounds*(coord: int or Int, shape: IntOrIntTuple): auto =
 template inBounds*(coord: tuple, shape: IntOrIntTuple): auto =
   ## Returns true if a coordinate is within bounds of a shape
   inBoundsImpl(coord, shape)
+
+macro inBounds*(coord: CoordStride, shape: IntOrIntTuple): auto =
+  ## Returns true if a static coordinate is within bounds of a shape,
+  ## each mode checked against its shape mode
+  let coordTy = coord.getTypeInst()
+  doAssert coordTy.kind == nnkBracketExpr
+  result = getAst(inBoundsImpl(coordTy[1], shape))
 
 macro inBounds*(coord: IntOrIntTuple, layout: Layout): auto =
   ## Returns true if a coordinate is within bounds of a shape

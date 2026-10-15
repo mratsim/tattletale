@@ -1,9 +1,9 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Layout data types: Layout[Sh, St], basic accessors, and type-level predicates.
 
@@ -130,16 +130,17 @@ func `$`*(layout: Layout): string =
 
 template rank*(layout: Layout): static int =
   ## Number of dimensions in layout (compile-time constant).
-  rank(layout.shape)
+  layout.shape.rank()
 
 template rank*[Sh, St](_: typedesc[Layout[Sh, St]]): static int =
   ## Number of dimensions in a layout type (compile-time constant).
-  rank(Sh)
+  Sh.rank()
 
 template size*(layout: Layout): auto =
-  ## Number of logical elements: product over all shape leaves.
-  ## Returns Int[N] for all-static shapes, int otherwise.
   product(layout.shape)
+
+template size*(t: IntOrIntTuple): auto =
+  product(t)
 
 func isLayoutTy*(n: NimNode): bool {.compileTime.} =
   ## True for Layout values, the generic head carries the match
@@ -217,13 +218,13 @@ type StrideOrder* = enum
 #  shape-structure predicates over IntOrIntTuple
 # ═══════════════════════════════════════════════════════════════
 
-template congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
+template congruent*[A, B: IntOrIntTuple](a: A, b: B): bool =
   ## True if `a` and `b` have the same hierarchical rank structure.
   ## Returns a bool typedesc, usable in both `static` and runtime contexts.
   when a is (int or Int) or b is (int or Int):
     a is (int or Int) and b is (int or Int)
   elif a is tuple and b is tuple:
-    when rank(a) != rank(b):
+    when a.rank() != b.rank():
       false
     else:
       block:
@@ -243,7 +244,7 @@ func weakly_congruent*[A, B: IntOrIntTuple](a: A; b: B): bool =
   elif b is (int or Int):
     false
   elif a is tuple and b is tuple:
-    when rank(a) != rank(b):
+    when a.rank() != b.rank():
       false
     else:
       block:
