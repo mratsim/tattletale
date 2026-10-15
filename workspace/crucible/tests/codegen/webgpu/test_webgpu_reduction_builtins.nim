@@ -26,7 +26,7 @@ const reductionWgsl = webgpu:
 
 proc runTest() =   # private, tests run in a proc so engines are destroyed at return
   when wgslSubgroupsExecutable:
-    block: # reductionKernel: out = [acc(lane 1), acc(lane 0), acc(lane 0)]
+    block: # reductionKernel: out = [acc(lane 1), v(lane 0), v(lane 0)]
       var engine = bkWGSL.init()
       engine.ingest(reductionWgsl)
 
@@ -38,8 +38,8 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
 
       echo "  reductionKernel: output = [", res[0], ", ", res[1], ", ", res[2], "]"
       doAssert res[0] == 11.0'f32  # lane 0: shuffleDown gathers lane 1's acc
-      doAssert res[1] == 10.0'f32  # lane 0: shuffle(v, 0) gathers its own v
-      doAssert res[2] == 10.0'f32  # lane 1: shuffle(v, 0) gathers lane 0's v
+      doAssert res[1] == 11.0'f32  # lane 0: shuffle(v, 0) gathers its own v, acc(lane 1)
+      doAssert res[2] == 11.0'f32  # lane 1: shuffle(v, 0) gathers lane 0's v, acc(lane 1)
       echo "  OK"
 
     echo "All reduction builtin execution tests passed"
