@@ -1,6 +1,7 @@
 ## fillWith on TensorView inside cuda: (minimal reproduction)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_assign.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_assign.nim
 import std/[unittest, macros]
 import workspace/crucible
 

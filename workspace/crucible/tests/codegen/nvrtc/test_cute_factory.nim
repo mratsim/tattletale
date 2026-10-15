@@ -1,6 +1,7 @@
 ## CuTe: factory functions returning composed types (B14)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_factory.nim
 import std/strformat
 import workspace/crucible
 

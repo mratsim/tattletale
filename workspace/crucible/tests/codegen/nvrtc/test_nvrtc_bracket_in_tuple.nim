@@ -1,6 +1,7 @@
 ## NVRTC: tuple with generic types (key CuTe pattern)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bracket_in_tuple.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bracket_in_tuple.nim
 import std/strformat
 import workspace/crucible
 

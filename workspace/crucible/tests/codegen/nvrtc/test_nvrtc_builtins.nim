@@ -1,6 +1,7 @@
 ## NVRTC: cross-platform GPU builtins (min, max, abs)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_builtins.nim
 import std/strformat
 import workspace/crucible
 

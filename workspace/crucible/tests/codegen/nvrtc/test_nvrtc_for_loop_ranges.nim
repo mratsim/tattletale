@@ -1,6 +1,7 @@
 ## NVRTC: for-loop range parsing (nnkForStmt)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_for_loop_ranges.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_for_loop_ranges.nim
 import std/strformat
 import workspace/crucible
 

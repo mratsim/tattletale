@@ -1,6 +1,7 @@
 ## gpuBinOp self-carried result type (bType): end-to-end NVRTC test
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_binop_type.nim
 import std/[unittest]
 import workspace/crucible
 import workspace/crucible/src/codegen/ir/gpu_type_constructors

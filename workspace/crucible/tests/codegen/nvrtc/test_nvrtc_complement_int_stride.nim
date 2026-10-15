@@ -1,6 +1,7 @@
 ## NVRTC: layout complement with a static Int[N] stride value (crucible only)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_complement_int_stride.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_complement_int_stride.nim
 import std/[unittest, macros]
 import workspace/crucible
 

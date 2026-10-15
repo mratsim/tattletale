@@ -1,6 +1,7 @@
 ## NVRTC: for-loop over a `..<` Slice[int] range inside cuda:
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_forloop_slice_range.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_forloop_slice_range.nim
 import std/[unittest, macros]
 import workspace/crucible
 

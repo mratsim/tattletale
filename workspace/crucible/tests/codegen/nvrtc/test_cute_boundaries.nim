@@ -1,6 +1,7 @@
 ## CuTe scaling: failure boundaries (B22-B26)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_boundaries.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_boundaries.nim
 import std/strformat
 import workspace/crucible
 

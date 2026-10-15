@@ -1,6 +1,7 @@
 ## NVRTC: `()` call-operator template as a call argument (block expression)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_callop_semicolon_arg.nim
 import std/[unittest, macros]
 import workspace/crucible
 

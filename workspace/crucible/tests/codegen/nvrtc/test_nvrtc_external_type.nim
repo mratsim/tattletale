@@ -1,6 +1,7 @@
 ## NVRTC: external types pulled from outside the `cuda` block
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_type.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_type.nim
 import workspace/crucible
 
 # ── External types (defined outside the `cuda` block) ───────────────────────

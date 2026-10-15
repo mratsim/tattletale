@@ -1,6 +1,7 @@
 ## NVRTC: inline asm with backtick identifiers (Nim native asm symbols)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_asm_backtick.nim
 import workspace/crucible
 
 const kernelCode = cuda:

@@ -1,6 +1,7 @@
 ## CuTe: pointer stride + computed indexing (B15, B20)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_ptr_stride.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_ptr_stride.nim
 import std/strformat
 import workspace/crucible
 

@@ -1,6 +1,7 @@
 ## registerGenericInstOrExternalProc: system `*` as nnkCall plus user-defined `*` on a struct
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_call_nim_builtins.nim
 import std/[unittest]
 import workspace/crucible
 

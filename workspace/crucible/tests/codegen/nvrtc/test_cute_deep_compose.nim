@@ -1,6 +1,7 @@
 ## CuTe: deep generic composition (B11, B12, B13)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_deep_compose.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_deep_compose.nim
 import std/strformat
 import workspace/crucible
 

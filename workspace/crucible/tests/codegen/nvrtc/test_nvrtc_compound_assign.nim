@@ -1,6 +1,7 @@
 ## compound-assign `a[i] += v` read-modify-write store-back (NVRTC roundtrip)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_compound_assign.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_compound_assign.nim
 import std/[unittest]
 import workspace/crucible
 

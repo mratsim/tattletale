@@ -1,6 +1,7 @@
 ## CuTe: tile loops + inline PTX (B17, B21)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_shared_mma.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_cute_shared_mma.nim
 import std/strformat
 import workspace/crucible
 

@@ -1,6 +1,7 @@
 ## NVRTC: address-space emission for locals.
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_address_space.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_address_space.nim
 import std/[strutils, unittest]
 import workspace/crucible
 

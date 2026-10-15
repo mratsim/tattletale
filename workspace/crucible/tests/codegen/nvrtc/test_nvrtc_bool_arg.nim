@@ -1,6 +1,7 @@
 ## NVRTC: bool/uint32 kernel args via the codegen pipeline
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_bool_arg.nim
 import workspace/crucible
 
 # NOTE: res gets prepended → output MUST be first kernel param

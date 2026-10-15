@@ -1,6 +1,7 @@
 ## duplicate struct definitions in generated CUDA (tuple constructor)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dup_typedef.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dup_typedef.nim
 import std/[unittest]
 import workspace/crucible
 

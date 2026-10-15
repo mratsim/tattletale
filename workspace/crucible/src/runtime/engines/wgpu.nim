@@ -304,8 +304,8 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
 
   let totalBindings = argShapes.len + 1
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
-  # wgpu-native rejects a zero binding size, whole-buffer bindings carry the
-  # buffer's queried size.
+  # wgpu-native rejects a zero binding size, whole-buffer bindings carry
+  # the buffer's queried size.
   bgEntries[0] = WGPUBindGroupEntry(
     binding: 0.cuint,
     buffer: output,

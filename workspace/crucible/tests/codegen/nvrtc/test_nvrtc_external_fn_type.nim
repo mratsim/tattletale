@@ -1,6 +1,7 @@
 ## NVRTC: external functions + external types + kernel chaining
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn_type.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_external_fn_type.nim
 import workspace/crucible
 
 # ── External types ──────────────────────────────────────────────────────────

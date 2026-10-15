@@ -1,6 +1,7 @@
 ## NVRTC: try/except fallback in addProcToGenericInsts
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_except_fallback.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_except_fallback.nim
 import std/strformat
 import workspace/crucible
 

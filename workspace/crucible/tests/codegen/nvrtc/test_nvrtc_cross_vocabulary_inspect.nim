@@ -1,6 +1,7 @@
 ## NVRTC: cross-vocabulary coordinate inspect (compile + grep)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cross_vocabulary_inspect.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_cross_vocabulary_inspect.nim
 import std/strutils
 import workspace/crucible
 

@@ -1,6 +1,7 @@
 ## crucible CUDA codegen for structs with dummy/empty fields
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dummy_init.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_dummy_init.nim
 import std/[unittest, strformat]
 import workspace/crucible
 

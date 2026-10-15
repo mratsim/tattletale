@@ -1,6 +1,7 @@
 ## crucible type resolver edge cases (field access)
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_field_access_type.nim
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/test_nvrtc_field_access_type.nim
 import std/[unittest]
 import workspace/crucible
 
