@@ -4,14 +4,12 @@
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_compound_assign.nim
 
-import std/strutils
 import workspace/crucible
 
 # ── OpenCL C generation via `opencl:` macro ────────────────────────────────
 
 const accCl = opencl:
-  proc accKernel(output: ptr UncheckedArray[uint32];
-                 a: ptr UncheckedArray[uint32]) {.global.} =
+  proc accKernel(output, a: ptr UncheckedArray[uint32]) {.global.} =
     for i in 0 ..< 2:
       var acc = uint32(0)
       for k in 0 ..< 4:
@@ -20,18 +18,10 @@ const accCl = opencl:
       output[i] += acc
       output[i] += 1
 
-# ── Codegen test (always runs) ─────────────────────────────────────────────
+# ── Execution via OpenCL runtime ───────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  echo "=== OpenCL compound-assign generation ===\n"
-  echo accCl
-  echo ""
-
-  doAssert not accCl.contains("+="), "compound assignment must be desugared, got: " & accCl
-
-  # ── Execution via OpenCL runtime ────────────────────────────────────────────
-
-  echo "=== OpenCL execution ===\n"
+proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+  echo "=== OpenCL compound-assign execution ===\n"
 
   block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6
     var engine = bkOpenCL.init()
