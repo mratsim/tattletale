@@ -26,8 +26,9 @@ proc appendLeaf(b: var TupleBuilderNested, ev: TupleStreamEvent) =
             else: ev.leaf.getStaticInt()
     if v != DynamicSentinel:
       b.append((IntCT(v), intTy(v)))
-    elif ev.leafTy == nil:
-      # no type known here, the type resolves in the caller's scope
+    elif ev.leafTy == nil or ev.leafTy.kind == nnkIdentDefs:
+      # no type known here, the type resolves in the caller's scope,
+      # a declaration node is not a type, the leaf types as typeof(leaf)
       b.appendTyped(ev.leaf)
     else:
       b.append((ev.leaf, ev.leafTy))

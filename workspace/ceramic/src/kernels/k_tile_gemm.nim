@@ -20,10 +20,7 @@ import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/kernels/k_layout_gemm
-
-# ═══════════════════════════════════════════════════════════════
-#  Launch mapping
-# ═══════════════════════════════════════════════════════════════
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile-level matmul
@@ -52,15 +49,13 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
   if thrID < mma.getThreadCount():
     let
       cSize = cGrid.size()
-      stride = int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * int(threadgroups_per_grid.z)
-    var tileID = cGrid.getLocalTileID()
-    while tileID < cSize:
+      gridStride = int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * int(threadgroups_per_grid.z)
+    for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
       var rD: rt(D.T, cLayout)
       var rA: rt(A.T, mma.getMmaLayout(opA))
       var rB: rt(B.T, mma.getMmaLayout(opB))
-      for i in 0 ..< cLayout.size():
-        rD[i] = zero(D.T)
+      rD.fillWith(zero(D.T))
       for k in 0 ..< kTiles:
         rA.loadTile(A, tvmA, thrID, (m, k))
         rB.loadTile(B, tvmB, thrID, (n, k))
@@ -76,7 +71,6 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
         for i in 0 ..< cLayout.size():
           rD[i] += beta * rC[i]
       D.storeTile(rD, tvmC, thrID, (m, n))
-      tileID += stride
 
 proc matmul*(mma: static TiledMma, D, A, B: distinct TensorView) =
   ## D = A·B, same tile grid and launch mapping as gemm.

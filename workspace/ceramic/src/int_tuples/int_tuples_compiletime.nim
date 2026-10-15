@@ -111,7 +111,7 @@ func getTypeOf*(n: NimNode): NimNode {.compileTime.} =
     if n[0].kind == nnkBracketExpr:
       result = n[0]
     elif n[0].eqIdent("E"):
-      # a CoordStride atom constructor, the type spells from the arguments
+      # a CoordStride atom constructor, the type comes from the arguments
       var coords = nnkPar.newTree()
       for i in 1 ..< n.len:
         coords.add n[i]
@@ -168,6 +168,12 @@ func isTupleTy*(t: NimNode): bool {.compileTime.} =
      nnkNilLit, nnkEmpty:
     # fresh macro nodes, no type to resolve and never tuples
     false
+  of nnkIdentDefs:
+    # a typed declaration node is a scalar, never a tuple
+    false
+  of nnkBracketExpr:
+    # a bracket is a tuple type only in its `tuple[...]` form, index expressions are scalars
+    t.len > 0 and t[0].kind in {nnkSym, nnkIdent} and t[0].eqIdent("tuple")
   else:
     t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
 
@@ -220,16 +226,10 @@ proc newLetAsgn*(stmts: var NimNode, name: string, value: NimNode): NimNode {.co
 
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
 
-  # template `alias`(): untyped =
-  #   expression
   result = newProc(
     name = genSym(nskTemplate, $alias),
     params = [getType(untyped)],
@@ -239,18 +239,11 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`c
 
 macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
   ##     See the section comment at the top of this file.
 
-  # const evalOnceCT_staticInt = expression
-  # template `alias`(): untyped =
-  #   evalOnceCT_staticInt
   result = newStmtList()
   let evalOnceCT_staticInt = genSym(nskConst, "evalOnceCT_staticInt")
 
@@ -267,13 +260,9 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
 
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded.
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
   ##     See the section comment at the top of this file.
 
   # Uses a generated `when expression is static:` to choose
@@ -281,13 +270,12 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   # The template name is genSym'd to avoid collisions when multiple
   # evalOnceAs calls exist in the same scope.
   #
-  # Implementation note — alternative approaches we tried:
-  #   when compiles(static(expr)) — crashes the nimvm in a `static:` context
-  #   when compiles(const = expression) — crashes in another context
-  #   when is static — seems to work and is what we use here,
-  #     but we need a macro for gensym of template symbols
-  #   isCompileTime() macro — fragile, misses many AST node kinds,
-  #     and getTypeInst() produces hard errors on untyped nodes
+  # Implementation notes, alternatives rejected:
+  # - when compiles(static(expr)): crashes the nimvm in a `static:` context
+  # - when compiles(const = expression): crashes in another context
+  # - when is static: works and is what we use here, but it needs a macro
+  #   for gensym of template symbols
+  # - isCompileTime() macro: fragile, misses many AST node kinds, getTypeInst() hard-errors on untyped nodes
   let aName = genSym(nskTemplate, $alias)
   result = newStmtList()
   result.add quote do:

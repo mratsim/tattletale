@@ -35,29 +35,16 @@ import workspace/fp_conv/fp_conv
 #  Kernel templates and launch descs
 # ═══════════════════════════════════════════════════════════════
 
-proc tileGemm(mma: static TiledMma[float32, float16, float16, 32, 32, 16],
-              C, D: TensorView[float32, tuple[a, b: int], tuple[a, b: int]],
-              A, B: TensorView[float16, tuple[a, b: int], tuple[a, b: int]]) =
-  let
-    cV = make_view(C.data, make_layout(C.getLayout().shape, C.getLayout().stride))
-    aV = make_view(A.data, make_layout(A.getLayout().shape, A.getLayout().stride))
-    bV = make_view(B.data, make_layout(B.getLayout().shape, B.getLayout().stride))
-  matmul(mma, cV, aV, bV)
-
 proc tileLoadReduce(mma: static TiledMma[float32, float16, float16, 32, 32, 16],
                     C, D: TensorView[float32, tuple[a, b: int], tuple[a, b: int]],
                     A, B: TensorView[float16, tuple[a, b: int], tuple[a, b: int]]) =
   ## Load-path-only companion: every loaded register cell reduces into
   ## one scalar stored at the thread's own C slot, so no load is dead,
   ## isolating the load/store cost from the mma cost
-  let
-    cV = make_view(C.data, make_layout(C.getLayout().shape, C.getLayout().stride))
-    aV = make_view(A.data, make_layout(A.getLayout().shape, A.getLayout().stride))
-    bV = make_view(B.data, make_layout(B.getLayout().shape, B.getLayout().stride))
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
-  let cGeom = cV.tileWith((32, 32))
-  let aGeom = aV.tileWith((32, 16))
+  let cGeom = C.tileWith((32, 32))
+  let aGeom = A.tileWith((32, 16))
   let cGrid = cGeom.getTileGrid()
   let (_, kTiles) = aGeom.getTileGrid()
   let tileID = cGrid.getLocalTileID()
@@ -68,8 +55,8 @@ proc tileLoadReduce(mma: static TiledMma[float32, float16, float16, 32, 32, 16],
     var rB: rt(float16, mma.getMmaLayout(opB))
     var acc = 0.0'f32
     for k in 0 ..< kTiles:
-      rA.loadTile(aV, tvmA, thrID, (m, k))
-      rB.loadTile(bV, tvmB, thrID, (n, k))
+      rA.loadTile(A, tvmA, thrID, (m, k))
+      rB.loadTile(B, tvmB, thrID, (n, k))
       for i in 0 ..< mma.getMmaLayout(opA).size():
         acc += float32(cast[uint16](rA[i]))
       for i in 0 ..< mma.getMmaLayout(opB).size():
@@ -96,7 +83,7 @@ template measure*(iters: int, elapsedNs: untyped, body: untyped): untyped =
 
 proc launchGemm[E: HwEngine](engine: E, C, D: TensorView[float32, tuple[a, b: int], tuple[a, b: int]],
                              A, B: TensorView[float16, tuple[a, b: int], tuple[a, b: int]]) =
-  engine.wrap_and_run tileGemm(tiledMma(float32, float16, float16, 32, 32, 16), C, D, A, B) do:
+  engine.wrap_and_run matmul(tiledMma(float32, float16, float16, 32, 32, 16), C, A, B) do:
     grid = ((C.getLayout().shape[0] + 31) div 32, (C.getLayout().shape[1] + 31) div 32)
     blk = (32, 1)
 

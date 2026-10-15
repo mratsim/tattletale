@@ -67,23 +67,6 @@ const
   TileN = 32
   TileK = 16
 
-template genGemmKernel(name: untyped, MT, NT, KT: static int) =
-  proc `name`(mma: static TiledMma[float32, float16, float16, MT, NT, KT],
-              D, C: TensorView[float32, tuple[a, b: int], tuple[a, b: int]],
-              alpha: float32,
-              A, B: TensorView[float16, tuple[a, b: int], tuple[a, b: int]],
-              beta: float32) =
-    ## Generates the concrete launchable device proc for one (MT, NT, KT)
-    ## mma tile: D = alpha·A·B + beta·C.
-    ## The statics type the formals, the launch re-instantiates the tile
-    ## algebra inside the bridge.
-    let
-      dV = make_view(D.data, make_layout(D.getLayout().shape, D.getLayout().stride))
-      cV = make_view(C.data, make_layout(C.getLayout().shape, C.getLayout().stride))
-      aV = make_view(A.data, make_layout(A.getLayout().shape, A.getLayout().stride))
-      bV = make_view(B.data, make_layout(B.getLayout().shape, B.getLayout().stride))
-    gemm(mma, dV, alpha, aV, bV, beta, cV)
-
 # ═══════════════════════════════════════════════════════════════
 #  Test runner
 # ═══════════════════════════════════════════════════════════════
@@ -99,9 +82,7 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
   var rng = initRand(int64(seed))
   echo moduleName, " PCG seed: ", seed
 
-  genGemmKernel(gemm_kernel, TileM, TileN, TileK)
-
-  # the presized pool, one allocation per engine run, cases reuse it
+    # the presized pool, one allocation per engine run, cases reuse it
   const
     MaxM = 70
     MaxN = 64
@@ -165,18 +146,18 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
       # C = A·B on device, the gemm's beta term reads it back
       gemm_ref(1.0'f32, aTV, bTV, 0.0'f32, dD, cTV)
       engine.copyToDeviceFromHost(cDev, addr cHost[0], M * N * sizeof(float32))
-      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
-                                      dC, dD, 1.0'f32, dA, dB, 0.0'f32) do:
+      engine.wrap_and_run gemm(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                               dC, 1.0'f32, dA, dB, 0.0'f32, dD) do:
         grid = (tilesX, tilesY)
         blk = (32, 1)
     when launchTiles != 0:
-      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
-                                      dD, dC, alpha, dA, dB, beta) do:
+      engine.wrap_and_run gemm(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                               dD, alpha, dA, dB, beta, dC) do:
         grid = (launchTiles, 1)
         blk = (32, 1)
     else:
-      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
-                                      dD, dC, alpha, dA, dB, beta) do:
+      engine.wrap_and_run gemm(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                               dD, alpha, dA, dB, beta, dC) do:
         grid = gridDims
         blk = (blkX, 1)
     engine.copyToHostFromDevice(addr dHost[0], dDev, M * N * sizeof(float32))
