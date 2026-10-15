@@ -43,5 +43,4 @@ export layouts_datatypes.cosize
 export h_mma_configgen.MmaOperand
 export h_mma_properties.getLayoutA, h_mma_properties.getLayoutB, h_mma_properties.getLayoutC
 export h_mma_properties.getThreadCount, h_mma_properties.getM, h_mma_properties.getN
-export h_mma_properties.getK, h_mma_properties.getVpt, h_mma_properties.threadCount
-export h_mma_properties.valuesPerThread, h_mma_properties.getLayout
+export h_mma_properties.getK, h_mma_properties.valuesPerThread, h_mma_properties.getLayout

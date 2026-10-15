@@ -69,18 +69,6 @@ proc tiledMma*[TAcc, TA, TB](
 #  Tile schedule queries
 # ═══════════════════════════════════════════════════════════════
 
-template repeatM*(tma: static TiledMma): int = tma.MT div tma.atom.getM()
-template repeatN*(tma: static TiledMma): int = tma.NT div tma.atom.getN()
-template repeatK*(tma: static TiledMma): int = tma.KT div tma.atom.getK()
-
-template valuesPerThread*(tma: static TiledMma, op: static MmaOperand): untyped =
-  tma.atom.valuesPerThread(op)
-
-template getLayout*(tma: static TiledMma, op: static MmaOperand): untyped =
-  when op == opA: tma.atom.getLayoutA()
-  elif op == opB: tma.atom.getLayoutB()
-  else: tma.atom.getLayoutC()
-
 template getThreadCount*(mma: static TiledMma): int =
   mma.atom.getThreadCount()
 
@@ -136,12 +124,6 @@ proc toThreadValueMap*[Sh, St, TSh](l: Layout[Sh, St], tileShape: TSh):
 
 template getThreadPartitioning*(tv: ThreadValueMap): untyped =
   tv.layout.selectDimensions(0).selectDimensions(0).shape
-
-template atomsPerTile*(tv: ThreadValueMap): untyped =
-  tv.layout.selectDimensions(0).selectDimensions(1).shape
-
-template getThreadGrid*(tv: ThreadValueMap): untyped =
-  tv.layout.selectDimensions(1).shape
 
 template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
   const threadMap = mma.getMatmulThreadmap(op)

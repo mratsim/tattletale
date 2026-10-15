@@ -42,10 +42,6 @@ template tileWith*(v: TensorView, tiler: static tuple): auto =
   ## ((tile shape), (tile grid)) mode pairs.
   v.getLayout().zipped_divide(tiler)
 
-template getTileShape*(geom: Layout): auto =
-  ## Tile shape of the geometry, the tiler's dims.
-  geom.shape[0]
-
 template getTileGrid*(geom: Layout): auto =
   ## Tile grid of the geometry, the tile coordinates covering the tensor.
   geom.shape[1]
