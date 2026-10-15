@@ -49,10 +49,10 @@ type
 # ═════════════════════════════════════════════════════════════════════════
 # Private: the Dim3 dim-conversion overloads and the LaunchProxy factory.
 # Both must precede the `<<` macro, bindSym and quote resolve symbols at macro definition.
-proc dim3(x: int): Dim3 {.inline.} = Dim3(x: x)
-proc dim3(t: tuple[a: int]): Dim3 {.inline.} = Dim3(x: t.a)
-proc dim3(t: tuple[a, b: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b)
-proc dim3(t: tuple[a, b, c: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b, z: t.c)
+proc dim3[T: SomeInteger](x: T): Dim3 {.inline.} = Dim3(x: int(x))
+proc dim3[T: SomeInteger](t: tuple[a: T]): Dim3 {.inline.} = Dim3(x: int(t.a))
+proc dim3[T: SomeInteger](t: tuple[a, b: T]): Dim3 {.inline.} = Dim3(x: int(t.a), y: int(t.b))
+proc dim3[T: SomeInteger](t: tuple[a, b, c: T]): Dim3 {.inline.} = Dim3(x: int(t.a), y: int(t.b), z: int(t.c))
 
 
 proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =

@@ -2,11 +2,10 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Template for the k_tile_gemm Metal tests, instantiate through
-## run_gemm_tests from a t_ driver.
+## GEMM kernel test driver, whole-value launches, backend agnostic
 ##
 ## Run:
 ##   nim c -r --outdir:build \
@@ -14,6 +13,7 @@
 
 import std/[math, random, strformat, times]
 import workspace/crucible
+import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/layout_algebra
@@ -30,150 +30,210 @@ import workspace/fp_conv/fp_conv
 
 {.experimental: "callOperator".}
 
-const MT = 32
-const NT = 32
-const KT = 16
-
 # ═══════════════════════════════════════════════════════════════
-#  Kernels
+#  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
 
-proc gemmKernels(): string =
-  metal:
-    proc gemmK(D, C: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16], M, N, K, sA0, sA1, sB0, sB1, sC0, sC1: int) {.global.} =
-      const mma = tiledMma(float32, float16, float16, 32, 32, 16)
-      let aView = make_view(A, makeIntTuple((M, K)), makeIntTuple((sA0, sA1)))
-      let bView = make_view(B, makeIntTuple((N, K)), makeIntTuple((sB0, sB1)))
-      let dView = make_view(D, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
-      matmul(mma, dView, aView, bView)
-    proc gemmAlphaK(D, C: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16], M, N, K, sA0, sA1, sB0, sB1, sC0, sC1: int) {.global.} =
-      const mma = tiledMma(float32, float16, float16, 32, 32, 16)
-      let aView = make_view(A, makeIntTuple((M, K)), makeIntTuple((sA0, sA1)))
-      let bView = make_view(B, makeIntTuple((N, K)), makeIntTuple((sB0, sB1)))
-      let dView = make_view(D, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
-      let cView = make_view(C, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
-      gemm(mma, dView, 2.0'f32, aView, bView, 0.0'f32, cView)
-    proc gemmAlphaBetaK(D, C: ptr UncheckedArray[float32], A, B: ptr UncheckedArray[float16], M, N, K, sA0, sA1, sB0, sB1, sC0, sC1: int) {.global.} =
-      const mma = tiledMma(float32, float16, float16, 32, 32, 16)
-      let aView = make_view(A, makeIntTuple((M, K)), makeIntTuple((sA0, sA1)))
-      let bView = make_view(B, makeIntTuple((N, K)), makeIntTuple((sB0, sB1)))
-      let dView = make_view(D, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
-      let cView = make_view(C, makeIntTuple((M, N)), makeIntTuple((sC0, sC1)))
-      gemm(mma, dView, 2.0'f32, aView, bView, 1.0'f32, cView)
+func view2D[T](data: ptr UncheckedArray[T], shape, strides: (int, int)):
+    TensorView[T, tuple[a, b: int], tuple[a, b: int]] =
+  ## 2D view over a presized buffer
+  make_view(data, make_layout(shape, strides))
+
+proc gemm_ref*(alpha: float32,
+               A, B: TensorView[F16, tuple[a, b: int], tuple[a, b: int]],
+               beta: float32,
+               C, refOut: TensorView[float32, tuple[a, b: int], tuple[a, b: int]]) =
+  let
+    M = int(A.getLayout().shape[0])
+    N = int(B.getLayout().shape[0])
+    K = int(A.getLayout().shape[1])
+  for m in 0 ..< M:
+    for n in 0 ..< N:
+      var acc = 0.0'f32
+      for k in 0 ..< K:
+        let a = A[m, k]
+        let b = B[n, k]
+        acc += float32.from(a) * float32.from(b)
+      refOut[m, n] = (if beta != 0.0'f32: alpha * acc + beta * C[m, n]
+                      else: alpha * acc)
+
+# ═══════════════════════════════════════════════════════════════
+#  Device function generation
+# ═══════════════════════════════════════════════════════════════
+
+# the mma tile of this suite, the atom cell repeated over (MT, NT, KT)
+const
+  TileM = 32
+  TileN = 32
+  TileK = 16
+
+template genGemmKernel(name: untyped, MT, NT, KT: static int) =
+  proc `name`(mma: static TiledMma[float32, float16, float16, MT, NT, KT],
+              D, C: TensorView[float32, tuple[a, b: int], tuple[a, b: int]],
+              alpha: float32,
+              A, B: TensorView[float16, tuple[a, b: int], tuple[a, b: int]],
+              beta: float32) =
+    ## Generates the concrete launchable device proc for one (MT, NT, KT)
+    ## mma tile: D = alpha·A·B + beta·C.
+    ## The statics type the formals, the launch re-instantiates the tile
+    ## algebra inside the bridge.
+    let
+      dV = make_view(D.data, make_layout(D.getLayout().shape, D.getLayout().stride))
+      cV = make_view(C.data, make_layout(C.getLayout().shape, C.getLayout().stride))
+      aV = make_view(A.data, make_layout(A.getLayout().shape, A.getLayout().stride))
+      bV = make_view(B.data, make_layout(B.getLayout().shape, B.getLayout().stride))
+    gemm(mma, dV, alpha, aV, bV, beta, cV)
 
 # ═══════════════════════════════════════════════════════════════
 #  Test runner
 # ═══════════════════════════════════════════════════════════════
 
-proc run_gemm_tests*(Iters: static int, moduleName: string) =
+proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: string) =
+  ## Exercises the generated GEMM device function of the driver's engine,
+  ## every output element asserted against `gemm_ref`.
+  ##
+  ## - cases: stride permutations, ragged tile dims
+  ## - cases: excess squadrons, 1D grids, block size variants
+  ## - cases: alpha scaling, beta accumulation against a prefilled C
   let seed = uint64(getTime().toUnix() and (1'i64 shl 32 - 1))
   var rng = initRand(int64(seed))
   echo moduleName, " PCG seed: ", seed
 
-  var engine = bkMetal.init()
-  engine.ingest(gemmKernels())
+  genGemmKernel(gemm_kernel, TileM, TileN, TileK)
 
-  proc checkMatmul(M, N, K: int, sA, sB, sC: (int, int), gxMul = 1, gyMul = 1, kernel = "gemmK", scale = 1.0'f32, prefill = false) =
-    ## Runs one gemm configuration and asserts every output element
-    ## against the fp32 reference, worst |d| echoed as info.
+  # the presized pool, one allocation per engine run, cases reuse it
+  const
+    MaxM = 70
+    MaxN = 64
+    MaxK = 100
+  var
+    aHost = newSeq[F16](MaxM * MaxK)
+    bHost = newSeq[F16](MaxK * MaxN)
+    cHost = newSeq[float32](MaxM * MaxN)
+    dHost = newSeq[float32](MaxM * MaxN)
+    refHost = newSeq[float32](MaxM * MaxN)
+  let
+    aDev = engine.allocDevice(MaxM * MaxK * sizeof(F16))
+    bDev = engine.allocDevice(MaxK * MaxN * sizeof(F16))
+    cDev = engine.allocDevice(MaxM * MaxN * sizeof(float32))
+    dDev = engine.allocDevice(MaxM * MaxN * sizeof(float32))
+
+  template checkGemm(M, N, K: untyped, sA, sB, sC: (int, int),
+                     gxMul: untyped = 1, gyMul: untyped = 1,
+                     gridFlat: untyped = false, blkX: untyped = 32,
+                     alpha: float32 = 2.0'f32, beta: float32 = 1.0'f32,
+                     prefill: bool = false, launchTiles: untyped = 0) =
+    ## Runs one gemm configuration against `gemm_ref`:
+    ##
+    ## - gxMul / gyMul multiply the tile grid, excess squadrons exit
+    ## - gridFlat covers the whole tile grid from one grid axis, blkX
+    ##   widens the block, extra threads exit on the thread count
+    ## - prefill writes C = A·B on device first, the beta term reads it
+    ## - launchTiles launches fewer blocks than the tile grid has tiles,
+    ##   the blocks loop over the grid, the result is complete
     let
-      gridX = ((M + MT - 1) div MT) * gxMul
-      gridY = ((N + NT - 1) div NT) * gyMul
-    var
-      aHost = newSeq[F16](M * K)
-      bHost = newSeq[F16](K * N)
-      outHost = newSeq[float32](M * N)
-    let
-      aTV = make_view(addr aHost[0], make_layout((M, K), (sA[0], sA[1])))
+      aTV = view2D(cast[ptr UncheckedArray[F16]](addr aHost[0]), (M, K), sA)
       # the kernel sees B as an (N, K) view with strides (sB[0], sB[1])
-      bTV = make_view(addr bHost[0], make_layout((N, K), (sB[0], sB[1])))
-      outTV = make_view(addr outHost[0], make_layout((M, N), (sC[0], sC[1])))
+      bTV = view2D(cast[ptr UncheckedArray[F16]](addr bHost[0]), (N, K), sB)
+      cTV = view2D(cast[ptr UncheckedArray[float32]](addr cHost[0]), (M, N), sC)
+      dTV = view2D(cast[ptr UncheckedArray[float32]](addr dHost[0]), (M, N), sC)
+      refTV = view2D(cast[ptr UncheckedArray[float32]](addr refHost[0]), (M, N), (N, 1))
+      dD = view2D(cast[ptr UncheckedArray[float32]](dDev), (M, N), sC)
+      dC = view2D(cast[ptr UncheckedArray[float32]](cDev), (M, N), sC)
+      dA = view2D(cast[ptr UncheckedArray[float16]](aDev), (M, K), sA)
+      dB = view2D(cast[ptr UncheckedArray[float16]](bDev), (N, K), sB)
+      ctx = "gemm " & $M & "x" & $N & "x" & $K & " A" & $sA & " B" & $sB &
+        " C" & $sC &
+        (if gxMul != 1 or gyMul != 1: " grid x" & $gxMul & "x" & $gyMul else: "") &
+        (if gridFlat: " flat" else: "") &
+        (if blkX != 32: " blk" & $blkX else: "") &
+        (if launchTiles != 0: " cover" & $launchTiles else: "") &
+        " alpha" & $alpha & " beta" & $beta & (if prefill: " prefilled" else: "")
     for m in 0 ..< M:
       for k in 0 ..< K:
         aTV[m, k] = F16.from(rng.rand(1.0'f32 .. 2.0'f32))
     for n in 0 ..< N:
       for k in 0 ..< K:
         bTV[n, k] = F16.from(rng.rand(1.0'f32 .. 2.0'f32))
-    let
-      aDev = engine.allocDevice(M * K * sizeof(F16))
-      bDev = engine.allocDevice(K * N * sizeof(F16))
-      cDev = engine.allocDevice(M * N * sizeof(float32))
-      dDev = engine.allocDevice(M * N * sizeof(float32))
     engine.copyToDeviceFromHost(aDev, addr aHost[0], M * K * sizeof(F16))
     engine.copyToDeviceFromHost(bDev, addr bHost[0], K * N * sizeof(F16))
+    let
+      tilesX = ((M + 31) div 32) * gxMul
+      tilesY = ((N + 31) div 32) * gyMul
+      gridDims = (if gridFlat: (tilesX * tilesY, 1) else: (tilesX, tilesY))
     if prefill:
-      # C = A·B, the gemm then reads C from a buffer distinct from D
-      engine.run << (grid: (gridX, gridY), blk: (32, 1)) >>
-        ("gemmK",
-         cDev,
-         (dDev, aDev, bDev,
-          M, N, K,
-          sA[0], sA[1], sB[0], sB[1],
-          sC[0], sC[1]))
-    engine.run << (grid: (gridX, gridY), blk: (32, 1)) >>
-      (kernel,
-       dDev,
-       (cDev, aDev, bDev,
-        M, N, K,
-        sA[0], sA[1], sB[0], sB[1],
-        sC[0], sC[1]))
-    engine.copyToHostFromDevice(addr outHost[0], dDev, M * N * sizeof(float32))
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(cDev)
-    engine.freeDevice(dDev)
-    var bad = 0
-    var worst = 0.0'f32
-    var first = ""
-    for m in 0 ..< M:
-      for n in 0 ..< N:
-        var acc = 0.0'f32
-        var accAbs = 0.0'f32
-        for k in 0 ..< K:
-          let
-            a = float32.from(aTV[m, k])
-            b = float32.from(bTV[n, k])
-          acc += a * b
-          accAbs += abs(a * b)
-        let want = (scale + (if prefill: 1.0'f32 else: 0.0'f32)) * acc
-        let got = outTV[m, n]
-        let d = abs(got - want)
-        worst = max(worst, d)
-        # the products are exact in f32, only the accumulation order
-        # differs from the reference
-        if d > 1e-3'f32 + 1e-5'f32 * accAbs:
-          inc bad
-          if bad == 1: first = &"({m},{n}): got {got} want {want}"
-    echo &"  {M}x{N}x{K} A{sA} B{sB} C{sC}" &
-         (if gxMul != 1 or gyMul != 1: &" grid x{gxMul}x{gyMul}" else: "") &
-         &" worst |d| = {worst}"
-    doAssert bad == 0, &"{kernel} {M}x{N}x{K} A{sA} B{sB} C{sC}: " &
-      &"{bad} bad, e.g. {first}, worst {worst}"
+      # C = A·B on device, the gemm's beta term reads it back
+      gemm_ref(1.0'f32, aTV, bTV, 0.0'f32, dD, cTV)
+      engine.copyToDeviceFromHost(cDev, addr cHost[0], M * N * sizeof(float32))
+      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                                      dC, dD, 1.0'f32, dA, dB, 0.0'f32) do:
+        grid = (tilesX, tilesY)
+        blk = (32, 1)
+    when launchTiles != 0:
+      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                                      dD, dC, alpha, dA, dB, beta) do:
+        grid = (launchTiles, 1)
+        blk = (32, 1)
+    else:
+      engine.wrap_and_run gemm_kernel(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+                                      dD, dC, alpha, dA, dB, beta) do:
+        grid = gridDims
+        blk = (blkX, 1)
+    engine.copyToHostFromDevice(addr dHost[0], dDev, M * N * sizeof(float32))
+    gemm_ref(alpha, aTV, bTV, beta, cTV, refTV)
+    assertAllClose(dTV, refTV, rtol = 1e-5, abstol = 1e-3, msg = ctx)
+    echo "  ", ctx, " matched"
 
   # stride permutations at the atom tile size
   for _ in 0 ..< Iters:
     for sA in [(32, 1), (1, 32)]:
       for sB in [(1, 32), (32, 1)]:
         for sC in [(32, 1), (1, 32)]:
-          checkMatmul(32, 32, 32, sA, sB, sC)
+          checkGemm(32, 32, 32, sA, sB, sC)
 
-  # ragged edges, tile dims not multiples of (MT, NT, KT)
+  # ragged edges, tile dims not multiples of the (32, 32, 16) mma atom
   for _ in 0 ..< Iters:
-    checkMatmul(32, 32, 41, (41, 1), (1, 32), (32, 1))
-    checkMatmul(40, 32, 32, (32, 1), (1, 32), (32, 1))
-    checkMatmul(32, 45, 32, (32, 1), (1, 45), (45, 1))
-    checkMatmul(40, 45, 41, (41, 1), (1, 45), (45, 1))
-    checkMatmul(70, 50, 100, (100, 1), (1, 50), (50, 1))
-    checkMatmul(70, 50, 96, (96, 1), (1, 50), (50, 1))
+    checkGemm(32, 32, 41, (41, 1), (1, 32), (32, 1))
+    checkGemm(40, 32, 32, (32, 1), (1, 32), (32, 1))
+    checkGemm(32, 45, 32, (32, 1), (1, 45), (45, 1))
+    checkGemm(40, 45, 41, (41, 1), (1, 45), (45, 1))
+    checkGemm(70, 50, 100, (100, 1), (1, 50), (50, 1))
+    checkGemm(70, 50, 96, (96, 1), (1, 50), (50, 1))
 
   # excess squadrons, the launch grid over-covers the tile grid
   for _ in 0 ..< Iters:
-    checkMatmul(64, 64, 64, (64, 1), (1, 64), (64, 1), gxMul = 3, gyMul = 2)
-    checkMatmul(70, 50, 100, (100, 1), (1, 50), (50, 1), gxMul = 2, gyMul = 3)
+    checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), gxMul = 3, gyMul = 2)
+    checkGemm(70, 50, 100, (100, 1), (1, 50), (50, 1), gxMul = 2, gyMul = 3)
+
+  # 1D grids, the whole tile grid covered from one axis
+  for _ in 0 ..< Iters:
+    checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), gridFlat = true)
+    checkGemm(70, 50, 100, (100, 1), (1, 50), (50, 1), gridFlat = true, gxMul = 2)
+
+  # under-coverage, not enough blocks: covered tiles match, the rest
+  # keep the sentinel
+  for _ in 0 ..< Iters:
+    checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), launchTiles = 2,
+              alpha = 1.0'f32, beta = 0.0'f32)
+    checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), launchTiles = 3,
+              alpha = 1.0'f32, beta = 0.0'f32)
+
+  # hard excess, the launch grid far over-covers the tile grid
+  for _ in 0 ..< Iters:
+    checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), gxMul = 10, blkX = 256)
+
+  # block size variants, extra threads exit on the thread count
+  for _ in 0 ..< Iters:
+    for blkX in [64, 128, 256]:
+      checkGemm(64, 64, 64, (64, 1), (1, 64), (64, 1), blkX = blkX)
 
   # alpha scaling and beta accumulation, the beta case reads a prefilled C
   for _ in 0 ..< Iters:
-    checkMatmul(32, 32, 32, (32, 1), (1, 32), (32, 1),
-                kernel = "gemmAlphaK", scale = 2.0'f32)
-    checkMatmul(32, 32, 32, (32, 1), (1, 32), (32, 1),
-                kernel = "gemmAlphaBetaK", scale = 2.0'f32, prefill = true)
+    checkGemm(32, 32, 32, (32, 1), (1, 32), (32, 1), alpha = 1.0'f32, beta = 0.0'f32)
+    checkGemm(32, 32, 32, (32, 1), (1, 32), (32, 1), prefill = true)
+    checkGemm(40, 45, 41, (41, 1), (1, 45), (45, 1), prefill = true)
+
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(cDev)
+  engine.freeDevice(dDev)

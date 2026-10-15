@@ -9,6 +9,7 @@
 import std/tables
 import workspace/crucible/src/abis/cl_abi
 
+import ../../codegen/ir/gpu_types
 import ../exec/opencl_runtime
 import ../chevrons
 
@@ -31,6 +32,8 @@ type
     source: string
     ctx: OpenCLCtx
     kernelCache: OpenCLKernelCache   # after ctx: released before ctx shutdown
+
+proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

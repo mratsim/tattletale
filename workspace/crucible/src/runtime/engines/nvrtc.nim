@@ -9,6 +9,7 @@
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/c_abi
 
+import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
 import ../chevrons
 # ═════════════════════════════════════════════════════════════════════════
@@ -30,6 +31,8 @@ type
     ## The context and compiled module release when the engine dies.
     ptx: string
     nvrtc: NVRTC
+
+proc backendKind*(_: typedesc[CudaEngine]): static BackendKind = bkCuda
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

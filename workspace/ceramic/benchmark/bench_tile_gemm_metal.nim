@@ -8,16 +8,9 @@
 ## Benchmark:
 ##   k_tile_gemm throughput on Metal
 ##
-## - gemmK and the load-only copyK run interleaved rounds,
-##   median per kernel, net TF = gemm minus copy
-## - the GPU clocks ramp during a warmup window before any timed round
-##
 ## Run:
-##   nim c -r -d:benchQuick --outdir:build/bench \
+##   nim c -r -d:release --outdir:build/bench \
 ##     workspace/ceramic/benchmark/bench_tile_gemm_metal.nim (from tattletale)
-##
-## -d:benchQuick: 2s warmup, 2 rounds (full: 8s warmup, 5 rounds)
-## CLI size filter: ./build/bench/bench_tile_gemm_metal 4096 runs only 4096
 
 import std/[os, strutils]
 import workspace/crucible
@@ -42,13 +35,11 @@ import workspace/fp_conv/fp_conv
 
 const
   ProblemSizes = [1024, 2048, 4096]
-  WarmupSeconds = when defined(benchQuick): 2.0 else: 8.0
-  Rounds = when defined(benchQuick): 2 else: 5
+  WarmupSeconds = 1.0
+  Rounds = 3
 
 proc main =
   var engine = bkMetal.init()
-  engine.ingest(benchKernels())
-  echo "BENCH_START"
   # CLI size filter: bench 4096 runs only that size
   var wanted: seq[int]
   for p in commandLineParams():

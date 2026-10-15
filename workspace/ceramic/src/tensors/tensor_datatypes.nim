@@ -20,7 +20,7 @@ type
 
   TensorView*[T, Sh, St] = object
     data*: ptr UncheckedArray[T]
-    layout: Layout[Sh, St]
+    layout*: Layout[Sh, St]
 
 type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or TensorOwned[T, Sh, St]
 

@@ -10,6 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
+import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
 import ../chevrons
 
@@ -38,6 +39,8 @@ type
     ctx: VulkanCtx
     bakedBlk: Dim3   # workgroup size baked into the shader at ingest
     caches: VulkanCaches
+
+proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

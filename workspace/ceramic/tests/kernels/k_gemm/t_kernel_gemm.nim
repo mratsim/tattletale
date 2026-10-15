@@ -9,7 +9,7 @@
 ##   k_tile_gemm matmul/gemm on Metal
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --outdir:build/tests \
 ##     workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm.nim (from tattletale)
 
 import std/[math, strformat]
@@ -31,8 +31,9 @@ import workspace/fp_conv/fp_conv
 
 {.experimental: "callOperator".}
 
-const Iters = 2
+proc main =
+  var engine = bkMetal.init()
+  run_gemm_tests(engine, Iters = 2, moduleName = "test_k_tile_gemm_metal")
 
-run_gemm_tests(
-    Iters = Iters,
-    moduleName = "test_k_tile_gemm_metal")
+when isMainModule:
+  main()

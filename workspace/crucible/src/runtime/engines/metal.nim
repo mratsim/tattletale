@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import std/[strutils, tables]
 
+import ../../codegen/ir/gpu_types
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
@@ -34,6 +35,8 @@ type
     source: string
     ctx: MetalDeviceCtx
     cache: MetalCache   # after ctx: released before ctx shutdown
+
+proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
 
 # ═════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
@@ -147,7 +150,57 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc run*(engine: MetalEngine, kernel: string, output: objc.ID, args: tuple, cfg = LaunchConfig()) =
+  func hasPtrField[T](): bool {.compileTime.} =
+    ## Whether T carries a pointer leaf at any depth, the recursion
+    ## criterion of the launch binding over struct args
+    when typeof(default(T)) is ptr:
+      result = true
+    elif typeof(default(T)) is object|tuple:
+      for f in fields(default(T)):
+        if hasPtrField[typeof(f)]():
+          return true
+    # otherwise false via the default result
+
+  proc packBytes(x: auto, bytes: var seq[byte]) =
+    ## Appends one value tree in launch-blob byte order: scalars pack
+    ## at the crucible-lowered width (`int`/`uint` lower to 32-bit),
+    ## structs and tuples recurse per field, in field order
+    when typeof(x) is bool:
+      let v = int32(x)
+      bytes.add(cast[ptr array[4, byte]](addr v)[])
+    elif typeof(x) is int:
+      let v = int32(x)
+      bytes.add(cast[ptr array[4, byte]](addr v)[])
+    elif typeof(x) is uint:
+      let v = uint32(x)
+      bytes.add(cast[ptr array[4, byte]](addr v)[])
+    elif typeof(x) is object|tuple:
+      var copy = x
+      for f in fields(copy):
+        packBytes(f, bytes)
+    else:
+      bytes.add(cast[ptr array[sizeof(x), byte]](unsafeAddr x)[])
+
+  proc bindLeaves(x: auto, bufs: var seq[objc.ID], bytes: var seq[byte], chunks: var seq[tuple[off, len: int]]) =
+    ## Collects one launch leaf:
+    ## - buffer handles and pointer leaves collect as buffers, a pointer
+    ##   leaf's raw value is the buffer identity
+    ## - other values pack as one chunk at the crucible-lowered widths,
+    ##   one chunk per exploded device param
+    when typeof(x) is objc.ID:
+      bufs.add(x)
+    elif typeof(x) is ptr:
+      bufs.add(cast[objc.ID](x))
+    elif typeof(x) is object|tuple and hasPtrField[typeof(x)]():
+      var copy = x
+      for f in fields(copy):
+        bindLeaves(f, bufs, bytes, chunks)
+    else:
+      let off = bytes.len
+      packBytes(x, bytes)
+      chunks.add((off, bytes.len - off))
+
+  proc run*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
     ## Runs `kernel` on the engine's GPU.
     ##
     ## Usage:
@@ -184,21 +237,21 @@ when defined(macosx):
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                      output, objc.NSUInteger(0), objc.NSUInteger(0))
-      var idx = 1
+      var bufs: seq[objc.ID] = @[]
+      var bytes: seq[byte] = @[]
+      var chunks: seq[tuple[off, len: int]] = @[]
+      bindLeaves(output, bufs, bytes, chunks)
       var argsCopy = args
       for f in fields(argsCopy):
-        when typeof(f) is objc.ID:
-          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          f, objc.NSUInteger(0), objc.NSUInteger(idx))
-        elif typeof(f) is bool:
-          var v = int32(f)
-          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          addr v, objc.NSUInteger(sizeof(int32)), objc.NSUInteger(idx))
-        else:
-          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          addr f, objc.NSUInteger(sizeof(f)), objc.NSUInteger(idx))
+        bindLeaves(f, bufs, bytes, chunks)
+      var idx = 0
+      for h in bufs:
+        discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                        h, objc.NSUInteger(0), objc.NSUInteger(idx))
+        inc idx
+      for c in chunks:
+        discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
+                        addr bytes[c.off], objc.NSUInteger(c.len), objc.NSUInteger(idx))
         inc idx
       let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),

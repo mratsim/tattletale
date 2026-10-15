@@ -5,24 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU kernel code generator — takes Ceramic layout algebra and Positron kernel
-## specifications and emits native GPU code (CUDA, OpenCL, Vulkan, WebGPU, Metal).
+## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, Vulkan, WebGPU, Metal.
 ##
-## Public API — a single import gives everything:
-##   import workspace/crucible
+## Public API, one import: `import workspace/crucible`
 ##
-##   const kernelCode = cuda:                 # opencl: / vulkan: / webgpu: / metal:
-##     proc addKernel(a: ptr UncheckedArray[uint32]; ...) {.global.} = ...
+## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
+## - var engine = bkCuda.init()
+## - engine.ingest(kernelCode)
+## - engine.run<<grid, blk>>("addKernel", out, (a, b))
 ##
-##   var engine = bkCuda.init()               # the HwEngine concept + backends
-##   engine.ingest(kernelCode)
-##   engine.run<<(1, 128)>>("addKernel", out, (a, b))
-##
-## Re-exports: gpu_compiler
-## (the `cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:` DSL macros + builtins)
-## and runtime/engines (HwEngine, init, ingest, getArtifact, run, check, deviceName, BackendKind/bk*).
-## Internal layers (passes, exec/, engines/nvrtc legacy driver) stay deep by design.
+## Re-exports:
+## - gpu_compiler, the DSL macros + builtins
+## - runtime/engines, the HwEngine concept and the five backends
+## - runtime/wrap_and_run and wrap_and_run
 
 import ./src/codegen/gpu_compiler
 import ./src/runtime/engines
-export gpu_compiler, engines
+import ./src/runtime/wrap_and_run
+export gpu_compiler, engines, wrap_and_run

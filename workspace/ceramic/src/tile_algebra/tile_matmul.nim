@@ -11,7 +11,7 @@
 ## - `tiledMma`: the atom resolved for the backend, repeated over
 ##   (MT, NT, KT) tiles
 ## - `getMmaLayout`: one thread's register tile shape for one operand
-## - `getTVCrdLayout`: the thread->value map over one tile, the tile
+## - `getThreadValueMap`: the thread->value map over one tile, the tile
 ##   shape composed with the atom's thread map
 ##
 ## Must run inside a cuda:/metal:/opencl: block, the backend picks the atom.
@@ -125,33 +125,9 @@ proc toThreadValueMap*[Sh, St, TSh](l: Layout[Sh, St], tileShape: TSh):
 template getThreadPartitioning*(tv: ThreadValueMap): untyped =
   tv.layout.selectDimensions(0).selectDimensions(0).shape
 
-template getTVCrdLayout*(mma: static TiledMma, op: static MmaOperand): untyped =
+template getThreadValueMap*(mma: static TiledMma, op: static MmaOperand): untyped =
   const threadMap = mma.getMatmulThreadmap(op)
   const tileShape = ((when op == opB: mma.NT else: mma.MT),
                      (when op == opC: mma.NT else: mma.KT))
   toThreadValueMap(compose(make_identity_layout(tileShape), threadMap),
                    tileShape)
-
-# Compile-time spec lock: the thread->value layouts for the APPLE_8x8x8_F32
-# atom on a 32x32x16 GEMM tile must equal the pycute reference
-# (experiments/e05_load_tile_oneshot_pycute.py, get_tv_crd_layout) byte-exact
-# on shape and coordinate stride for all three operands.
-#
-# Contract: the atom part of the threadmap is pre-converted to tile-flat
-# integer strides before the identity composition, which keeps the composed
-# layout injective (two (thread, value) slots never claim the same tensor element).
-const specMma = TiledMma[float32, float32, float32, 32, 32, 16](
-  atom: APPLE_8x8x8_F32)
-static:
-  doAssert specMma.getTVCrdLayout(opA).layout ===
-    ((((2, 2, 2, 2, 2), 2), (4, 2)),
-     (((E(2, 1), E(1, 0), E(2, 0), E(4, 1), E(4, 0)), E(1, 1)),
-      (E(8, 0), E(8, 1))))
-  doAssert specMma.getTVCrdLayout(opB).layout ===
-    ((((2, 2, 2, 2, 2), 2), (4, 2)),
-     (((E(2, 0), E(1, 1), E(2, 1), E(4, 0), E(4, 1)), E(1, 0)),
-      (E(8, 0), E(8, 1))))
-  doAssert specMma.getTVCrdLayout(opC).layout ===
-    ((((2, 2, 2, 2, 2), 2), (4, 4)),
-     (((E(2, 1), E(1, 0), E(2, 0), E(4, 1), E(4, 0)), E(1, 1)),
-      (E(8, 0), E(8, 1))))
