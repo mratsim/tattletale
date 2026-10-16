@@ -58,6 +58,22 @@ proc runTest() =
     "the phantom formal must not be a bridge kernel param, " &
     "its value lives in the type and bakes into the bridge body: " & sig
 
+  block:  # a `static T` formal bakes the same way, the value crosses in the bridge body
+      proc addStatic(outBuf, inBuf: ptr UncheckedArray[uint32], k: static int32) =
+        outBuf[0] = inBuf[0] + uint32(k)
+      engine.launchDeviceFn addStatic(outDev, inDev, 5) do:
+        grid = (1, 1)
+        blk = (1, 1)
+      engine.copyToHostFromDevice(addr res[0], outDev, sizeof(uint32))
+      doAssert res[0] == 105'u32,
+        "the kernel must add the static formal's baked value: got " & $res[0]
+      let staticArt = engine.getArtifact()
+      let staticSig = kernelSignatures(staticArt)[0]
+      doAssert "constant int& k" notin staticSig and "constant int k" notin staticSig,
+        "the static formal must not be a bridge kernel param: " & staticSig
+      doAssert "(uint)5" in staticArt,
+        "the static formal's value must bake into the bridge body: " & staticArt
+
   engine.freeDevice(inDev)
   engine.freeDevice(outDev)
 

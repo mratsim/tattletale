@@ -57,6 +57,21 @@ proc runTest() =
   doAssert "constant int& k" in sigs[0],
     "the literal's formal must stay an env member bridge param, not bake: " & sigs[0]
 
+  block:  # a second kernel gets its own bridge, both reachable in one artifact run
+      proc addOffset(outBuf, inBuf: ptr UncheckedArray[uint32], k: int32) =
+        outBuf[0] = inBuf[0] + uint32(k) + 7'u32
+      engine.launchDeviceFn addOffset(outDev, inDev, 1) do:
+        grid = (1, 1)
+        blk = (1, 1)
+      var res3: array[1, uint32]
+      engine.copyToHostFromDevice(addr res3[0], outDev, sizeof(uint32))
+      doAssert res3[0] == 108'u32,
+        "the second kernel must compute its own result: got " & $res3[0]
+      let sigs2 = kernelSignatures(engine.getArtifact())
+      doAssert sigs2.len == 1, "each ingest replaces the artifact: " & $sigs2.len
+      doAssert "addOffset" in sigs2[0] and "addScalar" notin sigs2[0],
+        "the second kernel's bridge is a distinct kernel: " & sigs2[0]
+
   engine.freeDevice(inDev)
   engine.freeDevice(outDev)
 
