@@ -1,7 +1,7 @@
 ## CuTe GEMM single-tile, NVRTC (CUDA) backend: A(2x3) * B(3x2) = C(2x2).
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/app/t_nvrtc_t_nvrtc_gemm.nim
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/app/t_nvrtc_gemm.nim
 import std/strformat
 import workspace/crucible
 

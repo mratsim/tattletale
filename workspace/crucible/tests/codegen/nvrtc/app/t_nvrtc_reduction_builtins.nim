@@ -8,7 +8,7 @@
 ## Run from the tattletale root:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/nvrtc/app/t_nvrtc_t_nvrtc_reduction_builtins.nim
+##     workspace/crucible/tests/codegen/nvrtc/app/t_nvrtc_reduction_builtins.nim
 
 import std/strutils
 import workspace/crucible
