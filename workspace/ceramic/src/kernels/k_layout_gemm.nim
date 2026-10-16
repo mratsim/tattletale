@@ -165,32 +165,28 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     KR = aTile.shape[1][1].toInt()
     MR = aTile.shape[1][0].toInt()
     NR = bTile.shape[1][0].toInt()
-    vC = dTile.shape[0].toInt()
     aBits = aTile.shape[0].toInt() * sizeof(typeof(aTile.data[0]))
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
-  # dTile starts as a copy of cTile, every k slice accumulates into it
-  staticFor m, 0, MR:
-    staticFor n, 0, NR:
-      staticFor v, 0, vC:
-        dTile[v, (m, n)] = cTile[v, (m, n)]
-
   staticFor k, 0, KR:
+    # k = 0 reads the addend out-of-place, later slices read the
+    # running accumulator back as their addend
+    let addend = when k == 0: cTile else: dTile
     when aBits == 8:
       staticFor m, 0, MR:
         staticFor n, 0, NR:
           let ns = (when (m and 1) == 1: NR - 1 - n else: n)
-          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), dTile, (m, ns))
+          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), addend, (m, ns))
     elif bBits == 8:
       staticFor n, 0, NR:
         staticFor m, 0, MR:
           let ms = (when (n and 1) == 1: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), dTile, (ms, n))
+          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), addend, (ms, n))
     else:
       staticFor n, 0, (NR + 1) div 2:
         staticFor m, 0, MR:
           let n0 = n * 2
           let ms = (when (n * 2 and 2) == 2: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), dTile, (ms, n0))
+          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), addend, (ms, n0))
           when n * 2 + 1 < NR:
-            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), dTile, (ms, n0 + 1))
+            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), addend, (ms, n0 + 1))

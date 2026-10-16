@@ -153,9 +153,13 @@ proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: 
     sink(ctx, false, default(H), pos, copy.addr, sizeof(copy))
     inc pos
   else:
-    var copy = v
+    # the sink copies `argWidth` bytes from `p`, narrower scalars widen
+    # with zero bytes, wider values truncate like putBytes
     const w = argWidth(typeof(v), backend)
-    sink(ctx, false, default(H), pos, copy.addr, w)
+    var staging: array[w, byte]
+    const n = if sizeof(typeof(v)) < w: sizeof(typeof(v)) else: w
+    copyMem(staging[0].addr, v.unsafeAddr, n)
+    sink(ctx, false, default(H), pos, staging.addr, w)
     inc pos
 
 proc bindArgs*[H, C](ctx: var C, backend: static BackendKind, output: auto, args: tuple,

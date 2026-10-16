@@ -99,6 +99,28 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       const n = launchArgCount(TestHandle, tuple[a: Empty, b: int32], TestHandle, bkMetal)
       check n == c.idxs.len
 
+    test "bool scalar delivers the lowered width, zero-padded":
+      # the sink copies `len` bytes from `p`, a 1-byte bool widened to 4
+      # must not leak stack bytes into the chunk
+      proc clobberStack() =
+        var junk: array[256, byte]
+        for i in 0 ..< 256:
+          junk[i] = 0xFF
+        doAssert junk[255] == 0xFF
+      type C = object
+        blob: array[8, byte]
+      proc collect(c: var C, isBuffer: bool, h: TestHandle, idx: int, p: pointer, len: int) {.nimcall.} =
+        doAssert len == 4
+        copyMem(c.blob[0].addr, p, len)
+      var c: C
+      clobberStack()
+      bindArgs(c, bkWGSL, TestHandle(1), (false,), false, collect)
+      check c.blob[0 .. 3] == [byte 0, 0, 0, 0]
+      c = C()
+      clobberStack()
+      bindArgs(c, bkWGSL, TestHandle(1), (true,), false, collect)
+      check c.blob[0 .. 3] == [byte 1, 0, 0, 0]
+
     test "launchArgCount matches the deliveries":
       const n = launchArgCount(int32, tuple[a: Whole, b: int64], TestHandle, bkMetal)
       check n == 3
