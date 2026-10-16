@@ -38,7 +38,7 @@ type AllCloseReport* = object
   worst*, firstGot*, firstWant*: float64
   firstCrd*: string
 
-proc allCloseImpl[T, ShA, StA, ShB, StB](
+proc allClose*[T, ShA, StA, ShB, StB](
     actual: TensorView[T, ShA, StA], expected: TensorView[T, ShB, StB],
     rtol, abstol: float64): AllCloseReport =
   ## Element-wise closeness, |a - e| <= abstol + rtol*|e| per element,
@@ -73,7 +73,7 @@ template assertAllClose*(actual, expected: untyped, rtol: float64 = 1e-4, abstol
   block:
     let actualView = actual
     let expectedView = expected
-    let report = allCloseImpl(actualView, expectedView, rtol, abstol)
+    let report = allClose(actualView, expectedView, rtol, abstol)
     if report.bad > 0:
       echo "Assertion failed: allClose"
       echo "  '", astToStr(actual), "'"
