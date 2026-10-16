@@ -40,6 +40,8 @@ term of art), harness, smoke.
 | `substrate` | "base", "foundation", or name the component ("continuation substrate" → "continuation base") |
 | `extent` (shape/launch sense) | "size", "dims", or "bounds" ("padded extent" → "padded size", "launch extents" → "launch dims"). Vulkan `VkExtent3D` and CUDA API doc quotes keep the ABI's own name |
 | `mode` (tuple/layout sense, ceramic only) | "dimension" — tuples and tensors have dimensions ("per-mode contribution" → "per-dimension contribution"). CuTe vocabulary leak; crucible and positron keep their own vocabulary |
+| `recon` / `reconstructed` (bridge-arg sense) | "rebuilt argument", "the struct literal", "rebuilt from the leaf params" — say what the object is, not the operation that made it |
+| `spell` / `spelled` (type-declaration sense) | "declared with type X", "typed as X" |
 
 ## Line-end hazards from the reflow scanner
 
