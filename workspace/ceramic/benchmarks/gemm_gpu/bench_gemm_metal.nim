@@ -7,7 +7,7 @@
 
 # Run:
 #   nim c -r -d:release --outdir:build/bench \
-#     workspace/ceramic/benchmarks/gemm_gpu/bench_tile_gemm_metal.nim (from tattletale)
+#     workspace/ceramic/benchmarks/gemm_gpu/bench_gemm_metal.nim (from tattletale)
 
 import std/[os, strutils]
 import workspace/crucible
@@ -74,7 +74,7 @@ proc main() =
   separator()
   for mnk in ProblemSizes:
     if wanted.len == 0 or mnk in wanted:
-      let iters = if mnk >= 4096: 10 elif mnk >= 2048: 25 else: 50
+      let iters = if mnk >= 4096: 20 elif mnk >= 2048: 100 else: 1000
       gemmBench(engine, launchGemm, mnk, mnk, mnk, iters,
                 "tiledMma 32x32x16 fp16")
       gemmBench(engine, launchMlxGemm, mnk, mnk, mnk, iters,
@@ -82,5 +82,4 @@ proc main() =
       separator()
 
 when isMainModule:
-  warmup()
   main()
