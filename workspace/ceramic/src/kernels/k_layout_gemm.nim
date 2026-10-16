@@ -104,7 +104,7 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
   ##   | dTile | (V, MR, NR) | result, d receives a*b + c          |
   ##   | aTile | (V, MR, KR) | A operand                           |
   ##   | bTile | (V, NR, KR) | B operand                           |
-  ##   | cTile | (V, MR, NR) | addend, pass dTile in place         |
+  ##   | cTile | (V, MR, NR) | addend, may alias dTile             |
   ##
   ## Worked example, m16n8k8, warp tile (32, 16, 32): MR = NR = 2,
   ## KR = 4, one warp per tile, fp16 A/B, fp32 D.
@@ -165,25 +165,32 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     KR = aTile.shape[1][1].toInt()
     MR = aTile.shape[1][0].toInt()
     NR = bTile.shape[1][0].toInt()
+    vC = dTile.shape[0].toInt()
     aBits = aTile.shape[0].toInt() * sizeof(typeof(aTile.data[0]))
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
+
+  # dTile starts as a copy of cTile, every k slice accumulates into it
+  staticFor m, 0, MR:
+    staticFor n, 0, NR:
+      staticFor v, 0, vC:
+        dTile[v, (m, n)] = cTile[v, (m, n)]
 
   staticFor k, 0, KR:
     when aBits == 8:
       staticFor m, 0, MR:
         staticFor n, 0, NR:
           let ns = (when (m and 1) == 1: NR - 1 - n else: n)
-          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), cTile, (m, ns))
+          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), dTile, (m, ns))
     elif bBits == 8:
       staticFor n, 0, NR:
         staticFor m, 0, MR:
           let ms = (when (n and 1) == 1: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), cTile, (ms, n))
+          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), dTile, (ms, n))
     else:
       staticFor n, 0, (NR + 1) div 2:
         staticFor m, 0, MR:
           let n0 = n * 2
           let ms = (when (n * 2 and 2) == 2: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), cTile, (ms, n0))
+          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), dTile, (ms, n0))
           when n * 2 + 1 < NR:
-            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), cTile, (ms, n0 + 1))
+            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), dTile, (ms, n0 + 1))
