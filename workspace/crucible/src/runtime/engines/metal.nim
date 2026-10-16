@@ -24,11 +24,13 @@ type
     ctx: MetalCtx
 
   MetalCache = object
-    ## Two per-engine caches:
+    ## Three per-engine caches:
     ## - library, keyed by source, replaced by re-ingest
-    ## - pipeline states, keyed by kernel name, cleared by re-ingest
+    ## - pipeline states and the kernels' reflected arg signatures,
+    ##   keyed by kernel name, cleared by re-ingest
     library: objc.ID
     psos: Table[string, objc.ID]
+    layouts: Table[string, KernelArgLayout]
 
   MetalEngine* = ref object
     ## A Metal engine, build with `bkMetal.init()`: runtime-compiled MSL kernels
@@ -86,7 +88,8 @@ when defined(macosx):
     objc.withMemPool:
       result = MetalEngine(
         ctx: MetalDeviceCtx(ctx: newMetalCtx()),
-        cache: MetalCache(psos: initTable[string, objc.ID]())
+        cache: MetalCache(psos: initTable[string, objc.ID](),
+                          layouts: initTable[string, KernelArgLayout]())
       )
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -106,6 +109,7 @@ when defined(macosx):
       for pso in engine.cache.psos.values:
         objc.release(pso)
       engine.cache.psos.clear()
+      engine.cache.layouts.clear()
       engine.cache.library = library
       engine.source = source
 
@@ -155,9 +159,15 @@ when defined(macosx):
             cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
     ## Runs `kernel` on the engine's GPU.
     ##
-    ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
-    ## (wrap_and_run), checked against the engine binding at compile time.
-    ## Direct runs pass the default and bind from the kernel arg contract alone.
+    ## Every launch binds from the kernel's declared signature, reflected
+    ## at pipeline-state build time and cached per kernel, then reconciled
+    ## against the args tuple's projection:
+    ## - `layout` is the kernel arg descriptor of a `{.global.}` bridge
+    ##   launch (wrap_and_run), checked against the engine projection
+    ##   at compile time
+    ## - the reconciliation is the runtime drift guard against
+    ##   the kernel's own declaration, a mismatch fails loudly, never misbinds
+    ## - direct runs pass the default and bind from the reflected signature alone
     ##
     ## Usage:
     ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -183,31 +193,40 @@ when defined(macosx):
                  "maximum of 1024")
 
       var pso: objc.ID
+      var declared: KernelArgLayout
       if engine.cache.psos.hasKey(kernel):
         pso = engine.cache.psos[kernel]
+        declared = engine.cache.layouts[kernel]
       else:
-        pso = compilePipelineState(engine.ctx.ctx.device,
-                                   engine.cache.library, kernel)
+        (pso, declared) = reflectedKernelLayout(engine.ctx.ctx.device,
+                                                engine.cache.library, kernel)
         engine.cache.psos[kernel] = pso
+        engine.cache.layouts[kernel] = declared
 
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), objc.ID](layout, bkMetal)
+      # one binding rule, two signature sources: the launch binds per
+      # the kernel's declared signature, reconciled against
+      # the projection the args tuple gives
+      # - a bridge launch's projection is its descriptor, checked against
+      #   the engine projection at compile time
+      # - the reconciliation is the runtime drift guard against
+      #   the kernel's own declaration
+      const given = checkedKernelArgLayout[typeof(output), typeof(args), objc.ID](layout, bkMetal)
+      let launch = declaredLaunchLayout(given, declared)
       var binding: KernelBinding[objc.ID]
-      bindKernelArgs[objc.ID](binding, argLayout, bkMetal, output, args, ptrAsBuffer = true, argAlign = 1)
-      var idx = 0
+      bindKernelArgs[objc.ID](binding, launch, bkMetal, output, args,
+                              ptrAsBuffer = true, argAlign = 1)
       for s in binding.slots:
         if s.isBuffer:
           discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          s.buffer, objc.NSUInteger(0), objc.NSUInteger(idx))
-          inc idx
+                          s.buffer, objc.NSUInteger(0), objc.NSUInteger(s.index))
       for s in binding.slots:
         if not s.isBuffer:
           discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
                           binding.bytes[s.offset].addr, objc.NSUInteger(s.width),
-                          objc.NSUInteger(idx))
-          inc idx
+                          objc.NSUInteger(s.index))
       if cfg.sharedMem > 0:
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))

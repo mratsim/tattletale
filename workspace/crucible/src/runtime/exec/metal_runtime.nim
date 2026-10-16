@@ -2,11 +2,12 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
 import workspace/crucible/src/abis/objc_abi as objc
+import ../kernel_args
 
 # ═════════════════════════════════════════════════
 # Constants
@@ -133,6 +134,163 @@ when defined(macosx):
       if not objc.isNil(psoError):
         detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
       failLoud("compute pipeline state creation failed for " & kernel & ": " & detail)
+
+  # ═════════════════════════════════════════════════
+  # Argument reflection
+  # ═════════════════════════════════════════════════
+
+  const
+    ## `MTLArgumentType` values (MTLArgument.h)
+    MTLArgumentTypeBuffer = 0
+    MTLArgumentTypeThreadgroupMemory = 1
+    ## `MTLDataType` values (MTLDataType.h) with a host scalar binding
+    MTLDataTypeStruct = 1
+    MTLDataTypeArray = 2
+    MTLDataTypeFloat = 3
+    MTLDataTypeHalf = 16
+    MTLDataTypeInt = 29
+    MTLDataTypeUInt = 33
+    MTLDataTypeShort = 37
+    MTLDataTypeUShort = 41
+    MTLDataTypeChar = 45
+    MTLDataTypeUChar = 49
+    MTLDataTypeBool = 53
+    MTLDataTypeLong = 81
+    MTLDataTypeULong = 85
+    MTLDataTypeBFloat = 121
+    ## `MTLPipelineOption` bits (MTLDevice.h): binding info plus buffer
+    ## type info, the latter fills the MTLStructType member layouts
+    MTLPipelineOptionBindingAndBufferType = 3
+
+  proc mtlScalarLayout(dt: objc.NSUInteger): tuple[kind: GpuTypeKind, width: int] =
+    ## Returns the Crucible IR kind and byte width of a declared MSL
+    ## scalar type from `MTLDataType`. `char` maps to the unsigned byte kind,
+    ## the one-byte storage is what binds.
+    case dt
+    of MTLDataTypeFloat: (gtFloat32, 4)
+    of MTLDataTypeHalf: (gtFloat16, 2)
+    of MTLDataTypeBFloat: (gtBf16, 2)
+    of MTLDataTypeInt: (gtInt32, 4)
+    of MTLDataTypeUInt: (gtUint32, 4)
+    of MTLDataTypeShort: (gtInt16, 2)
+    of MTLDataTypeUShort: (gtUint16, 2)
+    of MTLDataTypeChar, MTLDataTypeUChar: (gtUint8, 1)
+    of MTLDataTypeBool: (gtBool, 1)
+    of MTLDataTypeLong: (gtInt64, 8)
+    of MTLDataTypeULong: (gtUint64, 8)
+    else:
+      failLoud("Metal reflection: declared MSL type " & $dt &
+               " has no host scalar binding (vectors, matrices, textures and" &
+               " pointers inside structs cannot bind from launch values)")
+
+  proc flattenDeclaredStruct(st: objc.ID, base: int, members: var seq[KernelArgMember]) =
+    ## Flattens an MTLStructType into scalar members with absolute offsets:
+    ## nested structs recurse, array members expand one member per element
+    ## at the declared stride, non-scalar element types fail loudly
+    let ms = objc.msgSend(st, objc.`$$`("members"))
+    let n = objc.msgSendUInt(ms, objc.`$$`("count"))
+    for i in 0 ..< n:
+      let m = objc.msgSend(ms, objc.`$$`("objectAtIndex:"), objc.NSUInteger(i))
+      let off = base + int(objc.msgSendUInt(m, objc.`$$`("offset")))
+      let dt = objc.msgSendUInt(m, objc.`$$`("dataType"))
+      case dt
+      of MTLDataTypeStruct:
+        flattenDeclaredStruct(objc.msgSend(m, objc.`$$`("structType")), off, members)
+      of MTLDataTypeArray:
+        let at = objc.msgSend(m, objc.`$$`("arrayType"))
+        let length = int(objc.msgSendUInt(at, objc.`$$`("arrayLength")))
+        let stride = int(objc.msgSendUInt(at, objc.`$$`("stride")))
+        let eldt = objc.msgSendUInt(at, objc.`$$`("elementType"))
+        if eldt == MTLDataTypeStruct:
+          let est = objc.msgSend(at, objc.`$$`("elementStructType"))
+          for j in 0 ..< length:
+            flattenDeclaredStruct(est, off + j * stride, members)
+        else:
+          let (kind, width) = mtlScalarLayout(eldt)
+          for j in 0 ..< length:
+            members.add(KernelArgMember(irKind: kind, offset: off + j * stride,
+                                        width: width))
+      else:
+        let (kind, width) = mtlScalarLayout(dt)
+        members.add(KernelArgMember(irKind: kind, offset: off, width: width))
+
+  proc reflectedKernelLayout*(device, library: objc.ID, kernel: string): tuple[pso: objc.ID, layout: KernelArgLayout] =
+    ## Builds the compute pipeline state for `kernel` and reflects
+    ## the kernel's declared argument signature via
+    ## MTLComputePipelineReflection (options: binding + buffer type info):
+    ## - a scalar pointee records one kaBytes entry at its declared
+    ##   width and a struct pointee one kaStruct entry whose members
+    ##   carry the declared offsets and widths, a top-level array one
+    ##   raw kaBytes chunk
+    ## - threadgroup-memory args reserve their own index space, bind no
+    ##   launch value and record no entry, textures and samplers fail
+    ##   loudly like every other unsupported arg kind
+    ## - each entry records the kernel's declared arg index, [[buffer(n)]]
+    ##   or the position Metal assigns unattributed args, the value binds
+    ##   at that index
+    ##
+    ## Returns the +1 pipeline state and the declared layout.
+    ## The reflection object is autoreleased, drained with the caller's pool.
+    ##
+    ## Usage:
+    ##   let (pso, declared) = reflectedKernelLayout(device, library, "saxpy")
+    let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"),
+                          objc.nsStringFromNimString(kernel))
+    if objc.isNil(fn):
+      failLoud("newFunctionWithName(" & kernel & ") returned nil")
+    defer:
+      objc.release(fn)
+    var refl: objc.ID = objc.ID(nil)
+    var psoError: objc.ID = objc.ID(nil)
+    result.pso = objc.msgSend(device,
+      objc.`$$`("newComputePipelineStateWithFunction:options:reflection:error:"),
+      fn, objc.NSUInteger(MTLPipelineOptionBindingAndBufferType),
+      addr refl, addr psoError)
+    if objc.isNil(result.pso):
+      var detail = "no NSError object provided"
+      if not objc.isNil(psoError):
+        detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
+      failLoud("compute pipeline state creation failed for " & kernel & ": " & detail)
+    let args = objc.msgSend(refl, objc.`$$`("arguments"))
+    let n = objc.msgSendUInt(args, objc.`$$`("count"))
+    for i in 0 ..< n:
+      let a = objc.msgSend(args, objc.`$$`("objectAtIndex:"), objc.NSUInteger(i))
+      let name = objc.nsStringToNimString(objc.msgSend(a, objc.`$$`("name")))
+      let typ = objc.msgSendUInt(a, objc.`$$`("type"))
+      if typ == MTLArgumentTypeThreadgroupMemory:
+        continue
+      if typ != MTLArgumentTypeBuffer:
+        failLoud("Metal reflection: kernel '" & kernel & "' declares argument '" &
+                 name & "' of kind " & $typ & ", only buffer and" &
+                 " threadgroup-memory arguments bind from launch values")
+      let idx = int(objc.msgSendUInt(a, objc.`$$`("index")))
+      let bdt = objc.msgSendUInt(a, objc.`$$`("bufferDataType"))
+      if bdt == MTLDataTypeStruct:
+        var members: seq[KernelArgMember]
+        flattenDeclaredStruct(objc.msgSend(a, objc.`$$`("bufferStructType")), 0, members)
+        result.layout.args.add(KernelArg(kind: kaStruct,
+          width: int(objc.msgSendUInt(a, objc.`$$`("bufferDataSize"))),
+          members: members, index: idx))
+      elif bdt == MTLDataTypeArray:
+        # a top-level array arg: length and stride live on the pointer type
+        let ptype = objc.msgSend(a, objc.`$$`("bufferPointerType"))
+        let at = if objc.isNil(ptype): objc.ID(nil)
+                 else: objc.msgSend(ptype, objc.`$$`("elementArrayType"))
+        if objc.isNil(at):
+          failLoud("Metal reflection: kernel '" & kernel & "' declares array" &
+                   " argument '" & name & "' with no element array info")
+        if objc.msgSendUInt(at, objc.`$$`("elementType")) == MTLDataTypeStruct:
+          failLoud("Metal reflection: kernel '" & kernel &
+                   "' declares array-of-struct argument '" & name &
+                   "', element structs do not bind as one raw chunk")
+        let count = int(objc.msgSendUInt(at, objc.`$$`("arrayLength")))
+        result.layout.args.add(KernelArg(kind: kaBytes, irKind: gtArray,
+          count: count,
+          width: int(objc.msgSendUInt(a, objc.`$$`("bufferDataSize"))), index: idx))
+      else:
+        let (kind, width) = mtlScalarLayout(bdt)
+        result.layout.args.add(KernelArg(kind: kaBytes, irKind: kind,
+          width: int(objc.msgSendUInt(a, objc.`$$`("bufferDataSize"))), index: idx))
 
   # ═════════════════════════════════════════════════
   # Device, command queue, buffers
