@@ -31,9 +31,9 @@ proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
-proc launchKernel*[E](engine: E): LaunchSugar[E] =
-  ## `run` accessor, a proc never a template, templates would hijack the plain call.
-  ## A proc resolves by signature, 4 args hit the engine's plain `run`,
+proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
+  ## Launch accessor, a proc never a template, templates would hijack the plain call.
+  ## A proc resolves by signature, 4 args hit the engine's plain `launchKernel`,
   ## a bare `engine.launchKernel` hits this accessor.
   LaunchSugar[E](engine: engine)
 

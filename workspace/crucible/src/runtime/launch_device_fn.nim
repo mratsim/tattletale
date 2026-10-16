@@ -64,8 +64,11 @@ proc fieldsArePhantom(fields: NimNode): bool =
 proc typeIsPhantom(t: NimNode): bool =
   ## True when the type carries no runtime fields, its value lives in the type
   ## (empty phantom objects like `Phantom[8]` or ceramic's `Int[V]`).
-  ## Instantiated generics arrive either as a bracket expression over the generic
-  ## symbol or as the instantiation's own symbol, both resolve through `getImpl`.
+  ## - decision predicate for baking a formal into the bridge body
+  ## - launch_common.isStaticArg applies the same predicate to the binder's byte layout
+  ## - divergence: zero-length arrays are static for isStaticArg, never phantom here
+  ## - instantiated generics arrive as a bracket expression over the generic symbol,
+  ##   or as the instantiation's own symbol, both resolve through `getImpl`
   case t.kind
   of nnkBracketExpr:
     result = typeIsPhantom(t[0])
@@ -76,8 +79,9 @@ proc typeIsPhantom(t: NimNode): bool =
     case body.kind
     of nnkObjectTy: result = fieldsArePhantom(body[^1])
     of nnkTupleTy:  result = fieldsArePhantom(body)
-    of nnkBracketExpr:
-      # a type alias whose body is the generic instantiation: `type P8 = Phantom[8]`
+    of nnkBracketExpr, nnkSym:
+      # a type alias whose body is the generic instantiation or another alias:
+      # `type P8 = Phantom[8]`, `type Q = P8`
       result = typeIsPhantom(body)
     else: result = false
   else: result = false

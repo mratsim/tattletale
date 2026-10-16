@@ -15,7 +15,7 @@ import ./engines/metal {.all.}
 
 
 export gpu_types
-#export launch_kernel
+export launch_sugar  # plain-launch chevron path (aliased import dodges the launchKernel collision)
 export launch_common
 
 export ingest, getArtifact, launchKernel, check, deviceName
