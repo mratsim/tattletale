@@ -224,7 +224,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   if engine.cache.pipelines.hasKey(cacheKey):
     cache = engine.cache.pipelines[cacheKey]
   else:
-    let totalBindings = n + 1
+    let totalBindings = n
     var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
     entries[0] = WGPUBindGroupLayoutEntry(
       binding: 0.cuint,
@@ -234,13 +234,13 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
         minBindingSize: 0
       )
     )
-    for i in 0 ..< n:
-      entries[i + 1] = WGPUBindGroupLayoutEntry(
-        binding: (i + 1).cuint,
+    for i in 1 ..< n:
+      entries[i] = WGPUBindGroupLayoutEntry(
+        binding: i.cuint,
         visibility: WGPUShaderStageCompute,
         buffer: WGPUBufferBindingLayout(
-          `type`: if dctx.chunkLen[i] > 0: WGPUBufferBindingTypeStorage
-                  else: WGPUBufferBindingTypeReadOnlyStorage,
+          `type`: if dctx.chunkLen[i] > 0: WGPUBufferBindingTypeReadOnlyStorage
+                  else: WGPUBufferBindingTypeStorage,
           minBindingSize: dctx.chunkLen[i].csize_t
         )
       )
@@ -293,7 +293,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
     )
     engine.cache.pipelines[cacheKey] = cache
 
-  let totalBindings = n + 1
+  let totalBindings = n
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
   # wgpu-native rejects a zero binding size, whole-buffer bindings carry
   # the buffer's queried size.
@@ -302,16 +302,16 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
     buffer: output,
     size: wgpuBufferGetSize(output).csize_t
   )
-  for i in 0 ..< n:
-    bgEntries[i + 1] = WGPUBindGroupEntry(
-      binding: (i + 1).cuint,
+  for i in 1 ..< n:
+    bgEntries[i] = WGPUBindGroupEntry(
+      binding: i.cuint,
       buffer: if dctx.chunkLen[i] > 0: scratch else: dctx.handles[i],
       offset: dctx.chunkOff[i].cuint,
       size: dctx.chunkLen[i].csize_t
     )
-  for i in 0 ..< n:
+  for i in 1 ..< n:
     if dctx.chunkLen[i] == 0:
-      bgEntries[i + 1].size = wgpuBufferGetSize(dctx.handles[i]).csize_t
+      bgEntries[i].size = wgpuBufferGetSize(dctx.handles[i]).csize_t
   var bgDesc = WGPUBindGroupDescriptor(
     layout: cache.bindGroupLayout,
     entryCount: totalBindings.csize_t,
