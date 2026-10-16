@@ -15,7 +15,7 @@
 ## The IR checks run inside a `runAndSummarize` macro (the function tables live on the compiler-run GpuContext, never reaching runtime).
 ##
 ## Run:
-##   nim cpp -r --hints:off --warnings:off workspace/crucible/tests/ir/optimizations/test_ir_const_shell_fold.nim (from tattletale)
+##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/optimizations/t_ir_const_shell_fold.nim (from tattletale)
 
 import std/[macros, sequtils, strutils, tables]
 
