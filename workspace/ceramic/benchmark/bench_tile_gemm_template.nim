@@ -35,7 +35,7 @@ import workspace/fp_conv/fp_conv
 #  Kernel templates and launch descs
 # ═══════════════════════════════════════════════════════════════
 
-proc tileLoadReduce(mma: static TiledMma[float32, float16, float16, 32, 32, 16], C, D, A, B: distinct TensorView) =
+proc tileLoadReduce(mma: static TiledMma, C, D, A, B: distinct TensorView) =
   ## Load-path-only companion: every loaded register cell reduces into
   ## one scalar stored at the thread's own C slot, so no load is dead,
   ## isolating the load/store cost from the mma cost
