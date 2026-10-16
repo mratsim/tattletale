@@ -39,6 +39,17 @@ proc runTest() =
       doAssert not compiles(
         engine.launchDeviceFn<<(grid: (1, 1), blk: (1, 1), stream: 7)>> setOne(outDev))
 
+  block:  # a real launch through the chevron form: geometry reaches the dispatch
+      proc gridId(outBuf: ptr UncheckedArray[uint32]) =
+        outBuf[thread_position_in_grid.x] = thread_position_in_grid.x
+      let geomDev = engine.allocDevice(3 * sizeof(uint32))
+      engine.launchDeviceFn<<(grid: (3, 1), blk: (1, 1))>>(gridId(geomDev))
+      var g: array[3, uint32]
+      engine.copyToHostFromDevice(addr g[0], geomDev, sizeof(g))
+      doAssert g == [0'u32, 1, 2],
+        "the chevron grid must reach the dispatch, one write per grid position: " & $g
+      engine.freeDevice(geomDev)
+
   engine.freeDevice(outDev)
 
 when isMainModule:
