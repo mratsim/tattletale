@@ -165,13 +165,14 @@ proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil, reverse 
     if containerIsTuple:
       return scanPerMode(container, seed, seedTy, reverse)
     return (seed, seedTy)
-  if seedTy.isNil and seed.kind == nnkTupleConstr:
+  # a literal tuple seed and a symbol-bound tuple seed both go through
+  # makeIntTuple, the leaves promote to Int[V] when static
+  if seedTy.isNil and (seed.kind == nnkTupleConstr or
+      seed.getTypeInst().isTupleTy()):
     let (sv, st) = makeIntTuple(seed)
     if containerIsTuple:
       return scanPerMode(container, sv, st, reverse)
     return (sv, st)
-  if seedTy.isNil and seed.getTypeInst().isTupleTy():
-    return (seed, seed.getTypeInst())
   var accu: ProductAccum
   accu.init(seed, seedTy)
   for ev in container.tupleStream():
@@ -193,13 +194,14 @@ proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse
     if containerIsTuple:
       return scanPerMode(container, seed, seedTy, reverse)
     return (seed, seedTy)
-  if seedTy.isNil and seed.kind == nnkTupleConstr:
+  # a literal tuple seed and a symbol-bound tuple seed both go through
+  # makeIntTuple, the leaves promote to Int[V] when static
+  if seedTy.isNil and (seed.kind == nnkTupleConstr or
+      seed.getTypeInst().isTupleTy()):
     let (sv, st) = makeIntTuple(seed)
     if containerIsTuple:
       return scanPerMode(container, sv, st, reverse)
     return (sv, st)
-  if seedTy.isNil and seed.getTypeInst().isTupleTy():
-    return (seed, seed.getTypeInst())
   var accu: ProductAccum
   accu.init(seed, seedTy)
   for ev in container.tupleStream(true):
