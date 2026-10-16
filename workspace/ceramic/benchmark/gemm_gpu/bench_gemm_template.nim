@@ -7,7 +7,7 @@
 
 # Run:
 #   nim c -r -d:release --outdir:build/bench \
-#     workspace/ceramic/benchmarks/gemm_gpu/bench_gemm_metal.nim (from tattletale)
+#     workspace/ceramic/benchmark/gemm_gpu/bench_gemm_metal.nim (from tattletale)
 
 import std/[monotimes, strformat, strutils, times]
 import workspace/crucible
@@ -25,7 +25,7 @@ import workspace/ceramic/src/kernels/k_tile_gemm
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/benchmarks/gemm_gpu/bench_blueprint
+import workspace/ceramic/benchmark/gemm_gpu/bench_blueprint
 import workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm_template
 import workspace/fp_conv/fp_conv
 

@@ -10,12 +10,12 @@
 ## Usage:
 ##   nim cpp -r -d:release --hints:off --warnings:off \
 ##     --outdir:build/wip/arm-sme-matmul --nimcache:nimcache/wip/arm-sme-matmul \
-##     workspace/ceramic/benchmarks/bench_ex02_matmul_sme.nim
+##     workspace/ceramic/benchmark/bench_ex02_matmul_sme.nim
 
 import std/[algorithm, monotimes, random, strutils, strformat]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned_arm64_sme2 as v_a
-import workspace/ceramic/benchmarks/bench_utils
+import workspace/ceramic/benchmark/bench_utils
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors

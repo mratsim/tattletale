@@ -7,7 +7,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/kernels/k_layout_copy_gpu
-import workspace/ceramic/benchmarks/codegen_size/codegen_size_analysis
+import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
 
 # complement of a runtime-shape rank-2 layout, static strides, the direct-call pattern of tests/test_layout_algebra.nim
 const complementDirectMsl = metal:

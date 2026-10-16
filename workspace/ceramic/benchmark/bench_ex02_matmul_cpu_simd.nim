@@ -15,18 +15,18 @@
 ##
 ## Usage:
 ##   nim cpp -r --outdir:build \
-##     workspace/ceramic/benchmarks/bench_ex02_matmul_cpu_simd.nim
+##     workspace/ceramic/benchmark/bench_ex02_matmul_cpu_simd.nim
 ##
 ## With OpenBLAS:
 ##   nim cpp -r -d:cblas --outdir:build \
-##     workspace/ceramic/benchmarks/bench_ex02_matmul_cpu_simd.nim
+##     workspace/ceramic/benchmark/bench_ex02_matmul_cpu_simd.nim
 
 import std/[monotimes, times, math, random, strutils, strformat, sequtils, os]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned as v_a
 import workspace/ceramic/examples/ex02b_matmul_layout_algebra as v_b
-import workspace/ceramic/benchmarks/laser_matmul/gemm as laser_gemm
-import workspace/ceramic/benchmarks/bench_utils
+import workspace/ceramic/benchmark/laser_matmul/gemm as laser_gemm
+import workspace/ceramic/benchmark/bench_utils
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors

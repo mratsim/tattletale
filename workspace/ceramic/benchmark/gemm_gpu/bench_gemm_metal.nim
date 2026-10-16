@@ -7,13 +7,13 @@
 
 # Run:
 #   nim c -r -d:release --outdir:build/bench \
-#     workspace/ceramic/benchmarks/gemm_gpu/bench_gemm_metal.nim (from tattletale)
+#     workspace/ceramic/benchmark/gemm_gpu/bench_gemm_metal.nim (from tattletale)
 
 import std/[os, strutils]
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/metal
-import workspace/ceramic/benchmarks/gemm_gpu/bench_gemm_template
-import workspace/ceramic/benchmarks/gemm_gpu/apple_nax_utils
+import workspace/ceramic/benchmark/gemm_gpu/bench_gemm_template
+import workspace/ceramic/benchmark/gemm_gpu/apple_nax_utils
 
 const ProblemSizes = [1024, 2048, 4096]
 
