@@ -92,11 +92,14 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
                            make_layout((2, 4), (0, 1)))
     let expected = make_view(cast[ptr UncheckedArray[float32]](addr bufExpected[0]),
                              make_layout((4, 2), (1, 0)))
+    # raised is recorded inside the try and asserted after it, an assertion
+    # failure of this check itself must not land in the handler
+    var raised = false
     try:
       assertAllClose(actual, expected, msg = "broadcast difference must raise")
-      doAssert false, "allClose missed the broadcast difference"
     except AssertionDefect:
-      discard
+      raised = true
+    doAssert raised, "allClose missed the broadcast difference"
     var bufEqual = [5.0'f32, 5, 5, 5]
     let equal = make_view(cast[ptr UncheckedArray[float32]](addr bufEqual[0]),
                           make_layout((4, 2), (1, 0)))
