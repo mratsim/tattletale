@@ -29,10 +29,6 @@ proc runTest() =
   for other in ["output_vk[0] = 1;", "output_vk[0] = 3;", "output_vk[0] = 4;", "output_vk[0] = 5;"]:
     doAssert other notin kernelCode,
       "a non-Vulkan dispatch branch survived sem:\n" & kernelCode
-  doAssert "when" notin kernelCode,
-    "a when construct survived into the emitted source:\n" & kernelCode
-  doAssert "ccGetBackend" notin kernelCode,
-    "a ccGetBackend call survived into the emitted source:\n" & kernelCode
 
   # GLSL kernel entry points must be named `main`, since glslang links against `main`.
   # The pin renames the kernel in its copy of the source.

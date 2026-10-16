@@ -1,5 +1,7 @@
-## WebGPU pipeline cache (ingest-once / run-many): the pipeline artifacts survive repeated runs
-## with the same (kernel, arg-shape) key and are invalidated by re-ingest.
+## WebGPU pipeline cache (ingest-once / run-many): the pipeline artifacts survive repeated
+## runs with the same (kernel, arg-shape) key and are invalidated by re-ingest.
+## Pipeline creation pops a validation error scope around wgpuDeviceCreateComputePipeline,
+## so a cache miss (first creation) must not hang the callback.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -81,6 +83,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 6
       check res[2] == 9
       check res[3] == 12
+
+    test "first pipeline creation is a cache miss and must not hang the error-scope callback":
+      # Pipeline creation pops a validation error scope around
+      # wgpuDeviceCreateComputePipeline, so a fresh engine exercises the miss path.
+      var engine = bkWGSL.init()
+      engine.ingest(kernelDouble)
+      var res: array[4, uint32]
+      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      var a = [1'u32, 2'u32, 3'u32, 4'u32]
+      let aDev = engine.allocDevice(a.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      engine.launchKernel("doubleKernel", oDev, (aDev,))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.freeDevice(aDev)
+      engine.freeDevice(oDev)
+      check res == [2'u32, 4, 6, 8]
 
 when isMainModule:
   runTest()

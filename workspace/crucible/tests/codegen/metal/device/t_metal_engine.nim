@@ -1,7 +1,8 @@
 ## Metal engine end-to-end: `bkMetal.init()` → `ingest()` → `run()`,
-## with verified device output (2 + 3 == 5). Also covers ingest-once/run-many cache reuse,
+## with verified device output. Covers ingest-once/run-many cache reuse,
 ## re-ingest invalidation, grid/blk dispatch, scalar args, deviceName, and repeated
-## init/run cycles that exercise the RAII `=destroy` path.
+## init/run cycles that exercise the RAII `=destroy` path. The plain add-kernel
+## smoke itself is owned by t_metal_add.nim.
 ##
 ## Run:
 ##   cd tattletale
@@ -71,25 +72,6 @@ kernel void scalarKernel(device uint* output [[buffer(0)]],
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal engine":
-
-    test "a+b kernel executes on the device (2 + 3 == 5)":
-      var engine = bkMetal.init()
-      engine.ingest(addMsl)
-      echo addMsl
-      var a: array[1, uint32] = [2'u32]
-      var b: array[1, uint32] = [3'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.launchKernel("addKernel", oDev, (aDev, bDev))
-      var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
-      check res[0] == 5
 
     test "ingest-once run-many keeps producing correct results across runs":
       # "No recompiles" is structural. Ingest is the only compileLibrary call site,

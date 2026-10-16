@@ -92,10 +92,9 @@ proc runTest() =
       check dB.len == 3
       check dA == dB
 
-    test "both variants compute their own factors at runtime":
-      check runKernel(artA, "kA16") == @[16.0'f32]
-      check runKernel(artA, "kA32") == @[32.0'f32]
-      check runKernel(artA, "kA7") == @[7.0'f32]
+    test "the comment-shifted variant computes its own factors at runtime":
+      # Variant A's 16/32/7 runtime results are covered by
+      # t_metal_generic_inst_dedup.nim (scale1 at the same factors).
       check runKernel(artB, "kB16") == @[16.0'f32]
       check runKernel(artB, "kB32") == @[32.0'f32]
       check runKernel(artB, "kB7") == @[7.0'f32]

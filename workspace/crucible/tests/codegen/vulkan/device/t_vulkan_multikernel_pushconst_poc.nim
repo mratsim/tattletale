@@ -9,6 +9,7 @@
 ## A multi-kernel source unions every kernel's by-value scalars into one file-scope
 ## KernelParams block, so the engine rejects it loudly at ingest.
 ## One kernel per source is the supported pattern, pointer-only multi-kernel sources are unaffected.
+## Single-kernel by-value scalars are emitted as push constants (no function params).
 ##
 ## Run:
 ##   cd tattletale
@@ -37,6 +38,12 @@ const codeSingle = vulkan:
                a: uint32; b: uint32) {.global.} =
     output[0] = a + b
 
+# Single-kernel by-value scalar: emitted as a push constant block with no
+# function parameters (covers the contract from t_vulkan_kernel_pushconst).
+const codeWithVal = vulkan:
+  proc kernelWithVal(output: ptr UncheckedArray[uint32], val: uint32) {.global.} =
+    output[0] = val
+
 proc childIngestMulti() =
   ## Child mode: ingesting a multi-kernel scalar source must quit loudly.
   var engine = bkVulkan.init()
@@ -63,6 +70,15 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     doAssert code != 0, "multi-kernel scalar ingest must quit loudly"
     doAssert "multi-kernel source with scalar params" in outp,
              "guard message missing: " & outp
+
+  block:  # single-kernel by-value scalar becomes a push constant block
+    doAssert codeWithVal.contains("push_constant"),
+             &"Expected push_constant block in:\n{codeWithVal}"
+    doAssert codeWithVal.contains("void kernelWithVal()"),
+             &"Expected void kernelWithVal() in:\n{codeWithVal}"
+    doAssert codeWithVal.contains("val"),
+             &"Expected `val` in push constants or SSBO in:\n{codeWithVal}"
+    echo "  single-kernel kernelWithVal: push_constant block, no function params"
 
   echo "\n  OK: multi-kernel scalar sources rejected loudly"
   echo "  (single-kernel scalars unaffected)"
