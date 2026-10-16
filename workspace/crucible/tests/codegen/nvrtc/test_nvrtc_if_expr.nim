@@ -16,7 +16,7 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run(kernelName, oDev, ())
+  engine.launchKernel(kernelName, oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
 
@@ -86,7 +86,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kIfExprCond)
     let o5 = engine.allocDevice(sizeof(buf5))
-    engine.run<<(1, 4)>>("ifExprCondKernel", o5, ())
+    engine.launchKernel<<(1, 4)>>("ifExprCondKernel", o5, ())
     engine.copyToHostFromDevice(addr buf5[0], o5, sizeof(buf5))
     engine.freeDevice(o5)
   doAssert buf5[0] == 100, &"if-expr cond (tid=0): got {buf5[0]}, expected 100"
@@ -126,7 +126,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kIfElifElse)
     let o7 = engine.allocDevice(sizeof(buf7))
-    engine.run<<(1, 4)>>("ifElifElseKernel", o7, ())
+    engine.launchKernel<<(1, 4)>>("ifElifElseKernel", o7, ())
     engine.copyToHostFromDevice(addr buf7[0], o7, sizeof(buf7))
     engine.freeDevice(o7)
   doAssert buf7[0] == 100, &"if-elif-else (tid=0): got {buf7[0]}, expected 100"

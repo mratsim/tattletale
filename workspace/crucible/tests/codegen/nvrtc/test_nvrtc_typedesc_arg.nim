@@ -32,7 +32,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run<<(1, 1)>>("typedescKernel", oDev, ())
+  engine.launchKernel<<(1, 1)>>("typedescKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"

@@ -44,7 +44,7 @@ proc qkNormRopeKernel(x, gamma: seq[uint16], cosT, sinT: seq[float32],
   var engine = bkMetal.init()
   engine.ingest(qkNormRopeMsl)
   var outO = newSeq[uint16](rows * 128)
-  engine.run << (grid: (1, rows div 8, 1), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (1, rows div 8, 1), blk: (32, 1)) >> (
     "qkNormRope", outO, (x, gamma, cosT, sinT, int32(8 * 128), int32(8), int32(1), int32(0), eps))
   var outF = newSeq[float32](rows * 128)
   for i in 0 ..< rows * 128: outF[i] = fp16ToFp32(outO[i])

@@ -1,5 +1,5 @@
 ## OpenCL: add, vec2-add, and generic-max kernels generate OpenCL C
-## through the `opencl:` macro and run on the device via `engine.run()`.
+## through the `opencl:` macro and run on the device via `engine.launchKernel()`.
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/test_opencl_add.nim
@@ -79,7 +79,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
     let oDev = engine.allocDevice(2 * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
@@ -103,7 +103,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
     let oDev = engine.allocDevice(2 * sizeof(uint32))
-    engine.run("vec2AddKernel", oDev, (aDev, bDev))
+    engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
@@ -127,7 +127,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("maxKernel", oDev, (aDev, bDev))
+    engine.launchKernel("maxKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)

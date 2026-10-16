@@ -119,7 +119,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-      engine.run("t1Kernel", oDev, (aDev, bDev))
+      engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
@@ -138,7 +138,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let aDev = engine.allocDevice(a.len * sizeof(uint32))
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      engine.run("t2Kernel", oDev, (aDev,))
+      engine.launchKernel("t2Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
@@ -152,7 +152,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let aDev = engine.allocDevice(a.len * sizeof(uint32))
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      engine.run("t3Kernel", oDev, (aDev,))
+      engine.launchKernel("t3Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
@@ -166,7 +166,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let aDev = engine.allocDevice(a.len * sizeof(uint32))
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      engine.run("t4Kernel", oDev, (aDev,))
+      engine.launchKernel("t4Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
@@ -183,7 +183,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-      engine.run("t5Kernel", oDev, (aDev, bDev))
+      engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
@@ -196,7 +196,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t6Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("t6Kernel", oDev, ())
+      engine.launchKernel("t6Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -209,7 +209,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let xDev = engine.allocDevice(x.len * sizeof(uint32))
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
-      engine.run("t7Kernel", oDev, (xDev,))
+      engine.launchKernel("t7Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
@@ -223,7 +223,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let xDev = engine.allocDevice(x.len * sizeof(uint32))
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
-      engine.run("t8Kernel", oDev, (xDev,))
+      engine.launchKernel("t8Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
@@ -234,7 +234,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t10Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("t10Kernel", oDev, ())
+      engine.launchKernel("t10Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -244,7 +244,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t12Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("t12Kernel", oDev, ())
+      engine.launchKernel("t12Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -269,7 +269,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t15Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("t15Kernel", oDev, ())
+      engine.launchKernel("t15Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 2
@@ -279,7 +279,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t16Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("t16Kernel", oDev, ())
+      engine.launchKernel("t16Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 42

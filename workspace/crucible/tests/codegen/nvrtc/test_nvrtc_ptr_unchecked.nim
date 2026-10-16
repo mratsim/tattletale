@@ -24,7 +24,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var outBuf: array[8, uint32]
   let oDev = engine.allocDevice(sizeof(outBuf))
-  engine.run<<(1, 1)>>("fillKernel", oDev, ())
+  engine.launchKernel<<(1, 1)>>("fillKernel", oDev, ())
   engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
   echo "  fill: ", outBuf
   for i in 0..7: doAssert outBuf[i] == uint32(i + 10)
@@ -37,7 +37,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let bDev = engine.allocDevice(sizeof(b))
   engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
   let cDev = engine.allocDevice(sizeof(c))
-  engine.run<<(1, 1)>>("addKernel", cDev, (aDev, bDev))
+  engine.launchKernel<<(1, 1)>>("addKernel", cDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr c[0], cDev, sizeof(c))
   engine.freeDevice(aDev)
   engine.freeDevice(bDev)

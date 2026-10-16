@@ -109,7 +109,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let bDev = engine.allocDevice(sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
       let oDev = engine.allocDevice(10 * sizeof(uint32))
-      engine.run("basicKernel", oDev, (aDev, bDev))
+      engine.launchKernel("basicKernel", oDev, (aDev, bDev))
       var out32: array[10, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(uint32))
       engine.freeDevice(aDev)
@@ -137,7 +137,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let bDev = engine.allocDevice(sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
       let oDev = engine.allocDevice(10 * sizeof(uint32))
-      engine.run("structKernel", oDev, (aDev, bDev))
+      engine.launchKernel("structKernel", oDev, (aDev, bDev))
       var out32b: array[10, uint32]
       engine.copyToHostFromDevice(addr out32b[0], oDev, 10 * sizeof(uint32))
       engine.freeDevice(aDev)
@@ -165,7 +165,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let bDev = engine.allocDevice(sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
       let oDev = engine.allocDevice(10 * sizeof(uint32))
-      engine.run("structKernel2", oDev, (aDev, bDev))
+      engine.launchKernel("structKernel2", oDev, (aDev, bDev))
       var out32c: array[10, uint32]
       engine.copyToHostFromDevice(addr out32c[0], oDev, 10 * sizeof(uint32))
       engine.freeDevice(aDev)

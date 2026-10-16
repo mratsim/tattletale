@@ -253,7 +253,7 @@ proc runMegaGdn*(engine: HwEngine; m: var MegaGdnBufs;
   var alPA = m.aLog.pa()
   var dbPA = m.dtBias.pa()
   proc launch() {.gcsafe.} =
-    engine.run << (grid: (gridThreads, 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (gridThreads, 1, 1), blk: (32, 1, 1)) >>
       (kernelName, cPA,
         (bfAPA, f32APA, xPA, rPA, stPA, rgPA, n1PA, qkvPA, zPA, aPA,
          bPA, cvPA, onPA, opPA, n2PA, rtPA, guPA, dnPA,

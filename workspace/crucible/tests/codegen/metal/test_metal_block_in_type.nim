@@ -49,7 +49,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernel)
       let oDev = engine.allocDevice(sizeof(float32))
-      engine.run("reproKernel", oDev, (7'i32, 3'i32))
+      engine.launchKernel("reproKernel", oDev, (7'i32, 3'i32))
       var res: array[1, float32]
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
       engine.freeDevice(oDev)

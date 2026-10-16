@@ -94,7 +94,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     echo "PTX: ", engine.getArtifact().len, " bytes"
     var buf: array[4, uint32]
     let o0 = engine.allocDevice(sizeof(buf))
-    engine.run<<(1, 1)>>("threadIdKernel", o0, ())
+    engine.launchKernel<<(1, 1)>>("threadIdKernel", o0, ())
     engine.copyToHostFromDevice(addr buf[0], o0, sizeof(buf))
     engine.freeDevice(o0)
     doAssert buf[0] == 0
@@ -108,7 +108,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     var engine = bkCuda.init(kernel1d)
     var rec: array[3 * 5 * recordLen, uint32]
     let o1 = engine.allocDevice(sizeof(rec))
-    engine.run<<(3, 5)>>("threadState1d", o1, ())
+    engine.launchKernel<<(3, 5)>>("threadState1d", o1, ())
     engine.copyToHostFromDevice(addr rec[0], o1, sizeof(rec))
     engine.freeDevice(o1)
     for b in 0 ..< 3:
@@ -126,7 +126,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     var engine = bkCuda.init(kernel2d)
     var rec: array[gx * gy * bx * by * recordLen, uint32]
     let o2 = engine.allocDevice(sizeof(rec))
-    engine.run<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
+    engine.launchKernel<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
     engine.copyToHostFromDevice(addr rec[0], o2, sizeof(rec))
     engine.freeDevice(o2)
     for byy in 0 ..< gy:
@@ -152,7 +152,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     var engine = bkCuda.init(kernel3d)
     var rec: array[gx * gy * gz * bx * by * bz * recordLen, uint32]
     let o3 = engine.allocDevice(sizeof(rec))
-    engine.run<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
+    engine.launchKernel<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
     engine.copyToHostFromDevice(addr rec[0], o3, sizeof(rec))
     engine.freeDevice(o3)
     for bzz in 0 ..< gz:

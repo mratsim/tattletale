@@ -12,14 +12,14 @@
 ## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
 ## - var engine = bkCuda.init()
 ## - engine.ingest(kernelCode)
-## - engine.run<<grid, blk>>("addKernel", out, (a, b))
+## - engine.launchKernel<<grid, blk>>("addKernel", out, (a, b))
 ##
 ## Re-exports:
 ## - gpu_compiler, the DSL macros + builtins
 ## - runtime/engines, the HwEngine concept and the five backends
-## - runtime/wrap_and_run and wrap_and_run
+## - runtime/launch_device_fn and launchDeviceFn
 
 import ./src/codegen/gpu_compiler
 import ./src/runtime/engines
-import ./src/runtime/wrap_and_run
-export gpu_compiler, engines, wrap_and_run
+import ./src/runtime/launch_device_fn
+export gpu_compiler, engines, launchDeviceFn

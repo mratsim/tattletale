@@ -32,7 +32,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
 
       var res: array[3, float32]
       let oDev = engine.allocDevice(res.len * sizeof(float32))
-      engine.run("reductionKernel", oDev, ())
+      engine.launchKernel("reductionKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(float32))
       engine.freeDevice(oDev)
 

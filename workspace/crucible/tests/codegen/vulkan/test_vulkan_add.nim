@@ -80,7 +80,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
 
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
 
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
@@ -105,7 +105,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
 
-    engine.run("vec2AddKernel", oDev, (aDev, bDev))
+    engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
 
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
@@ -130,7 +130,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
 
-    engine.run("maxKernel", oDev, (aDev, bDev))
+    engine.launchKernel("maxKernel", oDev, (aDev, bDev))
 
     var outVal: array[1, uint32]
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))

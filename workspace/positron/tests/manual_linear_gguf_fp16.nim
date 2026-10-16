@@ -31,7 +31,7 @@ const ggufLinearMsl = metal:
 proc ggufLinearKernel(engine: var auto, launcher: string, xBits: seq[uint16],
     packed: seq[uint8], M, K, N, rowBytes: int): F.Tensor =
   var outO = newSeq[uint16](M * N)
-  engine.run << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (
     launcher, outO, (xBits, packed, int32(M), int32(K), int32(N), int32(rowBytes)))
   var outF = newSeq[float32](M * N)
   for i in 0 ..< M * N: outF[i] = fp16ToFp32(outO[i])

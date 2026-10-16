@@ -92,7 +92,7 @@ proc runGdnScan(
       betaSeg.hostPtr[h * n + j] = c.betaBits[(h * T) + t0 + j]
       gSeg.hostPtr[h * n + j] = c.gVals[(h * T) + t0 + j]
   var stPA = stateB.pa()
-  engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+  engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
     ("prop_gdn_prefill_fp16_c32", stPA,
       (yB.pa(), kSeg.pa(), qSeg.pa(), vSeg.pa(), betaSeg.pa(), gSeg.pa(),
         int32(Hv), int32(Hk), int32(Hv div Hk), int32(n)))
@@ -129,7 +129,7 @@ proc runGdnSteps(
       betaTok.hostPtr[h] = c.betaBits[(h * T) + t]
       gTok.hostPtr[h] = c.gVals[(h * T) + t]
     var stPA = stateB.pa()
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       ("prop_gdn_step_fp16", stPA,
         (yB.pa(), kTok.pa(), qTok.pa(), vTok.pa(), betaTok.pa(), gTok.pa(),
           int32(Hv), int32(Hk), int32(Hv div Hk)))

@@ -51,7 +51,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       var zero: array[2, uint32] = [0'u32, 0'u32]
       engine.copyToDeviceFromHost(oDev, addr zero[0], 2 * sizeof(uint32))
-      engine.run("ptrCopyKernel", cast[pointer](oDev), (cast[pointer](aDev),))
+      engine.launchKernel("ptrCopyKernel", cast[pointer](oDev), (cast[pointer](aDev),))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
       engine.freeDevice(aDev)
@@ -68,7 +68,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       var zero: array[4, uint32] = [0'u32, 0'u32, 0'u32, 0'u32]
       engine.copyToDeviceFromHost(oDev, addr zero[0], a.len * sizeof(uint32))
-      engine.run("structPtrCopyKernel", cast[pointer](oDev),
+      engine.launchKernel("structPtrCopyKernel", cast[pointer](oDev),
                  (PtrArgs(src: cast[pointer](aDev), n: 4),))
       var out32: array[4, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, a.len * sizeof(uint32))

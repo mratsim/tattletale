@@ -38,7 +38,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let fDev = engine.allocDevice(flags.len * sizeof(bool))
       engine.copyToDeviceFromHost(fDev, unsafeAddr flags[0], flags.len * sizeof(bool))
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
+      engine.launchKernel<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
       engine.freeDevice(fDev)
@@ -52,7 +52,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let fDev = engine.allocDevice(flags.len * sizeof(bool))
       engine.copyToDeviceFromHost(fDev, addr flags[0], flags.len * sizeof(bool))
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
+      engine.launchKernel<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
       engine.freeDevice(fDev)
@@ -66,7 +66,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let vDev = engine.allocDevice(vals.len * sizeof(uint32))
       engine.copyToDeviceFromHost(vDev, unsafeAddr vals[0], vals.len * sizeof(uint32))
       let oDev = engine.allocDevice(4 * sizeof(bool))
-      engine.run<<(grid: (4, 1))>>("boolWriteKernel", oDev, (vDev,))
+      engine.launchKernel<<(grid: (4, 1))>>("boolWriteKernel", oDev, (vDev,))
       var outBools: array[4, bool]
       engine.copyToHostFromDevice(addr outBools[0], oDev, 4 * sizeof(bool))
       engine.freeDevice(vDev)

@@ -28,7 +28,7 @@ const kernelCode = cuda:
 var buf: array[2, uint32]
 var engine = bkCuda.init()
 engine.ingest(kernelCode)
-engine.run<<(1, 1)>>("shadowKernel", buf, ())
+engine.launchKernel<<(1, 1)>>("shadowKernel", buf, ())
 # Expected: 0 (outer implicit result, never assigned).
 # Currently works on Blackwell but relies on `return ;` UB.
 doAssert buf[0] == 0, &"shadowIfElse(true): {buf[0]} (expected 0)"

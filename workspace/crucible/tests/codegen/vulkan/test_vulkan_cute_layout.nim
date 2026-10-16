@@ -38,7 +38,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkVulkan.init()
     engine.ingest(kernelVk)
     let oDev = engine.allocDevice(6 * sizeof(uint32))
-    engine.run("cuteKernel", oDev, ())
+    engine.launchKernel("cuteKernel", oDev, ())
     var res: array[6, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 6 * sizeof(uint32))
     engine.freeDevice(oDev)

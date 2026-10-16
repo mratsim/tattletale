@@ -44,7 +44,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let iDev = engine.allocDevice(sizeof(data))
   engine.copyToDeviceFromHost(iDev, addr data[0], sizeof(data))
   let oDev = engine.allocDevice(sizeof(outBuf))
-  engine.run<<(1, 1)>>("reproKernel", oDev, (iDev, 4'i32))
+  engine.launchKernel<<(1, 1)>>("reproKernel", oDev, (iDev, 4'i32))
   engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
   engine.freeDevice(iDev)
   engine.freeDevice(oDev)

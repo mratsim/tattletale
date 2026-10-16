@@ -44,7 +44,7 @@ proc runTest() =
       let oDev = engine.allocDevice(sizeof(uint32))
       var res: array[1, uint32]
       # baseOff = 2 * strideRow + strideCol = 2 * 3 + 1 = 7
-      engine.run("viewCastKernel", oDev, (aDev, int32(4), int32(3)))
+      engine.launchKernel("viewCastKernel", oDev, (aDev, int32(4), int32(3)))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)

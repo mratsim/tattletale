@@ -18,7 +18,7 @@ export gpu_types
 export chevrons
 export kernel_args
 
-export ingest, getArtifact, run, check, deviceName
+export ingest, getArtifact, launchKernel, check, deviceName
 export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFromDevice
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -32,7 +32,7 @@ type
     ##
     ## Usage:
     ##   engine.ingest(source)              # compile kernels, replaces the previous artifact.
-    ##   engine.run("kernel", out, args)    # launch, or engine.run<<grid, blk>> for geometry.
+    ##   engine.launchKernel("kernel", out, args)    # launch, or engine.launchKernel<<grid, blk>> for geometry.
     ##   engine.deviceName()                # the device this engine drives.
     ##
     ## `ingest` compiles the whole source in one shot, one call per engine.
@@ -40,7 +40,7 @@ type
     proc ingest(engine: E, source: string)
     proc getArtifact(engine: E)
     proc deviceName(engine: E): string
-    proc run(engine: E): RunSugar[E]
+    proc launchKernel(engine: E): LaunchSugar[E]
   # Concept procs cannot use `auto` returns, bare signatures only.
 
 # ═════════════════════════════════════════════════════════════════════════

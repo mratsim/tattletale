@@ -62,7 +62,7 @@ proc axpbyReference(expected: var array[N, float32], x, c: array[N, float32], al
 # in the args tuple: x, epi.c.data, dst.layout, epi.alpha, epi.beta, epi.c.layout, epi.storeMask.
 
 proc launchAxpbY[E](engine: var E, dstDev, xDev, cDev: auto, alpha, beta: float32, mask: StoreMask) =
-  engine.run << (grid: (1, 1), blk: (1, 1)) >> ("axpbyKernel", dstDev, (
+  engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> ("axpbyKernel", dstDev, (
     xDev,
     cDev,
     mkLayout(2, 3, 3, 1),

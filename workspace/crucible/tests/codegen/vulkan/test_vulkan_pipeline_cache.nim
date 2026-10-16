@@ -61,7 +61,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var out32: array[2, uint32]
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     doAssert out32[0] == 11 and out32[1] == 22
     echo "  addKernel run 1: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
@@ -69,7 +69,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     b = [30'u32, 40'u32]
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
@@ -87,7 +87,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var out32: array[2, uint32]
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("subKernel", oDev, (aDev, bDev))
+    engine.launchKernel("subKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     doAssert out32[0] == 9 and out32[1] == 18
     echo "  subKernel run 1: [10,20] - [1,2] = [", out32[0], ", ", out32[1], "]"
@@ -95,7 +95,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     b = [10'u32, 10'u32]
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("subKernel", oDev, (aDev, bDev))
+    engine.launchKernel("subKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
@@ -113,7 +113,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(2 * sizeof(uint32))
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)

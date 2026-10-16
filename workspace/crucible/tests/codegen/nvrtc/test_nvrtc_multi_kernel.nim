@@ -23,7 +23,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var buf: array[8, uint32]
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run<<(1, 8)>>("setConstantKernel", oDev, (42'u32,))
+  engine.launchKernel<<(1, 8)>>("setConstantKernel", oDev, (42'u32,))
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   echo "  setConstant(42): ", buf
   for i in 0..7: doAssert buf[i] == 42
@@ -34,7 +34,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(a))
   let bDev = engine.allocDevice(sizeof(b))
   engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
-  engine.run<<(1, 8)>>("addKernel", oDev, (aDev, bDev))
+  engine.launchKernel<<(1, 8)>>("addKernel", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(aDev)
   engine.freeDevice(bDev)

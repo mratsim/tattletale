@@ -20,7 +20,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
       let o0 = engine.allocDevice(sizeof(buf))
-      engine.run<<(1, 1)>>("kernel_const", o0, ())
+      engine.launchKernel<<(1, 1)>>("kernel_const", o0, ())
       engine.copyToHostFromDevice(addr buf[0], o0, sizeof(buf))
       engine.freeDevice(o0)
       check buf[0] == 42
@@ -36,7 +36,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
       let o1 = engine.allocDevice(sizeof(buf))
-      engine.run<<(1, 1)>>("kernel_let", o1, (7'u32,))
+      engine.launchKernel<<(1, 1)>>("kernel_let", o1, (7'u32,))
       engine.copyToHostFromDevice(addr buf[0], o1, sizeof(buf))
       engine.freeDevice(o1)
       check buf[0] == 7
@@ -53,7 +53,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
       let o2 = engine.allocDevice(sizeof(buf))
-      engine.run<<(1, 5)>>("kernel_var", o2, ())
+      engine.launchKernel<<(1, 5)>>("kernel_var", o2, ())
       engine.copyToHostFromDevice(addr buf[0], o2, sizeof(buf))
       engine.freeDevice(o2)
       for i in 0 ..< 5:
@@ -71,7 +71,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
       let o3 = engine.allocDevice(sizeof(buf))
-      engine.run<<(1, 1)>>("kernel_eoa", o3, (41'u32,))
+      engine.launchKernel<<(1, 1)>>("kernel_eoa", o3, (41'u32,))
       engine.copyToHostFromDevice(addr buf[0], o3, sizeof(buf))
       engine.freeDevice(o3)
       check buf[0] == 42
@@ -89,7 +89,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
       let o4 = engine.allocDevice(sizeof(buf))
-      engine.run<<(1, 1)>>("kernel_multi", o4, ())
+      engine.launchKernel<<(1, 1)>>("kernel_multi", o4, ())
       engine.copyToHostFromDevice(addr buf[0], o4, sizeof(buf))
       engine.freeDevice(o4)
       check buf[0] == 53

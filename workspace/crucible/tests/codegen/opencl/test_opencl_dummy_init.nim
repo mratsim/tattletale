@@ -30,7 +30,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo "===="
       var buf: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("dummyKernel", oDev, ())
+      engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check buf[0] == 1
@@ -43,7 +43,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo "===="
       var buf: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("dummyKernel", oDev, ())
+      engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check buf[0] == 1

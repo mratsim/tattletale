@@ -133,7 +133,9 @@ src/
 
 1. Add a printer file under `src/codegen/targets/` exposing `preprocess` and `codegen`.
 2. Wire it into `targets_lang.nim` (`codegen<Backend>` proc) and add a `BackendKind` case in `gpu_compiler.nim`, registering any backend-specific passes and reserved-keyword checks.
-3. Add a `tests/codegen/<backend>/` suite following the naming convention and `engine.run()` requirement in [`AGENTS.md`](AGENTS.md) (or a `manual_*` test if the backend cannot auto-run).
+3. Add a `tests/codegen/<backend>/` suite obeying the naming convention,
+   the `engine.launchKernel()` requirement of [`AGENTS.md`](AGENTS.md).
+   Backends that cannot auto-run get a `manual_*` test.
 
 ## Related docs
 

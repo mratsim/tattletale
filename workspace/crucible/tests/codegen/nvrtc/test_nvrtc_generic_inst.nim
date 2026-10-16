@@ -62,7 +62,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   let o32 = engine.allocDevice(sizeof(buf32))
-  engine.run("genericInstUint32", o32, ())
+  engine.launchKernel("genericInstUint32", o32, ())
   engine.copyToHostFromDevice(addr buf32[0], o32, sizeof(buf32))
   engine.freeDevice(o32)
   echo "  maxGeneric[uint32](10,20)       = ", buf32[0]
@@ -79,7 +79,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var bufI32: array[3, int32]
   let oI32 = engine.allocDevice(sizeof(bufI32))
-  engine.run("genericInstInt32", oI32, ())
+  engine.launchKernel("genericInstInt32", oI32, ())
   engine.copyToHostFromDevice(addr bufI32[0], oI32, sizeof(bufI32))
   engine.freeDevice(oI32)
   echo "  maxGeneric[int32](1,-5)         = ", bufI32[0]

@@ -36,7 +36,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var res: array[2, uint32]
       engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      engine.run("ternaryKernel", oDev, (aDev, bDev))
+      engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
       check res[0] == 7
       check res[1] == 1
@@ -44,7 +44,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       b[0] = 9
       engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      engine.run("ternaryKernel", oDev, (aDev, bDev))
+      engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)

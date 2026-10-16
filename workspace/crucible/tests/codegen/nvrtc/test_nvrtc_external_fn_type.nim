@@ -56,7 +56,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # Kernel 1: tripletSum
   var buf1: array[1, uint32]
   let oDev1 = engine.allocDevice(sizeof(buf1))
-  engine.run("sumKernel", oDev1, ())
+  engine.launchKernel("sumKernel", oDev1, ())
   engine.copyToHostFromDevice(addr buf1[0], oDev1, sizeof(buf1))
   engine.freeDevice(oDev1)
   echo "  sumKernel (100+200+300) = ", buf1[0]
@@ -65,7 +65,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # Kernel 2: compose + reduce
   var buf2: array[3, uint32]
   let oDev2 = engine.allocDevice(sizeof(buf2))
-  engine.run("maxKernel", oDev2, ())
+  engine.launchKernel("maxKernel", oDev2, ())
   engine.copyToHostFromDevice(addr buf2[0], oDev2, sizeof(buf2))
   engine.freeDevice(oDev2)
   echo "  maxKernel compose(1,2,3) = ", buf2[0]

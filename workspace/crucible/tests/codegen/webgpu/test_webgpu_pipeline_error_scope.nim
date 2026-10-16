@@ -23,7 +23,7 @@ proc runTest() =
   let aDev = engine.allocDevice(a.len * sizeof(uint32))
   let oDev = engine.allocDevice(res.len * sizeof(uint32))
   engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-  engine.run("doubleKernel", oDev, (aDev,))
+  engine.launchKernel("doubleKernel", oDev, (aDev,))
   engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
   engine.freeDevice(aDev)
   engine.freeDevice(oDev)

@@ -29,7 +29,7 @@ proc runTest() =
       check "threadgroup_barrier(mem_flags::mem_device)" in msl
       check "threadgroup_barrier(mem_flags::mem_threadgroup)" notin msl
       let oDev = engine.allocDevice(128 * sizeof(uint32))
-      engine.run<<(grid: (2, 1), blk: (64, 1))>>("deviceExchangeKernel", oDev, ())
+      engine.launchKernel<<(grid: (2, 1), blk: (64, 1))>>("deviceExchangeKernel", oDev, ())
       var res: array[128, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 128 * sizeof(uint32))
       engine.freeDevice(oDev)

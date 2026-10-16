@@ -32,21 +32,24 @@ imports. Only engine/runtime tests use the public API (below).
 | Prefix | When to use |
 |--------|-------------|
 | `test_ir_<desc>.nim` | IR-level tests — INTERNAL codegen API (deep imports), no engine |
-| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — `import workspace/crucible`; `bkCuda.init()` + `engine.ingest()` + `engine.run()` (or `engine.run<<(grid, blk)>>(...)`) |
-| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.run()` |
-| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.run()` |
-| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.run()` |
-| `test_metal_<desc>.nim` | Auto-runnable on Metal (macOS) — `import workspace/crucible`; `bkMetal.init()` + `engine.ingest()` + `engine.run()` (or `engine.run<<(grid, blk)>>(...)`; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
+| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — `import workspace/crucible`; `bkCuda.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`) |
+| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `test_metal_<desc>.nim` | Auto-runnable on Metal (macOS) — `import workspace/crucible`; `bkMetal.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
 | `manual_<backend>_<desc>.nim` | **Manual only** — tests that expect a compile-time error (e.g., `proc that won't compile`). These cannot auto-run. |
 
 ### Test Requirements
 
 **One import for everything:** `import workspace/crucible` re-exports the DSL
 macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:`) and the engine API (`bkCuda`/
-`bkOpenCL`/`bkVulkan`/`bkWGSL`/`bkMetal`, `init`, `ingest`, `getArtifact`, `run`, `check`,
+`bkOpenCL`/`bkVulkan`/`bkWGSL`/`bkMetal`, `init`, `ingest`, `getArtifact`, `launchKernel`, `check`,
 `deviceName`). IR tests are the exception — they keep deep internal imports.
 
-**All tests must call `engine.run()`** (or the chevron form `engine.run<<(grid, blk)>>(...)` — no space around `<<`/`>>`), not just `getArtifact()`/`ingest()`. A compile check is not enough — it can produce valid CUDA that computes wrong results.
+**All tests must call `engine.launchKernel()`** or the chevron form
+`engine.launchKernel<<(grid, blk)>>(...)` with no space around `<<`/`>>`,
+not just `getArtifact()`/`ingest()`. A compile check is not enough, it can
+produce valid CUDA that computes wrong results.
 
 **Wrap the engine-execution section in a private `proc runTest()`** and call it
 from `when isMainModule: runTest()`. The uniform name makes tests grep-able, and
@@ -70,9 +73,9 @@ Exception: tests for backends not supported in the current environment. For thos
 ## Engine API — per-target notes
 
 The engine lifecycle: `init()` → `ingest(source)` → `getArtifact()` →
-`run` (re-ingest replaces the context; RAII releases the old one). Args tuple
-follows kernel-param order minus the output; scalars are by-value (4-byte),
-pointers become device buffers.
+`launchKernel` (re-ingest replaces the context, RAII releases the old one).
+The args tuple order matches the kernel params minus the output, scalars
+are by-value (4-byte), pointers become device buffers.
 
 - **CUDA / OpenCL** — `grid`/`blk` are host-side launch config; `blk` is free
   (not shader-baked).
@@ -154,7 +157,7 @@ emit the native spellings below.
   therefore changes with the kernel body. Do not assert WGSL param naming,
   ordering, or injection-set text. Stable negative guards such as
   `@builtin(workgroup_size) notin src` are still expected.
-  Assert execution results (`engine.run()`).
+  Assert execution results (`engine.launchKernel()`).
 - `threads_per_threadgroup` is deferred on WGSL. WGSL has no `workgroup_size`
   builtin, only the `@workgroup_size` attribute, so referencing it in a `webgpu:` kernel is a loud compile error, by design.
   `thread_index_in_threadgroup` maps to WGSL's native `local_invocation_index`.
@@ -177,7 +180,7 @@ A "minimal repro" for a crucible bug:
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
 - Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` / `metal:` block
 - Demonstrates the failing pattern in the simplest possible way
-- Runs the kernel via `engine.run()` to verify correctness
+- Runs the kernel via `engine.launchKernel()` to verify correctness
 
 ## When the environment lacks a backend
 

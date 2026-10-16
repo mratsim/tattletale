@@ -68,7 +68,7 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
   let inpDev = engine.allocDevice(width * sizeof(float32))
   let outDev = engine.allocDevice(outW * sizeof(float32))
   engine.copyToDeviceFromHost(inpDev, addr inp[0], width * sizeof(float32))
-  engine.run<<(grid: (1, 1), blk: (64, 1))>>(launcher, outDev, (inpDev,))
+  engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>(launcher, outDev, (inpDev,))
   engine.copyToHostFromDevice(addr outp[0], outDev, outW * sizeof(float32))
   engine.freeDevice(inpDev)
   engine.freeDevice(outDev)

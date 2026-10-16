@@ -39,7 +39,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(code1)
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("kernelMain", oDev, ())
+      engine.launchKernel("kernelMain", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
@@ -50,7 +50,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(code2)
       echo code2
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("kernelMain", oDev, ())
+      engine.launchKernel("kernelMain", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)

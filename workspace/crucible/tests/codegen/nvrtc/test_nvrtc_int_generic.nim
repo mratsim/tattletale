@@ -28,7 +28,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run("testIntGeneric", oDev, ())
+  engine.launchKernel("testIntGeneric", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   doAssert buf[0] == 1

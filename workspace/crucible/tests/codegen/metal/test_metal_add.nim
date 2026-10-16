@@ -3,7 +3,7 @@
 ##   - plain buffer add (addKernel)
 ##   - an external struct type + external device fn (vec2AddKernel)
 ##   - a generic device fn instantiated to uint32 (maxKernel)
-## Every kernel runs through `engine.run()` and the outputs are asserted
+## Every kernel runs through `engine.launchKernel()` and the outputs are asserted
 ## byte-exact, never print-only.
 ##
 ## Tested ABI (macOS 26.6.1, 2026-08-17): libobjc, Metal.framework, CLT SDK 26.5,
@@ -72,7 +72,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(2 * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-      engine.run("addKernel", oDev, (aDev, bDev))
+      engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
       engine.freeDevice(aDev)
@@ -91,7 +91,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(2 * sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-      engine.run("vec2AddKernel", oDev, (aDev, bDev))
+      engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
       engine.freeDevice(aDev)
@@ -110,7 +110,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(sizeof(uint32))
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-      engine.run("maxKernel", oDev, (aDev, bDev))
+      engine.launchKernel("maxKernel", oDev, (aDev, bDev))
       var outVal: array[1, uint32]
       engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
       engine.freeDevice(aDev)

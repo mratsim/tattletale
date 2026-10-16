@@ -32,7 +32,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kernelInline)
     let o1 = engine.allocDevice(sizeof(buf))
-    engine.run("kernelMain", o1, ())
+    engine.launchKernel("kernelMain", o1, ())
     engine.copyToHostFromDevice(addr buf[0], o1, sizeof(buf))
     engine.freeDevice(o1)
     doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
@@ -52,7 +52,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kernelFnRet)
     let o2 = engine.allocDevice(sizeof(buf))
-    engine.run("kernelMain", o2, ())
+    engine.launchKernel("kernelMain", o2, ())
     engine.copyToHostFromDevice(addr buf[0], o2, sizeof(buf))
     engine.freeDevice(o2)
     doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"

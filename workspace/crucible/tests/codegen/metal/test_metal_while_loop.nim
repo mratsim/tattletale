@@ -23,7 +23,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(whileMsl)
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run("whileKernel", oDev, ())
+      engine.launchKernel("whileKernel", oDev, ())
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
       engine.freeDevice(oDev)

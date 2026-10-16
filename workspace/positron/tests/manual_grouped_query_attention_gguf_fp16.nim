@@ -114,7 +114,7 @@ proc tensorFromFp16(hs: seq[uint16], rows, cols: int): F.Tensor =
   for i in 0 ..< hs.len: f[i] = fp16ToFp32(hs[i])
   toTensor(f).reshape(rows, cols)
 proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16]): AttnTensors =
-  ## Host orchestration, one `engine.run` per launcher from ggufAttnMsl:
+  ## Host orchestration, one `engine.launchKernel` per launcher from ggufAttnMsl:
   ## - the q/k/v projections
   ## - the fused qk-norm+rope
   ## - the host cache write, write-before staging, decode row
@@ -132,17 +132,17 @@ proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16])
   let nKv = p.Nkv * p.D
   # the q/k/v projections (K = hidden, N = H·D / Nkv·D)
   var qBufS = newSeq[uint16](nTokens * nQ)
-  engine.run << (grid: (nQ div 128, (nTokens + 31) div 32, 1),
+  engine.launchKernel << (grid: (nQ div 128, (nTokens + 31) div 32, 1),
                  blk: (32, 1)) >> (
     launcher(p.qScheme), qBufS,
     (x, p.qw, int32(nTokens), int32(p.hidden), int32(nQ), p.qRowBytes))
   var kBufS = newSeq[uint16](nTokens * nKv)
-  engine.run << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
+  engine.launchKernel << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
                  blk: (32, 1)) >> (
     launcher(p.kScheme), kBufS,
     (x, p.kw, int32(nTokens), int32(p.hidden), int32(nKv), p.kRowBytes))
   var vBufS = newSeq[uint16](nTokens * nKv)
-  engine.run << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
+  engine.launchKernel << (grid: (nKv div 128, (nTokens + 31) div 32, 1),
                  blk: (32, 1)) >> (
     launcher(p.vScheme), vBufS,
     (x, p.vw, int32(nTokens), int32(p.hidden), int32(nKv), p.vRowBytes))
@@ -153,12 +153,12 @@ proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16])
   let (cosQ, sinQ) = buildRopeCosSin(nTokens, p.H, p.D, p.positions, p.theta)
   let (cosK, sinK) = buildRopeCosSin(nTokens, p.Nkv, p.D, p.positions, p.theta)
   var qRopeS = newSeq[uint16](nTokens * nQ)
-  engine.run << (grid: (1, nTokens, headBlocksQ), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (1, nTokens, headBlocksQ), blk: (32, 1)) >> (
     "ggufQkNormRopeD128", qRopeS,
     (qBufS, p.normGammaQ, cosQ, sinQ,
      int32(nQ), int32(p.H), int32(headBlocksQ), int32(0), p.eps))
   var kRopeS = newSeq[uint16](nTokens * nKv)
-  engine.run << (grid: (1, nTokens, headBlocksK), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (1, nTokens, headBlocksK), blk: (32, 1)) >> (
     "ggufQkNormRopeD128", kRopeS,
     (kBufS, p.normGammaK, cosK, sinK,
      int32(nKv), int32(p.Nkv), int32(headBlocksK), int32(0), p.eps))
@@ -198,14 +198,14 @@ proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16])
     let qLen = p.cuSeqlensQ[s + 1] - p.cuSeqlensQ[s]
     xBlocks = max(xBlocks, (qLen.int + 7) div 8)
   var attnOutS = newSeq[uint16](nTokens * nQ)
-  engine.run << (grid: (xBlocks, p.H, numSeqs), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (xBlocks, p.H, numSeqs), blk: (32, 1)) >> (
     "ggufPagedD128", attnOutS,
     (qRopeS, kSlab, vSlab, p.blockTable, p.cacheSeqlens, p.cuSeqlensQ,
      int32(numSeqs), int32(p.H), int32(p.Nkv),
      int32(p.maxPages), int32(p.pageSize)))
   # the o_proj over the attention output (num_qo_tokens, H·D) → hidden
   var outBufS = newSeq[uint16](nTokens * p.hidden)
-  engine.run << (grid: (p.hidden div 128, (nTokens + 31) div 32, 1),
+  engine.launchKernel << (grid: (p.hidden div 128, (nTokens + 31) div 32, 1),
                  blk: (32, 1)) >> (
     launcher(p.oScheme), outBufS,
     (attnOutS, p.ow, int32(nTokens), int32(nQ),

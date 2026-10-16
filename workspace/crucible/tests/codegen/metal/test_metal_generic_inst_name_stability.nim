@@ -76,7 +76,7 @@ proc runKernel(artifact: string, launcher: string): seq[float32] =
   let iDev = engine.allocDevice(sizeof(float32))
   engine.copyToDeviceFromHost(iDev, addr inp[0], sizeof(float32))
   let oDev = engine.allocDevice(sizeof(float32))
-  engine.run<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
+  engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
   engine.copyToHostFromDevice(addr outp[0], oDev, sizeof(float32))
   engine.freeDevice(iDev)
   engine.freeDevice(oDev)

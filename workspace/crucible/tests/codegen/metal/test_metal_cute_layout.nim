@@ -41,7 +41,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var res: array[6, uint32]
       let oDev = engine.allocDevice(6 * sizeof(uint32))
       engine.copyToDeviceFromHost(oDev, addr res[0], 6 * sizeof(uint32))
-      engine.run("cuteKernel", oDev, ())
+      engine.launchKernel("cuteKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 6 * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 10

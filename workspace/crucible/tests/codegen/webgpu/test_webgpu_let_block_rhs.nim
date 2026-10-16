@@ -43,7 +43,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelDirect
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("dummyKernel", oDev, ())
+      engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 1
@@ -54,7 +54,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelConstLet
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("dummyKernel", oDev, ())
+      engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 1
@@ -65,7 +65,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       echo kernelBlock
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("dummyKernel", oDev, ())
+      engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 1

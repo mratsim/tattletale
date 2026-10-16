@@ -258,7 +258,7 @@ proc moeFwdConfigGuard*(
   ##
   ## Raises with the offending dimension named. The device entry itself
   ## only drops the launch, the GPU has no message channel, so a caller
-  ## runs this companion before `engine.run`.
+  ## runs this companion before `engine.launchKernel`.
   ##
   ## Accepted config:
   ##   - num_tokens, hidden, moe_intermediate at least 1
@@ -320,7 +320,7 @@ proc moe_fwd*(
   ## - a config beyond the compiled-in maxima (n_routed_experts > 512,
   ##   top_k > MaxTopK, top_k > n_routed_experts, non-positive dim) drops
   ##   the launch, `moeFwdConfigGuard` raises naming the offending dim,
-  ##   run it before each `engine.run`
+  ##   run it before each `engine.launchKernel`
   ## - register budget near 2 live 32×32 fp32 accumulators (the gHalf/uHalf
   ##   pair) plus transients, sized once for the largest accepted config
   ##

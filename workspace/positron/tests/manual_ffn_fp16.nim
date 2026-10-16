@@ -62,7 +62,7 @@ proc gatedMlpSiluKernel(xf, wgf, wuf, wdf: seq[float32], M, K, NIntm, NOut: int)
     wdb[i] = fp32ToFp16(wdf[i])
   var outO = newSeq[uint16](M * NOut)
   let args = (xb, wgb, wub, wdb, int32(M), int32(K), int32(NIntm), int32(NOut))
-  engine.run << (grid: (NOut div 32, (M + 31) div 32, 1), blk: (32, 1)) >> ("gatedMlpSiluKernel", outO, args)
+  engine.launchKernel << (grid: (NOut div 32, (M + 31) div 32, 1), blk: (32, 1)) >> ("gatedMlpSiluKernel", outO, args)
   var outF = newSeq[float32](M * NOut)
   for i in 0 ..< M * NOut:
     outF[i] = fp16ToFp32(outO[i])

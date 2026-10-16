@@ -46,7 +46,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernelDirect)
       let oA = engine.allocDevice(sizeof(output))
-      engine.run<<(1, 1)>>("kernel", oA, ())
+      engine.launchKernel<<(1, 1)>>("kernel", oA, ())
       engine.copyToHostFromDevice(addr output[0], oA, sizeof(output))
       engine.freeDevice(oA)
       check output[0] == 1
@@ -57,7 +57,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(code)
       let oB = engine.allocDevice(sizeof(output))
-      engine.run<<(1, 1)>>("kernel", oB, ())
+      engine.launchKernel<<(1, 1)>>("kernel", oB, ())
       engine.copyToHostFromDevice(addr output[0], oB, sizeof(output))
       engine.freeDevice(oB)
       check output[0] == 1
@@ -68,7 +68,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(code)
       let oC = engine.allocDevice(sizeof(output))
-      engine.run<<(1, 1)>>("kernel", oC, ())
+      engine.launchKernel<<(1, 1)>>("kernel", oC, ())
       engine.copyToHostFromDevice(addr output[0], oC, sizeof(output))
       engine.freeDevice(oC)
       check output[0] == 1

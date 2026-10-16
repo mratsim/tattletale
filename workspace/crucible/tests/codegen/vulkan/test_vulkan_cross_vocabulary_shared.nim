@@ -33,7 +33,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   # 2 work-groups of (4, 2). Each group stages identical values, so the
   # group count is not pinned by this test; the neighbor-slot dependency
   # is within-group.
-  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
+  engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
   var res: array[8, uint32]
   engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
   engine.freeDevice(oDev)

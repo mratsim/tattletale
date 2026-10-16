@@ -37,7 +37,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(kernelCode)
     var out32: array[4, uint32]
     let oDev = engine.allocDevice(4 * sizeof(uint32))
-    engine.run("kernelMain", oDev, ())
+    engine.launchKernel("kernelMain", oDev, ())
     engine.copyToHostFromDevice(addr out32[0], oDev, 4 * sizeof(uint32))
     engine.freeDevice(oDev)
     doAssert out32[0] == 7, "set field must keep its value"

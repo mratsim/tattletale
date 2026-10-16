@@ -39,7 +39,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 4 threads explicitly.
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run<<(1, 4)>>("nodeviceKernel", oDev, ())
+  engine.launchKernel<<(1, 4)>>("nodeviceKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
 

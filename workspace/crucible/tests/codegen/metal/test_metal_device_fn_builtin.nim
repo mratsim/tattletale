@@ -22,7 +22,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(laneIdMsl)
       let oDev = engine.allocDevice(32 * sizeof(uint32))
-      engine.run<<(grid: (1, 1), blk: (32, 1))>>("fillLaneKernel", oDev, ())
+      engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("fillLaneKernel", oDev, ())
       var res: array[32, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 32 * sizeof(uint32))
       engine.freeDevice(oDev)

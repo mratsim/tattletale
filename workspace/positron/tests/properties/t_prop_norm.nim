@@ -108,7 +108,7 @@ proc runShape(engine: HwEngine, M, cases: int, seed: uint64, label: string) =
     for i in 0 ..< nElems: xB.hostPtr[i] = xBits[i]
 
   proc launch() =
-    engine.run << (grid: (1, int((M + 7) div 8), 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (1, int((M + 7) div 8), 1), blk: (32, 1, 1)) >>
       ("prop_norm_res_in_fp16", outPA, (xPA, rPA, wPA, int32(M), int32(C), eps))
     inc launches
 

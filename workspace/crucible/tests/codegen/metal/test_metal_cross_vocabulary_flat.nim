@@ -29,7 +29,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "uint thread_index_in_threadgroup [[thread_index_in_threadgroup]]" in msl
       check "threadgroup_barrier(mem_flags::mem_threadgroup)" in msl
       let oDev = engine.allocDevice((64 + 8) * sizeof(uint32))
-      engine.run<<(grid: (8, 1), blk: (8, 1))>>("crossVocabFlat", oDev, ())
+      engine.launchKernel<<(grid: (8, 1), blk: (8, 1))>>("crossVocabFlat", oDev, ())
       var res: array[64 + 8, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, (64 + 8) * sizeof(uint32))
       engine.freeDevice(oDev)

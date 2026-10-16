@@ -112,7 +112,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(2 * sizeof(int32))
       var zero: array[2, int32] = [0'i32, 0]
       engine.copyToDeviceFromHost(oDev, addr zero[0], 2 * sizeof(int32))
-      engine.run("idxReadKernel", cast[pointer](oDev), (5'i32, inDev))
+      engine.launchKernel("idxReadKernel", cast[pointer](oDev), (5'i32, inDev))
       var out32: array[2, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(int32))
       engine.freeDevice(inDev)
@@ -128,7 +128,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var p = GemmParams(m: 1, n: 2, k: 3,
                          strideA: 4_000_000'i64, strideB: 5_000_000'i64,
                          batchA: 6)
-      engine.run("paramsReadKernel", cast[pointer](oDev), (p,))
+      engine.launchKernel("paramsReadKernel", cast[pointer](oDev), (p,))
       var out32: array[6, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 6 * sizeof(int32))
       engine.freeDevice(oDev)
@@ -142,7 +142,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var zero: array[5, int32] = [0'i32, 0, 0, 0, 0]
       engine.copyToDeviceFromHost(oDev, addr zero[0], 5 * sizeof(int32))
       var g = GapStruct(a: 1, b: 2, c: 3, big: 4_000_000'i64, f: 2.5'f32)
-      engine.run("gapReadKernel", cast[pointer](oDev), (g,))
+      engine.launchKernel("gapReadKernel", cast[pointer](oDev), (g,))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5 * sizeof(int32))
       engine.freeDevice(oDev)
@@ -158,7 +158,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var zero: array[5, int32] = [0'i32, 0, 0, 0, 0]
       engine.copyToDeviceFromHost(oDev, addr zero[0], 5 * sizeof(int32))
       var p = MixParams(m: 1, n: 2, k: 3, iters: 4)
-      engine.run("mixReadKernel", cast[pointer](oDev),
+      engine.launchKernel("mixReadKernel", cast[pointer](oDev),
                  (cast[pointer](inDev), p, 7'i32))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5 * sizeof(int32))

@@ -40,7 +40,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkCuda.init()
       engine.ingest(kernel)
       let oDev = engine.allocDevice(sizeof(output))
-      engine.run<<(1, 1)>>("kernel", oDev, ())
+      engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
       engine.freeDevice(oDev)
       # 10*1 + 20*2 + 30*3 = 10 + 40 + 90 = 140

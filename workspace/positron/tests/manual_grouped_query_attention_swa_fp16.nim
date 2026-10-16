@@ -45,7 +45,7 @@ proc swaAttnKernel(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, wind
               fp32sToFp16(padRows8(vf, numKv, Nkv * D)),
               int32(numQo), int32(numKv), int32(qOffset), int32(H), int32(Nkv), int32(window))
   var outO = newSeq[uint16](numQo * H * D)
-  engine.run << (grid: ((numQo + 7) div 8, H, 1), blk: (32, 1)) >> ("swaD" & $D, outO, args)
+  engine.launchKernel << (grid: ((numQo + 7) div 8, H, 1), blk: (32, 1)) >> ("swaD" & $D, outO, args)
   result = toTensor(fp16sToF32(outO)).reshape(numQo, H, D)
 
 proc swaAttnReference(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, window, D: int): F.Tensor =

@@ -47,22 +47,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let xDev = engine.allocDevice(x.len * sizeof(int32))
       let oDev = engine.allocDevice(sizeof(int32))
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifDispatch", oDev, (xDev,))
+      engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 10
       x[0] = 1
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifDispatch", oDev, (xDev,))
+      engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 20
       x[0] = 2
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifDispatch", oDev, (xDev,))
+      engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 30
       x[0] = 3
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifDispatch", oDev, (xDev,))
+      engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
@@ -78,17 +78,17 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let xDev = engine.allocDevice(x.len * sizeof(int32))
       let oDev = engine.allocDevice(sizeof(int32))
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifNoElse", oDev, (xDev,))
+      engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 1
       x[0] = 1
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifNoElse", oDev, (xDev,))
+      engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       check res[0] == 2
       x[0] = 2
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(int32))
-      engine.run("elifNoElse", oDev, (xDev,))
+      engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(int32))
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)

@@ -66,7 +66,7 @@ proc runTest() =
   let cDev = engine.allocDevice(N * sizeof(uint16))
   engine.copyToDeviceFromHost(aDev, addr A[0], N * sizeof(uint16))
   engine.copyToDeviceFromHost(bDev, addr B[0], N * sizeof(uint16))
-  engine.run("f16MulKernel", cDev, (aDev, bDev))
+  engine.launchKernel("f16MulKernel", cDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr C[0], cDev, N * sizeof(uint16))
   engine.freeDevice(aDev)
   engine.freeDevice(bDev)

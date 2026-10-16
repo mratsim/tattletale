@@ -30,7 +30,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(kernelCode)
     var outVal: array[1, uint32]
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("kernelMain", oDev, ())
+    engine.launchKernel("kernelMain", oDev, ())
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
     doAssert outVal[0] == 42

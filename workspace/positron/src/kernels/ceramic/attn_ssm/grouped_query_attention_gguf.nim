@@ -25,9 +25,9 @@
 ##   q', k', v + the paged cache ──► [ paged attention ] ──► o (T, H, 128)
 ##
 
-## Every kernel takes the output buffer as first parameter;
-## engine.run binds the separate outBuf argument to it and the
-## args tuple to the rest.
+## Every kernel takes the output buffer as first parameter.
+## engine.launchKernel binds the separate outBuf argument to it, and binds
+## the args tuple to the rest.
 ##
 ## Orchestration (projection, qk-norm+rope, cache write, paged
 ## attention, o_proj) is the caller's job.

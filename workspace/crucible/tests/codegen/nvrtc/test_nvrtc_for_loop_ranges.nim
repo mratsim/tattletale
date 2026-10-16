@@ -20,7 +20,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kInfix)
     let oDev = engine.allocDevice(sizeof(buf1))
-    engine.run<<(1, 4)>>("infixRangeKernel", oDev, ())
+    engine.launchKernel<<(1, 4)>>("infixRangeKernel", oDev, ())
     engine.copyToHostFromDevice(addr buf1[0], oDev, sizeof(buf1))
     engine.freeDevice(oDev)
   doAssert buf1[0] == 10, &"range [0]: got {buf1[0]}"
@@ -39,7 +39,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kBodyAccess)
     let oDev = engine.allocDevice(sizeof(buf2))
-    engine.run<<(1, 2)>>("bodyAccessKernel", oDev, ())
+    engine.launchKernel<<(1, 2)>>("bodyAccessKernel", oDev, ())
     engine.copyToHostFromDevice(addr buf2[0], oDev, sizeof(buf2))
     engine.freeDevice(oDev)
   doAssert buf2[0] == 200, &"body access [0]: got {buf2[0]}"
@@ -59,7 +59,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkCuda.init()
     engine.ingest(kVarBound)
     let oDev = engine.allocDevice(sizeof(buf3))
-    engine.run<<(1, 2)>>("varBoundKernel", oDev, ())
+    engine.launchKernel<<(1, 2)>>("varBoundKernel", oDev, ())
     engine.copyToHostFromDevice(addr buf3[0], oDev, sizeof(buf3))
     engine.freeDevice(oDev)
   doAssert buf3[0] == 300, &"var bound [0]: got {buf3[0]}"

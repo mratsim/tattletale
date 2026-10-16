@@ -31,7 +31,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run("varArrayAsmKernel", oDev, ())
+  engine.launchKernel("varArrayAsmKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]

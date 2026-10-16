@@ -84,7 +84,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelA)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testA", oDev, ())
+    engine.launchKernel("testA", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
@@ -93,7 +93,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelB)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testB", oDev, ())
+    engine.launchKernel("testB", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
@@ -102,7 +102,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelC)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testC", oDev, ())
+    engine.launchKernel("testC", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
@@ -111,7 +111,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelD)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testD", oDev, ())
+    engine.launchKernel("testD", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
@@ -120,7 +120,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelE)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testE", oDev, ())
+    engine.launchKernel("testE", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)
@@ -129,7 +129,7 @@ suite "Vulkan - constexpr tuple init":
     var engine = bkVulkan.init()
     engine.ingest(kernelF)
     let oDev = engine.allocDevice(sizeof(uint32))
-    engine.run("testF", oDev, ())
+    engine.launchKernel("testF", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
     engine.freeDevice(oDev)

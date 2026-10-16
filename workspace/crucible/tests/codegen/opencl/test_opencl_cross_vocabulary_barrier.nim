@@ -28,7 +28,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   # group count is not pinned by this test; the neighbor-slot dependency
   # is within-group.
   let oDev = engine.allocDevice(8 * sizeof(uint32))
-  engine.run<<(grid: (2, 1), blk: (4, 2))>>("crossVocabBarrierKernel", oDev, ())
+  engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabBarrierKernel", oDev, ())
   engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
   engine.freeDevice(oDev)
   for i in 0 ..< 8:

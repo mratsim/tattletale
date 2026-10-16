@@ -48,7 +48,7 @@ proc runTest() =
       check "Pair p;" in msl
       check "thread uint a" notin msl
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run("varParamKernel", oDev, ())
+      engine.launchKernel("varParamKernel", oDev, ())
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
       engine.freeDevice(oDev)

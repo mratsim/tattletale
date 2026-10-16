@@ -34,13 +34,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let bDev = engine.allocDevice(sizeof(b))
   engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run<<(1, 10)>>("vec10_add", oDev, (aDev, bDev))
+  engine.launchKernel<<(1, 10)>>("vec10_add", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   echo "  vec10_add: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] + b[i]
 
-  engine.run<<(1, 10)>>("vec10_mul", oDev, (aDev, bDev))
+  engine.launchKernel<<(1, 10)>>("vec10_mul", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(aDev)
   engine.freeDevice(bDev)

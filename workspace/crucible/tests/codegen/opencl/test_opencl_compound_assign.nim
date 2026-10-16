@@ -33,7 +33,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     let aDev = engine.allocDevice(a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     let oDev = engine.allocDevice(2 * sizeof(uint32))
-    engine.run("accKernel", oDev, (aDev,))
+    engine.launchKernel("accKernel", oDev, (aDev,))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(oDev)

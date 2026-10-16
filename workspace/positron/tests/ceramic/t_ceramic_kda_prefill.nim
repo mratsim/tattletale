@@ -246,7 +246,7 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen, 
       yB.hostPtr[i] = 0
 
   proc launch(si: PrefillInputs) =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       (kernelName, statePA,
         (yPA, vPA, kPA, qPA, cumulogdecayPA, betaPA, qScale,
           int32(Hv), int32(Hk), int32(hkRatio), int32(T)))

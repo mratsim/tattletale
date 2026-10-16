@@ -30,7 +30,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run("boundaryKernel", oDev, ())
+  engine.launchKernel("boundaryKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"nested val: {buf[0]}"

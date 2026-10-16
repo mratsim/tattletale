@@ -100,7 +100,7 @@ proc runTest() =
     var gpuC = newSeq[float32](M * N)
     engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(float32))
     engine.copyToDeviceFromHost(bDev, addr B[0], B.len * sizeof(float32))
-    engine.run << (grid: (1, 1), blk: (32, 1)) >>
+    engine.launchKernel << (grid: (1, 1), blk: (32, 1)) >>
       ("gemmTileKernel", cDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr gpuC[0], cDev, M * N * sizeof(float32))
     var worst = 0.0'f32
@@ -131,7 +131,7 @@ proc runTest() =
         refC[m + n * M] = 1.0'f32 + acc
     engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(float32))
     engine.copyToDeviceFromHost(bDev, addr B[0], B.len * sizeof(float32))
-    engine.run << (grid: (1, 1), blk: (32, 1)) >>
+    engine.launchKernel << (grid: (1, 1), blk: (32, 1)) >>
       ("gemmTileDistinctCKernel", cDev, (aDev, bDev))
     var gpuC = newSeq[float32](M * N)
     engine.copyToHostFromDevice(addr gpuC[0], cDev, M * N * sizeof(float32))

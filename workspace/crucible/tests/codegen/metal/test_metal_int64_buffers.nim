@@ -32,7 +32,7 @@ proc runTest() =
       let bDev = engine.allocDevice(b.len * sizeof(uint64))
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint64))
       let oDev = engine.allocDevice(2 * sizeof(uint64))
-      engine.run("int64Kernel", oDev, (aDev, bDev))
+      engine.launchKernel("int64Kernel", oDev, (aDev, bDev))
       var res: array[2, uint64]
       engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint64))
       engine.freeDevice(aDev)

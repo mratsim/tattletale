@@ -25,7 +25,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(paramMsl)
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("paramKernel", oDev, ())
+      engine.launchKernel("paramKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)

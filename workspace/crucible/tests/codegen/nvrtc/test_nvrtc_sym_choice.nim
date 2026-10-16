@@ -22,7 +22,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run<<(1, 1)>>("symChoiceKernel", oDev, ())
+  engine.launchKernel<<(1, 1)>>("symChoiceKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   echo "  output: [", buf[0], ", ", buf[1], "]"

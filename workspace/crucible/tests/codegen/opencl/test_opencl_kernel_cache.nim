@@ -34,7 +34,7 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     let oDev = engine.allocDevice(sizeof(uint32))
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     doAssert outVal[0] == 11
 
@@ -42,7 +42,7 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     b = [200'u32]
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
@@ -63,12 +63,12 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     let oDev = engine.allocDevice(sizeof(uint32))
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     doAssert outVal[0] == 3
 
     engine.ingest(kernelCode2)
-    engine.run("addKernel", oDev, (aDev, bDev))
+    engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)

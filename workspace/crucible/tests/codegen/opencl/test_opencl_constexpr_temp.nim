@@ -75,7 +75,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelA)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testA", oDev, ())
+      engine.launchKernel("testA", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 1
@@ -85,7 +85,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelB)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testB", oDev, ())
+      engine.launchKernel("testB", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 128
@@ -95,7 +95,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelC)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testC", oDev, ())
+      engine.launchKernel("testC", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 1
@@ -105,7 +105,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelD)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testD", oDev, ())
+      engine.launchKernel("testD", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 0
@@ -115,7 +115,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelE)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testE", oDev, ())
+      engine.launchKernel("testE", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 0
@@ -125,7 +125,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelF)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("testF", oDev, ())
+      engine.launchKernel("testF", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 8

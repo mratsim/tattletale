@@ -114,7 +114,7 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
     let
       gridX = rng.rand(1 .. 2 * ceil_div(M, 32))
       gridY = rng.rand(1 .. 2 * ceil_div(N, 32))
-    engine.wrap_and_run gemm(tiledMma(float32, float16, float16, TileM, TileN, TileK),
+    engine.launchDeviceFn gemm(tiledMma(float32, float16, float16, TileM, TileN, TileK),
                              dD, alpha, dA, dB, beta, dC) do:
       grid = (gridX, gridY)
       blk = (32, 1)

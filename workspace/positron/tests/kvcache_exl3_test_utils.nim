@@ -19,8 +19,8 @@ import ../src/kernels/ceramic/linear_quant/kvcache_exl3
 #  The metal block. One launcher per kernel dispatches over runtime
 #  bits/compander int32 args to the 6 static instantiations (nested
 #  if/else: the crucible codegen drops elif branches). First param =
-#  the output buffer: engine.run binds the separate outBuf argument to
-#  it and the args tuple to the rest. pageSize = 256 and D = 128 baked
+#  the output buffer: engine.launchKernel binds the separate outBuf argument
+#  to it and the args tuple to the rest. pageSize = 256 and D = 128 baked
 #  into every call.
 # ════════════════════════════════════════
 
@@ -519,7 +519,7 @@ proc runKvCombo*(engine: var auto; d: KvCase; bits, compander: int;
   # ── the kernel quant (cache_seqlens = 0: the appended rows) ──
   var kq = newSeq[uint32](quantLen)
   var rowsZero = newSeq[int32](d.numSeqs)
-  engine.run << (grid: (groups div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (groups div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
     "kvQuantD128", kq,
     (d.kSlab, d.vSlab, d.blockTable, rowsZero,
      int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groups),
@@ -554,7 +554,7 @@ proc runKvCombo*(engine: var auto; d: KvCase; bits, compander: int;
   for i in 0 ..< d.numSeqs:
     rowsCached[i] = int32(d.rows)
   var kd = newSeq[uint16](2 * outTotal)
-  engine.run << (grid: (groups div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (groups div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
     "kvDequantD128", kd,
     (qK, qV, sK, sV, d.blockTable, rowsCached,
      int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groups),
@@ -725,7 +725,7 @@ proc runAppendCase(engine: var auto; shapes: var ShapeCases;
       var kq = newSeq[uint32](quantLen)
       for i in 0 ..< quantLen:
         kq[i] = 0xDEADBEEF'u32
-      engine.run << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
+      engine.launchKernel << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
         "kvQuantD128", kq,
         (d.kSlab, d.vSlab, d.blockTable, prefixSeq,
          int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groupsL),
@@ -824,7 +824,7 @@ proc runBoundaryCase(engine: var auto; shapes: var ShapeCases;
       # the kernel quant covers all rows (cache_seqlens = 0)
       var kq = newSeq[uint32](quantLen)
       var rowsZero = newSeq[int32](d.numSeqs)
-      engine.run << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
+      engine.launchKernel << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
         "kvQuantD128", kq,
         (d.kSlab, d.vSlab, d.blockTable, rowsZero,
          int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groupsL),
@@ -843,7 +843,7 @@ proc runBoundaryCase(engine: var auto; shapes: var ShapeCases;
       var kd = newSeq[uint16](2 * outTotal)
       for i in 0 ..< kd.len:
         kd[i] = 0x7C00'u16
-      engine.run << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
+      engine.launchKernel << (grid: (groupsL div 4, d.rows, d.numSeqs), blk: (32, 1)) >> (
         "kvDequantD128", kd,
         (qK, qV, sK, sV, d.blockTable, cached,
          int32(d.numSeqs), int32(d.maxPages), int32(d.tokenDim), int32(groupsL),
@@ -917,7 +917,7 @@ proc kvRoundTrip(
   for i in 0 ..< numSeqs:
     cacheRows[i] = int32(rows)
   var outBuf = newSeq[uint32](quantLen)
-  engine.run << (grid: (groups div 4, rows, numSeqs), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (groups div 4, rows, numSeqs), blk: (32, 1)) >> (
     "kvQuantD128", outBuf,
     (kSlab, vSlab, blockTable, cacheZero,
      int32(numSeqs), int32(maxPages), int32(tokenDim),
@@ -935,7 +935,7 @@ proc kvRoundTrip(
     sK[i] = uint16(outBuf[2 * qWordsTotal + i])
     sV[i] = uint16(outBuf[2 * qWordsTotal + sTotal + i])
   var kd = newSeq[uint16](2 * outTotal)
-  engine.run << (grid: (groups div 4, rows, numSeqs), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (groups div 4, rows, numSeqs), blk: (32, 1)) >> (
     "kvDequantD128", kd,
     (qK, qV, sK, sV, blockTable, cacheRows,
      int32(numSeqs), int32(maxPages), int32(tokenDim),

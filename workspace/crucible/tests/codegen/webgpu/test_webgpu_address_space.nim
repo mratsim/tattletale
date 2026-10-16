@@ -40,7 +40,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "var arr: array<u32, 4>;" in src
       var res: array[1, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("plainLocalKernel", oDev, ())
+      engine.launchKernel("plainLocalKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 7'u32
@@ -51,7 +51,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "let p: ptr<storage, array<u32>, read_write> = (&output);" in src
       var res: array[2, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("paramAliasKernel", oDev, ())
+      engine.launchKernel("paramAliasKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       check res[0] == 7'u32
@@ -64,7 +64,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "let p: ptr<workgroup, u32> = (&scratch[" in src
       var res: array[4, uint32]
       let oDev = engine.allocDevice(res.len * sizeof(uint32))
-      engine.run("smemAliasKernel", oDev, ())
+      engine.launchKernel("smemAliasKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
       engine.freeDevice(oDev)
       for i in 0 ..< 4:

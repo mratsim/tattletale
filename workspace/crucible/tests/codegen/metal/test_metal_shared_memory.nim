@@ -23,7 +23,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(sharedMsl)
       let oDev = engine.allocDevice(64 * sizeof(uint32))
-      engine.run<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", oDev, ())
+      engine.launchKernel<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", oDev, ())
       var res: array[64, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 64 * sizeof(uint32))
       engine.freeDevice(oDev)

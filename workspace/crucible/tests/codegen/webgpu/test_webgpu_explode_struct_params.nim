@@ -74,7 +74,7 @@ proc axpbyReference(expected: var array[N, float32], x, c: array[N, float32], al
 # blk must match the shader-baked workgroup size.
 
 proc launchAxpbY[E](engine: var E, dstDev, xDev, cDev: auto, alpha, beta: float32, mask: StoreMask) =
-  engine.run << (grid: (1, 1), blk: (64, 1)) >> ("axpbyKernel", dstDev, (
+  engine.launchKernel << (grid: (1, 1), blk: (64, 1)) >> ("axpbyKernel", dstDev, (
     mkLayout(2, 3, 3, 1),
     xDev,
     alpha, beta,

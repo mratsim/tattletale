@@ -15,7 +15,7 @@ import engines
 export chevrons
 
 const
-  BridgeDefs = CacheTable"crucible.wrap_and_run.bridges"
+  BridgeDefs = CacheTable"crucible.launchDeviceFn.bridges"
     # `{.global.}` bridge proc per kernel launch shape, built on first launch
 
 proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
@@ -74,7 +74,7 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
 
 macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys: untyped,
                     gridN, blkN: untyped, values: varargs[typed]): untyped =
-  # Bridge construction and launch, behind `wrap_and_run`:
+  # Bridge construction and launch, behind `launchDeviceFn`:
   #
   # - the kernel lowers into a `{.global.}` bridge on first launch,
   #   one bridge per launch shape
@@ -131,24 +131,24 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
                            elif typeof(`engine`).backendKind == bkOpenCL: `openclCg`(`bridgeNode`)
                            elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`bridgeNode`)
                            elif typeof(`engine`).backendKind == bkWGSL: `webgpuCg`(`bridgeNode`)
-                           else: {.error: "wrap_and_run: no lowering for this engine".}
+                           else: {.error: "launchDeviceFn: no lowering for this engine".}
     block:
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
-      `engine`.run(`kname`, `outputNode`, `argsTuple`,
+      `engine`.launchKernel(`kname`, `outputNode`, `argsTuple`,
                    LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)))
 
 macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped): untyped =
-  # Static/value arg split, behind `wrap_and_run`:
+  # Static/value arg split, behind `launchDeviceFn`:
   #
   # - the kernel symbol resolves alone, its impl gives the formal list and which formals are static, the launch args stay raw
   # - static args pass to the bridge builder raw, the backend context lives inside the bridge only
   # - value args pass positionally
   doAssert call.kind == nnkCall,
-    "wrap_and_run: expected fn(args...), got " & call.repr
+    "launchDeviceFn: expected fn(args...), got " & call.repr
   let impl = kernel.getImpl()
   doAssert impl.kind in {nnkProcDef, nnkFuncDef},
-    "wrap_and_run " & $kernel & ": the kernel must be a proc or func"
+    "launchDeviceFn " & $kernel & ": the kernel must be a proc or func"
 
   var staticArgs: seq[NimNode] = @[]
   var valueArgs: seq[NimNode] = @[]
@@ -160,7 +160,7 @@ macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped)
     let isStatic = isStaticFormal(f)
     for j in 0 ..< f.len - 2:
       doAssert call.len > 1 + si,
-        "wrap_and_run " & $kernel & ": " & $(call.len - 1) & " args for " &
+        "launchDeviceFn " & $kernel & ": " & $(call.len - 1) & " args for " &
         $si & " formals so far"
       if isStatic:
         staticArgs.add(call[1 + si])
@@ -170,7 +170,7 @@ macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped)
         formalTypes.add(f[^2])
       inc si
   doAssert call.len - 1 == si,
-    "wrap_and_run " & $kernel & ": " & $(call.len - 1) & " args for " &
+    "launchDeviceFn " & $kernel & ": " & $(call.len - 1) & " args for " &
     $si & " formals"
 
   let statics = nnkBracket.newTree(staticArgs)
@@ -181,15 +181,15 @@ macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped)
   for a in valueArgs:
     result.add(a)
 
-macro wrap_and_run*(engine: HwEngine, call: untyped): untyped =
+macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   ## Launches a device function with whole values, schedule via a `do:` block
   ## or the chevron form:
   ##
-  ##   engine.wrap_and_run gemm(tiledMma(f32, f16, f16, 32, 32, 16), dD, dA, dB, 1) do:
+  ##   engine.launchDeviceFn gemm(tiledMma(f32, f16, f16, 32, 32, 16), dD, dA, dB, 1) do:
   ##     grid = ((D.shape.m + 31) div 32, (D.shape.n + 31) div 32)
   ##     blk = (32, 1)
   ##
-  ##   engine.wrap_and_run<<grid, blk>> gemm(dD, dA, dB, 1)
+  ##   engine.launchDeviceFn<<grid, blk>> gemm(dD, dA, dB, 1)
   ##
   ## - the schedule block holds `grid =` / `blk =` assignments, both optional, default (1, 1)
   ## - the expressions evaluate at the launch site and may reference the kernel's formals
@@ -199,13 +199,13 @@ macro wrap_and_run*(engine: HwEngine, call: untyped): untyped =
     schedule = callNode[^1]
     callNode = nnkCall.newTree(call[0 ..< call.len - 1])
   doAssert schedule.kind in {nnkNilLit, nnkStmtList},
-    "wrap_and_run: the schedule must be a `do:` block, got " & schedule.repr
+    "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   if schedule.kind == nnkStmtList:
     for a in schedule:
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
-        "wrap_and_run: schedule expects grid = ... / blk = ..., got " & a.repr
+        "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
       if $a[0] == "grid": gridN = a[1]
       else: blkN = a[1]
   let splitN = bindSym"crucibleSplit"
@@ -213,7 +213,7 @@ macro wrap_and_run*(engine: HwEngine, call: untyped): untyped =
 
 type
   WrapSugar[E: HwEngine] = object
-    ## Transient chevron sugar for wrap_and_run launches, created per `engine.wrap_and_run` access, no field on the engine
+    ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
     engine: E
 
   WrapProxy[E: HwEngine] = object
@@ -227,33 +227,33 @@ proc makeWrapProxy[E: HwEngine](engine: E, grid, blk: Dim3): WrapProxy[E] =
   ## WrapProxy construction, generic param inference lives in this helper
   WrapProxy[E](engine: engine, grid: grid, blk: blk)
 
-macro wrap_and_run*(engine: HwEngine): untyped =
+macro launchDeviceFn*(engine: HwEngine): untyped =
   ## Chevron form accessor:
   ##
-  ##   engine.wrap_and_run<<(gridX, gridY), (32, 1)>> gemm(dD, dC, dA, dB)
+  ##   engine.launchDeviceFn<<(gridX, gridY), (32, 1)>> gemm(dD, dC, dA, dB)
   result = quote do:
     WrapSugar[typeof(`engine`)](engine: `engine`)
 
 macro `<<`*[E: HwEngine](r: WrapSugar[E], cfg: untyped): untyped =
   ## Chevron launch config, positional (grid, blk):
   ##
-  ##   engine.wrap_and_run<<((1, 1), (32, 1))>>(gemm(dD, dC, dA, dB))
+  ##   engine.launchDeviceFn<<((1, 1), (32, 1))>>(gemm(dD, dC, dA, dB))
   # the chevron form takes host expressions only, the `do:` form alone has
   # a schedule that may reference the function's formals
   doAssert cfg.kind in {nnkPar, nnkTupleConstr} and cfg.len == 2,
-    "wrap_and_run chevron takes (grid, blk), got: " & cfg.repr
+    "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr
   let dim3Sym = bindSym"dim3"
   let mkSym = bindSym"makeWrapProxy"
   result = quote do:
     `mkSym`(`r`.engine, `dim3Sym`(`cfg`[0]), `dim3Sym`(`cfg`[1]))
 
 macro `>>`*[E: HwEngine](proxy: WrapProxy[E], call: untyped): untyped =
-  ## Builds the launch: `engine.wrap_and_run<<grid, blk>> fn(args...)`
+  ## Builds the launch: `engine.launchDeviceFn<<grid, blk>> fn(args...)`
   var callNode = call
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall,
-    "wrap_and_run: expected fn(args...), got " & callNode.repr
+    "launchDeviceFn: expected fn(args...), got " & callNode.repr
   let splitN = bindSym"crucibleSplit"
   result = nnkCall.newTree(splitN,
     nnkDotExpr.newTree(proxy, ident"engine"), callNode[0], callNode,

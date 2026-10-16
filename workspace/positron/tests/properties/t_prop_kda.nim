@@ -134,7 +134,7 @@ proc runKdaScan(
         vSeg.hostPtr[(h * n + j) * Dv + r] = c.vBits[((h * T) + t0 + j) * Dv + r]
       betaSeg.hostPtr[h * n + j] = c.betaBits[(h * T) + t0 + j].widenTo(kFloat16)
   var stPA = stateB.pa()
-  engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+  engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
     ("prop_kda_prefill_fp16_c32", stPA,
       (yB.pa(), vSeg.pa(), kSeg.pa(), qSeg.pa(), cldSegB.pa(), betaSeg.pa(),
         float32(sqrt(float64(Dk))),
@@ -170,7 +170,7 @@ proc runKdaSteps(
       for r in 0 ..< Dv: vTok.hostPtr[h * Dv + r] = c.vBits[((h * T) + t) * Dv + r]
       betaTok.hostPtr[h] = c.betaBits[(h * T) + t].widenTo(kFloat16)
     var stPA = stateB.pa()
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       ("prop_kda_step_fp16", stPA,
         (yB.pa(), kTok.pa(), qTok.pa(), vTok.pa(), gTok.pa(), betaTok.pa(),
           float32(sqrt(float64(Dk))),

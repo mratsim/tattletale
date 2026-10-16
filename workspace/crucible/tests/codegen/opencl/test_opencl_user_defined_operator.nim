@@ -119,7 +119,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
     let oDev = engine.allocDevice(10 * sizeof(int32))
-    engine.run("basicKernel", oDev, (aDev, bDev))
+    engine.launchKernel("basicKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(int32))
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
@@ -143,7 +143,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
     let oDev2 = engine.allocDevice(10 * sizeof(int32))
-    engine.run("structKernel", oDev2, (aDev, bDev))
+    engine.launchKernel("structKernel", oDev2, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32b[0], oDev2, 10 * sizeof(int32))
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
@@ -167,7 +167,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
     let oDev3 = engine.allocDevice(10 * sizeof(int32))
-    engine.run("structKernel2", oDev3, (aDev, bDev))
+    engine.launchKernel("structKernel2", oDev3, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32c[0], oDev3, 10 * sizeof(int32))
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)

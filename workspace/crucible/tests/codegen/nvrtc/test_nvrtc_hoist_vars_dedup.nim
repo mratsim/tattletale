@@ -67,7 +67,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernel)
   let oDev = engine.allocDevice(sizeof(outBuf))
-  engine.run<<(1, 1)>>("gemmKernel", oDev, (128'i32, 64'i32))
+  engine.launchKernel<<(1, 1)>>("gemmKernel", oDev, (128'i32, 64'i32))
   engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
   engine.freeDevice(oDev)
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"

@@ -28,7 +28,7 @@ proc runTest() =
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run("asmBacktickKernel", oDev, ())
+  engine.launchKernel("asmBacktickKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2]

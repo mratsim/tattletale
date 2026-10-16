@@ -24,7 +24,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   let oDev = engine.allocDevice(sizeof(buf))
-  engine.run("sizedKernel", oDev, ())
+  engine.launchKernel("sizedKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
   engine.freeDevice(oDev)
   doAssert buf[0] == 1, &"Sized[4].data[0]: got {buf[0]}, expected 1"

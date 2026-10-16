@@ -47,7 +47,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let dDev = engine.allocDevice(dynArr.len * sizeof(float32))
       engine.copyToDeviceFromHost(dDev, addr dynArr[0], dynArr.len * sizeof(float32))
       let oDev = engine.allocDevice(9 * sizeof(float32))
-      engine.run("maxBasic", oDev, (dDev,))
+      engine.launchKernel("maxBasic", oDev, (dDev,))
       engine.copyToHostFromDevice(addr out32[0], oDev, 9 * sizeof(float32))
       engine.freeDevice(dDev)
       engine.freeDevice(oDev)

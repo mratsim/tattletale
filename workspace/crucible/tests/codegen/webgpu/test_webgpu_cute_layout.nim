@@ -36,7 +36,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(kernelWgsl)
     var res: array[6, uint32]
     let oDev = engine.allocDevice(res.len * sizeof(uint32))
-    engine.run("cuteKernel", oDev, ())
+    engine.launchKernel("cuteKernel", oDev, ())
     engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
     engine.freeDevice(oDev)
     doAssert res[0]==10 and res[1]==20 and res[2]==60

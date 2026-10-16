@@ -76,7 +76,7 @@ proc runTest() =
       let iDev = engine.allocDevice(4 * sizeof(uint32))
       engine.copyToDeviceFromHost(iDev, addr input[0], 4 * sizeof(uint32))
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run << (grid: (1, 1), blk: (1, 1)) >> (
+      engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "ptrFieldDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
@@ -91,7 +91,7 @@ proc runTest() =
       check "threadgroup uint* data;" in src
       check "(threadgroup uint*)" in src
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run << (grid: (4, 1), blk: (4, 1)) >> (
+      engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "ptrFieldSmemKernel", oDev, ())
       var output: array[4, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
@@ -109,13 +109,13 @@ proc runTest() =
       let iDev = engine.allocDevice(4 * sizeof(uint32))
       engine.copyToDeviceFromHost(iDev, addr input[0], 4 * sizeof(uint32))
       let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.run << (grid: (1, 1), blk: (1, 1)) >> (
+      engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "viewDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
       for i in 0 ..< 4:
         check output[i] == input[i]
-      engine.run << (grid: (4, 1), blk: (4, 1)) >> (
+      engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "viewSmemKernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
       engine.freeDevice(iDev)

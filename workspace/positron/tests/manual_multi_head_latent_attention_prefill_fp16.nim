@@ -53,7 +53,7 @@ proc mlaKernel(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]]
   var engine = bkMetal.init()
   engine.ingest(mlaMsl)
   var outAll = newSeq[uint16](3 * T * H * 256)
-  engine.run << (grid: (T div 8, H div 2, 1), blk: (32, 1)) >> ("mlaLatent", outAll,
+  engine.launchKernel << (grid: (T div 8, H div 2, 1), blk: (32, 1)) >> ("mlaLatent", outAll,
     (fp32sToFp16(g.xf), fp32sToFp16(g.qaWF), fp32sToFp16(g.qaGF), fp32sToFp16(g.qbWF),
      fp32sToFp16(g.kvaWF), fp32sToFp16(g.kvaGF), fp32sToFp16(g.kvbWF), cosF, sinF,
      int32(T), int32(H)))

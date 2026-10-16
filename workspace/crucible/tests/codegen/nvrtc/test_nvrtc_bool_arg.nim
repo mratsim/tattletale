@@ -39,22 +39,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # res=r → kernel gets (c=r, a, b, useAdd=true)
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 8 threads explicitly.
-  engine.run<<(1, 8)>>("condAdd", rDev, (aDev, bDev, true))
+  engine.launchKernel<<(1, 8)>>("condAdd", rDev, (aDev, bDev, true))
   engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  condAdd(true): ", r
   for i in 0..7: doAssert r[i] == a[i] + b[i]
 
-  engine.run<<(1, 8)>>("condAdd", rDev, (aDev, bDev, false))
+  engine.launchKernel<<(1, 8)>>("condAdd", rDev, (aDev, bDev, false))
   engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  condAdd(false): ", r
   for i in 0..7: doAssert r[i] == a[i] - b[i]
 
-  engine.run<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, false))
+  engine.launchKernel<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, false))
   engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  scale(3, false): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
 
-  engine.run<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, true))
+  engine.launchKernel<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, true))
   engine.copyToHostFromDevice(addr r[0], rDev, sizeof(r))
   echo "  scale(3, true): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)

@@ -26,7 +26,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(singleAttrMsl)
       let oDev = engine.allocDevice(2 * sizeof(uint32))
-      engine.run<<(grid: (2, 1), blk: (1, 1))>>("singleAttrKernel", oDev, ())
+      engine.launchKernel<<(grid: (2, 1), blk: (1, 1))>>("singleAttrKernel", oDev, ())
       var res: array[2, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
       engine.freeDevice(oDev)
@@ -37,7 +37,7 @@ proc runTest() =
       var engine = bkMetal.init()
       engine.ingest(shadowMsl)
       let oDev = engine.allocDevice(sizeof(uint32))
-      engine.run("shadowKernel", oDev, ())
+      engine.launchKernel("shadowKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
       engine.freeDevice(oDev)
