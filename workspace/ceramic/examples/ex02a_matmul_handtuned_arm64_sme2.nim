@@ -504,7 +504,7 @@ proc gemm_strided*[T: SomeNumber](
 
 when isMainModule:
   import std/[random, strutils]
-  import workspace/ceramic/benchmark/bench_utils
+  import workspace/ceramic/bench/bench_utils
 
   when defined(arm64):
     doAssert simdArchString() == "sme",

@@ -17,7 +17,7 @@
 
 import std/math
 import workspace/ceramic/examples/ex02_matmul_microkernels/gemm_ukernel_generic
-import workspace/ceramic/benchmark/laser_matmul/compiler_optim_hints
+import workspace/ceramic/bench/laser_matmul/compiler_optim_hints
 import workspace/cpuplatforms/x86/simd_x86
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra

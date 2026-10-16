@@ -121,7 +121,7 @@ nim cpp -r --verbosity:0 --hints:off --warnings:off \
 
 # CPU GEMM benchmark (add -d:cblas to include OpenBLAS)
 nim cpp -r --outdir:build \
-  workspace/ceramic/benchmark/bench_ex02_matmul_cpu_simd.nim
+  workspace/ceramic/bench/bench_ex02_matmul_cpu_simd.nim
 ```
 
 GPU kernels are emitted by Crucible and run through NVRTC (CUDA, OpenCL,
