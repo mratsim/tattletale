@@ -110,8 +110,8 @@ proc productImpl*(n: NimNode): NimNode {.compileTime.} =
   else:
     result = IntCT(a.staticAcc)
 
-proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse = false): tuple[val, ty: NimNode] {.compileTime.}
-proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse = false): tuple[val, ty: NimNode] {.compileTime.}
+proc prefixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.}
+proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.}
 
 proc scanPerMode(container, seed, seedTy: NimNode, reverse: bool): tuple[val, ty: NimNode] {.compileTime.} =
   doAssert seed.len == seedTy.len
@@ -120,15 +120,16 @@ proc scanPerMode(container, seed, seedTy: NimNode, reverse: bool): tuple[val, ty
   var modeIdx = 0
   var collecting = false
   var modeB: TupleBuilderNested
-  for ev in container.tupleStream(reverse):
+  # the stream stays forward, reverse picks the per-mode scan direction
+  for ev in container.tupleStream():
     if ev.path.len == 0:
       continue
     if collecting:
       if ev.path.len == 1 and ev.kind == kClose:
         collecting = false
         modeB.append(ev)
-        r.append(prefixProductScan(modeB.emit(0), seed[modeIdx],
-                                   seedTy[modeIdx], reverse))
+        let modeScan = if reverse: suffixProductScan else: prefixProductScan
+        r.append(modeScan(modeB.emit(0), seed[modeIdx], seedTy[modeIdx]))
         modeIdx.inc
       else:
         modeB.append(ev)
@@ -144,7 +145,7 @@ proc scanPerMode(container, seed, seedTy: NimNode, reverse: bool): tuple[val, ty
   r.append(TupleStreamEvent(path: @[], kind: kClose))
   result = (r.emit(0), r.emitTy(0))
 
-proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil, reverse = false): tuple[val, ty: NimNode] {.compileTime.} =
+proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
   ## Prefix product scan on nodes: each leaf's value is the seed times the leaves before it
   ##
   ## A tuple seed recurses per shape mode, a scalar seed under
@@ -163,7 +164,7 @@ proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil, reverse 
     container.kind != nnkTupleConstr and container.isTupleTy()
   if seedTy != nil and seedTy.kind == nnkTupleConstr:
     if containerIsTuple:
-      return scanPerMode(container, seed, seedTy, reverse)
+      return scanPerMode(container, seed, seedTy, false)
     return (seed, seedTy)
   # a literal tuple seed and a symbol-bound tuple seed both go through
   # makeIntTuple, the leaves promote to Int[V] when static
@@ -171,7 +172,7 @@ proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil, reverse 
       seed.getTypeInst().isTupleTy()):
     let (sv, st) = makeIntTuple(seed)
     if containerIsTuple:
-      return scanPerMode(container, sv, st, reverse)
+      return scanPerMode(container, sv, st, false)
     return (sv, st)
   var accu: ProductAccum
   accu.init(seed, seedTy)
@@ -179,7 +180,7 @@ proc prefixProductScan(container, seed: NimNode, seedTy: NimNode = nil, reverse 
     accu.update(ev)
   result = accu.finish(emitScalarForSize1 = not container.isTupleTy())
 
-proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse = false): tuple[val, ty: NimNode] {.compileTime.} =
+proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil): tuple[val, ty: NimNode] {.compileTime.} =
   ## Suffix product scan on nodes: each leaf's value is the seed times the leaves after it
   ##
   ##  Examples:
@@ -192,7 +193,7 @@ proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse
     container.kind != nnkTupleConstr and container.isTupleTy()
   if seedTy != nil and seedTy.kind == nnkTupleConstr:
     if containerIsTuple:
-      return scanPerMode(container, seed, seedTy, reverse)
+      return scanPerMode(container, seed, seedTy, true)
     return (seed, seedTy)
   # a literal tuple seed and a symbol-bound tuple seed both go through
   # makeIntTuple, the leaves promote to Int[V] when static
@@ -200,7 +201,7 @@ proc suffixProductScan*(container, seed: NimNode, seedTy: NimNode = nil, reverse
       seed.getTypeInst().isTupleTy()):
     let (sv, st) = makeIntTuple(seed)
     if containerIsTuple:
-      return scanPerMode(container, sv, st, reverse)
+      return scanPerMode(container, sv, st, true)
     return (sv, st)
   var accu: ProductAccum
   accu.init(seed, seedTy)
