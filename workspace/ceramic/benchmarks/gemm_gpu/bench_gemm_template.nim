@@ -43,17 +43,9 @@ export fp_conv
 
 {.experimental: "callOperator".}
 
-type LaunchFn[E] = proc (engine: E, dDev, aDev, bDev: pointer, M, N, K: int,
-                         iters: int) {.nimcall.}
+type LaunchFn[E] = proc (engine: E, dDev, aDev, bDev: pointer, M, N, K: int, iters: int) {.nimcall.}
 
-proc toDim(x: int): int {.inline.} = x
-proc toDim(x: Int): int {.inline.} = toInt(x)
-
-proc fillGemmInputs[TVa, TVb](aTV: TVa, bTV: TVb) =
-  let
-    M = toDim(aTV.getLayout().shape[0])
-    N = toDim(bTV.getLayout().shape[0])
-    K = toDim(aTV.getLayout().shape[1])
+proc fillGemmInputs[TVa, TVb](aTV: TVa, bTV: TVb, M, N, K: int) =
   for m in 0 ..< M:
     for k in 0 ..< K:
       aTV[m, k] = F16.from(float32(1 + (2 * m + 7 * k) mod 13))
@@ -69,7 +61,7 @@ proc checkGemmRef[E: HwEngine](engine: E, M, N, K: int, launch: LaunchFn[E], msg
   let
     aTV = make_view(addr aHost[0], make_layout((M, K), (M, one)))
     bTV = make_view(addr bHost[0], make_layout((N, K), (one, N)))
-  fillGemmInputs(aTV, bTV)
+  fillGemmInputs(aTV, bTV, M, N, K)
   let
     aDev = engine.allocDevice(M * K * sizeof(F16))
     bDev = engine.allocDevice(K * N * sizeof(F16))
@@ -101,7 +93,7 @@ proc gemmBench*[E: HwEngine](engine: E, launch: LaunchFn[E], M, N, K: int, iters
   let
     aTV = make_view(addr aHost[0], make_layout((M, K), (M, one)))
     bTV = make_view(addr bHost[0], make_layout((N, K), (one, N)))
-  fillGemmInputs(aTV, bTV)
+  fillGemmInputs(aTV, bTV, M, N, K)
   let
     aDev = engine.allocDevice(M * K * sizeof(F16))
     bDev = engine.allocDevice(K * N * sizeof(F16))
