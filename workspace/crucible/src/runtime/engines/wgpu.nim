@@ -193,10 +193,12 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
     else:
       ctx.pn = (ctx.pn + 255) div 256 * 256
       ctx.chunkOff[idx] = ctx.pn
-      ctx.chunkLen[idx] = len
-      ctx.blob.setLen(ctx.pn + len)
+      # storage-buffer binding sizes are multiples of 4 bytes, the pad stays zero
+      let padded = (len + 3) div 4 * 4
+      ctx.chunkLen[idx] = padded
+      ctx.blob.setLen(ctx.pn + padded)
       copyMem(ctx.blob[ctx.pn].addr, p, len)
-      inc ctx.pn, len
+      inc ctx.pn, padded
   var dctx = SinkCtx()
   bindArgs(dctx, bkWGSL, output, args, false, sinkArg)
   let scalarBytes = dctx.blob
