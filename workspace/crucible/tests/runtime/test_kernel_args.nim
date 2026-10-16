@@ -25,6 +25,7 @@ type
   WithPtr = object
     p*: ptr uint32
     n*: int32
+  Empty = object
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Kernel args - delivery":
@@ -74,6 +75,29 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var p = cast[ptr uint32](0xDEAD'i64)
       bindArgs(c, bkMetal, TestHandle(1), (WithPtr(p: p, n: 5),), true, collect)
       check c.kinds == @[true, true, false]
+
+    test "exploded composite advances the bind index once per leaf":
+      type C = object
+        idxs: seq[int]
+      proc collect(c: var C, isBuffer: bool, h: TestHandle, idx: int, p: pointer, len: int) {.nimcall.} =
+        c.idxs.add idx
+      var c: C
+      var p = cast[ptr uint32](0xDEAD'i64)
+      bindArgs(c, bkMetal, TestHandle(1), (WithPtr(p: p, n: 5), 7'i32), true, collect)
+      check c.idxs == @[0, 1, 2, 3]
+      const n = launchArgCount(TestHandle, tuple[a: WithPtr, b: int32], TestHandle, bkMetal)
+      check n == c.idxs.len
+
+    test "static composite consumes no bind slot":
+      type C = object
+        idxs: seq[int]
+      proc collect(c: var C, isBuffer: bool, h: TestHandle, idx: int, p: pointer, len: int) {.nimcall.} =
+        c.idxs.add idx
+      var c: C
+      bindArgs(c, bkMetal, TestHandle(1), (Empty(), 7'i32), false, collect)
+      check c.idxs == @[0, 1]
+      const n = launchArgCount(TestHandle, tuple[a: Empty, b: int32], TestHandle, bkMetal)
+      check n == c.idxs.len
 
     test "launchArgCount matches the deliveries":
       const n = launchArgCount(int32, tuple[a: Whole, b: int64], TestHandle, bkMetal)

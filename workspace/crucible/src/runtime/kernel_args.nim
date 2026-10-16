@@ -147,7 +147,7 @@ proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: 
       var off = 0
       packInto(blob, off, v, backend)
       sink(ctx, false, default(H), pos, blob.addr, off)
-    inc pos
+      inc pos
   elif typeof(v) is array:
     var copy = v
     sink(ctx, false, default(H), pos, copy.addr, sizeof(copy))
