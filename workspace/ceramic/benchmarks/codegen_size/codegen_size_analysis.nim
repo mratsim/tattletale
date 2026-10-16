@@ -712,7 +712,7 @@ proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
   ## cur_kernels/<runner>_<kernel>.msl, moves the previous generation
   ## into old_kernels/, and adds a Dump column to the table.
   ##
-  ## dump dir = workspace/ceramic/benchmark/codegen_size/dumps by default,
+  ## dump dir = workspace/ceramic/benchmarks/codegen_size/dumps by default,
   ## -d:TTT_CgsDumpDir="..." overrides it.
   const nameW = 30
   const costW = 14
@@ -724,7 +724,7 @@ proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
     "-".repeat(margW) & "|"
   when hasDump:
     const dumpW = 46
-    const cgsDumpDirDefault = "workspace/ceramic/benchmark/codegen_size/dumps"
+    const cgsDumpDirDefault = "workspace/ceramic/benchmarks/codegen_size/dumps"
       ## Dump location of -d:TTT_CgsDump, relative to the run directory.
     const TTT_CgsDumpDir {.strdefine.} = ""
       ## -d:TTT_CgsDumpDir="..." value, the default dump location applies when empty.

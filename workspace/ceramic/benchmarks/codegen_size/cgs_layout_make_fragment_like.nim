@@ -6,7 +6,7 @@ import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/benchmark/codegen_size/codegen_size_analysis
+import workspace/ceramic/benchmarks/codegen_size/codegen_size_analysis
 
 # fragment input, one static V-block layout construction, no like call
 const baselineOverheadMsl = metal:

@@ -80,7 +80,7 @@ when defined(macosx):
         objc.release(pso)
       cache.psos.clear()
 
-  proc newMetalEngine*(): MetalEngine =
+  proc newMetalEngine(): MetalEngine =
     ## Factory reached by engines.nim via `import {.all.}`.
     objc.withMemPool:
       result = MetalEngine(
@@ -267,6 +267,9 @@ when defined(macosx):
         discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
                         addr bytes[c.off], objc.NSUInteger(c.len), objc.NSUInteger(idx))
         inc idx
+      if cfg.sharedMem > 0:
+        discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
+                        objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))
       let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),
                          depth: objc.NSUInteger(cfg.grid.z))
@@ -295,5 +298,5 @@ when defined(macosx):
 # ═════════════════════════════════════════════════
 
 else:
-  proc newMetalEngine*(): MetalEngine =
+  proc newMetalEngine(): MetalEngine =
     quit("bkMetal requires macOS")

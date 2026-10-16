@@ -6,24 +6,16 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## POC benchmark: ARM SME2 GEMM (ex02a_matmul_handtuned_arm64_sme2) vs a scalar reference.
-## Square float32 matrices, one warmup plus three timed samples per size, total
-## runtime ≤ 5 s. Each variant is checked against the naive reference before timing.
-##
-## The "generic" baseline is the shared naive triple-loop `gemm_reference` from
-## workspace/ceramic/benchmark/bench_utils. The x86 ex02a (which falls back to the
-## generic ukernel on non-x86) cannot compile on arm64:
-## workspace/cpuplatforms/x86/simd_x86.nim defines builtin_prefetch only under
-## `defined(i386) or defined(amd64)`. The naive baseline is timed for N < 512 only.
 ##
 ## Usage:
 ##   nim cpp -r -d:release --hints:off --warnings:off \
 ##     --outdir:build/wip/arm-sme-matmul --nimcache:nimcache/wip/arm-sme-matmul \
-##     workspace/ceramic/benchmark/bench_ex02_matmul_sme.nim
+##     workspace/ceramic/benchmarks/bench_ex02_matmul_sme.nim
 
 import std/[algorithm, monotimes, random, strutils, strformat]
 
 import workspace/ceramic/examples/ex02a_matmul_handtuned_arm64_sme2 as v_a
-import workspace/ceramic/benchmark/bench_utils
+import workspace/ceramic/benchmarks/bench_utils
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
