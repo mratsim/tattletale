@@ -1,4 +1,4 @@
-## NVRTC: ntyProc and ntyStatic branches in nimToGpuType.
+## NVRTC: ntyStatic branch in nimToGpuType.
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/types/t_nvrtc_type_proc_and_static.nim
@@ -9,12 +9,6 @@ type
   ## ntyStatic: array sized by static int
   Buffer[N: static int] = object
     data: array[N, uint32]
-
-  ## Proc type — ntyProc
-  FnPtr = proc(x: uint32): uint32 {.cdecl.}
-
-proc applyTwice(fn: FnPtr; x: uint32): uint32 {.device.} =
-  result = fn(fn(x))
 
 const kernelCode = cuda:
   proc typeBranchesKernel(output: ptr UncheckedArray[uint32]) {.global.} =

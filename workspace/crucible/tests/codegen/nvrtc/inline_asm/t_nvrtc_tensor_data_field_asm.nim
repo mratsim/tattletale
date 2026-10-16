@@ -1,5 +1,7 @@
-## NVRTC: `var array` and `var openArray` params passed a tensor's data
-## FIELD (`gpuAddr(gpuDot)`) with inline-asm operands.
+## NVRTC: `var array` and `var openArray` params lower as `T*`,
+## inline-asm operands referencing elements. Both operand forms:
+##   - plain `var array` local
+##   - a tensor's data FIELD (`gpuAddr(gpuDot)`)
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -35,6 +37,16 @@ const kernelCode = cuda:
     output[4] = o.data[0]
     output[5] = o.data[1]
 
+const varArrayKernelCode = cuda:
+  proc varArrayAsmKernel(output: ptr UncheckedArray[float32]) {.global.} =
+    var c = [1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32]
+    addAsmVarArray(c, 5.0'f32)
+    output[0] = c[0]
+    output[1] = c[1]
+    var o = [10.0'f32, 20.0'f32, 30.0'f32, 40.0'f32]
+    addAsmOpenArray(o, 1.0'f32)
+    output[2] = o[0]
+
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var buf: array[6, float32]
   var engine = bkCuda.init()
@@ -52,6 +64,17 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert buf[4] == 11.0'f32  # 10 + 1
   doAssert buf[5] == 21.0'f32  # 20 + 1
   echo "  OK (test_nvrtc_tensor_data_field_asm)"
+
+  var buf2: array[3, float32]
+  let oDev2 = engine.allocDevice(sizeof(buf2))
+  engine.launchKernel("varArrayAsmKernel", oDev2, ())
+  engine.copyToHostFromDevice(addr buf2[0], oDev2, sizeof(buf2))
+  engine.freeDevice(oDev2)
+  echo "  [0]=", buf2[0], " [1]=", buf2[1], " [2]=", buf2[2]
+  doAssert buf2[0] == 6.0'f32   # 1 + 5
+  doAssert buf2[1] == 7.0'f32   # 2 + 5
+  doAssert buf2[2] == 11.0'f32  # 10 + 1
+  echo "  OK (test_nvrtc_var_array_asm)"
 
 when isMainModule:
   runTest()

@@ -1,4 +1,4 @@
-## NVRTC: cross-vocabulary coordinate inspect (compile + grep)
+## NVRTC: cross-vocabulary coordinate + barrier inspect (compile + grep)
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/functions/t_nvrtc_cross_vocabulary_inspect.nim
@@ -13,6 +13,18 @@ const kernelCode = cuda:
     C[gid2] = uint32(gid2)
     C[thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     workgroupBarrier()
+
+## Foreign barrier spellings (`barrier()`, `barrier(CLK_LOCAL_MEM_FENCE)`)
+## lower to the canonical `threadgroup_barrier` in sem.
+## The CUDA printer emits `__syncthreads()` for it.
+##   - Vulkan zero-arg `barrier()`, OpenCL `barrier(CLK_LOCAL_MEM_FENCE)`
+const barrierKernelCode = cuda:
+  proc crossVocabBarrierKernel(C: ptr UncheckedArray[uint32]) {.global.} =
+    let tid = int(thread_position_in_threadgroup.x)
+    C[tid] = uint32(tid)
+    barrier()                       # Vulkan-idiom zero-arg barrier
+    C[tid + 128] = uint32(tid) * 2'u32
+    barrier(CLK_LOCAL_MEM_FENCE)    # OpenCL-idiom flags barrier
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   echo kernelCode
@@ -34,6 +46,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   doAssert "__syncthreads()" in kernelCode,
     "CUDA barrier missing:\n" & kernelCode
   echo "  OK — cross-vocabulary CUDA source inspect (compile + grep)"
+
+  # Both foreign barrier spellings must lower to the canonical CUDA barrier.
+  doAssert barrierKernelCode.count("__syncthreads()") == 2,
+    "CUDA barrier missing or miscounted:\n" & barrierKernelCode
+  echo "  OK — foreign barrier spellings lower to __syncthreads() (compile + grep)"
 
 when isMainModule:
   runTest()

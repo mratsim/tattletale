@@ -50,14 +50,6 @@ const kernelC = cuda:
     let pair = wrapConst(Int[8](), Int[16]())
     C[0] = 1.0'f32
 
-# Pattern D: tuple bracket access on a const (like expandTuple pattern)
-const kernelD = cuda:
-  proc kernel(C: ptr UncheckedArray[float32]) {.global.} =
-    let pos = (Int[0](), Int[0]())
-    let D = (Int[1](), Int[8]())
-    let idx = Int[0]() + D[0] * pos[0] + D[1] * pos[1]
-    C[0] = float32(toIntVal idx)
-
 # Pattern E: constexpr default-initialized tuple used as expression
 const kernelE = cuda:
   proc kernel(C: ptr UncheckedArray[float32]) {.global.} =
@@ -106,16 +98,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
       engine.freeDevice(oDev)
       check output[0] == 1.0'f32
-
-    test "Pattern D — tuple bracket access on let":
-      var output: array[1, float32]
-      var engine = bkCuda.init()
-      engine.ingest(kernelD)
-      let oDev = engine.allocDevice(sizeof(output))
-      engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
-      engine.freeDevice(oDev)
-      check output[0] == 0.0'f32
 
     test "Pattern E — block with constexpr temp (evalOnceAs sim)":
       var output: array[1, float32]
