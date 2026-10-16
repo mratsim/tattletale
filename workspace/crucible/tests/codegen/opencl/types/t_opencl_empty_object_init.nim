@@ -1,0 +1,40 @@
+## OpenCL: empty-object construction emits `{0}`, never `{}`, and the kernel
+## building such an object compiles and runs on the device.
+## Run:
+##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/codegen/opencl/types/t_opencl_empty_object_init.nim
+
+import std/strutils
+import workspace/crucible
+
+type
+  Stateless = object
+    discard
+
+const kernelCode = opencl:
+  proc makeStateless(): Stateless {.device.} =
+    result = Stateless()
+  proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
+    var s = makeStateless()
+    output[0] = 42'u32
+
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  echo kernelCode
+
+  # The empty struct initializer must be `{0}`: `{}` is invalid C99.
+  doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the empty object"
+  doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
+
+  block:
+    var engine = bkOpenCL.init()
+    engine.ingest(kernelCode)
+    var outVal: array[1, uint32]
+    let oDev = engine.allocDevice(sizeof(uint32))
+    engine.launchKernel("kernelMain", oDev, ())
+    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.freeDevice(oDev)
+    doAssert outVal[0] == 42
+    echo "  OK"
+
+when isMainModule:
+  runTest()

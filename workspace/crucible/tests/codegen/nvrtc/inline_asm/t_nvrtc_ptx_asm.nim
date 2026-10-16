@@ -1,0 +1,39 @@
+## NVRTC: PTX inline asm (`asm` statements with add/addc carry chains).
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/inline_asm/t_nvrtc_ptx_asm.nim
+import workspace/crucible
+
+const kernelCode = cuda:
+  proc add_co(a, b: uint32): uint32 {.device, forceinline.} =
+    var res: uint32
+    asm "\"add.cc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
+    return res
+  proc add_ci(a, b: uint32): uint32 {.device, forceinline.} =
+    var res: uint32
+    asm "\"addc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
+    return res
+  proc add_cio(a, b: uint32): uint32 {.device, forceinline.} =
+    var res: uint32
+    asm "\"addc.cc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
+    return res
+  proc ptxAsmKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    output[0] = add_co(3'u32, 5'u32)
+    output[1] = add_ci(10'u32, 20'u32)
+
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.launchKernel("ptxAsmKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
+  echo "  [0]=", buf[0], " [1]=", buf[1]
+  doAssert buf[0] == 8
+  doAssert buf[1] == 30
+  echo "  OK (test_nvrtc_ptx_asm)"
+
+when isMainModule:
+  runTest()

@@ -14,13 +14,18 @@ AI coding tool guidelines for the Crucible codegen backend.
 ## Test Organization
 
 ```
-tests/codegen/
-  ir/           — IR-level tests (INTERNAL codegen API — deep imports, no engine)
-  nvrtc/        — CUDA via NVRTC (primary target)
-  opencl/       — OpenCL
-  vulkan/       — Vulkan
-  webgpu/       — WebGPU
-  metal/        — Metal (macOS)
+tests/
+  ir/             : IR-level tests (INTERNAL codegen API, deep imports, no engine)
+    mangling/ types/ symbol_resolution/ functions/ control_flow/
+    legalizations/ optimizations/
+  codegen/
+    nvrtc/        : CUDA via NVRTC (primary target)
+    opencl/       : OpenCL
+    vulkan/       : Vulkan
+    webgpu/       : WebGPU
+    metal/        : Metal (macOS)
+    each backend: app/ compiletime/ control_flow/ device/ functions/
+                  generics/ serialization/ types/ (+ inline_asm/ on nvrtc)
 ```
 
 **IR tests are the exception to the public import:** they test compiler internals
@@ -31,13 +36,13 @@ imports. Only engine/runtime tests use the public API (below).
 
 | Prefix | When to use |
 |--------|-------------|
-| `test_ir_<desc>.nim` | IR-level tests — INTERNAL codegen API (deep imports), no engine |
-| `test_nvrtc_<desc>.nim` | Auto-runnable on CUDA — `import workspace/crucible`; `bkCuda.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`) |
-| `test_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `test_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `test_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `test_metal_<desc>.nim` | Auto-runnable on Metal (macOS) — `import workspace/crucible`; `bkMetal.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
-| `manual_<backend>_<desc>.nim` | **Manual only** — tests that expect a compile-time error (e.g., `proc that won't compile`). These cannot auto-run. |
+| `t_ir_<desc>.nim` | IR-level tests under `tests/ir/` — INTERNAL codegen API (deep imports), no engine |
+| `t_nvrtc_<desc>.nim` | Auto-runnable on CUDA — `import workspace/crucible`; `bkCuda.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`) |
+| `t_opencl_<desc>.nim` | Auto-runnable on OpenCL — `import workspace/crucible`; `bkOpenCL.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_vulkan_<desc>.nim` | Auto-runnable on Vulkan — `import workspace/crucible`; `bkVulkan.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_webgpu_<desc>.nim` | Auto-runnable on WebGPU — `import workspace/crucible`; `bkWGSL.init()` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_metal_<desc>.nim` | Auto-runnable on Metal (macOS) — `import workspace/crucible`; `bkMetal.init()` + `engine.ingest()` + `engine.launchKernel()` (or `engine.launchKernel<<(grid, blk)>>(...)`; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
+| `manual_<backend>_<desc>.nim` | **Manual only**: tests expecting a compile-time error, they cannot auto-run. |
 
 ### Test Requirements
 
@@ -55,14 +60,17 @@ produce valid CUDA that computes wrong results.
 from `when isMainModule: runTest()`. The uniform name makes tests grep-able, and
 proc scope deterministically destroys the engine at return — which is what tests
 the RAII lifecycle (`=destroy` never runs on module-scope engines). See
-`tests/codegen/vulkan/test_vulkan_scalar_args.nim` for the pattern.
+`tests/codegen/vulkan/serialization/t_vulkan_scalar_args.nim` for the pattern.
 
 **Never declare backend-resource objects at module scope** — blocks may separate
 sections within a proc, but a test made of only module-level `block`s (no proc)
 is a no-go. Never declare backend-resource objects (engines, contexts, modules,
 OpenCL/Vulkan handles) at module scope via template helpers:
 - Nim templates do **not** scope `var` declarations — a `template runKernel(...) = var engine = bkCuda.init()` expanded at module level keeps every `engine` alive until program exit.
-- CUDA contexts are expensive: one live context holds a large device-memory reservation that is only returned on destruction. N module-scope contexts can exhaust the GPU (`CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs — see the `test_nvrtc_if_expr` fix).
+- CUDA contexts are expensive: one live context holds a large device-memory
+  reservation that is only returned on destruction. N module-scope contexts can
+  exhaust the GPU with `CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs.
+  `t_nvrtc_if_expr` documents the fix.
 - A `proc` scopes its locals naturally: resources are released when the proc returns, so N kernels in one test file use one context at a time.
 - Module-scope `const` kernel sources are fine — only runtime objects (engines created via `bkCuda.init()`/`bkOpenCL.init()` etc. from `runtime/engines`) must be function-local.
 
@@ -106,22 +114,22 @@ cd tattletale
 # NVRTC
 nim cpp -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/nvrtc/test_*.nim
+  workspace/crucible/tests/codegen/nvrtc/*/t_nvrtc_*.nim
 
 # OpenCL
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/opencl/test_*.nim
+  workspace/crucible/tests/codegen/opencl/*/t_opencl_*.nim
 
 # Vulkan
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/vulkan/test_*.nim
+  workspace/crucible/tests/codegen/vulkan/*/t_vulkan_*.nim
 
 # WebGPU
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/webgpu/test_*.nim
+  workspace/crucible/tests/codegen/webgpu/*/t_webgpu_*.nim
 
 # Metal (macOS)
 # tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17

@@ -1,0 +1,39 @@
+## CuTe: factory functions returning composed types (B14)
+## Run:
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/nvrtc/app/cute/t_nvrtc_cute_factory.nim
+import std/strformat
+import workspace/crucible
+
+type
+  Layout[M, N: static int] = object
+    data: array[M * N, uint32]
+
+proc makeLayout[M, N: static int](val: uint32): Layout[M, N] {.device.} =
+  # CuTe-style factory: fill entire layout with val.
+  # Loop bound = M-1 (Nim inclusive .. generates i<M in C).
+  for i in 0 .. M-1:
+    for j in 0 .. N-1:
+      result.data[i * N + j] = val
+
+const kernelCode = cuda:
+  proc factoryKernel(output: ptr UncheckedArray[uint32]) {.global.} =
+    let l = makeLayout[2, 3](42'u32)
+    output[0] = l.data[0]
+    output[1] = l.data[5]
+
+proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+  var buf: array[2, uint32]
+  var engine = bkCuda.init()
+  engine.ingest(kernelCode)
+  echo "PTX: ", engine.getArtifact().len, " bytes"
+  let oDev = engine.allocDevice(sizeof(buf))
+  engine.launchKernel("factoryKernel", oDev, ())
+  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.freeDevice(oDev)
+  doAssert buf[0] == 42, &"factory[0]: {buf[0]}"
+  doAssert buf[1] == 42, &"factory[5]: {buf[1]}"
+  echo "  OK — factory pattern"
+
+when isMainModule:
+  runTest()
