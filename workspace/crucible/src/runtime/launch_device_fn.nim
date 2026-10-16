@@ -141,12 +141,14 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
   doAssert impl.kind in {nnkProcDef, nnkFuncDef}, "launchDeviceFn " & $kernel & ": the kernel must be a proc or func"
 
   var
-    statics: seq[NimNode] = @[]
+    staticRepr = ""
     valueNames: seq[string] = @[]
     valueTypes: seq[NimNode] = @[]
     formalTypes: seq[NimNode] = @[]
-    envIdx: seq[int] = @[]
-    slots: seq[NimNode] = @[]
+    bindings = initTable[string, NimNode]()
+    bridgeCall = nnkCall.newTree(kernel)
+    argsTuple = nnkTupleConstr.newTree()
+    outputNode: NimNode = nil
   var si = 0
   for i in 1 ..< impl[3].len:
     let f = impl[3][i]
@@ -155,39 +157,36 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
     for j in 0 ..< f.len - 2:
       doAssert si < values.len, "launchDeviceFn " & $kernel & ": " & $si & " formals but only " & $values.len & " launch values"
       if bakes or typeIsPhantom(values[si].getTypeInst()):
-        statics.add(values[si])
-        slots.add(values[si])
+        # baked: the call-site expression lands in the bridge body, no bridge param
+        staticRepr.add(repr(values[si]))
+        bridgeCall.add(values[si])
       else:
-        valueNames.add($f[j])
+        # env member: bridge param + launch value, literal included
+        let name = $f[j]
+        valueNames.add(name)
         valueTypes.add(values[si].getTypeInst())
         formalTypes.add(ftype)
-        envIdx.add(si)
-        slots.add(ident($f[j]))
+        bindings[name] = values[si]
+        if outputNode.isNil:
+          outputNode = values[si]
+        else:
+          argsTuple.add(values[si])
+        bridgeCall.add(ident(name))
       inc si
   doAssert values.len == si, "launchDeviceFn " & $kernel & ": " & $values.len & " args for " & $si & " formals"
-  doAssert envIdx.len > 0, "launchDeviceFn " & $kernel & ": the kernel needs an output formal"
+  doAssert not outputNode.isNil, "launchDeviceFn " & $kernel & ": the kernel needs a launch value formal as output"
 
-  var staticRepr = ""
-  for s in statics: staticRepr.add(repr(s))
   var typeRepr = ""
   for t in valueTypes: typeRepr.add(repr(t))
   # the bridge bakes the value types in, the cache key carries them
   # negative hashes contain a `-` which MSL rejects in identifiers
   let kname = ($kernel & "_" & $hash(staticRepr & "|" & typeRepr)).replace("-", "n")
   if not BridgeDefs.hasKey(kname):
-    var bridgeCall = nnkCall.newTree(kernel)
-    for s in slots: bridgeCall.add(s)
     let built = buildGlobalFn(kname, kernel, bridgeCall, valueTypes, formalTypes, valueNames)
     BridgeDefs[kname] = nnkStmtList.newTree(built)
 
-  var bindings = initTable[string, NimNode]()
-  for i, idx in envIdx: bindings[valueNames[i]] = values[idx]
   let grid = substituteIdents(gridN.copy(), bindings)
   let blk = substituteIdents(blkN.copy(), bindings)
-
-  var argsTuple = nnkTupleConstr.newTree()
-  for i in 1 ..< envIdx.len: argsTuple.add(values[envIdx[i]])
-  let outputNode = values[envIdx[0]]
 
   let bridgeSource = ident("crucibleBridgeSource" & kname)
   let bridgeN = bindSym"bridge"
