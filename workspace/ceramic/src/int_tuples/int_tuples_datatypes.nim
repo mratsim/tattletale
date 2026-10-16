@@ -186,3 +186,16 @@ template `..<`*[V: static int](start: Int[V]; bound: int): Slice[int] =
   Slice[int](a: V, b: pred(bound))
 template `..<`*[V, U: static int](start: Int[V]; bound: Int[U]): Slice[int] =
   Slice[int](a: V, b: pred(U))
+
+# ═══════════════════════════════════════════════════════════════
+#  countup over mixed bounds
+# ═══════════════════════════════════════════════════════════════
+
+template countup*[V: static int](start: int, stopIncl: Int[V], step: int = 1): untyped =
+  countup(start, V, step)
+
+template countup*[V: static int](start: Int[V], stopIncl: int, step: int = 1): untyped =
+  countup(V, stopIncl, step)
+
+template countup*[V, U: static int](start: Int[V], stopIncl: Int[U], step: int = 1): untyped =
+  countup(V, U, step)

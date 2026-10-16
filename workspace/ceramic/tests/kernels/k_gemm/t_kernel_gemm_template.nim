@@ -39,14 +39,15 @@ func view2D[T](data: ptr UncheckedArray[T], shape, strides: (int, int)):
   ## 2D view over a presized buffer
   make_view(data, make_layout(shape, strides))
 
-proc gemm_ref*(alpha: float32,
-               A, B: TensorView[F16, (int, int), (int, int)],
+proc gemm_ref*[ShA, StA, ShB, StB, ShC, StC](alpha: float32,
+               A: TensorView[F16, ShA, StA],
+               B: TensorView[F16, ShB, StB],
                beta: float32,
-               C, refOut: TensorView[float32, (int, int), (int, int)]) =
+               C, refOut: TensorView[float32, ShC, StC]) =
   let
-    M = int(A.getLayout().shape[0])
-    N = int(B.getLayout().shape[0])
-    K = int(A.getLayout().shape[1])
+    M = A.getLayout().shape[0]
+    N = B.getLayout().shape[0]
+    K = A.getLayout().shape[1]
   for m in 0 ..< M:
     for n in 0 ..< N:
       var acc = 0.0'f32
