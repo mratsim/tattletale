@@ -18,7 +18,6 @@ const ProblemSizes = [1024, 2048, 4096]
 
 const MlxSteelGemmSrc =
   staticRead("mlx_steel_gemm.metal") & staticRead("steel_bench_wrappers.metal")
-var steelCurrent = false
 
 type MlxGemmParams = object
   m*, n*, k*: int
@@ -47,9 +46,8 @@ proc launchGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iters: 
     blk = (32, 1)
 
 proc launchMlxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iters: int) =
-  if not steelCurrent:
+  if engine.getArtifact() != MlxSteelGemmSrc:
     engine.ingest(MlxSteelGemmSrc)
-    steelCurrent = true
   let
     tm = ceil_div(M, 64)
     tn = ceil_div(N, 64)

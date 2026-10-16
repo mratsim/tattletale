@@ -151,9 +151,7 @@ when defined(macosx):
 
 
   func hasPtrField[T](): bool {.compileTime.} =
-    ## Whether T carries a pointer leaf at any depth, the recursion
-    ## criterion of the launch binding over struct args
-    when typeof(default(T)) is ptr:
+    when typeof(default(T)) is ptr or typeof(default(T)) is pointer:
       result = true
     elif typeof(default(T)) is object|tuple:
       for f in fields(default(T)):
@@ -198,7 +196,7 @@ when defined(macosx):
     ##   one chunk per exploded device param
     when typeof(x) is objc.ID:
       bufs.add(x)
-    elif typeof(x) is ptr:
+    elif typeof(x) is ptr or typeof(x) is pointer:
       bufs.add(cast[objc.ID](x))
     elif typeof(x) is object|tuple and hasPtrField[typeof(x)]():
       var copy = x
