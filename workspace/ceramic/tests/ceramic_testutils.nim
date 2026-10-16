@@ -27,11 +27,11 @@ func toF64(x: F16): float64 {.inline.} =
   float64(float32.from(x))
 
 func flatSize[L](l: L): int =
-  ## Cosize as a runtime int, static `Int[N]` layouts included
-  when typeof(cosize(l)) is Int:
-    toInt(cosize(l))
+  ## Size as a runtime int, static `Int[N]` layouts included
+  when typeof(size(l)) is Int:
+    toInt(size(l))
   else:
-    cosize(l)
+    size(l)
 
 type AllCloseReport* = object
   bad*: int
@@ -49,7 +49,7 @@ proc allCloseImpl[T, ShA, StA, ShB, StB](
     "allClose: size mismatch, got " & $n &
     " want " & $flatSize(expected.getLayout())
   for i in 0 ..< n:
-    let crd = idx2crd(actual.getLayout(), i)
+    let crd = idx2crd(actual.getLayout().shape, i)
     let a = toF64(actual.data[toInt crd2idx(actual.getLayout(), crd)])
     let e = toF64(expected.data[toInt crd2idx(expected.getLayout(), crd)])
     let d = abs(a - e)
@@ -80,7 +80,7 @@ template assertAllClose*(actual, expected: untyped, rtol: float64 = 1e-4, abstol
       if msg.len > 0:
         echo "  ", msg
       echo "  ", report.bad, " mismatched elements of ",
-           cosize(actualView.getLayout()), ", worst |d| = ", report.worst
+           flatSize(actualView.getLayout()), ", worst |d| = ", report.worst
       echo "  first mismatch at ", report.firstCrd, ": got ", report.firstGot,
            " want ", report.firstWant, " (rtol ", rtol, ", abstol ", abstol, ")"
       raise newException(AssertionDefect, "[ceramic] allClose assertion failed")

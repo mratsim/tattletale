@@ -83,6 +83,25 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
   var rng = initRand(int64(seed))
   echo moduleName, " PCG seed: ", seed
 
+  # allClose walks the logical size, so a broadcast-only difference raises
+  # while equal broadcast views pass
+  block:
+    var bufActual = [5.0'f32, 5, 5, 5]
+    var bufExpected = [5.0'f32, 1, 2, 3]
+    let actual = make_view(cast[ptr UncheckedArray[float32]](addr bufActual[0]),
+                           make_layout((2, 4), (0, 1)))
+    let expected = make_view(cast[ptr UncheckedArray[float32]](addr bufExpected[0]),
+                             make_layout((4, 2), (1, 0)))
+    try:
+      assertAllClose(actual, expected, msg = "broadcast difference must raise")
+      doAssert false, "allClose missed the broadcast difference"
+    except AssertionDefect:
+      discard
+    var bufEqual = [5.0'f32, 5, 5, 5]
+    let equal = make_view(cast[ptr UncheckedArray[float32]](addr bufEqual[0]),
+                          make_layout((4, 2), (1, 0)))
+    assertAllClose(actual, equal, msg = "equal broadcast views")
+
     # the presized pool, one allocation per engine run, cases reuse it
   const
     MaxM = 70
