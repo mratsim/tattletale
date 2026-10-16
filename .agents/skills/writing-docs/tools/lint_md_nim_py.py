@@ -1751,12 +1751,16 @@ def nim_structure_checks(path, text, header_nos, findings):
     blocked = nim_block_comment_lines(text)
     for i, raw in enumerate(lines):
         line = raw.rstrip()
-        if (i + 1) not in blocked and INBOUNDS_PLAIN_CALL_RE.search(line) \
-                and not INBOUNDS_DECL_RE.match(line):
-            findings.append(Finding(
-                path, i + 1, "inbounds-call-syntax",
-                "inBounds in plain call syntax, use the method call "
-                "coord.inBounds(shape)"))
+        if (i + 1) not in blocked:
+            code, comment_only = _strip_comment(line)
+            if not comment_only:
+                code = _blank_nim_strings(code)
+                if INBOUNDS_PLAIN_CALL_RE.search(code) \
+                        and not INBOUNDS_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "inbounds-call-syntax",
+                        "inBounds in plain call syntax, use the method call "
+                        "coord.inBounds(shape)"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
