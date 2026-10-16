@@ -199,10 +199,10 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
   ## CUDA spelling of a canonical coordinate builtin referenced whole.
   ## `gbkThreadPositionInGrid` has no whole-value spelling: the `gpuDot` field-access site emits the component expression.
   case kind
-  of gbkThreadgroupPositionInGrid: "make_int3(blockIdx.x, blockIdx.y, blockIdx.z)"
-  of gbkThreadPositionInThreadgroup: "make_int3(threadIdx.x, threadIdx.y, threadIdx.z)"
-  of gbkThreadsPerThreadgroup: "make_int3(blockDim.x, blockDim.y, blockDim.z)"
-  of gbkThreadgroupsPerGrid: "make_int3(gridDim.x, gridDim.y, gridDim.z)"
+  of gbkThreadgroupPositionInGrid: "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)"
+  of gbkThreadPositionInThreadgroup: "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)"
+  of gbkThreadsPerThreadgroup: "make_uint3(blockDim.x, blockDim.y, blockDim.z)"
+  of gbkThreadgroupsPerGrid: "make_uint3(gridDim.x, gridDim.y, gridDim.z)"
   of gbkThreadIndexInThreadgroup:
     # x-major flat thread index, parenthesized so a trailing `* k`
     # cannot mis-associate into `+ threadIdx.x * k`.
@@ -331,11 +331,11 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       # `blockIdx.d*blockDim.d + threadIdx.d`. Without the parentheses,
       # a trailing `* k` would bind to `threadIdx.d` only.
       let d = ast.dField.ident()
-      result = "(int)(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
+      result = "(blockIdx." & d & "*blockDim." & d & "+threadIdx." & d & ")"
     elif ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
          ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component of an unsigned CUDA builtin, cast to standard Nim `int` from default uint.
-      result = "(int)(" & cudaCoordIdent(ast.dParent.symbol.coordBuiltin, ast.dParent.ident()) & '.' & ast.dField.ident() & ')'
+      # Component of an unsigned CUDA builtin, the canonical Nim domain is uint32.
+      result = cudaCoordIdent(ast.dParent.symbol.coordBuiltin, ast.dParent.ident()) & '.' & ast.dField.ident()
     else:
       result = ctx.genCuda(ast.dParent) & '.' & ctx.genCuda(ast.dField)
 

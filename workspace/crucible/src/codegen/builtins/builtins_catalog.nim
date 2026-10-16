@@ -31,9 +31,10 @@ import ./builtins_pragmas
 ## and forwarded to the backend spelling by each printer.
 
 type
-  ivec3* = tuple[x, y, z: int]
-    ## Canonical GPU coordinate vector, int domain.
-    ## Crucible lowers int to the target's int width, int32 in CUDA C.
+  ivec3* = tuple[x, y, z: uint32]
+    ## Canonical GPU coordinate vector, uint32 domain.
+    ## Coordinates are unsigned on every backend: CUDA `uint`, OpenCL `size_t`,
+    ## GLSL `uvec3`, WGSL `vec3<u32>`, MSL `uint3`.
     ## Positions and dimensions are structural grid coordinates,
     ## never wraparound arithmetic inputs.
     ## Tuple so `.x` and `[idx]` access both work.
@@ -97,35 +98,35 @@ template gridDim*(): untyped = threadgroups_per_grid
 template threadIdx*(): untyped = thread_position_in_threadgroup
 
 # OpenCL idiom
-template get_global_id*(d: static int): int =
+template get_global_id*(d: static int): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_grid`.
   when d == 0: thread_position_in_grid.x
   elif d == 1: thread_position_in_grid.y
   elif d == 2: thread_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_global_id".}
-template get_group_id*(d: static int): int =
+template get_group_id*(d: static int): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroup_position_in_grid`.
   when d == 0: threadgroup_position_in_grid.x
   elif d == 1: threadgroup_position_in_grid.y
   elif d == 2: threadgroup_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_group_id".}
-template get_local_id*(d: static int): int =
+template get_local_id*(d: static int): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `thread_position_in_threadgroup`.
   when d == 0: thread_position_in_threadgroup.x
   elif d == 1: thread_position_in_threadgroup.y
   elif d == 2: thread_position_in_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_id".}
-template get_local_size*(d: static int): int =
+template get_local_size*(d: static int): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threads_per_threadgroup`.
   when d == 0: threads_per_threadgroup.x
   elif d == 1: threads_per_threadgroup.y
   elif d == 2: threads_per_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_size".}
-template get_num_groups*(d: static int): int =
+template get_num_groups*(d: static int): uint32 =
   ## OpenCL work-item dimension helper: static `d` folds to the matching component of `threadgroups_per_grid`.
   when d == 0: threadgroups_per_grid.x
   elif d == 1: threadgroups_per_grid.y

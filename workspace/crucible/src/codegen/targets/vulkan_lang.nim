@@ -292,11 +292,11 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   ## GLSL spelling of a canonical coordinate builtin referenced whole.
   ## All six canonicals are native GLSL builtins, so this is a plain rename.
   case kind
-  of gbkThreadPositionInGrid: "ivec3(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y), int(gl_GlobalInvocationID.z))"
-  of gbkThreadgroupPositionInGrid: "ivec3(int(gl_WorkGroupID.x), int(gl_WorkGroupID.y), int(gl_WorkGroupID.z))"
-  of gbkThreadPositionInThreadgroup: "ivec3(int(gl_LocalInvocationID.x), int(gl_LocalInvocationID.y), int(gl_LocalInvocationID.z))"
-  of gbkThreadsPerThreadgroup: "ivec3(int(gl_WorkGroupSize.x), int(gl_WorkGroupSize.y), int(gl_WorkGroupSize.z))"
-  of gbkThreadgroupsPerGrid: "ivec3(int(gl_NumWorkGroups.x), int(gl_NumWorkGroups.y), int(gl_NumWorkGroups.z))"
+  of gbkThreadPositionInGrid: "uvec3(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y, gl_GlobalInvocationID.z)"
+  of gbkThreadgroupPositionInGrid: "uvec3(gl_WorkGroupID.x, gl_WorkGroupID.y, gl_WorkGroupID.z)"
+  of gbkThreadPositionInThreadgroup: "uvec3(gl_LocalInvocationID.x, gl_LocalInvocationID.y, gl_LocalInvocationID.z)"
+  of gbkThreadsPerThreadgroup: "uvec3(gl_WorkGroupSize.x, gl_WorkGroupSize.y, gl_WorkGroupSize.z)"
+  of gbkThreadgroupsPerGrid: "uvec3(gl_NumWorkGroups.x, gl_NumWorkGroups.y, gl_NumWorkGroups.z)"
   of gbkThreadIndexInThreadgroup: "int(gl_LocalInvocationIndex)"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.

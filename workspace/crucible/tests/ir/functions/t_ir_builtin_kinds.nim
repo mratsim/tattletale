@@ -85,19 +85,22 @@ const kindCuda = cuda:
     C[2] = thread_position_in_threadgroup.x
     C[3] = threads_per_threadgroup.x
     C[4] = threadgroups_per_grid.x
-    C[5] = thread_index_in_threadgroup
+    # the flat index is the x-major linearization, an arithmetic quantity consumed
+    # host-side as int (ceramic tile ops), unlike the unsigned coordinate components
+    C[5] = uint32(thread_index_in_threadgroup)
     threadgroup_barrier()
     printf("i = %u", C[0])
     let thread_position_in_grid = 5'u32
     C[6] = thread_position_in_grid
 
 block:
-  # Component access of each coordinate kind lowers to its CUDA spelling.
+  # Component access of each coordinate kind lowers to its CUDA spelling,
+  # the make_uint3 whole-value construction with the field taken from it.
   doAssert "(blockIdx.x*blockDim.x+threadIdx.x)" in kindCuda
-  doAssert "C[1] = blockIdx.x" in kindCuda
-  doAssert "C[2] = threadIdx.x" in kindCuda
-  doAssert "C[3] = blockDim.x" in kindCuda
-  doAssert "C[4] = gridDim.x" in kindCuda
+  doAssert "C[1] = make_uint3(blockIdx.x, blockIdx.y, blockIdx.z).x" in kindCuda
+  doAssert "C[2] = make_uint3(threadIdx.x, threadIdx.y, threadIdx.z).x" in kindCuda
+  doAssert "C[3] = make_uint3(blockDim.x, blockDim.y, blockDim.z).x" in kindCuda
+  doAssert "C[4] = make_uint3(gridDim.x, gridDim.y, gridDim.z).x" in kindCuda
   # The flat thread index is the parenthesized x-major linearization.
   doAssert "threadIdx.z*blockDim.x*blockDim.y" in kindCuda
   # The barrier kind lowers to the native CUDA call even though getFnName
@@ -110,7 +113,7 @@ block:
   doAssert "unsigned int thread_position_in_grid = 5U" in kindCuda
   doAssert "C[6] = thread_position_in_grid" in kindCuda
   doAssert "C[6] = (blockIdx" notin kindCuda
-  echo "  OK — real CUDA emission (6 coordinates, barrier, printf, shadowed local)"
+  echo "  OK: real CUDA emission (6 coordinates, barrier, printf, shadowed local)"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

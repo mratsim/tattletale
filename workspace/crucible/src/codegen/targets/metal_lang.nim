@@ -414,8 +414,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
        ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component of an unsigned MSL builtin, cast to standard Nim `int` from default uint.
-      result = "(int)(" & ctx.genMetalImpl(ast.dParent, 0) & '.' & ctx.genMetalImpl(ast.dField, 0) & ')'
+      # Component of an unsigned MSL builtin, the canonical Nim domain is uint32.
+      result = ctx.genMetalImpl(ast.dParent, 0) & '.' & ctx.genMetalImpl(ast.dField, 0)
     else:
       result = ctx.genMetalImpl(ast.dParent, 0) & '.' &
                ctx.genMetalImpl(ast.dField, 0)

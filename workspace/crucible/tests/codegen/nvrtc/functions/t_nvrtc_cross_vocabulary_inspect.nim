@@ -37,7 +37,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   # The global-id expression as a multiplicative operand: the emitted
   # text is the parenthesized sum, then the multiply. A trailing `* k`
   # binds to the whole sum, never to `threadIdx.x` alone.
-  doAssert "((int)(blockIdx.x*blockDim.x+threadIdx.x) * 2)" in kernelCode,
+  doAssert "((blockIdx.x*blockDim.x+threadIdx.x) * 2)" in kernelCode,
     "CUDA global-id multiply must keep the sum parenthesized:\n" & kernelCode
   # canonical flat local index -> parenthesized x-major linearization
   doAssert "(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)" in kernelCode,

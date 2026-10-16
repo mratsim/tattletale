@@ -597,8 +597,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
        ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component of a u32 WGSL builtin, cast to standard Nim `int` from default u32.
-      result = "i32(" & ctx.genWebGpu(ast.dParent) & '.' & ctx.genWebGpu(ast.dField) & ')'
+      # Component of a u32 WGSL builtin, the canonical Nim domain is uint32.
+      result = ctx.genWebGpu(ast.dParent) & '.' & ctx.genWebGpu(ast.dField)
     else:
       let fieldName = if ast.dField.kind == gpuIdent: wgslSafeMember(ast.dField.ident())
                       else: ctx.genWebGpu(ast.dField)

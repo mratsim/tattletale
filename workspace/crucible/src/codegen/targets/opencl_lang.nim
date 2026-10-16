@@ -238,7 +238,8 @@ proc genLit*(ast: GpuAst): string =
 
 proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
   ## OpenCL C spelling of a canonical coordinate field access: each component
-  ## maps to a `get_*(d)` call with the dimension as a literal.
+  ## maps to a `get_*(d)` call with the dimension as a literal, size_t narrowed
+  ## to the canonical uint32 domain at the assignment.
   ## Returns "" for kinds without a per-component mapping
   ## (whole-value uses of the vector builtins have no OpenCL spelling).
   let d =
@@ -248,11 +249,11 @@ proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
     of "z": "2"
     else: return ""
   case kind
-  of gbkThreadPositionInGrid: "(int)get_global_id(" & d & ")"
-  of gbkThreadgroupPositionInGrid: "(int)get_group_id(" & d & ")"
-  of gbkThreadPositionInThreadgroup: "(int)get_local_id(" & d & ")"
-  of gbkThreadsPerThreadgroup: "(int)get_local_size(" & d & ")"
-  of gbkThreadgroupsPerGrid: "(int)get_num_groups(" & d & ")"
+  of gbkThreadPositionInGrid: "get_global_id(" & d & ")"
+  of gbkThreadgroupPositionInGrid: "get_group_id(" & d & ")"
+  of gbkThreadPositionInThreadgroup: "get_local_id(" & d & ")"
+  of gbkThreadsPerThreadgroup: "get_local_size(" & d & ")"
+  of gbkThreadgroupsPerGrid: "get_num_groups(" & d & ")"
   of gbkThreadIndexInThreadgroup, gbkNone: ""
 
 proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =

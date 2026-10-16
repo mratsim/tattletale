@@ -1140,6 +1140,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkHiddenStdConv, nnkHiddenSubConv:
     doAssert node[0].kind == nnkEmpty
     result = ctx.toGpuAst(reg, node[1])
+    # Nim sem inserts the hidden conversion when an untyped literal adapts to
+    # its context type (e.g. `uint32Coord * 2` types the literal uint32).
+    # The IR literal must carry the converted type or strict-signedness
+    # backends (WGSL) see an i32 literal inside a u32 expression.
+    if result.kind == gpuLit:
+      result.lType = resolveType(reg, node.getTypeInst())
   of nnkConv:
     # maps type conversion, e.g. `let i: int = 5; i.uint32`
     result = GpuAst(kind: gpuConv, convTo: resolveType(reg, node[0]), convExpr: ctx.toGpuAst(reg, node[1]))
