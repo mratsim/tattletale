@@ -59,7 +59,7 @@ proc checkGemmRef[E: HwEngine](engine: E, M, N, K: int, launch: LaunchFn[E], msg
     aHost = newSeq[F16](M * K)
     bHost = newSeq[F16](K * N)
   let
-    aTV = make_view(addr aHost[0], make_layout((M, K), (M, one)))
+    aTV = make_view(addr aHost[0], make_layout((M, K), (K, one)))
     bTV = make_view(addr bHost[0], make_layout((N, K), (one, N)))
   fillGemmInputs(aTV, bTV, M, N, K)
   let
@@ -73,9 +73,9 @@ proc checkGemmRef[E: HwEngine](engine: E, M, N, K: int, launch: LaunchFn[E], msg
   var refHost = newSeq[float32](M * N)
   engine.copyToHostFromDevice(addr gotHost[0], dDev, M * N * sizeof(float32))
   let gotTV = make_view(cast[ptr UncheckedArray[float32]](addr gotHost[0]),
-    make_layout((M, N), (M, one)))
+    make_layout((M, N), (N, one)))
   let refTV = make_view(cast[ptr UncheckedArray[float32]](addr refHost[0]),
-    make_layout((M, N), (M, one)))
+    make_layout((M, N), (N, one)))
   gemm_ref(1.0'f32, aTV, bTV, 0.0'f32, gotTV, refTV)
   assertAllClose(gotTV, refTV, rtol = 1e-5, abstol = 1e-3, msg = msg)
   engine.freeDevice(aDev)
@@ -91,7 +91,7 @@ proc gemmBench*[E: HwEngine](engine: E, launch: LaunchFn[E], M, N, K: int, iters
     aHost = newSeq[F16](M * K)
     bHost = newSeq[F16](K * N)
   let
-    aTV = make_view(addr aHost[0], make_layout((M, K), (M, one)))
+    aTV = make_view(addr aHost[0], make_layout((M, K), (K, one)))
     bTV = make_view(addr bHost[0], make_layout((N, K), (one, N)))
   fillGemmInputs(aTV, bTV, M, N, K)
   let

@@ -37,13 +37,13 @@ proc launchGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iters: 
   let one = 1  # runtime int, the layouts stay dynamic
   let
     dC = make_view(cast[ptr UncheckedArray[float32]](dDev),
-      make_layout((M, N), (M, one)))
+      make_layout((M, N), (N, one)))
     dA = make_view(cast[ptr UncheckedArray[float16]](aDev),
-      make_layout((M, K), (M, one)))
+      make_layout((M, K), (K, one)))
     dB = make_view(cast[ptr UncheckedArray[float16]](bDev),
       make_layout((N, K), (one, N)))
   engine.wrap_and_run gemmLoop(tiledMma(float32, float16, float16, 32, 32, 16), dC, dA, dB, iters) do:
-    grid = (ceil_div(dC.getLayout().shape[0], 32), ceil_div(dC.getLayout().shape[1], 32))
+    grid = (ceil_div(M, 32), ceil_div(N, 32))
     blk = (32, 1)
 
 proc launchMlxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iters: int) =
@@ -51,8 +51,8 @@ proc launchMlxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iter
     engine.ingest(MlxSteelGemmSrc)
     steelCurrent = true
   let
-    tm = (M + 63) div 64
-    tn = (N + 63) div 64
+    tm = ceil_div(M, 64)
+    tn = ceil_div(N, 64)
     swizzleLog = if tm <= 3: 0 else: 1
     tile = 1 shl swizzleLog
   let params = MlxGemmParams(
@@ -63,7 +63,7 @@ proc launchMlxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iter
     swizzle_log: swizzleLog, gemm_k_iterations_aligned: K div 16,
     batch_ndim: 0)
   engine.run("mlx_gemm_64x64x16", dDev, (aDev, bDev, params, iters),
-    LaunchConfig(grid: dim3((tn * tile, (tm + tile - 1) div tile, 1)),
+    LaunchConfig(grid: dim3((tn * tile, ceil_div(tm, tile), 1)),
                  blk: dim3((128, 1, 1)), sharedMem: 5376))
 
 proc main() =
