@@ -95,9 +95,12 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   var staticRepr = ""
   for s in statics:
     staticRepr.add(repr(s))
+  var typeRepr = ""
+  for t in valueTypes:
+    typeRepr.add(repr(t))
+  # the bridge bakes the value types in, the cache key carries them
   # negative hashes contain a `-` which MSL rejects in identifiers
-  let kname = (if staticRepr.len == 0: $kernel
-               else: $kernel & "_" & $hash(staticRepr)).replace("-", "n")
+  let kname = ($kernel & "_" & $hash(staticRepr & "|" & typeRepr)).replace("-", "n")
   if not BridgeDefs.hasKey(kname):
     let built = buildGlobalFn(kname, kernel, statics, valueTypes, formalTypeNodes, valueNames)
     BridgeDefs[kname] = nnkStmtList.newTree(built)

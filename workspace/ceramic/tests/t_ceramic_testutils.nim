@@ -31,6 +31,17 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let report = allClose(actual, expected, rtol = 1e-4'f64, abstol = 1e-4'f64)
       check report.bad == 2
 
+    test "NaN and unequal infinities never match":
+      var bufActual = [float32 NaN, float32 Inf, 1.0'f32, 2.0'f32]
+      var bufExpected = [1.0'f32, float32 Inf, 1.0'f32, float32 -Inf]
+      let actual = make_view(cast[ptr UncheckedArray[float32]](addr bufActual[0]),
+                             make_layout((2, 2), (2, 1)))
+      let expected = make_view(cast[ptr UncheckedArray[float32]](addr bufExpected[0]),
+                               make_layout((2, 2), (2, 1)))
+      let report = allClose(actual, expected, rtol = 1e-4'f64, abstol = 1e-4'f64)
+      # the NaN element and the +Inf vs -Inf element mismatch
+      check report.bad == 2
+
     test "equal broadcast views pass":
       var bufActual = [1.0'f32, 2, 1, 2]
       var bufExpected = [1.0'f32, 2, 1, 2]

@@ -1706,9 +1706,8 @@ RAISE_ANY_RE = re.compile(r"^\s*raise\b")
 
 
 def nim_except_rewrap_checks(path, text, findings):
-    """Flags an except clause whose body re-raises the caught exception, the
-    rewrap shape that pays try/except cost in the hot path to rewrite a
-    message. Raising a different exception is translation and stays legal."""
+    """Flags any raise inside an except clause: rewrapping eats the original
+    stack trace, exceptions are handled or propagated, never rewrapped."""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
         m = EXCEPT_RE.match(raw)

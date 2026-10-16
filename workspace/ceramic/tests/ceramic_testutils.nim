@@ -52,8 +52,13 @@ proc allClose*[T, ShA, StA, ShB, StB](
     let crd = idx2crd(actual.getLayout().shape, i)
     let a = toF64(actual.data[toInt crd2idx(actual.getLayout(), crd)])
     let e = toF64(expected.data[toInt crd2idx(expected.getLayout(), crd)])
-    let d = abs(a - e)
-    if d > abstol + rtol * abs(e):
+    # NaN never matches, a NaN difference is not greater than any bound,
+    # an infinite expected value must not inflate the relative bound
+    var d = abs(a - e)
+    if a != e and (a != a or e != e):
+      d = Inf
+    let re = if e == e and abs(e) != Inf: abs(e) else: 0.0
+    if d > abstol + rtol * re:
       if result.bad == 0:
         result.firstCrd = $crd
         result.firstGot = a
