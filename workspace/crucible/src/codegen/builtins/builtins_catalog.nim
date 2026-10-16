@@ -32,13 +32,13 @@ import ./builtins_pragmas
 
 type
   ivec3* = tuple[x, y, z: uint32]
-    ## Canonical GPU coordinate vector, uint32 domain.
-    ## Coordinates are unsigned on every backend: CUDA `uint`, OpenCL `size_t`,
-    ## GLSL `uvec3`, WGSL `vec3<u32>`, MSL `uint3`.
-    ## Positions and dimensions are structural grid coordinates,
-    ## never wraparound arithmetic inputs.
-    ## Tuple so `.x` and `[idx]` access both work.
-    ## `nim_to_gpu` normalizes tuple `[idx]` to a field access.
+    ## Canonical GPU coordinate vector, uint32 domain:
+    ## - coordinates are unsigned on every backend: CUDA `uint`, OpenCL `size_t`,
+    ##   GLSL `uvec3`, WGSL `vec3<u32>`, MSL `uint3`
+    ## - positions and dimensions are structural grid coordinates, never
+    ##   wraparound arithmetic inputs
+    ## - tuple so `.x` and `[idx]` access both work, `nim_to_gpu` normalizes
+    ##   tuple `[idx]` to a field access
 
 # ═══════════════════════════════════════════════════════════
 # Canonical dummies: the MSL vocabulary
