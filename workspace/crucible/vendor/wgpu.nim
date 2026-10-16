@@ -357,6 +357,11 @@ proc wgpuInstanceRequestAdapter*(
     callbackInfo: WGPURequestAdapterCallbackInfo): WGPUFuture
   {.importc: "wgpuInstanceRequestAdapter", dynlib: libWgpu.}
 
+const WGPUFeatureName_ShaderF16* = 0x0000000B'u32
+
+proc wgpuAdapterHasFeature*(adapter: WGPUAdapter, feature: uint32): uint32
+  {.importc: "wgpuAdapterHasFeature", dynlib: libWgpu.}
+
 proc wgpuAdapterRequestDevice*(
     adapter: WGPUAdapter,
     descriptor: ptr WGPUDeviceDescriptor,
