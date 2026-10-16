@@ -12,7 +12,7 @@ import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
 import ../chevrons
-import ../kernel_args
+import ../launch_common
 
 export wgpu_runtime
 # ═════════════════════════════════════════════════════════════════════════
@@ -158,9 +158,11 @@ proc parseBakedBlk(wgsl: string): Dim3 =
 
 
 proc launchKernel*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
-  ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  ## blk must match the shader's baked workgroup size, plain run dispatches it.
+  ## Runs `kernel` on the engine's device, building the pipeline on first use:
+  ## - `output` receives the kernel's result, `args` bind positionally
+  ## - `cfg` carries the launch geometry, `blk` must match the shader's baked workgroup size
+  ## - a plain run dispatches (1, 1)
+  ## - example: engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let device = engine.ctx.ctx.device
   let queue  = engine.ctx.ctx.queue
 
