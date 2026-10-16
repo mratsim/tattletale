@@ -39,32 +39,34 @@ proc isStaticFormal(f: NimNode): bool =
   ptype.kind == nnkStaticTy or
     (ptype.kind == nnkCommand and $ptype[0] == "static")
 
-proc isConstantTy(t: NimNode): bool =
-  ## Whether the type node has no scalar leaf: only tuples and generic
-  ## instantiations of fieldless objects, a compile-time constant
-  ## crossing the launch boundary as no bytes
+proc needTempStorage(t: NimNode): bool =
   case t.kind
-  of nnkIntLit..nnkFloat128Lit:
-    # a static parameter carries its value in the type
-    result = true
-  of nnkBracketExpr:
-    # a generic instantiation, constant iff every argument is
-    result = true
-    for e in t[1 ..< t.len]:
-      if not isConstantTy(e):
-        return false
-  of nnkTupleTy:
-    result = true
-    for d in t:
-      if d.kind == nnkIdentDefs and not isConstantTy(d[^2]):
-        return false
-  of nnkPar, nnkTupleConstr:
-    result = true
-    for e in t:
-      if not isConstantTy(e):
-        return false
-  else:
+  of nnkVarTy:
+    error "buildGlobalFn: var fields are not supported: " & t.repr
+  of nnkStaticTy:
     result = false
+  of nnkBracketExpr:
+    if t[0].typeKind == ntyTypeDesc:
+      result = false
+    else:
+      result = false
+      for e in t[1 ..< t.len]:
+        if needTempStorage(e):
+          return true
+  of nnkCharLit..nnkNilLit:
+    result = false
+  of nnkTupleTy:
+    result = false
+    for d in t:
+      if d.kind == nnkIdentDefs and needTempStorage(d[^2]):
+        return true
+  of nnkPar, nnkTupleConstr:
+    result = false
+    for e in t:
+      if needTempStorage(e):
+        return true
+  else:
+    result = true
 
 proc constantValue(t: NimNode): NimNode =
   ## Builds the compile-time value of a constant type node: nested
@@ -116,7 +118,7 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
           doAssert fldType.kind != nnkObjectTy,
             "buildGlobalFn: nested pointer structs are not supported: " & vtype.repr
           for m in 0 ..< d.len - 2:
-            if isConstantTy(fldType):
+            if not needTempStorage(fldType):
               # a constant field crosses the launch boundary as no bytes,
               # the kernel reads its value from the type
               reconFields.add(nnkExprColonExpr.newTree(d[m].copy(),

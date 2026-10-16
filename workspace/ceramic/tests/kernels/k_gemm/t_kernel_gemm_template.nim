@@ -35,14 +35,14 @@ import workspace/fp_conv/fp_conv
 # ═══════════════════════════════════════════════════════════════
 
 func view2D[T](data: ptr UncheckedArray[T], shape, strides: (int, int)):
-    TensorView[T, tuple[a, b: int], tuple[a, b: int]] =
+    TensorView[T, (int, int), (int, int)] =
   ## 2D view over a presized buffer
   make_view(data, make_layout(shape, strides))
 
 proc gemm_ref*(alpha: float32,
-               A, B: TensorView[F16, tuple[a, b: int], tuple[a, b: int]],
+               A, B: TensorView[F16, (int, int), (int, int)],
                beta: float32,
-               C, refOut: TensorView[float32, tuple[a, b: int], tuple[a, b: int]]) =
+               C, refOut: TensorView[float32, (int, int), (int, int)]) =
   let
     M = int(A.getLayout().shape[0])
     N = int(B.getLayout().shape[0])
