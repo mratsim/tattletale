@@ -91,16 +91,26 @@ proc main() =
   for p in commandLineParams():
     wanted.add parseInt(p)
   separator()
+  var sizeIdx = 0
   for mnk in ProblemSizes:
     if wanted.len == 0 or mnk in wanted:
       let iters = if mnk >= 4096: 20 elif mnk >= 2048: 100 else: 1000
-      gemmBench(engine, launchGemm, mnk, mnk, mnk, iters,
-                "tiledMma 32x32x16 fp16")
-      gemmBench(engine, launchMlxGemm, mnk, mnk, mnk, iters,
-                "mlx steel gemm 64x64x16")
-      gemmBench(engine, launchNaxGemm, mnk, mnk, mnk, iters,
-                "mlx NAX gemm 64x64x256")
+      # the run order rotates per size index, thermal drift stops
+      # systematically favoring the implementation that runs first
+      let order = [sizeIdx mod 3, (sizeIdx + 1) mod 3, (sizeIdx + 2) mod 3]
+      for oi in order:
+        case oi
+        of 0:
+          gemmBench(engine, launchGemm, mnk, mnk, mnk, iters,
+                    "tiledMma 32x32x16 fp16")
+        of 1:
+          gemmBench(engine, launchMlxGemm, mnk, mnk, mnk, iters,
+                    "mlx steel gemm 64x64x16")
+        else:
+          gemmBench(engine, launchNaxGemm, mnk, mnk, mnk, iters,
+                    "mlx NAX gemm 64x64x256")
       separator()
+    inc sizeIdx
 
 when isMainModule:
   main()
