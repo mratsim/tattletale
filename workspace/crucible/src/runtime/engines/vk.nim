@@ -13,6 +13,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
 import ../chevrons
+import ../kernel_args
 
 export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
@@ -160,14 +161,16 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
+proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple,
+          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##
-  ## Usage:
-  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   ##
   ## `output` is the kernel's first argument, then the args in declaration order.
   ## Device buffers pass as-is, scalars copy by value into the push-constant block.
+  ##
+  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
+  ## (wrap_and_run), checked against the engine binding at compile time.
+  ## Direct runs pass the default and bind from the kernel arg contract alone.
   ##
   ## Host seqs and arrays are not launch args:
   ## allocDevice + copyToDeviceFromHost upload them, copyToHostFromDevice reads results back.
@@ -202,26 +205,22 @@ proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tupl
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
-  var pushConstBytes = newSeq[byte]()
-  var inputBuffers = newSeq[VulkanBuffer]()
-  var argsCopy = args
-  for f in fields(argsCopy):
-    when typeof(f) is VulkanBuffer:
-      inputBuffers.add f
-    elif typeof(f) is bool:
-      # std430 push-constant scalars are 4-byte aligned
-      let v = int32(f)
-      for j in 0 ..< sizeof(int32):
-        pushConstBytes.add cast[ptr UncheckedArray[byte]](v.addr)[j]
-    else:
-      if sizeof(f) mod 4 != 0:
-        quit("Vulkan by-value (push-constant) args must be 4-byte-aligned " &
-             "std430 types, got " & $sizeof(f) & " bytes")
-      for j in 0 ..< sizeof(f):
-        pushConstBytes.add cast[ptr UncheckedArray[byte]](f.addr)[j]
-  if pushConstBytes.len > 128:
+  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), VulkanBuffer](layout, bkVulkan)
+  var binding: KernelBinding[VulkanBuffer]
+  bindKernelArgs[VulkanBuffer](binding, argLayout, bkVulkan, output, args, ptrAsBuffer = false, argAlign = 1)
+  # std430 push-constant scalars are 4-byte aligned
+  for s in binding.slots:
+    if not s.isBuffer and s.width mod 4 != 0:
+      quit("Vulkan by-value (push-constant) args must be 4-byte-aligned " &
+           "std430 types, got " & $s.width & " bytes")
+  if binding.bytes.len > 128:
     quit("Vulkan push constants exceed the spec-guaranteed 128-byte max (got " &
-         $pushConstBytes.len & " bytes)")
+         $binding.bytes.len & " bytes)")
+  var inputBuffers = newSeq[VulkanBuffer]()
+  for i in 1 ..< binding.slots.len:
+    if binding.slots[i].isBuffer:
+      inputBuffers.add binding.slots[i].buffer
+  let pushConstBytes = binding.bytes
 
   # The pipeline layout depends only on the shader module, the SSBO count
   # (output at binding 0 + buffer inputs) and the push-constant size.

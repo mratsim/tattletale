@@ -12,6 +12,7 @@ import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
 import ../chevrons
+import ../kernel_args
 
 export wgpu_runtime
 # ═════════════════════════════════════════════════════════════════════════
@@ -157,7 +158,8 @@ proc parseBakedBlk(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
+proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
+          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
   ##
   ## Usage:
@@ -166,6 +168,10 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   ## `output` is the kernel's first argument, then the args in declaration order.
   ## Device buffers pass as-is, scalars copy by value into a scratch buffer
   ## created per launch (WebGPU has no push constants).
+  ##
+  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
+  ## (wrap_and_run), checked against the engine binding at compile time.
+  ## Direct runs pass the default and bind from the kernel arg contract alone.
   ##
   ## Host seqs and arrays are not launch args:
   ## allocDevice + copyToDeviceFromHost upload them, copyToHostFromDevice reads results back.
@@ -189,29 +195,13 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
          "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
 
-  var scalarBytes = newSeq[byte]()
-  type ArgShape = tuple[isScalar: bool, width: int, offset: int]
-  var argShapes: seq[ArgShape]
-  var argsCopy = args
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
   # the device keeps the spec-default limits, the spec-default alignment is 256.
-  const ScalarSlotAlign = 256
-  for f in fields(argsCopy):
-    when typeof(f) is WGPUBuffer:
-      argShapes.add (false, 0, 0)
-    elif typeof(f) is bool:
-      let v = int32(f)
-      let offset = (scalarBytes.len + ScalarSlotAlign - 1) div ScalarSlotAlign * ScalarSlotAlign
-      scalarBytes.setLen(offset)
-      argShapes.add (true, sizeof(int32), offset)
-      for j in 0 ..< sizeof(int32):
-        scalarBytes.add cast[ptr UncheckedArray[byte]](v.addr)[j]
-    else:
-      let offset = (scalarBytes.len + ScalarSlotAlign - 1) div ScalarSlotAlign * ScalarSlotAlign
-      scalarBytes.setLen(offset)
-      argShapes.add (true, sizeof(f), offset)
-      for j in 0 ..< sizeof(f):
-        scalarBytes.add cast[ptr UncheckedArray[byte]](f.addr)[j]
+  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), WGPUBuffer](layout, bkWGSL)
+  var binding: KernelBinding[WGPUBuffer]
+  bindKernelArgs[WGPUBuffer](binding, argLayout, bkWGSL, output, args, ptrAsBuffer = false, argAlign = 256)
+  let scalarBytes = binding.bytes
+  let argShapes = binding.slots
 
   var scratch = WGPUBuffer(nil)
   if scalarBytes.len > 0:
@@ -230,7 +220,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
 
   var argShapeKey = newSeq[int](argShapes.len)
   for i, a in argShapes:
-    argShapeKey[i] = if a.isScalar: -a.width else: 0
+    argShapeKey[i] = if not a.isBuffer: -a.width else: 0
   let cacheKey = (kernel, argShapeKey)
   var cache: WgpuPipelineCache
   if engine.cache.pipelines.hasKey(cacheKey):
@@ -251,9 +241,9 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
         binding: (i + 1).cuint,
         visibility: WGPUShaderStageCompute,
         buffer: WGPUBufferBindingLayout(
-          `type`: if a.isScalar: WGPUBufferBindingTypeReadOnlyStorage
+          `type`: if not a.isBuffer: WGPUBufferBindingTypeReadOnlyStorage
                   else: WGPUBufferBindingTypeStorage,
-          minBindingSize: a.width.csize_t
+          minBindingSize: (if not a.isBuffer: a.width else: 0).csize_t
         )
       )
     var bglDesc = WGPUBindGroupLayoutDescriptor(
@@ -317,18 +307,13 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
   for i, a in argShapes:
     bgEntries[i + 1] = WGPUBindGroupEntry(
       binding: (i + 1).cuint,
-      buffer: if a.isScalar: scratch else: WGPUBuffer(nil),
+      buffer: if not a.isBuffer: scratch else: a.buffer,
       offset: a.offset.cuint,
-      size: (if a.isScalar: a.width else: 0).csize_t
+      size: (if not a.isBuffer: a.width else: 0).csize_t
     )
-  # Buffer args land at their declaration position, the scalar slots above
-  # already claim the binding of every non-buffer arg.
-  var ai = 0
-  for f in fields(argsCopy):
-    when typeof(f) is WGPUBuffer:
-      bgEntries[ai + 1].buffer = f
-      bgEntries[ai + 1].size = wgpuBufferGetSize(f).csize_t
-    inc ai
+  for i, a in argShapes:
+    if a.isBuffer:
+      bgEntries[i + 1].size = wgpuBufferGetSize(a.buffer).csize_t
   var bgDesc = WGPUBindGroupDescriptor(
     layout: cache.bindGroupLayout,
     entryCount: totalBindings.csize_t,

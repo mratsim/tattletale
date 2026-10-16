@@ -12,6 +12,7 @@ import workspace/crucible/src/abis/c_abi
 import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
 import ../chevrons
+import ../kernel_args
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
@@ -156,8 +157,13 @@ proc load(nvrtc: var NVRTC) =
   nvrtc.moduleLoaded = true
 
 
-proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
+proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple,
+          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
+  ##
+  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
+  ## (wrap_and_run), checked against the engine binding at compile time.
+  ## Direct runs pass the default and bind from the kernel arg contract alone.
   ##
   ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -174,12 +180,17 @@ proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, 
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
-  # every parameter passes by value as its address, CUDA copies at launch
-  var outVal = output
-  var params: seq[pointer] = @[pointer(addr outVal)]
-  var argsCopy = args
-  for f in fields(argsCopy):
-    params.add addr f
+  # every parameter passes by value as its address, CUDA copies at launch,
+  # device pointers bind as buffer slots, their value is the param
+  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), CUdeviceptr](layout, bkCuda)
+  var binding: KernelBinding[CUdeviceptr]
+  bindKernelArgs[CUdeviceptr](binding, argLayout, bkCuda, output, args, ptrAsBuffer = false, argAlign = 1)
+  var params: seq[pointer] = @[]
+  for i, s in binding.slots:
+    if s.isBuffer:
+      params.add binding.slots[i].buffer.addr
+    else:
+      params.add binding.bytes[s.offset].addr
 
   let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
   check cuLaunchKernel(

@@ -7,6 +7,7 @@
 import std/[strutils, tables]
 
 import ../../codegen/ir/gpu_types
+import ../kernel_args
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
@@ -150,72 +151,13 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  func hasPtrField[T](): bool {.compileTime.} =
-    when typeof(default(T)) is ptr or typeof(default(T)) is pointer:
-      result = true
-    elif typeof(default(T)) is object|tuple:
-      for f in fields(default(T)):
-        if hasPtrField[typeof(f)]():
-          return true
-    # otherwise false via the default result
-
-  func needTempStorage[T](): bool {.compileTime.} =
-    when typeof(default(T)) is object|tuple:
-      result = false
-      for f in fields(default(T)):
-        if needTempStorage[typeof(f)]():
-          return true
-    else:
-      result = true
-
-  proc packBytes(x: auto, bytes: var seq[byte]) =
-    ## Appends one value tree in launch-blob byte order: scalars pack
-    ## at the crucible-lowered width (`int`/`uint` lower to 32-bit),
-    ## structs and tuples recurse per field, in field order
-    when typeof(x) is bool:
-      let v = int32(x)
-      bytes.add(cast[ptr array[4, byte]](addr v)[])
-    elif typeof(x) is int:
-      let v = int32(x)
-      bytes.add(cast[ptr array[4, byte]](addr v)[])
-    elif typeof(x) is uint:
-      let v = uint32(x)
-      bytes.add(cast[ptr array[4, byte]](addr v)[])
-    elif typeof(x) is object|tuple:
-      var copy = x
-      for f in fields(copy):
-        packBytes(f, bytes)
-    else:
-      bytes.add(cast[ptr array[sizeof(x), byte]](unsafeAddr x)[])
-
-  proc bindLeaves(x: auto, bufs: var seq[objc.ID], bytes: var seq[byte], chunks: var seq[tuple[off, len: int]]) =
-    ## Collects one launch leaf:
-    ## - buffer handles and pointer leaves collect as buffers, a pointer
-    ##   leaf's raw value is the buffer identity
-    ## - other values pack as one chunk at the crucible-lowered widths,
-    ##   one chunk per exploded device param
-    ## - object and tuple values explode per field in field order, matching
-    ##   the bridge's leaf explosion
-    ## - a fully static subtree carries no bytes, values are read back
-    ##   as compile-time constants
-    when typeof(x) is objc.ID:
-      bufs.add(x)
-    elif typeof(x) is ptr or typeof(x) is pointer:
-      bufs.add(cast[objc.ID](x))
-    elif typeof(x) is object|tuple:
-      var copy = x
-      for f in fields(copy):
-        when not needTempStorage[typeof(f)]():
-          discard
-        else:
-          bindLeaves(f, bufs, bytes, chunks)
-    else:
-      let off = bytes.len
-      packBytes(x, bytes)
-      chunks.add((off, bytes.len - off))
-
-  proc run*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
+  proc run*(engine: MetalEngine, kernel: string, output: auto, args: tuple,
+            cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
     ## Runs `kernel` on the engine's GPU.
+    ##
+    ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
+    ## (wrap_and_run), checked against the engine binding at compile time.
+    ## Direct runs pass the default and bind from the kernel arg contract alone.
     ##
     ## Usage:
     ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -251,22 +193,21 @@ when defined(macosx):
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      var bufs: seq[objc.ID] = @[]
-      var bytes: seq[byte] = @[]
-      var chunks: seq[tuple[off, len: int]] = @[]
-      bindLeaves(output, bufs, bytes, chunks)
-      var argsCopy = args
-      for f in fields(argsCopy):
-        bindLeaves(f, bufs, bytes, chunks)
+      const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), objc.ID](layout, bkMetal)
+      var binding: KernelBinding[objc.ID]
+      bindKernelArgs[objc.ID](binding, argLayout, bkMetal, output, args, ptrAsBuffer = true, argAlign = 1)
       var idx = 0
-      for h in bufs:
-        discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                        h, objc.NSUInteger(0), objc.NSUInteger(idx))
-        inc idx
-      for c in chunks:
-        discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
-                        addr bytes[c.off], objc.NSUInteger(c.len), objc.NSUInteger(idx))
-        inc idx
+      for s in binding.slots:
+        if s.isBuffer:
+          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                          s.buffer, objc.NSUInteger(0), objc.NSUInteger(idx))
+          inc idx
+      for s in binding.slots:
+        if not s.isBuffer:
+          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
+                          binding.bytes[s.offset].addr, objc.NSUInteger(s.width),
+                          objc.NSUInteger(idx))
+          inc idx
       if cfg.sharedMem > 0:
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))

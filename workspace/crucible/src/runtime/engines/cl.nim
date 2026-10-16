@@ -10,6 +10,7 @@ import std/tables
 import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
+import ../kernel_args
 import ../exec/opencl_runtime
 import ../chevrons
 
@@ -79,8 +80,13 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, cfg = LaunchConfig()) =
+proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple,
+          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
+  ##
+  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
+  ## (wrap_and_run), checked against the engine binding at compile time.
+  ## Direct runs pass the default and bind from the kernel arg contract alone.
   ##
   ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -93,19 +99,14 @@ proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tupl
     engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
   var kern = engine.kernelCache.kernels[kernel]
 
-  kern.setArg(0, output)
-  var idx = 1
-  var argsCopy = args
-  for f in fields(argsCopy):
-    when typeof(f) is OpenCLBuffer:
-      kern.setArg(idx, f)
-    elif typeof(f) is bool:
-      # OpenCL C has no bool, the codegen declares scalar bool as `int`
-      var v = int32(f)
-      kern.setArg(idx, sizeof(int32), addr v)
+  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), OpenCLBuffer](layout, bkOpenCL)
+  var binding: KernelBinding[OpenCLBuffer]
+  bindKernelArgs[OpenCLBuffer](binding, argLayout, bkOpenCL, output, args, ptrAsBuffer = false, argAlign = 1)
+  for i, s in binding.slots:
+    if s.isBuffer:
+      kern.setArg(i, s.buffer)
     else:
-      kern.setArg(idx, sizeof(f), addr f)
-    inc idx
+      kern.setArg(i, s.width, binding.bytes[s.offset].addr)
 
   # global = grid·blk work-items, local = blk (per axis, 3D NDRange)
   let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),

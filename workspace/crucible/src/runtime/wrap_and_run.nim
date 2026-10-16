@@ -11,11 +11,15 @@ import std/[macros, macrocache, algorithm, hashes, strutils, tables]
 import ../codegen/gpu_compiler
 import chevrons {.all.}
 import engines
+import kernel_args
 
 export chevrons
 
-const BridgeDefs = CacheTable"crucible.wrap_and_run.bridges"
-  # `{.global.}` bridge proc per kernel launch shape, built on first launch
+const
+  BridgeDefs = CacheTable"crucible.wrap_and_run.bridges"
+    # `{.global.}` bridge proc per kernel launch shape, built on first launch
+  BridgeLayouts = CacheTable"crucible.wrap_and_run.bridgeLayouts"
+    # the kernel arg descriptor of each bridge, the launch is gated against it
 
 proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
   # Replaces identifier leaves matched in `bindings`, recursing everywhere
@@ -39,130 +43,23 @@ proc isStaticFormal(f: NimNode): bool =
   ptype.kind == nnkStaticTy or
     (ptype.kind == nnkCommand and $ptype[0] == "static")
 
-proc needTempStorage(t: NimNode): bool =
-  case t.kind
-  of nnkVarTy:
-    error "buildGlobalFn: var fields are not supported: " & t.repr
-  of nnkStaticTy:
-    result = false
-  of nnkBracketExpr:
-    if t[0].typeKind == ntyTypeDesc:
-      result = false
-    else:
-      result = false
-      for e in t[1 ..< t.len]:
-        if needTempStorage(e):
-          return true
-  of nnkCharLit..nnkNilLit:
-    result = false
-  of nnkTupleTy:
-    result = false
-    for d in t:
-      if d.kind == nnkIdentDefs and needTempStorage(d[^2]):
-        return true
-  of nnkPar, nnkTupleConstr:
-    result = false
-    for e in t:
-      if needTempStorage(e):
-        return true
-  else:
-    result = true
-
-proc constantValue(t: NimNode): NimNode =
-  ## Builds the compile-time value of a constant type node: nested
-  ## fieldless objects and tuples constructed from their argument types
-  if t.kind == nnkBracketExpr:
-    return nnkCall.newTree(t.copy())
-  if t.kind in {nnkTupleTy, nnkPar, nnkTupleConstr}:
-    var r = nnkTupleConstr.newTree()
-    if t.kind == nnkTupleTy:
-      for d in t:
-        if d.kind == nnkIdentDefs:
-          r.add(constantValue(d[^2]))
-    else:
-      for e in t:
-        r.add(constantValue(e))
-    return r
-  error "constantValue: not a constant type node: " & t.repr
-
-proc isBindMany(t: NimNode): bool =
-  if t.kind == nnkDistinctTy: return true
-  if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
-  return false
-
-proc hasPtrTy(t: NimNode): bool =
-  ## True when the type-impl node holds a pointer leaf anywhere
-  if t.kind in {nnkPtrTy, nnkRefTy}:
-    return true
-  for c in t:
-    if hasPtrTy(c):
-      return true
-  return false
-
-proc reconstructFromLeaves(prefix: string, t, impl: NimNode, params: NimNode): NimNode =
-  ## Bridge-body value of type `t` (impl `impl` = `t.getTypeImpl()`)
-  ## assembled from launch leaves named `cru<prefix>...`:
-  ## - a static subtree rebuilds from the type, crossing as no bytes
-  ## - a dynamic scalar becomes one launch parameter
-  ## - an object or tuple explodes into its fields, recursion per field
-  if not needTempStorage(t):
-    return constantValue(t)
-  case impl.kind
-  of nnkObjectTy:
-    result = nnkObjConstr.newTree(t.copy())
-    for k in 2 ..< impl.len:
-      let recList = impl[k]
-      doAssert recList.kind in {nnkRecList, nnkIdentDefs},
-        "buildGlobalFn: unsupported object field node " & recList.repr
-      let defs = if recList.kind == nnkRecList: recList else:
-          nnkRecList.newTree(recList)
-      for d in defs:
-        doAssert d.kind == nnkIdentDefs,
-          "buildGlobalFn: unsupported field " & d.repr
-        let fldType = d[^2]
-        if needTempStorage(fldType):
-          let fldImpl = fldType.getTypeImpl()
-          doAssert fldImpl.kind notin {nnkObjectTy, nnkTupleTy, nnkPar, nnkTupleConstr} or
-              not hasPtrTy(fldImpl),
-            "buildGlobalFn: nested pointer structs are not supported: " & t.repr
-        for m in 0 ..< d.len - 2:
-          result.add(nnkExprColonExpr.newTree(d[m].copy(),
-            reconstructFromLeaves(prefix & "_" & $d[m], fldType, fldType.getTypeImpl(), params)))
-  of nnkTupleTy, nnkPar, nnkTupleConstr:
-    result = nnkTupleConstr.newTree()
-    var i = 0
-    for e in impl:
-      if e.kind == nnkIdentDefs:
-        for m in 0 ..< e.len - 2:
-          result.add(reconstructFromLeaves(prefix & "_" & $e[m], e[^2], e[^2].getTypeImpl(), params))
-      else:
-        result.add(reconstructFromLeaves(prefix & "_F" & $i, e, e.getTypeImpl(), params))
-      inc i
-  else:
-    # scalar or pointer leaf: one launch parameter
-    let pname = ident("cru" & prefix)
-    params.add(nnkIdentDefs.newTree(pname, t.copy(), newEmptyNode()))
-    result = pname
-
 proc buildGlobalFn(kname: string, kernel, statics: NimNode,
                    valueTypes, valueImpls, formalTypes: seq[NimNode],
-                   valueNames: seq[string]): NimNode =
+                   valueNames: seq[string]): tuple[bridge: NimNode, layout: KernelArgLayout] =
   # Builds the `{.global.}` bridge proc:
   #
-  #   proc <kname>(<leaf params>) {.global.} =
+  #   proc <kname>(<kernel arg params>) {.global.} =
   #     <kernel>(<static args>, <rebuilt formals>)
   var params = nnkFormalParams.newTree(newEmptyNode())
   var bridgeArgs: seq[NimNode] = @[]
+  var layout: KernelArgLayout
   for i, vtype in valueTypes:
-    let useFormal = i < formalTypes.len and not isBindMany(formalTypes[i])
+    let useFormal = i < formalTypes.len and not isBindManyArg(formalTypes[i])
     let argType = if useFormal: formalTypes[i] else: vtype
     let obj = if useFormal: formalTypes[i].getTypeImpl() else: valueImpls[i]
-    if obj.kind == nnkObjectTy:
-      bridgeArgs.add(reconstructFromLeaves(valueNames[i], argType, obj, params))
-    else:
-      let pname = ident("cru" & valueNames[i])
-      params.add(nnkIdentDefs.newTree(pname, argType.copy(), newEmptyNode()))
-      bridgeArgs.add(pname)
+    # every value routes through the one explosion: composites explode,
+    # static subtrees rebuild from the type, dynamic scalars cross as one param
+    bridgeArgs.add(reconstructKernelArg(valueNames[i], argType, obj, params, layout))
   var bridgeCall = nnkCall.newTree(kernel)
   for s in statics:
     bridgeCall.add(s)
@@ -170,13 +67,14 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
     bridgeCall.add(a)
   let body = nnkStmtList.newTree(bridgeCall)
 
-  result = nnkProcDef.newTree(
+  result.bridge = nnkProcDef.newTree(
     ident(kname),
     newEmptyNode(), newEmptyNode(),
     params,
     nnkPragma.newTree(ident"global"),
     newEmptyNode(),
     body)
+  result.layout = layout
 
 macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys: untyped,
                     gridN, blkN: untyped, values: varargs[typed]): untyped =
@@ -207,8 +105,9 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   let kname = (if staticRepr.len == 0: $kernel
                else: $kernel & "_" & $hash(staticRepr)).replace("-", "n")
   if not BridgeDefs.hasKey(kname):
-    BridgeDefs[kname] = nnkStmtList.newTree(
-      buildGlobalFn(kname, kernel, statics, valueTypes, valueImpls, formalTypeNodes, valueNames))
+    let built = buildGlobalFn(kname, kernel, statics, valueTypes, valueImpls, formalTypeNodes, valueNames)
+    BridgeDefs[kname] = nnkStmtList.newTree(built.bridge)
+    BridgeLayouts[kname] = kernelArgLayoutAst(built.layout)
 
   var bindings = initTable[string, NimNode]()
   for i, name in valueNames:
@@ -222,12 +121,14 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   let outputNode = values[0]
 
   let bridgeSource = ident("crucibleBridgeSource" & kname)
+  let bridgeLayout = ident("crucibleBridgeLayout" & kname)
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let vulkanCg = bindSym"vulkan"
   let webgpuCg = bindSym"webgpu"
   let bridgeNode = BridgeDefs[kname].copy()
+  let bridgeLayoutNode = BridgeLayouts[kname].copy()
 
   result = quote do:
     when not declared(`bridgeSource`):
@@ -237,11 +138,13 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
                            elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`bridgeNode`)
                            elif typeof(`engine`).backendKind == bkWGSL: `webgpuCg`(`bridgeNode`)
                            else: {.error: "wrap_and_run: no lowering for this engine".}
+      const `bridgeLayout` = `bridgeLayoutNode`
     block:
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
       `engine`.run(`kname`, `outputNode`, `argsTuple`,
-                   LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)))
+                   LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)),
+                   `bridgeLayout`)
 
 macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped): untyped =
   # Static/value arg split, behind `wrap_and_run`:
