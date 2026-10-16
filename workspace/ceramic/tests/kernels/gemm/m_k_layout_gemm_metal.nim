@@ -42,7 +42,7 @@ proc gemmTileFrag(C, A, B: ptr UncheckedArray[float32]) {.inline.} =
       rA[v, (0, s)] = A[crd2idx(aLayout, (tid, v)) + s * blockElems]
       rB[v, (0, s)] = B[crd2idx(bLayout, (tid, v)) + s * blockElems]
   rC.fillWith(0.0'f32)
-  atom.gemm_tile(rC, rA, rB)
+  atom.gemm_tile(rC, rA, rB, rC)
   for v in 0 ..< vC:
     C[crd2idx(cLayout, (tid, v))] = rC[v, (0, 0)]
 
@@ -53,6 +53,10 @@ const kernelCode = metal:
 proc runTest() =
   var engine = bkMetal.init()
   engine.ingest(kernelCode)
+  let
+    aDev = engine.allocDevice(M * kSlices * K * sizeof(float32))
+    bDev = engine.allocDevice(N * kSlices * K * sizeof(float32))
+    cDev = engine.allocDevice(M * N * sizeof(float32))
   var rng = initRand(0xC0FFEE)
   var allOk = true
   for trial in 0 ..< 16:
@@ -74,8 +78,11 @@ proc runTest() =
           acc += A[m + k * M] * B[n + k * N]
         refC[m + n * M] = acc
     var gpuC = newSeq[float32](M * N)
+    engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(float32))
+    engine.copyToDeviceFromHost(bDev, addr B[0], B.len * sizeof(float32))
     engine.run << (grid: (1, 1), blk: (32, 1)) >>
-      ("gemmTileKernel", gpuC, (A, B))
+      ("gemmTileKernel", cDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr gpuC[0], cDev, M * N * sizeof(float32))
     var worst = 0.0'f32
     for m in 0 ..< M:
       for n in 0 ..< N:
@@ -84,6 +91,9 @@ proc runTest() =
     allOk = allOk and pass
     echo &"  gemm_tile Apple trial {trial}: ",
          (if pass: &"PASS worst |d| = {worst}" else: &"FAIL worst |d| = {worst}")
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(cDev)
   if not allOk: quit 1
 
 when isMainModule:
