@@ -55,7 +55,7 @@ proc siluAndMulKernel(gs, us: seq[float32], M, N: int): F.Tensor =
       X[r * 2 * N + c] = fp32ToFp16(gs[r * N + c])
       X[r * 2 * N + N + c] = fp32ToFp16(us[r * N + c])
   var outO = newSeq[uint16](M * N)
-  engine.run << (grid: (N div 64, (M + 7) div 8, 1), blk: (32, 1)) >> ("siluAndMulKernel", outO, (X, int32(M), int32(N), 0.0'f32))
+  engine.launchKernel << (grid: (N div 64, (M + 7) div 8, 1), blk: (32, 1)) >> ("siluAndMulKernel", outO, (X, int32(M), int32(N), 0.0'f32))
   var outF = newSeq[float32](M * N)
   for i in 0 ..< M * N:
     outF[i] = fp16ToFp32(outO[i])

@@ -44,7 +44,7 @@ const ggufDequantMsl = metal:
 proc dequantKernel(engine: var auto, launcher: string, packed: seq[uint8],
     K, N, rowBytes: int): seq[uint16] =
   var outO = newSeq[uint16](N * K)
-  engine.run << (grid: (K div 16, N div 32, 1), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (K div 16, N div 32, 1), blk: (32, 1)) >> (
     launcher, outO, (packed, int32(K), int32(rowBytes)))
   result = outO
 

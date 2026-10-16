@@ -547,7 +547,7 @@ task test_ceramic, "Test workspace/ceramic":
 # Run from tattletale/: the runners resolve their source paths and the
 # default dump dir relative to the working directory.
 
-const CgsBenchDir = "workspace/ceramic/benchmark/codegen_size"
+const CgsBenchDir = "workspace/ceramic/bench/codegen_size"
 
 proc cgsCmd(filename: string; dump: bool): string =
   "nim c -r --hints:off --warnings:off -d:release" &

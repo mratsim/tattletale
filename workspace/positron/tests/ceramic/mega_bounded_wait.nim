@@ -48,7 +48,7 @@ proc runMegaBounded*[C: static int](
   ##
   ## - `launch` performs exactly one engine dispatch and returns
   ## - the wrapper runs each launch on a worker thread and joins it, keeping
-  ##   launches serialized exactly as an unwrapped `engine.run` sequence
+  ##   launches serialized exactly as an unwrapped `engine.launchKernel` sequence
   ## - `counters` is the launch's host-visible counters page and `stageNames` gives the labels
   ##
   ## Expiry:

@@ -157,9 +157,9 @@ proc parseBakedBlk(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernel*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   ## blk must match the shader's baked workgroup size, plain run dispatches it.
   let device = engine.ctx.ctx.device
   let queue  = engine.ctx.ctx.queue

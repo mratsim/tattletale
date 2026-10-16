@@ -27,7 +27,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[128, float32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      engine.run<<(1, 1)>>("kernel", buf, ())
+      engine.launchKernel<<(1, 1)>>("kernel", buf, ())
       # fillWith writes 42.0 to every element
       check buf[0] == 42.0'f32
       check buf[127] == 42.0'f32

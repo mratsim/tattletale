@@ -153,10 +153,10 @@ proc load(nvrtc: var NVRTC) =
   nvrtc.moduleLoaded = true
 
 
-proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
+proc launchKernel*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
-  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   # the context is made current per launch, several engines can coexist
   # the launch synchronizes before returning
   check cuCtxSetCurrent(engine.nvrtc.context)

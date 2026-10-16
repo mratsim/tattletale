@@ -57,7 +57,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var Buf: array[64, float32]
       var engine = bkCuda.init()
       engine.ingest(kernelPartition)
-      engine.run<<(1, 8)>>("partKernel", Buf, ())
+      engine.launchKernel<<(1, 8)>>("partKernel", Buf, ())
       check Buf[0] == 1.0'f32
 
 when isMainModule:

@@ -38,7 +38,7 @@ proc exl3LinearKernel(xBits: seq[uint16], trellis: seq[int16],
   var engine = bkMetal.init()
   engine.ingest(exl3LinearMsl)
   var outO = newSeq[uint16](M * N)
-  engine.run << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (
+  engine.launchKernel << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (
     "exl3LinearB" & $bits, outO, (xBits, trellis, suh, svh, int32(M), int32(K), int32(N)))
   var outF = newSeq[float32](M * N)
   for i in 0 ..< M * N:

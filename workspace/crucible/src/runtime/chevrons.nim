@@ -23,8 +23,8 @@ type
     grid*, blk* = default(Dim3)
     sharedMem*, stream* = 0
 
-  RunSugar*[E] = object
-    ## Transient chevron sugar, created per `engine.run` access.
+  LaunchSugar*[E] = object
+    ## Transient chevron sugar, created per `engine.launchKernel` access.
     engine: E
 
   LaunchProxy*[E] = object
@@ -49,15 +49,15 @@ proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
-proc run*[E](engine: E): RunSugar[E] =
+proc launchKernel*[E](engine: E): LaunchSugar[E] =
   ## `run` accessor, a proc never a template, templates would hijack the plain call.
   ## A proc resolves by signature, 4 args hit the engine's plain `run`,
-  ## a bare `engine.run` hits this accessor.
-  RunSugar[E](engine: engine)
+  ## a bare `engine.launchKernel` hits this accessor.
+  LaunchSugar[E](engine: engine)
 
-macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
+macro `<<`*[E](r: LaunchSugar[E], cfg: untyped): untyped =
   ## Chevron launch config, named or positional:
-  ##   engine.run<<(grid, blk), sharedMem: n>> / engine.run<<grid, blk, sharedMem, stream>>
+  ##   engine.launchKernel<<(grid, blk), sharedMem: n>> / engine.launchKernel<<grid, blk, sharedMem, stream>>
 
   let cfgAst = cfg
   var gridN, blkN, smN, stN: NimNode
@@ -92,7 +92,7 @@ macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
       sharedMem: `smN`, stream: `stN`))
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
-  ## Builds the run call: `engine.run<<cfg>>("kernel", output, (args...))`
+  ## Builds the run call: `engine.launchKernel<<cfg>>("kernel", output, (args...))`
   doAssert call.kind in {nnkPar, nnkTupleConstr, nnkCall, nnkBracket},
     "chevron RHS must be (\"kernel\", output, (args...)), got: " & call.repr
   doAssert call.len == 3,
@@ -101,4 +101,4 @@ macro `>>`*(proxy: typed, call: untyped): untyped =
   let outputN = call[1]
   let argsN = call[2]
   result = quote do:
-    `proxy`.engine.run(`kernelN`, `outputN`, `argsN`, `proxy`.cfg)
+    `proxy`.engine.launchKernel(`kernelN`, `outputN`, `argsN`, `proxy`.cfg)

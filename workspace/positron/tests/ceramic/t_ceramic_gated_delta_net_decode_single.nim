@@ -140,7 +140,7 @@ proc runCombo(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, steps, c
       betaB.hostPtr[h] = si.betaBits[h]
 
   proc launch(si: StepInputs) =
-    engine.run << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (Dv div TileR, bhMax, 1), blk: (32, 1, 1)) >>
       (kernelName, statePA,
         (yPA, kPA, qPA, vPA, betaPA, gPA,
           int32(Hv), int32(Hk), int32(hkRatio)))

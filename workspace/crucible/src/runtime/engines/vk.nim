@@ -156,9 +156,9 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernel*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   ## blk must match the shader's baked workgroup size, plain run dispatches it.
   var vctx = engine.ctx.ctx
 

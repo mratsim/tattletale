@@ -16,7 +16,7 @@ import properties/properties
 
 # One launcher per MoeAct member, the gguf launchers' shape.
 # The activation is a static binding of the entry, each launcher
-# instantiates its member and engine.run addresses the instantiation
+# instantiates its member and engine.launchKernel addresses the instantiation
 # by the launcher's name.
 const moeMsl = metal:
   proc moeRunSilu(out_r, x, router_w, gate_up_w, down_w,
@@ -102,7 +102,7 @@ proc moeKernelBits(g: MoEG, r: MoeRow): seq[uint16] =
   var outO = newSeq[uint16](r.tokens * r.hidden)
   var hScr = newSeq[uint16](r.tokens * r.topK * r.inter)
   var hsScr = newSeq[uint16](r.tokens * r.nShared * r.inter)
-  engine.run << (grid: (r.tokens, 1, 1), blk: (32, 1)) >> (moeRunName(r.act),
+  engine.launchKernel << (grid: (r.tokens, 1, 1), blk: (32, 1)) >> (moeRunName(r.act),
     outO,
     (fp32sToFp16(g.xf), fp32sToFp16(g.rwf), fp32sToFp16(g.guf),
      fp32sToFp16(g.dnf), fp32sToFp16(g.sguf), fp32sToFp16(g.sdwf),
@@ -315,7 +315,7 @@ proc checkConfigGuard() =
   var outO = newSeq[uint16](8 * 2048)
   for i in 0 ..< outO.len:
     outO[i] = 0x7BFF'u16
-  engine.run << (grid: (8, 1, 1), blk: (32, 1)) >> ("moeRunSilu", outO,
+  engine.launchKernel << (grid: (8, 1, 1), blk: (32, 1)) >> ("moeRunSilu", outO,
     (newSeq[uint16](8 * 2048), newSeq[uint16](1024 * 2048),
      newSeq[uint16](1024 * 3072), newSeq[uint16](1024 * 2048),
      newSeq[uint16](3072), newSeq[uint16](2048),

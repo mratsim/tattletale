@@ -390,7 +390,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, T, H, E, K, cases: int;
         &"expert id out of range at pair {i}"
 
   proc launch =
-    engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
       (kernelName, idsPA, (wPA, xPA, rWPA, sPA, int32(T)))
     inc launches
 
@@ -582,7 +582,7 @@ proc runSharedGateCombo(engine: HwEngine; dt: ScalarKind; T, cases: int;
 
   proc launch =
     let kernelName = if dt == kBfloat16: "cer_shared_gate_bf16" else: "cer_shared_gate_f16"
-    engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
       (kernelName, outPA, (xPA, sgwPA))
     inc launches
 
@@ -665,7 +665,7 @@ proc runMergeCombo(engine: HwEngine; dt: ScalarKind; T, H, K, cases: int;
       partB.hostPtr[i] = rng.nextF32(-1.0'f32, 1.0'f32)
     for i in 0 ..< nOut:
       outB.hostPtr[i] = 0xFFFF'u16
-    engine.run << (grid: (T, H32 div 32, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, H32 div 32, 1), blk: (32, 1, 1)) >>
       (kernelName, outPA, partPA)
     inc launches, int(gridX * gridY)
     for t in 0 ..< T:
@@ -769,12 +769,12 @@ proc runPoisonedRouter(engine: HwEngine) =
       partB.hostPtr[i] = 4.203895392974451e-45'f32
 
   proc launchChain() =
-    engine.run << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, 1, 1), blk: (32, 1, 1)) >>
       ("cer_moe_route_bf16_mega", idsPA, (wPA, xPA, rWPA, sPA, int32(T)))
-    engine.run << (grid: (T, K + 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, K + 1, 1), blk: (32, 1, 1)) >>
       ("cer_moe_fwd_bf16_mega", partPA,
         (xPA, rWPA, guPA, dWPA, sgPA, suPA, sdPA, gvPA, hPA, hsPA, sFwdPA))
-    engine.run << (grid: (T, H div 32, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (T, H div 32, 1), blk: (32, 1, 1)) >>
       ("cer_moe_merge_bf16_mega", outPA, partPA)
 
   proc record(): tuple[ids: seq[int32], w: seq[uint16], part: seq[float32], outRow: seq[uint16]] =

@@ -151,7 +151,7 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
   proc launch =
     for tx in 0 ..< gridX:
       for ty in 0 ..< gridY:
-        engine.run << (grid: (1, 1, 1), blk: (32, 1, 1)) >>
+        engine.launchKernel << (grid: (1, 1, 1), blk: (32, 1, 1)) >>
           (kernelName, outPA,
           (xPA, wPA, int32(N), int32(K), int32(M), int32(tx), int32(ty)))
     inc launches, gridX * gridY

@@ -194,7 +194,7 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
   var scoresPA = scoresScratch.pa()
 
   proc launch(): bool {.gcsafe.} =
-    engine.run << (grid: (tokens, K + 1, 1), blk: (32, 1, 1)) >>
+    engine.launchKernel << (grid: (tokens, K + 1, 1), blk: (32, 1, 1)) >>
       (entry, partialPA,
         (xPA, routerWPA, gateUpWPA, downWPA, sharedGWPA, sharedUWPA,
          sharedDWPA, sharedGVPA, hPA, hsPA, scoresPA))

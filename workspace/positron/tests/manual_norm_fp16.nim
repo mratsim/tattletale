@@ -51,7 +51,7 @@ proc rmsNormResInKernel(Xh, Rh, Gh: seq[uint16], M, C: int, eps: float32): F.Ten
   var engine = bkMetal.init()
   engine.ingest(rmsMsl)
   var outO = newSeq[uint16](M * C)
-  engine.run << (grid: (1, (M + 7) div 8), blk: (32, 1)) >> ("rmsNormResInKernel", outO, (Xh, Rh, Gh, int32(M), int32(C), eps))
+  engine.launchKernel << (grid: (1, (M + 7) div 8), blk: (32, 1)) >> ("rmsNormResInKernel", outO, (Xh, Rh, Gh, int32(M), int32(C), eps))
   var outF = newSeq[float32](M * C)
   for i in 0 ..< M * C:
     outF[i] = fp16ToFp32(outO[i])

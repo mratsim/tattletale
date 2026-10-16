@@ -77,9 +77,9 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernel*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
-  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let ctx = engine.ctx.ctx
   # NVIDIA-OpenCL only: the codegen emits Nim `asm(...)` as GCC-style inline
   # asm in the OpenCL C kernel, only NVIDIA's LLVM-based OpenCL compiler

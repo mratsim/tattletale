@@ -103,7 +103,7 @@ proc pagedAttnKernel(
   let args = (q, kSlab, vSlab, blockTable, cacheSeqlens, cuSeqlensQ,
               int32(numSeqs), int32(H), int32(Nkv), int32(maxPages),
               int32(numLayers), int32(layer))
-  engine.run << (grid: (1, H, numSeqs), blk: (32, 1)) >> ("pagedD128", outO, args)
+  engine.launchKernel << (grid: (1, H, numSeqs), blk: (32, 1)) >> ("pagedD128", outO, args)
   var outF = newSeq[float32](nQo * H * D)
   for i in 0 ..< nQo * H * D:
     outF[i] = fp16ToFp32(outO[i])
