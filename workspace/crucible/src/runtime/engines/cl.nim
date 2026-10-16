@@ -9,6 +9,8 @@
 import std/tables
 import workspace/crucible/src/abis/cl_abi
 
+import ../../codegen/ir/gpu_types
+import ../kernel_args
 import ../exec/opencl_runtime
 import ../chevrons
 
@@ -32,6 +34,8 @@ type
     ctx: OpenCLCtx
     kernelCache: OpenCLKernelCache   # after ctx: released before ctx shutdown
 
+proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
@@ -39,12 +43,10 @@ proc `=destroy`(c: var OpenCLCtx) =
   c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
 
 proc `=destroy`(cache: var OpenCLKernelCache) =
-  ## Release cached kernels while the context is still alive.
   for _, kern in cache.kernels.mpairs:
     kern.destroyKernel()
 
 proc newOpenCLEngine(): OpenCLEngine =
-  ## Private factory, engines.nim reaches it via `import {.all.}`.
   OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()))
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -52,8 +54,7 @@ proc newOpenCLEngine(): OpenCLEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
-  ## Store the OpenCL C source. Re-entrant: replaces the previous artifact
-  ## and releases cached kernels, which are rebuilt lazily on the next run.
+  ## Stores the OpenCL C source, re-entrant, cached kernels rebuild lazily.
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"
@@ -78,8 +79,6 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 
 proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
-  ##
-  ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let ctx = engine.ctx.ctx
   # NVIDIA-OpenCL only: the codegen emits Nim `asm(...)` as GCC-style inline
@@ -90,19 +89,15 @@ proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tupl
     engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
   var kern = engine.kernelCache.kernels[kernel]
 
-  kern.setArg(0, output)
-  var idx = 1
-  var argsCopy = args
-  for f in fields(argsCopy):
-    when typeof(f) is OpenCLBuffer:
-      kern.setArg(idx, f)
-    elif typeof(f) is bool:
-      # OpenCL C has no bool, the codegen declares scalar bool as `int`
-      var v = int32(f)
-      kern.setArg(idx, sizeof(int32), addr v)
+  type SinkCtx = object
+    kern: OpenCLKernel
+  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: OpenCLBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
+    if isBuffer:
+      ctx.kern.setArg(idx, h)
     else:
-      kern.setArg(idx, sizeof(f), addr f)
-    inc idx
+      ctx.kern.setArg(idx, len, p)
+  var dctx = SinkCtx(kern: kern)
+  bindArgs(dctx, bkOpenCL, output, args, false, sinkArg)
 
   # global = grid·blk work-items, local = blk (per axis, 3D NDRange)
   let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),

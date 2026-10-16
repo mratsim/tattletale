@@ -794,6 +794,9 @@ proc codegen*(ctx: var GpuContext): string =
         needsF16 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroups = true
+  for id, g in ctx.globals:
+    if g.typ.containsKind(gtFloat16):
+      needsF16 = true
   if needsF16:
     result.add "enable f16;\n\n"
   if needsSubgroups:

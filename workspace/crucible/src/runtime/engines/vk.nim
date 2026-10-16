@@ -10,8 +10,10 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
+import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
 import ../chevrons
+import ../kernel_args
 
 export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
@@ -39,6 +41,8 @@ type
     bakedBlk: Dim3   # workgroup size baked into the shader at ingest
     caches: VulkanCaches
 
+proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
@@ -47,16 +51,12 @@ proc `=destroy`(c: var VulkanCtx) =
     c.ctx.shutdown()
 
 proc `=destroy`(c: var VulkanCaches) =
-  ## Releases the cached pipelines before the engine's ctx shuts down,
-  ## reverse declaration order destroys the caches first.
-  ## The custom `=destroy` releases the tables explicitly.
   for p in c.pipelineCache.mvalues:
     p.destroyPipeline(c.ctx)
   `=destroy`(c.pipelineCache)
   `=destroy`(c.spirvCache)
 
 proc newVulkanEngine(): VulkanEngine =
-  ## Private factory, engines.nim reaches it via `import {.all.}`.
   let vctx = initVulkan()
   VulkanEngine(
     ctx: VulkanCtx(ctx: vctx),
@@ -67,8 +67,7 @@ proc newVulkanEngine(): VulkanEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
-  ## glslangValidator → SPIR-V. Re-entrant: replaces the previous artifact
-  ## (the device context persists, only the compiled artifact is replaced).
+  ## Stores the source, glslangValidator → SPIR-V, re-entrant.
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
@@ -159,18 +158,8 @@ proc parseEntryPoint(glsl: string): string =
 
 proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##
-  ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  ##
-  ## `output` is the kernel's first argument, then the args in declaration order.
-  ## Device buffers pass as-is, scalars copy by value into the push-constant block.
-  ##
-  ## Host seqs and arrays are not launch args:
-  ## allocDevice + copyToDeviceFromHost upload them, copyToHostFromDevice reads results back.
-  ##
-  ## Plain `run` dispatches with the shader's workgroup size, chevron
-  ## `run<<grid, blk>>` sets the grid, blk must match the shader's baked workgroup size.
+  ## blk must match the shader's baked workgroup size, plain run dispatches it.
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_xyz), a default cfg dispatches the baked size,
@@ -199,32 +188,33 @@ proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tupl
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
-  var pushConstBytes = newSeq[byte]()
-  var inputBuffers = newSeq[VulkanBuffer]()
-  var argsCopy = args
-  for f in fields(argsCopy):
-    when typeof(f) is VulkanBuffer:
-      inputBuffers.add f
-    elif typeof(f) is bool:
-      # std430 push-constant scalars are 4-byte aligned
-      let v = int32(f)
-      for j in 0 ..< sizeof(int32):
-        pushConstBytes.add cast[ptr UncheckedArray[byte]](v.addr)[j]
+  # byte chunks pack into the 128-byte push-constant block, buffers
+  # cross as storage bindings
+  type SinkCtx = object
+    pushBuf: array[128, byte]
+    pn: int
+    inputBuffers: seq[VulkanBuffer]
+  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: VulkanBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
+    if isBuffer:
+      if idx > 0:
+        ctx.inputBuffers.add h
     else:
-      if sizeof(f) mod 4 != 0:
+      if len mod 4 != 0:
         quit("Vulkan by-value (push-constant) args must be 4-byte-aligned " &
-             "std430 types, got " & $sizeof(f) & " bytes")
-      for j in 0 ..< sizeof(f):
-        pushConstBytes.add cast[ptr UncheckedArray[byte]](f.addr)[j]
-  if pushConstBytes.len > 128:
-    quit("Vulkan push constants exceed the spec-guaranteed 128-byte max (got " &
-         $pushConstBytes.len & " bytes)")
+             "std430 types, got " & $len & " bytes")
+      if ctx.pn + len > 128:
+        quit("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+      copyMem(ctx.pushBuf[ctx.pn].addr, p, len)
+      inc ctx.pn, len
+  var dctx = SinkCtx()
+  bindArgs(dctx, bkVulkan, output, args, false, sinkArg)
+  let pushConstLen = dctx.pn
 
   # The pipeline layout depends only on the shader module, the SSBO count
   # (output at binding 0 + buffer inputs) and the push-constant size.
   # The fully-created pipeline is cached by (kernel, ssboCount, pushConstSize)
   # and reused across runs.
-  let pipelineKey = (kernel, inputBuffers.len + 1, pushConstBytes.len)
+  let pipelineKey = (kernel, dctx.inputBuffers.len + 1, pushConstLen)
   if not engine.caches.pipelineCache.hasKey(pipelineKey):
     # The shader module is only needed when building a new pipeline
     let vkCreateShaderModule = cast[
@@ -245,14 +235,14 @@ proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tupl
       ](vctx.gpaAddr(vctx.instance, "vkDestroyShaderModule"))
       if shaderModule != nil and vkDestroyShaderModule != nil:
         vkDestroyShaderModule(vctx.device, shaderModule, nil)
-    var pipeline = vctx.createPipeline(shaderModule, inputBuffers.len + 1, entry,
-                                     pushConstBytes.len)
+    var pipeline = vctx.createPipeline(shaderModule, dctx.inputBuffers.len + 1, entry,
+                                     pushConstLen)
     engine.caches.pipelineCache[pipelineKey] = pipeline
 
   # Output first (binding 0), then buffer inputs
   engine.caches.pipelineCache[pipelineKey].setArg(0, output, vctx)
-  for i in 0 ..< inputBuffers.len:
-    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, inputBuffers[i], vctx)
+  for i in 0 ..< dctx.inputBuffers.len:
+    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, dctx.inputBuffers[i], vctx)
 
   # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
   vctx.runKernel(engine.caches.pipelineCache[pipelineKey],
@@ -260,8 +250,8 @@ proc run*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tupl
                   uint32(cfg.grid.y * blk.y),
                   uint32(cfg.grid.z * blk.z)],
                  [uint32(blk.x), uint32(blk.y), uint32(blk.z)],
-                 if pushConstBytes.len > 0: pushConstBytes[0].addr else: nil,
-                 pushConstBytes.len)
+                 if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
+                 pushConstLen)
 
 proc allocDevice*(engine: VulkanEngine, n: int): VulkanBuffer =
   var vctx = engine.ctx.ctx

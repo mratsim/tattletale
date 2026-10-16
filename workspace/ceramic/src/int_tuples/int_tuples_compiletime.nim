@@ -29,8 +29,11 @@ template isConst*(a: tuple): bool = false
 
 func IntCT*(val: int): NimNode {.compileTime.} =
   ## Shorthand: Int[val]() AST node.
-  newNimNode(nnkObjConstr).add(
-    newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
+  newNimNode(nnkObjConstr).add(newNimNode(nnkBracketExpr).add(ident"Int", newLit(val)))
+
+func intTy*(val: int): NimNode {.compileTime.} =
+  ## Int[val] bracket for the compile-time value `val`
+  IntCT(val)[0]
 
 func divmod*(a, b: int): (int, int) {.compileTime.} =
   ## Quotient and remainder of `a` divided by `b`.
@@ -49,14 +52,33 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
   case t.kind
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
+  of nnkStmtListExpr:
+    # evalOnceAs caching, `const q = X; X`, the trailing value is static
+    t[^1].getStaticInt()
   of nnkCall, nnkBracketExpr:
-    if t[0].eqIdent("Int"):
-      int(t[1].intVal)
+    # the typed-delegate path hands out typeDesc[Int[V]] wrappers
+    if t[0].eqIdent("typeDesc"):
+      t[1].getStaticInt()
+    elif t[0].eqIdent("Int"):
+      t[1].getStaticInt()
+    elif t[0].eqIdent("ceil_div") and t.len == 3 and
+        t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
+      # domain arithmetic folds at compile time, matching the static
+      # int semantics Nim applies during type resolution
+      let a = t[1].intVal.int
+      let b = t[2].intVal.int
+      if b == 0: DynamicSentinel else: (a + b - 1) div b
     else:
       DynamicSentinel
   of nnkObjConstr:
     if t[0][0].eqIdent("Int"):
       t[0].getStaticInt()
+    else:
+      DynamicSentinel
+  of nnkSym:
+    let ti = t.getTypeInst()
+    if ti.kind != nnkSym:
+      ti.getStaticInt()
     else:
       DynamicSentinel
   else:
@@ -81,8 +103,43 @@ func tupleTypeWithoutNames(t: NimNode): NimNode {.compileTime.} =
       fields.add f
   result = nnkTupleTy.newTree(fields)
 
+func getTypeOf*(n: NimNode): NimNode {.compileTime.} =
+  case n.kind
+  of nnkStmtListExpr:
+    result = getTypeOf(n[^1])
+  of nnkCall, nnkObjConstr:
+    if n[0].kind == nnkBracketExpr:
+      result = n[0]
+    elif n[0].eqIdent("E"):
+      # a CoordStride atom constructor, the type comes from the arguments
+      var coords = nnkPar.newTree()
+      for i in 1 ..< n.len:
+        coords.add n[i]
+      result = nnkBracketExpr.newTree(ident"CoordStride", coords)
+    else:
+      result = n.getTypeInst()
+  of nnkSym:
+    result = n.getTypeInst()
+  of nnkIdent, nnkIntLit .. nnkUInt64Lit, nnkFloatLit:
+    result = nil
+  of nnkPar, nnkTupleConstr:
+    if n.kind == nnkPar and n.len == 1:
+      result = getTypeOf(n[0])
+    else:
+      result = nnkTupleTy.newTree()
+      for child in n:
+        result.add getTypeOf(child)
+  of nnkBracketExpr:
+    let base = getTypeOf(n[0])
+    if base != nil and base.kind in {nnkTupleTy, nnkTupleConstr} and
+        n[1].kind in {nnkIntLit .. nnkUInt64Lit}:
+      result = base[int(n[1].intVal)]
+    else:
+      result = n.getTypeInst()
+  else:
+    result = n.getTypeInst()
+
 func getTupleType*(n: NimNode): NimNode {.compileTime.} =
-  ## Returns a tuple of corresponding types
   if n.kind == nnkTupleTy:
     return n.tupleTypeWithoutNames()
   let t = n.getType()
@@ -94,23 +151,39 @@ func getTupleType*(n: NimNode): NimNode {.compileTime.} =
   result = inner.getTypeImpl().tupleTypeWithoutNames()
 
 func isTupleTy*(t: NimNode): bool {.compileTime.} =
-  ## True for tuple values and tuple types
+  if t == nil:
+    return false
   case t.kind
   of nnkTupleTy, nnkTupleConstr:
     true
   of nnkPar:
     t.len != 1 # A single elem in parenthesis is not a tuple
+  of nnkCall, nnkObjConstr:
+    if t[0].kind == nnkBracketExpr:
+      # an Int[v]() / Layout[A, B](...) constructor is a scalar value
+      false
+    else:
+      t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
   of nnkIntLit, nnkInt64Lit, nnkFloatLit, nnkCharLit, nnkStrLit,
      nnkNilLit, nnkEmpty:
     # fresh macro nodes, no type to resolve and never tuples
     false
+  of nnkIdentDefs:
+    # a typed declaration node is a scalar, never a tuple
+    false
+  of nnkBracketExpr:
+    # a bracket is a tuple type only in its `tuple[...]` form, index expressions are scalars
+    t.len > 0 and t[0].kind in {nnkSym, nnkIdent} and t[0].eqIdent("tuple")
   else:
     t.getTupleType().kind in {nnkTupleConstr, nnkTupleTy}
 
+func isIntTyHead*(n: NimNode): bool {.compileTime.} =
+  n.kind == nnkSym and (n.sameType(bindSym"Int") or $n == "Int")
+
 func isScalarTy*(t: NimNode): bool {.compileTime.} =
   t.kind == nnkIntLit or
-    (t.kind == nnkBracketExpr and t[0].sameType(bindSym"Int")) or
-    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].sameType(bindSym"Int")) or
+    (t.kind == nnkBracketExpr and t[0].isIntTyHead()) or
+    (t.kind == nnkCall and t[0].kind == nnkBracketExpr and t[0][0].isIntTyHead()) or
     (t.kind == nnkSym and t.sameType(bindSym"int"))
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
@@ -134,13 +207,16 @@ func abs*(a: NimNode): NimNode {.compileTime.} =
 func min*(a, b: NimNode): NimNode {.compileTime.} =
   bindSym"min".newCall(a, b)
 
+func max*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"max".newCall(a, b)
+
 func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
   bindSym"ceil_div".newCall(a, b)
 
 func sign*(a: NimNode): NimNode {.compileTime.} =
   bindSym"sign".newCall(a)
 
-proc newLetAsgn*(stmts: var NimNode; name: string; value: NimNode): NimNode {.compileTime.} =
+proc newLetAsgn*(stmts: var NimNode, name: string, value: NimNode): NimNode {.compileTime.} =
   result = genSym(nskLet, name)
   stmts.add result.newLetStmt value
 
@@ -150,16 +226,10 @@ proc newLetAsgn*(stmts: var NimNode; name: string; value: NimNode): NimNode {.co
 
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`const`|`var`}): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
 
-  # template `alias`(): untyped =
-  #   expression
   result = newProc(
     name = genSym(nskTemplate, $alias),
     params = [getType(untyped)],
@@ -169,18 +239,11 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed{lvalue|lit|`let`|`c
 
 macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
   ##     See the section comment at the top of this file.
 
-  # const evalOnceCT_staticInt = expression
-  # template `alias`(): untyped =
-  #   evalOnceCT_staticInt
   result = newStmtList()
   let evalOnceCT_staticInt = genSym(nskConst, "evalOnceCT_staticInt")
 
@@ -197,13 +260,9 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
 
 macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   ## Create an `alias` for `expression`
-  ## Ensuring it is evaluated only once if it is a `rvalue`
-  ## or passed through if it is an lvalue.
-  ##
-  ## Constant expressions are constant-folded.
-  ##
-  ##  ⚠  Wrap every use inside a template body in a `block:`.
-  ##     Standalone statements in a func body need no `block:`.
+  ## - Returns: a template expanding to `expression`, evaluated once
+  ##  ⚠  Every use inside a template body goes inside a `block:` scope.
+  ##  ⚠  Standalone statements in a func body need no such scope.
   ##     See the section comment at the top of this file.
 
   # Uses a generated `when expression is static:` to choose
@@ -211,13 +270,12 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   # The template name is genSym'd to avoid collisions when multiple
   # evalOnceAs calls exist in the same scope.
   #
-  # Implementation note — alternative approaches we tried:
-  #   when compiles(static(expr)) — crashes the nimvm in a `static:` context
-  #   when compiles(const = expression) — crashes in another context
-  #   when is static — seems to work and is what we use here,
-  #     but we need a macro for gensym of template symbols
-  #   isCompileTime() macro — fragile, misses many AST node kinds,
-  #     and getTypeInst() produces hard errors on untyped nodes
+  # Implementation notes, alternatives rejected:
+  # - when compiles(static(expr)): crashes the nimvm in a `static:` context
+  # - when compiles(const = expression): crashes in another context
+  # - when is static: works and is what we use here, but it needs a macro
+  #   for gensym of template symbols
+  # - isCompileTime() macro: fragile, misses many AST node kinds, getTypeInst() hard-errors on untyped nodes
   let aName = genSym(nskTemplate, $alias)
   result = newStmtList()
   result.add quote do:

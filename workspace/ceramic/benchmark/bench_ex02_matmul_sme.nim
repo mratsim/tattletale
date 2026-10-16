@@ -6,14 +6,6 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## POC benchmark: ARM SME2 GEMM (ex02a_matmul_handtuned_arm64_sme2) vs a scalar reference.
-## Square float32 matrices, one warmup plus three timed samples per size, total
-## runtime ≤ 5 s. Each variant is checked against the naive reference before timing.
-##
-## The "generic" baseline is the shared naive triple-loop `gemm_reference` from
-## workspace/ceramic/benchmark/bench_utils. The x86 ex02a (which falls back to the
-## generic ukernel on non-x86) cannot compile on arm64:
-## workspace/cpuplatforms/x86/simd_x86.nim defines builtin_prefetch only under
-## `defined(i386) or defined(amd64)`. The naive baseline is timed for N < 512 only.
 ##
 ## Usage:
 ##   nim cpp -r -d:release --hints:off --warnings:off \

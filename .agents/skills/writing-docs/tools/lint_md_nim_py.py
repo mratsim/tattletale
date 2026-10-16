@@ -46,7 +46,7 @@ Rule table (rule | trigger | severity):
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
-| except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
+| except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
@@ -191,17 +191,6 @@ OF_SUFFIX_DECL_RE = re.compile(
 # The inbounds-call-syntax rule. Plain call sites of inBounds, the house
 # convention is the method call coord.inBounds(shape). Definitions and
 # the inBoundsImpl internals never match, the name boundary is exact.
-# The pair-name rule. A callable whose name carries `pair` says
-# nothing its signature does not, name the thing it returns instead.
-# The quote-field-access rule. A backtick splice wrapping a field
-# access, `x.field`, splices the base object and drops the field,
-# name the field access outside the backticks
-QUOTE_FIELD_ACCESS_RE = re.compile(
-    r"`\s*[A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*\s*`")
-
-PAIR_DECL_RE = re.compile(
-    r"^\s*(?:proc|func|macro|template|iterator|converter)\s+\w*[Pp][Aa][Ii][Rr]\w*\s*[\*\[\(:=]")
-
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
@@ -327,10 +316,6 @@ def _probe_exempt(line):
 BANNED = [
     (r"\bpast the\b",
      None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
-    (r"\bsems?\b",
-     None, "name the phase directly, type resolution, instantiation, or the checker"),
-    (r"\bspells?\b|\bspelled\b|\bspelling\b",
-     None, "state the type or wording directly, spell prose is banned"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
      r"|\bno longer\b|\bused to \b|\bas of \b",
@@ -505,17 +490,13 @@ RULES = {
     "sig-wrap": Rule("sig-wrap", True,
                      "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,
-                          "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
+                          "a raise inside an except clause, rewrapping eats the original stack trace (handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
                              "a doc or maintainer comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
     "try-block": Rule("try-block", True,
                       "a try/except or try/finally block catching exceptions as control flow outside the libtorch C++ boundary and tests folders"),
     "decl-of-suffix": Rule("decl-of-suffix", True,
                            "a proc, func or template name ending in Of, name the thing directly"),
-    "quote-field-access": Rule("quote-field-access", True,
-                               "a backtick splice wraps a field access"),
-    "pair-name": Rule("pair-name", True,
-                      "a callable whose name carries `pair`"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
 }
@@ -1607,27 +1588,6 @@ SIG_HEAD_RE = re.compile(r"^\s*(?:proc|func|macro|template|iterator|converter)\b
 SIG_WRAP_MAX = 140
 
 
-def nim_pair_name_checks(path, text, findings):
-    """Flags a callable whose name carries `pair`."""
-    masked = nim_mask_tokens(text).splitlines()
-    for i, raw in enumerate(masked):
-        if PAIR_DECL_RE.match(raw):
-            findings.append(Finding(
-                path, i + 1, "pair-name",
-                "a callable named with `pair` names nothing, name what it returns"))
-
-
-def nim_quote_field_access_checks(path, text, findings):
-    """Flags a backtick splice wrapping a field access, the splice
-    takes the base object, the field never lands in the tree."""
-    masked = nim_mask_tokens(text).splitlines()
-    for i, raw in enumerate(masked):
-        if QUOTE_FIELD_ACCESS_RE.search(raw):
-            findings.append(Finding(
-                path, i + 1, "quote-field-access",
-                "a backtick splice wraps a field access, splice a local instead"))
-
-
 def nim_sig_wrap_checks(path, text, findings):
     """Flags a callable signature (proc, func, macro, template, iterator,
     converter) wrapped across lines while the joined single-line form fits
@@ -1693,108 +1653,6 @@ def nim_block_comment_lines(text):
     return out
 
 
-def nim_mask_tokens(text):
-    """Returns the text with the content of block comments, line comments,
-    and string or char literals replaced by spaces, every line keeps its
-    length and position, so the token scans never read a code token out of
-    a comment or a literal."""
-    out = []
-    in_block = False
-    in_triple = False
-    for raw in text.splitlines():
-        buf = list(raw)
-        n = len(raw)
-        i = 0
-        while i < n:
-            if in_triple:
-                end = raw.find('"""', i)
-                if end < 0:
-                    for k in range(i, n):
-                        buf[k] = " "
-                    i = n
-                else:
-                    for k in range(i, end + 3):
-                        buf[k] = " "
-                    i = end + 3
-                    in_triple = False
-                continue
-            if in_block:
-                end = raw.find("]#", i)
-                if end < 0:
-                    for k in range(i, n):
-                        buf[k] = " "
-                    i = n
-                else:
-                    for k in range(i, end + 2):
-                        buf[k] = " "
-                    i = end + 2
-                    in_block = False
-                continue
-            c = raw[i]
-            if raw.startswith("#[", i):
-                in_block = True
-                continue
-            if c == "#":
-                for k in range(i, n):
-                    buf[k] = " "
-                i = n
-                continue
-            if c == '"':
-                if raw.startswith('"""', i):
-                    end = raw.find('"""', i + 3)
-                    if end < 0:
-                        for k in range(i, n):
-                            buf[k] = " "
-                        i = n
-                        in_triple = True
-                    else:
-                        for k in range(i, end + 3):
-                            buf[k] = " "
-                        i = end + 3
-                    continue
-                j = i + 1
-                while j < n:
-                    if raw[j] == "\\":
-                        j += 2
-                        continue
-                    if raw[j] == '"':
-                        break
-                    j += 1
-                for k in range(i, min(j + 1, n)):
-                    buf[k] = " "
-                i = min(j + 1, n)
-                continue
-            if c == "r" and raw[i:i + 2] == 'r"' and \
-                    (i == 0 or not (raw[i - 1].isalnum() or raw[i - 1] == "_")):
-                # raw string, no escapes, a doubled quote is a literal quote
-                j = i + 2
-                while j < n:
-                    if raw[j] == '"':
-                        if j + 1 < n and raw[j + 1] == '"':
-                            j += 2
-                            continue
-                        break
-                    j += 1
-                for k in range(i, min(j + 1, n)):
-                    buf[k] = " "
-                i = min(j + 1, n)
-                continue
-            if c == "'" and (i == 0 or not (raw[i - 1].isalnum() or raw[i - 1] == "_")):
-                # char literal, an apostrophe after an alphanumeric is a
-                # numeric literal suffix such as `42'u32`
-                if i + 1 < n and raw[i + 1] == "\\":
-                    j = i + 3
-                else:
-                    j = i + 2
-                for k in range(i, min(j + 1, n)):
-                    buf[k] = " "
-                i = min(j + 1, n)
-                continue
-            i += 1
-        out.append("".join(buf))
-    return "\n".join(out)
-
-
 def nim_design_narration_checks(path, text, findings):
     """Flags doc-comment and whole-line maintainer-comment lines that justify
     the design to the audience - the because-clause, the X-and-not-Y contrast,
@@ -1844,14 +1702,12 @@ def nim_try_block_checks(path, text, findings):
 
 EXCEPT_RE = re.compile(r"^\s*except\b([^:]*):")
 EXCEPT_AS_RE = re.compile(r"\bas\s+(\w+)\s*$")
-RAISE_NAMED_RE = re.compile(r"^\s*raise\s+(\w+)\s*$")
-RAISE_BARE_RE = re.compile(r"^\s*raise\s*$")
+RAISE_ANY_RE = re.compile(r"^\s*raise\b")
 
 
 def nim_except_rewrap_checks(path, text, findings):
-    """Flags an except clause whose body re-raises the caught exception, the
-    rewrap shape that pays try/except cost in the hot path to rewrite a
-    message. Raising a different exception is translation and stays legal."""
+    """Flags any raise inside an except clause: rewrapping eats the original
+    stack trace, exceptions are handled or propagated, never rewrapped."""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
         m = EXCEPT_RE.match(raw)
@@ -1868,13 +1724,11 @@ def nim_except_rewrap_checks(path, text, findings):
                 continue
             if len(s) - len(s.lstrip()) <= indent:
                 break
-            bare = RAISE_BARE_RE.match(s)
-            named = RAISE_NAMED_RE.match(s)
-            if bare or (name and named and named.group(1) == name):
+            if RAISE_ANY_RE.match(s):
                 findings.append(Finding(
                     path, j + 1, "except-rewrap",
-                    "the except clause re-raises the caught exception, handle "
-                    "it or let it propagate, never rewrap in the hot path"))
+                    "a raise inside except rewraps the exception and eats "
+                    "the original stack trace, handle it or let it propagate"))
                 break
             j += 1
 
@@ -1890,15 +1744,19 @@ def nim_structure_checks(path, text, header_nos, findings):
     - inbounds-call-syntax bans the plain call of inBounds, the house
       convention is the method call coord.inBounds(shape)"""
     lines = text.splitlines()
-    masked = nim_mask_tokens(text).splitlines()
     blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(masked):
+    for i, raw in enumerate(lines):
         line = raw.rstrip()
-        if INBOUNDS_PLAIN_CALL_RE.search(line) and not INBOUNDS_DECL_RE.match(lines[i]):
-            findings.append(Finding(
-                path, i + 1, "inbounds-call-syntax",
-                "inBounds in plain call syntax, use the method call "
-                "coord.inBounds(shape)"))
+        if (i + 1) not in blocked:
+            code, comment_only = _strip_comment(line)
+            if not comment_only:
+                code = _blank_nim_strings(code)
+                if INBOUNDS_PLAIN_CALL_RE.search(code) \
+                        and not INBOUNDS_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "inbounds-call-syntax",
+                        "inBounds in plain call syntax, use the method call "
+                        "coord.inBounds(shape)"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
@@ -1941,20 +1799,18 @@ def nim_structure_checks(path, text, header_nos, findings):
             if body is not None and body < len(lines) \
                     and lines[body].strip().startswith("##"):
                 prose = []
-                has_bullet = False
+                docs = []
                 j = body
                 while j < len(lines) and lines[j].strip().startswith("##"):
                     c = lines[j].strip()[2:].strip()
+                    docs.append(c)
                     if c and not structural(c):
                         prose.append(c)
-                    if BULLET_RE.match(c):
-                        has_bullet = True
                     j += 1
-                # a doc that bullets its contract satisfies this rule, the
-                # bulleted list is the contract marker the message prescribes
-                if (len(prose) >= 3 and not has_bullet
+                if (len(prose) >= 3
                         and not any(CONTRACT_MARKER_RE.search(c)
-                                    for c in prose)):
+                                    for c in prose)
+                        and not any(BULLET_RE.match(c) for c in docs)):
                     findings.append(Finding(
                         path, body + 1, "missing-contract",
                         "multi-line doc states no contract marker "
@@ -2070,8 +1926,6 @@ def scan(path, text, findings):
                     break
             nim_structure_checks(path, text, header_nos, findings)
             nim_sig_wrap_checks(path, text, findings)
-            nim_pair_name_checks(path, text, findings)
-            nim_quote_field_access_checks(path, text, findings)
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
@@ -2415,7 +2269,7 @@ def lint_text(text, filename):
 # Every other class needs judgment about what the prose should say.
 MECHANICAL_RULES = frozenset((
     "article-eol", "stray-fragment", "single-word-eol",
-    "unit-split", "table-alignment", "quote-split",
+    "unit-split", "table-alignment",
 ))
 
 # wall-no-air joins the transform triggers for the one-sentence merge but
@@ -2435,9 +2289,7 @@ _FIX_ROUND_CAP = 1000
 
 # Wrap tokens split on whitespace with one backticked span kept whole
 # as one token, a None entry marks a hard break the rewrap keeps.
-# A double-quoted span is kept whole too, the rewrap never splits a
-# quoted phrase across lines (quote parity).
-_SPAN_TOKEN_RE = re.compile(r"`[^`]*`[.,;:()'*]?|\"[^\"\n]*\"[.,;:()'*]?|\S+")
+_SPAN_TOKEN_RE = re.compile(r"`[^`]*`[.,;:()'\"*]?|\S+")
 
 # A noqa comment lead, tooling metadata the prose rules skip
 NOQA_RE = re.compile(r"\s*noqa\b")
@@ -3855,6 +3707,8 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
                 "tupleLen call outside the blessed rank definitions, route "
                 "through rank or mark # rank-allow"))
         if allowed:
+            continue
+        if code.lstrip().startswith("export "):
             continue
         if RANK_TYPEOF_RE.search(code) or TYPEOF_RANK_RE.search(code):
             findings.append(Finding(

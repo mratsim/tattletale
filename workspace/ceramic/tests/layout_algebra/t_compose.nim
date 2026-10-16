@@ -700,7 +700,16 @@ proc runComposeSymbolTilerTests =
     let lit = compose(make_layout((32, 8), (1, 32)), (make_layout(16, 1), 2))
     let viaSym = compose(make_layout((32, 8), (1, 32)), t)
     doAssert viaSym === lit
-  echo "  symbol tiler: 2 cases OK"
+  # an un-inlined tuple producer is evaluated once, its tuple type
+  # decides the tiler path
+  block:
+    proc prodTup(a, b: int): (int, int) = (a, b)
+    let a = 2
+    let b = 3
+    let c = compose(make_layout((4, 8), (1, 4)), prodTup(a, b))
+    check c.shape, (2, 3), (int, int)
+    check c.stride, (1, 4), (Int[1], Int[4])
+  echo "  symbol tiler: 3 cases OK"
 
 # ── coordinate strides ────────────────────────────────────────
 proc runComposeCoordStrideTests =

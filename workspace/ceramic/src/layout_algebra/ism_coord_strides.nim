@@ -38,46 +38,153 @@ func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
 # ═══════════════════════════════════════════════════════════════
 
 proc unwrapTypedesc(n: NimNode): NimNode
-proc csAdd*(ta, tb: NimNode): NimNode
-proc csScaleCoeffs*(kv: int, ta: NimNode): NimNode
 
 macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride", csAdd(a.getTypeInst[1], b.getTypeInst[1])))
+  let ta = a.getTypeInst[1]
+  let tb = b.getTypeInst[1]
+  if not ta.isTupleTy() and not tb.isTupleTy():
+    return nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride", newIntLitNode(ta.intVal.int + tb.intVal.int)))
+  var builder = TupleBuilderNested.new(1)
+  if not ta.isTupleTy() or not tb.isTupleTy():
+    # a scalar coordinate stride broadcasts over the other's coefficients
+    let scalar = if ta.isTupleTy(): tb else: ta
+    let tupleSide = if ta.isTupleTy(): ta else: tb
+    for ev in tupleSide.tupleStream():
+      builder.onLeaves(ev):
+        let c = ev.leaf.intVal.int + scalar.intVal.int
+        builder.append((newIntLitNode(c), intTy(c)))
+  else:
+    var zip = zipLongest(ta.tupleStream(), tb.tupleStream())
+    while not zip.done():
+      let (ev, other) = zip.next()
+      builder.onLeaves(ev):
+        let v = if ev.leaf.isNil: 0 else: ev.leaf.intVal.int
+        let w = if other.leaf.isNil: 0 else: other.leaf.intVal.int
+        let c = v + w
+        builder.append((newIntLitNode(c), intTy(c)))
+  return nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", builder.emit(0)))
 
-macro `*`*[A: CoordStride](a: A, k: typed): untyped =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride *: cannot scale by a runtime value", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
+macro `*`*[A: CoordStride](a: A, k: static int): untyped =
+  let ta = a.getTypeInst[1]
+  if not ta.isTupleTy():
+    return nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride", newIntLitNode(k * ta.intVal.int)))
+  var builder = TupleBuilderNested.new(1)
+  for ev in ta.tupleStream():
+    builder.onLeaves(ev):
+      let c = k * ev.leaf.intVal.int
+      builder.append((newIntLitNode(c), intTy(c)))
+  return nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", builder.emit(0)))
 
-macro `+`*[A: CoordStride](a: A, k: typed): untyped =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride",
-    csAdd(a.getTypeInst[1], nnkTupleConstr.newTree(newIntLitNode(kv)))))
+macro `*`*[V: static int, A: CoordStride](a: A, k: Int[V]): untyped =
+  return a * newLit(V)
 
-macro `+`*[A: CoordStride](k: typed, a: A): untyped =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride +: cannot mix a runtime value into a coordinate stride", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride",
-    csAdd(nnkTupleConstr.newTree(newIntLitNode(kv)), a.getTypeInst[1])))
+macro `*`*[V: static int, A: CoordStride](k: Int[V], a: A): untyped =
+  return a * newLit(V)
+
+macro `*`*[A: CoordStride](k: static int, a: A): untyped =
+  return a * newLit(k)
+
+macro `+`*[A: CoordStride](a: A, k: static int): untyped =
+  let ta = a.getTypeInst[1]
+  if not ta.isTupleTy():
+    return nnkCall.newTree(nnkBracketExpr.newTree(
+      bindSym"CoordStride", newIntLitNode(ta.intVal.int + k)))
+  var builder = TupleBuilderNested.new(1)
+  var first = true
+  for ev in ta.tupleStream():
+    builder.onLeaves(ev):
+      let c = ev.leaf.intVal.int + (if first: k else: 0)
+      builder.append((newIntLitNode(c), intTy(c)))
+      first = false
+  return nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", builder.emit(0)))
+
+macro `+`*[A: CoordStride](k: static int, a: A): untyped =
+  return a + newLit(k)
+
+macro `+`*[V: static int, A: CoordStride](a: A, k: Int[V]): untyped =
+  return a + newLit(V)
+
+macro `+`*[V: static int, A: CoordStride](k: Int[V], a: A): untyped =
+  return a + newLit(V)
+
+macro `+`*[A: CoordStride](a: A, k: tuple): untyped =
+  let ta = a.getTypeInst[1]
+  var builder = TupleBuilderNested.new(1)
+  if not k.getTypeInst.isTupleTy():
+    # a scalar k broadcasts over every coeff leaf
+    for ev in ta.tupleStream():
+      builder.onLeaves(ev):
+        builder.append((k + ev.leaf, k.getTypeInst()))
+  else:
+    var zip = zipLongest(ta.tupleStream(), k.tupleStream())
+    while not zip.done():
+      let (ea, eb) = zip.next()
+      builder.onLeaves(ea):
+        let c = if ea.leaf.isNil: newIntLitNode(0) else: ea.leaf
+        let kExpr = if eb.leaf.isNil: newIntLitNode(0) else: eb.leaf
+        if kExpr.kind == nnkIntLit and c.kind == nnkIntLit:
+          let sum = kExpr.intVal.int + c.intVal.int
+          builder.append((newIntLitNode(sum), intTy(sum)))
+        else:
+          let sumExpr = kExpr + c
+          builder.appendTyped(sumExpr)
+  return builder.emit(0)
+
+macro `+`*[A: CoordStride](k: tuple, a: A): untyped =
+  return nnkCall.newTree(bindSym"+", a, k)
+
+macro `*`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
+  error("CoordStride *: cannot scale by a coordinate stride", b)
+
+macro `div`*[A: CoordStride](a: A, k: static int): untyped =
+  ## Divides a coordinate stride's coeffs by a static scalar
+  var builder = TupleBuilderNested.new(1)
+  for ev in a.getTypeInst[1].tupleStream():
+    builder.onLeaves(ev):
+      let c = ev.leaf.intVal.int div k
+      builder.append((newIntLitNode(c), intTy(c)))
+  return nnkCall.newTree(nnkBracketExpr.newTree(
+    bindSym"CoordStride", builder.emit(0)))
 
 macro `*`*[A: CoordStride](k: typed, a: A): untyped =
-  let kv = if k.kind in {nnkIntLit .. nnkInt64Lit}: k.intVal.int
-           else: k.getTypeInst().getStaticInt()
-  if kv == DynamicSentinel:
-    error("CoordStride *: cannot scale by a runtime value", k)
-  result = nnkCall.newTree(nnkBracketExpr.newTree(
-    bindSym"CoordStride", csScaleCoeffs(kv, a.getTypeInst[1])))
+  let ta = a.getTypeInst[1]
+  if not ta.isTupleTy():
+    return k * newIntLitNode(ta.intVal.int)
+  var builder = TupleBuilderNested.new(1)
+  for ev in ta.tupleStream():
+    builder.onLeaves(ev):
+      builder.append((k * ev.leaf, k.getTypeInst()))
+  return builder.emit(0)
+
+# ═══════════════════════════════════════════════════════════════
+#   Evaluation: runtime coordinate leaf x coordinate stride
+# ═══════════════════════════════════════════════════════════════
+
+macro `+`*(a, b: tuple): untyped =
+  ## Semimodule completion, evaluation side: leafwise
+  ## coordinate-tuple addition, evaluated at runtime.
+  ##
+  ## - the stream walks each argument's type for structure and yields
+  ##   the argument's element expressions as leaves
+  var zip = zipLongest(a.tupleStream(), b.tupleStream())
+  var builder = TupleBuilderNested.new(1)
+  while not zip.done():
+    let (ea, eb) = zip.next()
+    builder.onLeaves(ea):
+      let x = if ea.leaf.isNil: newIntLitNode(0) else: ea.leaf
+      let y = if eb.leaf.isNil: newIntLitNode(0) else: eb.leaf
+      if x.kind == nnkIntLit and y.kind == nnkIntLit:
+        let sum = x.intVal.int + y.intVal.int
+        builder.append((newIntLitNode(sum), intTy(sum)))
+      else:
+        let sumExpr = x + y
+        builder.appendTyped(sumExpr)
+  return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════
 #   Constructors
@@ -89,7 +196,7 @@ macro E*(mode: static int): untyped =
   for _ in 0 ..< mode:
     coeffs.add(newIntLitNode(0))
   coeffs.add(newIntLitNode(1))
-  result = nnkCall.newTree(
+  return nnkCall.newTree(
     nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
 
 macro E*(scale, mode: static int): untyped =
@@ -98,11 +205,11 @@ macro E*(scale, mode: static int): untyped =
   for _ in 0 ..< mode:
     coeffs.add(newIntLitNode(0))
   coeffs.add(newIntLitNode(scale))
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
+  return nnkCall.newTree(nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
 
 macro E*(coeffs: typed): untyped =
   ## Multi-term atom from a coefficient vector: E((1, 1)) is 1@0 + 1@1.
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
+  return nnkCall.newTree(nnkBracketExpr.newTree(bindSym"CoordStride", coeffs))
 
 proc getCoordinates(path: seq[int]): NimNode =
   var node = newIntLitNode(1)
@@ -146,9 +253,11 @@ macro make_basis_like*(profile: typed): untyped =
   var builder = TupleBuilderNested.new(1)
   for ev in profile.tupleStream():
     builder.onLeaves(ev):
-      builder.append(nnkCall.newTree(
-        nnkBracketExpr.newTree(bindSym"CoordStride", ev.path.getCoordinates())))
-  result = builder.emit(0)
+      let coords = ev.path.getCoordinates()
+      builder.append((nnkCall.newTree(
+        nnkBracketExpr.newTree(bindSym"CoordStride", coords)),
+        nnkBracketExpr.newTree(bindSym"CoordStride", coords)))
+  return builder.emit(0)
 
 # ═══════════════════════════════════════════════════════════════
 #   Pretty-printing
@@ -197,10 +306,10 @@ proc pretty(t: NimNode, path: seq[int]): string =
   return "(" & parts.join(",") & ")"
 
 macro `$`*(T: typedesc[CoordStride]): string =
-  result = newStrLitNode(pretty(T.unwrapTypedesc(), @[]))
+  return newStrLitNode(pretty(T.unwrapTypedesc(), @[]))
 
 macro `$`*(a: CoordStride): string =
-  result = newStrLitNode(pretty(a.unwrapTypedesc(), @[]))
+  return newStrLitNode(pretty(a.unwrapTypedesc(), @[]))
 
 # ═══════════════════════════════════════════════════════════════
 #   Compile-time helpers for layout algebra
@@ -219,7 +328,9 @@ type
     coeffs*: NimNode # caMulti: the coefficient tuple, values as int literals
 
 proc isCoordStride*(leafTy: NimNode): bool =
-  ## True when the type is a coordinate stride instantiation
+  ## True when the type is a coordinate stride instantiation, false for nil
+  if leafTy == nil:
+    return false
   var t = leafTy
   if t.kind == nnkSym:
     let impl = t.getImpl
@@ -228,7 +339,7 @@ proc isCoordStride*(leafTy: NimNode): bool =
       t = impl[2][1]
     else:
       return false
-  result = t.kind == nnkBracketExpr and t[0].kind == nnkSym and
+  return t.kind == nnkBracketExpr and t[0].kind == nnkSym and
     t[0].strVal == "CoordStride"
 
 proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
@@ -259,6 +370,15 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
     CoordStrideDescriptor(kind: caSingle, path: nzPath, scale: nzValue, coeffs: coeffs)
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
+
+macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
+  ## Colex order over coordinate strides, ascending on (axis, scale),
+  ## the key order of the complement's stride sort
+  let da = a.getTypeInst().getCoordStrideDescriptor()
+  let db = b.getTypeInst().getCoordStrideDescriptor()
+  doAssert da.kind == caSingle and db.kind == caSingle,
+    "CoordStride <: only single-term atoms order"
+  return newLit((da.path[^1], da.scale) < (db.path[^1], db.scale))
 
 proc csScaledEq(a, b: NimNode, s: int): bool =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
@@ -291,30 +411,6 @@ func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
   of caMulti:
     b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
 
-proc csScaleCoeffs(kv: int, ta: NimNode): NimNode =
-  if ta.kind notin {nnkTupleConstr, nnkPar}:
-    return newIntLitNode(kv * ta.intVal)
-  result = nnkTupleConstr.newTree()
-  for i in 0 ..< ta.len:
-    result.add(csScaleCoeffs(kv, ta[i]))
-
-proc csAdd(ta, tb: NimNode): NimNode =
-  # Elementwise addition of CoordStride AST
-  let taIsTuple = ta.kind in {nnkTupleConstr, nnkPar}
-  let tbIsTuple = tb.kind in {nnkTupleConstr, nnkPar}
-  if not taIsTuple and not tbIsTuple:
-    return newIntLitNode(ta.intVal + tb.intVal)
-  if not taIsTuple or not tbIsTuple:
-    let (tupleSide, scalarSide) = if taIsTuple: (ta, tb) else: (tb, ta)
-    doAssert scalarSide.intVal == 0,
-      "CoordStride +: a nonzero scalar cannot add a tuple"
-    return tupleSide
-  result = nnkTupleConstr.newTree()
-  for i in 0 ..< max(ta.len, tb.len):
-    let va = if i < ta.len: ta[i] else: newIntLitNode(0)
-    let vb = if i < tb.len: tb[i] else: newIntLitNode(0)
-    result.add csAdd(va, vb)
-
 proc unwrapTypedesc(n: NimNode): NimNode =
   var t = n.getTypeInst
   if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
@@ -324,3 +420,4 @@ proc unwrapTypedesc(n: NimNode): NimNode =
   if t.kind == nnkSym:
     return t.getImpl[2][1]
   error("CoordStride: not an CoordStride instantiation: " & t.repr, n)
+

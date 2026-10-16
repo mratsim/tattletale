@@ -57,7 +57,7 @@ proc copyBody(atomName: string;
     result = newStmtList(
       newLetStmt(ident"srcSize", srcSize),
       newLetStmt(ident"smemInt",
-        newCall(bindSym"cvtaGenericToShared", newDotExpr(dstView, ident"data"))),
+        bindSym"cvtaGenericToShared".newCall(newDotExpr(dstView, ident"data"))),
       newLetStmt(ident"gmemPtr",
         newDotExpr(srcView, ident"data")),
       newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr)))

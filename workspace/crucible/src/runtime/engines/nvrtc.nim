@@ -9,8 +9,10 @@
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/c_abi
 
+import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
 import ../chevrons
+import ../kernel_args
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
@@ -31,6 +33,8 @@ type
     ptx: string
     nvrtc: NVRTC
 
+proc backendKind*(_: typedesc[CudaEngine]): static BackendKind = bkCuda
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
@@ -43,8 +47,6 @@ proc `=destroy`(nvrtc: NVRTC) =
     check cuCtxDestroy nvrtc.context
 
 proc newCudaEngine(): CudaEngine =
-  ## Private factory, engines.nim reaches it via `import {.all.}`.
-  ## `init` semantics: live CUDA context, no kernel yet.
   result = CudaEngine()
   result.nvrtc = initNvrtc()
 
@@ -76,8 +78,6 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
 
 
 proc initNvrtc(): NVRTC =
-  ## CUDA context + device handle, no program yet, `ingest` builds the NVRTC
-  ## program from the source and compiles it.
   var
     context: CUcontext
     device: CUdevice
@@ -155,7 +155,6 @@ proc load(nvrtc: var NVRTC) =
 
 proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
-  ##
   ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   # the context is made current per launch, several engines can coexist
@@ -171,12 +170,21 @@ proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, 
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
-  # every parameter passes by value as its address, CUDA copies at launch
-  var outVal = output
-  var params: seq[pointer] = @[pointer(addr outVal)]
-  var argsCopy = args
-  for f in fields(argsCopy):
-    params.add addr f
+  # every parameter passes by value as its address, CUDA copies at launch,
+  # device pointers cross as their raw value, the params array holds
+  # one pointer per device arg, sized at compile time
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  type SinkCtx = object
+    addrs: array[n, pointer]
+    hvals: array[n, CUdeviceptr]
+  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: CUdeviceptr, idx: int, p: pointer, len: int) {.nimcall.} =
+    if isBuffer:
+      ctx.hvals[idx] = h
+      ctx.addrs[idx] = ctx.hvals[idx].addr
+    else:
+      ctx.addrs[idx] = p
+  var dctx = SinkCtx()
+  bindArgs(dctx, bkCuda, output, args, false, sinkArg)
 
   let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
   check cuLaunchKernel(
@@ -185,7 +193,7 @@ proc run*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, 
     uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
     uint32(cfg.sharedMem),
     stream,
-    params[0].addr, nil)
+    dctx.addrs[0].addr, nil)
 
   check cuCtxSynchronize()
 

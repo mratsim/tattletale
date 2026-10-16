@@ -54,7 +54,8 @@ let NimGpuNumericBuiltinsOperators* {.compileTime.} = {
 let NimGpuBooleanOperators* {.compileTime.} = {
   # Boolean operator mappings. Set apart from numeric operators because
   # `and`/`or`/`not` differ between boolean (&&/||/!) and bitwise (&/|/~).
-  "and": "&&", "or": "||", "not": "!"
+  "and": "&&", "or": "||", "not": "!",
+  "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "=="
 }.toTable()
 
 let NimGpuFnBuiltins* {.compileTime.} = ["toOpenArray", "len"]

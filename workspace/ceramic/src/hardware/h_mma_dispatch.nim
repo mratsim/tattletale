@@ -86,24 +86,20 @@ func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string]
     " : " & operandClause(aNames, constraintLetter("uint32")) &
     ", " & operandClause(bNames, constraintLetter("uint32"))
 
-func buildAppleSimdgroupAsm(dNames, aNames, bNames: openArray[string], accType, inType: string): string =
-  ## Metal codegen for one simdgroup_multiply_accumulate builtin over
-  ## caller-staged scalars, D = A·B + D. The accumulator is always fp32
-  ## (`simdgroup_float8x8`), A and B carry the atom's operand dtype.
+func buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames: openArray[string], accType, inType: string): string =
+  ## Metal codegen for one simdgroup_multiply_accumulate builtin
+  ## over caller-staged scalars, D = A·B + C. The accumulator is always
+  ## fp32 (`simdgroup_float8x8`), A and B carry the atom's operand dtype.
   ##
   ## Expected input:
-  ##   - `dNames`/`aNames`/`bNames`: the staged scalars' names, one
+  ##   - `dNames`/`aNames`/`bNames`/`cNames`: the staged scalars' names, one
   ##     fragment value each, 2 per lane on the 8×8×8 atoms, in per-lane value order
   ##   - `accType`/`inType`: the MSL element names, the accumulator is fp32
   ##     ("float"), A and B carry the atom's operand dtype
-  ## Output: one braced MSL statement string.
-  ## The braced block keeps the `simdgroup_*8x8` declarations in one scope,
-  ## several mma_AB payloads unroll into the same function scope
-  ## and must not collide on the declaration names.
   result = "{\n"
   result.add "  simdgroup_" & accType & "8x8 sd = make_filled_simdgroup_matrix<" & accType &
             ", 8>(" & accType & "(0.0f));\n"
-  for i, name in dNames:
+  for i, name in cNames:
     result.add "  sd.thread_elements()[" & $i & "] = `" & name & "`;\n"
   result.add "  simdgroup_" & inType & "8x8 sa = make_filled_simdgroup_matrix<" & inType &
             ", 8>(" & inType & "(0.0f));\n"
@@ -154,34 +150,14 @@ template valuesPerThread*(atom: untyped, layoutKey: string): int =
 # ═════════════════════════════════════════════════════════════════════════
 
 macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
-  ## One register-level MMA call over caller-staged scalars,
-  ## `atom.gemm_mma(d0, ..., a0, ..., b0, ...)`: dV accumulator scalars,
-  ## then aV A scalars, then bV B scalars, in the atom's per-lane value
-  ## order (dV/aV/bV = the atom's values per thread per operand).
-  ##
-  ## Dispatch only. The scalars are read and written exactly as passed:
-  ## no operand reads, no writebacks, no indexing. Staging a register
-  ## tensor's cell values into the scalars is `gemm_atom`'s job
-  ## (k_layout_gemm), which keeps the staging reads at its own call site.
-  ##
-  ## Contract:
-  ##   - the accumulator scalars must be assignable locals, pre-loaded
-  ##     with the accumulated value, overwritten with the result
-  ##   - the asm paths (Apple, NVIDIA) reference the staged scalars by name,
-  ##     so those scalars must be plain named locals, any name works
-  ##
-  ## Everything instruction-level is derived from the atom's registry
-  ## consts (h_configgen), the mnemonic (`instr`), the per-operand
-  ## values per thread (the layouts' V), and the MSL element names (`elem`).
-  ##
-  ## Dispatch by mnemonic:
-  ##   - "simdgroup_multiply_accumulate" (Apple atoms), `nnkAsmStmt` block
-  ##     (buildAppleSimdgroupAsm) rendered as raw MSL by the Metal printer
-  ##   - "" (the universal 1×1×1 atoms), one plain scalar FMA
-  ##   - "mma.sync.aligned.*" (NVIDIA atoms), the extended-asm path below
-  ##
-  ## Apple atoms always accumulate in fp32, the operand element names come
-  ## from the atom's `aType` registry const (aType == bType asserted).
+  ## One register-level MMA call over caller-staged scalars: `d = a·b + c`,
+  ## `atom.gemm_mma(d0, ..., a0, ..., b0, ..., c0, ...)`:
+  ## - dV result scalars,
+  ## - then aV A scalars,
+  ## - then bV B scalars,
+  ## - then cV C scalars.
+  ## Order: the atom's per-lane value order.
+  ## (dV/aV/bV/cV = the atom's values per thread per operand.)
 
   let instr = constStr(atom, "instr")
   let dV = atom.valuesPerThread("cLayout")
@@ -191,18 +167,19 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
   var args = scalars
   if args.kind != nnkArgList:
     args = newTree(nnkArgList, args)
-  if args.len != dV + aV + bV:
-    error("gemm_mma: expected " & $(dV + aV + bV) & " staged scalars (" &
-          $dV & " accumulator + " & $aV & " A + " & $bV & " B), got " &
-          $args.len & ". Staging from tensor cells lives in gemm_atom " &
-          "(k_layout_gemm); gemm_mma takes scalars only.")
+  if args.len != 2 * dV + aV + bV:
+    error("gemm_mma: expected " & $(2 * dV + aV + bV) & " staged scalars (" &
+          $dV & " result + " & $aV & " A + " & $bV & " B + " & $dV &
+          " addend), got " & $args.len & ". Staging from tensor cells lives " &
+          "in gemm_atom (k_layout_gemm); gemm_mma takes scalars only.")
 
   case instr
   of "simdgroup_multiply_accumulate":
-    var dNames, aNames, bNames: seq[string]
+    var dNames, aNames, bNames, cNames: seq[string]
     for i in 0 ..< dV: dNames.add($scalars[i])
     for i in 0 ..< aV: aNames.add($scalars[dV + i])
     for i in 0 ..< bV: bNames.add($scalars[dV + aV + i])
+    for i in 0 ..< dV: cNames.add($scalars[dV + aV + bV + i])
     let aType = constStr(atom, "aType")
     let bType = constStr(atom, "bType")
     doAssert aType == bType,
@@ -212,25 +189,32 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
       error("gemm_mma: atom `" & $atom & "` is missing the `aType` registry " &
             "property (\"float\"/\"half\"/\"bfloat\") for the Apple staging payload")
     result = newTree(nnkAsmStmt, newEmptyNode(),
-      newLit(buildAppleSimdgroupAsm(dNames, aNames, bNames, "float", aType)))
+      newLit(buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames, "float", aType)))
   of "":
-    # the universal 1x1x1 scalar atom: one plain FMA, the accumulator cast
+    # the universal 1x1x1 scalar atom: one plain FMA, the result cast
     # to its own type first (the product may be narrower, say half operands)
     if dV != 1 or aV != 1 or bV != 1:
       error("gemm_mma: universal atoms are the 1x1x1 scalar FMA (vpt 1), got " &
             $(dV) & "/" & $(aV) & "/" & $(bV))
     result = quote do:
-      `scalars[0]` = typeof(`scalars[0]`)(`scalars[1]` * `scalars[2]`) + `scalars[0]`
+      `scalars[0]` = typeof(`scalars[0]`)(`scalars[1]` * `scalars[2]`) + `scalars[3]`
   else:
     if not instr.startsWith("mma.sync.aligned."):
       error("gemm_mma: unsupported instruction `" & instr & "`")
-    var dNames, aNames, bNames: seq[string]
+    var dNames, aNames, bNames, cNames: seq[string]
     for i in 0 ..< dV: dNames.add($scalars[i])
     for i in 0 ..< aV: aNames.add($scalars[dV + i])
     for i in 0 ..< bV: bNames.add($scalars[dV + aV + i])
+    for i in 0 ..< dV: cNames.add($scalars[dV + aV + bV + i])
     let accType = accumulatorElementName(instr)
+    # PTX mma.sync reads and writes one register set (C == D),
+    # Copy C into D before calling the low-level instruction
+    result = newStmtList()
+    for i in 0 ..< dV:
+      if cNames[i] != dNames[i]:
+        result.add nnkAsgn.newTree(scalars[i], scalars[dV + aV + bV + i])
     let asmStr = buildNvidiaMmaAsm(instr, dNames, aNames, bNames, accType)
-    result = newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
+    result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
   # labeled block: the Metal printer emits braces only for labeled blocks,
   # multiple calls in one function scope must not collide on the staged scalar names
   result = newTree(nnkBlockStmt, genSym(nskLabel, "gemmMma"), result)

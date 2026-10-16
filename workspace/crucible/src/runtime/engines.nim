@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import ../codegen/ir/gpu_types
 import ./chevrons
+import ./kernel_args
 import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}
 import ./engines/vk {.all.}
@@ -15,9 +16,10 @@ import ./engines/metal {.all.}
 
 export gpu_types
 export chevrons
+export kernel_args
 
 export ingest, getArtifact, run, check, deviceName
-export allocDevice, freeDevice, copyToDeviceFromHost, copyToHostFromDevice
+export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFromDevice
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types

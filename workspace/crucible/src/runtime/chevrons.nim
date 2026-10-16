@@ -15,29 +15,16 @@ import std/macros
 
 type
   Dim3* = object
-    ## A 3D launch dims, used for both the grid and the block axes of a launch.
-    ## Nominal object (no structural collision with user tuples),
-    ## field defaults make `Dim3(x: n)` → (n, 1, 1).
+    ## A 3D launch dims, `Dim3(x: n)` defaults y/z to 1.
     x*, y*, z* = 1
 
   LaunchConfig* = object
-    ## Launch geometry, per-backend interpretation:
-    ##   grid      → CUDA gridDim / OpenCL global-per-axis (= grid·blk) /
-    ##               Vulkan vkCmdDispatch group count / WebGPU
-    ##               dispatchWorkgroups
-    ##   blk       → CUDA blockDim / OpenCL local_work_size / shader-baked
-    ##               (validated loudly) on Vulkan/WebGPU
-    ##   sharedMem → CUDA dynamic smem / OpenCL __local (ignored elsewhere)
-    ##   stream    → CUDA-only for now
-    ## y/z are consumed by all backends, OpenCL/Vulkan/WebGPU NDRange and dispatch
-    ## are full 3D (see the *_ndrange2d tests).
+    ## Launch geometry, grid/blk per-backend, sharedMem CUDA/OpenCL only, stream CUDA only.
     grid*, blk* = default(Dim3)
     sharedMem*, stream* = 0
 
   RunSugar*[E] = object
-    ## Transient chevron sugar: created per `engine.run` access, owns the ref
-    ## only for the chevron expression. No field on the engine, no
-    ## back-pointer, no self-cycle, `=destroy` is deterministic at scope exit.
+    ## Transient chevron sugar, created per `engine.run` access.
     engine: E
 
   LaunchProxy*[E] = object
@@ -49,15 +36,13 @@ type
 # ═════════════════════════════════════════════════════════════════════════
 # Private: the Dim3 dim-conversion overloads and the LaunchProxy factory.
 # Both must precede the `<<` macro, bindSym and quote resolve symbols at macro definition.
-proc dim3(x: int): Dim3 {.inline.} = Dim3(x: x)
-proc dim3(t: tuple[a: int]): Dim3 {.inline.} = Dim3(x: t.a)
-proc dim3(t: tuple[a, b: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b)
-proc dim3(t: tuple[a, b, c: int]): Dim3 {.inline.} = Dim3(x: t.a, y: t.b, z: t.c)
+proc dim3[T: SomeInteger](x: T): Dim3 {.inline.} = Dim3(x: int(x))
+proc dim3[T: SomeInteger](t: tuple[a: T]): Dim3 {.inline.} = Dim3(x: int(t.a))
+proc dim3[T: SomeInteger](t: tuple[a, b: T]): Dim3 {.inline.} = Dim3(x: int(t.a), y: int(t.b))
+proc dim3[T: SomeInteger](t: tuple[a, b, c: T]): Dim3 {.inline.} = Dim3(x: int(t.a), y: int(t.b), z: int(t.c))
 
 
 proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
-  ## Makes the `<<` macro's emitted call skip the generic parameter, Nim object
-  ## constructors cannot infer generic params, the inference lives in this helper.
   LaunchProxy[E](engine: engine, cfg: cfg)
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -65,22 +50,15 @@ proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc run*[E](engine: E): RunSugar[E] =
-  ## `run` accessor, a proc never a template: templates replace identifiers
-  ## before overload resolution and would hijack the plain call.
+  ## `run` accessor, a proc never a template, templates would hijack the plain call.
   ## A proc resolves by signature, 4 args hit the engine's plain `run`,
   ## a bare `engine.run` hits this accessor.
   RunSugar[E](engine: engine)
 
 macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
-  ## Chevron launch-config sugar, field mapping only. Named fields are read
-  ## by name in any order, defaults grid=blk=1, sharedMem=stream=0.
-  ##
-  ## Positional forms take 2..4 args in (grid, blk, sharedMem, stream) order.
-  ## Dims emit as `dim3(<raw expr>)`, the overloads convert int / 1-tuple /
-  ## 2-tuple / 3-tuple (dims are positional tuples).
-  ##
-  ## Mixed named/positional, unknown named fields and positional counts outside 2..4
-  ## are rejected loudly at compile time.
+  ## Chevron launch config, named or positional:
+  ##   engine.run<<(grid, blk), sharedMem: n>> / engine.run<<grid, blk, sharedMem, stream>>
+
   let cfgAst = cfg
   var gridN, blkN, smN, stN: NimNode
   let named = cfgAst.kind in {nnkPar, nnkTupleConstr} and
@@ -114,8 +92,7 @@ macro `<<`*[E](r: RunSugar[E], cfg: untyped): untyped =
       sharedMem: `smN`, stream: `stN`))
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
-  ## Builds the actual run call: `engine.run(kernel, output, args, cfg)`.
-  ## `call` is the full `("kernel", output, (alpha, A, beta, B))` AST.
+  ## Builds the run call: `engine.run<<cfg>>("kernel", output, (args...))`
   doAssert call.kind in {nnkPar, nnkTupleConstr, nnkCall, nnkBracket},
     "chevron RHS must be (\"kernel\", output, (args...)), got: " & call.repr
   doAssert call.len == 3,

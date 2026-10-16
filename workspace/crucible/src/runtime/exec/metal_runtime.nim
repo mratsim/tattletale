@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
@@ -13,8 +13,7 @@ import workspace/crucible/src/abis/objc_abi as objc
 # ═════════════════════════════════════════════════
 
 const
-  ## Shared storage (0) + untracked hazard tracking (1 << 8): the storage mode of Apple's MLX allocator.
-  ## CPU and GPU share a single memory region, so `contents()` needs no staging or map.
+  ## Shared + untracked storage, Apple's MLX allocator mode: contents() needs no staging.
   MTLResourceStorageModeShared = 0
   MTLResourceHazardTrackingModeUntracked = 1 shl 8
   SharedUntrackedOptions* = objc.NSUInteger(MTLResourceStorageModeShared or
@@ -64,11 +63,8 @@ when defined(macosx):
   proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>".}
 
   proc mslLanguageVersion*(): objc.NSUInteger =
-    ## MSL language version for this OS, from the `uname()` release ladder.
-    ## `uname()` reports the Darwin kernel release (25.6.0 on macOS 26.6.1),
-    ## not the marketing version, the ladder maps Darwin majors:
-    ## < 24 → 3.1 (macOS < 15), 24 → 3.2 (macOS 15), ≥ 25 → 4.0 (macOS ≥ 26).
-    ## `NSProcessInfo.operatingSystemVersion` returns a 24-byte sret struct, UB for the ID-returning objc.msgSend family.
+    ## MSL language version for this OS, from the `uname()` Darwin release:
+    ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName
     if uname(addr uts) != 0:
       failLoud("uname failed, cannot determine the MSL language version")
@@ -93,8 +89,7 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   proc compileOptions*(): objc.ID =
-    ## MTLCompileOptions: fast math disabled (correctness-first) and the OS's MSL language version.
-    ## Returns a +1 object. The caller releases it after `newLibraryWithSource`.
+    ## MTLCompileOptions: fast math disabled, the OS's MSL version, +1 returned.
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
@@ -105,8 +100,7 @@ when defined(macosx):
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), mslLanguageVersion())
 
   proc compileLibrary*(device: objc.ID, source: string, opts: objc.ID): objc.ID =
-    ## Compiles `source` via `newLibraryWithSource:options:error:`.
-    ## Returns the +1 library, or quits loudly with the NSError `localizedDescription` when the compiler provides one.
+    ## Compiles `source` to a +1 MLLibrary, quits loudly on NSError.
     var compileError: objc.ID = objc.ID(nil)
     result = objc.msgSend(device, objc.`$$`("newLibraryWithSource:options:error:"),
                           objc.nsStringFromNimString(source), opts, addr compileError)
@@ -117,9 +111,7 @@ when defined(macosx):
       failLoud("Metal library compilation failed: " & detail)
 
   proc compilePipelineState*(device, library: objc.ID, kernel: string): objc.ID =
-    ## Creates the compute pipeline state for `kernel` via `newComputePipelineStateWithFunction:error:`.
-    ## Returns the +1 pipeline state, the function object (+1 from `newFunctionWithName:`)
-    ## is released here, the pipeline state retains it internally.
+    ## Creates the +1 compute pipeline state for `kernel`.
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"), objc.nsStringFromNimString(kernel))
     if objc.isNil(fn):
       failLoud("newFunctionWithName(" & kernel & ") returned nil")
@@ -134,20 +126,3 @@ when defined(macosx):
         detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
       failLoud("compute pipeline state creation failed for " & kernel & ": " & detail)
 
-  # ═════════════════════════════════════════════════
-  # Device, command queue, buffers
-  # ═════════════════════════════════════════════════
-
-  proc defaultMetalDevice*(): objc.ID =
-    ## Returns the default Metal device, +1 (Create ownership rules), survives
-    ## the caller's autorelease-pool drain, release via `objc.release`.
-    ## A lookup, not an init: the engine owns its context construction.
-    result = objc.MTLCreateSystemDefaultDevice()
-    if objc.isNil(result):
-      failLoud("default Metal device lookup returned nil (no Metal device)")
-
-  proc getpagesize(): cint {.importc: "getpagesize", header: "<unistd.h>".}
-
-  proc hostPageSize*(): int =
-    ## Host page size (16 KiB on Apple Silicon).
-    int(getpagesize())

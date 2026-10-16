@@ -1,9 +1,9 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## MMA atom property getters and derived atom geometry.
 import std/macros
@@ -31,14 +31,10 @@ macro getVpt*(A: static MmaAtom): untyped =
   ## from their layouts (`valuesPerThread`, below).
   result = bindSym($A & "_vpt")
 
-template threadCount*(atom: static MmaAtom; operand: static MmaOperand): untyped =
-  ## Threads cooperating on the atom for operand A, B or C in the `C <- A*B + C` microkernel.
-  ##
-  ## Returns the atom's thread count, wrapped in `Int`.
-  ## Every declared GPU atom uses the same thread count for all three operands.
+template threadCount*(atom: static MmaAtom): untyped =
   Int[atom.getThreadCount()]()
 
-template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): untyped =
+template valuesPerThread*(atom: static MmaAtom, operand: static MmaOperand): untyped =
   ## Operand values per thread. A, B and C may each differ.
   ##
   ## Returns the operand layout's cosize divided by the atom's thread count.
@@ -52,9 +48,9 @@ template valuesPerThread*(atom: static MmaAtom; operand: static MmaOperand): unt
   ## | int8+e4m3 (k32)           | 16/8/4      |
   ## | universal 8x8x8 and Apple | 2/2/2       |
   ## | 1x1x1                     | 1/1/1       |
-  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount(opA)
-  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount(opB)
-  else:                cosize(atom.getLayoutC()) div atom.threadCount(opC)
+  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount
+  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount
+  else:                cosize(atom.getLayoutC()) div atom.threadCount
 
 macro getThreadCount*(A: static MmaAtom): untyped =
   ## Returns the number of threads one atom invocation cooperates over.

@@ -17,22 +17,26 @@ import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/macros/static_for
 
+
 {.experimental: "callOperator".}
 {.experimental: "dynamicBindSym".}
 
-macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: untyped): untyped =
+macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc, cTile, cLoc: untyped): untyped =
   ## One Matrix-Multiply-Accumulate (MMA) atom call at a tile position,
   ## for an atom with 2 values per thread.
   ## Args:
-  ##   - dTile, dLoc: accumulator tile and cell position
+  ##   - dTile, dLoc: result tile and cell position, d receives a·b + c
   ##   - aTile, aLoc: A operand tile and cell position
   ##   - bTile, bLoc: B operand tile and cell position
+  ##   - cTile, cLoc: addend tile and cell position. Its cell value
+  ##     is the addend in d = a·b + c. Pass the result tile as cTile
+  ##     for in-place accumulation
   ##
   ## This macro transforms
   ##
-  ##   mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k))
+  ##   mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), cTile, (m, ns))
   ##
-  ## into:
+  ## into this block:
   ##
   ##   block gemmAtomAt:
   ##     var d0 = dTile[0, m, ns]
@@ -41,8 +45,10 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: 
   ##     let a1 = aTile[1, m, k]
   ##     let b0 = bTile[0, ns, kSlice]
   ##     let b1 = bTile[1, ns, kSlice]
+  ##     let c0 = cTile[0, m, ns]
+  ##     let c1 = cTile[1, m, ns]
   ##
-  ##     mma.gemm_mma(d0, d1, a0, a1, b0, b1)
+  ##     mma.gemm_mma(d0, d1, a0, a1, b0, b1, c0, c1)
   ##
   ##     dTile[0, m, ns] = d0
   ##     dTile[1, m, ns] = d1
@@ -67,6 +73,8 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: 
     result.add newLetStmt(ident("a" & $i), aTile.at(i, aLoc))
   for i in 0 ..< bV:
     result.add newLetStmt(ident("b" & $i), bTile.at(i, bLoc))
+  for i in 0 ..< dV:
+    result.add newLetStmt(ident("c" & $i), cTile.at(i, cLoc))
 
   var mmaCall = bindSym"gemm_mma".newCall(newLit(mma))
 
@@ -76,6 +84,8 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: 
     mmaCall.add(ident("a" & $i))
   for i in 0 ..< bV:
     mmaCall.add(ident("b" & $i))
+  for i in 0 ..< dV:
+    mmaCall.add(ident("c" & $i))
   result.add mmaCall
 
   for i in 0 ..< dV:
@@ -83,14 +93,18 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc: 
 
   result = nnkBlockStmt.newTree(genSym(nskLabel, "gemmAtomAt"), result)
 
-func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned) =
+func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned, cTile: var TensorOwned[T, Sh, St]) =
   ## Tile-level GEneralized Matrix-Multiply (GEMM)
   ##
   ## Args:
-  ##   - mma: the hardware instruction descriptor
-  ##   - dTile: accumulator tile (V, MR, NR), accumulated in place
-  ##   - aTile: A operand tile (V, MR, KR)
-  ##   - bTile: B operand tile (V, NR, KR)
+  ##
+  ##   | tile  | shape       | role                                |
+  ##   | ----- | ----------- | ----------------------------------- |
+  ##   | mma   |             | the hardware instruction descriptor |
+  ##   | dTile | (V, MR, NR) | result, d receives a*b + c          |
+  ##   | aTile | (V, MR, KR) | A operand                           |
+  ##   | bTile | (V, NR, KR) | B operand                           |
+  ##   | cTile | (V, MR, NR) | addend, may alias dTile             |
   ##
   ## Worked example, m16n8k8, warp tile (32, 16, 32): MR = NR = 2,
   ## KR = 4, one warp per tile, fp16 A/B, fp32 D.
@@ -155,21 +169,22 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
   staticFor k, 0, KR:
+    let addend = when k == 0: cTile else: dTile
     when aBits == 8:
       staticFor m, 0, MR:
         staticFor n, 0, NR:
           let ns = (when (m and 1) == 1: NR - 1 - n else: n)
-          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k))
+          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), addend, (m, ns))
     elif bBits == 8:
       staticFor n, 0, NR:
         staticFor m, 0, MR:
           let ms = (when (n and 1) == 1: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k))
+          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), addend, (ms, n))
     else:
       staticFor n, 0, (NR + 1) div 2:
         staticFor m, 0, MR:
           let n0 = n * 2
           let ms = (when (n * 2 and 2) == 2: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k))
+          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), addend, (ms, n0))
           when n * 2 + 1 < NR:
-            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k))
+            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), addend, (ms, n0 + 1))

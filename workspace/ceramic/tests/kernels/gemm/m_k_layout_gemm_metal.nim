@@ -1,9 +1,10 @@
 ## gemm_tile on Metal: one APPLE_8x8x8_F32 simdgroup atom, C(8,8) = A(8,16) * B(8,16),
-## per-lane register tiles (V, (MR, KR)) gathered through the atom layouts, 16 trials.
+## per-lane register tiles (V, (MR, KR)) gathered through the atom layouts,
+## 16 in-place trials plus one distinct-addend trial (rD = rC + A*B, rC nonzero).
 ##
 ## Run:
 ##   nim c -r -d:metal --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/ceramic/tests/kernels/k_gemm/m_k_layout_gemm_metal.nim (from tattletale)
+##     workspace/ceramic/tests/kernels/gemm/m_k_layout_gemm_metal.nim (from tattletale)
 
 import std/[math, random, strformat]
 import workspace/crucible
@@ -42,17 +43,40 @@ proc gemmTileFrag(C, A, B: ptr UncheckedArray[float32]) {.inline.} =
       rA[v, (0, s)] = A[crd2idx(aLayout, (tid, v)) + s * blockElems]
       rB[v, (0, s)] = B[crd2idx(bLayout, (tid, v)) + s * blockElems]
   rC.fillWith(0.0'f32)
-  atom.gemm_tile(rC, rA, rB)
+  atom.gemm_tile(rC, rA, rB, rC)
   for v in 0 ..< vC:
     C[crd2idx(cLayout, (tid, v))] = rC[v, (0, 0)]
+
+proc gemmTileDistinctCFrag(C, A, B: ptr UncheckedArray[float32]) {.inline.} =
+  ## One simdgroup with a distinct addend tile: rD = rC + A*B, rC nonzero,
+  ## every k slice accumulates into rD.
+  let tid = thread_index_in_threadgroup
+  var rA = make_tensor(float32, makeIntTuple((vA, (1, kSlices))))
+  var rB = make_tensor(float32, makeIntTuple((vB, (1, kSlices))))
+  var rC = make_tensor(float32, makeIntTuple((vC, (1, 1))))
+  var rD = make_tensor(float32, makeIntTuple((vC, (1, 1))))
+  for v in 0 ..< vA:
+    for s in 0 ..< kSlices:
+      rA[v, (0, s)] = A[crd2idx(aLayout, (tid, v)) + s * blockElems]
+      rB[v, (0, s)] = B[crd2idx(bLayout, (tid, v)) + s * blockElems]
+  rC.fillWith(1.0'f32)
+  atom.gemm_tile(rD, rA, rB, rC)
+  for v in 0 ..< vC:
+    C[crd2idx(cLayout, (tid, v))] = rD[v, (0, 0)]
 
 const kernelCode = metal:
   proc gemmTileKernel(C, A, B: ptr UncheckedArray[float32]) {.global.} =
     gemmTileFrag(C, A, B)
+  proc gemmTileDistinctCKernel(C, A, B: ptr UncheckedArray[float32]) {.global.} =
+    gemmTileDistinctCFrag(C, A, B)
 
 proc runTest() =
   var engine = bkMetal.init()
   engine.ingest(kernelCode)
+  let
+    aDev = engine.allocDevice(M * kSlices * K * sizeof(float32))
+    bDev = engine.allocDevice(N * kSlices * K * sizeof(float32))
+    cDev = engine.allocDevice(M * N * sizeof(float32))
   var rng = initRand(0xC0FFEE)
   var allOk = true
   for trial in 0 ..< 16:
@@ -74,8 +98,11 @@ proc runTest() =
           acc += A[m + k * M] * B[n + k * N]
         refC[m + n * M] = acc
     var gpuC = newSeq[float32](M * N)
+    engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(float32))
+    engine.copyToDeviceFromHost(bDev, addr B[0], B.len * sizeof(float32))
     engine.run << (grid: (1, 1), blk: (32, 1)) >>
-      ("gemmTileKernel", gpuC, (A, B))
+      ("gemmTileKernel", cDev, (aDev, bDev))
+    engine.copyToHostFromDevice(addr gpuC[0], cDev, M * N * sizeof(float32))
     var worst = 0.0'f32
     for m in 0 ..< M:
       for n in 0 ..< N:
@@ -84,6 +111,42 @@ proc runTest() =
     allOk = allOk and pass
     echo &"  gemm_tile Apple trial {trial}: ",
          (if pass: &"PASS worst |d| = {worst}" else: &"FAIL worst |d| = {worst}")
+
+  # distinct addend tile, rC = 1 everywhere: rD must equal rC + sum over k of A*B
+  block:
+    var A = newSeq[float32](M * kSlices * K)
+    var B = newSeq[float32](N * kSlices * K)
+    for m in 0 ..< M:
+      for k in 0 ..< kSlices * K:
+        A[m + k * M] = rng.rand(-2.0 .. 2.0)
+    for n in 0 ..< N:
+      for k in 0 ..< kSlices * K:
+        B[n + k * N] = rng.rand(-2.0 .. 2.0)
+    var refC = newSeq[float32](M * N)
+    for m in 0 ..< M:
+      for n in 0 ..< N:
+        var acc = 0.0'f32
+        for k in 0 ..< kSlices * K:
+          acc += A[m + k * M] * B[n + k * N]
+        refC[m + n * M] = 1.0'f32 + acc
+    engine.copyToDeviceFromHost(aDev, addr A[0], A.len * sizeof(float32))
+    engine.copyToDeviceFromHost(bDev, addr B[0], B.len * sizeof(float32))
+    engine.run << (grid: (1, 1), blk: (32, 1)) >>
+      ("gemmTileDistinctCKernel", cDev, (aDev, bDev))
+    var gpuC = newSeq[float32](M * N)
+    engine.copyToHostFromDevice(addr gpuC[0], cDev, M * N * sizeof(float32))
+    var worst = 0.0'f32
+    for m in 0 ..< M:
+      for n in 0 ..< N:
+        worst = max(worst, abs(gpuC[m + n * M] - refC[m + n * M]))
+    let pass = worst < 1e-5
+    allOk = allOk and pass
+    echo &"  gemm_tile Apple distinct-addend trial: ",
+         (if pass: &"PASS worst |d| = {worst}" else: &"FAIL worst |d| = {worst}")
+
+  engine.freeDevice(aDev)
+  engine.freeDevice(bDev)
+  engine.freeDevice(cDev)
   if not allOk: quit 1
 
 when isMainModule:

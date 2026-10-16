@@ -65,6 +65,7 @@ when defined(macosx):
     MsgSendID = proc (self: ID, op: SEL, a: ID): ID {.cdecl.}
     MsgSendIDPtr = proc (self: ID, op: SEL, a: ID, b: ptr ID): ID {.cdecl.}
     MsgSendIDIDPtr = proc (self: ID, op: SEL, a: ID, b: ID, c: ptr ID): ID {.cdecl.}
+    MsgSendIDUIntPtr2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: ptr ID, d: ptr ID): ID {.cdecl.}
     MsgSendUInt2 = proc (self: ID, op: SEL, a: NSUInteger, b: NSUInteger): ID {.cdecl.}
     MsgSendIDUInt2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: NSUInteger): ID {.cdecl.}
     MsgSendPtrUInt2 = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger): ID {.cdecl.}
@@ -88,6 +89,9 @@ when defined(macosx):
 
   template msgSend*(self: ID, op: SEL, a: ID, b: ID, c: ptr ID): ID =
     cast[MsgSendIDIDPtr](objc_msgSend)(self, op, a, b, c)
+
+  template msgSend*(self: ID, op: SEL, a: ID, b: NSUInteger, c: ptr ID, d: ptr ID): ID =
+    cast[MsgSendIDUIntPtr2](objc_msgSend)(self, op, a, b, c, d)
 
   template msgSend*(self: ID, op: SEL, a: NSUInteger, b: NSUInteger): ID =
     cast[MsgSendUInt2](objc_msgSend)(self, op, a, b)

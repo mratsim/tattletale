@@ -6,6 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import std/[strutils, tables]
 
+import ../../codegen/ir/gpu_types
+import ../kernel_args
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
@@ -35,6 +37,8 @@ type
     ctx: MetalDeviceCtx
     cache: MetalCache   # after ctx: released before ctx shutdown
 
+proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
+
 # ═════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
 # ═════════════════════════════════════════════════
@@ -55,17 +59,14 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   proc newMetalCtx(): MetalCtx =
-    ## Engine context: the default device plus its command queue, both +1
-    ## under Create/new ownership rules and released by the ctx =destroy.
-    result.device = defaultMetalDevice()
+    result.device = objc.MTLCreateSystemDefaultDevice()
+    if objc.isNil(result.device):
+      failLoud("no Metal device")
     result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
     if objc.isNil(result.queue):
       failLoud("newCommandQueue returned nil")
 
   proc `=destroy`(ctx: var MetalDeviceCtx) =
-    ## Releases the +1 device and command queue (queue first, the reverse of creation order).
-    ## The releases run inside a pool: the queue's dealloc autoreleases the device,
-    ## and destroy runs outside any public call, so a bare release would trip OBJC_DEBUG_MISSING_POOLS=YES.
     objc.withMemPool:
       objc.release(ctx.ctx.queue)
       objc.release(ctx.ctx.device)
@@ -77,8 +78,7 @@ when defined(macosx):
         objc.release(pso)
       cache.psos.clear()
 
-  proc newMetalEngine*(): MetalEngine =
-    ## Factory reached by engines.nim via `import {.all.}`.
+  proc newMetalEngine(): MetalEngine =
     objc.withMemPool:
       result = MetalEngine(
         ctx: MetalDeviceCtx(ctx: newMetalCtx()),
@@ -118,8 +118,6 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   proc bufferContents(h: objc.ID): pointer =
-    ## [buffer contents], the host address of a shared-storage allocation.
-    ## Engine-internal: public host access is the two copy procs only.
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
       failLoud("contents() returned nil for a shared buffer")
@@ -147,11 +145,9 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc run*(engine: MetalEngine, kernel: string, output: objc.ID, args: tuple, cfg = LaunchConfig()) =
-    ## Runs `kernel` on the engine's GPU.
-    ##
-    ## Usage:
-    ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  proc run*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
+    ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
+  ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -177,29 +173,27 @@ when defined(macosx):
       if engine.cache.psos.hasKey(kernel):
         pso = engine.cache.psos[kernel]
       else:
-        pso = compilePipelineState(engine.ctx.ctx.device,
-                                   engine.cache.library, kernel)
+        pso = compilePipelineState(engine.ctx.ctx.device, engine.cache.library, kernel)
         engine.cache.psos[kernel] = pso
 
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                      output, objc.NSUInteger(0), objc.NSUInteger(0))
-      var idx = 1
-      var argsCopy = args
-      for f in fields(argsCopy):
-        when typeof(f) is objc.ID:
-          discard objc.msgSend(encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          f, objc.NSUInteger(0), objc.NSUInteger(idx))
-        elif typeof(f) is bool:
-          var v = int32(f)
-          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          addr v, objc.NSUInteger(sizeof(int32)), objc.NSUInteger(idx))
+      # deliver the launch values whole, positional
+      type SinkCtx = object
+        encoder: objc.ID
+      proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: objc.ID, idx: int, p: pointer, len: int) {.nimcall.} =
+        if isBuffer:
+          discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                          h, objc.NSUInteger(0), objc.NSUInteger(idx))
         else:
-          discard objc.msgSend(encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          addr f, objc.NSUInteger(sizeof(f)), objc.NSUInteger(idx))
-        inc idx
+          discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
+                          p, objc.NSUInteger(len), objc.NSUInteger(idx))
+      var dctx = SinkCtx(encoder: encoder)
+      bindArgs(dctx, bkMetal, output, args, true, sinkArg)
+      if cfg.sharedMem > 0:
+        discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
+                        objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))
       let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),
                          depth: objc.NSUInteger(cfg.grid.z))
@@ -228,5 +222,5 @@ when defined(macosx):
 # ═════════════════════════════════════════════════
 
 else:
-  proc newMetalEngine*(): MetalEngine =
+  proc newMetalEngine(): MetalEngine =
     quit("bkMetal requires macOS")

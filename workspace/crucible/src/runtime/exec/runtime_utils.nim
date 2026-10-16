@@ -8,26 +8,24 @@
 import std/os
 
 proc sanitizePath*(name: string): string =
-  ## Strip all directory components, returning only the final filename component.
-  ## Raises if the result differs from the input (path traversal attempt detected).
+  ## Strips directory components, raises on path traversal.
   result = extractFilename(name)
   if result != name or result in [".", ".."]:
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""
 
 proc getDebugDir(): string =
-  ## Returns getTempDir() / "tattletale" / "debug" — all debug-only writes go here.
+  ## getTempDir() / "tattletale" / "debug", all debug-only writes.
   result = getTempDir() / "tattletale" / "debug"
   createDir(result)
 
 proc getDebugPath*(name: string): string =
-  ## Returns getDebugDir() / sanitizePath(name) with parent dirs created.
-  ## Convenience for debug-only file writes.
+  ## getDebugDir() / sanitizePath(name), parent dirs created.
   let safe = sanitizePath(name)
   result = getDebugDir() / safe
   createDir(result.parentDir())
 
 proc getKernelDir*(segments: varargs[string, sanitizePath]): string =
-  ## Returns getTempDir() / "tattletale" / sanitizePath(s0) / sanitizePath(s1) / ...
+  ## getTempDir() / "tattletale" / sanitizePath of each arg.
   ## with parent dirs created.
   result = getTempDir() / "tattletale"
   for s in segments:

@@ -4,6 +4,7 @@
 ## Tests both GPU (divmod) and CPU (wheel-winding) indexing paths.
 
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_indexing
 import std/typetraits
 import std/macros
 import workspace/ceramic/tests/layout/layouts_testutils
@@ -311,6 +312,21 @@ block:
   doAssert dice(L, (Y, Y)) === L
   doAssert dice(L, (X, X)) === ((), ())
 echo "    dice on Layout: 4 cases OK"
+
+block:
+  # a selector leaf facing a nested target mode applies to the whole subtree,
+  # one X keeps it in slice, one int drops it
+  let L = make_layout(((2, 3), 4), ((1, 2), 6))
+  doAssert slice(L, (0, _)) === make_layout(4, 6)
+  doAssert slice(L, (_, 0)) === make_layout(((2, 3),), ((1, 2),))
+echo "    slice nested mode: 2 cases OK"
+
+block:
+  # one int keeps an entire subtree in dice, one X drops it
+  let L = make_layout(((2, 3), 4), ((1, 2), 6))
+  doAssert dice(L, (X, Y)) === make_layout(4, 6)
+  doAssert dice(L, (Y, X)) === make_layout(((2, 3),), ((1, 2),))
+echo "    dice nested mode: 2 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
 #  Call operator — crd2idx via L()

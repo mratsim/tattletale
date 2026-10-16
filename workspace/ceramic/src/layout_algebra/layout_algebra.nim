@@ -8,13 +8,14 @@
 ## Layout algebra: coalesce, complement, compose, divide, inverses, products.
 
 import std/macros
+import std/algorithm
 import std/sequtils
 import std/typetraits
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import ./layouts_unsanctioned_helpers
 import ./layouts
-import ./layout_compiletime
+import ./layout_compiletime {.all.}
 import ./layouts_unsanctioned_helpers
 import ./ism_coord_strides
 import ./layout_indexing
@@ -23,6 +24,20 @@ import ./layout_indexing_gpu
 # ═══════════════════════════════════════════════════════════════
 #  getIndicesSortedByStride
 # ═══════════════════════════════════════════════════════════════
+
+proc strideHasCoordStride(layout: NimNode): bool {.compileTime.} =
+  ## True when the layout's stride type carries a CoordStride leaf
+  var ty = layout.getTypeInst()
+  if ty.kind == nnkBracketExpr and ty.len == 3 and $ty[0] == "Layout":
+    ty = ty[2]
+  proc walk(n: NimNode): bool {.compileTime.} =
+    if n.kind in {nnkTupleConstr, nnkTupleTy, nnkPar}:
+      for i in 0 ..< n.len:
+        if walk(n[i]):
+          return true
+      return false
+    return isCoordStride(n)
+  result = walk(ty)
 
 proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
   ## Return indices sorted by stride ascending.
@@ -58,26 +73,25 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #     the size is unchanged and every input integer maps to the
 #     same output integer
 
-proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
+macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
-  ##
-  ## A size-1 dimension is dropped except the last one.
-  ## An empty input is mapped to (1, 0)
   var builder = TupleBuilderFlat.new(2)
   var span = 0                 # the open chain's shape product, 0 = no open chain
   var headTy: NimNode          # the open chain's head stride type
   var pending: NimNode         # a trailing size-1 leaf's stride, nil when none
+  var pendingTy: NimNode       # the pending stride's type
   var pendingVal = DynamicSentinel  # the pending stride's static value
 
   template appendChain =
     let headVal = headTy.getStaticInt()
     if headVal != DynamicSentinel:
-      builder.append(IntCT(span), IntCT(headVal))
+      builder.append((IntCT(span), intTy(span)), (IntCT(headVal), intTy(headVal)))
     else:
       var t = headTy
       if t.kind == nnkSym:
         t = t.getImpl[2][1]
-      builder.append(IntCT(span), bindSym"E".newCall(t[1]))
+      builder.append((IntCT(span), intTy(span)),
+        (bindSym"E".newCall(t[1]), nnkBracketExpr.newTree(bindSym"CoordStride", t[1])))
 
   for (shapeEv, strideEv) in sh.tupleStream().zip(st.tupleStream()):
     if shapeEv.kind != kLeaf:
@@ -85,17 +99,6 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
     let headVal = if headTy.isNil: DynamicSentinel else: headTy.getStaticInt()
-
-    # size-1 dimension
-    if shapeVal == 1:
-      if not headTy.isNil and strideVal != DynamicSentinel and
-          headVal != DynamicSentinel and span * headVal == strideVal:
-        pending = nil
-        pendingVal = DynamicSentinel
-      else:
-        pending = strideEv.leaf
-        pendingVal = strideVal
-      continue
 
     let strideCrd = strideEv.leafTy.getCoordStrideDescriptor()
     let headCrd = if headTy.isNil: CoordStrideDescriptor(kind: caNone)
@@ -112,6 +115,10 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
       span *= shapeVal
       pending = nil
       pendingVal = DynamicSentinel
+    elif shapeVal == 1:
+      pending = strideEv.leaf
+      pendingTy = strideEv.leafTy
+      pendingVal = if strideCrd.kind == caNone: strideVal else: DynamicSentinel
 
     else: # Flush
       if not headTy.isNil:
@@ -121,8 +128,9 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
         span = shapeVal
         headTy = strideEv.leafTy
       else:
-        builder.append(shapeEv.leaf,
-          (if strideVal != DynamicSentinel: IntCT(strideVal) else: strideEv.leaf))
+        builder.append((shapeEv.leaf, shapeEv.leafTy),
+          (if strideVal != DynamicSentinel: (IntCT(strideVal), intTy(strideVal))
+           else: (strideEv.leaf, strideEv.leafTy)))
         span = 0
         headTy = nil
       pending = newEmptyNode()
@@ -131,27 +139,15 @@ proc coalesceFoldImpl(sh, st: NimNode): NimNode {.compileTime.} =
   if not headTy.isNil:
     appendChain()
   elif pending.isNil:
-    builder.append(IntCT(1), IntCT(0))
+    builder.append((IntCT(1), intTy(1)), (IntCT(0), intTy(0)))
   if not pending.isNil and pending.kind != nnkEmpty:
-    builder.append(IntCT(1),
-      (if pendingVal != DynamicSentinel: IntCT(pendingVal) else: pending))
+    # the discard drops the trailing size-1 mode only when other
+    # modes precede it, a lone size-1 result stays
+    if not dropTrailing or builder.count == 0:
+      builder.append((IntCT(1), intTy(1)),
+        (if pendingVal != DynamicSentinel: (IntCT(pendingVal), intTy(pendingVal))
+         else: (pending, pendingTy)))
   return builder.emitLayout()
-
-macro coalesceImpl(sh, st: typed): untyped =
-  ## Size-1-preserving coalesce
-  result = newStmtList()
-  result.add coalesceFoldImpl(sh, st)
-
-macro coalesceDropImpl(sh, st: typed): untyped =
-  result = newStmtList()
-  result.add coalesceFoldImpl(sh, st)
-  let shapeTuple = result[0][1]
-  let strideTuple = result[0][2]
-  if shapeTuple.kind in {nnkTupleConstr, nnkPar} and shapeTuple.len > 1:
-    let lastShapeVal = shapeTuple[^1].getStaticInt()
-    if lastShapeVal == 1:
-      shapeTuple.del(shapeTuple.len - 1)
-      strideTuple.del(strideTuple.len - 1)
 
 macro coalesce*(layout: Layout): untyped =
   ## Merge contiguous dimensions.
@@ -167,150 +163,178 @@ macro coalesce*(layout: Layout): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
   template coalesceDelegate(shape, stride: typed): untyped =
-    coalesceDropImpl(shape, stride)
+    coalesceImpl(shape, stride, dropTrailing = true)
   result.add getAst(coalesceDelegate(sh, st))
 
 # ═══════════════════════════════════════════════════════════════
 #  complement
 # ═══════════════════════════════════════════════════════════════
 
-type ComplementRegime = enum
-  crStatic, crDynMulti, crDynRank1Zero, crDynRank1
-
-func complementRegime(shDims: seq[tuple[shape, depth: int, leaf: NimNode]],
-                      stDims: seq[tuple[stride: int, leaf: NimNode]]): ComplementRegime =
-  # Handles every complement limitations, the case branches stay pure processing:
-  # - one stride per shape dimension, or one stride broadcasted over the shape
-  # - multi-dimensional complements need compile-time strides, parity with CuTe
-  # - the multi-dimension walk indexes flat leaves only
-  if stDims.len != shDims.len and stDims.len != 1:
-    error "complement: expected one stride per shape dimension, got " &
-      $stDims.len & " strides for " & $shDims.len & " shape dimensions"
-  # Injectivity: strides must cover the range
-  # We can only check static strides as it's not possible to assert at runtime on a GPU
-  var span = 1
-  var spanTrusted = true
-  var walkStrides: seq[int]
-  for i in 0 ..< shDims.len:
-    walkStrides.add (if stDims.len == 1: stDims[0].stride else: stDims[i].stride)
-  if DynamicSentinel notin walkStrides:
-    for idx in getIndicesSortedByStride(walkStrides):
-      let (stride, shape) = (walkStrides[idx], shDims[idx].shape)
-      if stride == 0 or shape == 1:
-        continue
-      if spanTrusted and stride < span:
-        error "complement: non-injective layout, stride " & $stride &
-          " overlaps the covered span " & $span
-      if shape == DynamicSentinel:
-        spanTrusted = false
-      else:
-        span *= shape
-  if DynamicSentinel notin shDims.mapIt(it.shape) and
-      DynamicSentinel notin stDims.mapIt(it.stride):
-    return crStatic
-  if shDims.len == 1:
-    # rank-1 runtime, the formula or the zero collapse
-    if stDims[0].stride == 0:
-      return crDynRank1Zero
-    return crDynRank1
-  if DynamicSentinel in stDims.mapIt(it.stride):
-    error "complement: multi-dimension with dynamic strides not supported"
-  for i in 0 ..< shDims.len:
-    if shDims[i].depth > 1:
-      error "complement: non-flat shape at index " & $i
-  crDynMulti
-
-func complementFold(dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]], bound: NimNode, boundStatic: int, defaultBound: bool): NimNode =
-  var gapNodes, curNodes: seq[NimNode]
-  var curNode = IntCT(1)
+proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
+    strideNode, strideTy, shapeNode: NimNode]], bound: NimNode, defaultBound: bool): NimNode {.compileTime.} =
+  ## Fills the gaps a layout leaves uncovered in its address range,
+  ## over every stride leaf, integer strides and coordinate strides,
+  ## each codomain axis filled independently.
+  ##
+  ## - one entry per stride leaf, the leaf's own node carries the kind:
+  ##   an integer stride or an E(scale, axis) coordinate stride,
+  ##   coordinate strides need static shapes
+  ## - `bound` sets the fill limit, one value per axis or a scalar
+  ##   for a single-axis result
+  ## - the result covers the addresses the input misses, in order, without overlap, size-1 modes removed by coalesce
+  ## - without `bound` the integer axes fill up to the input's size,
+  ##   coordinate axes stay as they are
+  var sorted = leaves
+  sorted.sort(proc(a, b: tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode]): int =
+    cmp((a.axis, a.strideVal == DynamicSentinel, a.strideVal),
+        (b.axis, b.strideVal == DynamicSentinel, b.strideVal)))
+  var axes: seq[int]
+  for l in sorted:
+    if l.axis notin axes:
+      axes.add l.axis
+  var covVal = newSeq[int](axes.len)
+  var covScalar = newSeq[NimNode](axes.len)
+  var covStride = newSeq[NimNode](axes.len)
+  var covStrideTy = newSeq[NimNode](axes.len)
+  var covStatic = newSeq[bool](axes.len)
+  var covProdStatic = newSeq[bool](axes.len)   # the last leaf's stride*shape folds
+  var covProd = newSeq[int](axes.len)          # that product's value
+  var atomAxis = newSeq[bool](axes.len)
+  for l in sorted:
+    if isCoordStride(l.strideTy):
+      atomAxis[axes.find(l.axis)] = true
+  for i in 0 ..< axes.len:
+    covVal[i] = 1
+    covScalar[i] = IntCT(1)
+    covStride[i] = IntCT(1)
+    covStrideTy[i] = intTy(1)
+    covStatic[i] = true
+  var axisModes: seq[seq[tuple[gap, gapTy, stride, strideTy: NimNode]]]
+  axisModes.setLen(axes.len)
   var b = 1
-  var allSkipped = true
-  var accSpan = 1
-  var fullCoverage = true
-  for idx in getIndicesSortedByStride(dims.mapIt(it.stride)):
-    let dim = dims[idx]
-    if dim.stride == 0 or dim.shape == 1:
-      # a stride-0 dimension maps every coordinate to offset 0,
-      # a size-1 dimension covers a single offset, neither joins
-      # the gap-fill chain
+  for l in sorted:
+    if l.strideVal == 0 or l.shapeVal == 1:
+      # a stride-0 leaf maps every coordinate to offset 0, a size-1
+      # dimension covers a single offset, neither opens a gap
       continue
-    let s = IntCT(dim.stride)
-    gapNodes.add bindSym"max".newCall(
-      IntCT(1), nnkInfix.newTree(ident"div", s, curNode))
-    curNodes.add curNode
-    if dim.shape == DynamicSentinel:
-      # past a dynamic shape leaf the frontier is runtime arithmetic
-      fullCoverage = false
-      curNode = s * dim.leaf
+    let k = axes.find(l.axis)
+    if not isCoordStride(l.strideTy) and
+        l.strideVal != DynamicSentinel and covStatic[k] and l.strideVal < covVal[k]:
+      error "complement: non-injective layout, stride " & $l.strideVal &
+        " overlaps the covered span " & $covVal[k]
+    let covDiv = if covStatic[k]: IntCT(covVal[k]) else: covScalar[k]
+    let covDivN = if covStatic[k]: newLit(covVal[k]) else: covDiv
+    if isCoordStride(l.strideTy):
+      let gap = l.strideVal div covVal[k]
+      if gap == 0:
+        error "complement: coordinate strides collide, scale " & $l.strideVal &
+          " inside the covered span " & $covVal[k] & " on axis " & $l.axis
+      if gap > 1:
+        axisModes[k].add (IntCT(gap), intTy(gap), covStride[k], covStrideTy[k])
     else:
-      if dim.stride != accSpan:
-        fullCoverage = false
-      curNode = IntCT(dim.stride * dim.shape)
-      # the covered span grows by the shape when the stride closes on it
-      accSpan *= dim.shape
-    if defaultBound:
-      # cosize over the live leaves, invariant under the skip
-      b += (dim.shape - 1) * abs(dim.stride)
-    allSkipped = false
-  if allSkipped:
-    # every leaf skipped, the complement collapses to (bound):(1)
-    return make_layout(
-      (if defaultBound: IntCT(b) else: bound), newLit(1))
-  let boundVal = if defaultBound: b else: boundStatic
-  if fullCoverage and boundVal != DynamicSentinel and boundVal <= accSpan:
-    # the layout already covers the bound, no gaps to fill, the complement
-    # is a lone (1):(coverage) dimension
-    return make_layout(IntCT(1), IntCT(accSpan))
-  curNodes.add curNode
-  gapNodes.add bindSym"ceil_div".newCall(
-    (if defaultBound: IntCT(b) else: bound), curNode)
-  # coalesce is a macro and folds when the call site expands
-  result = bindSym"coalesce".newCall(make_layout(
-    nnkPar.newTree(gapNodes), nnkPar.newTree(curNodes)))
+      # a gap of 1 covers no hole, the mode drops
+      let gapVal = if l.strideVal != DynamicSentinel and covStatic[k]:
+                     l.strideVal div covVal[k]
+                   else: DynamicSentinel
+      if gapVal == DynamicSentinel or gapVal > 1:
+        let gapExpr = l.strideNode div covDivN
+        axisModes[k].add (gapExpr, nnkCall.newTree(ident"typeof", gapExpr), covStride[k], covStrideTy[k])
+    if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and covStatic[k]:
+      covVal[k] = l.strideVal * l.shapeVal
+      covScalar[k] = IntCT(covVal[k])
+      covStride[k] = l.strideNode * IntCT(l.shapeVal)
+      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
+    else:
+      covStatic[k] = false
+      covProdStatic[k] = l.strideVal != DynamicSentinel and
+        l.shapeVal != DynamicSentinel
+      covProd[k] = if covProdStatic[k]: l.strideVal * l.shapeVal else: 0
+      covScalar[k] = l.strideNode * l.shapeNode
+      covStride[k] = l.strideNode * l.shapeNode
+      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
+    if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
+      b += (l.shapeVal - 1) * abs(l.strideVal)
+
+  var boundLeafs: seq[tuple[leaf, leafTy: NimNode]]
+  if not defaultBound:
+    if axes.len == 1:
+      # a scalar cotarget fills the linear axis, a tuple's product
+      # does the same for the integer codomain
+      let boundNode = if bound.getTypeInst().kind == nnkTupleConstr:
+                        bindSym"product".newCall(bound)
+                      else:
+                        bound
+      boundLeafs.add (boundNode, bound.getTypeInst())
+    else:
+      for bEv in bound.tupleStream():
+        if bEv.kind == kLeaf:
+          boundLeafs.add (bEv.leaf, bEv.leafTy)
+      doAssert boundLeafs.len == axes.len,
+        "complement: cotarget rank " & $boundLeafs.len & " != codomain rank " & $axes.len
+
+  var builder = TupleBuilderFlat.new(2)
+  for k in 0 ..< axes.len:
+    for m in axisModes[k]:
+      builder.append((m.gap, m.gapTy), (m.stride, m.strideTy))
+    # the free complement extends integer axes to the layout's cosize, atom axes stay unextended
+    let boundNode = if defaultBound:
+                      IntCT(if atomAxis[k]: 1 else: b)
+                    else:
+                      boundLeafs[k].leaf
+    let boundVal = boundNode.getStaticInt()
+    if boundVal != DynamicSentinel and covStatic[k]:
+      # static operands fold the quotient to its value here,
+      # a rem of 1 covers nothing the gap modes miss and drops
+      let cd = (boundVal + covVal[k] - 1) div covVal[k]
+      if cd != 1 or axisModes[k].len == 0:
+        builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
+    else:
+      # the dynamic rem folds when both operands carry static types,
+      # a rem of 1 covers no hole the gap modes miss and drops
+      let bVal = boundNode.getStaticInt()
+      if bVal != DynamicSentinel and covProdStatic[k]:
+        let cd = (bVal + covProd[k] - 1) div covProd[k]
+        if cd != 1 or axisModes[k].len == 0:
+          builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
+      else:
+        let cdExpr = bindSym"ceil_div".newCall(boundNode, covScalar[k])
+        builder.appendTyped((cdExpr, nil), (covStride[k], covStrideTy[k]))
+
+  # a lone mode is a scalar, the complement's single-mode results
+  # (full coverage) spell shape/stride directly
+  let layout = builder.emitLayout(emitScalarForSize1 = true)
+  return layout
 
 macro complementImpl(sh, st: typed, bound: typed, defaultBound: static bool): untyped =
   var shDims: seq[tuple[shape, depth: int, leaf: NimNode]]
   var stDims: seq[tuple[stride: int, leaf: NimNode]]
+  var stTys: seq[NimNode]
   for shEv in sh.tupleStream():
     if shEv.kind == kLeaf:
       shDims.add (shEv.leafTy.getStaticInt(), shEv.depth, shEv.leaf)
   for stEv in st.tupleStream():
     if stEv.kind == kLeaf:
       stDims.add (stEv.leafTy.getStaticInt(), stEv.leaf)
+      stTys.add stEv.leafTy
 
-  let boundExpr =
-    if bound.getTypeInst().kind == nnkTupleConstr:
-      bindSym"product".newCall(bound)
-    else:
-      bound
-  let boundDyn = if defaultBound: bound else: boundExpr
-  let boundStatic =
-    if defaultBound: DynamicSentinel
-    else: bound.getTypeInst().getStaticInt()
-
-  # one stride leaf broadcasts over the shape
-  var dims: seq[tuple[stride, shape, depth: int, leaf: NimNode]]
+  var leaves: seq[tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode]]
   for i in 0 ..< shDims.len:
     let j = if stDims.len == 1: 0 else: i
-    dims.add (stDims[j].stride, shDims[i].shape, shDims[i].depth, shDims[i].leaf)
-
-  case complementRegime(shDims, stDims)
-  of crStatic:
-    result = complementFold(dims, boundExpr, boundStatic, defaultBound)
-  of crDynMulti:
-    # the fold emits runtime arithmetic for dynamic shape leaves
-    result = complementFold(dims, boundDyn, DynamicSentinel, defaultBound = false)
-  of crDynRank1Zero:
-    # a static zero stride, every coordinate maps to offset 0
-    result = make_layout(boundDyn, newLit(1))
-  of crDynRank1:
-    # rank-1, runtime gap formula
-    let stLeaf = stDims[0].leaf
-    let shLeaf = shDims[0].leaf
-    result = quote do:
-      coalesce(make_layout(
-        (max(Int[1](), `stLeaf`), ceil_div(`boundDyn`, `stLeaf` * `shLeaf`)),
-        (1, `stLeaf` * `shLeaf`)))
+    let desc = getCoordStrideDescriptor(stTys[j])
+    case desc.kind
+    of caMulti:
+      error "complement: multi-term coordinate strides not supported"
+    else:
+      if desc.kind == caSingle and shDims[i].shape == DynamicSentinel:
+        error "complement: coordinate strides need static shapes"
+      leaves.add (
+        axis: if desc.kind == caSingle: desc.path[^1] else: 0,
+        strideVal: if desc.kind == caSingle: desc.scale else: stDims[j].stride,
+        shapeVal: shDims[i].shape,
+        strideNode: stDims[j].leaf,
+        strideTy: stTys[j],
+        shapeNode: shDims[i].leaf)
+  return complementGenericFold(leaves, bound, defaultBound)
 
 macro complement*(layout: Layout): untyped =
   ## Layout complement, the codomain gap filler.
@@ -325,7 +349,7 @@ macro complement*(layout: Layout): untyped =
   ## Contract:
   ## - strictly ordered, `result(i-1) < result(i)`, the result is unique
   ## - when the stride chain divides, the pair
-  ##   `make_layout(layout, result)` is a bijection
+  ##   `make_layout(layout, complement)` is a bijection
   ##   onto a contiguous range, otherwise it under-fills:
   ##   the largest ordered, disjoint layout that fits
   ##
@@ -345,10 +369,15 @@ macro complement*(layout: Layout): untyped =
   ##    (2, 2):(1, 4) with 16   → (2, 2):(2, 8)
   result = newStmtList()
   let (sh, st) = result.destructureLayout(layout)
-
   let originalLayout = if result.len == 0: layout else: result[^1][1]
-  result.add bindSym"complementImpl".newCall(
-    sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
+  if strideHasCoordStride(layout):
+    # a coordinate-strided layout has no integer cosize, the per-axis
+    # walk needs no bound, gap shapes are 1, extension uses
+    # explicit shape-tuple cotargets
+    result.add bindSym"complementImpl".newCall(sh, st, IntCT(0), newLit(true))
+  else:
+    result.add bindSym"complementImpl".newCall(
+      sh, st, bindSym"cosize".newCall(originalLayout), newLit(true))
 
 macro complement*(layout: Layout, cosizeBound: static int): untyped =
   ## Complement with a compile-time int bound.
@@ -418,6 +447,59 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #             elif r != 0: the shape divisibility condition fails
 #             else: keep sᵢ
 
+# ═══════════════════════════════════════════════════════════════
+#  strided divide/modulo mode arithmetic
+# ═══════════════════════════════════════════════════════════════
+#
+#  qᵢ = M div pᵢ, 1 when the running prefix exhausts M
+
+template stridedDiv*[S, B, P: int or Int](s: S, M: B, prefix: P): auto =
+  ## Mode shape of A' / M, qᵢ = M div pᵢ, 1 when exhausted
+  ##
+  ## Returns:
+  ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
+  ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
+  ##            = sᵢ             otherwise, the remainder is trimmed by % N
+  when S is Int and B is Int and P is Int:
+    const q = M div prefix + int(M div prefix === 0)
+    when q mod s === 0:
+      Int[1]()
+    elif q >= 1 and s mod q === 0:
+      Int[(s div q).toInt()]()
+    else:
+      Int[s.toInt()]()
+  else:
+    let m = M.toInt()
+    let p = prefix.toInt()
+    let q = m div p + int(m div p == 0)
+    let sv = s.toInt()
+    if q mod sv == 0: 1
+    elif q >= 1 and sv mod q == 0: sv div q
+    else: sv
+
+template stridedMod*[S, B, P: int or Int](s: S, N: B, prefix: P): auto =
+  ## Strided % N, mode shapeᵢ = min(sᵢ, max(1, N div pᵢ))
+  when S is Int and B is Int and P is Int:
+    const m = max(1, N div prefix)
+    when s < m:
+      Int[s.toInt()]()
+    else:
+      Int[m.toInt()]()
+  else:
+    let sv = s.toInt()
+    let n = N.toInt()
+    let p = prefix.toInt()
+    min(sv, max(1, n div p))
+
+template stridedMod*[B, P: int or Int](N: B, prefix: P): auto =
+  ## Last-mode quotient: max(1, N div p_last), truncation decays to size-1 modes
+  when B is Int and P is Int:
+    Int[max(1, N div prefix).toInt()]()
+  else:
+    let n = N.toInt()
+    let p = prefix.toInt()
+    max(1, n div p)
+
 macro stridedDiv(strided: Layout, M: typed): untyped =
   ## A' / M, the layout of every d-th element of A'
   ##
@@ -428,9 +510,6 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
   ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
   ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
   ##            = sᵢ             otherwise, the remainder is trimmed by % N
-  ##
-  ## Statically known modes are computed here, dynamic modes emit the
-  ## rule as plain int arithmetic for the compiler to fold downstream.
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
@@ -440,14 +519,9 @@ macro stridedDiv(strided: Layout, M: typed): untyped =
     builder.onLeaves(shapeEv):
       let shapeDim = shapeEv.leaf
       let strideDim = strideEv.leaf
-      let q = quote do: `M` div `prefix` + ord(`M` div `prefix` === 0)
-      builder.append(
-        quote do:
-          (if `q` mod `shapeDim` === 0: 1
-           elif `q` >= 1 and `shapeDim` mod `q` === 0:
-             (`shapeDim` div `q`).toInt()
-           else: `shapeDim`.toInt()),
-        quote do: `q` * `strideDim`)
+      let divShape = quote do: stridedDiv(`shapeDim`, `M`, `prefix`)
+      let divStride = quote do: (`M` div `prefix` + int(`M` div `prefix` === 0)) * `strideDim`
+      builder.appendTyped((divShape, nil), (divStride, nil))
       prefix = quote do: `prefix` * `shapeDim`
   result.add builder.emitLayout()
 
@@ -463,20 +537,28 @@ macro stridedMod(strided: Layout, N: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
-  var modes: seq[tuple[shapeDim, strideDim: NimNode]]
-  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    modes.add (shapeEv.leaf, strideEv.leaf)
   var builder = TupleBuilderFlat.new(2)
   var prefix = IntCT(1)
-  for i, mode in modes:
-    let shapeDim = mode.shapeDim
-    if i < modes.len - 1:
-      builder.append(
-        quote do: min(`shapeDim`, max(1, `N` div `prefix`)), mode.strideDim)
-    else:
-      let q = quote do: `N` div `prefix`
-      builder.append(quote do: max(1, `q`), mode.strideDim)
-    prefix = quote do: `prefix` * `shapeDim`
+  var pendingShape, pendingShapeTy, pendingStride, pendingStrideTy: NimNode
+  for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
+    let shapeDim = shapeEv.leaf
+    if not pendingShape.isNil:
+      # each mode's mod call gets its own block scope, the template's
+      # static-branch bodies share gensyms across instantiations
+      let modShape = quote do: (block: stridedMod(`pendingShape`, `N`, `prefix`))
+      # the member types resolve at type resolution of the constructor,
+      # spelled as typeof so the modded shape and its type slot agree
+      builder.append((modShape, quote do: typeof(`modShape`)),
+                     (pendingStride, pendingStrideTy))
+      prefix = quote do: `prefix` * `pendingShape`
+    pendingShape = shapeDim
+    pendingShapeTy = shapeEv.leafTy
+    pendingStride = strideEv.leaf
+    pendingStrideTy = strideEv.leafTy
+  if not pendingShape.isNil:
+    # the last mode carries the running quotient, its shape ignores s
+    let lastMod = quote do: (block: stridedMod(`N`, `prefix`))
+    builder.appendTyped((lastMod, nil), (pendingStride, pendingStrideTy))
   result.add builder.emitLayout()
 
 proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
@@ -484,7 +566,7 @@ proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
   ## absorbs the rest of the path, it is its own single mode
   result = node
   for i in path:
-    if result.getTypeInst().isTupleTy():
+    if result.getTypeOf().isTupleTy():
       result = nnkBracketExpr.newTree(result, newLit(i))
     else:
       break
@@ -502,28 +584,31 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   var mVal = bStride.getStaticInt()
   if mVal == DynamicSentinel:
     # a symbol-bound stride, the static lives in the field's type
-    mVal = bStride.getTypeInst().getStaticInt()
+    mVal = bStride.getTypeOf().getStaticInt()
   if mVal == 0:
     result.add make_layout(bShape, IntCT(0))
     return
-  if bShape.getTypeInst().isTupleTy():
-    template composeMode(aSh, aSt, bSh, bSt: typed): untyped =
-      composeImpl(aSh, aSt, bSh, bSt)
+  if bShape.getTypeOf().isTupleTy():
+    var modeStmts = newStmtList()
     var builder = TupleBuilderFlat.new(2)
+    var modeIdx = 0
     for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
       let bModeShape = shEv.leaf
       let bModeStride = stEv.leaf
-      # modeAst is emitted twice. As a expression of integers it should be easily constant-folded
-      # and common subexpression eliminated
-      let modeAst = getAst(composeMode(aShape, aStride, bModeShape, bModeStride))
-      builder.append(
-        modeAst.newDotExpr(ident"shape"),
-        modeAst.newDotExpr(ident"stride"))
-    result.add builder.emitLayout()
+      let alias = genSym(nskLet, "composeMode" & $modeIdx)
+      inc modeIdx
+      modeStmts.add quote do:
+        let `alias` = composeImpl(`aShape`, `aStride`, `bModeShape`, `bModeStride`)
+      builder.appendTyped((alias.newDotExpr(ident"shape"), nil), (alias.newDotExpr(ident"stride"), nil))
+    let ctor = builder.emitLayout()
+    result.add quote do:
+      block:
+        `modeStmts`
+        `ctor`
   else:
     var nVal = bShape.getStaticInt()
     if nVal == DynamicSentinel:
-      nVal = bShape.getTypeInst().getStaticInt()
+      nVal = bShape.getTypeOf().getStaticInt()
     if nVal == 1:
       # A' evaluated at one point, evaluation is coalesce-invariant
       result.add make_layout(IntCT(1),
@@ -531,7 +616,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
     else:
       var aSh, aSt: NimNode
       let stmts = newStmtList()
-      if not isCoordStride(bStride.getTypeInst()):
+      if not isCoordStride(bStride.getTypeOf()):
         stmts.add quote do:
           evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
         (aSh, aSt) = result.destructureLayout(ident"aPrime")
@@ -552,7 +637,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
         let termAst = getAst(termDelegate(
           pathSelect(aSh, termEv.path), pathSelect(aSt, termEv.path),
           termValue, bShape))
-        let alias = ident("composeTerm" & $termIndex)
+        let alias = genSym(nskLet, "composeTerm" & $termIndex)
         inc termIndex
         stmts.add quote do:
           let `alias` = `termAst`
@@ -605,7 +690,17 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 
   result = newStmtList()
   let (aShape, aStride) = result.destructureLayout(a)
-  let tilerTy = tiler.getTypeInst()
+  # an un-inlined tuple producer (template call, mapped expression)
+  # is evaluated once, the leaf walk reads the value through the alias
+  var tilerEval = tiler
+  # the type is read off the original tiler, the alias ident below
+  # carries no type at macro expansion time
+  let tilerTy = tiler.getTypeOf()
+  if tilerTy.isTupleTy() and
+      tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
+    let tilerAlias = ident("tilerEval")
+    result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
+    tilerEval = tilerAlias
   if not tilerTy.isTupleTy():
     # a layout tiler: destructured and handed to composeImpl as-is
     let (bShape, bStride) = result.destructureLayout(tiler)
@@ -637,7 +732,7 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 
   var tilerLeaves: seq[NimNode]
   var tilerLeafTys: seq[NimNode]
-  for tEv in tiler.tupleDimsStream():
+  for tEv in tilerEval.tupleDimsStream(tilerTy):
     let tLeaf = tEv.leaf
     let tLeafTy = tEv.leafTy
     if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and
@@ -649,10 +744,11 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   var builder = TupleBuilderFlat.new(2)
   var ti = 0
 
-  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aStLeaf, aStLeafTy: NimNode) =
+  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aShLeafTy, aStLeaf, aStLeafTy: NimNode) =
     if isKeepMark(tLeaf, tLeafTy):
-      builder.append(aShLeaf, aStLeaf)
-    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy):
+      builder.append((aShLeaf, aShLeafTy), (aStLeaf, aStLeafTy))
+    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy) and
+        tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
       error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
     elif isLayoutTy(tLeafTy) or aStLeafTy.isTupleTy():
       # a Layout entry, or a scalar entry on a nested mode: the entry
@@ -665,10 +761,20 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
       let modeAlias = ident("composedTilerMode" & $ti)
       stmts.add bindSym"evalOnceAs".newCall(modeAlias,
         getAst(composeModeDelegate(aShLeaf, aStLeaf, bSh, bSt)))
-      builder.append(modeAlias.newDotExpr(ident"shape"),
-                     modeAlias.newDotExpr(ident"stride"))
+      let (modeSh, modeSt) = stmts.destructureLayout(modeAlias)
+      # the composed mode's member types resolve when the emitted
+      # Layout constructor sems, they are spelled as typeof here
+      let modeShTy = quote do: typeof(`modeSh`)
+      let modeStTy = quote do: typeof(`modeSt`)
+      builder.append((modeSh, modeShTy), (modeSt, modeStTy))
     else:
-      builder.append(tLeaf, aStLeaf)
+      # a scalar tiler element composes (B):(1), a static int B is
+      # lifted to Int[B] like make_layout does
+      if tLeafTy == nil and tLeaf.kind in {nnkIntLit .. nnkUInt64Lit}:
+        builder.append((IntCT(tLeaf.intVal), intTy(tLeaf.intVal)),
+                       (aStLeaf, aStLeafTy))
+      else:
+        builder.appendTyped((tLeaf, tLeafTy), (aStLeaf, aStLeafTy))
 
   let aShapeIsTuple = aShapeTy.isTupleTy()
   let aStrideIsTuple = aStrideTy.isTupleTy()
@@ -677,6 +783,7 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
       break
     result.tilerMode(tilerLeaves[ti], tilerLeafTys[ti],
       (if aShapeIsTuple: aShape.getTupleIndex(ti) else: aShape),
+      shEv.leaf,
       (if aStrideIsTuple: aStride.getTupleIndex(ti) else: aStride),
       stEv.leafTy)
     inc ti
@@ -691,10 +798,13 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 macro logicalProductFinish(a, rest: typed): untyped =
   result = newStmtList()
   var grid = rest
-  while grid.kind == nnkStmtListExpr:
-    for i in 0 ..< grid.len - 1:
-      result.add(grid[i])
-    grid = grid[^1]
+  # the composed layout arrives as `block: let m0 = ...; <layout>`,
+  # keep the let statements, the layout expression reads those variables
+  while grid.kind in {nnkStmtListExpr, nnkBlockExpr}:
+    let body = if grid.kind == nnkBlockExpr: grid[1] else: grid
+    for i in 0 ..< body.len - 1:
+      result.add(body[i])
+    grid = body[^1]
   let (aShape, aStrides) = result.destructureLayout(a)
   let (rShape, rStrides) = result.destructureLayout(grid)
   result.add make_layout(
@@ -805,19 +915,18 @@ macro tiled_product*(blk: Layout, tiler: typed): untyped =
   let hierUnzipAst = getAst(hier_unzip(productSplitter, blk, tiler))
   if hierUnzipAst.kind == nnkBlockExpr:
     result = newStmtList()
-    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
-    let makeLayoutCall = hierUnzipAst[^1][^1]
+    # the composed layout arrives as `block: let m0 = ...; <layout>`
+    let huzBody = hierUnzipAst[1]
+    result.add huzBody[0 ..< huzBody.len - 1]
+    let makeLayoutCall = huzBody[^1]
     let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
-    result.add bindSym"zippedToTiledPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+    result.add bindSym"zippedToTiledPartsImpl".newCall(tileShape, restShape, tileStride, restStride)
   else:
     result = newStmtList()
-    result.add bindSym"evalOnceAs".newCall(newIdentNode("zippedProductLayout"), hierUnzipAst)
-    let zippedLayout = newIdentNode("zippedProductLayout")
-    result.add bindSym"zippedToTiledPairImpl".newCall(
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 0),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 1),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 0),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 1))
+    let (zippedShape, zippedStride) = result.destructureLayout(hierUnzipAst)
+    result.add bindSym"zippedToTiledPartsImpl".newCall(
+      getTupleIndex(zippedShape, 0), getTupleIndex(zippedShape, 1),
+      getTupleIndex(zippedStride, 0), getTupleIndex(zippedStride, 1))
 
 macro flat_product*(blk: Layout, tiler: typed): untyped =
   ## Reproduce a block layout across the positions a tiler describes,
@@ -842,27 +951,33 @@ macro flat_product*(blk: Layout, tiler: typed): untyped =
   let hierUnzipAst = getAst(hier_unzip(productSplitter, blk, tiler))
   if hierUnzipAst.kind == nnkBlockExpr:
     result = newStmtList()
-    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
-    let makeLayoutCall = hierUnzipAst[^1][^1]
+    # the composed layout arrives as `block: let m0 = ...; <layout>`
+    let huzBody = hierUnzipAst[1]
+    result.add huzBody[0 ..< huzBody.len - 1]
+    let makeLayoutCall = huzBody[^1]
     let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
-    result.add bindSym"zippedToFlatPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+    result.add bindSym"zippedToFlatPartsImpl".newCall(tileShape, restShape, tileStride, restStride)
   else:
     result = newStmtList()
-    result.add bindSym"evalOnceAs".newCall(newIdentNode("zippedProductLayout"), hierUnzipAst)
-    let zippedLayout = newIdentNode("zippedProductLayout")
-    result.add bindSym"zippedToFlatPairImpl".newCall(
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 0),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"shape"), newLit 1),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 0),
-      nnkBracketExpr.newTree(zippedLayout.newDotExpr(ident"stride"), newLit 1))
+    let (zippedShape, zippedStride) = result.destructureLayout(hierUnzipAst)
+    result.add bindSym"zippedToFlatPartsImpl".newCall(
+      getTupleIndex(zippedShape, 0), getTupleIndex(zippedShape, 1),
+      getTupleIndex(zippedStride, 0), getTupleIndex(zippedStride, 1))
 
 # ═══════════════════════════════════════════════════════════════
 #  blocked_product / raked_product
 # ═══════════════════════════════════════════════════════════════
 
-macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
+macro productZipImpl(prodCtor: typed, raked: static bool): untyped =
   result = newStmtList()
-  let (prodShape, prodStride) = result.destructureLayout(unwrapStmtListExpr(prodCtor))
+  # the composed layout arrives as `block: let m0 = ...; <layout>`
+  var prodAst = prodCtor
+  while prodAst.kind in {nnkStmtListExpr, nnkBlockExpr}:
+    let body = if prodAst.kind == nnkBlockExpr: prodAst[1] else: prodAst
+    for i in 0 ..< body.len - 1:
+      result.add(body[i])
+    prodAst = body[^1]
+  let (prodShape, prodStride) = result.destructureLayout(prodAst)
   let firstShape = getTupleIndex(prodShape, if raked: 1 else: 0)
   let secondShape = getTupleIndex(prodShape, if raked: 0 else: 1)
   let firstStride = getTupleIndex(prodStride, if raked: 1 else: 0)
@@ -879,18 +994,21 @@ macro productPairZipImpl(prodCtor: typed, raked: static bool): untyped =
     let secondShapeEvent = secondShapeStream.next()
     let firstStrideEvent = firstStrideStream.next()
     let secondStrideEvent = secondStrideStream.next()
-    builder.append(nnkPar.newTree(firstShapeEvent.leaf, secondShapeEvent.leaf),
-                   nnkPar.newTree(firstStrideEvent.leaf, secondStrideEvent.leaf))
+    builder.append(
+      (nnkPar.newTree(firstShapeEvent.leaf, secondShapeEvent.leaf),
+       nnkPar.newTree(firstShapeEvent.leafTy, secondShapeEvent.leafTy)),
+      (nnkPar.newTree(firstStrideEvent.leaf, secondStrideEvent.leaf),
+       nnkPar.newTree(firstStrideEvent.leafTy, secondStrideEvent.leafTy)))
   builder.append(TupleStreamEvent(path: @[], kind: kClose),
                  TupleStreamEvent(path: @[], kind: kClose))
   result.add builder.emitLayout()
 
-macro productPairZipDelegate[A, B: Layout](blk: A, tiler: B, raked: static bool): untyped =
+macro productZipDelegate[A, B: Layout](blk: A, tiler: B, raked: static bool): untyped =
   let rakedLit = newLit(raked)
   result = quote do:
     block:
       const rankMax = max(`blk`.rank(), `tiler`.rank())
-      productPairZipImpl(
+      productZipImpl(
         logical_product(padRight(`blk`, rankMax), padRight(`tiler`, rankMax)),
         `rakedLit`)
 
@@ -902,7 +1020,7 @@ macro blocked_product*[A, B: Layout](blk: A, tiler: B): untyped =
   ## Say each tile copy must stay contiguous, one whole tile before
   ## the grid steps to the next.
   quote do:
-    productPairZipDelegate(`blk`, `tiler`, false)
+    productZipDelegate(`blk`, `tiler`, false)
 
 macro raked_product*[A, B: Layout](blk: A, tiler: B): untyped =
   ## Repeat block over tiler grid, blocks interleaved.
@@ -912,7 +1030,7 @@ macro raked_product*[A, B: Layout](blk: A, tiler: B): untyped =
   ## Say the tile's elements must spread across grid slots instead,
   ## a cyclic fill over the grid.
   quote do:
-    productPairZipDelegate(`blk`, `tiler`, true)
+    productZipDelegate(`blk`, `tiler`, true)
 
 # ═══════════════════════════════════════════════════════════════
 #  tile_to_shape
@@ -948,10 +1066,7 @@ template tile_to_shape*(blk: Layout, target_shape: typed, ord_shape: static Stri
 # ═══════════════════════════════════════════════════════════════
 
 template divideFormula(shA, stA, shB, stB) =
-  compose(make_layout(shA, stA),
-          make_layout(
-            (shB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).shape),
-            (stB, complement(make_layout(shB, stB), size(make_layout(shA, stA))).stride)))
+  compose(make_layout(shA, stA), make_layout((shB, complement(make_layout(shB, stB), shA).shape), (stB, complement(make_layout(shB, stB), shA).stride)))
 
 template divideRank1(l, t) =
   when l.shape isnot tuple:
@@ -1017,9 +1132,10 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
     logical_divide(make_layout(dsh, dst), dtl).shape
   template divideTupleDimStride(dsh, dst, dtl) =
     logical_divide(make_layout(dsh, dst), dtl).stride
-  let shTy = sh.getTypeInst()
-  let layoutRank = if shTy.kind == nnkTupleConstr: shTy.len else: 1
-  let tilerRank = tiler.getTypeInst().len
+  let shTy = sh.getTypeOf()
+  let layoutRank = if shTy.isTupleTy(): shTy.len else: 1
+  let tilerTy = tiler.getTypeOf()
+  let tilerRank = if tilerTy.isTupleTy(): tilerTy.len else: 1
   if tilerRank > layoutRank:
     error "logical_divide: tiler has more dimensions (" & $tilerRank &
       ") than the layout (" & $layoutRank & ")"
@@ -1033,11 +1149,14 @@ macro divideTupleImpl(sh, st, tiler: typed): untyped =
         # a binding would instead materialize a wall of temporaries + temp types
         # that might be harder to optimize away on certain backends (Vulkan / WebGPU that don't use LLVM for example)
         let tilerEv = tilerDims.next()
-        builder.append(getAst(divideTupleDimShape(shEv.leaf, stEv.leaf, tilerEv.leaf)),
-                       getAst(divideTupleDimStride(shEv.leaf, stEv.leaf, tilerEv.leaf)))
+        let divSh = getAst(divideTupleDimShape(shEv.leaf, stEv.leaf, tilerEv.leaf))
+        let divSt = getAst(divideTupleDimStride(shEv.leaf, stEv.leaf, tilerEv.leaf))
+        let divShTy = quote do: typeof(`divSh`)
+        let divStTy = quote do: typeof(`divSt`)
+        builder.append((divSh, divShTy), (divSt, divStTy))
       else:
         # a pass-through dimension, the dimension arrives whole
-        builder.append(shEv.leaf, stEv.leaf)
+        builder.append((shEv.leaf, shEv.leafTy), (stEv.leaf, stEv.leafTy))
   return builder.emitLayout()
 
 macro logical_divide*(layout: Layout, tiler: tuple): untyped =
@@ -1052,7 +1171,7 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result = e
     while result.kind == nnkStmtListExpr:
       result = result[^1]
-  if unwrapSLE(tiler).getTypeInst().len == 0:
+  if unwrapSLE(tiler).getTypeOf().len == 0:
     # an empty tiler divides nothing, the layout passes through verbatim
     result = newStmtList()
     result.add layout
@@ -1064,7 +1183,7 @@ macro logical_divide*(layout: Layout, tiler: tuple): untyped =
     result.add getAst(divideTupleDelegate(sh, st, tiler))
 
 template zipped_divide*(layout: Layout, tiler: auto): auto =
-  ## Divide layout by tiler and zip tile/rest dimensions into rank-2 result.
+  ## Divides layout by tiler, zips tile/rest dimensions into rank-2 result.
   ##
   ## Say a kernel level needs the tile and the rest at once, one
   ## index into dimension 1 selects which tile, dimension 0 walks
@@ -1072,9 +1191,7 @@ template zipped_divide*(layout: Layout, tiler: auto): auto =
   ##
   ## Returns:
   ## - dimension 0 carries the tile, dimension 1 the rest, zipped
-  hier_unzip(logical_divide, layout,
-    when tiler is Layout: tiler
-    else: makeIntTuple(tiler))
+  hier_unzip(logical_divide, layout, when tiler is Layout: tiler else: makeIntTuple(tiler))
 
 # ═══════════════════════════════════════════════════════════════
 #  tiled_divide / flat_divide
@@ -1111,10 +1228,12 @@ macro tiled_divide*(layout: Layout, tiler: typed): untyped =
   let hierUnzipAst = getAst(hier_unzip(divideSplitter, layout, tiler))
   if hierUnzipAst.kind == nnkBlockExpr:
     result = newStmtList()
-    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
-    let makeLayoutCall = hierUnzipAst[^1][^1]
+    # the composed layout arrives as `block: let m0 = ...; <layout>`
+    let huzBody = hierUnzipAst[1]
+    result.add huzBody[0 ..< huzBody.len - 1]
+    let makeLayoutCall = huzBody[^1]
     let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
-    result.add bindSym"zippedToTiledPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+    result.add bindSym"zippedToTiledPartsImpl".newCall(tileShape, restShape, tileStride, restStride)
   else:
     result = bindSym"zippedToTiledImpl".newCall(hierUnzipAst)
 
@@ -1148,10 +1267,12 @@ macro flat_divide*(layout: Layout, tiler: typed): untyped =
   let hierUnzipAst = getAst(hier_unzip(divideSplitter, layout, tiler))
   if hierUnzipAst.kind == nnkBlockExpr:
     result = newStmtList()
-    result.add hierUnzipAst[1 ..< hierUnzipAst.len - 1]
-    let makeLayoutCall = hierUnzipAst[^1][^1]
+    # the composed layout arrives as `block: let m0 = ...; <layout>`
+    let huzBody = hierUnzipAst[1]
+    result.add huzBody[0 ..< huzBody.len - 1]
+    let makeLayoutCall = huzBody[^1]
     let (tileShape, restShape, tileStride, restStride) = (makeLayoutCall[1][0], makeLayoutCall[1][1], makeLayoutCall[2][0], makeLayoutCall[2][1])
-    result.add bindSym"zippedToFlatPairImpl".newCall(tileShape, restShape, tileStride, restStride)
+    result.add bindSym"zippedToFlatPartsImpl".newCall(tileShape, restShape, tileStride, restStride)
   else:
     result = bindSym"zippedToFlatImpl".newCall(hierUnzipAst)
 
@@ -1166,7 +1287,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
   ## - the chain stride is the product of the shapes before the dimension,
   ##   a runtime prefix expression once a dynamic leaf precedes it
   ## - an empty chain collapses to the empty layout (1, 0)
-  var dims: seq[tuple[stride, shape, prefix: int, prefixNode: NimNode, leaf: NimNode]]
+  var dims: seq[tuple[stride, shape, prefix: int, prefixNode, leaf, leafTy: NimNode]]
   var prefix = 1
   # prefixNode carries the prefix as an expression once it turns runtime,
   # so a stride after a dynamic leaf can still be emitted
@@ -1175,7 +1296,7 @@ macro rightInverseImpl(sh, st: typed): untyped =
     if shEv.kind != kLeaf:
       continue
     let shape = shEv.leafTy.getStaticInt()
-    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf)
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf, shEv.leafTy)
     let factor = if shape == DynamicSentinel: shEv.leaf
                  else: IntCT(shape)
     if shape == DynamicSentinel:
@@ -1197,9 +1318,13 @@ macro rightInverseImpl(sh, st: typed): untyped =
     if dim.stride == curr:
       let shLeaf = if dim.shape == DynamicSentinel: dim.leaf
                    else: IntCT(dim.shape)
+      let shLeafTy = if dim.shape == DynamicSentinel: dim.leafTy
+                     else: intTy(dim.shape)
       let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                    else: IntCT(dim.prefix)
-      builder.append(shLeaf, stLeaf)
+      let stLeafTy = if dim.prefix == DynamicSentinel: nnkCall.newTree(ident"typeof", dim.prefixNode)
+                     else: intTy(dim.prefix)
+      builder.append((shLeaf, shLeafTy), (stLeaf, stLeafTy))
       if dim.shape == DynamicSentinel:
         break
       curr = dim.stride * dim.shape
@@ -1231,7 +1356,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
   ##   result_stride[i] = shape prefix of the previous stride-sorted dimension
   ##
   ## All strides must be static (compile-time assert).
-  var dims: seq[tuple[stride, shape, prefix: int, prefixNode: NimNode, leaf: NimNode]]
+  var dims: seq[tuple[stride, shape, prefix: int, prefixNode, leaf, leafTy: NimNode]]
   var prefix = 1
   # prefixNode carries the prefix as an expression once it turns runtime,
   # so a stride after a dynamic leaf can still be emitted
@@ -1240,7 +1365,7 @@ macro leftInverseImpl(sh, st: typed): untyped =
     if shEv.kind != kLeaf:
       continue
     let shape = shEv.leafTy.getStaticInt()
-    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf)
+    dims.add (stEv.leafTy.getStaticInt(), shape, prefix, prefixNode, shEv.leaf, shEv.leafTy)
     let factor = if shape == DynamicSentinel: shEv.leaf
                  else: IntCT(shape)
     if shape == DynamicSentinel:
@@ -1273,7 +1398,9 @@ macro leftInverseImpl(sh, st: typed): untyped =
     if gap != 1:
       let prevStLeaf = if prevPrefix == DynamicSentinel: prevPrefixNode
                        else: IntCT(prevPrefix)
-      builder.append(IntCT(gap), prevStLeaf)
+      let prevStLeafTy = if prevPrefix == DynamicSentinel: nnkCall.newTree(ident"typeof", prevPrefixNode)
+                         else: intTy(prevPrefix)
+      builder.append((IntCT(gap), intTy(gap)), (prevStLeaf, prevStLeafTy))
     sizeSoFar = dim.stride
     prevIdx = idx
     prevPrefix = dim.prefix
@@ -1283,9 +1410,13 @@ macro leftInverseImpl(sh, st: typed): untyped =
     let dim = dims[prevIdx]
     let shLeaf = if dim.shape == DynamicSentinel: dim.leaf
                  else: IntCT(dim.shape)
+    let shLeafTy = if dim.shape == DynamicSentinel: dim.leafTy
+                   else: intTy(dim.shape)
     let stLeaf = if dim.prefix == DynamicSentinel: dim.prefixNode
                  else: IntCT(dim.prefix)
-    builder.append(shLeaf, stLeaf)
+    let stLeafTy = if dim.prefix == DynamicSentinel: nnkCall.newTree(ident"typeof", dim.prefixNode)
+                   else: intTy(dim.prefix)
+    builder.append((shLeaf, shLeafTy), (stLeaf, stLeafTy))
   return bindSym"coalesce".newCall(builder.emitLayout())
 
 macro left_inverse*(layout: typed): untyped =
