@@ -693,12 +693,14 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   # an un-inlined tuple producer (template call, mapped expression)
   # is evaluated once, the leaf walk reads the value through the alias
   var tilerEval = tiler
-  if tiler.getTypeOf().isTupleTy() and
+  # the type is read off the original tiler, the alias ident below
+  # carries no type at macro expansion time
+  let tilerTy = tiler.getTypeOf()
+  if tilerTy.isTupleTy() and
       tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
     let tilerAlias = ident("tilerEval")
     result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
     tilerEval = tilerAlias
-  let tilerTy = tilerEval.getTypeOf()
   if not tilerTy.isTupleTy():
     # a layout tiler: destructured and handed to composeImpl as-is
     let (bShape, bStride) = result.destructureLayout(tiler)
@@ -730,7 +732,7 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
 
   var tilerLeaves: seq[NimNode]
   var tilerLeafTys: seq[NimNode]
-  for tEv in tilerEval.tupleDimsStream():
+  for tEv in tilerEval.tupleDimsStream(tilerTy):
     let tLeaf = tEv.leaf
     let tLeafTy = tEv.leafTy
     if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and

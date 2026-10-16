@@ -81,15 +81,18 @@ func tupleStream*(s: NimNode, reversed = false): TupleStream =
     result.pending = TupleStreamEvent(path: @[], kind: kOpen)
   result.hasPending = true
 
-func tupleDimsStream*(s: NimNode): TupleStream =
+func tupleDimsStream*(s: NimNode, tyOverride: NimNode = nil): TupleStream =
   ## Returns: the top-level elements as kLeaf events, one per
   ##   dimension in order, done() turns true after the last.
   ##
   ## - a sub-tuple element arrives whole in `leaf`
   ## - scalars wrap in a size-1 tuple
   ## - no root wrapper, the walk opens and closes on the leaves
+  ## - `tyOverride` supplies the tuple type for nodes that carry
+  ##   none at macro expansion time, say an evalOnceAs alias ident
   let ev = unwrapStmtListExpr(s)
-  let ty = s.getTypeOf().resolveAliasTy()
+  let ty = if tyOverride != nil: tyOverride.resolveAliasTy()
+           else: s.getTypeOf().resolveAliasTy()
   result.shallow = true
   if ty.isTupleTy():
     if ty.len != 0:
