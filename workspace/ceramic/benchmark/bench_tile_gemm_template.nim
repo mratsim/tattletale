@@ -35,9 +35,7 @@ import workspace/fp_conv/fp_conv
 #  Kernel templates and launch descs
 # ═══════════════════════════════════════════════════════════════
 
-proc tileLoadReduce(mma: static TiledMma[float32, float16, float16, 32, 32, 16],
-                    C, D: TensorView[float32, (int, int), (int, int)],
-                    A, B: TensorView[float16, (int, int), (int, int)]) =
+proc tileLoadReduce(mma: static TiledMma[float32, float16, float16, 32, 32, 16], C, D, A, B: distinct TensorView) =
   ## Load-path-only companion: every loaded register cell reduces into
   ## one scalar stored at the thread's own C slot, so no load is dead,
   ## isolating the load/store cost from the mma cost
@@ -81,14 +79,12 @@ template measure*(iters: int, elapsedNs: untyped, body: untyped): untyped =
     body
   elapsedNs = inNanoseconds(getMonotime() - start) div iters
 
-proc launchGemm[E: HwEngine](engine: E, C, D: TensorView[float32, (int, int), (int, int)],
-                             A, B: TensorView[float16, (int, int), (int, int)]) =
+proc launchGemm[E: HwEngine](engine: E, C, D, A, B: distinct TensorView) =
   engine.wrap_and_run matmul(tiledMma(float32, float16, float16, 32, 32, 16), C, A, B) do:
     grid = ((C.getLayout().shape[0] + 31) div 32, (C.getLayout().shape[1] + 31) div 32)
     blk = (32, 1)
 
-proc launchLoadReduce[E: HwEngine](engine: E, C, D: TensorView[float32, (int, int), (int, int)],
-                                   A, B: TensorView[float16, (int, int), (int, int)]) =
+proc launchLoadReduce[E: HwEngine](engine: E, C, D, A, B: distinct TensorView) =
   engine.wrap_and_run tileLoadReduce(tiledMma(float32, float16, float16, 32, 32, 16), C, D, A, B) do:
     grid = ((C.getLayout().shape[0] + 31) div 32, (C.getLayout().shape[1] + 31) div 32)
     blk = (32, 1)
