@@ -63,7 +63,6 @@ proc `=destroy`(cache: var WgpuCache) =
     wgpuBindGroupLayoutRelease(c.bindGroupLayout)
 
 proc newWgpuEngine(): WgpuEngine =
-  ## Private factory, engines.nim reaches it via `import {.all.}`.
   WgpuEngine(
     ctx: WgpuCtx(ctx: initWgpu()),
     cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
@@ -158,26 +157,10 @@ proc parseBakedBlk(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
-          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
+proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##
-  ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  ##
-  ## `output` is the kernel's first argument, then the args in declaration order.
-  ## Device buffers pass as-is, scalars copy by value into a scratch buffer
-  ## created per launch (WebGPU has no push constants).
-  ##
-  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
-  ## (wrap_and_run), checked against the engine binding at compile time.
-  ## Direct runs pass the default and bind from the kernel arg contract alone.
-  ##
-  ## Host seqs and arrays are not launch args:
-  ## allocDevice + copyToDeviceFromHost upload them, copyToHostFromDevice reads results back.
-  ##
-  ## Plain `run` dispatches with the shader's workgroup size, chevron
-  ## `run<<grid, blk>>` sets the grid, blk must match the shader's baked workgroup size.
+  ## blk must match the shader's baked workgroup size, plain run dispatches it.
   let device = engine.ctx.ctx.device
   let queue  = engine.ctx.ctx.queue
 
@@ -197,11 +180,26 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
 
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
   # the device keeps the spec-default limits, the spec-default alignment is 256.
-  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), WGPUBuffer](layout, bkWGSL)
-  var binding: KernelBinding[WGPUBuffer]
-  bindKernelArgs[WGPUBuffer](binding, argLayout, bkWGSL, output, args, ptrAsBuffer = false, argAlign = 256)
-  let scalarBytes = binding.bytes
-  let argShapes = binding.slots
+  # byte chunks pack into a scratch storage buffer at 256-byte alignment
+  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWGSL)
+  type SinkCtx = object
+    handles: array[n, WGPUBuffer]
+    chunkOff, chunkLen: array[n, int]
+    blob: seq[byte]
+    pn: int
+  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: WGPUBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
+    if isBuffer:
+      ctx.handles[idx] = h
+    else:
+      ctx.pn = (ctx.pn + 255) div 256 * 256
+      ctx.chunkOff[idx] = ctx.pn
+      ctx.chunkLen[idx] = len
+      ctx.blob.setLen(ctx.pn + len)
+      copyMem(ctx.blob[ctx.pn].addr, p, len)
+      inc ctx.pn, len
+  var dctx = SinkCtx()
+  bindArgs(dctx, bkWGSL, output, args, false, sinkArg)
+  let scalarBytes = dctx.blob
 
   var scratch = WGPUBuffer(nil)
   if scalarBytes.len > 0:
@@ -218,15 +216,15 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
     if scratch != nil:
       wgpuBufferRelease(scratch)
 
-  var argShapeKey = newSeq[int](argShapes.len)
-  for i, a in argShapes:
-    argShapeKey[i] = if not a.isBuffer: -a.width else: 0
+  var argShapeKey = newSeq[int](n)
+  for i in 0 ..< n:
+    argShapeKey[i] = -dctx.chunkLen[i]
   let cacheKey = (kernel, argShapeKey)
   var cache: WgpuPipelineCache
   if engine.cache.pipelines.hasKey(cacheKey):
     cache = engine.cache.pipelines[cacheKey]
   else:
-    let totalBindings = argShapes.len + 1
+    let totalBindings = n + 1
     var entries = newSeq[WGPUBindGroupLayoutEntry](totalBindings)
     entries[0] = WGPUBindGroupLayoutEntry(
       binding: 0.cuint,
@@ -236,14 +234,14 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
         minBindingSize: 0
       )
     )
-    for i, a in argShapes:
+    for i in 0 ..< n:
       entries[i + 1] = WGPUBindGroupLayoutEntry(
         binding: (i + 1).cuint,
         visibility: WGPUShaderStageCompute,
         buffer: WGPUBufferBindingLayout(
-          `type`: if not a.isBuffer: WGPUBufferBindingTypeReadOnlyStorage
-                  else: WGPUBufferBindingTypeStorage,
-          minBindingSize: (if not a.isBuffer: a.width else: 0).csize_t
+          `type`: if dctx.chunkLen[i] > 0: WGPUBufferBindingTypeStorage
+                  else: WGPUBufferBindingTypeReadOnlyStorage,
+          minBindingSize: dctx.chunkLen[i].csize_t
         )
       )
     var bglDesc = WGPUBindGroupLayoutDescriptor(
@@ -295,7 +293,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
     )
     engine.cache.pipelines[cacheKey] = cache
 
-  let totalBindings = argShapes.len + 1
+  let totalBindings = n + 1
   var bgEntries = newSeq[WGPUBindGroupEntry](totalBindings)
   # wgpu-native rejects a zero binding size, whole-buffer bindings carry
   # the buffer's queried size.
@@ -304,16 +302,16 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple,
     buffer: output,
     size: wgpuBufferGetSize(output).csize_t
   )
-  for i, a in argShapes:
+  for i in 0 ..< n:
     bgEntries[i + 1] = WGPUBindGroupEntry(
       binding: (i + 1).cuint,
-      buffer: if not a.isBuffer: scratch else: a.buffer,
-      offset: a.offset.cuint,
-      size: (if not a.isBuffer: a.width else: 0).csize_t
+      buffer: if dctx.chunkLen[i] > 0: scratch else: dctx.handles[i],
+      offset: dctx.chunkOff[i].cuint,
+      size: dctx.chunkLen[i].csize_t
     )
-  for i, a in argShapes:
-    if a.isBuffer:
-      bgEntries[i + 1].size = wgpuBufferGetSize(a.buffer).csize_t
+  for i in 0 ..< n:
+    if dctx.chunkLen[i] == 0:
+      bgEntries[i + 1].size = wgpuBufferGetSize(dctx.handles[i]).csize_t
   var bgDesc = WGPUBindGroupDescriptor(
     layout: cache.bindGroupLayout,
     entryCount: totalBindings.csize_t,

@@ -43,12 +43,10 @@ proc `=destroy`(c: var OpenCLCtx) =
   c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
 
 proc `=destroy`(cache: var OpenCLKernelCache) =
-  ## Release cached kernels while the context is still alive.
   for _, kern in cache.kernels.mpairs:
     kern.destroyKernel()
 
 proc newOpenCLEngine(): OpenCLEngine =
-  ## Private factory, engines.nim reaches it via `import {.all.}`.
   OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()))
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -56,8 +54,7 @@ proc newOpenCLEngine(): OpenCLEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
-  ## Store the OpenCL C source. Re-entrant: replaces the previous artifact
-  ## and releases cached kernels, which are rebuilt lazily on the next run.
+  ## Stores the OpenCL C source, re-entrant, cached kernels rebuild lazily.
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"
@@ -80,15 +77,8 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple,
-          cfg = LaunchConfig(), layout: static KernelArgLayout = KernelArgLayout()) =
+proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
-  ##
-  ## `layout` is the kernel arg descriptor of a `{.global.}` bridge launch
-  ## (wrap_and_run), checked against the engine binding at compile time.
-  ## Direct runs pass the default and bind from the kernel arg contract alone.
-  ##
-  ## Usage:
   ##   engine.run<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let ctx = engine.ctx.ctx
   # NVIDIA-OpenCL only: the codegen emits Nim `asm(...)` as GCC-style inline
@@ -99,14 +89,15 @@ proc run*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tupl
     engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
   var kern = engine.kernelCache.kernels[kernel]
 
-  const argLayout = checkedKernelArgLayout[typeof(output), typeof(args), OpenCLBuffer](layout, bkOpenCL)
-  var binding: KernelBinding[OpenCLBuffer]
-  bindKernelArgs[OpenCLBuffer](binding, argLayout, bkOpenCL, output, args, ptrAsBuffer = false, argAlign = 1)
-  for i, s in binding.slots:
-    if s.isBuffer:
-      kern.setArg(i, s.buffer)
+  type SinkCtx = object
+    kern: OpenCLKernel
+  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: OpenCLBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
+    if isBuffer:
+      ctx.kern.setArg(idx, h)
     else:
-      kern.setArg(i, s.width, binding.bytes[s.offset].addr)
+      ctx.kern.setArg(idx, len, p)
+  var dctx = SinkCtx(kern: kern)
+  bindArgs(dctx, bkOpenCL, output, args, false, sinkArg)
 
   # global = grid·blk work-items, local = blk (per axis, 3D NDRange)
   let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),

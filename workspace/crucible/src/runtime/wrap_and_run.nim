@@ -11,15 +11,12 @@ import std/[macros, macrocache, algorithm, hashes, strutils, tables]
 import ../codegen/gpu_compiler
 import chevrons {.all.}
 import engines
-import kernel_args
 
 export chevrons
 
 const
   BridgeDefs = CacheTable"crucible.wrap_and_run.bridges"
     # `{.global.}` bridge proc per kernel launch shape, built on first launch
-  BridgeLayouts = CacheTable"crucible.wrap_and_run.bridgeLayouts"
-    # the kernel arg descriptor of each bridge, the launch is gated against it
 
 proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
   # Replaces identifier leaves matched in `bindings`, recursing everywhere
@@ -43,38 +40,37 @@ proc isStaticFormal(f: NimNode): bool =
   ptype.kind == nnkStaticTy or
     (ptype.kind == nnkCommand and $ptype[0] == "static")
 
+proc isBindManyArg(t: NimNode): bool =
+  ## True when the formal type is a `distinct` typeclass, such formals bind by value type
+  if t.kind == nnkDistinctTy: return true
+  if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
+  return false
+
 proc buildGlobalFn(kname: string, kernel, statics: NimNode,
-                   valueTypes, valueImpls, formalTypes: seq[NimNode],
-                   valueNames: seq[string]): tuple[bridge: NimNode, layout: KernelArgLayout] =
-  # Builds the `{.global.}` bridge proc:
-  #
-  #   proc <kname>(<kernel arg params>) {.global.} =
-  #     <kernel>(<static args>, <rebuilt formals>)
+                   valueTypes, formalTypes: seq[NimNode],
+                   valueNames: seq[string]): NimNode =
+  # Builds the `{.global.}` bridge proc, the call's value args verbatim:
+  #   proc <kname>(<args>) {.global.} = <kernel>(<statics>, <args>)
+  # The codegen lowers the formals, the binder binds the same values.
   var params = nnkFormalParams.newTree(newEmptyNode())
-  var bridgeArgs: seq[NimNode] = @[]
-  var layout: KernelArgLayout
-  for i, vtype in valueTypes:
-    let useFormal = i < formalTypes.len and not isBindManyArg(formalTypes[i])
-    let argType = if useFormal: formalTypes[i] else: vtype
-    let obj = if useFormal: formalTypes[i].getTypeImpl() else: valueImpls[i]
-    # every value routes through the one explosion: composites explode,
-    # static subtrees rebuild from the type, dynamic scalars cross as one param
-    bridgeArgs.add(reconstructKernelArg(valueNames[i], argType, obj, params, layout))
   var bridgeCall = nnkCall.newTree(kernel)
   for s in statics:
     bridgeCall.add(s)
-  for a in bridgeArgs:
-    bridgeCall.add(a)
+  for i, vtype in valueTypes:
+    let argType = if i < formalTypes.len and not isBindManyArg(formalTypes[i]):
+                    formalTypes[i]
+                  else: vtype
+    params.add(nnkIdentDefs.newTree(ident(valueNames[i]), argType, newEmptyNode()))
+    bridgeCall.add(ident(valueNames[i]))
   let body = nnkStmtList.newTree(bridgeCall)
 
-  result.bridge = nnkProcDef.newTree(
+  result = nnkProcDef.newTree(
     ident(kname),
     newEmptyNode(), newEmptyNode(),
     params,
     nnkPragma.newTree(ident"global"),
     newEmptyNode(),
     body)
-  result.layout = layout
 
 macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys: untyped,
                     gridN, blkN: untyped, values: varargs[typed]): untyped =
@@ -88,13 +84,11 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   #   the backend context lives inside the bridge only
   var valueNames: seq[string] = @[]
   var valueTypes: seq[NimNode] = @[]
-  var valueImpls: seq[NimNode] = @[]
   var formalTypeNodes: seq[NimNode] = @[]
   for f in formals:
     valueNames.add($f)
   for v in values:
     valueTypes.add(v.getTypeInst())
-    valueImpls.add(v.getTypeImpl())
   for t in formalTys:
     formalTypeNodes.add(t)
 
@@ -105,9 +99,8 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   let kname = (if staticRepr.len == 0: $kernel
                else: $kernel & "_" & $hash(staticRepr)).replace("-", "n")
   if not BridgeDefs.hasKey(kname):
-    let built = buildGlobalFn(kname, kernel, statics, valueTypes, valueImpls, formalTypeNodes, valueNames)
-    BridgeDefs[kname] = nnkStmtList.newTree(built.bridge)
-    BridgeLayouts[kname] = kernelArgLayoutAst(built.layout)
+    let built = buildGlobalFn(kname, kernel, statics, valueTypes, formalTypeNodes, valueNames)
+    BridgeDefs[kname] = nnkStmtList.newTree(built)
 
   var bindings = initTable[string, NimNode]()
   for i, name in valueNames:
@@ -121,14 +114,12 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
   let outputNode = values[0]
 
   let bridgeSource = ident("crucibleBridgeSource" & kname)
-  let bridgeLayout = ident("crucibleBridgeLayout" & kname)
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let vulkanCg = bindSym"vulkan"
   let webgpuCg = bindSym"webgpu"
   let bridgeNode = BridgeDefs[kname].copy()
-  let bridgeLayoutNode = BridgeLayouts[kname].copy()
 
   result = quote do:
     when not declared(`bridgeSource`):
@@ -138,13 +129,11 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys
                            elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`bridgeNode`)
                            elif typeof(`engine`).backendKind == bkWGSL: `webgpuCg`(`bridgeNode`)
                            else: {.error: "wrap_and_run: no lowering for this engine".}
-      const `bridgeLayout` = `bridgeLayoutNode`
     block:
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
       `engine`.run(`kname`, `outputNode`, `argsTuple`,
-                   LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)),
-                   `bridgeLayout`)
+                   LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)))
 
 macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped): untyped =
   # Static/value arg split, behind `wrap_and_run`:
@@ -190,20 +179,17 @@ macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped)
     result.add(a)
 
 macro wrap_and_run*(engine: HwEngine, call: untyped): untyped =
-  ## Launches a device function with whole values, schedule via a `do:` block:
+  ## Launches a device function with whole values, schedule via a `do:` block
+  ## or the chevron form:
   ##
-  ##   engine.wrap_and_run gemm(tiledMma(f32, f16, f16, 32, 32, 16), dD, 2.0'f32, dA, dB, 1.0'f32, dC) do:
+  ##   engine.wrap_and_run gemm(tiledMma(f32, f16, f16, 32, 32, 16), dD, dA, dB, 1) do:
   ##     grid = ((D.shape.m + 31) div 32, (D.shape.n + 31) div 32)
   ##     blk = (32, 1)
   ##
-  ## The schedule block:
+  ##   engine.wrap_and_run<<grid, blk>> gemm(dD, dA, dB, 1)
   ##
-  ## - binds to the kernel call, it holds `grid = <expr>` and `blk = <expr>` assignments, both optional, default (1, 1)
-  ## - the expressions evaluate at the launch site and may reference the function's formals, the launch args substitute by name
-  ## - anything but `grid =` / `blk =` assignments is rejected
-  ##
-  ## The chevron form `engine.wrap_and_run<<grid, blk>> fn(args...)`
-  ## carries the same schedule positionally, host expressions only.
+  ## - the schedule block holds `grid =` / `blk =` assignments, both optional, default (1, 1)
+  ## - the expressions evaluate at the launch site and may reference the kernel's formals
   var schedule: NimNode = nil
   var callNode = call
   if callNode[^1].kind == nnkStmtList:

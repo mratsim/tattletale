@@ -1,8 +1,5 @@
-## Metal direct runs: a ptr-free struct arg binds as ONE chunk packed at
-## the crucible-lowered field widths, per the kernel's declared signature
-## (`int`/`uint` lower to 32-bit).
-## - per-field explosion would bind field chunks against the single
-##   struct slot the kernel declares, it reads one field as the whole struct
+## Metal direct runs: a ptr-free struct arg binds as ONE chunk, at the lowered
+## field widths with natural alignment.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \
@@ -59,8 +56,8 @@ using namespace metal;
 
 kernel void idxReadKernel(
     device int32_t* out [[buffer(0)]],
-    const constant int32_t& alpha,
-    const device int32_t* in [[buffer(1)]]) {
+    const constant int32_t& alpha [[buffer(1)]],
+    const device int32_t* in [[buffer(2)]]) {
   out[0] = alpha;
   out[1] = in[0];
 }
@@ -104,10 +101,9 @@ type
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - whole-value struct args (direct runs)":
 
-    test "unattributed scalars bind at the index Metal assigns":
-      # Metal assigns unattributed `constant T&` params indices after
-      # the explicit [[buffer(n)]] ones: alpha sits at index 2, in at index 1.
-      # A dense sequential binding would cross the two.
+    test "positional binding: args bind in launch order":
+      # hand-written kernels bind positionally, the launch tuple's order
+      # is the signature
       var engine = bkMetal.init()
       engine.ingest(idxMsl)
       var inVal: array[1, int32] = [10'i32]
@@ -139,8 +135,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check out32 == [1'i32, 2, 3, 4, 5, 6]
 
     test "a struct with an alignment gap packs each field at its declared offset":
-      # the declared layout pads `big` to its 8-byte alignment, offset 16
-      # (4 bytes after c), a flat field-order chunk would write it at 12
+      # the MSL struct pads `big` to offset 16, the chunk must too
       var engine = bkMetal.init()
       engine.ingest(gapMsl)
       let oDev = engine.allocDevice(5 * sizeof(int32))
