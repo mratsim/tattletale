@@ -110,7 +110,8 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
     ## - gxMul / gyMul multiply the tile grid, excess squadrons exit
     ## - gridFlat covers the whole tile grid from one grid axis, blkX
     ##   widens the block, extra threads exit on the thread count
-    ## - prefill writes C = A·B on device first, the beta term reads it
+    ## - prefill writes C = A·B on device first, beta without prefill
+    ##   uploads a random C addend, the beta term reads C on device
     ## - launchTiles launches fewer blocks than the tile grid has tiles,
     ##   the blocks loop over the grid, the result is complete
     let
@@ -139,6 +140,12 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
         bTV[n, k] = F16.from(rng.rand(1.0'f32 .. 2.0'f32))
     engine.copyToDeviceFromHost(aDev, addr aHost[0], M * K * sizeof(F16))
     engine.copyToDeviceFromHost(bDev, addr bHost[0], K * N * sizeof(F16))
+    if beta != 0.0'f32 and not prefill:
+      # the gemm's beta term reads C on device, the host C view carries the addend
+      for m in 0 ..< M:
+        for n in 0 ..< N:
+          cTV[m, n] = rng.rand(1.0'f32 .. 2.0'f32)
+      engine.copyToDeviceFromHost(cDev, addr cHost[0], M * N * sizeof(float32))
     let
       tilesX = ((M + 31) div 32) * gxMul
       tilesY = ((N + 31) div 32) * gyMul
