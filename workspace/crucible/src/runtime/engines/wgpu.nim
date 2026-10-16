@@ -193,7 +193,7 @@ proc run*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, c
     else:
       ctx.pn = (ctx.pn + 255) div 256 * 256
       ctx.chunkOff[idx] = ctx.pn
-      # storage-buffer binding sizes are multiples of 4 bytes, the pad stays zero
+      # storage-buffer binding sizes are multiples of 4 bytes
       let padded = (len + 3) div 4 * 4
       ctx.chunkLen[idx] = padded
       ctx.blob.setLen(ctx.pn + padded)

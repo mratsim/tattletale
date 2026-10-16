@@ -169,8 +169,6 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
   staticFor k, 0, KR:
-    # k = 0 reads the addend out-of-place, later slices read the
-    # running accumulator back as their addend
     let addend = when k == 0: cTile else: dTile
     when aBits == 8:
       staticFor m, 0, MR:

@@ -149,8 +149,7 @@ proc initWgpu*(): WgpuContext =
   )
   # The uncaptured-error callback receives errors outside any pushed error scope,
   # e.g. dispatch validation reported at submit time.
-  # the WGSL `enable f16` extension requires the shader-f16 device feature,
-  # request it when the adapter carries it, f16 kernels fail at parse otherwise
+  # the WGSL `enable f16` extension requires the shader-f16 device feature
   var reqFeatures: array[1, uint32]
   var reqFeatureCount = 0
   if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_ShaderF16) != 0:

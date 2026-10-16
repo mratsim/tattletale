@@ -153,8 +153,6 @@ proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: 
     sink(ctx, false, default(H), pos, copy.addr, sizeof(copy))
     inc pos
   else:
-    # the sink copies `argWidth` bytes from `p`, narrower scalars widen
-    # with zero bytes, wider values truncate like putBytes
     const w = argWidth(typeof(v), backend)
     var staging: array[w, byte]
     const n = if sizeof(typeof(v)) < w: sizeof(typeof(v)) else: w

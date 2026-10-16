@@ -100,8 +100,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check n == c.idxs.len
 
     test "bool scalar delivers the lowered width, zero-padded":
-      # the sink copies `len` bytes from `p`, a 1-byte bool widened to 4
-      # must not leak stack bytes into the chunk
+      # bool args lower to 4 bytes on the device, the padding bytes are zeros
       proc clobberStack() =
         var junk: array[256, byte]
         for i in 0 ..< 256:
