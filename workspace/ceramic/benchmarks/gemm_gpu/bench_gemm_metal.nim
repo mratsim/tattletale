@@ -13,11 +13,14 @@ import std/[os, strutils]
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/metal
 import workspace/ceramic/benchmarks/gemm_gpu/bench_gemm_template
+import workspace/ceramic/benchmarks/gemm_gpu/apple_nax_utils
 
 const ProblemSizes = [1024, 2048, 4096]
 
 const MlxSteelGemmSrc =
   staticRead("mlx_steel_gemm.metal") & staticRead("steel_bench_wrappers.metal")
+
+const NaxGemmSrc = naxGemmIngestSrc()
 
 type MlxGemmParams = object
   m*, n*, k*: int
@@ -64,6 +67,24 @@ proc launchMlxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iter
     LaunchConfig(grid: dim3((tn * tile, ceil_div(tm, tile), 1)),
                  blk: dim3((128, 1, 1)), sharedMem: 5376))
 
+proc launchNaxGemm(engine: MetalEngine, dDev, aDev, bDev: pointer, M, N, K, iters: int) =
+  # The hardcoded wrapper config covers exactly M, N multiples of 64,
+  # K multiples of 256: anything else would silently drop K-elements.
+  if M mod 64 != 0 or N mod 64 != 0 or K mod 256 != 0:
+    failLoud("NAX GEMM: unsupported shape " & $M & "x" & $N & "x" & $K & ", the wrapper config needs M and N multiples of 64, K a multiple of 256")
+  if engine.getArtifact() != NaxGemmSrc:
+    engine.ingest(NaxGemmSrc)
+  let params = MlxGemmParams(
+    m: M, n: N, k: K,
+    lda: K, ldb: N, ldd: N,
+    tiles_n: ceil_div(N, 64), tiles_m: ceil_div(M, 64),
+    batch_stride_a: 0, batch_stride_b: 0, batch_stride_d: 0,
+    swizzle_log: 0, gemm_k_iterations_aligned: K div 256,
+    batch_ndim: 0)
+  engine.run("mlx_gemm_nax_64x64", dDev, (aDev, bDev, params, iters),
+    LaunchConfig(grid: dim3((ceil_div(N, 64), ceil_div(M, 64), 1)),
+                 blk: dim3((128, 1, 1))))
+
 proc main() =
   var engine = bkMetal.init()
   var wanted: seq[int]
@@ -77,6 +98,8 @@ proc main() =
                 "tiledMma 32x32x16 fp16")
       gemmBench(engine, launchMlxGemm, mnk, mnk, mnk, iters,
                 "mlx steel gemm 64x64x16")
+      gemmBench(engine, launchNaxGemm, mnk, mnk, mnk, iters,
+                "mlx NAX gemm 64x64x256")
       separator()
 
 when isMainModule:
