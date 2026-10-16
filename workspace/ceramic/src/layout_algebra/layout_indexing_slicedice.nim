@@ -74,8 +74,10 @@ macro slice*(target: tuple, selector: typed): untyped =
         # int, Int and Y selectors drop the leaf
       else:
         # a selector leaf facing a nested target mode takes the whole mode,
-        # the mode's kOpen was consumed as tgtEvent, replay it to open the subtree
-        builder.append(tgtEvent)
+        # the mode's kOpen was consumed as tgtEvent, replayed to open
+        # the subtree only when the selector keeps it
+        if isX:
+          builder.append(tgtEvent)
         var depth = 1
         while true:
           let ev = tgtStream.next()
@@ -128,8 +130,10 @@ macro dice*(target: tuple, selector: typed): untyped =
         # X selectors drop the leaf
       else:
         # a selector leaf facing a nested target mode takes the whole mode,
-        # the mode's kOpen was consumed as tgtEvent, replay it to open the subtree
-        builder.append(tgtEvent)
+        # the mode's kOpen was consumed as tgtEvent, replayed to open
+        # the subtree only when the selector keeps it
+        if not isX:
+          builder.append(tgtEvent)
         var depth = 1
         while true:
           let ev = tgtStream.next()
