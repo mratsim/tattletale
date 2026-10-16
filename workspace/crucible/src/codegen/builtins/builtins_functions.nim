@@ -67,6 +67,10 @@ let NimGpuNumericBuiltinsFunctions* {.compileTime.} = ["min", "max", "abs"]
   # Functions (not operators) that are {.magic.} in Nim
   # and have dedicated lowering in GPU backends.
 
+let NimGpuZeroInitMagicBuiltins* {.compileTime.} = ["default"]
+  # `{.magic.}` functions with no backend spelling: the call site lowers each call to the zero-init of its result type.
+  # Scalar results lower to a typed zero literal, aggregate results to a `TypeName{}` construction.
+
 let NimGpuNumericBuiltinsFnNames {.compileTime.}: Table[(BackendKind, string, GpuTypeKind), string] =
   # Per-backend per-type mapping for builtin functions.
   {(bkOpenCL, "max", gtFloat32): "fmax",

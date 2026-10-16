@@ -327,7 +327,11 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
 
   let fn = ctx.toGpuAst(reg, inst, staticValueMask, deadStaticMask)
   if fn.kind == gpuDiscard:
-    doAssert inst.isBuiltIn()
+    # Only {.builtin.}/{.importc.} procs may skip body parsing here.
+    # Anything else reaching this point is a construct with no codegen support.
+    if not inst.isBuiltIn():
+      error("crucible cannot translate the body of `" & node[0].repr & "`: the proc is " &
+            "neither {.builtin.}, {.importc.} nor a value-lowered magic builtin", inst)
     return
   fn.pAttributes.incl attDevice # make sure this is interpreted as a device function
   # Bind the body, which names the generic definition, to this instantiation's ident.
@@ -724,6 +728,24 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
   of nnkCall, nnkCommand:
     # `name` below is name + signature hash. Check if this is a generic based on node repr
     let name = ctx.getFnName(reg, node[0]) # cannot use `strVal`, might be a symchoice
+    # Zero-init magic builtins: `system.default` carries {.magic: "Default".}, so the call has no body to parse.
+    # There is also no backend spelling to forward a name to, so lower each call to the zero-init of its result type:
+    # - aggregates go through the object-construction machinery, which every backend emits as `TypeName{}` with per-field `{}` defaults
+    # - scalars lower to a typed zero literal
+    if node[0].repr in NimGpuZeroInitMagicBuiltins:
+      let typ = resolveType(reg, node.getTypeInst())
+      if typ.kind in GpuNumericTypes:
+        result = GpuAst(kind: gpuLit, lValue: "0", lType: typ)
+      elif typ.kind in {gtObject, gtGenericInst}:
+        let flds = if typ.kind == gtObject: typ.oFields else: typ.gFields
+        result = GpuAst(kind: gpuObjConstr, ocType: typ)
+        for fld in flds:
+          result.ocFields.add GpuFieldInit(name: fld.name,
+                                           value: GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid)),
+                                           typ: fld.typ)
+      else:
+        error("`" & node[0].repr & "` has no backend lowering for a result type of kind " & $typ.kind, node)
+      return
     if node[0].repr in ctx.generics or name notin ctx.allFnTab:
       # process the generic instantiaton and store *or* pull in a proc defined outside
       # the `cuda` macro by its implementation.
