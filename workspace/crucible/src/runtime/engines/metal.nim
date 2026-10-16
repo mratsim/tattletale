@@ -194,16 +194,18 @@ when defined(macosx):
     ##   leaf's raw value is the buffer identity
     ## - other values pack as one chunk at the crucible-lowered widths,
     ##   one chunk per exploded device param
+    ## - object and tuple values explode per field in field order, matching
+    ##   the bridge's leaf explosion
+    ## - a fully static subtree carries no bytes, values are read back
+    ##   as compile-time constants
     when typeof(x) is objc.ID:
       bufs.add(x)
     elif typeof(x) is ptr or typeof(x) is pointer:
       bufs.add(cast[objc.ID](x))
-    elif typeof(x) is object|tuple and hasPtrField[typeof(x)]():
+    elif typeof(x) is object|tuple:
       var copy = x
       for f in fields(copy):
         when not needTempStorage[typeof(f)]():
-          # a fully static subtree carries no bytes, the kernel reads
-          # its values as compile-time constants
           discard
         else:
           bindLeaves(f, bufs, bytes, chunks)

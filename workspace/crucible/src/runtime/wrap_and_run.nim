@@ -90,6 +90,60 @@ proc isBindMany(t: NimNode): bool =
   if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
   return false
 
+proc hasPtrTy(t: NimNode): bool =
+  ## True when the type-impl node holds a pointer leaf anywhere
+  if t.kind in {nnkPtrTy, nnkRefTy}:
+    return true
+  for c in t:
+    if hasPtrTy(c):
+      return true
+  return false
+
+proc reconstructFromLeaves(prefix: string, t, impl: NimNode, params: NimNode): NimNode =
+  ## Bridge-body value of type `t` (impl `impl` = `t.getTypeImpl()`)
+  ## assembled from launch leaves named `cru<prefix>...`:
+  ## - a static subtree rebuilds from the type, crossing as no bytes
+  ## - a dynamic scalar becomes one launch parameter
+  ## - an object or tuple explodes into its fields, recursion per field
+  if not needTempStorage(t):
+    return constantValue(t)
+  case impl.kind
+  of nnkObjectTy:
+    result = nnkObjConstr.newTree(t.copy())
+    for k in 2 ..< impl.len:
+      let recList = impl[k]
+      doAssert recList.kind in {nnkRecList, nnkIdentDefs},
+        "buildGlobalFn: unsupported object field node " & recList.repr
+      let defs = if recList.kind == nnkRecList: recList else:
+          nnkRecList.newTree(recList)
+      for d in defs:
+        doAssert d.kind == nnkIdentDefs,
+          "buildGlobalFn: unsupported field " & d.repr
+        let fldType = d[^2]
+        if needTempStorage(fldType):
+          let fldImpl = fldType.getTypeImpl()
+          doAssert fldImpl.kind notin {nnkObjectTy, nnkTupleTy, nnkPar, nnkTupleConstr} or
+              not hasPtrTy(fldImpl),
+            "buildGlobalFn: nested pointer structs are not supported: " & t.repr
+        for m in 0 ..< d.len - 2:
+          result.add(nnkExprColonExpr.newTree(d[m].copy(),
+            reconstructFromLeaves(prefix & "_" & $d[m], fldType, fldType.getTypeImpl(), params)))
+  of nnkTupleTy, nnkPar, nnkTupleConstr:
+    result = nnkTupleConstr.newTree()
+    var i = 0
+    for e in impl:
+      if e.kind == nnkIdentDefs:
+        for m in 0 ..< e.len - 2:
+          result.add(reconstructFromLeaves(prefix & "_" & $e[m], e[^2], e[^2].getTypeImpl(), params))
+      else:
+        result.add(reconstructFromLeaves(prefix & "_F" & $i, e, e.getTypeImpl(), params))
+      inc i
+  else:
+    # scalar or pointer leaf: one launch parameter
+    let pname = ident("cru" & prefix)
+    params.add(nnkIdentDefs.newTree(pname, t.copy(), newEmptyNode()))
+    result = pname
+
 proc buildGlobalFn(kname: string, kernel, statics: NimNode,
                    valueTypes, valueImpls, formalTypes: seq[NimNode],
                    valueNames: seq[string]): NimNode =
@@ -104,33 +158,7 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
     let argType = if useFormal: formalTypes[i] else: vtype
     let obj = if useFormal: formalTypes[i].getTypeImpl() else: valueImpls[i]
     if obj.kind == nnkObjectTy:
-      var reconFields: seq[NimNode] = @[]
-      for k in 2 ..< obj.len:
-        let recList = obj[k]
-        doAssert recList.kind in {nnkRecList, nnkIdentDefs},
-          "buildGlobalFn: unsupported object field node " & recList.repr
-        let defs = if recList.kind == nnkRecList: recList else:
-            nnkRecList.newTree(recList)
-        for d in defs:
-          doAssert d.kind == nnkIdentDefs,
-            "buildGlobalFn: unsupported field " & d.repr
-          let fldType = d[^2]
-          doAssert fldType.kind != nnkObjectTy,
-            "buildGlobalFn: nested pointer structs are not supported: " & vtype.repr
-          for m in 0 ..< d.len - 2:
-            if not needTempStorage(fldType):
-              # a constant field crosses the launch boundary as no bytes,
-              # the kernel reads its value from the type
-              reconFields.add(nnkExprColonExpr.newTree(d[m].copy(),
-                constantValue(fldType)))
-            else:
-              let pname = ident("cru" & valueNames[i] & "_" & $d[m])
-              params.add(nnkIdentDefs.newTree(pname, fldType.copy(), newEmptyNode()))
-              reconFields.add(nnkExprColonExpr.newTree(d[m].copy(), pname))
-      var recon = nnkObjConstr.newTree(argType.copy())
-      for rf in reconFields:
-        recon.add(rf)
-      bridgeArgs.add(recon)
+      bridgeArgs.add(reconstructFromLeaves(valueNames[i], argType, obj, params))
     else:
       let pname = ident("cru" & valueNames[i])
       params.add(nnkIdentDefs.newTree(pname, argType.copy(), newEmptyNode()))
