@@ -11,7 +11,7 @@ import std/[monotimes, os, strutils, tables, times]
 import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
-import ../chevrons
+import ../launch_kernel
 import ../launch_common
 
 export wgpu_runtime

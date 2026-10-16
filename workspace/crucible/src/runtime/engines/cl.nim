@@ -12,7 +12,7 @@ import workspace/crucible/src/abis/cl_abi
 import ../../codegen/ir/gpu_types
 import ../launch_common
 import ../exec/opencl_runtime
-import ../chevrons
+import ../launch_kernel
 
 export opencl_runtime
 # ═════════════════════════════════════════════════════════════════════════

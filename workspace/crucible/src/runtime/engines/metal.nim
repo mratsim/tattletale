@@ -14,7 +14,7 @@ import ../exec/metal_runtime
 export metal_runtime
 
 when defined(macosx):
-  import ../chevrons
+  import ../launch_kernel
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════

@@ -11,7 +11,7 @@ import workspace/crucible/src/abis/c_abi
 
 import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
-import ../chevrons
+import ../launch_kernel
 import ../launch_common
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types

@@ -30,7 +30,7 @@ template dim3*(a, b, c: SomeInteger): Dim3 =
   Dim3(x: int(a), y: int(b), z: int(c))
 
 # Private: the conversion overloads the chevronConfig parser quotes, also
-# reached by launch_device_fn through chevrons' `import launch_common {.all.}`.
+# reached by launch_device_fn through `import launch_common {.all.}`.
 # Templates expand away, nothing reaches codegen.
 # The tuple patterns read fields positionally: the template body substitutes
 # the argument textually, a tuple literal like `(2, 2)` has no field names.

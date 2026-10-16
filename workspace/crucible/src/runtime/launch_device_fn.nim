@@ -9,10 +9,11 @@
 
 import std/[macros, macrocache, algorithm, hashes, strutils, tables]
 import ../codegen/gpu_compiler
-import chevrons {.all.}
+import launch_kernel {.all.}
+import launch_common {.all.}
 import engines
 
-export chevrons
+export launch_kernel
 
 const
   BridgeDefs = CacheTable"crucible.launchDeviceFn.bridges"
@@ -46,9 +47,7 @@ proc isBindManyArg(t: NimNode): bool =
   if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
   return false
 
-proc buildGlobalFn(kname: string, kernel, statics: NimNode,
-                   valueTypes, formalTypes: seq[NimNode],
-                   valueNames: seq[string]): NimNode =
+proc buildGlobalFn(kname: string, kernel, statics: NimNode, valueTypes, formalTypes: seq[NimNode], valueNames: seq[string]): NimNode =
   # Builds the `{.global.}` bridge proc, the call's value args verbatim:
   #   proc <kname>(<args>) {.global.} = <kernel>(<statics>, <args>)
   # The codegen lowers the formals, the binder binds the same values.

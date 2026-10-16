@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import ../codegen/ir/gpu_types
-import ./chevrons
+import ./launch_kernel as launch_sugar
 import ./launch_common
 import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}
@@ -15,7 +15,7 @@ import ./engines/metal {.all.}
 
 
 export gpu_types
-export chevrons
+#export launch_kernel
 export launch_common
 
 export ingest, getArtifact, launchKernel, check, deviceName

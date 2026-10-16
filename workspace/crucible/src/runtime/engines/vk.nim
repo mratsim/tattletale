@@ -12,7 +12,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
-import ../chevrons
+import ../launch_kernel
 import ../launch_common
 
 export vulkan_runtime
