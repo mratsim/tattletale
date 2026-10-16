@@ -46,7 +46,7 @@ Rule table (rule | trigger | severity):
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
-| except-rewrap        | an except clause re-raises the caught exception (rewrap)                                          | counted  |
+| except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
@@ -490,7 +490,7 @@ RULES = {
     "sig-wrap": Rule("sig-wrap", True,
                      "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,
-                          "an except clause re-raises the caught exception (rewrap; handle it or let it propagate)"),
+                          "a raise inside an except clause, rewrapping eats the original stack trace (handle it or let it propagate)"),
     "design-narration": Rule("design-narration", True,
                              "a doc or maintainer comment justifying the design choice instead of stating the contract (because, instead of, rather than, X and not Y, which is why, declared ahead)"),
     "try-block": Rule("try-block", True,
@@ -1702,8 +1702,7 @@ def nim_try_block_checks(path, text, findings):
 
 EXCEPT_RE = re.compile(r"^\s*except\b([^:]*):")
 EXCEPT_AS_RE = re.compile(r"\bas\s+(\w+)\s*$")
-RAISE_NAMED_RE = re.compile(r"^\s*raise\s+(\w+)\s*$")
-RAISE_BARE_RE = re.compile(r"^\s*raise\s*$")
+RAISE_ANY_RE = re.compile(r"^\s*raise\b")
 
 
 def nim_except_rewrap_checks(path, text, findings):
@@ -1726,13 +1725,11 @@ def nim_except_rewrap_checks(path, text, findings):
                 continue
             if len(s) - len(s.lstrip()) <= indent:
                 break
-            bare = RAISE_BARE_RE.match(s)
-            named = RAISE_NAMED_RE.match(s)
-            if bare or (name and named and named.group(1) == name):
+            if RAISE_ANY_RE.match(s):
                 findings.append(Finding(
                     path, j + 1, "except-rewrap",
-                    "the except clause re-raises the caught exception, handle "
-                    "it or let it propagate, never rewrap in the hot path"))
+                    "a raise inside except rewraps the exception and eats "
+                    "the original stack trace, handle it or let it propagate"))
                 break
             j += 1
 
