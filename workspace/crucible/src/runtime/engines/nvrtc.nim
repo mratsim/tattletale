@@ -12,6 +12,7 @@ import workspace/crucible/src/abis/c_abi
 import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
 import ../engines_common
+import ../errors
 import ../launch/launch_common
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -147,8 +148,7 @@ proc load(nvrtc: var NVRTC) =
   if status != CUDA_SUCCESS:
     var error_str: cstring
     check cuGetErrorString(status, error_str)
-    echo "Module load failed: ", error_str
-    quit(1)
+    failLoud("Module load failed: " & $error_str)
 
   nvrtc.moduleLoaded = true
 

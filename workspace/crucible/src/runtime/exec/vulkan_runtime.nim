@@ -6,6 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
+import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
 type
@@ -84,10 +85,10 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   else:
     result.lib = loadLib(vk.VulkanLib)
   if result.lib == nil:
-    quit("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
+    failLoud("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
   result.gpa = result.lib.symAddr("vkGetInstanceProcAddr")
   if result.gpa == nil:
-    quit(vk.VulkanLib & " missing vkGetInstanceProcAddr")
+    failLoud(vk.VulkanLib & " missing vkGetInstanceProcAddr")
 
 # ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
@@ -125,7 +126,7 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   let exitCode = p.waitForExit()
   defer: p.close()
   if exitCode != 0:
-    quit("glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
+    failLoud("glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)
@@ -173,7 +174,7 @@ proc initVulkan*(): VulkanContext =
          pInstance: ptr VkInstance): VkResult {.cdecl.}
   ](gpaFn(nil, "vkCreateInstance"))
   if vkCreateInstance == nil:
-    quit("Cannot load vkCreateInstance")
+    failLoud("Cannot load vkCreateInstance")
 
   var appInfo = VkApplicationInfo(
     sType: VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -209,7 +210,7 @@ proc initVulkan*(): VulkanContext =
   var devCount: uint32 = 0
   check ep(result.instance, devCount.addr, nil)
   if devCount == 0:
-    quit("No Vulkan devices found")
+    failLoud("No Vulkan devices found")
   var devices = newSeq[VkPhysicalDevice](devCount.int)
   check ep(result.instance, devCount.addr, devices[0].addr)
 
@@ -257,14 +258,14 @@ proc initVulkan*(): VulkanContext =
       bestScore = score
       bestIdx = i
   if bestScore < 0:
-    quit("No Vulkan device with a compute-capable queue family found")
+    failLoud("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
   echo "  Vulkan device: ", deviceScore(result.physicalDevice).name
 
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)
   if qfCount == 0:
-    quit("No queue families found")
+    failLoud("No queue families found")
   var qfProps = newSeq[VkQueueFamilyProperties](qfCount.int)
   gpqfp(result.physicalDevice, qfCount.addr, qfProps[0].addr)
   result.queueFamilyIndex = 0
@@ -419,7 +420,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    quit("No suitable memory type found — " & details)
+    failLoud("No suitable memory type found — " & details)
   if (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
       cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) == 0 and
      (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
@@ -431,7 +432,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    quit("No host-visible memory type available (vkMapMemory would fail) — " & details)
+    failLoud("No host-visible memory type available (vkMapMemory would fail) — " & details)
 
   when defined(debug):
     echo "  [allocBuffer] size=", size, " memTypeBits=", memReq.memoryTypeBits,
@@ -462,7 +463,7 @@ proc dealloc*(buffer: var VulkanBuffer, ctx: VulkanContext) =
     buffer.memory = nil
 proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size: int) =
   if size > buf.size:
-    quit("writeBuffer overflow")
+    failLoud("writeBuffer overflow")
   let vkMapMemory = cast[
     proc(device: VkDevice, memory: VkDeviceMemory,
          offset: VkDeviceSize, size: VkDeviceSize,
@@ -474,13 +475,13 @@ proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size
   var mapped: pointer
   let mres = vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
   if mres != VK_SUCCESS:
-    quit("vkMapMemory failed (" & $mres & ")")
+    failLoud("vkMapMemory failed (" & $mres & ")")
   copyMem(mapped, data, size)
   vkUnmapMemory(buf.device, buf.memory)
 
 proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
   if buf.size mod sizeof(T) != 0:
-    quit("Buffer size not divisible by type size")
+    failLoud("Buffer size not divisible by type size")
   if buf.size > 0:
     let vkMapMemory = cast[
       proc(device: VkDevice, memory: VkDeviceMemory,

@@ -12,6 +12,7 @@ import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
 import ../engines_common
+import ../errors
 import ../launch/launch_common
 
 export wgpu_runtime
@@ -83,9 +84,7 @@ template check*(status: WGPUBufferMapAsyncStatus) =
   ## reports the caller's location.
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
-    quit 1
+    failLoud("WGPUBufferMapAsyncStatus " & $code)
 
 proc ingest*(engine: WgpuEngine, source: string) =
   ## Stores the WGSL source and builds the shader module, re-entrant (a new artifact replaces the old, cached pipelines are invalidated).
@@ -110,7 +109,7 @@ proc ingest*(engine: WgpuEngine, source: string) =
   )
   engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.ctx.device, addr shaderDesc)
   if engine.cache.module == nil:
-    quit("WebGPU: failed to create shader module")
+    failLoud("WebGPU: failed to create shader module")
   engine.source = source
   engine.bakedBlk = parseBakedBlk(source)
 
@@ -125,13 +124,6 @@ proc deviceName*(engine: WgpuEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
-
-template failLoud(msg: string) =
-  ## Unified error policy: stacktrace + stderr + quit(1) with the caller's location.
-  ## A template so instantiationInfo() reports the call site.
-  writeStackTrace()
-  stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
-  quit 1
 
 proc parseBakedBlk(wgsl: string): Dim3 =
   ## Extracts the shader-baked workgroup size from the WGSL preamble
@@ -180,7 +172,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
   if engine.bakedBlk.x == 0 or
      blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
      blk.z != engine.bakedBlk.z:
-    quit("WebGPU run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
+    failLoud("WebGPU run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
          " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
          "x" & $engine.bakedBlk.z &
          " — launch config mismatch (blk is shader-baked on WebGPU)")
@@ -218,7 +210,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
       mappedAtCreation: false)
     scratch = wgpuDeviceCreateBuffer(device, addr scratchDesc)
     if scratch == nil:
-      quit("WebGPU: failed to create the scalar scratch buffer")
+      failLoud("WebGPU: failed to create the scalar scratch buffer")
   # Released with the launch, not with the allocation block, the bind group
   # and the queue upload below still use it.
   defer:
@@ -259,14 +251,14 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
     )
     let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
     if bgl == nil:
-      quit("WebGPU: failed to create bind group layout")
+      failLoud("WebGPU: failed to create bind group layout")
     var plDesc = WGPUPipelineLayoutDescriptor(
       bindGroupLayoutCount: 1,
       bindGroupLayouts: bgl.addr
     )
     let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
     if pl == nil:
-      quit("WebGPU: failed to create pipeline layout")
+      failLoud("WebGPU: failed to create pipeline layout")
     var entryPtView = WGPUStringView(data: cstring(kernel), length: kernel.len.csize_t)
     var computeState = WGPUComputeState(
       module: engine.cache.module,
@@ -288,13 +280,13 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
     discard wgpuDevicePopErrorScope(device, pipePopInfo)
     while not pipeScope.done:
       if not wgpuDevicePoll(device, true, nil):
-        quit("WebGPU: wgpuDevicePoll failed")
+        failLoud("WebGPU: wgpuDevicePoll failed")
     if pipeScope.errType != wgpuErrorTypeNoError:
       let uncaptured = takeUncapturedError()
       failLoud("WebGPU pipeline creation failed: " & pipeScope.message &
         (if uncaptured.errType != wgpuErrorTypeNoError: " / " & uncaptured.message else: ""))
     if pipeline == nil:
-      quit("WebGPU: failed to create compute pipeline")
+      failLoud("WebGPU: failed to create compute pipeline")
     cache = WgpuPipelineCache(
       pipeline: pipeline,
       pipelineLayout: pl,
@@ -328,7 +320,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
   )
   let bg = wgpuDeviceCreateBindGroup(device, addr bgDesc)
   if bg == nil:
-    quit("WebGPU: failed to create bind group")
+    failLoud("WebGPU: failed to create bind group")
   defer:
     wgpuBindGroupRelease(bg)
 
@@ -338,7 +330,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
   # Record commands: compute pass with the launch validation scope
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
-    quit("WebGPU: failed to create command encoder")
+    failLoud("WebGPU: failed to create command encoder")
   defer:
     wgpuCommandEncoderRelease(encoder)
 
@@ -366,7 +358,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
     wgpuCommandBufferRelease(cmdBuf)
   while not scopeData.done:
     if not wgpuDevicePoll(device, true, nil):
-      quit("WebGPU: wgpuDevicePoll failed")
+      failLoud("WebGPU: wgpuDevicePoll failed")
   if scopeData.errType != wgpuErrorTypeNoError:
     failLoud("WebGPU dispatch failed: " & scopeData.message)
 
@@ -386,7 +378,7 @@ proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
     mappedAtCreation: false)
   result = wgpuDeviceCreateBuffer(device, addr desc)
   if result == nil:
-    quit("WebGPU: failed to create a " & $n & "-byte device buffer")
+    failLoud("WebGPU: failed to create a " & $n & "-byte device buffer")
 
 proc freeDevice*(engine: WgpuEngine, h: WGPUBuffer) =
   wgpuBufferRelease(h)
@@ -404,12 +396,12 @@ proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n:
     mappedAtCreation: false)
   let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
   if stagingBuf == nil:
-    quit("WebGPU: failed to create the staging buffer")
+    failLoud("WebGPU: failed to create the staging buffer")
   defer:
     wgpuBufferRelease(stagingBuf)
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
-    quit("WebGPU: failed to create command encoder")
+    failLoud("WebGPU: failed to create command encoder")
   defer:
     wgpuCommandEncoderRelease(encoder)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, src, 0, stagingBuf, 0, n.csize_t)
@@ -430,13 +422,13 @@ proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n:
   )
   discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, n.csize_t, mapCbInfo)
   if not wgpuDevicePoll(device, true, nil):
-    quit("WebGPU: wgpuDevicePoll failed")
+    failLoud("WebGPU: wgpuDevicePoll failed")
   let deadline = getMonoTime() + initDuration(seconds = 5)
   while not mapData.done:
     if not wgpuDevicePoll(device, false, nil):
-      quit("WebGPU: wgpuDevicePoll failed")
+      failLoud("WebGPU: wgpuDevicePoll failed")
     if deadline <= getMonoTime():
-      quit("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
+      failLoud("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
     sleep(2)
   check mapData.status
   let mappedPtr = wgpuBufferGetMappedRange(stagingBuf, 0, mapData.resultBytes.csize_t)

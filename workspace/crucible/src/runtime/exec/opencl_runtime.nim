@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible/src/abis/cl_abi
+import ../errors
 
 type
 
@@ -50,9 +51,7 @@ template check*(res: TClResult) =
   ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != SUCCESS:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: OpenCL error " & $code & '\n')
-    quit 1
+    failLoud("OpenCL error " & $code)
 
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
@@ -107,7 +106,7 @@ proc initOpenCL(device: OpenCLDevice): OpenCLContext =
 proc initOpenCL*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
-    quit("OpenCL: no devices found")
+    failLoud("OpenCL: no devices found")
   # Pick first GPU; fall back to first device
   var dev = devices[0]
   for d in devices:
@@ -128,7 +127,7 @@ proc dealloc*(buffer: var OpenCLBuffer) =
 
 proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   if size != buffer.size:
-    quit("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
+    failLoud("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
   check buffer.commands.enqueueWriteBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
@@ -136,7 +135,7 @@ proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
 proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   ## Raw readback into a caller-provided buffer (used by the engines).
   if size > buffer.size:
-    quit("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
+    failLoud("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
   check buffer.commands.enqueueReadBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
@@ -162,9 +161,9 @@ proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKer
       var log = newString(logLength.int)
       check getProgramBuildInfo(program, ctx.device.id, PROGRAM_BUILD_LOG,
                                 logLength, log[0].addr, nil)
-      quit("OpenCL failed to build program '" & name & "': " & log)
+      failLoud("OpenCL failed to build program '" & name & "': " & log)
     else:
-      quit("OpenCL failed to build program '" & name & "'")
+      failLoud("OpenCL failed to build program '" & name & "'")
   else:
     check status
 
@@ -176,9 +175,9 @@ proc setArg*(kernel: var OpenCLKernel, index: int, buffer: OpenCLBuffer) =
 
 proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[cl_size_t]) =
   if globalWorkSize.len == 0:
-    quit("OpenCL runKernel: global work size must have at least one dimension")
+    failLoud("OpenCL runKernel: global work size must have at least one dimension")
   if globalWorkSize.len != localWorkSize.len:
-    quit("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
+    failLoud("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
 
   check enqueueNDRangeKernel(
     kernel.commands,

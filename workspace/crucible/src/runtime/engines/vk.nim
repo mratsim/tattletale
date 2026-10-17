@@ -13,6 +13,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
 import ../engines_common
+import ../errors
 import ../launch/launch_common
 
 export vulkan_runtime
@@ -99,7 +100,7 @@ proc ingest*(engine: VulkanEngine, source: string) =
   # kernel's scalars from offset 0. One kernel per source with scalars.
   if countKernels(source) > 1 and
      "layout(push_constant) uniform KernelParams" in source:
-    quit("Vulkan: multi-kernel source with scalar params is unsupported, " &
+    failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
          "use one kernel per source when passing by-value scalars")
   # The previous source built the cached pipelines and per-kernel SPIR-V,
   # release the pipelines (driver shader-compile objects) and drop both caches
@@ -195,7 +196,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
   if engine.bakedBlk.x == 0 or
      blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
      blk.z != engine.bakedBlk.z:
-    quit("Vulkan run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
+    failLoud("Vulkan run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
          " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
          "x" & $engine.bakedBlk.z &
          ": launch config mismatch, blk is shader-baked on Vulkan)")
@@ -224,10 +225,9 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
         ctx.inputBuffers.add h
     else:
       if len mod 4 != 0:
-        quit("Vulkan by-value (push-constant) args must be 4-byte-aligned " &
-             "std430 types, got " & $len & " bytes")
+        failLoud("Vulkan by-value (push-constant) args must be 4-byte-aligned std430 types, got " & $len & " bytes")
       if ctx.pn + len > 128:
-        quit("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+        failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
       copyMem(ctx.pushBuf[ctx.pn].addr, p, len)
       inc ctx.pn, len
   var dctx = SinkCtx()

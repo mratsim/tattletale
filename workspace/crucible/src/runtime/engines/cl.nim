@@ -11,6 +11,7 @@ import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
 import ../engines_common
+import ../errors
 import ../launch/launch_common
 import ../exec/opencl_runtime
 
