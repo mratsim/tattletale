@@ -28,19 +28,28 @@ proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
 # ▸ Public API
 
 proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
-  ## Launch accessor: a bare `engine.launchKernel` hits this, 4 args hit the engine's
-  ## plain `launchKernel`. A proc, never a template: templates would hijack the plain call.
+  ## Launch accessor: bare access returns chevron sugar, 4 args hit the engine's launch.
+  ## - Chevrons:
+  ##   `engine.launchKernel<<(16, 16), (32, 8)>>("k", out, (a, b))`
+  ## - Do form:
+  ##     `engine.launchDeviceFn <kernel-expr> do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
   LaunchSugar[E](engine: engine)
 
 macro `<<`*[E](r: LaunchSugar[E], cfg: untyped): untyped =
-  ## Chevron launch config, parsed by `chevronConfig`:
-  ##   engine.launchKernel<<(grid: (2, 4), blk: (4, 2), sharedMem: n)>>
 
   result = quote do:
     makeProxy(`r`.engine, chevronConfig(`cfg`))
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
-  ## Builds the run call: `engine.launchKernel<<cfg>>("kernel", output, (args...))`
+  ## Builds the launch from the chevron proxy.
+  ## - Chevrons:
+  ##   `engine.launchKernel<<(16, 16), (32, 8)>>("k", out, (a, b))`
+  ## - Do form:
+  ##     `engine.launchDeviceFn <kernel-expr> do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
   doAssert call.kind in {nnkPar, nnkTupleConstr, nnkCall, nnkBracket},
     "chevron RHS must be (\"kernel\", output, (args...)), got: " & call.repr
   doAssert call.len == 3,

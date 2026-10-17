@@ -182,14 +182,13 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
                    LaunchConfig(grid: `gridD`, blk: `blkD`))
 
 macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
-  ## Launches a device function with whole values, schedule via a `do:` block:
-  ##
-  ##   engine.launchDeviceFn gemm(dD, dA, dB, 1) do:
-  ##     grid = ((D.shape.m + 31) div 32, (D.shape.n + 31) div 32)
-  ##     blk = (32, 1)
-  ##
-  ## - the schedule block holds `grid =` / `blk =` assignments, both optional, default (1, 1)
-  ## - the expressions evaluate at the launch site and may reference the kernel's formals
+  ## Launches a device function with whole values, the schedule is a `do:` block.
+  ## - Chevrons:
+  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
+  ## - Do form:
+  ##     `engine.launchDeviceFn gemm(dD, dA, dB, 1) do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
   var schedule: NimNode = nil
   var callNode = call
   if callNode[^1].kind == nnkStmtList:
@@ -224,14 +223,17 @@ proc makeDeviceFnProxy[E: HwEngine](engine: E, cfg: LaunchConfig): DeviceFnProxy
   DeviceFnProxy[E](engine: engine, grid: cfg.grid, blk: cfg.blk)
 
 proc launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
-  ## Chevron form accessor: `engine.launchDeviceFn<<grid, blk>> fn(args)`, a proc resolves
-  ## by signature so the 2-arg `do:` macro form is untouched.
+  ## Chevron form accessor for device-fn launches, a proc resolves by signature
+  ## so the 2-arg `do:` macro form is untouched.
+  ## - Chevrons:
+  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
+  ## - Do form:
+  ##     `engine.launchDeviceFn <kernel-expr> do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
   DeviceFnSugar[E](engine: engine)
 
 macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
-  ## Chevron launch geometry, positional `(grid, blk)` or `grid:` / `blk:` pairs:
-  ##   engine.launchDeviceFn<<(grid, blk)>> fn(args)
-  ## sharedMem and stream do not exist on the device-fn path, they are compile errors
   doAssert cfg.kind in {nnkPar, nnkTupleConstr}, "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr
   var named = 0
   var positional = 0
@@ -247,7 +249,13 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
     `mkSym`(`r`.engine, `cfgSym`(`cfg`))
 
 macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
-  ## Builds the launch: `engine.launchDeviceFn<<grid, blk>> fn(args...)`
+  ## Builds the device-fn launch from the chevron proxy.
+  ## - Chevrons:
+  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
+  ## - Do form:
+  ##     `engine.launchDeviceFn <kernel-expr> do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
   var callNode = call
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
