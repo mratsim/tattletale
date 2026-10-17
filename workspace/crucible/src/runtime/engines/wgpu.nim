@@ -162,21 +162,21 @@ proc parseBakedBlk(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, blk: Dim3) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use:
   ## - `output` receives the kernel's result, `args` bind positionally
-  ## - `cfg` carries the launch geometry, `blk` must match the shader's baked workgroup size
+  ## - `grid`/`blk` carry the launch geometry, `blk` must match the shader's baked workgroup size
   ## - a plain run dispatches (1, 1)
-  ## - example: engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ## - example: engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let device = engine.ctx.ctx.device
   let queue  = engine.ctx.ctx.queue
 
-  # blk is shader-baked (@workgroup_size), a default cfg dispatches the baked size,
+  # blk is shader-baked (@workgroup_size), the default blk (1, 1, 1) dispatches the baked size,
   # an explicit blk must match it exactly.
-  let blk = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+  let blk = if blk.x == 1 and blk.y == 1 and blk.z == 1:
               engine.bakedBlk
             else:
-              cfg.blk
+              blk
   if engine.bakedBlk.x == 0 or
      blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
      blk.z != engine.bakedBlk.z:
@@ -348,8 +348,8 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
   # Dispatch-level validation failures surface only through the error scope,
   # push a validation scope around the launch and check the popped result below.
   wgpuDevicePushErrorScope(device, wgpuErrorFilterValidation)
-  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x),
-                                           uint32(cfg.grid.y), uint32(cfg.grid.z))
+  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(grid.x),
+                                           uint32(grid.y), uint32(grid.z))
   wgpuComputePassEncoderEnd(pass)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
 

@@ -153,19 +153,19 @@ proc load(nvrtc: var NVRTC) =
   nvrtc.moduleLoaded = true
 
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk: Dim3) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   # the context is made current per launch, several engines can coexist
   # the launch synchronizes before returning
   check cuCtxSetCurrent(engine.nvrtc.context)
-  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
+  doAssert grid.x > 0 and grid.y > 0 and grid.z > 0,
     "CUDA grid dims must have every axis > 0, got " &
-    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
-  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
+    $grid.x & ", " & $grid.y & ", " & $grid.z
+  doAssert blk.x > 0 and blk.y > 0 and blk.z > 0,
     "CUDA block dims must have every axis > 0, got " &
-    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
+    $blk.x & ", " & $blk.y & ", " & $blk.z
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
@@ -188,8 +188,8 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, 
 
   check cuLaunchKernel(
     engine.nvrtc.kernel,
-    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
-    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
+    uint32(grid.x), uint32(grid.y), uint32(grid.z),
+    uint32(blk.x), uint32(blk.y), uint32(blk.z),
     0, 0,  # no shared memory, no stream
     dctx.addrs[0].addr, nil)
 

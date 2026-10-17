@@ -178,20 +178,20 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, grid, blk: Dim3) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use:
   ## - `output` receives the kernel's result, `args` bind positionally
-  ## - `cfg` carries the launch geometry, `blk` must match the shader's baked workgroup size
+  ## - `grid`/`blk` carry the launch geometry, `blk` must match the shader's baked workgroup size
   ## - a plain run dispatches (1, 1)
-  ## - example: engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ## - example: engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   var vctx = engine.ctx.ctx
 
-  # blk is shader-baked (local_size_xyz), a default cfg dispatches the baked size,
+  # blk is shader-baked (local_size_xyz), the default blk (1, 1, 1) dispatches the baked size,
   # an explicit blk must match it exactly.
-  let blk = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+  let blk = if blk.x == 1 and blk.y == 1 and blk.z == 1:
               engine.bakedBlk
             else:
-              cfg.blk
+              blk
   if engine.bakedBlk.x == 0 or
      blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
      blk.z != engine.bakedBlk.z:
@@ -268,11 +268,11 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
   for i in 0 ..< dctx.inputBuffers.len:
     engine.caches.pipelineCache[pipelineKey].setArg(i + 1, dctx.inputBuffers[i], vctx)
 
-  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
+  # Dispatch grid groups (runKernel computes groupCount = ceil(global/local))
   vctx.runKernel(engine.caches.pipelineCache[pipelineKey],
-                 [uint32(cfg.grid.x * blk.x),
-                  uint32(cfg.grid.y * blk.y),
-                  uint32(cfg.grid.z * blk.z)],
+                 [uint32(grid.x * blk.x),
+                  uint32(grid.y * blk.y),
+                  uint32(grid.z * blk.z)],
                  [uint32(blk.x), uint32(blk.y), uint32(blk.z)],
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)

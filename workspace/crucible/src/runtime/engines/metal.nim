@@ -146,21 +146,21 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk: Dim3) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
-      if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
+      if grid.x < 1 or grid.y < 1 or grid.z < 1:
         failLoud("Metal run: grid must be ≥ 1 per axis, got " &
-                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-      if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
+                 $grid.x & "x" & $grid.y & "x" & $grid.z)
+      if blk.x < 1 or blk.y < 1 or blk.z < 1:
         failLoud("Metal run: blk must be ≥ 1 per axis, got " &
-                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
-      let threadsPerThreadgroup = cfg.blk.x * cfg.blk.y * cfg.blk.z
+                 $blk.x & "x" & $blk.y & "x" & $blk.z)
+      let threadsPerThreadgroup = blk.x * blk.y * blk.z
       if threadsPerThreadgroup > 1024:
-        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-                 $cfg.blk.z & " = " & $threadsPerThreadgroup &
+        failLoud("Metal run: blk " & $blk.x & "x" & $blk.y & "x" &
+                 $blk.z & " = " & $threadsPerThreadgroup &
                  " threads per threadgroup, exceeds the Apple Silicon " &
                  "maximum of 1024")
 
@@ -186,12 +186,12 @@ when defined(macosx):
                           p, objc.NSUInteger(len), objc.NSUInteger(idx))
       var dctx = SinkCtx(encoder: encoder)
       bindArgs(dctx, bkMetal, output, args, true, sinkArg)
-      let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
-                         height: objc.NSUInteger(cfg.grid.y),
-                         depth: objc.NSUInteger(cfg.grid.z))
-      let blk = objc.MTLSize(width: objc.NSUInteger(cfg.blk.x),
-                        height: objc.NSUInteger(cfg.blk.y),
-                        depth: objc.NSUInteger(cfg.blk.z))
+      let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
+                         height: objc.NSUInteger(grid.y),
+                         depth: objc.NSUInteger(grid.z))
+      let blk = objc.MTLSize(width: objc.NSUInteger(blk.x),
+                        height: objc.NSUInteger(blk.y),
+                        depth: objc.NSUInteger(blk.z))
       discard objc.msgSend(encoder, objc.`$$`("dispatchThreadgroups:threadsPerThreadgroup:"),
                       grid, blk)
       discard objc.msgSend(encoder, objc.`$$`("endEncoding"))

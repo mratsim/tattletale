@@ -167,8 +167,8 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
   let bridgeNode = nnkStmtList.newTree(buildGlobalFn(kname, kernel, bridgeCall, valueTypes, formalTypes, valueNames))
   let grid = substituteIdents(gridN.copy(), bindings)
   let blk = substituteIdents(blkN.copy(), bindings)
-  let gridD = toDim3(grid)
-  let blkD = toDim3(blk)
+  let gridD = quote do: dim3(`grid`)
+  let blkD = quote do: dim3(`blk`)
 
   let bridgeSource = ident("crucibleBridgeSource" & kname)
   let bridgeN = bindSym"bridge"
@@ -212,16 +212,6 @@ type
     ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
     engine: E
 
-  DeviceFnProxy*[E: HwEngine] = object
-    ## Chevron intermediate, built by `<<`, consumed by `>>`.
-    engine: E
-    grid: Dim3
-    blk: Dim3
-
-proc makeDeviceFnProxy[E: HwEngine](engine: E, cfg: LaunchConfig): DeviceFnProxy[E] {.inline.} =
-  ## DeviceFnProxy construction, generic param inference lives in this helper
-  DeviceFnProxy[E](engine: engine, grid: cfg.grid, blk: cfg.blk)
-
 macro launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] =
   ## Chevron form accessor for device-fn launches.
   ## - Chevrons:
@@ -232,20 +222,17 @@ macro launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] =
   ##       `blk = (32, 1)`
   result = quote do: DeviceFnSugar[E](`engine`)
 
-macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
-  doAssert cfg.kind in {nnkPar, nnkTupleConstr}, "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr
-  var named = 0
-  var positional = 0
-  for ch in cfg:
-    if ch.kind == nnkExprColonExpr:
-      doAssert $ch[0] in ["grid", "blk"], "launchDeviceFn chevron takes grid/blk only, '" & $ch[0] & "' does not exist on the device-fn path: " & ch.repr
-      inc named
-    else: inc positional
-  doAssert (named == 0 and positional == 2) or positional == 0, "launchDeviceFn chevron takes (grid, blk) or grid:/blk: pairs, got: " & cfg.repr
-  let mkSym = bindSym"makeDeviceFnProxy"
-  let cfgSym = bindSym"chevronConfig"
-  result = quote do:
-    `mkSym`(`r`.engine, `cfgSym`(`cfg`))
+type
+  DeviceFnProxy*[E: HwEngine] = object
+    ## Chevron intermediate, built by `<<`, consumed by `>>`. Same shape as `LaunchConfig[E]`,
+    ## a distinct type so `>>` can tell the device-fn and kernel launch paths apart.
+    engine: E
+    grid: Dim3
+    blk: Dim3
+
+proc `<<`*[E: HwEngine, G, B: int|tuple](r: DeviceFnSugar[E], cfg: tuple[grid: G, blk: B]): DeviceFnProxy[E] =
+  ## Builds the device-fn proxy from the chevron left half.
+  DeviceFnProxy[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
 
 macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
   ## Builds the device-fn launch from the chevron proxy.

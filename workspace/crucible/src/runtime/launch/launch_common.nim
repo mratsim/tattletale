@@ -14,44 +14,6 @@ template dim3(t: tuple[a: SomeInteger]): Dim3 = Dim3(x: int(t[0]))
 template dim3(t: tuple[a, b: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]))
 template dim3(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]), z: int(t[2]))
 
-proc toDim3(n: NimNode): NimNode =
-  ## A grid/blk chevron expression as a `dim3` call.
-  result = quote do: dim3(`n`)
-
-macro chevronConfig*(cfg: untyped): LaunchConfig =
-  ## Parses the launch chevron config, named or positional:
-  ##   engine.launchKernel<<(grid, blk)>> or engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>
-  ##
-  ## - named fields grid/blk, defaults grid (1, 1), blk (1, 1)
-  ## - positional form: exactly (grid, blk)
-  ## - grid and blk stay host expressions: tuple literals construct `Dim3` directly,
-  ##   everything else goes through `dim3`
-  ## - mixing named and positional fields is rejected
-  let cfgAst = cfg
-  var gridN, blkN: NimNode
-  let named = cfgAst.kind in {nnkPar, nnkTupleConstr} and
-              cfgAst.len > 0 and cfgAst[0].kind == nnkExprColonExpr
-  if named:
-    for ch in cfgAst:
-      doAssert ch.kind == nnkExprColonExpr,
-        "chevron: mixing named and positional fields is not allowed: " & cfgAst.repr
-      let key = ch[0].strVal
-      case key
-      of "grid": gridN = ch[1]
-      of "blk":  blkN  = ch[1]
-      else: doAssert false, "chevron: unknown field '" & ch[0].repr & "'"
-    if gridN.isNil: gridN = newLit(1)
-    if blkN.isNil:  blkN  = newLit(1)
-  else:
-    doAssert cfgAst.len == 2,
-      "chevron positional form needs (grid, blk), got: " & cfgAst.repr
-    gridN = cfgAst[0]
-    blkN  = cfgAst[1]
-  let gridD = toDim3(gridN)
-  let blkD = toDim3(blkN)
-  result = quote do:
-    LaunchConfig(grid: `gridD`, blk: `blkD`)
-
 # ▸ Structural binding
 
 func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =

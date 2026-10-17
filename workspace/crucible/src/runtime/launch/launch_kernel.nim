@@ -19,13 +19,6 @@ type
     ## Transient chevron sugar, created per `engine.launchKernel` access.
     engine: E
 
-  LaunchProxy[E] = object
-    engine: E
-    cfg: LaunchConfig
-
-proc makeProxy[E](engine: E, cfg: LaunchConfig): LaunchProxy[E] {.inline.} =
-  LaunchProxy[E](engine: engine, cfg: cfg)
-
 # ▸ Public API
 
 proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
@@ -47,41 +40,35 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
   ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
   ##       `blk = (32, 1)`
   var argsNode: NimNode = nil
-  var cfgNode: NimNode = nil
-  var schedule: NimNode = nil
+  var gridN: NimNode = nil
+  var blkN: NimNode = nil
   case rest.len
   of 1:
     argsNode = rest[0]
   of 2:
     if rest[1].kind == nnkStmtList:
       argsNode = rest[0]
-      schedule = rest[1]
+      for a in rest[1]:
+        doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
+          "launchKernel do-schedule expects grid = ... / blk = ..., got " & a.repr
+        if $a[0] == "grid": gridN = a[1] else: blkN = a[1]
+      doAssert gridN != nil and blkN != nil,
+        "launchKernel do-schedule needs grid and blk, got " & rest[1].repr
     else:
       argsNode = rest[0]
-      cfgNode = rest[1]
+      let cfgN = rest[1]
+      gridN = quote do: `cfgN`.grid
+      blkN = quote do: `cfgN`.blk
   else:
     error "launchKernel takes (kernel, output, args[, cfg][, do-schedule]), got " & $(rest.len + 3) & " args"
-  doAssert cfgNode.isNil or schedule.isNil,
-    "launchKernel: pass the config or a `do:` schedule, not both"
-  if not schedule.isNil:
-    var fields: seq[NimNode] = @[]
-    for a in schedule:
-      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
-        "launchKernel do-schedule expects grid = ... / blk = ..., got " & a.repr
-      fields.add nnkExprColonExpr.newTree(a[0], a[1])
-    doAssert fields.len >= 2,
-      "launchKernel do-schedule needs at least grid and blk, got " & $fields.len & " field(s)"
-    let tup = nnkPar.newTree(fields)
-    cfgNode = quote do: chevronConfig(`tup`)
-  if cfgNode.isNil:
-    cfgNode = quote do: LaunchConfig()
+  if gridN.isNil: gridN = quote do: dim3(1)
+  if blkN.isNil:  blkN  = quote do: dim3(1)
   result = quote do:
-    `engine`.launchKernelImpl(`kernel`, `output`, `argsNode`, `cfgNode`)
+    `engine`.launchKernelImpl(`kernel`, `output`, `argsNode`, `gridN`, `blkN`)
 
-macro `<<`*[E](r: LaunchSugar[E], cfg: untyped): untyped =
-
-  result = quote do:
-    makeProxy(`r`.engine, chevronConfig(`cfg`))
+proc `<<`*[E, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchConfig[E] =
+  ## Builds the launch config from the chevron left half.
+  LaunchConfig[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
   ## Builds the launch from the chevron proxy.
@@ -99,4 +86,4 @@ macro `>>`*(proxy: typed, call: untyped): untyped =
   let outputN = call[1]
   let argsN = call[2]
   result = quote do:
-    `proxy`.engine.launchKernel(`kernelN`, `outputN`, `argsN`, `proxy`.cfg)
+    `proxy`.engine.launchKernelImpl(`kernelN`, `outputN`, `argsN`, `proxy`.grid, `proxy`.blk)
