@@ -21,8 +21,7 @@ func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime
   else: sizeof(T)
 
 func isStaticArg[T](_: typedesc[T]): bool {.compileTime.} =
-  ## True when the value lives in the type (phantom objects like Int[V]),
-  ## so it occupies no runtime bytes
+  ## True when the value lives in the type (phantom objects like Int[V]), so it occupies no runtime bytes
   when T is object|tuple:
     for f in fields(default(T)):
       if not isStaticArg(typeof(f)): return false
@@ -42,19 +41,23 @@ func hasBufferLeaf[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
   else: result = false
 
-func chunkLayout[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
-  ## Padded size and natural alignment of a ptr-free chunk: lowered widths,
-  ## the MSL/C struct layout, values that live in the type carry no bytes
+func roundStepUp(x, step: int): int {.inline.} =
+  ((x + step - 1) div step) * step
+
+func deviceLayout[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
+  ## Padded and aligned type on device
+  ## This skips phnatom types, static values
+  ## and handle Nim int being lowered to 4-byte integer even on 64-bit.
   when T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
     else:
       result.align = 1
       for f in fields(default(T)):
-        let fl = chunkLayout(typeof(f), backend)
-        result.size = (result.size + fl.align - 1) div fl.align * fl.align + fl.size
+        let fl = deviceLayout(typeof(f), backend)
+        result.size = roundStepUp(result.size, fl.align) + fl.size
         result.align = max(result.align, fl.align)
-      result.size = (result.size + result.align - 1) div result.align * result.align
+      result.size = roundStepUp(result.size, result.align)
   elif T is array:
     let ea = if default(T).len > 0: argWidth(typeof(default(T)[0]), backend) else: 1
     result = (sizeof(T), ea)
@@ -108,10 +111,10 @@ proc packInto[T](dst: var openArray[byte], off: var int, v: T, backend: static B
     when not isStaticArg(T):
       for f in fields(v):
         packInto(dst, off, f, backend)
-      let a = chunkLayout(T, backend).align
+      let a = deviceLayout(T, backend).align
       off = (off + a - 1) div a * a
   elif T is array:
-    let a = chunkLayout(T, backend).align
+    let a = deviceLayout(T, backend).align
     off = (off + a - 1) div a * a
     copyMem(dst[off].addr, v.addr, sizeof(v))
     off += sizeof(v)
@@ -121,23 +124,22 @@ proc packInto[T](dst: var openArray[byte], off: var int, v: T, backend: static B
     putBytes(dst, off, v, a)
     off += a
 
-proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: auto,
-                      ptrAsBuffer: static bool,
-                      sink: proc(ctx: var C, isBuffer: bool, h: H, idx: int,
-                                 p: pointer, len: int) {.nimcall.}) {.inline.} =
-  ## Sinks one value (or value subtree) to `sink`
+proc serialize[H, C](ctx: var C, pos: var int, v: auto,
+                     serializer: proc(ctx: var C, bufferHandle: H, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.},
+                     backend: static BackendKind, ptrAsBuffer: static bool) {.inline.} =
+  ## Serializes one value (or value subtree) through `serializer`
   when not supportsCopyMem(typeof(v)):
     {.error: "kernel args are trivially copyable types only, " &
         $typeof(v) & " does not support copyMem".}
   when typeof(v) is H:
-    sink(ctx, true, v, pos, nil, 0)
+    serializer(ctx, v, nil, 0, pos, true)
     inc pos
   elif typeof(v) is ptr or typeof(v) is pointer:
     when ptrAsBuffer:
-      sink(ctx, true, cast[H](v), pos, nil, 0)
+      serializer(ctx, cast[H](v), nil, 0, pos, true)
     else:
       var copy = v
-      sink(ctx, false, default(H), pos, copy.addr, sizeof(pointer))
+      serializer(ctx, default(H), copy.addr, sizeof(pointer), pos, false)
     inc pos
   elif typeof(v) is object|tuple:
     when isStaticArg(typeof(v)):
@@ -145,24 +147,24 @@ proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: 
     elif hasBufferLeaf(typeof(v), H):
       var copy = v
       for f in fields(copy):
-        deliverArg(ctx, backend, pos, f, ptrAsBuffer, sink)
+        serialize(ctx, pos, f, serializer, backend, ptrAsBuffer)
     else:
-      const size = chunkLayout(typeof(v), backend).size
+      const size = deviceLayout(typeof(v), backend).size
       var blob: array[size, byte]
       var off = 0
       packInto(blob, off, v, backend)
-      sink(ctx, false, default(H), pos, blob.addr, off)
+      serializer(ctx, default(H), blob.addr, off, pos, false)
       inc pos
   elif typeof(v) is array:
     var copy = v
-    sink(ctx, false, default(H), pos, copy.addr, sizeof(copy))
+    serializer(ctx, default(H), copy.addr, sizeof(copy), pos, false)
     inc pos
   else:
     const w = argWidth(typeof(v), backend)
     var staging: array[w, byte]
     const n = if sizeof(typeof(v)) < w: sizeof(typeof(v)) else: w
     copyMem(staging[0].addr, v.unsafeAddr, n)
-    sink(ctx, false, default(H), pos, staging.addr, w)
+    serializer(ctx, default(H), staging.addr, w, pos, false)
     inc pos
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -175,13 +177,12 @@ func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], ba
   for f in fields(default(A)):
     result += argCount(typeof(f), H, backend)
 
-proc bindArgs*[H, C](ctx: var C, backend: static BackendKind, output: auto, args: tuple,
-                     ptrAsBuffer: static bool,
-                     sink: proc(ctx: var C, isBuffer: bool, h: H, idx: int,
-                                p: pointer, len: int) {.nimcall.}) =
+proc bindArgs*[H, C](ctx: var C, output: auto, args: tuple,
+                     serializer: proc(ctx: var C, bufferHandle: H, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.},
+                     backend: static BackendKind, ptrAsBuffer: static bool) =
   ## Sinks the output then the args tuple, positional
   var pos = 0
-  deliverArg(ctx, backend, pos, output, ptrAsBuffer, sink)
+  serialize(ctx, pos, output, serializer, backend, ptrAsBuffer)
   var argsCopy = args
   for f in fields(argsCopy):
-    deliverArg(ctx, backend, pos, f, ptrAsBuffer, sink)
+    serialize(ctx, pos, f, serializer, backend, ptrAsBuffer)

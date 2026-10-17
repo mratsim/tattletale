@@ -22,24 +22,19 @@ export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   VulkanCtx = object
-    ## RAII value wrapper, `=destroy` releases the device resources when the engine ref dies.
     ctx: VulkanContext
 
   VulkanCaches = object
-    ## RAII value wrapper for the ingest-once / run-many caches.
-    ## Holds a device ctx copy for the `=destroy` pipeline release.
     ctx: VulkanContext
     spirvCache: Table[string, seq[uint32]]
     pipelineCache: Table[(string, int, int), VulkanPipeline]
 
   VulkanEngine* = ref object
-    ## A Vulkan engine, build with `bkVulkan.init()`: GLSL kernels compiled to
-    ## SPIR-V and dispatched on one device. All GPU resources release when the engine dies.
     source: string
     spirv: seq[uint32]
-    entryPoint: string  # GLSL entry point name, baked at ingest
+    entryPoint: string
     ctx: VulkanCtx
-    bakedBlk: Dim3   # workgroup size baked into the shader at ingest
+    shaderSquadron: Dim3   # squadron baked into the shader at ingest
     caches: VulkanCaches
 
 proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
@@ -48,7 +43,6 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var VulkanCtx) =
-  ## Releases the Vulkan resources, nil-guarded against double teardown.
   if c.ctx.instance == nil:
     return
   let L = c.ctx.vkLib
@@ -94,17 +88,11 @@ proc ingest*(engine: VulkanEngine, source: string) =
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
-  # Multi-kernel sources with by-value scalars misalign every kernel after
-  # the first: the codegen unions all kernels' scalar params into one
-  # file-scope push-constant block, the runtime packs only the invoked
-  # kernel's scalars from offset 0. One kernel per source with scalars.
-  if countKernels(source) > 1 and
-     "layout(push_constant) uniform KernelParams" in source:
+
+  if countKernels(source) > 1 and "layout(push_constant) uniform KernelParams" in source:
     failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
          "use one kernel per source when passing by-value scalars")
-  # The previous source built the cached pipelines and per-kernel SPIR-V,
-  # release the pipelines (driver shader-compile objects) and drop both caches
-  # before replacing the artifact.
+
   for p in engine.caches.pipelineCache.mvalues:
     p.destroyPipeline(engine.ctx.ctx)
   engine.caches.pipelineCache.clear()
@@ -112,24 +100,22 @@ proc ingest*(engine: VulkanEngine, source: string) =
   engine.source = source
   engine.entryPoint = parseEntryPoint(source)
   engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
-  engine.bakedBlk = parseBakedBlk(source)
+  engine.shaderSquadron = parseShaderSquadron(source)
 
 proc getArtifact*(engine: VulkanEngine): seq[uint32] =
-  ## Returns the compiled SPIR-V.
   engine.spirv
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
-  ## Returns the physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   engine.ctx.ctx.deviceName(engine.ctx.ctx.physicalDevice)
 
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
 
-proc parseBakedBlk(glsl: string): Dim3 =
-  ## Extract the shader-baked workgroup size from the GLSL preamble:
+proc parseShaderSquadron(glsl: string): Dim3 =
+  ## Extract the shader-baked squadron from the GLSL preamble:
   ## `layout(local_size_x = 256, local_size_y = 8, local_size_z = 1) in;`
-  ## Returns (0, 0, 0) when absent (run will then fail blk validation loudly).
+  ## Returns (0, 0, 0) when absent (run will then fail squadron validation loudly).
   const markers = ["local_size_x = ", "local_size_y = ", "local_size_z = "]
   for i, marker in markers:
     let j = glsl.find(marker)
@@ -146,7 +132,6 @@ proc parseBakedBlk(glsl: string): Dim3 =
     else: result.z = n
 
 proc countKernels(glsl: string): int =
-  ## Counts kernel entry points, each kernel carries a `layout(local_size_x = ...) in;` preamble.
   const marker = "layout(local_size_x"
   var i = glsl.find(marker)
   while i >= 0:
@@ -154,10 +139,6 @@ proc countKernels(glsl: string): int =
     i = glsl.find(marker, i + marker.len)
 
 proc parseEntryPoint(glsl: string): string =
-  ## Extracts the first kernel's entry point name from the GLSL.
-  ## The codegen emits `layout(local_size_x ...) in;` before each kernel,
-  ## device helpers are forward-declared, the first bare `void ` may name a helper.
-  ## Without a kernel preamble the fallback is the first `void `, then "main".
   const preamble = "layout(local_size_x"
   const marker = "void "
   var startPos = 0
@@ -179,30 +160,22 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, grid, blk = Dim3()) =
-  ## Runs `kernel` on the engine's device, building the pipeline on first use:
-  ## - `output` receives the kernel's result, `args` bind positionally
-  ## - `grid`/`blk` carry the launch geometry, `blk` must match the shader's baked workgroup size
-  ## - a plain run dispatches (1, 1)
-  ## - example: engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, grid, squadron = Dim3()) =
   var vctx = engine.ctx.ctx
-
-  # blk is shader-baked (local_size_xyz), the default blk (1, 1, 1) dispatches the baked size,
-  # an explicit blk must match it exactly.
-  let blk = if blk.x == 1 and blk.y == 1 and blk.z == 1:
-              engine.bakedBlk
+  let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
+              engine.shaderSquadron
             else:
-              blk
-  if engine.bakedBlk.x == 0 or
-     blk.x != engine.bakedBlk.x or blk.y != engine.bakedBlk.y or
-     blk.z != engine.bakedBlk.z:
-    failLoud("Vulkan run blk=" & $blk.x & "x" & $blk.y & "x" & $blk.z &
-         " != baked workgroup size " & $engine.bakedBlk.x & "x" & $engine.bakedBlk.y &
-         "x" & $engine.bakedBlk.z &
-         ": launch config mismatch, blk is shader-baked on Vulkan)")
+              squadron
 
-  # Entry point: the ingested SPIR-V serves the baked entry, other kernels
-  # compile once per kernel name and cache.
+  if engine.shaderSquadron.x == 0 or
+     squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
+     squadron.z != engine.shaderSquadron.z:
+    failLoud("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
+         " != baked squadron " & $engine.shaderSquadron.x & "x" & $engine.shaderSquadron.y &
+         "x" & $engine.shaderSquadron.z &
+         ": launch config mismatch, squadron is shader-baked on Vulkan)")
+
+  # Entrypoint caching
   var entry = engine.entryPoint
   var spirv: seq[uint32]
   if kernel == engine.entryPoint:
@@ -213,16 +186,15 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
-  # byte chunks pack into the 128-byte push-constant block, buffers
-  # cross as storage bindings
-  type SinkCtx = object
+  type SerializationCtx = object
     pushBuf: array[128, byte]
     pn: int
     inputBuffers: seq[VulkanBuffer]
-  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: VulkanBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
-    if isBuffer:
-      if idx > 0:
-        ctx.inputBuffers.add h
+
+  proc serializer(ctx: var SerializationCtx, bufferHandle: VulkanBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
+    if viaBuffer:
+      if argIdx > 0:
+        ctx.inputBuffers.add bufferHandle
     else:
       if len mod 4 != 0:
         failLoud("Vulkan by-value (push-constant) args must be 4-byte-aligned std430 types, got " & $len & " bytes")
@@ -230,17 +202,13 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
         failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
       copyMem(ctx.pushBuf[ctx.pn].addr, p, len)
       inc ctx.pn, len
-  var dctx = SinkCtx()
-  bindArgs(dctx, bkVulkan, output, args, false, sinkArg)
+
+  var dctx = SerializationCtx()
+  bindArgs(dctx, output, args, serializer, bkVulkan, false)
   let pushConstLen = dctx.pn
 
-  # The pipeline layout depends only on the shader module, the SSBO count
-  # (output at binding 0 + buffer inputs) and the push-constant size.
-  # The fully-created pipeline is cached by (kernel, ssboCount, pushConstSize)
-  # and reused across runs.
   let pipelineKey = (kernel, dctx.inputBuffers.len + 1, pushConstLen)
   if not engine.caches.pipelineCache.hasKey(pipelineKey):
-    # The shader module is only needed when building a new pipeline
     let vkCreateShaderModule = cast[
       proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
            pAllocator: pointer,
@@ -270,10 +238,10 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
 
   # Dispatch grid groups (runKernel computes groupCount = ceil(global/local))
   vctx.runKernel(engine.caches.pipelineCache[pipelineKey],
-                 [uint32(grid.x * blk.x),
-                  uint32(grid.y * blk.y),
-                  uint32(grid.z * blk.z)],
-                 [uint32(blk.x), uint32(blk.y), uint32(blk.z)],
+                 [uint32(grid.x * squadron.x),
+                  uint32(grid.y * squadron.y),
+                  uint32(grid.z * squadron.z)],
+                 [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
 

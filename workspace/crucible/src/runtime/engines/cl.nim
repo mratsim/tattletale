@@ -21,19 +21,15 @@ export opencl_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   OpenCLCtx = object
-    ## RAII value wrapper, the context destructor releases the device resources when the engine ref dies.
     ctx: OpenCLContext
 
   OpenCLKernelCache = object
-    ## RAII value wrapper, cached kernels released when the engine ref dies.
     kernels: Table[string, OpenCLKernel]
 
   OpenCLEngine* = ref object
-    ## An OpenCL engine, build with `bkOpenCL.init()`: OpenCL C kernels on one device.
-    ## The context and cached kernels release when the engine dies.
     source: string
     ctx: OpenCLCtx
-    kernelCache: OpenCLKernelCache   # after ctx: released before the context destroy
+    kernelCache: OpenCLKernelCache
 
 proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 
@@ -48,7 +44,6 @@ proc newOpenCLEngine(): OpenCLEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
-  ## Stores the OpenCL C source, re-entrant, cached kernels rebuild lazily.
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"
@@ -56,11 +51,9 @@ proc ingest*(engine: OpenCLEngine, source: string) =
   engine.source = source
 
 proc getArtifact*(engine: OpenCLEngine): string =
-  ## Returns the OpenCL C kernel source.
   engine.source
 
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
-  ## Returns the OpenCL device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   engine.ctx.ctx.device.name()
 
 
@@ -73,27 +66,22 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let ctx = engine.ctx.ctx
-  # NVIDIA-OpenCL only: the codegen emits Nim `asm(...)` as GCC-style inline
-  # asm in the OpenCL C kernel, only NVIDIA's LLVM-based OpenCL compiler
-  # accepts it. PTX-embedding kernels (tensor-core mma.sync) also need
-  # a work-group of exactly 32 work-items, mma.sync is warp-synchronous.
   if kernel notin engine.kernelCache.kernels:
     engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
-  # pointer into the cache: the kernel owns its resources, a value copy's
-  # destructor would release them under the cache's feet
   let kern = engine.kernelCache.kernels.addr[][kernel].addr
 
-  type SinkCtx = object
+  type SerializationCtx = object
     kern: ptr OpenCLKernel
-  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: OpenCLBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
-    if isBuffer:
-      ctx.kern[].setArg(idx, h)
+    
+  proc serializer(ctx: var SerializationCtx, bufferHandle: OpenCLBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
+    if viaBuffer:
+      ctx.kern[].setArg(argIdx, bufferHandle)
     else:
-      ctx.kern[].setArg(idx, len, p)
-  var dctx = SinkCtx(kern: kern)
-  bindArgs(dctx, bkOpenCL, output, args, false, sinkArg)
+      ctx.kern[].setArg(argIdx, len, p)
 
-  # global = grid·blk work-items, local = blk (per axis, 3D NDRange)
+  var dctx = SerializationCtx(kern: kern)
+  bindArgs(dctx, output, args, serializer, bkOpenCL, false)
+
   let globalSize = [cl_size_t(grid.x * blk.x),
                     cl_size_t(grid.y * blk.y),
                     cl_size_t(grid.z * blk.z)]

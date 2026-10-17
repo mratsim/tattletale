@@ -22,7 +22,6 @@ when defined(macosx):
 # ═════════════════════════════════════════════════
 type
   MetalDeviceCtx = object
-    ## RAII value wrapper: `=destroy` fires when the engine ref dies.
     ctx: MetalCtx
 
   MetalCache = object
@@ -33,8 +32,6 @@ type
     psos: Table[string, objc.ID]
 
   MetalEngine* = ref object
-    ## A Metal engine, build with `bkMetal.init()`: runtime-compiled MSL kernels
-    ## on one GPU. All Objective-C resources release when the engine dies.
     source: string
     ctx: MetalDeviceCtx
     cache: MetalCache   # after ctx: released before the context destroy
@@ -92,8 +89,6 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   proc ingest*(engine: MetalEngine, source: string) =
-    ## Store the MSL source and compile it into a library. Calling ingest again
-    ## replaces the previous artifact and invalidates both cache levels.
     objc.withMemPool:
       let opts = compileOptions()
       let library = compileLibrary(engine.ctx.ctx.device, source, opts)
@@ -108,7 +103,6 @@ when defined(macosx):
       engine.source = source
 
   proc getArtifact*(engine: MetalEngine): string =
-    ## Returns the MSL kernel source.
     engine.source
 
   proc deviceName*(engine: MetalEngine): string =
@@ -149,9 +143,8 @@ when defined(macosx):
 
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
-  ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+    ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
-      # blk is dispatch-time, so run validates the launch geometry.
       if grid.x < 1 or grid.y < 1 or grid.z < 1:
         failLoud("Metal run: grid must be ≥ 1 per axis, got " & $grid.x & "x" & $grid.y & "x" & $grid.z)
       if blk.x < 1 or blk.y < 1 or blk.z < 1:
@@ -169,18 +162,21 @@ when defined(macosx):
       let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      # deliver the launch values whole, positional
-      type SinkCtx = object
+
+
+      type SerializationCtx = object
         encoder: objc.ID
-      proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: objc.ID, idx: int, p: pointer, len: int) {.nimcall.} =
-        if isBuffer:
+
+      proc serializer(ctx: var SerializationCtx, bufferHandle: objc.ID, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
+        if viaBuffer:
           discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          h, objc.NSUInteger(0), objc.NSUInteger(idx))
+                          bufferHandle, objc.NSUInteger(0), objc.NSUInteger(argIdx))
         else:
           discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          p, objc.NSUInteger(len), objc.NSUInteger(idx))
-      var dctx = SinkCtx(encoder: encoder)
-      bindArgs(dctx, bkMetal, output, args, true, sinkArg)
+                          p, objc.NSUInteger(len), objc.NSUInteger(argIdx))
+
+      var dctx = SerializationCtx(encoder: encoder)
+      bindArgs(dctx, output, args, serializer, bkMetal, true)
       let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
                          height: objc.NSUInteger(grid.y),
                          depth: objc.NSUInteger(grid.z))
@@ -193,16 +189,13 @@ when defined(macosx):
       discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
       discard objc.msgSend(cmdBuf, objc.`$$`("waitUntilCompleted"))
 
-      # The device can reject a dispatch after commit (oversized grid, bad binding).
-      # Without a status check, the stale output would read back as success.
       let status = objc.msgSendUInt(cmdBuf, objc.`$$`("status"))
       if status != MTLCommandBufferStatusCompleted:
         var detail = "no NSError object provided"
         let err = objc.msgSend(cmdBuf, objc.`$$`("error"))
         if not objc.isNil(err):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
-        failLoud("Metal run: command buffer failed (status " & $status &
-                 " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
+        failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
 # ═════════════════════════════════════════════════
 # ▸ Non-macOS entry point
