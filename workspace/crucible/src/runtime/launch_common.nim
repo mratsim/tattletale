@@ -20,8 +20,8 @@ type
 
   LaunchConfig* = object
     ## Launch geometry, grid/blk per-backend, sharedMem CUDA/OpenCL only, stream CUDA only.
-    grid*, blk* = default(Dim3)
-    sharedMem*, stream* = 0
+    grid*, blk*: Dim3
+    sharedMem*, stream*: int
 
 template dim3*(a, b, c: SomeInteger): Dim3 =
   ## Builds a `Dim3` from plain integer args: `dim3(32, 8, 1)`.
