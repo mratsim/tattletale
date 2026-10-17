@@ -162,7 +162,7 @@ proc parseBakedBlk(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, blk: Dim3) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use:
   ## - `output` receives the kernel's result, `args` bind positionally
   ## - `grid`/`blk` carry the launch geometry, `blk` must match the shader's baked workgroup size

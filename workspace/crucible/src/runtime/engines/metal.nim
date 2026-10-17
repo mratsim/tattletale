@@ -146,23 +146,17 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk: Dim3) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
-  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       # blk is dispatch-time, so run validates the launch geometry.
       if grid.x < 1 or grid.y < 1 or grid.z < 1:
-        failLoud("Metal run: grid must be ≥ 1 per axis, got " &
-                 $grid.x & "x" & $grid.y & "x" & $grid.z)
+        failLoud("Metal run: grid must be ≥ 1 per axis, got " & $grid.x & "x" & $grid.y & "x" & $grid.z)
       if blk.x < 1 or blk.y < 1 or blk.z < 1:
-        failLoud("Metal run: blk must be ≥ 1 per axis, got " &
-                 $blk.x & "x" & $blk.y & "x" & $blk.z)
-      let threadsPerThreadgroup = blk.x * blk.y * blk.z
-      if threadsPerThreadgroup > 1024:
-        failLoud("Metal run: blk " & $blk.x & "x" & $blk.y & "x" &
-                 $blk.z & " = " & $threadsPerThreadgroup &
-                 " threads per threadgroup, exceeds the Apple Silicon " &
-                 "maximum of 1024")
+        failLoud("Metal run: blk must be ≥ 1 per axis, got " & $blk.x & "x" & $blk.y & "x" & $blk.z)
+      if blk.x * blk.y * blk.z > 1024:
+        failLoud("Metal run: blk " & $blk.x & "x" & $blk.y & "x" & $blk.z & " exceeds the 1024 threads-per-threadgroup max")
 
       var pso: objc.ID
       if engine.cache.psos.hasKey(kernel):

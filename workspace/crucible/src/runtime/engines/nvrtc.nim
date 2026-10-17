@@ -153,7 +153,7 @@ proc load(nvrtc: var NVRTC) =
   nvrtc.moduleLoaded = true
 
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk: Dim3) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))

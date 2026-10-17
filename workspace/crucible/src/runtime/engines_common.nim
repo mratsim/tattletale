@@ -13,7 +13,6 @@ type
     x*, y*, z* = 1
 
   LaunchConfig*[E] = object
-    ## Engine + launch geometry, the value `<<` hands to `>>`.
     engine*: E
     grid*, blk*: Dim3
 

@@ -10,10 +10,35 @@
 import std/[macros, hashes, strutils, tables]
 import ../../codegen/gpu_compiler
 import ../engines_common
-import launch_kernel {.all.}
-import launch_common {.all.}
+import ./launch_kernel {.all.}
+import ./launch_common {.all.}
 
-export launch_kernel
+type
+  DeviceFnSugar*[E: HwEngine] = object
+    ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
+    engine: E
+
+type
+  DeviceFnProxy*[E: HwEngine] = object
+    ## Chevron intermediate, built by `<<`, consumed by `>>`. Same shape as `LaunchConfig[E]`,
+    ## a distinct type so `>>` can tell the device-fn and kernel launch paths apart.
+    engine: E
+    grid: Dim3
+    blk: Dim3
+
+proc `<<`*[E: HwEngine, G, B: int|tuple](r: DeviceFnSugar[E], cfg: tuple[grid: G, blk: B]): DeviceFnProxy[E] =
+  ## Builds the device-fn proxy from the chevron left half.
+  DeviceFnProxy[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
+
+macro launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] =
+  ## Chevron form accessor for device-fn launches.
+  ## - Chevrons:
+  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
+  ## - Do form:
+  ##     `engine.launchDeviceFn <kernel-expr> do:`
+  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
+  ##       `blk = (32, 1)`
+  return quote do: DeviceFnSugar[E](`engine`)
 
 proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
   # Replaces identifier leaves matched in `bindings`, everywhere except dots' right sides
@@ -105,7 +130,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   let openclCg = bindSym"opencl"
   let vulkanCg = bindSym"vulkan"
   let webgpuCg = bindSym"webgpu"
-  result = quote do:
+  return quote do:
     when typeof(`engine`).backendKind == bkMetal: `metalCg`(`node`)
     elif typeof(`engine`).backendKind == bkCuda: `cudaCg`(`node`)
     elif typeof(`engine`).backendKind == bkOpenCL: `openclCg`(`node`)
@@ -167,13 +192,13 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
   let bridgeNode = nnkStmtList.newTree(buildGlobalFn(kname, kernel, bridgeCall, valueTypes, formalTypes, valueNames))
   let grid = substituteIdents(gridN.copy(), bindings)
   let blk = substituteIdents(blkN.copy(), bindings)
-  let gridD = quote do: dim3(`grid`)
-  let blkD = quote do: dim3(`blk`)
+  let gridD = grid.newCall(bindSym"dim3")
+  let blkD = blk.newCall(bindSym"dim3")
 
   let bridgeSource = ident("crucibleBridgeSource" & kname)
   let bridgeN = bindSym"bridge"
 
-  result = quote do:
+  return quote do:
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `bridgeNode`)
       if `engine`.getArtifact() != `bridgeSource`:
@@ -200,39 +225,14 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   if schedule.kind == nnkStmtList:
     for a in schedule:
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"], "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
-      if $a[0] == "grid": gridN = a[1]
-      else: blkN = a[1]
+      if $a[0] == "grid":
+        gridN = a[1]
+      else:
+        blkN = a[1]
   let buildN = bindSym"crucibleBuild"
   result = nnkCall.newTree(buildN, engine, callNode[0], gridN, blkN)
   for i in 1 ..< callNode.len:
     result.add(callNode[i])
-
-type
-  DeviceFnSugar*[E: HwEngine] = object
-    ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
-    engine: E
-
-macro launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] =
-  ## Chevron form accessor for device-fn launches.
-  ## - Chevrons:
-  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
-  ## - Do form:
-  ##     `engine.launchDeviceFn <kernel-expr> do:`
-  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
-  ##       `blk = (32, 1)`
-  result = quote do: DeviceFnSugar[E](`engine`)
-
-type
-  DeviceFnProxy*[E: HwEngine] = object
-    ## Chevron intermediate, built by `<<`, consumed by `>>`. Same shape as `LaunchConfig[E]`,
-    ## a distinct type so `>>` can tell the device-fn and kernel launch paths apart.
-    engine: E
-    grid: Dim3
-    blk: Dim3
-
-proc `<<`*[E: HwEngine, G, B: int|tuple](r: DeviceFnSugar[E], cfg: tuple[grid: G, blk: B]): DeviceFnProxy[E] =
-  ## Builds the device-fn proxy from the chevron left half.
-  DeviceFnProxy[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
 
 macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
   ## Builds the device-fn launch from the chevron proxy.

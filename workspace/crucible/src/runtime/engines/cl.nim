@@ -68,7 +68,7 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, grid, blk: Dim3) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   let ctx = engine.ctx.ctx
