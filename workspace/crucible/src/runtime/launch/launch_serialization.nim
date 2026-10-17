@@ -109,9 +109,10 @@ proc packInto[T](dst: var openArray[byte], off: var int, v: T, backend: static B
   ## bool to 4 bytes (1 on CUDA).
   when T is object|tuple:
     when not isStaticArg(T):
+      let a = deviceLayout(T, backend).align
+      off = (off + a - 1) div a * a
       for f in fields(v):
         packInto(dst, off, f, backend)
-      let a = deviceLayout(T, backend).align
       off = (off + a - 1) div a * a
   elif T is array:
     let a = deviceLayout(T, backend).align

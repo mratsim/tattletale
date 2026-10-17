@@ -119,6 +119,27 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       bindArgs(c, TestHandle(1), (true,), collect, bkWGSL, false)
       doAssert c.blob[0 .. 3] == [byte 1, 0, 0, 0]
 
+  block:  # nested object packs at its deviceLayout-aligned offset
+      type
+        Inner = object
+          b: int32
+          c: int64
+        Outer = object
+          a: int32
+          inner: Inner
+      proc collect(c: var seq[byte], bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
+        if not viaBuffer:
+          c = newSeq[byte](len)
+          copyMem(c[0].addr, p, len)
+      var blobOut: seq[byte]
+      var o = Outer(a: 0x01020304'i32, inner: Inner(b: 0x11121314'i32, c: 0x090A0B0C0D0E0F10'i64))
+      bindArgs(blobOut, TestHandle(1), (o,), collect, bkMetal, false)
+      # Packed field offsets: a at 0, inner.b at 8, inner.c at 16
+      doAssert blobOut.len == 24
+      doAssert blobOut[0 .. 3] == [byte 4, 3, 2, 1]
+      doAssert blobOut[8 .. 11] == [byte 0x14, 0x13, 0x12, 0x11]
+      doAssert blobOut[16 .. 23] == [byte 0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09]
+
   block:  # launchArgCount matches the deliveries
       const n = launchArgCount(int32, tuple[a: Whole, b: int64], TestHandle, bkMetal)
       doAssert n == 3
