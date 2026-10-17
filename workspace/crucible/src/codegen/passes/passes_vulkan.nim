@@ -21,7 +21,6 @@ proc lowerPushConstantsImpl*(ctx: var GpuContext)
 proc registerVulkanPasses*(reg: var PassRegistry) =
   ## Register Vulkan-specific passes: SSBO/push-constant lowering, GLSL keyword rejection.
   # Explode before the SSBO/push-constant lowering below scans the params.
-  reg.registerExplodePointerStructParams()
   reg.register("lowerSsboParams", pkTransform, phaseMain,
     "Scans kernels, builds canonical SSBO list, normalizes param names",
     dependsOn = @[],

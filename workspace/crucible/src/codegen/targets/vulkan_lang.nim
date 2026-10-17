@@ -511,9 +511,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuTypeDef:
     if ast.tFields.anyIt(containsPtrFieldDeep(it.typ)):
-      # Pointer-bearing struct values have no GLSL representation, their uses
-      # die in the explodePointerStructParams pass and a survivor fails
-      # loudly on the unknown type name.
+      # Pointer-bearing struct values have no GLSL representation
       result = ""
     else:
       result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"

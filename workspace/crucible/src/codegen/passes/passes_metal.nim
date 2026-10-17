@@ -26,8 +26,7 @@ proc registerMetalPasses*(reg: var PassRegistry) =
   # The runtime path fills `genericInsts`, not `allFnTab`, so the keyword pass
   # above iterates nothing there. The printer's `checkReservedIdent` rejects
   # reserved identifiers at emission, guarding params, locals and function names.
-  # MSL kernels take exploded ptr/scalar/value params, never whole structs.
-  reg.registerExplodePointerStructParams()
+  # MSL kernel entry args cannot be pointer-bearing structs.
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
     "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
     dependsOn = @["emitFunctionSignatures"],

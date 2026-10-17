@@ -22,7 +22,6 @@ proc registerWgslPasses*(reg: var PassRegistry) =
       ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
   )
   # Explode before the passes below reshape pointer-bearing code.
-  reg.registerExplodePointerStructParams()
   reg.register("injectAddressOf", pkTransform, phaseMain,
     "Replaces storage-buffer idents with &ident in global fns",
     dependsOn = @[],
