@@ -51,7 +51,7 @@ proc exprGpuType(n: GpuAst): GpuType =
 proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   ## Build a map of function name → span params to split
   result = newTable[string, seq[SpanParam]]()
-  
+
   template scanFn(fn: GpuAst) =
     if fn.isNil or fn.kind != gpuProc:
       continue
@@ -98,14 +98,14 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
   if fnName.len == 0: return
   let spans = sigMap.getOrDefault(fnName)
   if spans.len == 0: return
-  
+
   var newParams: seq[GpuParam]
   var skipMask: seq[bool]
   skipMask.setLen(fn.pParams.len)
-  
+
   for s in spans:
     skipMask[s.paramIdx] = true
-  
+
   for idx, p in fn.pParams:
     if idx < skipMask.len and skipMask[idx]:
       # Find the span info for this param
@@ -129,7 +129,7 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
 
 proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
   ## Walk AST, rewriting span idents and adjusting call sites
-  
+
   case n.kind
   of gpuIdent:
     # Span-typed ident → ptr ident (same name, ptr type)
@@ -149,7 +149,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
     var fnName: string
     if n.cName.kind == gpuIdent:
       fnName = n.cName.symbol.name
-    
+
     # Handle builtin calls: len(span) → span_len
     if fnName == "len" or fnName.startsWith("len_"):
       if n.cArgs.len >= 1:
@@ -255,7 +255,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
           newArgs.add n.cArgs[argIdx]
         argIdx += 1
       n.cArgs = newArgs
-    
+
     # Recurse into args
     for child in mitems(n):
       child.rewriteNode(sigMap)
@@ -289,6 +289,75 @@ proc lowerSpans*(ctx: var GpuContext) =
   rewriteTab(ctx.allFnTab)
   rewriteTab(ctx.genericInsts)
   rewriteTab(ctx.fnTab)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Compile-time parameter pruning
+# ═══════════════════════════════════════════════════════════════════
+
+proc referencesIdent(n: GpuAst, name: string): bool =
+  ## True when the IR references the identifier `name` anywhere
+  if n.kind == gpuIdent and n.symbol.name == name:
+    return true
+  for child in n:
+    if child.referencesIdent(name):
+      return true
+
+proc eraseCallArgs(n: var GpuAst, callee: string, dropped: seq[int]) =
+  ## Removes the arguments at `dropped` positions from every call to `callee`
+  if n.kind == gpuCall and n.cName.symbol.name == callee:
+    var kept: seq[GpuAst]
+    for i, arg in n.cArgs:
+      if i notin dropped:
+        kept.add arg
+    n.cArgs = kept
+  for child in n.mitems:
+    child.eraseCallArgs(callee, dropped)
+
+proc pruneCompileTimeParams*(ctx: var GpuContext) =
+  ## Drops parameters with no runtime representation on the target:
+  ## - compile-time params: the type slot holds the compile-time argument
+  ##   (`gtCompileTimeValue`), sem inlined it into the body
+  ## - phantom-typed values matched through typeclass formals: an object
+  ##   with no fields (`Int[3]`), the value lives in the type parameters
+  ## Erases the matching call arguments.
+  var drops: Table[string, seq[int]]
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.kind != gpuProc: continue
+    var dropped: seq[int]
+    for i, p in fn.pParams:
+      if p.typ.kind == gtCompileTimeValue:
+        # the compile-time argument has no device representation
+        dropped.add i
+      elif p.typ.kind in {gtObject, gtGenericInst} and
+          (if p.typ.kind == gtObject: p.typ.oFields.len else: p.typ.gFields.len) == 0:
+        # phantom value: nothing to pass at runtime
+        dropped.add i
+    if dropped.len > 0:
+      drops[fn.pName.symbol.name] = dropped
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    for callee, dropped in drops:
+      fn.pBody.eraseCallArgs(callee, dropped)
+    if fn.pName.symbol.name in drops:
+      let dropped = drops[fn.pName.symbol.name]
+      var kept: seq[GpuParam]
+      for i, p in fn.pParams:
+        if i notin dropped:
+          kept.add p
+      fn.pParams = kept
+
+proc registerTypeSystemPasses*(reg: var PassRegistry) =
+  ## Passes that lower the Nim type system onto the target: compile-time
+  ## parameters have no representation there. Run before the legalizations.
+  reg.register(
+    name = "pruneCompileTimeParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
+    run = pruneCompileTimeParams
+  )
 
 proc registerLoweringPasses*(reg: var PassRegistry) =
   reg.register(

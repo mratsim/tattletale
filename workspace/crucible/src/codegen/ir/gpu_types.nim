@@ -64,7 +64,7 @@ type
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
     gtInvalid      # Can be returned to indicate a call to `nimToGpuType` failed to determine a type
-                   ## XXX: make this the default value and replace all `gtVoid` placeholders by it
+    gtCompileTimeValue  # the parameter's type slot holds the compile-time argument, not a type
 
 
   GpuTypeField* = object

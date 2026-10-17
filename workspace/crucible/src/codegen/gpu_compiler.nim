@@ -35,6 +35,7 @@ template registerCommonPasses*(reg: var PassRegistry) =
   ## Register passes common to all backends.
   reg.registerValidationPrePasses()
   reg.registerNormalizationPasses()
+  reg.registerTypeSystemPasses()
   reg.registerLegalizationPasses()
   reg.registerPreprocessingPasses()
   reg.registerOptimizationPasses()

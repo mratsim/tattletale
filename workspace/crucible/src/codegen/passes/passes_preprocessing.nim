@@ -246,6 +246,9 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     TypeDesc(kind: tdkUnresolved)
   of gtInvalid:
     TypeDesc(kind: tdkUnresolved)
+  of gtCompileTimeValue:
+    # the type slot holds the compile-time argument, there is no descriptor
+    TypeDesc(kind: tdkUnresolved)
 
 proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
   ## Pre-compute the type descriptor for a given IR node.

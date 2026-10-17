@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, hashes, strutils, tables]
+import std/[macros, hashes]
 import ../../codegen/gpu_compiler
 import ../engines_common
 import launch_kernel {.all.}
@@ -24,10 +24,6 @@ type
     grid: Dim3
     blk: Dim3
 
-  BridgeAccumulator = object
-    signature: seq[tuple[arg: string, argTy: NimNode]]
-    deviceFnCall: NimNode
-
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
@@ -36,55 +32,6 @@ type
 proc makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
   DeviceFnSugar[E](engine: engine)
 
-proc isPhantomType(t: NimNode): bool =
-  ## True when the type carries no runtime fields
-  case t.kind
-  of nnkObjectTy:
-    result = true
-    for field in t[^1]:
-      if field.kind in {nnkEmpty, nnkNilLit}: continue
-      if field.kind != nnkIdentDefs: return false
-      for i in 0 ..< field.len - 2:
-        if not isPhantomType(field[i]): return false
-  of nnkTupleTy:
-    result = true
-    for i in 0 ..< t.len:
-      if not isPhantomType(t[i]): return false
-  of nnkSym:
-    let impl = t.getImpl()
-    if impl.isNil or impl.kind != nnkTypeDef: return false
-    result = isPhantomType(impl[2])
-  of nnkBracketExpr:
-    result = isPhantomType(t[0])
-  else:
-    result = false
-
-proc needTempStorage(n: NimNode): bool =
-  case n.kind
-  of nnkVarTy:
-    error("launchDeviceFn: it is unsafe to capture a `var` parameter '" & repr(n) & "' by value")
-  of nnkStaticTy, nnkCharLit..nnkNilLit:
-    return false
-  else:
-    let t = n.getTypeInst()
-    if t.typeKind in {ntyTypeDesc, ntyStatic}:
-      return false
-    # no-runtime-field types bake
-    case t.kind
-    of nnkObjectTy:
-      for field in t[^1]:
-        if field.kind in {nnkEmpty, nnkNilLit}: continue
-        if field.kind != nnkIdentDefs: return true
-        for i in 0 ..< field.len - 2:
-          if not field[i].isPhantomType(): return true
-      return false
-    of nnkTupleTy:
-      for i in 0 ..< t.len:
-        if not t[i].isPhantomType(): return true
-      return false
-    else:
-      return true
-
 proc base58(h: int): string =
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   var x = uint64(h)
@@ -92,19 +39,6 @@ proc base58(h: int): string =
   while x > 0:
     result = alphabet[int(x mod 58)] & result
     x = x div 58
-
-proc declGlobalFn(name: string, acc: BridgeAccumulator): NimNode =
-  ## proc <name>(<signature>) {.global.} = <deviceFnCall>
-  var params = nnkFormalParams.newTree(newEmptyNode())
-  for (pname, ptype) in acc.signature:
-    params.add(nnkIdentDefs.newTree(ident(pname), ptype, newEmptyNode()))
-  result = nnkProcDef.newTree(
-    ident(name),
-    newEmptyNode(), newEmptyNode(),
-    params,
-    nnkPragma.newTree(ident"global"),
-    newEmptyNode(),
-    nnkStmtList.newTree(acc.deviceFnCall))
 
 macro bridge(engine: HwEngine, node: untyped): untyped =
   let metalCg = bindSym"metal"
@@ -119,44 +53,127 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
     elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`node`)
     else: `webgpuCg`(`node`)
 
-macro buildGlobalFn(engine: HwEngine, kernel: typed, gridN, blkN: untyped, values: varargs[typed]): untyped =
-  var acc = BridgeAccumulator(deviceFnCall: nnkCall.newTree(kernel))
-  var argsTuple = nnkTupleConstr.newTree()
-  var outputNode: NimNode = nil
+proc isCompileTime(ftype: NimNode): bool =
+  ftype.kind == nnkStaticTy or
+    (ftype.kind in {nnkCommand, nnkBracketExpr, nnkCall} and
+     $ftype[0] in ["static", "typedesc"])
 
-  for v in values:
-    if v.needTempStorage():
-      # env member: signature param, forwarded to deviceFnCall
-      let pname = "a" & $acc.signature.len
-      acc.signature.add((pname, v.getTypeInst()))
-      acc.deviceFnCall.add(ident(pname))
-      if outputNode.isNil:
-        outputNode = v
-      else:
-        argsTuple.add(v)
-    else: # constant-value, embedded in the global function
-      acc.deviceFnCall.add(v)
+proc hashNode(n: NimNode): Hash =
+  ## Structural hash of an AST node: kind, leaves by value, children by shape
+  result = hash(n.kind)
+  case n.kind
+  of nnkIdent, nnkSym:
+    result = result !& hash(n.strVal)
+  of nnkIntLit .. nnkUInt64Lit:
+    result = result !& hash(n.intVal)
+  of nnkFloatLit .. nnkFloat64Lit:
+    result = result !& hash(n.floatVal)
+  of nnkEmpty:
+    discard
+  else:
+    for child in n:
+      result = result !& hashNode(child)
+  result = !$result
 
-  doAssert not outputNode.isNil, "launchDeviceFn " & $kernel & ": the kernel needs a launch value formal as output"
+proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
+  ## ```
+  ##   kernel  = kern                                        (typed callee symbol)
+  ##   statics = [tiledMma(f32, f16, f16, 32, 32, 16)]       (raw, one per compile-time parameter)
+  ##   values  = [Int[3](), v.addr]                          (type-checked, one per runtime parameter)
+  ##     │
+  ##     │  zip against the kernel's parameters, in declaration order:
+  ##     │    compile-time parameter → its argument is written into the kernel call as-is
+  ##     │    runtime parameter     → a new kernel parameter, typed by its argument
+  ##     ▼
+  ##   proc kern_Xy3kP(x: Int[3], v: ptr float32) {.global.} =
+  ##     kern(tiledMma(f32, f16, f16, 32, 32, 16), x, v)
+  ##
+  let impl = kernel.getImpl()
+  impl.expectKind(nnkProcDef)
+  let formals = impl[3]
+  var formalNames: seq[NimNode]
+  var formalTypes: seq[NimNode]
+  for i in 1 ..< formals.len:
+    let f = formals[i]
+    for j in 0 ..< f.len - 2:
+      formalNames.add(f[j])
+      formalTypes.add(f[^2])
+  # identity: the callee, the compile-time values, the runtime parameter types
+  var h = hash($kernel)
+  var kcall = ident($kernel).newCall()
+  var params = nnkFormalParams.newTree(newEmptyNode())
+  var si = 0
+  var vi = 0
+  for i in 0 ..< formalTypes.len:
+    if isCompileTime(formalTypes[i]):
+      let v = statics[si]
+      si.inc
+      kcall.add(v)
+      h = h !& hashNode(v)
+    else:
+      let v = values[vi]
+      vi.inc
+      # fresh ident: the callee's parameter name nodes carry its scope binding
+      let pname = ident($formalNames[i])
+      params.add(nnkIdentDefs.newTree(pname, v.getTypeInst(), newEmptyNode()))
+      kcall.add(pname)
+      h = h !& hashNode(v.getTypeInst())
+  
+  doAssert vi > 0, "launchDeviceFn " & $kernel & ": the kernel needs a runtime parameter as output"
 
-  var accRepr = ""
-  for (pname, ptype) in acc.signature:
-    accRepr.add(pname & ":" & repr(ptype) & ";")
-  accRepr.add(repr(acc.deviceFnCall))
-  let name = $kernel & "_" & base58(hash(accRepr))
-  let bridgeNode = nnkStmtList.newTree(declGlobalFn(name, acc))
+  let procdef = nnkProcDef.newTree(
+    ident($kernel & "_" & base58(int(h))),
+    newEmptyNode(), newEmptyNode(),
+    params,
+    nnkPragma.newTree(ident"global"),
+    newEmptyNode(),
+    nnkStmtList.newTree(kcall))
+  return procdef
+
+macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN: untyped, values: varargs[typed]): untyped =
+  ## Builds the `{.global.}` proc for the kernel, ingests its lowered source
+  ## when it differs and launches it: the first value is the output.
+  let procdef = buildGlobalFn(kernel, statics, values)
+  let kname = newLit($procdef.name)
+  let bridgeN = bindSym"bridge"
+  let bridgeSource = ident("crucibleBridgeSource" & $procdef.name)
   let gridD = bindSym"dim3".newCall(gridN)
   let blkD = bindSym"dim3".newCall(blkN)
-
-  let bridgeSource = ident("crucibleBridgeSource" & name)
-  let bridgeN = bindSym"bridge"
-
-  return quote do:
+  let outputN = values[0]
+  var argsN = nnkTupleConstr.newTree()
+  for i in 1 ..< values.len:
+    argsN.add(values[i])
+  result = quote do:
     block:
-      const `bridgeSource` = `bridgeN`(`engine`, `bridgeNode`)
+      const `bridgeSource` = `bridgeN`(`engine`, `procdef`)
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
-      `engine`.launchKernelImpl(`name`, `outputNode`, `argsTuple`, `gridD`, `blkD`)
+      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`, `gridD`, `blkD`)
+
+macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
+  ## Resolves the device call against the kernel's parameters and launches it as a generated `{.global.}` proc.
+  let impl = kernel.getImpl()
+  let formals = impl[3]
+  var formalTypes: seq[NimNode]
+  for i in 1 ..< formals.len:
+    let f = formals[i]
+    for j in 0 ..< f.len - 2:
+      formalTypes.add(f[^2])
+  doAssert args.len == formalTypes.len,
+    "launchDeviceFn " & $kernel & ": " & $args.len & " args for " &
+    $formalTypes.len & " parameters"
+
+  var statics = nnkBracket.newTree()
+  var values: seq[NimNode]
+  for i, a in args:
+    if isCompileTime(formalTypes[i]):
+      statics.add(a)
+    else:
+      values.add(a)
+
+  result = bindSym"launchGlobalFn".newCall(engine, kernel, statics, gridN, blkN)
+  for v in values:
+    result.add(v)
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -188,7 +205,6 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   if callNode[^1].kind == nnkStmtList:
     schedule = callNode[^1]
     callNode = nnkCall.newTree(call[0 ..< call.len - 1])
-  doAssert schedule.isNil or schedule.kind == nnkStmtList, "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   if not schedule.isNil:
@@ -198,8 +214,7 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
         gridN = a[1]
       else:
         blkN = a[1]
-  let buildN = bindSym"buildGlobalFn"
-  result = nnkCall.newTree(buildN, engine, callNode[0], gridN, blkN)
+  result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN)
   for i in 1 ..< callNode.len:
     result.add(callNode[i])
 
@@ -208,8 +223,7 @@ macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  let buildN = bindSym"buildGlobalFn"
-  result = nnkCall.newTree(buildN,
+  result = bindSym"resolveDeviceCall".newCall(
     proxy.newDotExpr(ident"engine"), callNode[0],
     proxy.newDotExpr(ident"grid"),
     proxy.newDotExpr(ident"blk"))
