@@ -315,11 +315,8 @@ proc eraseCallArgs(n: var GpuAst, callee: string, dropped: seq[int]) =
     child.eraseCallArgs(callee, dropped)
 
 proc pruneCompileTimeParams*(ctx: var GpuContext) =
-  ## Drops parameters with no runtime representation on the target:
-  ## - compile-time params: the type slot holds the compile-time argument
-  ##   (`gtCompileTimeValue`), sem inlined it into the body
-  ## - phantom-typed values matched through typeclass formals: an object
-  ##   with no fields (`Int[3]`), the value lives in the type parameters
+  ## Drops parameters whose type has no runtime bytes: compile-time
+  ## arguments and phantoms, the value lives in the type
   ## Erases the matching call arguments.
   var drops: Table[string, seq[int]]
   for fnKey in ctx.allFnTab.keys:
@@ -327,12 +324,8 @@ proc pruneCompileTimeParams*(ctx: var GpuContext) =
     if fn.kind != gpuProc: continue
     var dropped: seq[int]
     for i, p in fn.pParams:
-      if p.typ.kind == gtCompileTimeValue:
-        # the compile-time argument has no device representation
-        dropped.add i
-      elif p.typ.kind in {gtObject, gtGenericInst} and
-          (if p.typ.kind == gtObject: p.typ.oFields.len else: p.typ.gFields.len) == 0:
-        # phantom value: nothing to pass at runtime
+      if size(p.typ) == 0:
+        # no runtime representation: compile-time args and phantoms
         dropped.add i
     if dropped.len > 0:
       drops[fn.pName.symbol.name] = dropped

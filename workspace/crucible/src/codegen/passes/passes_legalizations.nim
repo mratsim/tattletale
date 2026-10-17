@@ -685,6 +685,56 @@ proc unwrapBlockInDot(n: var GpuAst) =
   else:
     discard
 
+proc buildLeafConstr(t: GpuType, name: string): GpuAst =
+  result = GpuAst(kind: gpuObjConstr, ocType: t)
+  for f in t.structFields:
+    if size(f.typ) == 0:
+      result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
+    elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:
+      result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name), typ: f.typ)
+    else:
+      result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
+
+proc expandStructKernelParamsImpl(ctx: var GpuContext) =
+  ## Kernel entry args cannot be structs carrying pointers on Metal/Vulkan/WebGPU
+  ## Deconstruct body in kernel entry and reconstruct before device function calls
+  for _, fn in ctx.allFnTab.mpairs:
+    if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
+    var params: seq[GpuParam]
+    for p in fn.pParams:
+      if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
+        let leaves = p.typ.kernelParamLeaves(p.ident.ident())
+        for leaf in leaves:
+          let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
+          let space = if leaf.isBuffer: asDevice else: asRMEM
+          params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
+                              typ: leaf.typ, addressSpace: space)
+        let constr = buildLeafConstr(p.typ, p.ident.ident())
+        let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
+                           vType: p.typ, vInit: constr, vMutable: false,
+                           addressSpace: asRMEM)
+        doAssert fn.pBody.kind == gpuBlock, "expandStructKernelParams: kernel body is not a block"
+        fn.pBody.statements.insert(local, 0)
+      else:
+        params.add p
+    fn.pParams = params
+
+proc registerExpandStructKernelParams*(reg: var PassRegistry) =
+  ## Registers the `expandStructKernelParams` pass on `reg`.
+  ## Wiring contract:
+  ## - Metal only
+  ## - CUDA and OpenCL take structs carrying pointers natively, never wire
+  ## - Vulkan and WebGPU need a body rewrite instead: GLSL and WGSL storage
+  ##   cannot hold structs carrying pointers, not yet provided
+  reg.register(
+    name = "expandStructKernelParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
+    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
+    run = expandStructKernelParamsImpl
+  )
+
 proc registerLegalizationPasses*(reg: var PassRegistry) =
   ## Register passes that make the IR well-formed.
 

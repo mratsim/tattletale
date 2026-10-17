@@ -75,7 +75,7 @@ proc hashNode(n: NimNode): Hash =
       result = result !& hashNode(child)
   result = !$result
 
-proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
+proc buildGlobalFn*(kernel: NimNode, statics, values: NimNode): NimNode =
   ## ```
   ##   kernel  = kern                                        (typed callee symbol)
   ##   statics = [tiledMma(f32, f16, f16, 32, 32, 16)]       (raw, one per compile-time parameter)

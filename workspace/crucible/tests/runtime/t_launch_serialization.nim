@@ -64,7 +64,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert c.blob[16 ..< 24] == [byte 8, 0, 0, 0, 0, 0, 0, 0]
       doAssert c.blob[24 ..< 28] == [byte 0, 0, 0x20, 0x40]
 
-  block:  # buffer-bearing composites deliver one buffer per leaf
+  block:  # composites carrying buffers bind one buffer per leaf
       type C = object
         kinds: seq[bool]
       proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
