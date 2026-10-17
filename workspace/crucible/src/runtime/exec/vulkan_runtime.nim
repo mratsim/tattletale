@@ -43,6 +43,7 @@ type
     vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
 
+
 template check*(res: VkResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
   ## No exceptions as the public contract.
@@ -70,6 +71,7 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
 # ICD discovery, interface negotiation, and dispatch internally.
 # This matches the approach used by ash, vulkano, and all standard
 # Vulkan applications.
+
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   # macOS: dyld does not search /opt/homebrew/lib by default, so dlopen by
@@ -336,37 +338,6 @@ proc initVulkan*(): VulkanContext =
   )
   check cpcache(result.device, pcc.addr, nil, result.pipelineCache.addr)
 
-proc destroyContext*(ctx: var VulkanContext) =
-  ## Releases all Vulkan resources, nil-guarded single ownership check.
-  if ctx.instance == nil:
-    return
-  let L = ctx.vkLib
-  let vkDestroyPipelineCachePtr = cast[
-    proc(device: VkDevice, pipelineCache: VkPipelineCache,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineCache"))
-  let vkDestroyCommandPoolPtr = cast[
-    proc(device: VkDevice, commandPool: VkCommandPool,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyCommandPool"))
-  let vkDestroyDevicePtr = cast[
-    proc(device: VkDevice, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyDevice"))
-  let vkDestroyInstancePtr = cast[
-    proc(instance: VkInstance, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyInstance"))
-  if ctx.pipelineCache != nil and vkDestroyPipelineCachePtr != nil:
-    vkDestroyPipelineCachePtr(ctx.device, ctx.pipelineCache, nil)
-    ctx.pipelineCache = nil
-  if ctx.commandPool != nil and vkDestroyCommandPoolPtr != nil:
-    vkDestroyCommandPoolPtr(ctx.device, ctx.commandPool, nil)
-    ctx.commandPool = nil
-  if ctx.device != nil and vkDestroyDevicePtr != nil:
-    vkDestroyDevicePtr(ctx.device, nil)
-    ctx.device = nil
-  if ctx.instance != nil and vkDestroyInstancePtr != nil:
-    vkDestroyInstancePtr(ctx.instance, nil)
-    ctx.instance = nil
 
 # ═══════════════════════════════════════════════════════════════════════
 # Buffer management

@@ -19,14 +19,30 @@ type
     commands: Pcommand_queue
 
   OpenCLBuffer* = object
-    ctx: OpenCLContext
+    commands: Pcommand_queue
     size: int
     mem: Pmem
 
   OpenCLKernel* = object
-    ctx: OpenCLContext
+    commands: Pcommand_queue
     kernel: Pkernel
     program: Pprogram
+
+
+proc `=destroy`(ctx: var OpenCLContext) =
+  ## Releases the OpenCL context and command queue, nil-guarded against double teardown.
+  if ctx.context != nil:
+    discard releaseCommandQueue(ctx.commands)
+    discard releaseContext(ctx.context)
+    ctx.commands = nil
+    ctx.context = nil
+
+proc `=destroy`(k: var OpenCLKernel) =
+  ## Releases the kernel and its program, nil fields skip.
+  if k.kernel != nil:
+    discard releaseKernel(k.kernel)
+  if k.program != nil:
+    discard releaseProgram(k.program)
 
 template check*(res: TClResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
@@ -100,17 +116,9 @@ proc initOpenCL*(): OpenCLContext =
       break
   result = initOpenCL(dev)
 
-proc destroyContext*(ctx: var OpenCLContext) =
-  ## Nil-guarded single ownership check.
-  if ctx.context != nil:
-    discard releaseCommandQueue(ctx.commands)
-    discard releaseContext(ctx.context)
-    ctx.commands = nil
-    ctx.context = nil
-
 proc allocBuffer*(ctx: OpenCLContext, size: int): OpenCLBuffer =
   var status: TClResult
-  result.ctx = ctx
+  result.commands = ctx.commands
   result.size = size
   result.mem = createBuffer(ctx.context, MEM_READ_WRITE, cl_size_t(size), nil, status.addr)
   check status
@@ -121,7 +129,7 @@ proc dealloc*(buffer: var OpenCLBuffer) =
 proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   if size != buffer.size:
     quit("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
-  check buffer.ctx.commands.enqueueWriteBuffer(
+  check buffer.commands.enqueueWriteBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
@@ -129,12 +137,12 @@ proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   ## Raw readback into a caller-provided buffer (used by the engines).
   if size > buffer.size:
     quit("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
-  check buffer.ctx.commands.enqueueReadBuffer(
+  check buffer.commands.enqueueReadBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
-  result.ctx = ctx
+  result.commands = ctx.commands
   let strings = allocCStringArray([source])
   defer: deallocCStringArray(strings)
 
@@ -163,10 +171,6 @@ proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKer
   result.kernel = createKernel(program, name.cstring, status.addr)
   check status
 
-proc destroyKernel*(kernel: var OpenCLKernel) =
-  discard releaseKernel(kernel.kernel)
-  discard releaseProgram(kernel.program)
-
 proc setArg*(kernel: var OpenCLKernel, index: int, buffer: OpenCLBuffer) =
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(sizeof(Pmem)), buffer.mem.unsafeAddr)
 
@@ -177,7 +181,7 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
     quit("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
 
   check enqueueNDRangeKernel(
-    kernel.ctx.commands,
+    kernel.commands,
     kernel.kernel,
     cl_uint(globalWorkSize.len),
     nil,
@@ -185,7 +189,7 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
     unsafeAddr localWorkSize[0],
     0, nil, nil
   )
-  check finish(kernel.ctx.commands)
+  check finish(kernel.commands)
 
 proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
   ## Bind a scalar kernel argument by value (e.g. alpha/beta coefficients).

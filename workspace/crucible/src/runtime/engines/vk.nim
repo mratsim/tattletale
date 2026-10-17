@@ -21,7 +21,7 @@ export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   VulkanCtx = object
-    ## RAII value wrapper, `=destroy` fires when the engine ref dies.
+    ## RAII value wrapper, `=destroy` releases the device resources when the engine ref dies.
     ctx: VulkanContext
 
   VulkanCaches = object
@@ -47,7 +47,30 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var VulkanCtx) =
-  destroyContext(c.ctx)
+  ## Releases the Vulkan resources, nil-guarded against double teardown.
+  if c.ctx.instance == nil:
+    return
+  let L = c.ctx.vkLib
+  let vkDestroyPipelineCachePtr = cast[proc(device: VkDevice, pipelineCache: VkPipelineCache, pAllocator: pointer) {.cdecl.}](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyPipelineCache"))
+  let vkDestroyCommandPoolPtr = cast[proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyCommandPool"))
+  let vkDestroyDevicePtr = cast[
+    proc(device: VkDevice, pAllocator: pointer) {.cdecl.}
+  ](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyDevice"))
+  let vkDestroyInstancePtr = cast[
+    proc(instance: VkInstance, pAllocator: pointer) {.cdecl.}
+  ](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyInstance"))
+  if c.ctx.pipelineCache != nil and vkDestroyPipelineCachePtr != nil:
+    vkDestroyPipelineCachePtr(c.ctx.device, c.ctx.pipelineCache, nil)
+    c.ctx.pipelineCache = nil
+  if c.ctx.commandPool != nil and vkDestroyCommandPoolPtr != nil:
+    vkDestroyCommandPoolPtr(c.ctx.device, c.ctx.commandPool, nil)
+    c.ctx.commandPool = nil
+  if c.ctx.device != nil and vkDestroyDevicePtr != nil:
+    vkDestroyDevicePtr(c.ctx.device, nil)
+    c.ctx.device = nil
+  if c.ctx.instance != nil and vkDestroyInstancePtr != nil:
+    vkDestroyInstancePtr(c.ctx.instance, nil)
+    c.ctx.instance = nil
 
 proc `=destroy`(c: var VulkanCaches) =
   for p in c.pipelineCache.mvalues:

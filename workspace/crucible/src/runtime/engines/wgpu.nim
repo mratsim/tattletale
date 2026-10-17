@@ -20,7 +20,7 @@ export wgpu_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   WgpuCtx = object
-    ## RAII value wrapper, `=destroy` fires when the engine ref dies.
+    ## RAII value wrapper, `=destroy` releases the device resources when the engine ref dies.
     ctx: WgpuContext
 
   WgpuPipelineCache = object
@@ -50,7 +50,14 @@ proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var WgpuCtx) =
-  destroyContext(c.ctx)
+  ## Releases the wgpu resources, nil-guarded against double teardown.
+  if c.ctx.instance != nil:
+    wgpuDeviceRelease(c.ctx.device)
+    wgpuAdapterRelease(c.ctx.adapter)
+    wgpuInstanceRelease(c.ctx.instance)
+    c.ctx.device = nil
+    c.ctx.adapter = nil
+    c.ctx.instance = nil
 
 proc `=destroy`(cache: var WgpuCache) =
   ## Releases the shader module and cached pipelines while the device context is still alive.

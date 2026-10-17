@@ -20,7 +20,7 @@ export opencl_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   OpenCLCtx = object
-    ## RAII value wrapper, `=destroy` fires when the engine ref dies.
+    ## RAII value wrapper, the context destructor releases the device resources when the engine ref dies.
     ctx: OpenCLContext
 
   OpenCLKernelCache = object
@@ -39,13 +39,6 @@ proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
-proc `=destroy`(c: var OpenCLCtx) =
-  destroyContext(c.ctx)
-
-proc `=destroy`(cache: var OpenCLKernelCache) =
-  for _, kern in cache.kernels.mpairs:
-    kern.destroyKernel()
-
 proc newOpenCLEngine(): OpenCLEngine =
   OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()))
 
@@ -58,9 +51,7 @@ proc ingest*(engine: OpenCLEngine, source: string) =
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"
-  for _, kern in engine.kernelCache.kernels.mpairs:
-    kern.destroyKernel()
-  engine.kernelCache.kernels.clear()
+  engine.kernelCache.kernels = initTable[string, OpenCLKernel]()
   engine.source = source
 
 proc getArtifact*(engine: OpenCLEngine): string =
@@ -87,15 +78,17 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
   # a work-group of exactly 32 work-items, mma.sync is warp-synchronous.
   if kernel notin engine.kernelCache.kernels:
     engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
-  var kern = engine.kernelCache.kernels[kernel]
+  # pointer into the cache: the kernel owns its resources, a value copy's
+  # destructor would release them under the cache's feet
+  let kern = engine.kernelCache.kernels.addr[][kernel].addr
 
   type SinkCtx = object
-    kern: OpenCLKernel
+    kern: ptr OpenCLKernel
   proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: OpenCLBuffer, idx: int, p: pointer, len: int) {.nimcall.} =
     if isBuffer:
-      ctx.kern.setArg(idx, h)
+      ctx.kern[].setArg(idx, h)
     else:
-      ctx.kern.setArg(idx, len, p)
+      ctx.kern[].setArg(idx, len, p)
   var dctx = SinkCtx(kern: kern)
   bindArgs(dctx, bkOpenCL, output, args, false, sinkArg)
 
@@ -104,7 +97,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
                     cl_size_t(cfg.grid.y * cfg.blk.y),
                     cl_size_t(cfg.grid.z * cfg.blk.z)]
   let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
-  kern.runKernel(globalSize, localSize)
+  kern[].runKernel(globalSize, localSize)
 
 proc allocDevice*(engine: OpenCLEngine, n: int): OpenCLBuffer =
   engine.ctx.ctx.allocBuffer(n)
