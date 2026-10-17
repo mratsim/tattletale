@@ -41,7 +41,7 @@ type
     ## All GPU resources release when the engine dies.
     source: string
     ctx: WgpuCtx
-    cache: WgpuCache   # after ctx: released before ctx shutdown
+    cache: WgpuCache   # after ctx: released before the context destroy
     bakedBlk: Dim3   # workgroup size baked into the shader at ingest
 
 proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
@@ -50,8 +50,7 @@ proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var WgpuCtx) =
-  if c.ctx.instance != nil:
-    c.ctx.shutdown()
+  destroyContext(c.ctx)
 
 proc `=destroy`(cache: var WgpuCache) =
   ## Releases the shader module and cached pipelines while the device context is still alive.
@@ -72,15 +71,14 @@ proc newWgpuEngine(): WgpuEngine =
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
-template check*(status: WGPUBufferMapAsyncStatus, quitOnFailure = true) =
-  ## Unified error policy: stacktrace + stderr + quit(1) unless `quitOnFailure = false`.
-  ## A template so instantiationInfo() reports the caller's location.
+template check*(status: WGPUBufferMapAsyncStatus) =
+  ## Error policy: stacktrace, stderr, exit 1. A template so instantiationInfo()
+  ## reports the caller's location.
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
     writeStackTrace()
     stderr.write($instantiationInfo() & " exited with error: WGPUBufferMapAsyncStatus " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    quit 1
 
 proc ingest*(engine: WgpuEngine, source: string) =
   ## Stores the WGSL source and builds the shader module, re-entrant (a new artifact replaces the old, cached pipelines are invalidated).

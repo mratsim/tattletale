@@ -47,8 +47,7 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var VulkanCtx) =
-  if c.ctx.instance != nil:
-    c.ctx.shutdown()
+  destroyContext(c.ctx)
 
 proc `=destroy`(c: var VulkanCaches) =
   for p in c.pipelineCache.mvalues:

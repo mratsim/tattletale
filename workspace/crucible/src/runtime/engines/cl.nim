@@ -32,7 +32,7 @@ type
     ## The context and cached kernels release when the engine dies.
     source: string
     ctx: OpenCLCtx
-    kernelCache: OpenCLKernelCache   # after ctx: released before ctx shutdown
+    kernelCache: OpenCLKernelCache   # after ctx: released before the context destroy
 
 proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 
@@ -40,7 +40,7 @@ proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc `=destroy`(c: var OpenCLCtx) =
-  c.ctx.shutdown()   # shutdown is idempotent (nil-guarded)
+  destroyContext(c.ctx)
 
 proc `=destroy`(cache: var OpenCLKernelCache) =
   for _, kern in cache.kernels.mpairs:

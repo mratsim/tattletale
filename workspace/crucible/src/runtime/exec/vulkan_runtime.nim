@@ -336,8 +336,8 @@ proc initVulkan*(): VulkanContext =
   )
   check cpcache(result.device, pcc.addr, nil, result.pipelineCache.addr)
 
-proc shutdown*(ctx: var VulkanContext) =
-  ## Idempotent: safe to call multiple times (manual shutdown + =destroy).
+proc destroyContext*(ctx: var VulkanContext) =
+  ## Releases all Vulkan resources, nil-guarded single ownership check.
   if ctx.instance == nil:
     return
   let L = ctx.vkLib

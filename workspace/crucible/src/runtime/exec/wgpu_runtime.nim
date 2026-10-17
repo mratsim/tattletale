@@ -175,8 +175,8 @@ proc initWgpu*(): WgpuContext =
     device: dd.device,
     queue: queue
   )
-proc shutdown*(ctx: var WgpuContext) =
-  ## Releases all wgpu resources. Idempotent, the engine's `=destroy` calls it.
+proc destroyContext*(ctx: var WgpuContext) =
+  ## Releases all wgpu resources, nil-guarded single ownership check.
   if ctx.instance != nil:
     wgpuDeviceRelease(ctx.device)
     wgpuAdapterRelease(ctx.adapter)

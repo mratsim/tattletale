@@ -36,7 +36,7 @@ type
     ## on one GPU. All Objective-C resources release when the engine dies.
     source: string
     ctx: MetalDeviceCtx
-    cache: MetalCache   # after ctx: released before ctx shutdown
+    cache: MetalCache   # after ctx: released before the context destroy
 
 proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
 
@@ -157,12 +157,6 @@ when defined(macosx):
       if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
         failLoud("Metal run: blk must be ≥ 1 per axis, got " &
                  $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
-      # Per-axis cap before the product. Three ≤ 1024 axes cannot overflow,
-      # so a wrapped product cannot pass the 1024-thread guard.
-      if cfg.blk.x > 1024 or cfg.blk.y > 1024 or cfg.blk.z > 1024:
-        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-                 $cfg.blk.z & " has an axis above 1024, exceeds the Apple " &
-                 "Silicon maximum of 1024 threads per threadgroup")
       let threadsPerThreadgroup = cfg.blk.x * cfg.blk.y * cfg.blk.z
       if threadsPerThreadgroup > 1024:
         failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &

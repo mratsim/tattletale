@@ -100,8 +100,8 @@ proc initOpenCL*(): OpenCLContext =
       break
   result = initOpenCL(dev)
 
-proc shutdown*(ctx: var OpenCLContext) =
-  ## Idempotent: safe to call multiple times (manual shutdown + =destroy).
+proc destroyContext*(ctx: var OpenCLContext) =
+  ## Nil-guarded single ownership check.
   if ctx.context != nil:
     discard releaseCommandQueue(ctx.commands)
     discard releaseContext(ctx.context)

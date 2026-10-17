@@ -59,10 +59,6 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
     else:
       argsNode = rest[0]
       cfgNode = rest[1]
-  of 3:
-    argsNode = rest[0]
-    cfgNode = rest[1]
-    schedule = rest[2]
   else:
     error "launchKernel takes (kernel, output, args[, cfg][, do-schedule]), got " & $(rest.len + 3) & " args"
   doAssert cfgNode.isNil or schedule.isNil,
