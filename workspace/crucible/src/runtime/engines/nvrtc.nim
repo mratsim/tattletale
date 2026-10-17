@@ -140,6 +140,27 @@ proc load(nvrtc: var NVRTC) =
   nvrtc.moduleLoaded = true
 
 
+type SerializationCtx[n: static int] = object
+  addrs: array[n, pointer]
+  hvals: array[n, CUdeviceptr]
+  bytes: array[n, seq[byte]]
+
+proc serializer[n: static int](ctx: var SerializationCtx[n], bufferHandle: CUdeviceptr,
+    p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
+  if viaBuffer:
+    ctx.hvals[argIdx] = bufferHandle
+    ctx.addrs[argIdx] = ctx.hvals[argIdx].addr
+  else:
+    ctx.bytes[argIdx] = newSeq[byte](len)
+    if len > 0:
+      copyMem(ctx.bytes[argIdx][0].addr, p, len)
+    ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
+
+proc cudaBindArgs(output: CUdeviceptr, args: tuple): auto =
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  result = SerializationCtx[n]()
+  bindArgs(result, output, args, serializer[n], bkCuda, false)
+
 proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
@@ -156,21 +177,7 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, 
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
-
-  type SerializationCtx = object
-    addrs: array[n, pointer]
-    hvals: array[n, CUdeviceptr]
-
-  proc serializer(ctx: var SerializationCtx, bufferHandle: CUdeviceptr, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-    if viaBuffer:
-      ctx.hvals[argIdx] = bufferHandle
-      ctx.addrs[argIdx] = ctx.hvals[argIdx].addr
-    else:
-      ctx.addrs[argIdx] = p
-      
-  var dctx = SerializationCtx()
-  bindArgs(dctx, output, args, serializer, bkCuda, false)
+  let dctx = cudaBindArgs(output, args)
 
   check cuLaunchKernel(
     engine.nvrtc.kernel,
