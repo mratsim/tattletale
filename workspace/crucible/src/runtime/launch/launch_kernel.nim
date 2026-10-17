@@ -66,7 +66,7 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
   result = quote do:
     `engine`.launchKernelImpl(`kernel`, `output`, `argsNode`, `gridN`, `blkN`)
 
-proc `<<`*[E, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchConfig[E] =
+proc `<<`*[E: HwEngine, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchConfig[E] =
   ## Builds the launch config from the chevron left half.
   LaunchConfig[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
 
