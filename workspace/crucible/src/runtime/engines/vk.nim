@@ -12,8 +12,8 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
-import ../chevrons
-import ../kernel_args
+import ../launch_kernel
+import ../launch_common
 
 export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
@@ -157,9 +157,11 @@ proc parseEntryPoint(glsl: string): string =
 
 
 proc launchKernel*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
-  ## Runs `kernel` on the engine's device, building the pipeline on first use.
-  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  ## blk must match the shader's baked workgroup size, plain run dispatches it.
+  ## Runs `kernel` on the engine's device, building the pipeline on first use:
+  ## - `output` receives the kernel's result, `args` bind positionally
+  ## - `cfg` carries the launch geometry, `blk` must match the shader's baked workgroup size
+  ## - a plain run dispatches (1, 1)
+  ## - example: engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   var vctx = engine.ctx.ctx
 
   # blk is shader-baked (local_size_xyz), a default cfg dispatches the baked size,

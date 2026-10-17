@@ -345,6 +345,8 @@ BANNED = [
      lambda l: l.rstrip().endswith(":"),
      "name the thing directly, the item, the preceding entries, or restate the mechanism "
      "(a colon-terminated lead-in announcing the adjacent example is exempt)"),
+    (r"\blands? at\b|\bsits? at\b", None,
+     "state the offset or position directly, or restate the layout"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,

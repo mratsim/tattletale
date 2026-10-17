@@ -7,20 +7,16 @@
 
 ## Wrap-and-run: launch a device function through the chevron.
 
-import std/[macros, macrocache, algorithm, hashes, strutils, tables]
+import std/[macros, hashes, strutils, tables]
 import ../codegen/gpu_compiler
-import chevrons {.all.}
+import launch_kernel {.all.}
+import launch_common {.all.}
 import engines
 
-export chevrons
-
-const
-  BridgeDefs = CacheTable"crucible.launchDeviceFn.bridges"
-    # `{.global.}` bridge proc per kernel launch shape, built on first launch
+export launch_kernel
 
 proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
-  # Replaces identifier leaves matched in `bindings`, recursing everywhere
-  # except dots' right sides (`a.b` substitutes `a` only)
+  # Replaces identifier leaves matched in `bindings`, everywhere except dots' right sides
   case n.kind
   of nnkIdent, nnkSym:
     let key = $n
@@ -35,10 +31,10 @@ proc substituteIdents(n: NimNode, bindings: Table[string, NimNode]): NimNode =
       r.add(substituteIdents(child, bindings))
     r
 
-proc isStaticFormal(f: NimNode): bool =
-  let ptype = f[^2]
-  ptype.kind == nnkStaticTy or
-    (ptype.kind == nnkCommand and $ptype[0] == "static")
+proc isStaticFormalType(t: NimNode): bool =
+  ## True when a formal's declared type is `static T`: such formals bake the call-site expression into the bridge body
+  t.kind == nnkStaticTy or
+    (t.kind == nnkCommand and $t[0] == "static")
 
 proc isBindManyArg(t: NimNode): bool =
   ## True when the formal type is a `distinct` typeclass, such formals bind by value type
@@ -46,22 +42,50 @@ proc isBindManyArg(t: NimNode): bool =
   if t.kind == nnkSym and t.getTypeInst().kind == nnkDistinctTy: return true
   return false
 
-proc buildGlobalFn(kname: string, kernel, statics: NimNode,
-                   valueTypes, formalTypes: seq[NimNode],
-                   valueNames: seq[string]): NimNode =
-  # Builds the `{.global.}` bridge proc, the call's value args verbatim:
-  #   proc <kname>(<args>) {.global.} = <kernel>(<statics>, <args>)
-  # The codegen lowers the formals, the binder binds the same values.
+proc typeIsPhantom(t: NimNode): bool
+
+proc fieldsArePhantom(fields: NimNode): bool =
+  ## True when every field of an object recList or tuple body is phantom
+  for field in fields:
+    # an empty body arrives as a nil placeholder, no fields, phantom
+    if field.kind in {nnkEmpty, nnkNilLit}: continue
+    # a recCase carries a runtime discriminant, never phantom
+    if field.kind != nnkIdentDefs: return false
+    for i in 0 ..< field.len - 2:
+      if not typeIsPhantom(field[i]): return false
+  result = true
+
+proc typeIsPhantom(t: NimNode): bool =
+  ## True when the type carries no runtime fields, its value lives in the type:
+  ## empty phantom objects like `Phantom[8]` or ceramic's `Int[V]`.
+  ## Bake decision predicate for formals. Instantiated generics resolve through `getImpl`.
+  case t.kind
+  of nnkBracketExpr:
+    result = typeIsPhantom(t[0])
+  of nnkSym:
+    let impl = t.getImpl()
+    if impl.isNil or impl.kind != nnkTypeDef: return false
+    let body = impl[2]
+    case body.kind
+    of nnkObjectTy: result = fieldsArePhantom(body[^1])
+    of nnkTupleTy:  result = fieldsArePhantom(body)
+    of nnkBracketExpr, nnkSym:
+      # a type alias whose body is the generic instantiation or another alias
+      result = typeIsPhantom(body)
+    else: result = false
+  else: result = false
+
+proc buildGlobalFn(kname: string, kernel, bridgeCall: NimNode, valueTypes, formalTypes: seq[NimNode], valueNames: seq[string]): NimNode =
+  # Builds the `{.global.}` bridge proc, the call's value formals verbatim:
+  #   proc <kname>(<value formals>) {.global.} = <bridgeCall>
+  # `bridgeCall` carries the kernel call in the kernel's formal order, baked args inline, env args by name.
+  # The codegen lowers the formals, the binder binds the same ones.
   var params = nnkFormalParams.newTree(newEmptyNode())
-  var bridgeCall = nnkCall.newTree(kernel)
-  for s in statics:
-    bridgeCall.add(s)
   for i, vtype in valueTypes:
     let argType = if i < formalTypes.len and not isBindManyArg(formalTypes[i]):
                     formalTypes[i]
                   else: vtype
     params.add(nnkIdentDefs.newTree(ident(valueNames[i]), argType, newEmptyNode()))
-    bridgeCall.add(ident(valueNames[i]))
   let body = nnkStmtList.newTree(bridgeCall)
 
   result = nnkProcDef.newTree(
@@ -72,124 +96,97 @@ proc buildGlobalFn(kname: string, kernel, statics: NimNode,
     newEmptyNode(),
     body)
 
-macro crucibleBuild(engine: HwEngine, kernel: typed, statics, formals, formalTys: untyped,
-                    gridN, blkN: untyped, values: varargs[typed]): untyped =
-  # Bridge construction and launch, behind `launchDeviceFn`:
-  #
-  # - the kernel lowers into a `{.global.}` bridge on first launch,
-  #   one bridge per launch shape
-  # - the engine ingests the bridge's source when its artifact differs
-  # - the launch values pass whole, the first one is the kernel's output
-  # - static args bake into the bridge, they never cross the launch boundary,
-  #   the backend context lives inside the bridge only
-  var valueNames: seq[string] = @[]
-  var valueTypes: seq[NimNode] = @[]
-  var formalTypeNodes: seq[NimNode] = @[]
-  for f in formals:
-    valueNames.add($f)
-  for v in values:
-    valueTypes.add(v.getTypeInst())
-  for t in formalTys:
-    formalTypeNodes.add(t)
-
-  var staticRepr = ""
-  for s in statics:
-    staticRepr.add(repr(s))
-  var typeRepr = ""
-  for t in valueTypes:
-    typeRepr.add(repr(t))
-  # the bridge bakes the value types in, the cache key carries them
-  # negative hashes contain a `-` which MSL rejects in identifiers
-  let kname = ($kernel & "_" & $hash(staticRepr & "|" & typeRepr)).replace("-", "n")
-  if not BridgeDefs.hasKey(kname):
-    let built = buildGlobalFn(kname, kernel, statics, valueTypes, formalTypeNodes, valueNames)
-    BridgeDefs[kname] = nnkStmtList.newTree(built)
-
-  var bindings = initTable[string, NimNode]()
-  for i, name in valueNames:
-    bindings[name] = values[i]
-  let grid = substituteIdents(gridN.copy(), bindings)
-  let blk = substituteIdents(blkN.copy(), bindings)
-
-  var argsTuple = nnkTupleConstr.newTree()
-  for i in 1 ..< values.len:
-    argsTuple.add(values[i])
-  let outputNode = values[0]
-
-  let bridgeSource = ident("crucibleBridgeSource" & kname)
+macro bridge(engine: HwEngine, node: untyped): untyped =
+  ## Backend dispatch for the bridge source: emits the when/elif chain over
+  ## the engine backend kind, calling the backend's lowering macro.
+  ## `node` is untyped, not NimNode: a typed param would sem the bridge AST before it reaches the backend macros.
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let vulkanCg = bindSym"vulkan"
   let webgpuCg = bindSym"webgpu"
-  let bridgeNode = BridgeDefs[kname].copy()
-
   result = quote do:
-    when not declared(`bridgeSource`):
-      const `bridgeSource` = when typeof(`engine`).backendKind == bkMetal: `metalCg`(`bridgeNode`)
-                           elif typeof(`engine`).backendKind == bkCuda: `cudaCg`(`bridgeNode`)
-                           elif typeof(`engine`).backendKind == bkOpenCL: `openclCg`(`bridgeNode`)
-                           elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`bridgeNode`)
-                           elif typeof(`engine`).backendKind == bkWGSL: `webgpuCg`(`bridgeNode`)
-                           else: {.error: "launchDeviceFn: no lowering for this engine".}
-    block:
-      if `engine`.getArtifact() != `bridgeSource`:
-        `engine`.ingest(`bridgeSource`)
-      `engine`.launchKernel(`kname`, `outputNode`, `argsTuple`,
-                   LaunchConfig(grid: dim3(`grid`), blk: dim3(`blk`)))
+    when typeof(`engine`).backendKind == bkMetal: `metalCg`(`node`)
+    elif typeof(`engine`).backendKind == bkCuda: `cudaCg`(`node`)
+    elif typeof(`engine`).backendKind == bkOpenCL: `openclCg`(`node`)
+    elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`node`)
+    elif typeof(`engine`).backendKind == bkWGSL: `webgpuCg`(`node`)
+    else: {.error: "launchDeviceFn: no lowering for this engine".}
 
-macro crucibleSplit(engine: HwEngine, kernel: typed, call, gridN, blkN: untyped): untyped =
-  # Static/value arg split, behind `launchDeviceFn`:
-  #
-  # - the kernel symbol resolves alone, its impl gives the formal list and which formals are static, the launch args stay raw
-  # - static args pass to the bridge builder raw, the backend context lives inside the bridge only
-  # - value args pass positionally
-  doAssert call.kind == nnkCall,
-    "launchDeviceFn: expected fn(args...), got " & call.repr
+macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, values: varargs[typed]): untyped =
+  ## Bridge construction and launch behind `launchDeviceFn`:
+  ## - one walk over the kernel formals, the launch values matched positionally
+  ## - `static T` formals and no-runtime-field types bake the call-site expression
+  ##   into the bridge body, every other formal is an env member, literal included
+  ## - the bridge lowers into a `{.global.}` proc, one per (kernel, baked args, env value types)
+  ## - the first launch value is the kernel's output, the engine ingests the artifact
   let impl = kernel.getImpl()
-  doAssert impl.kind in {nnkProcDef, nnkFuncDef},
-    "launchDeviceFn " & $kernel & ": the kernel must be a proc or func"
+  doAssert impl.kind in {nnkProcDef, nnkFuncDef}, "launchDeviceFn " & $kernel & ": the kernel must be a proc or func"
 
-  var staticArgs: seq[NimNode] = @[]
-  var valueArgs: seq[NimNode] = @[]
-  var formalNames: seq[NimNode] = @[]
-  var formalTypes: seq[NimNode] = @[]
+  var
+    staticRepr = ""
+    valueNames: seq[string] = @[]
+    valueTypes: seq[NimNode] = @[]
+    formalTypes: seq[NimNode] = @[]
+    bindings = initTable[string, NimNode]()
+    bridgeCall = nnkCall.newTree(kernel)
+    argsTuple = nnkTupleConstr.newTree()
+    outputNode: NimNode = nil
   var si = 0
   for i in 1 ..< impl[3].len:
     let f = impl[3][i]
-    let isStatic = isStaticFormal(f)
+    let ftype = f[^2]
+    let bakes = isStaticFormalType(ftype)
     for j in 0 ..< f.len - 2:
-      doAssert call.len > 1 + si,
-        "launchDeviceFn " & $kernel & ": " & $(call.len - 1) & " args for " &
-        $si & " formals so far"
-      if isStatic:
-        staticArgs.add(call[1 + si])
+      doAssert si < values.len, "launchDeviceFn " & $kernel & ": " & $si & " formals but only " & $values.len & " launch values"
+      if bakes or typeIsPhantom(values[si].getTypeInst()):
+        # baked: the call-site expression lands in the bridge body, no bridge param
+        staticRepr.add(repr(values[si]))
+        bridgeCall.add(values[si])
       else:
-        valueArgs.add(call[1 + si])
-        formalNames.add(f[j])
-        formalTypes.add(f[^2])
+        # env member: bridge param + launch value, literal included
+        let name = $f[j]
+        valueNames.add(name)
+        valueTypes.add(values[si].getTypeInst())
+        formalTypes.add(ftype)
+        bindings[name] = values[si]
+        if outputNode.isNil:
+          outputNode = values[si]
+        else:
+          argsTuple.add(values[si])
+        bridgeCall.add(ident(name))
       inc si
-  doAssert call.len - 1 == si,
-    "launchDeviceFn " & $kernel & ": " & $(call.len - 1) & " args for " &
-    $si & " formals"
+  doAssert values.len == si, "launchDeviceFn " & $kernel & ": " & $values.len & " args for " & $si & " formals"
+  doAssert not outputNode.isNil, "launchDeviceFn " & $kernel & ": the kernel needs a launch value formal as output"
 
-  let statics = nnkBracket.newTree(staticArgs)
-  let formals = nnkBracket.newTree(formalNames)
-  let formalTys = nnkBracket.newTree(formalTypes)
-  let buildN = bindSym"crucibleBuild"
-  result = nnkCall.newTree(buildN, engine, kernel, statics, formals, formalTys, gridN, blkN)
-  for a in valueArgs:
-    result.add(a)
+  var typeRepr = ""
+  for t in valueTypes: typeRepr.add(repr(t))
+  # the bridge bakes the value types in, the name carries them
+  # negative hashes contain a `-` which MSL rejects in identifiers
+  let kname = ($kernel & "_" & $hash(staticRepr & "|" & typeRepr)).replace("-", "n")
+  let bridgeNode = nnkStmtList.newTree(buildGlobalFn(kname, kernel, bridgeCall, valueTypes, formalTypes, valueNames))
+  let grid = substituteIdents(gridN.copy(), bindings)
+  let blk = substituteIdents(blkN.copy(), bindings)
+  let gridD = toDim3(grid)
+  let blkD = toDim3(blk)
+
+  let bridgeSource = ident("crucibleBridgeSource" & kname)
+  let bridgeN = bindSym"bridge"
+
+  result = quote do:
+    block:
+      const `bridgeSource` = `bridgeN`(`engine`, `bridgeNode`)
+      if `engine`.getArtifact() != `bridgeSource`:
+        `engine`.ingest(`bridgeSource`)
+      `engine`.launchKernel(`kname`, `outputNode`, `argsTuple`,
+                   LaunchConfig(grid: `gridD`, blk: `blkD`))
 
 macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
-  ## Launches a device function with whole values, schedule via a `do:` block
-  ## or the chevron form:
+  ## Launches a device function with whole values, schedule via a `do:` block:
   ##
-  ##   engine.launchDeviceFn gemm(tiledMma(f32, f16, f16, 32, 32, 16), dD, dA, dB, 1) do:
+  ##   engine.launchDeviceFn gemm(dD, dA, dB, 1) do:
   ##     grid = ((D.shape.m + 31) div 32, (D.shape.n + 31) div 32)
   ##     blk = (32, 1)
-  ##
-  ##   engine.launchDeviceFn<<grid, blk>> gemm(dD, dA, dB, 1)
   ##
   ## - the schedule block holds `grid =` / `blk =` assignments, both optional, default (1, 1)
   ## - the expressions evaluate at the launch site and may reference the kernel's formals
@@ -198,64 +195,67 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   if callNode[^1].kind == nnkStmtList:
     schedule = callNode[^1]
     callNode = nnkCall.newTree(call[0 ..< call.len - 1])
-  doAssert schedule.kind in {nnkNilLit, nnkStmtList},
-    "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
+  doAssert schedule.kind in {nnkNilLit, nnkStmtList}, "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   if schedule.kind == nnkStmtList:
     for a in schedule:
-      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
-        "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
+      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"], "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
       if $a[0] == "grid": gridN = a[1]
       else: blkN = a[1]
-  let splitN = bindSym"crucibleSplit"
-  result = nnkCall.newTree(splitN, engine, callNode[0], callNode, gridN, blkN)
+  let buildN = bindSym"crucibleBuild"
+  result = nnkCall.newTree(buildN, engine, callNode[0], gridN, blkN)
+  for i in 1 ..< callNode.len:
+    result.add(callNode[i])
 
 type
-  WrapSugar[E: HwEngine] = object
+  DeviceFnSugar[E: HwEngine] = object
     ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
     engine: E
 
-  WrapProxy[E: HwEngine] = object
-    ## Chevron intermediate:
-    ## built by `<<`, consumed by `>>`.
+  DeviceFnProxy[E: HwEngine] = object
+    ## Chevron intermediate, built by `<<`, consumed by `>>`.
     engine: E
     grid: Dim3
     blk: Dim3
 
-proc makeWrapProxy[E: HwEngine](engine: E, grid, blk: Dim3): WrapProxy[E] =
-  ## WrapProxy construction, generic param inference lives in this helper
-  WrapProxy[E](engine: engine, grid: grid, blk: blk)
+proc makeDeviceFnProxy[E: HwEngine](engine: E, cfg: LaunchConfig): DeviceFnProxy[E] {.inline.} =
+  ## DeviceFnProxy construction, generic param inference lives in this helper
+  DeviceFnProxy[E](engine: engine, grid: cfg.grid, blk: cfg.blk)
 
-macro launchDeviceFn*(engine: HwEngine): untyped =
-  ## Chevron form accessor:
-  ##
-  ##   engine.launchDeviceFn<<(gridX, gridY), (32, 1)>> gemm(dD, dC, dA, dB)
+proc launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
+  ## Chevron form accessor: `engine.launchDeviceFn<<grid, blk>> fn(args)`, a proc resolves
+  ## by signature so the 2-arg `do:` macro form is untouched.
+  DeviceFnSugar[E](engine: engine)
+
+macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
+  ## Chevron launch geometry, positional `(grid, blk)` or `grid:` / `blk:` pairs:
+  ##   engine.launchDeviceFn<<(grid, blk)>> fn(args)
+  ## sharedMem and stream do not exist on the device-fn path, they are compile errors
+  doAssert cfg.kind in {nnkPar, nnkTupleConstr}, "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr
+  var named = 0
+  var positional = 0
+  for ch in cfg:
+    if ch.kind == nnkExprColonExpr:
+      doAssert $ch[0] in ["grid", "blk"], "launchDeviceFn chevron takes grid/blk only, '" & $ch[0] & "' does not exist on the device-fn path: " & ch.repr
+      inc named
+    else: inc positional
+  doAssert (named == 0 and positional == 2) or positional == 0, "launchDeviceFn chevron takes (grid, blk) or grid:/blk: pairs, got: " & cfg.repr
+  let mkSym = bindSym"makeDeviceFnProxy"
+  let cfgSym = bindSym"chevronConfig"
   result = quote do:
-    WrapSugar[typeof(`engine`)](engine: `engine`)
+    `mkSym`(`r`.engine, `cfgSym`(`cfg`))
 
-macro `<<`*[E: HwEngine](r: WrapSugar[E], cfg: untyped): untyped =
-  ## Chevron launch config, positional (grid, blk):
-  ##
-  ##   engine.launchDeviceFn<<((1, 1), (32, 1))>>(gemm(dD, dC, dA, dB))
-  # the chevron form takes host expressions only, the `do:` form alone has
-  # a schedule that may reference the function's formals
-  doAssert cfg.kind in {nnkPar, nnkTupleConstr} and cfg.len == 2,
-    "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr
-  let dim3Sym = bindSym"dim3"
-  let mkSym = bindSym"makeWrapProxy"
-  result = quote do:
-    `mkSym`(`r`.engine, `dim3Sym`(`cfg`[0]), `dim3Sym`(`cfg`[1]))
-
-macro `>>`*[E: HwEngine](proxy: WrapProxy[E], call: untyped): untyped =
+macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
   ## Builds the launch: `engine.launchDeviceFn<<grid, blk>> fn(args...)`
   var callNode = call
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
-  doAssert callNode.kind == nnkCall,
-    "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  let splitN = bindSym"crucibleSplit"
-  result = nnkCall.newTree(splitN,
-    nnkDotExpr.newTree(proxy, ident"engine"), callNode[0], callNode,
+  doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
+  let buildN = bindSym"crucibleBuild"
+  result = nnkCall.newTree(buildN,
+    nnkDotExpr.newTree(proxy, ident"engine"), callNode[0],
     nnkDotExpr.newTree(proxy, ident"grid"),
     nnkDotExpr.newTree(proxy, ident"blk"))
+  for i in 1 ..< callNode.len:
+    result.add(callNode[i])
