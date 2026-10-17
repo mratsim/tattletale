@@ -50,9 +50,9 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
         doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
           "launchKernel do-schedule expects grid = ... / blk = ..., got " & a.repr
         if $a[0] == "grid":
-          gridN = a[1]
+          gridN = bindSym"dim3".newCall(a[1])
         else:
-          blkN = a[1]
+          blkN = bindSym"dim3".newCall(a[1])
     else:
       argsNode = rest[0]
       let cfgN = rest[1]

@@ -188,10 +188,10 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   if callNode[^1].kind == nnkStmtList:
     schedule = callNode[^1]
     callNode = nnkCall.newTree(call[0 ..< call.len - 1])
-  doAssert schedule.kind in {nnkNilLit, nnkStmtList}, "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
+  doAssert schedule.isNil or schedule.kind == nnkStmtList, "launchDeviceFn: the schedule must be a `do:` block, got " & schedule.repr
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
-  if schedule.kind == nnkStmtList:
+  if not schedule.isNil:
     for a in schedule:
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"], "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
       if $a[0] == "grid":
