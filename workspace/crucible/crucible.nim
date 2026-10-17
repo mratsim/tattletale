@@ -21,5 +21,5 @@
 
 import ./src/codegen/gpu_compiler
 import ./src/runtime/engines
-import ./src/runtime/launch_device_fn
+import ./src/runtime/launch/launch_device_fn
 export gpu_compiler, engines, launchDeviceFn

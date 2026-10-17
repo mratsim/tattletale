@@ -12,8 +12,8 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
-import ../launch_kernel
-import ../launch_common
+import ../launch/launch_kernel
+import ../launch/launch_common
 
 export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════

@@ -10,9 +10,9 @@ import std/tables
 import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
-import ../launch_common
+import ../launch/launch_common
 import ../exec/opencl_runtime
-import ../launch_kernel
+import ../launch/launch_kernel
 
 export opencl_runtime
 # ═════════════════════════════════════════════════════════════════════════

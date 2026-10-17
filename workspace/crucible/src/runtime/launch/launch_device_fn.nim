@@ -8,10 +8,9 @@
 ## Wrap-and-run: launch a device function through the chevron.
 
 import std/[macros, hashes, strutils, tables]
-import ../codegen/gpu_compiler
+import ../../codegen/gpu_compiler
 import launch_kernel {.all.}
 import launch_common {.all.}
-import engines
 
 export launch_kernel
 
@@ -208,11 +207,11 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
     result.add(callNode[i])
 
 type
-  DeviceFnSugar[E: HwEngine] = object
+  DeviceFnSugar*[E: HwEngine] = object
     ## Transient chevron sugar for launchDeviceFn launches, created per `engine.launchDeviceFn` access, no field on the engine
     engine: E
 
-  DeviceFnProxy[E: HwEngine] = object
+  DeviceFnProxy*[E: HwEngine] = object
     ## Chevron intermediate, built by `<<`, consumed by `>>`.
     engine: E
     grid: Dim3

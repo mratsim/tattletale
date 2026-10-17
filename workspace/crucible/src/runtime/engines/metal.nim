@@ -7,14 +7,14 @@
 import std/[strutils, tables]
 
 import ../../codegen/ir/gpu_types
-import ../launch_common
+import ../launch/launch_common
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
 export metal_runtime
 
 when defined(macosx):
-  import ../launch_kernel
+  import ../launch/launch_kernel
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════

@@ -18,7 +18,7 @@ type
     ## Transient chevron sugar, created per `engine.launchKernel` access.
     engine: E
 
-  LaunchProxy*[E] = object
+  LaunchProxy[E] = object
     engine: E
     cfg: LaunchConfig
 

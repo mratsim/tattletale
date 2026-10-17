@@ -5,8 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import ../codegen/ir/gpu_types
-import ./launch_kernel as launch_sugar
-import ./launch_common
+import ./launch/launch_kernel
+import ./launch/launch_common
+import ./launch/launch_device_fn
 import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}
 import ./engines/vk {.all.}
@@ -15,8 +16,12 @@ import ./engines/metal {.all.}
 
 
 export gpu_types
-export launch_sugar  # plain-launch chevron path (aliased import dodges the launchKernel collision)
-export launch_common
+# Curated launch surface: geometry types, the two launch verbs,
+# chevron and do forms. launch_kernel and launch_device_fn export
+# exactly the facade via `*` marks, tests import runtime/launch modules directly.
+export launch_kernel, launch_device_fn
+export launch_common.Dim3, launch_common.dim3, launch_common.LaunchConfig,
+  launch_common.HwEngine
 
 export ingest, getArtifact, launchKernelImpl, check, deviceName
 export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFromDevice
@@ -25,23 +30,6 @@ export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFro
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 
-type
-  HwEngine* = concept engine, type E
-    ## A hardware engine: compiles GPU source and launches its kernels on one device.
-    ## One concrete type per backend (`bkMetal.init()`, `bkCuda.init()`, `bkOpenCL.init()`, `bkVulkan.init()`, `bkWGSL.init()`).
-    ##
-    ## Usage:
-    ##   engine.ingest(source)              # compile kernels, replaces the previous artifact.
-    ##   engine.launchKernel("kernel", out, args)    # launch, or engine.launchKernel<<grid, blk>> for geometry.
-    ##   engine.deviceName()                # the device this engine drives.
-    ##
-    ## `ingest` compiles the whole source in one shot, one call per engine.
-    ## `run` takes the output buffer first, then the kernel args in declaration order.
-    proc ingest(engine: E, source: string)
-    proc getArtifact(engine: E)
-    proc deviceName(engine: E): string
-    proc launchKernel(engine: E): LaunchSugar[E]
-  # Concept procs cannot use `auto` returns, bare signatures only.
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API

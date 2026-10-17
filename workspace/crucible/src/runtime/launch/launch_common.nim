@@ -9,7 +9,7 @@
 
 import std/macros
 import std/typetraits
-import ../codegen/ir/gpu_types
+import ../../codegen/ir/gpu_types
 
 # ▸ Launch geometry
 
@@ -85,6 +85,17 @@ macro chevronConfig*(cfg: untyped): LaunchConfig =
     LaunchConfig(
       grid: `gridD`, blk: `blkD`,
       sharedMem: `smN`, stream: `stN`)
+
+type
+  HwEngine* = concept engine, type E
+    ## A hardware engine: compiles GPU source, launches its kernels on one device,
+    ## one concrete type per backend.
+    ## Usage: `engine.ingest(src)`, `engine.launchKernel("k", out, (args))`,
+    ## `engine.launchKernel<<grid, blk>>(...)`, `engine.launchDeviceFn <kernel> do: grid = ...`.
+
+    proc ingest(engine: E, source: string)
+    proc getArtifact(engine: E)
+    proc deviceName(engine: E): string
 
 # ▸ Structural binding
 

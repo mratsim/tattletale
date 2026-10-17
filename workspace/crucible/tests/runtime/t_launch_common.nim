@@ -13,7 +13,7 @@
 ##     workspace/crucible/tests/runtime/t_launch_common.nim
 
 import workspace/crucible
-import workspace/crucible/src/runtime/launch_common
+import workspace/crucible/src/runtime/launch/launch_common
 
 type
   TestHandle = distinct int
