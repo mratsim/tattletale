@@ -178,7 +178,7 @@ macro crucibleBuild(engine: HwEngine, kernel: typed, gridN, blkN: untyped, value
       const `bridgeSource` = `bridgeN`(`engine`, `bridgeNode`)
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
-      `engine`.launchKernel(`kname`, `outputNode`, `argsTuple`,
+      `engine`.launchKernelImpl(`kname`, `outputNode`, `argsTuple`,
                    LaunchConfig(grid: `gridD`, blk: `blkD`))
 
 macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =

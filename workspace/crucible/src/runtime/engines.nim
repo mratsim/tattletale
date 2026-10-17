@@ -18,7 +18,7 @@ export gpu_types
 export launch_sugar  # plain-launch chevron path (aliased import dodges the launchKernel collision)
 export launch_common
 
-export ingest, getArtifact, launchKernel, check, deviceName
+export ingest, getArtifact, launchKernelImpl, check, deviceName
 export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFromDevice
 
 # ═════════════════════════════════════════════════════════════════════════

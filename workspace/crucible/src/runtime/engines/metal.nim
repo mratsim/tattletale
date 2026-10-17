@@ -145,7 +145,7 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc launchKernel*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:

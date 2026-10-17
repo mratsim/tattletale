@@ -156,7 +156,7 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernel*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, cfg = LaunchConfig()) =
   ## Runs `kernel` on the engine's device, building the pipeline on first use:
   ## - `output` receives the kernel's result, `args` bind positionally
   ## - `cfg` carries the launch geometry, `blk` must match the shader's baked workgroup size
