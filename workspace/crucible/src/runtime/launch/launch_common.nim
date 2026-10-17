@@ -10,22 +10,9 @@
 import std/macros
 import std/typetraits
 import ../../codegen/ir/gpu_types
+import ../engines_common
 
 # ▸ Launch geometry
-
-type
-  Dim3* = object
-    ## A 3D launch dims, `Dim3(x: n)` defaults y/z to 1.
-    x*, y*, z* = 1
-
-  LaunchConfig* = object
-    ## Launch geometry, grid/blk per-backend, sharedMem CUDA/OpenCL only, stream CUDA only.
-    grid*, blk*: Dim3
-    sharedMem*, stream*: int
-
-template dim3*(a, b, c: SomeInteger): Dim3 =
-  ## Builds a `Dim3` from plain integer args: `dim3(32, 8, 1)`.
-  Dim3(x: int(a), y: int(b), z: int(c))
 
 # Private parser-quoted conversions, templates expand away: nothing reaches codegen.
 # Template params stay clear of the Dim3 field names x/y/z, a name collision breaks expansion.
@@ -86,16 +73,7 @@ macro chevronConfig*(cfg: untyped): LaunchConfig =
       grid: `gridD`, blk: `blkD`,
       sharedMem: `smN`, stream: `stN`)
 
-type
-  HwEngine* = concept engine, type E
-    ## A hardware engine: compiles GPU source, launches its kernels on one device,
-    ## one concrete type per backend.
-    ## Usage: `engine.ingest(src)`, `engine.launchKernel("k", out, (args))`,
-    ## `engine.launchKernel<<grid, blk>>(...)`, `engine.launchDeviceFn <kernel> do: grid = ...`.
 
-    proc ingest(engine: E, source: string)
-    proc getArtifact(engine: E)
-    proc deviceName(engine: E): string
 
 # ▸ Structural binding
 

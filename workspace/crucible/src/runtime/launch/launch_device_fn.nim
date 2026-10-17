@@ -9,6 +9,7 @@
 
 import std/[macros, hashes, strutils, tables]
 import ../../codegen/gpu_compiler
+import ../engines_common
 import launch_kernel {.all.}
 import launch_common {.all.}
 
@@ -221,16 +222,15 @@ proc makeDeviceFnProxy[E: HwEngine](engine: E, cfg: LaunchConfig): DeviceFnProxy
   ## DeviceFnProxy construction, generic param inference lives in this helper
   DeviceFnProxy[E](engine: engine, grid: cfg.grid, blk: cfg.blk)
 
-proc launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
-  ## Chevron form accessor for device-fn launches, a proc resolves by signature
-  ## so the 2-arg `do:` macro form is untouched.
+macro launchDeviceFn*[E: HwEngine](engine: E): DeviceFnSugar[E] =
+  ## Chevron form accessor for device-fn launches.
   ## - Chevrons:
   ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
   ## - Do form:
   ##     `engine.launchDeviceFn <kernel-expr> do:`
   ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
   ##       `blk = (32, 1)`
-  DeviceFnSugar[E](engine: engine)
+  result = quote do: DeviceFnSugar[E](`engine`)
 
 macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
   doAssert cfg.kind in {nnkPar, nnkTupleConstr}, "launchDeviceFn chevron takes (grid, blk), got: " & cfg.repr

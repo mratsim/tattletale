@@ -5,6 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import ../codegen/ir/gpu_types
+import ./engines_common
 import ./launch/launch_kernel
 import ./launch/launch_common
 import ./launch/launch_device_fn
@@ -19,9 +20,7 @@ export gpu_types
 # Curated launch surface: geometry types, the two launch verbs,
 # chevron and do forms. launch_kernel and launch_device_fn export
 # exactly the facade via `*` marks, tests import runtime/launch modules directly.
-export launch_kernel, launch_device_fn
-export launch_common.Dim3, launch_common.dim3, launch_common.LaunchConfig,
-  launch_common.HwEngine
+export engines_common, launch_kernel, launch_device_fn
 
 export ingest, getArtifact, launchKernelImpl, check, deviceName
 export allocDevice, freeDevice, backendKind, copyToDeviceFromHost, copyToHostFromDevice

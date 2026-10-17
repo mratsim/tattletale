@@ -8,6 +8,7 @@
 {.experimental: "codeReordering".}
 
 import std/macros
+from ../engines_common import HwEngine, LaunchConfig, Dim3, dim3
 import launch_common {.all.}
 export launch_common
 
