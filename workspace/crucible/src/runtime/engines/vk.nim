@@ -21,9 +21,6 @@ export vulkan_runtime
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
-  VulkanCtx = object
-    ctx: VulkanContext
-
   VulkanCaches = object
     ctx: VulkanContext
     spirvCache: Table[string, seq[uint32]]
@@ -33,7 +30,7 @@ type
     source: string
     spirv: seq[uint32]
     entryPoint: string
-    ctx: VulkanCtx
+    ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     caches: VulkanCaches
 
@@ -42,30 +39,6 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
-proc `=destroy`(c: var VulkanCtx) =
-  if c.ctx.instance == nil:
-    return
-  let L = c.ctx.vkLib
-  let vkDestroyPipelineCachePtr = cast[proc(device: VkDevice, pipelineCache: VkPipelineCache, pAllocator: pointer) {.cdecl.}](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyPipelineCache"))
-  let vkDestroyCommandPoolPtr = cast[proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyCommandPool"))
-  let vkDestroyDevicePtr = cast[
-    proc(device: VkDevice, pAllocator: pointer) {.cdecl.}
-  ](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyDevice"))
-  let vkDestroyInstancePtr = cast[
-    proc(instance: VkInstance, pAllocator: pointer) {.cdecl.}
-  ](c.ctx.gpaAddr(c.ctx.instance, "vkDestroyInstance"))
-  if c.ctx.pipelineCache != nil and vkDestroyPipelineCachePtr != nil:
-    vkDestroyPipelineCachePtr(c.ctx.device, c.ctx.pipelineCache, nil)
-    c.ctx.pipelineCache = nil
-  if c.ctx.commandPool != nil and vkDestroyCommandPoolPtr != nil:
-    vkDestroyCommandPoolPtr(c.ctx.device, c.ctx.commandPool, nil)
-    c.ctx.commandPool = nil
-  if c.ctx.device != nil and vkDestroyDevicePtr != nil:
-    vkDestroyDevicePtr(c.ctx.device, nil)
-    c.ctx.device = nil
-  if c.ctx.instance != nil and vkDestroyInstancePtr != nil:
-    vkDestroyInstancePtr(c.ctx.instance, nil)
-    c.ctx.instance = nil
 
 proc `=destroy`(c: var VulkanCaches) =
   for p in c.pipelineCache.mvalues:
@@ -76,7 +49,7 @@ proc `=destroy`(c: var VulkanCaches) =
 proc newVulkanEngine(): VulkanEngine =
   let vctx = initVulkan()
   VulkanEngine(
-    ctx: VulkanCtx(ctx: vctx),
+    ctx: vctx,
     caches: VulkanCaches(ctx: vctx))
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -94,7 +67,7 @@ proc ingest*(engine: VulkanEngine, source: string) =
          "use one kernel per source when passing by-value scalars")
 
   for p in engine.caches.pipelineCache.mvalues:
-    p.destroyPipeline(engine.ctx.ctx)
+    p.destroyPipeline(engine.ctx)
   engine.caches.pipelineCache.clear()
   engine.caches.spirvCache.clear()
   engine.source = source
@@ -106,7 +79,7 @@ proc getArtifact*(engine: VulkanEngine): seq[uint32] =
   engine.spirv
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
-  engine.ctx.ctx.deviceName(engine.ctx.ctx.physicalDevice)
+  engine.ctx.deviceName(engine.ctx.physicalDevice)
 
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
@@ -161,7 +134,6 @@ proc parseEntryPoint(glsl: string): string =
 
 
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, grid, squadron = Dim3()) =
-  var vctx = engine.ctx.ctx
   let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
               engine.shaderSquadron
             else:
@@ -213,31 +185,31 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
       proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
            pAllocator: pointer,
            pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
-    ](vctx.gpaAddr(vctx.instance, "vkCreateShaderModule"))
+    ](engine.ctx.gpaAddr(engine.ctx.instance, "vkCreateShaderModule"))
     var smCI = VkShaderModuleCreateInfo(
       sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
       codeSize: csize_t(spirv.len * sizeof(uint32)),
       pCode: spirv[0].addr
     )
     var shaderModule: VkShaderModule
-    check vkCreateShaderModule(vctx.device, smCI.addr, nil, shaderModule.addr)
+    check vkCreateShaderModule(engine.ctx.device, smCI.addr, nil, shaderModule.addr)
     defer:
       let vkDestroyShaderModule = cast[
         proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl.}
-      ](vctx.gpaAddr(vctx.instance, "vkDestroyShaderModule"))
+      ](engine.ctx.gpaAddr(engine.ctx.instance, "vkDestroyShaderModule"))
       if shaderModule != nil and vkDestroyShaderModule != nil:
-        vkDestroyShaderModule(vctx.device, shaderModule, nil)
-    var pipeline = vctx.createPipeline(shaderModule, dctx.inputBuffers.len + 1, entry,
+        vkDestroyShaderModule(engine.ctx.device, shaderModule, nil)
+    var pipeline = engine.ctx.createPipeline(shaderModule, dctx.inputBuffers.len + 1, entry,
                                      pushConstLen)
     engine.caches.pipelineCache[pipelineKey] = pipeline
 
   # Output first (binding 0), then buffer inputs
-  engine.caches.pipelineCache[pipelineKey].setArg(0, output, vctx)
+  engine.caches.pipelineCache[pipelineKey].setArg(0, output, engine.ctx)
   for i in 0 ..< dctx.inputBuffers.len:
-    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, dctx.inputBuffers[i], vctx)
+    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, dctx.inputBuffers[i], engine.ctx)
 
   # Dispatch grid groups (runKernel computes groupCount = ceil(global/local))
-  vctx.runKernel(engine.caches.pipelineCache[pipelineKey],
+  engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
                  [uint32(grid.x * squadron.x),
                   uint32(grid.y * squadron.y),
                   uint32(grid.z * squadron.z)],
@@ -246,20 +218,16 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
                  pushConstLen)
 
 proc allocDevice*(engine: VulkanEngine, n: int): VulkanBuffer =
-  var vctx = engine.ctx.ctx
-  vctx.allocBuffer(n)
+  engine.ctx.allocBuffer(n)
 
 proc freeDevice*(engine: VulkanEngine, h: VulkanBuffer) =
   var h = h
-  var vctx = engine.ctx.ctx
-  h.dealloc(vctx)
+  h.dealloc(engine.ctx)
 
 proc copyToDeviceFromHost*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
   var dst = dst
-  var vctx = engine.ctx.ctx
-  vctx.writeBuffer(dst, src, n)
+  engine.ctx.writeBuffer(dst, src, n)
 
 proc copyToHostFromDevice*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
-  var vctx = engine.ctx.ctx
-  let res = readBuffer[byte](vctx, src)
+  let res = readBuffer[byte](engine.ctx, src)
   copyMem(dst, res[0].addr, n)

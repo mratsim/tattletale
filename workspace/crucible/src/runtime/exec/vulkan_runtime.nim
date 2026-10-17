@@ -33,7 +33,8 @@ type
     ssboCount: int
     pushConstSize: int
 
-  VulkanContext* = object
+  VulkanContext* = ref VulkanContextObj
+  VulkanContextObj = object
     instance*: VkInstance
     physicalDevice*: VkPhysicalDevice
     device*: VkDevice
@@ -73,6 +74,34 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
 # This matches the approach used by ash, vulkano, and all standard
 # Vulkan applications.
 
+proc `=copy`(dst: var VulkanContextObj, src: VulkanContextObj) {.error:
+    "VulkanContext is ref-only, copy the ref not the object".}
+
+proc `=destroy`(c: var VulkanContextObj) =
+  if c.instance == nil:
+    return
+  let gpa = cast[proc(instance: VkInstance, name: cstring): pointer {.cdecl.}](c.getProcAddr)
+  let vkDestroyPipelineCachePtr = cast[proc(device: VkDevice, pipelineCache: VkPipelineCache, pAllocator: pointer) {.cdecl.}](gpa(c.instance, "vkDestroyPipelineCache"))
+  let vkDestroyCommandPoolPtr = cast[proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}](gpa(c.instance, "vkDestroyCommandPool"))
+  let vkDestroyDevicePtr = cast[
+    proc(device: VkDevice, pAllocator: pointer) {.cdecl.}
+  ](gpa(c.instance, "vkDestroyDevice"))
+  let vkDestroyInstancePtr = cast[
+    proc(instance: VkInstance, pAllocator: pointer) {.cdecl.}
+  ](gpa(c.instance, "vkDestroyInstance"))
+  if c.pipelineCache != nil and vkDestroyPipelineCachePtr != nil:
+    vkDestroyPipelineCachePtr(c.device, c.pipelineCache, nil)
+    c.pipelineCache = nil
+  if c.commandPool != nil and vkDestroyCommandPoolPtr != nil:
+    vkDestroyCommandPoolPtr(c.device, c.commandPool, nil)
+    c.commandPool = nil
+  if c.device != nil and vkDestroyDevicePtr != nil:
+    vkDestroyDevicePtr(c.device, nil)
+    c.device = nil
+  if c.instance != nil and vkDestroyInstancePtr != nil:
+    vkDestroyInstancePtr(c.instance, nil)
+    c.instance = nil
+
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   # macOS: dyld does not search /opt/homebrew/lib by default, so dlopen by
@@ -90,7 +119,6 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   if result.gpa == nil:
     failLoud(vk.VulkanLib & " missing vkGetInstanceProcAddr")
 
-# ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
@@ -159,6 +187,7 @@ proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc initVulkan*(): VulkanContext =
+  result = VulkanContext()
   let (lib, gpaRaw) = loadVulkanLoader()
   result.vkLib = lib
   result.getProcAddr = gpaRaw

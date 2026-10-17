@@ -13,7 +13,8 @@ type
   OpenCLDevice* = object
     id: Pdevice_id
 
-  OpenCLContext* = object
+  OpenCLContext* = ref OpenCLContextObj
+  OpenCLContextObj = object
     device*: OpenCLDevice
     platform: Pplatform_id
     context: Pcontext
@@ -24,13 +25,20 @@ type
     size: int
     mem: Pmem
 
-  OpenCLKernel* = object
+  OpenCLKernel* = ref OpenCLKernelObj
+  OpenCLKernelObj = object
     commands: Pcommand_queue
     kernel: Pkernel
     program: Pprogram
 
 
-proc `=destroy`(ctx: var OpenCLContext) =
+proc `=copy`(dst: var OpenCLContextObj, src: OpenCLContextObj) {.error:
+    "OpenCLContext is ref-only, copy the ref not the object".}
+
+proc `=copy`(dst: var OpenCLKernelObj, src: OpenCLKernelObj) {.error:
+    "OpenCLKernel is ref-only, copy the ref not the object".}
+
+proc `=destroy`(ctx: var OpenCLContextObj) =
   ## Releases the OpenCL context and command queue, nil-guarded against double teardown.
   if ctx.context != nil:
     discard releaseCommandQueue(ctx.commands)
@@ -38,7 +46,7 @@ proc `=destroy`(ctx: var OpenCLContext) =
     ctx.commands = nil
     ctx.context = nil
 
-proc `=destroy`(k: var OpenCLKernel) =
+proc `=destroy`(k: var OpenCLKernelObj) =
   ## Releases the kernel and its program, nil fields skip.
   if k.kernel != nil:
     discard releaseKernel(k.kernel)
@@ -94,6 +102,7 @@ proc isGpu(device: OpenCLDevice): bool =
   result = (deviceType.int64 and DEVICE_TYPE_GPU.int64) != 0
 
 proc initOpenCL(device: OpenCLDevice): OpenCLContext =
+  result = OpenCLContext()
   var
     id = device.id
     status: TClResult
@@ -107,7 +116,7 @@ proc initOpenCL*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
     failLoud("OpenCL: no devices found")
-  # Pick first GPU; fall back to first device
+  # Pick first GPU, fall back to first device
   var dev = devices[0]
   for d in devices:
     if d.isGpu():
@@ -141,6 +150,7 @@ proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   )
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
+  result = OpenCLKernel()
   result.commands = ctx.commands
   let strings = allocCStringArray([source])
   defer: deallocCStringArray(strings)
@@ -191,5 +201,5 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
   check finish(kernel.commands)
 
 proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
-  ## Bind a scalar kernel argument by value (e.g. alpha/beta coefficients).
+  ## Binds a scalar kernel argument by value (such as alpha/beta coefficients)
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(size), data)

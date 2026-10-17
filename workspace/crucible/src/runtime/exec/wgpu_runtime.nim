@@ -38,12 +38,25 @@ type
     ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
     errType*: WGPUErrorType
     message*: string
-  WgpuContext* = object
+  WgpuContext* = ref WgpuContextObj
+  WgpuContextObj = object
     ## Live wgpu handles, instance → adapter → device → queue.
     instance*: WGPUInstance
     adapter*: WGPUAdapter
     device*: WGPUDevice
     queue*: WGPUQueue
+
+proc `=copy`(dst: var WgpuContextObj, src: WgpuContextObj) {.error:
+    "WgpuContext is ref-only, copy the ref not the object".}
+
+proc `=destroy`(c: var WgpuContextObj) =
+  if c.instance != nil:
+    wgpuDeviceRelease(c.device)
+    wgpuAdapterRelease(c.adapter)
+    wgpuInstanceRelease(c.instance)
+    c.device = nil
+    c.adapter = nil
+    c.instance = nil
 
 proc deviceName*(ctx: WgpuContext): string =
   ## Returns the WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").

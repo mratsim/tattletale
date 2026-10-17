@@ -20,15 +20,12 @@ export opencl_runtime
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
-  OpenCLCtx = object
-    ctx: OpenCLContext
-
   OpenCLKernelCache = object
     kernels: Table[string, OpenCLKernel]
 
   OpenCLEngine* = ref object
     source: string
-    ctx: OpenCLCtx
+    ctx: OpenCLContext
     kernelCache: OpenCLKernelCache
 
 proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
@@ -37,7 +34,7 @@ proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 proc newOpenCLEngine(): OpenCLEngine =
-  OpenCLEngine(ctx: OpenCLCtx(ctx: initOpenCL()))
+  OpenCLEngine(ctx: initOpenCL())
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -54,7 +51,7 @@ proc getArtifact*(engine: OpenCLEngine): string =
   engine.source
 
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
-  engine.ctx.ctx.device.name()
+  engine.ctx.device.name()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -65,19 +62,18 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  let ctx = engine.ctx.ctx
   if kernel notin engine.kernelCache.kernels:
-    engine.kernelCache.kernels[kernel] = ctx.compileKernel(kernel, engine.source)
-  let kern = engine.kernelCache.kernels.addr[][kernel].addr
+    engine.kernelCache.kernels[kernel] = engine.ctx.compileKernel(kernel, engine.source)
+  let kern = engine.kernelCache.kernels[kernel]
 
   type SerializationCtx = object
-    kern: ptr OpenCLKernel
+    kern: OpenCLKernel
     
   proc serializer(ctx: var SerializationCtx, bufferHandle: OpenCLBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
     if viaBuffer:
-      ctx.kern[].setArg(argIdx, bufferHandle)
+      ctx.kern.setArg(argIdx, bufferHandle)
     else:
-      ctx.kern[].setArg(argIdx, len, p)
+      ctx.kern.setArg(argIdx, len, p)
 
   var dctx = SerializationCtx(kern: kern)
   bindArgs(dctx, output, args, serializer, bkOpenCL, false)
@@ -86,10 +82,10 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
                     cl_size_t(grid.y * blk.y),
                     cl_size_t(grid.z * blk.z)]
   let localSize = [cl_size_t(blk.x), cl_size_t(blk.y), cl_size_t(blk.z)]
-  kern[].runKernel(globalSize, localSize)
+  kern.runKernel(globalSize, localSize)
 
 proc allocDevice*(engine: OpenCLEngine, n: int): OpenCLBuffer =
-  engine.ctx.ctx.allocBuffer(n)
+  engine.ctx.allocBuffer(n)
 
 proc freeDevice*(engine: OpenCLEngine, h: OpenCLBuffer) =
   var h = h

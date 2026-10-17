@@ -20,9 +20,6 @@ export wgpu_runtime
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
-  WgpuCtx = object
-    ctx: WgpuContext
-
   WgpuPipelineCache = object
     pipeline: WGPUComputePipeline
     pipelineLayout: WGPUPipelineLayout
@@ -34,7 +31,7 @@ type
 
   WgpuEngine* = ref object
     source: string
-    ctx: WgpuCtx
+    ctx: WgpuContext
     cache: WgpuCache
     shaderSquadron: Dim3
 
@@ -43,14 +40,6 @@ proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
-proc `=destroy`(c: var WgpuCtx) =
-  if c.ctx.instance != nil:
-    wgpuDeviceRelease(c.ctx.device)
-    wgpuAdapterRelease(c.ctx.adapter)
-    wgpuInstanceRelease(c.ctx.instance)
-    c.ctx.device = nil
-    c.ctx.adapter = nil
-    c.ctx.instance = nil
 
 proc `=destroy`(cache: var WgpuCache) =
   if cache.module != nil:
@@ -62,7 +51,7 @@ proc `=destroy`(cache: var WgpuCache) =
 
 proc newWgpuEngine(): WgpuEngine =
   WgpuEngine(
-    ctx: WgpuCtx(ctx: initWgpu()),
+    ctx: initWgpu(),
     cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
   )
 
@@ -95,7 +84,7 @@ proc ingest*(engine: WgpuEngine, source: string) =
   var shaderDesc = WGPUShaderModuleDescriptor(
     nextInChain: addr wgslSource
   )
-  engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.ctx.device, addr shaderDesc)
+  engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.device, addr shaderDesc)
   if engine.cache.module == nil:
     failLoud("WebGPU: failed to create shader module")
   engine.source = source
@@ -105,7 +94,7 @@ proc getArtifact*(engine: WgpuEngine): string =
   engine.source
 
 proc deviceName*(engine: WgpuEngine): string {.inline.} =
-  engine.ctx.ctx.deviceName()
+  engine.ctx.deviceName()
 
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
@@ -141,8 +130,8 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
 
 
 proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, squadron = Dim3()) =
-  let device = engine.ctx.ctx.device
-  let queue  = engine.ctx.ctx.queue
+  let device = engine.ctx.device
+  let queue  = engine.ctx.queue
 
   let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
               engine.shaderSquadron
@@ -342,7 +331,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
     failLoud("WebGPU uncaptured error: " & uncaptured.message)
 
 proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
-  let device = engine.ctx.ctx.device
+  let device = engine.ctx.device
   var desc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
            wgpuBufferUsageCopyDst,
@@ -356,11 +345,11 @@ proc freeDevice*(engine: WgpuEngine, h: WGPUBuffer) =
   wgpuBufferRelease(h)
 
 proc copyToDeviceFromHost*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
-  wgpuQueueWriteBuffer(engine.ctx.ctx.queue, dst, 0, src, n.csize_t)
+  wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
 
 proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
-  let device = engine.ctx.ctx.device
-  let queue  = engine.ctx.ctx.queue
+  let device = engine.ctx.device
+  let queue  = engine.ctx.queue
   var stagingDesc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageMapRead or wgpuBufferUsageCopyDst,
     size: n.csize_t,

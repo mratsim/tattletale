@@ -21,9 +21,6 @@ when defined(macosx):
 # ▸ Types
 # ═════════════════════════════════════════════════
 type
-  MetalDeviceCtx = object
-    ctx: MetalCtx
-
   MetalCache = object
     ## Two per-engine caches:
     ## - library, keyed by source, replaced by re-ingest
@@ -33,7 +30,7 @@ type
 
   MetalEngine* = ref object
     source: string
-    ctx: MetalDeviceCtx
+    ctx: MetalCtx
     cache: MetalCache   # after ctx: released before the context destroy
 
 proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
@@ -65,10 +62,6 @@ when defined(macosx):
     if objc.isNil(result.queue):
       failLoud("newCommandQueue returned nil")
 
-  proc `=destroy`(ctx: var MetalDeviceCtx) =
-    objc.withMemPool:
-      objc.release(ctx.ctx.queue)
-      objc.release(ctx.ctx.device)
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
@@ -80,7 +73,7 @@ when defined(macosx):
   proc newMetalEngine(): MetalEngine =
     objc.withMemPool:
       result = MetalEngine(
-        ctx: MetalDeviceCtx(ctx: newMetalCtx()),
+        ctx: newMetalCtx(),
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
@@ -91,7 +84,7 @@ when defined(macosx):
   proc ingest*(engine: MetalEngine, source: string) =
     objc.withMemPool:
       let opts = compileOptions()
-      let library = compileLibrary(engine.ctx.ctx.device, source, opts)
+      let library = compileLibrary(engine.ctx.device, source, opts)
       objc.release(opts)
       when defined(debug):
         echo "[INFO]: metal ingest: invalidating previous artifact"
@@ -107,7 +100,7 @@ when defined(macosx):
 
   proc deviceName*(engine: MetalEngine): string =
     objc.withMemPool:
-      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
+      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE run path
@@ -121,7 +114,7 @@ when defined(macosx):
   proc allocDevice*(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
       failLoud("allocDevice: size must be positive, got " & $n)
-    result = objc.msgSend(engine.ctx.ctx.device, objc.`$$`("newBufferWithLength:options:"),
+    result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
                           objc.NSUInteger(n), SharedUntrackedOptions)
     if objc.isNil(result):
       failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
@@ -156,10 +149,10 @@ when defined(macosx):
       if engine.cache.psos.hasKey(kernel):
         pso = engine.cache.psos[kernel]
       else:
-        pso = compilePipelineState(engine.ctx.ctx.device, engine.cache.library, kernel)
+        pso = compilePipelineState(engine.ctx.device, engine.cache.library, kernel)
         engine.cache.psos[kernel] = pso
 
-      let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
+      let cmdBuf = objc.msgSend(engine.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
 

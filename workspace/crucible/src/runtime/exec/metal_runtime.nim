@@ -36,6 +36,11 @@ type
     device*: objc.ID
     queue*: objc.ID
 
+proc `=destroy`(ctx: var MetalCtx) =
+    objc.withMemPool:
+      objc.release(ctx.queue)
+      objc.release(ctx.device)
+
 # ═════════════════════════════════════════════════
 # macOS-only execution primitives
 # ═════════════════════════════════════════════════
