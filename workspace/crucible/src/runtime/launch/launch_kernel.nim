@@ -9,10 +9,16 @@ import std/macros
 import ../engines_common
 import launch_common {.all.}
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Types
+# ═════════════════════════════════════════════════════════════════════════
 type
   LaunchSugar*[E] = object
     engine: E
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
 proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
   ## Chevron accessor: bare access returns chevron sugar.
   ## - Chevrons:

@@ -20,7 +20,33 @@ template dim3*(a, b, c: SomeInteger = 1): Dim3 =
   Dim3(x: int(a), y: int(b), z: int(c))
 
 type
+  DeviceMem*[H, T] = object
+    ## Typed on-device memory buffer
+    mem*: H
+
+type
   HwEngine* = concept engine, type E
     proc ingest(engine: E, source: string)
     proc getArtifact(engine: E)
     proc deviceName(engine: E): string
+    proc allocDevice(engine: E, nbytes: int)
+    proc freeDevice(engine: E, handle: auto)
+    proc copyToDeviceFromHost(engine: E, dst: auto, src: pointer, n: int)
+    proc copyToHostFromDevice(engine: E, dst: pointer, src: auto, n: int)
+
+proc allocDevice*(engine: HwEngine, T: typedesc, len: int): auto {.inline.} =
+  mixin allocDevice
+  let h = engine.allocDevice(len * sizeof(T))
+  DeviceMem[typeof(h), T](mem: h)
+
+proc freeDevice*[H, T](engine: HwEngine, mem: DeviceMem[H, T]) {.inline.} =
+  mixin freeDevice
+  engine.freeDevice(mem.mem)
+
+proc copyToDeviceFromHost*[H, T](engine: HwEngine, dst: DeviceMem[H, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  mixin copyToDeviceFromHost
+  engine.copyToDeviceFromHost(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[H, T](engine: HwEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[H, T], n: int) {.inline.} =
+  mixin copyToHostFromDevice
+  engine.copyToHostFromDevice(dst, src.mem, n * sizeof(T))
