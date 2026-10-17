@@ -22,7 +22,6 @@ export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════
 type
   VulkanCaches = object
-    ctx: VulkanContext
     spirvCache: Table[string, seq[uint32]]
     pipelineCache: Table[(string, int, int), VulkanPipeline]
 
@@ -40,17 +39,11 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 
-proc `=destroy`(c: var VulkanCaches) =
-  for p in c.pipelineCache.mvalues:
-    p.destroyPipeline(c.ctx)
-  `=destroy`(c.pipelineCache)
-  `=destroy`(c.spirvCache)
-
 proc newVulkanEngine(): VulkanEngine =
   let vctx = initVulkan()
   VulkanEngine(
     ctx: vctx,
-    caches: VulkanCaches(ctx: vctx))
+    caches: VulkanCaches())
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -66,9 +59,7 @@ proc ingest*(engine: VulkanEngine, source: string) =
     failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
          "use one kernel per source when passing by-value scalars")
 
-  for p in engine.caches.pipelineCache.mvalues:
-    p.destroyPipeline(engine.ctx)
-  engine.caches.pipelineCache.clear()
+  engine.caches.pipelineCache = initTable[(string, int, int), VulkanPipeline]()
   engine.caches.spirvCache.clear()
   engine.source = source
   engine.entryPoint = parseEntryPoint(source)

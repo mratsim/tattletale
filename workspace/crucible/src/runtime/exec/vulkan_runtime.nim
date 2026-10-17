@@ -23,13 +23,18 @@ type
     offset: uint32
     size: uint32
 
-  VulkanPipeline* = object
+  VulkanPipeline* = ref VulkanPipelineObj
+  VulkanPipelineObj = object
     device: VkDevice
     handle: VkPipeline
     layout: VkPipelineLayout
     descriptorSetLayout: VkDescriptorSetLayout
     descriptorPool: VkDescriptorPool
     descriptorSet: VkDescriptorSet
+    vkDestroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
+    vkDestroyPipelineLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
+    vkDestroyDescriptorSetLayout: proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
+    vkDestroyDescriptorPool: proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
     ssboCount: int
     pushConstSize: int
 
@@ -45,6 +50,19 @@ type
     vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
 
+
+proc `=destroy`(p: var VulkanPipelineObj) =
+  ## Releases the pipeline and its descriptor objects, nil fields skip.
+  if p.device == nil:
+    return
+  if p.handle != nil and p.vkDestroyPipeline != nil:
+    p.vkDestroyPipeline(p.device, p.handle, nil)
+  if p.layout != nil and p.vkDestroyPipelineLayout != nil:
+    p.vkDestroyPipelineLayout(p.device, p.layout, nil)
+  if p.descriptorSetLayout != nil and p.vkDestroyDescriptorSetLayout != nil:
+    p.vkDestroyDescriptorSetLayout(p.device, p.descriptorSetLayout, nil)
+  if p.descriptorPool != nil and p.vkDestroyDescriptorPool != nil:
+    p.vkDestroyDescriptorPool(p.device, p.descriptorPool, nil)
 
 template check*(res: VkResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
@@ -533,7 +551,20 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
                      ssboCount: int, entryPoint: string = "main",
                      pushConstSize: int = 0): VulkanPipeline =
+  result = VulkanPipeline()
   result.device = ctx.device
+  result.vkDestroyPipeline = cast[
+    proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyPipeline"))
+  result.vkDestroyPipelineLayout = cast[
+    proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineLayout"))
+  result.vkDestroyDescriptorSetLayout = cast[
+    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
+  result.vkDestroyDescriptorPool = cast[
+    proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
   result.ssboCount = ssboCount
   result.pushConstSize = pushConstSize
 
@@ -627,31 +658,6 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
     layout: result.layout
   )
   check vkCreateComputePipelines(ctx.device, ctx.pipelineCache, 1, cpCI.addr, nil, result.handle.addr)
-
-proc destroyPipeline*(pipeline: var VulkanPipeline, ctx: VulkanContext) =
-  let vkDestroyPipeline = cast[
-    proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyPipeline"))
-  let vkDestroyPipelineLayout = cast[
-    proc(device: VkDevice, pipelineLayout: VkPipelineLayout,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineLayout"))
-  let vkDestroyDescriptorSetLayout = cast[
-    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
-  let vkDestroyDescriptorPool = cast[
-    proc(device: VkDevice, descriptorPool: VkDescriptorPool,
-         pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
-  if pipeline.handle != nil and vkDestroyPipeline != nil:
-    vkDestroyPipeline(pipeline.device, pipeline.handle, nil)
-  if pipeline.layout != nil and vkDestroyPipelineLayout != nil:
-    vkDestroyPipelineLayout(pipeline.device, pipeline.layout, nil)
-  if pipeline.descriptorSetLayout != nil and vkDestroyDescriptorSetLayout != nil:
-    vkDestroyDescriptorSetLayout(pipeline.device, pipeline.descriptorSetLayout, nil)
-  if pipeline.descriptorPool != nil and vkDestroyDescriptorPool != nil:
-    vkDestroyDescriptorPool(pipeline.device, pipeline.descriptorPool, nil)
 
 proc setArg*(pipeline: var VulkanPipeline, index: int, buf: VulkanBuffer,
             ctx: VulkanContext) =
