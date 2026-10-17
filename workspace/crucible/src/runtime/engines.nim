@@ -7,7 +7,7 @@
 import ../codegen/ir/gpu_types
 import ./engines_common
 import ./launch/launch_kernel
-import ./launch/launch_common
+import ./launch/launch_serialization
 import ./launch/launch_device_fn
 import ./engines/nvrtc {.all.}
 import ./engines/cl {.all.}

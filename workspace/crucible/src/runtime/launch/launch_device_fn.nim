@@ -9,7 +9,7 @@ import std/[macros, hashes, strutils, tables]
 import ../../codegen/gpu_compiler
 import ../engines_common
 import launch_kernel {.all.}
-import launch_common {.all.}
+import launch_serialization {.all.}
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types

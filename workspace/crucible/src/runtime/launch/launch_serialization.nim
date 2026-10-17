@@ -11,15 +11,7 @@ import ../../codegen/ir/gpu_types
 import ../engines_common
 
 # ═════════════════════════════════════════════════════════════════════════
-# ▸ Grid geometry conversions
-# ═════════════════════════════════════════════════════════════════════════
-template dim3(t: tuple[a: SomeInteger]): Dim3 = Dim3(x: int(t[0]))
-template dim3(t: tuple[a, b: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]))
-template dim3(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]), z: int(t[2]))
-template dim3(d: Dim3): Dim3 = d
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Structural binding
+# ▸ Compile-time binding
 # ═════════════════════════════════════════════════════════════════════════
 
 func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
@@ -81,11 +73,9 @@ func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind)
   elif T is array: 1
   else: 1
 
-func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
-  ## Device args one launch delivers, output first
-  result = argCount(O, H, backend)
-  for f in fields(default(A)):
-    result += argCount(typeof(f), H, backend)
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Runtime packing
+# ═════════════════════════════════════════════════════════════════════════
 
 proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
   ## One scalar lowered to `w` bytes, wider values truncate to 32-bit
@@ -174,6 +164,16 @@ proc deliverArg[H, C](ctx: var C, backend: static BackendKind, pos: var int, v: 
     copyMem(staging[0].addr, v.unsafeAddr, n)
     sink(ctx, false, default(H), pos, staging.addr, w)
     inc pos
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════
+
+func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+  ## Device args one launch delivers, output first
+  result = argCount(O, H, backend)
+  for f in fields(default(A)):
+    result += argCount(typeof(f), H, backend)
 
 proc bindArgs*[H, C](ctx: var C, backend: static BackendKind, output: auto, args: tuple,
                      ptrAsBuffer: static bool,

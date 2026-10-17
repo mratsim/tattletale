@@ -10,10 +10,10 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \
 ##     --nimcache:nimcache/tests \
-##     workspace/crucible/tests/runtime/t_launch_common.nim
+##     workspace/crucible/tests/runtime/t_launch_serialization.nim
 
 import workspace/crucible
-import workspace/crucible/src/runtime/launch/launch_common
+import workspace/crucible/src/runtime/launch/launch_serialization
 
 type
   TestHandle = distinct int

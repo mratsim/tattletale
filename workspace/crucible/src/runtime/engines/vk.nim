@@ -14,7 +14,7 @@ import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
 import ../engines_common
 import ../errors
-import ../launch/launch_common
+import ../launch/launch_serialization
 
 export vulkan_runtime
 # ═════════════════════════════════════════════════════════════════════════

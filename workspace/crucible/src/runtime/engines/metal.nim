@@ -9,7 +9,7 @@ import std/[strutils, tables]
 import ../../codegen/ir/gpu_types
 import ../engines_common
 import ../errors
-import ../launch/launch_common
+import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 

@@ -19,6 +19,11 @@ type
 template dim3*(a, b, c: SomeInteger = 1): Dim3 =
   Dim3(x: int(a), y: int(b), z: int(c))
 
+template dim3*(t: tuple[a: SomeInteger]): Dim3 = Dim3(x: int(t[0]))
+template dim3*(t: tuple[a, b: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]))
+template dim3*(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]), z: int(t[2]))
+template dim3*(d: Dim3): Dim3 = d
+
 type
   DeviceMem*[H, T] = object
     ## Typed on-device memory buffer

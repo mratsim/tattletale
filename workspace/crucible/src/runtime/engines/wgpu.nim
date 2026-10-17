@@ -13,7 +13,7 @@ import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
 import ../engines_common
 import ../errors
-import ../launch/launch_common
+import ../launch/launch_serialization
 
 export wgpu_runtime
 # ═════════════════════════════════════════════════════════════════════════

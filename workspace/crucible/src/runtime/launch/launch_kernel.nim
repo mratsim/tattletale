@@ -7,7 +7,7 @@
 
 import std/macros
 import ../engines_common
-import launch_common {.all.}
+import launch_serialization {.all.}
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
