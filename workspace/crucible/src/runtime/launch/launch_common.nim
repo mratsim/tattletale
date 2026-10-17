@@ -17,7 +17,6 @@ import ../engines_common
 # Private parser-quoted conversions, templates expand away: nothing reaches codegen.
 # Template params stay clear of the Dim3 field names x/y/z, a name collision breaks expansion.
 template dim3(a: SomeInteger): Dim3 = Dim3(x: int(a))
-template dim3(d: Dim3): Dim3 = d
 
 proc toDim3(n: NimNode): NimNode =
   ## A grid/blk chevron expression as a `Dim3`: tuple literals construct the object, other host expressions go through `dim3`.
