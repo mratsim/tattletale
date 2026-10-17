@@ -13,12 +13,11 @@ type
     x*, y*, z* = 1
 
   LaunchConfig* = object
-    ## Launch geometry, grid/blk per-backend, sharedMem CUDA/OpenCL only, stream CUDA only.
+    ## Launch geometry, grid and block dims.
+    ## Device-specific like shared memory or stream ID are unsupported at the moment
     grid*, blk*: Dim3
-    sharedMem*, stream*: int
 
-template dim3*(a, b, c: SomeInteger): Dim3 =
-  ## Builds a `Dim3` from plain integer args: `dim3(32, 8, 1)`.
+template dim3*(a, b, c: SomeInteger = 1): Dim3 =
   Dim3(x: int(a), y: int(b), z: int(c))
 
 type

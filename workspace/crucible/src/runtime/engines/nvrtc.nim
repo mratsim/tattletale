@@ -186,13 +186,11 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, 
   var dctx = SinkCtx()
   bindArgs(dctx, bkCuda, output, args, false, sinkArg)
 
-  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
   check cuLaunchKernel(
     engine.nvrtc.kernel,
     uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
     uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
-    uint32(cfg.sharedMem),
-    stream,
+    0, 0,  # no shared memory, no stream
     dctx.addrs[0].addr, nil)
 
   check cuCtxSynchronize()

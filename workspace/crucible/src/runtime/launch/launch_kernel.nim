@@ -66,8 +66,8 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
   if not schedule.isNil:
     var fields: seq[NimNode] = @[]
     for a in schedule:
-      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem", "stream"],
-        "launchKernel do-schedule expects grid/blk/sharedMem/stream = ..., got " & a.repr
+      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"],
+        "launchKernel do-schedule expects grid = ... / blk = ..., got " & a.repr
       fields.add nnkExprColonExpr.newTree(a[0], a[1])
     doAssert fields.len >= 2,
       "launchKernel do-schedule needs at least grid and blk, got " & $fields.len & " field(s)"

@@ -186,9 +186,6 @@ when defined(macosx):
                           p, objc.NSUInteger(len), objc.NSUInteger(idx))
       var dctx = SinkCtx(encoder: encoder)
       bindArgs(dctx, bkMetal, output, args, true, sinkArg)
-      if cfg.sharedMem > 0:
-        discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
-                        objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))
       let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),
                          depth: objc.NSUInteger(cfg.grid.z))

@@ -5,42 +5,30 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Launch delivery contract: geometry, chevron config, structural arg binding.
-
 import std/macros
 import std/typetraits
 import ../../codegen/ir/gpu_types
 import ../engines_common
 
-# ▸ Launch geometry
-
-# Private parser-quoted conversions, templates expand away: nothing reaches codegen.
-# Template params stay clear of the Dim3 field names x/y/z, a name collision breaks expansion.
-template dim3(a: SomeInteger): Dim3 = Dim3(x: int(a))
+template dim3(t: tuple[a: SomeInteger]): Dim3 = Dim3(x: int(t[0]))
+template dim3(t: tuple[a, b: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]))
+template dim3(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]), z: int(t[2]))
 
 proc toDim3(n: NimNode): NimNode =
-  ## A grid/blk chevron expression as a `Dim3`: tuple literals construct the object, other host expressions go through `dim3`.
-  if n.kind == nnkTupleConstr or (n.kind == nnkPar and n.len > 1):
-    doAssert n.len <= 3, "chevron: grid/blk tuple takes 1..3 fields, got: " & n.repr
-    let x = n[0]
-    let y = if n.len > 1: n[1] else: newLit(1)
-    let z = if n.len > 2: n[2] else: newLit(1)
-    result = quote do: Dim3(x: `x`, y: `y`, z: `z`)
-  else:
-    result = quote do: dim3(`n`)
+  ## A grid/blk chevron expression as a `dim3` call.
+  result = quote do: dim3(`n`)
 
 macro chevronConfig*(cfg: untyped): LaunchConfig =
   ## Parses the launch chevron config, named or positional:
-  ##   engine.launchKernel<<(grid, blk, sharedMem, stream)>> / engine.launchKernel<<(grid: (2, 4), blk: (4, 2), sharedMem: n)>>
+  ##   engine.launchKernel<<(grid, blk)>> or engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>
   ##
-  ## - named fields grid/blk/sharedMem/stream, defaults:
-  ##   grid (1, 1), blk (1, 1), sharedMem 0, stream 0
-  ## - positional form: 2..4 fields in that order
+  ## - named fields grid/blk, defaults grid (1, 1), blk (1, 1)
+  ## - positional form: exactly (grid, blk)
   ## - grid and blk stay host expressions: tuple literals construct `Dim3` directly,
   ##   everything else goes through `dim3`
   ## - mixing named and positional fields is rejected
   let cfgAst = cfg
-  var gridN, blkN, smN, stN: NimNode
+  var gridN, blkN: NimNode
   let named = cfgAst.kind in {nnkPar, nnkTupleConstr} and
               cfgAst.len > 0 and cfgAst[0].kind == nnkExprColonExpr
   if named:
@@ -51,28 +39,18 @@ macro chevronConfig*(cfg: untyped): LaunchConfig =
       case key
       of "grid": gridN = ch[1]
       of "blk":  blkN  = ch[1]
-      of "sharedMem": smN = ch[1]
-      of "stream":    stN = ch[1]
       else: doAssert false, "chevron: unknown field '" & ch[0].repr & "'"
     if gridN.isNil: gridN = newLit(1)
     if blkN.isNil:  blkN  = newLit(1)
-    if smN.isNil:   smN   = newLit(0)
-    if stN.isNil:   stN   = newLit(0)
   else:
-    doAssert cfgAst.len in 2..4,
-      "chevron positional form needs 2..4 args, got: " & cfgAst.repr
+    doAssert cfgAst.len == 2,
+      "chevron positional form needs (grid, blk), got: " & cfgAst.repr
     gridN = cfgAst[0]
     blkN  = cfgAst[1]
-    smN   = if cfgAst.len >= 3: cfgAst[2] else: newLit(0)
-    stN   = if cfgAst.len >= 4: cfgAst[3] else: newLit(0)
   let gridD = toDim3(gridN)
   let blkD = toDim3(blkN)
   result = quote do:
-    LaunchConfig(
-      grid: `gridD`, blk: `blkD`,
-      sharedMem: `smN`, stream: `stN`)
-
-
+    LaunchConfig(grid: `gridD`, blk: `blkD`)
 
 # ▸ Structural binding
 
