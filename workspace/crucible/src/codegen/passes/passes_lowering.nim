@@ -295,14 +295,6 @@ proc lowerSpans*(ctx: var GpuContext) =
 # Compile-time parameter pruning
 # ═══════════════════════════════════════════════════════════════════
 
-proc referencesIdent(n: GpuAst, name: string): bool =
-  ## True when the IR references the identifier `name` anywhere
-  if n.kind == gpuIdent and n.symbol.name == name:
-    return true
-  for child in n:
-    if child.referencesIdent(name):
-      return true
-
 proc eraseCallArgs(n: var GpuAst, callee: string, dropped: seq[int]) =
   ## Removes the arguments at `dropped` positions from every call to `callee`
   if n.kind == gpuCall and n.cName.symbol.name == callee:

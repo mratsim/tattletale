@@ -55,6 +55,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
 
 proc isCompileTime(ftype: NimNode): bool =
   ftype.kind == nnkStaticTy or
+    (ftype.kind in {nnkIdent, nnkSym} and ftype.eqIdent("typedesc")) or
     (ftype.kind in {nnkCommand, nnkBracketExpr, nnkCall} and
      $ftype[0] in ["static", "typedesc"])
 

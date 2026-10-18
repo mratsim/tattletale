@@ -1209,6 +1209,10 @@ proc kernelParamLeaves*(t: GpuType, name: string): seq[KernelParamLeaf] =
             walk(f.typ, name & "_" & f.name, leaves)
       else:
         leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
     else:
       leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
   walk(t, name, result)

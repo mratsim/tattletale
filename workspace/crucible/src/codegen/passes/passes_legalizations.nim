@@ -700,11 +700,16 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
   ## Deconstruct body in kernel entry and reconstruct before device function calls
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
+    var taken: seq[string]
+    for p in fn.pParams:
+      taken.add p.ident.ident()
     var params: seq[GpuParam]
     for p in fn.pParams:
       if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
         let leaves = p.typ.kernelParamLeaves(p.ident.ident())
         for leaf in leaves:
+          doAssert leaf.name notin taken,
+            "expandStructKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
           let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
           let space = if leaf.isBuffer: asDevice else: asRMEM
           params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
