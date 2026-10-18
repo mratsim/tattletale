@@ -1,6 +1,6 @@
-## Multi-kernel Vec10 add/mul on the WebGPU (WGSL) backend.
-## One ingest compiles the library, both kernels launch on the same engine.
+## WebGPU multi-kernel Vec10
 ##
+## Test that one ingest compiles both kernels and both launch on the same engine
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \

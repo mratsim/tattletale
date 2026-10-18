@@ -1,21 +1,7 @@
-## Builtin catalog: in-macro alias expansion + identifier-collision sweep.
+## Builtin catalog alias expansion
 ##
-## The alias set is the per-idiom coordinate spellings: CUDA `blockIdx`,
-## OpenCL `get_global_id`, GLSL `gl_GlobalInvocationID`, WGSL `global_id`,
-## etc. They are implemented as zero-arg and static-dim templates that
-## expand to the canonical MSL names during sem, so the IR only ever
-## contains canonical names. This test pins the expansion *inside* a typed
-## GPU macro body (the `opencl:` macro specifically).
-## The runtime-dim loud-error probe fires inside the macro body:
-##   - dot context:     `blockIdx.x`      -> `threadgroup_position_in_grid.x`
-##   - positional:      `blockIdx[1]`     -> `threadgroup_position_in_grid.y`
-##   - static-dim:      `get_global_id(d)` folds to the `d`-th component
-##   - runtime dim `get_global_id(d)` is a loud Nim static error
-##
-## The collision sweep asserts no two catalog names are identifier-equal under
-## Nim's case/underscore-insensitive matching. The only intentional pair is
-## `workgroup_barrier` ≡ `workgroupBarrier`: one defaulted-param declaration
-## serves both the OpenCL flags arity and the WGSL zero-arg spelling.
+## Test that coordinate aliases expand to canonical builtins in a typed GPU
+## macro body, a runtime-dim use errors, and no two names collide
 ##
 ## Run:
 ##   cd tattletale
@@ -108,6 +94,9 @@ block:
   doAssert names.len > 20, "catalog name extraction must find the full declaration set, got " & $names.len
   # `barrier` is deliberately overloaded (0-arg Vulkan, flags OpenCL).
   # Two declarations share one identifier: not a collision.
+  # The one intentional pair is `workgroup_barrier` ≡ `workgroupBarrier`:
+  # one defaulted-param declaration serves both the OpenCL flags arity
+  # and the WGSL zero-arg spelling.
   names = names.deduplicate()
 
   proc norm(name: string): string =

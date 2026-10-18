@@ -1,6 +1,6 @@
-## OpenCL: multi-kernel Vec10 add and mul in one ingested source.
-## One ingest compiles the library, both kernels launch on the same engine.
+## OpenCL multi-kernel Vec10
 ##
+## Test that one ingest compiles both kernels and both launch on the same engine
 ## Run:
 ##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \

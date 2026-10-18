@@ -1,13 +1,6 @@
-## Phase 1b: Type System Fixes test
+## GPU type system equality, hash and clone
 ##
-## Verifies:
-## - hasPragma returns true when magic is the second pragma
-## - GpuType.== on gtGenericInst with nil fields does NOT crash
-## - gtPtr.== distinguishes mutable from immutable
-## - gtPtr.hash distinguishes mutable from immutable
-## - gtInvalid == gtInvalid returns false
-## - GpuProcSignature.== compares params by value (Symbol identity)
-## - clone preserves mutable for gtPtr
+## Test that GpuType and GpuProcSignature equality, hash and clone keep pointer mutability and reject gtInvalid
 ##
 ## Run:
 ##   cd tattletale
