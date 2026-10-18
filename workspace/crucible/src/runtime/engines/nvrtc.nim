@@ -30,6 +30,7 @@ type
     moduleLoaded: bool
 
   CudaEngine* = ref object
+    source: string
     ptx: string
     nvrtc: NVRTC
 
@@ -59,10 +60,11 @@ proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
+  engine.source = source
   engine.ptx = engine.nvrtc.ptx
 
 proc getArtifact*(engine: CudaEngine): string =
-  engine.ptx
+  engine.source
 
 proc deviceName*(engine: CudaEngine): string {.inline.} =
   var name = newString(256)
