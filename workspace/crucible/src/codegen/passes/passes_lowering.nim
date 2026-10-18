@@ -356,10 +356,10 @@ proc getOperandType(n: GpuAst): GpuType =
   of gpuObjConstr: n.ocType
   of gpuDeref:
     let d = getOperandType(n.dOf)
-    if d != nil and d.kind == gtPtr: d.to else: d
+    if not d.isNil and d.kind == gtPtr: d.to else: d
   of gpuIndex:
     let t = getOperandType(n.iArr)
-    if t == nil: nil
+    if t.isNil: nil
     else:
       case t.kind
       of gtArray: t.aTyp
@@ -394,7 +394,7 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
     insertPointerDerefImpl(ctx, n.iIndex)
     if n.iArr.kind != gpuDeref:
       let t = getOperandType(n.iArr)
-      if t != nil and t.kind == gtPtr and t.to != nil:
+      if not t.isNil and t.kind == gtPtr and not t.to.isNil:
         n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
   of gpuDot:
     insertPointerDerefImpl(ctx, n.dParent)
