@@ -203,6 +203,13 @@ proc hasNonFnPtrParam(fn: GpuAst): bool =
     if p.typ != nil and p.typ.kind == gtPtr and p.addressSpace != asRMEM:
       return true
 
+proc hasPtrStructParam(fn: GpuAst, ctx: GpuContext): bool =
+  for p in fn.pParams:
+    if p.typ != nil and p.typ.kind == gtObject:
+      for f in p.typ.fields:
+        if f.typ.kind == gtPtr and (p.typ, f.name) in ctx.structsWithPtrs:
+          return true
+
 proc inlinePointerParamCalls(ctx: var GpuContext) =
   ## Inlines device-proc calls whose pointer parameters have no WGSL
   ## parameter type. WGSL rejects storage, uniform and workgroup pointers
@@ -249,6 +256,13 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
       if typ.kind == gtPtr:
         # `mutable` selects `read_write` in the WGSL pointer type.
         typ.mutable = arg.determineMutability()
+      if typ.kind == gtObject and arg.kind == gpuIdent:
+        # A struct value does not carry its pointer field: the pointer lives
+        # in a global binding. Without rebinding, the callee body reads
+        # whatever same-named buffer it finds.
+        for f in typ.fields:
+          if f.typ.kind == gtPtr and (arg.ident(), f.name) in ctx.ptrFieldBindings:
+            ctx.ptrFieldBindings[(fresh, f.name)] = ctx.ptrFieldBindings[(arg.ident(), f.name)]
       let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
       let binding = GpuAst(kind: gpuIdent, symbol: sym)
       subst[p.ident.symbol.iSym] = binding
@@ -262,7 +276,8 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
 
   proc inlineCandidate(ctx: GpuContext, call: GpuAst): bool =
     ## True when a call must inline.
-    ## Its callee takes pointer parameters with no WGSL parameter type.
+    ## The callee takes a pointer outside `function` space, or a struct
+    ## holding one: neither crosses a WGSL function signature.
     if call.cName.symbol == nil:
       return false
     if call.cName notin ctx.allFnTab:
@@ -270,7 +285,7 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
     let callee = ctx.allFnTab[call.cName]
     if callee.kind != gpuProc or callee.isGlobal():
       return false
-    result = callee.hasNonFnPtrParam()
+    result = callee.hasNonFnPtrParam() or callee.hasPtrStructParam(ctx)
 
   proc inlineIn(ctx: var GpuContext, n: var GpuAst): bool =
     ## Splices inlinable calls in `n`, depth-first. Returns true when `n` changed.
@@ -303,10 +318,10 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
       changed = ctx.inlineIn(body)
     ctx.fnTab[key].pBody = body
 
-  # Drop the inlined callees. Their pointer parameters have no WGSL parameter type.
+  # Drop the inlined callees: their parameters cannot cross a WGSL function signature.
   for key in toSeq(ctx.fnTab.keys):
     let fn = ctx.fnTab[key]
-    if not fn.isGlobal() and fn.hasNonFnPtrParam():
+    if not fn.isGlobal() and (fn.hasNonFnPtrParam() or fn.hasPtrStructParam(ctx)):
       ctx.fnTab.del(key)
 
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
@@ -369,17 +384,14 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     if fn.isGlobal():
       pw.injectAddressOfImpl(ctx, fn)
 
-  # 5. makeCodeValid
+  # 5. Inline calls whose parameters cannot cross a WGSL function signature.
+  ctx.inlinePointerParamCalls()
+
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     pw.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
 
-  # 6. checkCodeValid
   for (fnIdent, fn) in pairs(ctx.fnTab):
     pw.checkCodeValidImpl(ctx, fn)
-
-  # 7. Inline device-proc calls that cannot carry their pointer parameters
-  #    through a WGSL function signature.
-  ctx.inlinePointerParamCalls()
 
 
 proc genLit*(ast: GpuAst): string =
