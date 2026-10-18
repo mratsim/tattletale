@@ -10,6 +10,7 @@ import std / [tables]
 import ../ir/gpu_types
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
 import ./passes_preprocessing
@@ -18,12 +19,12 @@ proc lowerByrefParamsImpl*(ctx: var GpuContext; n: var GpuAst)
 proc insertByrefAddrsImpl*(ctx: var GpuContext; n: var GpuAst)
 
 proc registerOpenclPasses*(reg: var PassRegistry) =
-  ## Register OpenCL-specific passes: byref-arg materialization, keyword rejection.
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
   )
+  reg.registerExpandStructKernelParams()
   reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
     "Rejects identifiers that are reserved OpenCL C keywords",
     proc(ctx: var GpuContext): void =

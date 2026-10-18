@@ -178,7 +178,7 @@ when defined(macosx):
 
 
       var dctx = SerializationCtx(encoder: encoder)
-      bindArgs(dctx, output, args, store, objc.ID)
+      bindArgs(dctx, output, args, store, objc.ID, bkMetal)
       let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
                          height: objc.NSUInteger(grid.y),
                          depth: objc.NSUInteger(grid.z))

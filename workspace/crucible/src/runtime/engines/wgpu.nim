@@ -179,10 +179,10 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: t
 
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
   # the device keeps the spec-default limits, the spec-default alignment is 256.
-  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer)
+  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWGSL)
 
   var dctx = SerializationCtx()
-  bindArgs(dctx, output, args, store, WGPUBuffer)
+  bindArgs(dctx, output, args, store, WGPUBuffer, bkWGSL)
   let scalarBytes = dctx.blob
 
   var scratch = WGPUBuffer(nil)

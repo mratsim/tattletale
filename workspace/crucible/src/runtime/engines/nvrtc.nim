@@ -162,9 +162,9 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
   ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
 proc cudaBindArgs(output: auto, args: tuple): auto =
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr)
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
   result = SerializationCtx[n]()
-  bindArgs(result, output, args, store, CUdeviceptr)
+  bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
 
 proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.

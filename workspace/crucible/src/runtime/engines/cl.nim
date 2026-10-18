@@ -88,7 +88,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   let kern = engine.kernelCache.kernels[kernel]
 
   var dctx = SerializationCtx(kern: kern)
-  bindArgs(dctx, output, args, store, OpenCLBuffer)
+  bindArgs(dctx, output, args, store, OpenCLBuffer, bkOpenCL)
 
   let globalSize = [cl_size_t(grid.x * blk.x),
                     cl_size_t(grid.y * blk.y),

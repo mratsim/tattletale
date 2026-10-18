@@ -75,7 +75,20 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   var blob: array[lay.size, byte]
   var off = 0
-  blob.packFrom(off, v, bkVulkan)
+  when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
+    for f in fields(v):
+      when typeof(f) is DeviceMem:
+        off = roundStepUp(off, 8)
+        let a = deviceAddress(f.mem, ctx.vctx)
+        copyMem(blob[off].addr, a.unsafeAddr, 8)
+        inc off, 8
+      else:
+        blob.packFrom(off, f, bkVulkan)
+    off = roundStepUp(off, lay.align)
+    doAssert off == lay.size,
+      "host packing of " & $T & " does not match the device layout"
+  else:
+    blob.packFrom(off, v, bkVulkan)
   if lay.size > 0:
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
@@ -197,7 +210,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     entry = kernel
 
   var dctx = SerializationCtx(vctx: engine.ctx)
-  bindArgs(dctx, output, args, store, VulkanBuffer)
+  bindArgs(dctx, output, args, store, VulkanBuffer, bkVulkan)
   let pushConstLen = dctx.pn
 
   let pipelineKey = (kernel, pushConstLen)

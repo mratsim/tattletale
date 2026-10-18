@@ -14,7 +14,7 @@ import ../engines/engines_common
 # ▸ Compile-time binding
 # ═════════════════════════════════════════════════════════════════════════
 
-func argWidth*[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
+func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
   ## Crucible-lowered byte width of scalar `T`
   when T is int|uint|enum: 4
   elif T is bool: (when backend == bkCuda: 1 else: 4)
@@ -30,7 +30,7 @@ func isStaticArg[T](_: typedesc[T]): bool {.compileTime.} =
     result = default(T).len == 0 or isStaticArg(typeof(default(T)[0]))
   else: result = false
 
-func hasBufferLeaf[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
+func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
   ## True when `T` holds a pointer, handle or DeviceMem anywhere
   when T is H or T is DeviceMem or T is ptr or T is pointer: true
   elif T is object|tuple:
@@ -41,13 +41,17 @@ func hasBufferLeaf[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
   else: result = false
 
+func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
+  backend in {bkMetal, bkWGSL, bkOpenCL}
+
 func roundStepUp*(x, step: int): int {.inline.} =
   ((x + step - 1) div step) * step
 
 func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment, phantom/static types excluded,
   ##  Nim int/uint lowered to 4 bytes
-  when T is object|tuple:
+  when T is DeviceMem: result = (8, 8)  # the device address slot
+  elif T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
     else:
@@ -63,14 +67,14 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
   else:
     result = (argWidth(T, backend), argWidth(T, backend))
 
-func argCount[T, H](_: typedesc[T], _: typedesc[H]): int {.compileTime.} =
+func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
   ## Device args one launch value delivers
   when T is H or T is DeviceMem or T is ptr or T is pointer: 1
   elif T is object|tuple:
     when isStaticArg(T): 0
-    elif hasBufferLeaf(T, H):
+    elif hasBufferLeaf(T, H) and explodesStructArgs(backend):
       for f in fields(default(T)):
-        result += argCount(typeof(f), H)
+        result += argCount(typeof(f), H, backend)
     else: 1
   elif T is array: 1
   else: 1
@@ -122,7 +126,7 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
     putBytes(dst, off, v, a)
     off += a
 
-macro serialize*(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc) =
+macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc, backend: static BackendKind) =
   result = quote do:
     when not supportsCopyMem(typeof(`v`)):
       {.error: "kernel args are trivially copyable types only, " &
@@ -136,9 +140,9 @@ macro serialize*(ctx: var auto, v: auto, pos: var int, store: untyped, H: typede
     elif typeof(`v`) is object|tuple:
       when isStaticArg(typeof(`v`)):
         discard
-      elif hasBufferLeaf(typeof(`v`), `H`):
+      elif hasBufferLeaf(typeof(`v`), `H`) and explodesStructArgs(`backend`):
         for f in fields(`v`):
-          serialize(`ctx`, f, `pos`, `store`, `H`)
+          serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
       else:
         `store`(`ctx`, `v`, `pos`)
         inc `pos`
@@ -150,14 +154,14 @@ macro serialize*(ctx: var auto, v: auto, pos: var int, store: untyped, H: typede
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
-func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H]): int {.compileTime.} =
-  result = argCount(O, H)
+func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+  result = argCount(O, H, backend)
   for f in fields(default(A)):
-    result += argCount(typeof(f), H)
+    result += argCount(typeof(f), H, backend)
 
-template bindArgs*(ctx: var auto, output: auto, args: tuple, store: untyped, H: typedesc) =
+template bindArgs*(ctx: var auto, output: auto, args: tuple, store: untyped, H: typedesc, backend: static BackendKind) =
   var pos = 0
-  serialize(ctx, output, pos, store, H)
+  serialize(ctx, output, pos, store, H, backend)
   var argsCopy = args
   for f in fields(argsCopy):
-    serialize(ctx, f, pos, store, H)
+    serialize(ctx, f, pos, store, H, backend)
