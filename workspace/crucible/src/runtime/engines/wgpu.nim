@@ -71,11 +71,9 @@ proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
   ctx.handles[argIdx] = v
 
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
-  ## WebGPU binds pointer args as storage buffers: raw pointer bits are
-  ## meaningless in the scalar scratch, buffer args must be WGPUBuffer values
   when T is ptr|pointer:
     static:
-      error "WebGPU pointer args bind as storage buffers: pass the WGPUBuffer from allocDevice, got " & $T
+      error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
   ctx.pn = roundStepUp(ctx.pn, 256)
   ctx.chunkOff[argIdx] = ctx.pn
   const size = deviceLayout(T, bkWGSL).size
