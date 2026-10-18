@@ -86,7 +86,7 @@ static:
     doAssert addrOf.aOf.iArr.kind == gpuIdent, "no deref under addr-of"
     echo "  OK - addr-of subtree untouched"
 
-  # ── 6. Double deref: gpuDeref over a pointer operand ──────────────────────
+  # ── 6. Single deref of a pointer-to-pointer stays one deref ───────────────
   block:
     let int32 = GpuType(kind: gtInt32)
     let ptrPtr = GpuType(kind: gtPtr, to: GpuType(kind: gtPtr, to: int32))
@@ -95,8 +95,9 @@ static:
     var deref = GpuAst(kind: gpuDeref, dOf: ptrIdent)
     var ctx = GpuContext()
     insertPointerDerefImpl(ctx, deref)
-    doAssert deref.dOf.kind == gpuDeref, "ptr operand of a deref should be wrapped"
-    echo "  OK - double deref inserted"
+    doAssert deref.dOf.kind == gpuIdent,
+      "the deref node itself is the wrap: re-wrapping its pointer operand changes the read depth"
+    echo "  OK - explicit deref left alone"
 
   # ── 7. Leaves plain array indexing alone ──────────────────────────────────
   block:

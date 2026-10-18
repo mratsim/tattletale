@@ -39,11 +39,44 @@ proc refTypeName(inner: GpuType): string =
 
 proc refBlockDecl(inner: GpuType): string =
   ## `layout(buffer_reference, std430) buffer Ref_X { T x[]; } Ref_X;`
-  ## for one pointee type, runtime-sized member
-  let pt = if inner.kind == gtUA: inner.uaTo else: inner
-  let member = if pt.kind == gtVoid: "uint8_t x[]"
-               elif pt.kind == gtUA: gpuTypeToString(pt.uaTo, "x", allowEmptyIdent = true) & "[]"
-               else: gpuTypeToString(pt, "x") & "[]"
+  ## for one pointee type.
+  ##
+  ## Member shapes:
+  ## - runtime array (UncheckedArray): `T x[]`, fixed-array elements nest
+  ##   after the runtime dimension (`uint8_t x[][32]`), the unsized
+  ##   dimension is only legal in the outermost position
+  ## - pointer to one fixed array: fixed member `uint8_t x[32]`
+
+  proc arrayDims(t: GpuType): tuple[base: GpuType, dims: string] =
+    ## Strips the array nesting, collecting the dimension suffixes outermost
+    ## first (the Nim nesting order and the GLSL reading order agree)
+    var t = t
+    while t.kind == gtArray:
+      doAssert t.aLen >= 0,
+        "Unresolved static array length in a Vulkan ref block: lengths must resolve before emission"
+      result.dims &= '[' & $t.aLen & ']'
+      t = t.aTyp
+    result.base = t
+
+  let member =
+    if inner.kind == gtUA:
+      let el = inner.uaTo
+      doAssert el.kind != gtUA,
+        "Runtime array of runtime arrays is not expressible in a GLSL buffer block"
+      if el.kind == gtVoid:
+        "uint8_t x[]"
+      elif el.kind == gtArray:
+        let (base, dims) = arrayDims(el)
+        gpuTypeToString(base, "x", allowEmptyIdent = true) & "[]" & dims
+      else:
+        gpuTypeToString(el, "x", allowEmptyIdent = true) & "[]"
+    elif inner.kind == gtArray:
+      let (base, dims) = arrayDims(inner)
+      gpuTypeToString(base, "x", allowEmptyIdent = true) & dims
+    elif inner.kind == gtVoid:
+      "uint8_t x[]"
+    else:
+      gpuTypeToString(inner, "x") & "[]"
   let name = refTypeName(inner)
   result = "layout(buffer_reference, std430) buffer " & name & " { " & member & "; };"
 
@@ -393,7 +426,12 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField)
 
   of gpuIndex:
-    result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
+    if ast.iArr.kind == gpuDeref:
+      # the ref block member is runtime-sized, the index applies to it directly.
+      # Routing through the gpuDeref rendering would give `.x[0][i]`
+      result = ctx.genVulkan(ast.iArr.dOf) & ".x[" & ctx.genVulkan(ast.iIndex) & ']'
+    else:
+      result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
 
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
@@ -536,8 +574,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
 
   of gpuDeref:
-    # a buffer reference: the block's member, indexed or field-accessed by the parent node
-    result = ctx.genVulkan(ast.dOf) & ".x"
+    # the ref block member is a runtime-sized array, a value read takes
+    # element 0. Indexed and field-accessed uses route around this branch
+    result = ctx.genVulkan(ast.dOf) & ".x[0]"
 
   of gpuConstexpr:
     if ast.cType.kind == gtArray:
@@ -564,6 +603,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsFp16 = false
   var needsBf16 = false
   var needsSubgroup = false
+  var needsInt8 = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat64):
       needsFp64 = true
@@ -571,6 +611,8 @@ proc codegen*(ctx: var GpuContext): string =
       needsFp16 = true
     if fn.pRetType.containsKind(gtBf16):
       needsBf16 = true
+    if fn.pRetType.containsKind(gtUint8):
+      needsInt8 = true
     for p in fn.pParams:
       if p.typ.containsKind(gtFloat64):
         needsFp64 = true
@@ -578,6 +620,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp16 = true
       if p.typ.containsKind(gtBf16):
         needsBf16 = true
+      if p.typ.containsKind(gtUint8):
+        needsInt8 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
 
@@ -593,6 +637,12 @@ proc codegen*(ctx: var GpuContext): string =
   if needsBf16:
     result.add "#extension GL_EXT_bfloat16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+  if needsInt8:
+    # uint8_t members in push-constant and buffer-reference blocks need
+    # both extensions: explicit_int8 defines the type, 8bit_storage
+    # admits it in storage-class blocks
+    result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
+    result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
   if needsSubgroup:
     # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
     # subgroupShuffle by GL_KHR_shader_subgroup_shuffle.

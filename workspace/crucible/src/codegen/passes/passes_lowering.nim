@@ -404,11 +404,10 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
       if t != nil and t.kind == gtPtr:
         n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
   of gpuDeref:
+    # Recurse into the deref'd subtree only: this node is already the wrap
+    # for its operand. A re-wrap chains derefs and adds one extra `.x[0]`
+    # per visit in the backends that render them
     insertPointerDerefImpl(ctx, n.dOf)
-    if n.dOf.kind != gpuDeref:
-      let t = getOperandType(n.dOf)
-      if t != nil and t.kind == gtPtr:
-        n.dOf = GpuAst(kind: gpuDeref, dOf: n.dOf)
   else:
     for ch in mitems(n):
       insertPointerDerefImpl(ctx, ch)
