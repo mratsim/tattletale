@@ -181,18 +181,6 @@ proc enqueueReadBuffer*(
   event: pointer
 ): TClResult {.importc: "clEnqueueReadBuffer", dynlib: ClLib.}
 
-proc enqueueFillBuffer*(
-  command_queue: Pcommand_queue,
-  buffer: Pmem,
-  pattern: pointer,
-  pattern_size: cl_size_t,
-  offset: cl_size_t,
-  size: cl_size_t,
-  num_events_in_wait_list: cl_uint,
-  event_wait_list: pointer,
-  event: pointer
-): TClResult {.importc: "clEnqueueFillBuffer", dynlib: ClLib.}
-
 # ═══════════════════════════════════════════════════════════════════════
 # Program & Kernel API
 # ═══════════════════════════════════════════════════════════════════════

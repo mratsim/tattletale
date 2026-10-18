@@ -44,6 +44,26 @@ type
   VkDevice* = pointer
   VkQueue* = pointer
   VkBuffer* = pointer
+  VkDeviceAddress* = uint64
+  VkMemoryAllocateFlagBits* = int32
+
+  VkPhysicalDeviceBufferDeviceAddressFeatures* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    bufferDeviceAddress*: VkBool32
+    bufferDeviceAddressCaptureReplay*: VkBool32
+    bufferDeviceAddressMultiDrawAttributed*: VkBool32
+
+  VkBufferDeviceAddressInfo* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    buffer*: VkBuffer
+
+  VkMemoryAllocateFlagsInfo* = object
+    sType*: VkStructureType
+    pNext*: pointer
+    flags*: VkMemoryAllocateFlagBits
+    deviceMask*: uint32
   VkDeviceMemory* = pointer
   VkShaderModule* = pointer
   VkPipeline* = pointer
@@ -95,6 +115,9 @@ const
   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2* = VkStructureType(1000059000)
   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES* = VkStructureType(1000082000)
   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES* = VkStructureType(1000083000)
+  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES* = VkStructureType(1000257000)
+  VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO* = VkStructureType(1000244001)
+  VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO* = VkStructureType(1000060000)
 
   # Shader stages
   VK_SHADER_STAGE_COMPUTE_BIT* = VkShaderStageFlagBits(1 shl 5)
@@ -106,12 +129,15 @@ const
   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT* = VkBufferUsageFlagBits(1 shl 4)
   VK_BUFFER_USAGE_TRANSFER_SRC_BIT* = VkBufferUsageFlagBits(1 shl 1)
   VK_BUFFER_USAGE_TRANSFER_DST_BIT* = VkBufferUsageFlagBits(1 shl 0)
+  VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT* = VkBufferUsageFlagBits(1 shl 17)
 
   # Memory property flags
   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT* = VkMemoryPropertyFlagBits(1 shl 0)
   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT* = VkMemoryPropertyFlagBits(1 shl 1)
   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT* = VkMemoryPropertyFlagBits(1 shl 2)
   VK_MEMORY_PROPERTY_HOST_CACHED_BIT* = VkMemoryPropertyFlagBits(1 shl 3)
+  VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT* = VkMemoryAllocateFlagBits(1 shl 1)
+
 
   # Command buffer usage
   VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT* = VkCommandBufferUsageFlagBits(1 shl 0)

@@ -76,7 +76,6 @@ proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
   let idxTyp = initGpuType(gtInt32)
   GpuAst(
     kind: gpuCall,
-    cIsExpr: true,
     cName: GpuAst(kind: gpuIdent, symbol: newSymbol("toOpenArray")),
     cArgs: @[
       arr,
@@ -359,7 +358,7 @@ proc filterPragmasImpl*(n: var GpuAst) =
     of "device": attrs.incl attDevice
     of "global": attrs.incl attGlobal
     of "inline", "forceinline": attrs.incl attForceInline
-    of "nimonly", "builtin", "importc", "magic":
+    of "builtin", "importc", "magic":
       # These cause the proc to be treated as a builtin (no body needed)
       discard
     of "varargs":

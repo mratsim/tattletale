@@ -171,7 +171,7 @@ proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
   if not hasGuard and tA.kind in {gtFloat32, gtFloat64, gtFloat16, gtBf16}: return false
 
   var callName = GpuAst(kind: gpuIdent, symbol: newSymbol(builtin))
-  n = GpuAst(kind: gpuCall, cIsExpr: true, cName: callName,
+  n = GpuAst(kind: gpuCall, cName: callName,
              cArgs: @[tThen, tElse])
   return true
 

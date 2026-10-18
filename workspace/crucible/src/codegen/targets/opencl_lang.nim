@@ -16,7 +16,6 @@ proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
                       allowEmptyIdent = false): string
-proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
 proc getInnerArrayType(t: GpuType): string =
   ## Returns the name of the inner most type for a nested array.
@@ -169,8 +168,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genOpenCL(a))
-proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genOpenCL(a))
 
 # ── Preprocess ────────────────────────────────────────────────────────
 
@@ -450,13 +447,6 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           clArgs.add ctx.genOpenCL(arg)
         result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `opencl` macro.")
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `opencl` macro.")
 
   of gpuBinOp:
     ctx.withoutSemicolon:

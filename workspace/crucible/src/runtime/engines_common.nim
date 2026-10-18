@@ -1,0 +1,57 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Dependency-free leaf: the launch modules and engines.nim both import it.
+
+type
+  Dim3* = object
+    ## A 3D launch dims, `Dim3(x: n)` defaults y/z to 1.
+    x*, y*, z* = 1
+
+  LaunchConfig*[E] = object
+    engine*: E
+    grid*, blk*: Dim3
+
+template dim3*(a, b, c: SomeInteger = 1): Dim3 =
+  Dim3(x: int(a), y: int(b), z: int(c))
+
+template dim3*(t: tuple[a: SomeInteger]): Dim3 = Dim3(x: int(t[0]))
+template dim3*(t: tuple[a, b: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]))
+template dim3*(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int(t[1]), z: int(t[2]))
+template dim3*(d: Dim3): Dim3 = d
+
+type
+  DeviceMem*[H, T] = object
+    ## Typed on-device memory buffer
+    mem*: H
+
+type
+  HwEngine* = concept engine, type E
+    proc ingest(engine: E, source: string)
+    proc getArtifact(engine: E)
+    proc deviceName(engine: E): string
+    proc allocDevice(engine: E, nbytes: int)
+    proc freeDevice(engine: E, handle: auto)
+    proc copyToDeviceFromHost(engine: E, dst: auto, src: pointer, n: int)
+    proc copyToHostFromDevice(engine: E, dst: pointer, src: auto, n: int)
+
+proc allocDevice*(engine: HwEngine, T: typedesc, len: int): auto {.inline.} =
+  mixin allocDevice
+  let h = engine.allocDevice(len * sizeof(T))
+  DeviceMem[typeof(h), T](mem: h)
+
+proc freeDevice*[H, T](engine: HwEngine, mem: DeviceMem[H, T]) {.inline.} =
+  mixin freeDevice
+  engine.freeDevice(mem.mem)
+
+proc copyToDeviceFromHost*[H, T](engine: HwEngine, dst: DeviceMem[H, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  mixin copyToDeviceFromHost
+  engine.copyToDeviceFromHost(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[H, T](engine: HwEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[H, T], n: int) {.inline.} =
+  mixin copyToHostFromDevice
+  engine.copyToHostFromDevice(dst, src.mem, n * sizeof(T))

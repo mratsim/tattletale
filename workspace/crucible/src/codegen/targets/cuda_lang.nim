@@ -14,7 +14,6 @@ proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
                       allowEmptyIdent = false): string
-proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
 proc getInnerArrayType(t: GpuType): string =
   ## Returns the name of the inner most type for a nested array.
@@ -110,8 +109,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     result.add ' ' & ident
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
-  ## Returns the correct function with its return type. Kept for backward compat
-  ## during Phase 5. Will be removed when codegen reads sigString from FnTableEntry.
+  ## Returns the correct function with its return type.
   if typ.kind == gtPtr and typ.to.kind == gtArray:
     # crazy stuff. Syntax to return a pointer to a statically sized array:
     # `Foo (*fnName(fnArgs))[ArrayLen]`
@@ -148,8 +146,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genCuda(a))
-proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genCuda(a))
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 
@@ -371,13 +367,6 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         for i, arg in ast.cArgs:
           cudaArgs.add ctx.genCuda(arg)
         result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `cuda` macro.")
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `cuda` macro.")
 
   of gpuBinOp:
     ctx.withoutSemicolon:

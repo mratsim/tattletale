@@ -25,7 +25,6 @@ block:
   doAssert s.iSym == "x_abc123", "Symbol.iSym should be 'x_abc123'"
   doAssert s.typ.kind == gtInt32, "Symbol.typ.kind should be gtInt32"
   doAssert s.symKind == gsLocal, "Symbol.symKind should be gsLocal"
-  doAssert s.module == "", "Symbol.module should be empty string"
   echo "  OK — Symbol creation and field access"
 
 # ═══════════════════════════════════════════════════════════════════════

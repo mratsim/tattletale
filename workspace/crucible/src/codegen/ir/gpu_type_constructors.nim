@@ -41,14 +41,14 @@ proc initGpuVoidPtr*(): GpuType =
 
 proc initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
   ## Initializes an object/struct type
-  result = GpuType(kind: gtObject, name: name, oFields: flds)
+  result = GpuType(kind: gtObject, name: name, fields: flds)
 
-proc initGpuSpanType*(kind: GpuSpanKind, elemTyp: GpuType): GpuType =
+proc initGpuSpanType*(elemTyp: GpuType): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type
   if elemTyp.kind == gtInvalid:
     result = GpuType(kind: gtInvalid)
   else:
-    result = GpuType(kind: gtSpan, sKind: kind, sElemTyp: elemTyp)
+    result = GpuType(kind: gtSpan, sElemTyp: elemTyp)
 
 proc toTypeDef*(typ: GpuType): GpuAst =
   ## Converts a given object or generic instantiation type into an AST of a
@@ -56,8 +56,7 @@ proc toTypeDef*(typ: GpuType): GpuAst =
   # store the type instantiation
   result = GpuAst(kind: gpuTypeDef, tTyp: typ)
   case typ.kind
-  of gtObject:      result.tFields = typ.oFields
-  of gtGenericInst: result.tFields = typ.gFields
+  of gtObject, gtGenericInst: result.tFields = typ.fields
   else:
     raiseAssert "Type: " & $pretty(typ) & " is neither object type nor generic instantiation."
 
@@ -186,7 +185,7 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     of "device": result.incl attDevice
     of "global": result.incl attGlobal
     of "inline", "forceinline": result.incl attForceInline
-    of "nimonly", "builtin":
+    of "builtin":
       # used to fully ignore functions!
       return
     of "importc": # encountered if we analyze a proc from outside `cuda` scope
@@ -255,10 +254,6 @@ proc collectAddressSpace*(n: NimNode): AddressSpace =
       doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
       seen = true
       result = asSMEM
-    of "rmem":
-      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
-      seen = true
-      result = asRMEM
     of "const_mem":
       doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
       seen = true

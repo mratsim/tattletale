@@ -21,7 +21,6 @@ type
     gpuDiscard         # Just an empty statement. Useful to not emit anything
     gpuProc         # Function definition (both device and global)
     gpuCall         # Function call
-    gpuTemplateCall # Call to a Nim template
     gpuIf           # If statement
     gpuTernary      # Ternary expression (cond ? then : else)
     gpuFor          # For loop
@@ -64,7 +63,7 @@ type
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
     gtInvalid      # Can be returned to indicate a call to `nimToGpuType` failed to determine a type
-                   ## XXX: make this the default value and replace all `gtVoid` placeholders by it
+    gtCompileTimeValue  # the parameter's type slot holds the compile-time argument, not a type
 
 
   GpuTypeField* = object
@@ -73,6 +72,7 @@ type
 
   GpuType* = ref object
     builtin*: bool ## Whether the type refers to a builtin type or not
+    fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
     case kind*: GpuTypeKind
     of gtPtr:
       to*: GpuType # `ptr T` points to `to`
@@ -84,7 +84,6 @@ type
     of gtUA: uaTo*: GpuType # `UncheckedArray[T]`
     of gtObject:
       name*: string
-      oFields*: seq[GpuTypeField]
     of gtArray:
       aTyp*: GpuType # the inner type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
@@ -93,17 +92,11 @@ type
     of gtStatic:
       sValue*: int  # The actual static integer value
     of gtSpan:
-      sKind*: GpuSpanKind  # kOpenArray or kVarargs
       sElemTyp*: GpuType   # element type T
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
-      gFields*: seq[GpuTypeField] # same as `oFields` for `gtObject`
     else: discard
-
-  GpuSpanKind* = enum
-    kOpenArray   # Nim openArray[T] — ptr + runtime length
-    kVarargs     # Unsupported at th moment
 
   GpuRangeKind* = enum
     rkInclusive    # Nim `a..b` — emitted as `i <= end` or equivalent
@@ -127,7 +120,6 @@ type
     body*: GpuAst          # function definition AST (nil for externals/builtins)
     kind*: set[FunctionKind]
     namePolicy*: NamePolicy  # set by mangleNames pass later
-    sigString*: string       # pre-computed function signature (set by emitFunctionSignatures pass)
   GpuAttribute* = enum
     attDevice = "__device__"
     attGlobal = "__global__"
@@ -156,12 +148,8 @@ type
       pWorkgroupSize*: tuple[x, y, z: int]  ## `{.workgroup: (X, Y, Z).}` annotation, (0,0,0) = unset
       forwardDeclare*: bool ## can be set to true to _only_ generate a forward declaration
     of gpuCall:
-      cIsExpr*: bool ## If the call returns a value
       cName*: GpuAst ## Will be a `GpuIdent`
       cArgs*: seq[GpuAst]
-    of gpuTemplateCall:
-      tcName*: GpuAst ## Will be a `GpuIdent`
-      tcArgs*: seq[GpuAst]  # Arguments for template instantiation
     of gpuIf:
       ifCond*: GpuAst
       ifThen*: GpuAst
@@ -234,7 +222,6 @@ type
     of gpuAlias:
       aTyp*: GpuType ## Name of the type alias
       aTo*: GpuAst ## Type the alias maps to
-      aDistinct*: bool ## If the alias is a distinct type in Nim.
     of gpuObjConstr:
       ocType*: GpuType  # type we construct
       ## XXX: it would be better if we already fill the fields with default values here
@@ -292,7 +279,6 @@ type
     coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
-    module*: string     ## Module provenance (optional)
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -381,7 +367,7 @@ type
     ## - Value: signature of the (possibly generic) instantiation
     processedProcs*: OrderedTable[GpuAst, GpuProcSignature]
 
-    ## Stores all builtin / nimonly / importc / ... functions we encounter so that we can
+    ## Stores all builtin / importc / ... functions we encounter so that we can
     ## check if they return a value when we encounter them in a `gpuCall`
     builtinFns*: OrderedTable[GpuAst, GpuAst]
 
@@ -397,16 +383,8 @@ type
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
 
-    ## Phase 6: Vulkan SSBO canonical slots (name, inner type) per indexed position
-    ssboCanonicalInfo*: seq[tuple[name: string, innerType: GpuType]]
     ## Phase 6: Vulkan push-constant param info (type, name strings stored as comments
     ## in globalBlocks for codegen to read)
-  ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
-  ## causes trouble.
-  GpuGenericsInfo* = object
-    procs*: seq[GpuAst]
-    types*: seq[GpuAst]
-
   GenericArg* = object
     addrSpace*: AddressSpace ## We store the address space, because that's what matters
     mutable*: bool # if the argument is mutable or not
@@ -472,13 +450,12 @@ const TAG_IDENT_IN_ASM* = "\x01"
   ## The printers substitute the symbol's (mangled) display name at codegen time.
   ## A control byte is used so the marker can never collide with valid asm text.
 
-proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone, module: string = ""): Symbol =
+proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
   new(result)
   result.name = name
   result.iSym = if iSym == "": name else: iSym
   result.typ = typ
   result.symKind = symKind
-  result.module = module
 
 proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   var sym = newSymbol(ident, symKind = symKind)
@@ -501,12 +478,6 @@ proc scopeGet*(scope: seq[(string, Symbol)]; name: string): Symbol =
       return s
   raiseAssert "Scope lookup failed: '" & name & "' not found"
 
-proc scopeGetOrDefault*(scope: seq[(string, Symbol)]; name: string): Symbol =
-  ## Look up a name in a scope table. Returns nil if not found.
-  for (n, s) in scope:
-    if n == name:
-      return s
-
 proc clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
   result = GpuType(kind: typ.kind)
@@ -519,8 +490,8 @@ proc clone*(typ: GpuType): GpuType =
     result.uaTo = typ.uaTo.clone()
   of gtObject:
     result.name = typ.name
-    for f in typ.oFields:
-      result.oFields.add GpuTypeField(name: f.name, typ: f.typ.clone())
+    for f in typ.fields:
+      result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   of gtArray:
     result.aTyp = typ.aTyp.clone()
     result.aLen = typ.aLen
@@ -530,8 +501,8 @@ proc clone*(typ: GpuType): GpuType =
     result.gName = typ.gName
     for g in typ.gArgs:
       result.gArgs.add g.clone()
-    for f in typ.gFields:
-      result.gFields.add GpuTypeField(name: f.name, typ: f.typ.clone())
+    for f in typ.fields:
+      result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   else: discard
 
 proc clone*(ast: GpuAst): GpuAst =
@@ -557,15 +528,9 @@ proc clone*(ast: GpuAst): GpuAst =
     result.forwardDeclare = ast.forwardDeclare
   of gpuCall:
     result = GpuAst(kind: gpuCall)
-    result.cIsExpr = ast.cIsExpr
     result.cName = ast.cName.clone()
     for arg in ast.cArgs:
       result.cArgs.add(arg.clone())
-  of gpuTemplateCall:
-    result = GpuAst(kind: gpuTemplateCall)
-    result.tcName = ast.tcName.clone()
-    for arg in ast.tcArgs:
-      result.tcArgs.add(arg.clone())
   of gpuIf:
     result = GpuAst(kind: gpuIf)
     result.ifCond = ast.ifCond.clone()
@@ -661,7 +626,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuAlias)
     result.aTyp = ast.aTyp.clone()
     result.aTo = ast.aTo.clone()
-    result.aDistinct = ast.aDistinct
   of gpuObjConstr:
     result = GpuAst(kind: gpuObjConstr)
     result.ocType = ast.ocType.clone()
@@ -716,7 +680,7 @@ proc hash*(t: GpuType): Hash =
     h = h !& hash(t.uaTo)
   of gtObject:
     h = h !& hash(t.name)
-    for f in t.oFields:
+    for f in t.fields:
       h = h !& hash(f)
   of gtArray:
     h = h !& hash(t.aTyp)
@@ -727,7 +691,7 @@ proc hash*(t: GpuType): Hash =
     h = h !& hash(t.gName)
     for g in t.gArgs:
       h = h !& hash(g)
-    for f in t.gFields:
+    for f in t.fields:
       h = h !& hash(f)
   of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
@@ -755,23 +719,37 @@ proc `==`*(a, b: GpuType): bool =
     of gtUA:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
-      if a.oFields.len != b.oFields.len: result = false
+      if a.fields.len != b.fields.len: result = false
       else:
-        for i in 0 ..< a.oFields.len:
-          result = result and (a.oFields[i] == b.oFields[i])
+        for i in 0 ..< a.fields.len:
+          result = result and (a.fields[i] == b.fields[i])
     of gtGenericInst:
       result = a.gName == b.gName
       if a.gArgs.len != b.gArgs.len: result = false
-      elif a.gFields.len != b.gFields.len: result = false
+      elif a.fields.len != b.fields.len: result = false
       else:
         for i in 0 ..< a.gArgs.len:
           result = result and (a.gArgs[i] == b.gArgs[i])
-        for i in 0 ..< a.gFields.len:
-          result = result and (a.gFields[i] == b.gFields[i])
+        for i in 0 ..< a.fields.len:
+          result = result and (a.fields[i] == b.fields[i])
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
     of gtStatic: result = a.sValue == b.sValue
     of gtInvalid: result = false
     else: discard
+
+proc `==`*(a, b: Symbol): bool =
+  ## Compares symbols by content (iSym, kind, type), not by pointer.
+  ##
+  ## Two Symbol objects can describe the same symbol: a function's name and a call to that function are created independently.
+  ##
+  ## Pointer comparison reports such pairs as different. The code emitter
+  ## then fails to find the callee definition in the function tables.
+  if a.isNil or b.isNil:
+    result = a.isNil and b.isNil
+  else:
+    result = a.iSym == b.iSym and a.symKind == b.symKind and
+      ((a.typ.isNil and b.typ.isNil) or
+       (not a.typ.isNil and not b.typ.isNil and a.typ == b.typ))
 
 proc `==`*(a, b: GpuAst): bool =
   if a.isNil or b.isNil: return false
@@ -899,7 +877,6 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.cName, indent + 2)
     for arg in n.cArgs:
       result.add pretty(arg, indent + 2)
-  of gpuTemplateCall: discard
   of gpuIf:
     result.add idd("IfCond")
     result.add pretty(n.ifCond, indent + 4)
@@ -1151,17 +1128,14 @@ func size*(t: GpuType): int =
     result = 8  # pointer size on 64-bit
   of gtString:
     result = 8  # pointer
-  of gtStatic:
+  of gtStatic, gtCompileTimeValue:
     result = 0  # compile-time value, no runtime size
   of gtArray:
     # TODO: for generic/unresolved array, size is set to -1, but can that happen in practice?
     # Due to constant folding I would expect array length to always be resolved.
     result = t.aLen * size(t.aTyp)
-  of gtObject:
-    for f in t.oFields:
-      result += size(f.typ)
-  of gtGenericInst:
-    for f in t.gFields:
+  of gtObject, gtGenericInst:
+    for f in t.fields:
       result += size(f.typ)
   of gtInvalid:
     result = 0

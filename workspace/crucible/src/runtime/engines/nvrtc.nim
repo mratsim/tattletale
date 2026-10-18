@@ -11,16 +11,18 @@ import workspace/crucible/src/abis/c_abi
 
 import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
-import ../chevrons
-import ../kernel_args
+import ../engines_common
+import ../errors
+import ../launch/launch_serialization
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
   NVRTC = object
     prog: nvrtcProgram
-    log: string # The compilation log
-    ptx: string # PTX of the program
+    log: string
+    ptx: string
     device: CUdevice
     kernel: CUfunction
     module: CUmodule
@@ -28,8 +30,7 @@ type
     moduleLoaded: bool
 
   CudaEngine* = ref object
-    ## A CUDA engine, build with `bkCuda.init()`: NVRTC-compiled kernels on one GPU.
-    ## The context and compiled module release when the engine dies.
+    source: string
     ptx: string
     nvrtc: NVRTC
 
@@ -38,6 +39,7 @@ proc backendKind*(_: typedesc[CudaEngine]): static BackendKind = bkCuda
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
+
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
     check cuCtxSetCurrent(nvrtc.context)
@@ -55,18 +57,16 @@ proc newCudaEngine(): CudaEngine =
 # ═════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
-  ## NVRTC-compile `source` → PTX. Re-entrant: replaces the previous artifact and program, the CUDA context stays alive (created once at init).
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
+  engine.source = source
   engine.ptx = engine.nvrtc.ptx
 
 proc getArtifact*(engine: CudaEngine): string =
-  ## Returns the compiled PTX.
-  engine.ptx
+  engine.source
 
 proc deviceName*(engine: CudaEngine): string {.inline.} =
-  ## Returns the CUDA device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   var name = newString(256)
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
@@ -89,19 +89,15 @@ proc initNvrtc(): NVRTC =
   result = NVRTC(device: device, context: context)
 
 proc createProgram(nvrtc: var NVRTC, source: string) =
-  ## Build the NVRTC program from `source`, replacing any previous program.
-  ## Re-ingest unloads the previous module (the context stays alive).
   if nvrtc.module.pointer != nil:
     check cuCtxSetCurrent(nvrtc.context)
     check cuModuleUnload nvrtc.module
     nvrtc.module = CUmodule(nil)
     nvrtc.moduleLoaded = false
 
-  # The program name only prefixes NVRTC compile-error lines
   check nvrtcCreateProgram(nvrtc.prog, cstring source, "kernel.cu", 0, nil, nil)
 
 proc log(nvrtc: var NVRTC) =
-  ## Retrieve the compilation log.
   var logSize: csize_t
   check nvrtcGetProgramLogSize(nvrtc.prog, logSize)
 
@@ -111,10 +107,6 @@ proc log(nvrtc: var NVRTC) =
   nvrtc.log = $log # usually empty if no issues found by the compiler
 
 proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) =
-  # Compile the program. The arch defaults to the queried device capability
-  # (compute_120 on a 12.0 GPU), pre-sm_120 hardware still JIT-lowers the PTX.
-  # NVRTC rejects archs below compute_75 with a loud compile error
-  # listing the valid targets.
   let arch = "--gpu-architecture=compute_" & $compute_capability
   var options = @[
     cstring arch,
@@ -132,7 +124,6 @@ proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) 
   check compileResult
 
 proc getPtx(nvrtc: var NVRTC) =
-  ## Obtain PTX from the program.
   var ptxSize: csize_t
   check nvrtcGetPTXSize(nvrtc.prog, ptxSize)
 
@@ -147,52 +138,57 @@ proc load(nvrtc: var NVRTC) =
   if status != CUDA_SUCCESS:
     var error_str: cstring
     check cuGetErrorString(status, error_str)
-    echo "Module load failed: ", error_str
-    quit(1)
+    failLoud("Module load failed: " & $error_str)
 
   nvrtc.moduleLoaded = true
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ═════════════════════════════════════════════════════════════════════════
 
-proc launchKernel*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, cfg = LaunchConfig()) =
+type SerializationCtx[n: static int] = object
+  addrs: array[n, pointer]
+  bytes: array[n, seq[byte]]
+
+proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
+  when T is ptr|pointer:
+    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
+  # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
+  const size = deviceLayout(T, bkCuda).size
+  ctx.bytes[argIdx] = newSeq[byte](size)
+  if size > 0:
+    var off = 0
+    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
+  ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
+
+proc cudaBindArgs(output: CUdeviceptr, args: tuple): auto =
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr)
+  result = SerializationCtx[n]()
+  bindArgs(result, output, args, store, CUdeviceptr)
+
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-  # the context is made current per launch, several engines can coexist
-  # the launch synchronizes before returning
+
   check cuCtxSetCurrent(engine.nvrtc.context)
-  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
+  doAssert grid.x > 0 and grid.y > 0 and grid.z > 0,
     "CUDA grid dims must have every axis > 0, got " &
-    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
-  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
+    $grid.x & ", " & $grid.y & ", " & $grid.z
+  doAssert blk.x > 0 and blk.y > 0 and blk.z > 0,
     "CUDA block dims must have every axis > 0, got " &
-    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
+    $blk.x & ", " & $blk.y & ", " & $blk.z
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
-  # every parameter passes by value as its address, CUDA copies at launch,
-  # device pointers cross as their raw value, the params array holds
-  # one pointer per device arg, sized at compile time
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
-  type SinkCtx = object
-    addrs: array[n, pointer]
-    hvals: array[n, CUdeviceptr]
-  proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: CUdeviceptr, idx: int, p: pointer, len: int) {.nimcall.} =
-    if isBuffer:
-      ctx.hvals[idx] = h
-      ctx.addrs[idx] = ctx.hvals[idx].addr
-    else:
-      ctx.addrs[idx] = p
-  var dctx = SinkCtx()
-  bindArgs(dctx, bkCuda, output, args, false, sinkArg)
+  let dctx = cudaBindArgs(output, args)
 
-  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
   check cuLaunchKernel(
     engine.nvrtc.kernel,
-    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
-    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
-    uint32(cfg.sharedMem),
-    stream,
+    uint32(grid.x), uint32(grid.y), uint32(grid.z),
+    uint32(blk.x), uint32(blk.y), uint32(blk.z),
+    0'u32, CUstream(nil),  # no shared memory, no stream
     dctx.addrs[0].addr, nil)
 
   check cuCtxSynchronize()

@@ -46,6 +46,14 @@ imports. Only engine/runtime tests use the public API (below).
 
 ### Test Requirements
 
+**Header shape:** every test file opens with the same shape, nothing else:
+
+- line 1: the title, one line, it names the surface under test
+- next: `Test that <the single behavior the test asserts>`
+- a blank line, then the run command verbatim to the end
+- no mechanism narration, no journey, the linter rule
+  `test-header-testthat` enforces the shape
+
 **One import for everything:** `import workspace/crucible` re-exports the DSL
 macros (`cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:`) and the engine API (`bkCuda`/
 `bkOpenCL`/`bkVulkan`/`bkWGSL`/`bkMetal`, `init`, `ingest`, `getArtifact`, `launchKernel`, `check`,

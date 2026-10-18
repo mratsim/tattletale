@@ -42,11 +42,6 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
           fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
         break
 
-proc firstNonBlock(n: GpuAst): GpuAst =
-  ## Unwrap single-statement gpuBlock wrappers.
-  result = n
-  while result.kind == gpuBlock and result.statements.len == 1:
-    result = result.statements[0]
 
 proc liftConstexprFrom(n: var GpuAst; lifts: var seq[GpuAst]) =
   ## Lift gpuConstexpr nodes from expression children, replacing them with their cIdent.
@@ -229,7 +224,7 @@ proc getExprType*(ctx: GpuContext; n: GpuAst): GpuType =
   of gpuDot:
     let parentType = ctx.getExprType(n.dParent)
     if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
-      let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
+      let fields = parentType.fields
       for f in fields:
         if f.name == n.dField.symbol.name:
           result = f.typ
@@ -299,10 +294,6 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
     for i in 0 ..< slot.cArgs.len:
       let pt = if i < params.len: params[i].typ else: GpuType(kind: gtVoid)
       let p = ctx.blitExprSlot(slot.cArgs[i], pt, fnRetType)
-      result.add p
-  of gpuTemplateCall:
-    for i in 0 ..< slot.tcArgs.len:
-      let p = ctx.blitExprSlot(slot.tcArgs[i], GpuType(kind: gtVoid), fnRetType)
       result.add p
   of gpuReturn:
     result = ctx.blitExprSlot(slot.rValue, fnRetType, fnRetType)
@@ -401,9 +392,7 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
   else:
     discard
 
-proc collectSyms(n: GpuAst; syms: var HashSet[string])
 proc renameSymsInTree(n: var GpuAst; oldName, newName: string)
-proc hoistLvalueVars(stmts: var seq[GpuAst])
 proc dedupVarNames*(stmts: var seq[GpuAst])
 
 proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
@@ -436,10 +425,6 @@ proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
         for j in 0 ..< stmt.cArgs.len:
           let pt = if j < params.len: params[j].typ else: GpuType(kind: gtVoid)
           let p = ctx.blitExprSlot(stmt.cArgs[j], pt, fnRetType)
-          preamble.add p
-      of gpuTemplateCall:
-        for j in 0 ..< stmt.tcArgs.len:
-          let p = ctx.blitExprSlot(stmt.tcArgs[j], GpuType(kind: gtVoid), fnRetType)
           preamble.add p
       of gpuReturn:
         if preamble.len == 0:
@@ -517,16 +502,6 @@ proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
   else:
     discard
 
-proc collectSyms(n: GpuAst; syms: var HashSet[string]) =
-  ## Collect all iSym values referenced via gpuIdent in an AST subtree.
-  if n == nil: return
-  case n.kind
-  of gpuIdent:
-    syms.incl n.symbol.iSym
-  else:
-    for child in n.items:
-      collectSyms(child, syms)
-
 proc renameSymsInTree(n: var GpuAst; oldName, newName: string) =
   ## Rename all gpuIdent references with iName == oldName to newName,
   ## including gpuVar.vName (which is not yielded by mitems).
@@ -545,78 +520,6 @@ proc renameSymsInTree(n: var GpuAst; oldName, newName: string) =
   else:
     for child in n.mitems:
       renameSymsInTree(child, oldName, newName)
-
-proc hoistLvalueVars(stmts: var seq[GpuAst]) =
-  ## Hoist gpuVar declarations out of `_lvalue`-labeled gpuBlock siblings
-  ## that are referenced by sibling statements. Variables declared inside
-  ## the `_lvalue` block but needed outside are moved above the block.
-
-  proc declaredVars(scope: GpuAst): OrderedTable[string, int] =
-    ## Collect variable names declared at top level of a scope block.
-    for j, s in scope.statements:
-      if s.kind == gpuVar:
-        result[s.vName.symbol.name] = j
-
-  proc referencedBySiblings(stmts: seq[GpuAst]; scopeIdx: int;
-                           varNames: seq[string]): HashSet[string] =
-    ## Find vars declared in scope that are referenced by any sibling statement.
-    for j in 0 ..< stmts.len:
-      if j != scopeIdx:
-        var refs: HashSet[string]
-        collectSyms(stmts[j], refs)
-        for v in varNames:
-          if v in refs:
-            result.incl v
-
-  proc expandTransitives(scope: GpuAst; varIdx: OrderedTable[string, int];
-                         toHoist: var HashSet[string]) =
-    ## Add vars that hoisted vars depend on via their vInit.
-    var changed = true
-    while changed:
-      changed = false
-      for vname, idx in varIdx.pairs:
-        if vname in toHoist:
-          var refd: HashSet[string]
-          if scope.statements[idx].kind == gpuVar:
-            collectSyms(scope.statements[idx].vInit, refd)
-          for r in refd:
-            if r in varIdx and r notin toHoist:
-              toHoist.incl r
-              changed = true
-
-  proc splitScope(scope: GpuAst; toHoist: HashSet[string]):
-      tuple[hoisted: seq[GpuAst], remaining: seq[GpuAst]] =
-    ## Partition scope statements into those being hoisted vs kept.
-    for s in scope.statements:
-      if s.kind == gpuVar and s.vName.symbol.name in toHoist:
-        result.hoisted.add s
-      else:
-        result.remaining.add s
-
-  proc spliceBefore[T](xs: var seq[T]; idx: int; prefix: seq[T]) =
-    ## Insert `prefix` elements before position `idx` in `xs`.
-    var outSeq: seq[T]
-    for i in 0 ..< idx:
-      outSeq.add xs[i]
-    outSeq.add prefix
-    for i in idx ..< xs.len:
-      outSeq.add xs[i]
-    xs = outSeq
-
-  var i = 0
-  while i < stmts.len:
-    if stmts[i].kind == gpuBlock and stmts[i].blockLabel == "_lvalue":
-      let scope = stmts[i]
-      let varIdx = declaredVars(scope)
-      if varIdx.len > 0:
-        var hoistedSet = referencedBySiblings(stmts, i, toSeq(varIdx.keys))
-        if hoistedSet.len > 0:
-          expandTransitives(scope, varIdx, hoistedSet)
-          let (hoistedStmts, remaining) = splitScope(scope, hoistedSet)
-          scope.statements = remaining
-          spliceBefore(stmts, i, hoistedStmts)
-          i += hoistedStmts.len
-    inc i
 
 proc dedupVarNames*(stmts: var seq[GpuAst]) =
   ## Rename duplicate gpuVar declarations across sibling gpuBlock statements.
@@ -666,9 +569,6 @@ proc unwrapBlockInDot(n: var GpuAst) =
   of gpuCall:
     for arg in n.cArgs.mitems:
       unwrapBlockInDot(arg)
-  of gpuTemplateCall:
-    for arg in n.tcArgs.mitems:
-      unwrapBlockInDot(arg)
   of gpuObjConstr:
     for f in n.ocFields.mitems:
       unwrapBlockInDot(f.value)
@@ -685,187 +585,101 @@ proc unwrapBlockInDot(n: var GpuAst) =
   else:
     discard
 
-proc structFields(t: GpuType): seq[GpuTypeField] =
-  ## Fields of a struct type, declaration order.
+func containsPtrDeep(t: GpuType): bool =
+  ## True when a pointer is reachable through the type's fields
   case t.kind
-  of gtObject: t.oFields
-  of gtGenericInst: t.gFields
-  else: @[]
+  of gtPtr: true
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      if f.typ.containsPtrDeep: return true
+    false
+  of gtArray: t.aTyp.containsPtrDeep
+  else: false
 
-proc containsPtrDeep(t: GpuType): bool =
-  ## True when a gtPtr sits anywhere in the type tree, array element
-  ## types and unchecked-array element types included.
-  case t.kind
-  of gtPtr: result = true
-  of gtArray:
-    result = containsPtrDeep(t.aTyp)
-  of gtUA:
-    result = containsPtrDeep(t.uaTo)
-  of gtObject:
-    for f in t.oFields:
-      if containsPtrDeep(f.typ): return true
-  of gtGenericInst:
-    for f in t.gFields:
-      if containsPtrDeep(f.typ): return true
-  else: discard
 
-proc isScalarGpuKind(k: GpuTypeKind): bool =
-  k in {gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64,
-        gtInt64, gtFloat32, gtFloat64, gtFloat16, gtBf16, gtSize_t}
+type KernelParamLeaf = object
+  ## One signature entry of an expanded struct kernel param
+  name*: string
+  typ*: GpuType
+  isBuffer*: bool
 
-proc newExplodedParam(name: string, typ: GpuType, addressSpace: AddressSpace): GpuParam =
-  let sym = newSymbol(name, iSym = name, typ = typ, symKind = gsDeviceKernelParam)
-  GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: typ,
-           addressSpace: addressSpace, passByRef: false)
-
-proc explodeTypeInto(t: GpuType, path: seq[string], name: string,
-                     params: var seq[GpuParam], usedNames: var HashSet[string],
-                     leaves: var Table[seq[string], GpuAst]) =
-  ## Lowers one field type into exploded kernel params, depth-first in field
-  ## order:
-  ## - pointer field -> ptr param (`device T*`, SSBO, storage)
-  ## - scalar/enum field or fixed-size pointer-free array -> by-value
-  ##   param (constant-ref, push const or read-only storage)
-  ## - pointer-free value struct -> by-value struct param
-  ## - struct carrying pointers -> recursion into its fields
-  ## Precondition: `name` is unique among the struct's exploded leaves.
-  ## `leaves` maps each field path from the param root to its leaf param ident,
-  ## keyed as @[rootISym] & path.
-  doAssert name notin usedNames,
-    "explodePointerStructParams: exploded param name collision on '" & name & "'"
-  doAssert path.len > 0
-  usedNames.incl name
-  if t.kind == gtPtr:
-    # Type verbatim: the UA inner type survives for WGSL's runtime array,
-    # MSL decays it to `device T*`.
-    params.add newExplodedParam(name, t, asDevice)
-    leaves[path] = params[^1].ident
-  elif isScalarGpuKind(t.kind):
-    params.add newExplodedParam(name, t, asRMEM)
-    leaves[path] = params[^1].ident
-  elif t.kind in {gtObject, gtGenericInst}:
-    if containsPtrDeep(t):
-      for f in structFields(t):
-        explodeTypeInto(f.typ, path & f.name, name & "_" & f.name, params,
-                        usedNames, leaves)
-    else:
-      params.add newExplodedParam(name, t, asRMEM)
-      leaves[path] = params[^1].ident
-  elif t.kind == gtArray:
-    # Fixed-size array field: one by-value param, never per-element params.
-    # Pointer-bearing elements carry no value representation: the explosion
-    # fails loudly on them.
-    doAssert not containsPtrDeep(t.aTyp),
-      "explodePointerStructParams: array field '" & name &
-      "' carries pointer-bearing elements"
-    params.add newExplodedParam(name, t, asRMEM)
-    leaves[path] = params[^1].ident
-  else:
-    doAssert false, "explodePointerStructParams: unsupported field type " &
-      $t.kind & " at '" & name & "'"
-
-proc rewriteExplodedDots(n: var GpuAst, roots: HashSet[string], leaves: Table[seq[string], GpuAst]) =
-  ## Rewrites `param.field...` chains rooted at an exploded param into
-  ## exploded leaf param idents:
-  ## - whole chain when the leaf path covers it (ptr, scalar, value struct)
-  ## - matched prefix otherwise, fields of an exploded value struct:
-  ##   `dst.layout.shape` -> `dst_layout.shape`
-  case n.kind
-  of gpuDot:
-    var fields: seq[string]
-    var root = n
-    while root.kind == gpuDot:
-      fields.insert(root.dField.ident())
-      root = root.dParent
-    if root.kind == gpuIdent and root.symbol != nil and
-       root.symbol.iSym in roots:
-      var matched = -1
-      for k in countdown(fields.len, 1):
-        if leaves.hasKey(@[root.symbol.iSym] & fields[0 ..< k]):
-          matched = k
-          break
-      doAssert matched > 0,
-        "explodePointerStructParams: no exploded leaf for field chain '" &
-        fields.join(".") & "' of param '" & root.symbol.iSym & "' (whole use)"
-      var replacement = leaves[@[root.symbol.iSym] & fields[0 ..< matched]]
-      for f in fields[matched ..< fields.len]:
-        let fsym = newSymbol(f, iSym = f, typ = nil, symKind = gsNone)
-        replacement = GpuAst(kind: gpuDot, dParent: replacement,
-                             dField: GpuAst(kind: gpuIdent, symbol: fsym))
-      n = replacement
-    else:
-      # the chain roots elsewhere (an indexed or called expression): descend
-      # into the root, its children can still reference an exploded param
-      rewriteExplodedDots(root, roots, leaves)
-  else:
-    for child in mitems(n):
-      rewriteExplodedDots(child, roots, leaves)
-
-proc rejectWholeUse(n: var GpuAst, roots: HashSet[string]) =
-  ## Fails compilation on a bare use of an exploded param: only field
-  ## accesses rewrite onto leaf params, a whole value binds to no param.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in roots:
-      error "explodePointerStructParams: kernel param '" & n.symbol.iSym &
-        "' is used whole, only field accesses rewrite to exploded leaf params"
-  else:
-    for child in mitems(n):
-      rejectWholeUse(child, roots)
-
-proc explodePointerStructParamsImpl(ctx: var GpuContext) =
-  ## Kernel params of struct types carrying pointer fields, nested anywhere,
-  ## explode depth-first in field order into ptr, scalar,
-  ## pointer-free-value params. Body chains `param.field...` rewrite onto
-  ## the exploded leaf params:
-  ## - no reconstructed local: backends without pointer-bearing struct values
-  ##   (GLSL, WGSL) emit the kernel directly
-  ## - the struct never crosses the launch boundary
-  var done = initHashSet[string]()
-  for fnKey in ctx.allFnTab.keys:
-    var fn = ctx.allFnTab[fnKey]
-    if fn.kind != gpuProc or not fn.pAttributes.contains(attGlobal):
-      continue
-    let key = fn.pName.symbol.iSym
-    if key in done:
-      continue
-    done.incl key
-    var newParams: seq[GpuParam]
-    var usedNames = initHashSet[string]()
-    var leaves = initTable[seq[string], GpuAst]()
-    var roots = initHashSet[string]()
-    var exploded = false
-    # A generated leaf name must not collide with a retained param, the collision set seeds from the retained names first.
-    var explodes = newSeq[bool](fn.pParams.len)
-    for i, p in fn.pParams:
-      if p.typ != nil and p.typ.kind in {gtObject, gtGenericInst} and
-         containsPtrDeep(p.typ):
-        explodes[i] = true
-        exploded = true
-        roots.incl p.ident.symbol.iSym
+proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
+  ## Kernel entry args cannot be structs carrying pointers on Metal and WebGPU:
+  ## the signature expands such a param to its leaves, depth-first in field order,
+  ## matching the launch serializer's binding order. Size-0 fields expand to nothing.
+  result = newSeq[KernelParamLeaf]()
+  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
+    case t.kind
+    of gtPtr:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
+    of gtObject, gtGenericInst:
+      if t.containsPtrDeep:
+        for f in t.fields:
+          if size(f.typ) > 0:
+            walk(f.typ, name & "_" & f.name, leaves)
       else:
-        usedNames.incl p.ident.ident()
-    for i, p in fn.pParams:
-      if explodes[i]:
-        explodeTypeInto(p.typ, @[p.ident.symbol.iSym], p.ident.ident(),
-                        newParams, usedNames, leaves)
-      else:
-        newParams.add p
-    if exploded:
-      fn.pParams = newParams
-      rewriteExplodedDots(fn.pBody, roots, leaves)
-      rejectWholeUse(fn.pBody, roots)
+        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    else:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+  walk(t, name, result)
 
-proc registerExplodePointerStructParams*(reg: var PassRegistry) =
-  ## Registers the `explodePointerStructParams` pass on `reg`.
+proc buildLeafConstr(t: GpuType, name: string): GpuAst =
+  result = GpuAst(kind: gpuObjConstr, ocType: t)
+  for f in t.fields:
+    if size(f.typ) == 0:
+      result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
+    elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:
+      result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name), typ: f.typ)
+    else:
+      result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
+
+proc expandStructKernelParamsImpl(ctx: var GpuContext) =
+  ## Kernel entry args cannot be structs carrying pointers on Metal/WebGPU
+  ## Deconstruct body in kernel entry and reconstruct before device function calls
+  for _, fn in ctx.allFnTab.mpairs:
+    if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
+    var taken: seq[string]
+    for p in fn.pParams:
+      taken.add p.ident.ident()
+    var params: seq[GpuParam]
+    for p in fn.pParams:
+      if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
+        let leaves = p.typ.kernelParamLeaves(p.ident.ident())
+        for leaf in leaves:
+          doAssert leaf.name notin taken,
+            "expandStructKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
+          let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
+          let space = if leaf.isBuffer: asDevice else: asRMEM
+          params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
+                              typ: leaf.typ, addressSpace: space)
+        let constr = buildLeafConstr(p.typ, p.ident.ident())
+        let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
+                           vType: p.typ, vInit: constr, vMutable: false,
+                           addressSpace: asRMEM)
+        doAssert fn.pBody.kind == gpuBlock, "expandStructKernelParams: kernel body is not a block"
+        fn.pBody.statements.insert(local, 0)
+      else:
+        params.add p
+    fn.pParams = params
+
+proc registerExpandStructKernelParams*(reg: var PassRegistry) =
+  ## Registers the `expandStructKernelParams` pass on `reg`.
   ## Wiring contract:
-  ## - Metal, Vulkan, WebGPU only
-  ## - CUDA and OpenCL take pointer-bearing structs natively, never wire
-  reg.register("explodePointerStructParams", pkTransform, phaseMain,
-    "Explodes kernel params of structs carrying (nested) pointer fields into ptr/scalar/value params and rewrites body accesses",
-    dependsOn = @["ensureBlock"],
-    run = proc(ctx: var GpuContext): void =
-      ctx.explodePointerStructParamsImpl()
+  ## - Metal and WebGPU: their languages cannot index through a pointer field,
+  ##   kernels receive leaves and rebuild the struct in the body
+  ## - CUDA and OpenCL: structs carrying pointers cross natively, skip
+  ## - Vulkan: pointer fields cross as 64-bit buffer device addresses, skip
+  reg.register(
+    name = "expandStructKernelParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
+    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
+    run = expandStructKernelParamsImpl
   )
 
 proc registerLegalizationPasses*(reg: var PassRegistry) =

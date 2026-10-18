@@ -1,21 +1,7 @@
-## Builtin catalog: in-macro alias expansion + identifier-collision sweep.
+## Builtin catalog alias expansion
 ##
-## The alias set is the per-idiom coordinate spellings: CUDA `blockIdx`,
-## OpenCL `get_global_id`, GLSL `gl_GlobalInvocationID`, WGSL `global_id`,
-## etc. They are implemented as zero-arg and static-dim templates that
-## expand to the canonical MSL names during sem, so the IR only ever
-## contains canonical names. This test pins the expansion *inside* a typed
-## GPU macro body (the `opencl:` macro specifically).
-## The runtime-dim loud-error probe fires inside the macro body:
-##   - dot context:     `blockIdx.x`      -> `threadgroup_position_in_grid.x`
-##   - positional:      `blockIdx[1]`     -> `threadgroup_position_in_grid.y`
-##   - static-dim:      `get_global_id(d)` folds to the `d`-th component
-##   - runtime dim `get_global_id(d)` is a loud Nim static error
-##
-## The collision sweep asserts no two catalog names are identifier-equal under
-## Nim's case/underscore-insensitive matching. The only intentional pair is
-## `workgroup_barrier` ≡ `workgroupBarrier`: one defaulted-param declaration
-## serves both the OpenCL flags arity and the WGSL zero-arg spelling.
+## Test that coordinate aliases expand to canonical builtins in a typed GPU
+## macro body, a runtime-dim use errors, and no two names collide
 ##
 ## Run:
 ##   cd tattletale
@@ -108,13 +94,10 @@ block:
   doAssert names.len > 20, "catalog name extraction must find the full declaration set, got " & $names.len
   # `barrier` is deliberately overloaded (0-arg Vulkan, flags OpenCL).
   # Two declarations share one identifier: not a collision.
+  # The one intentional pair is `workgroup_barrier` ≡ `workgroupBarrier`:
+  # one defaulted-param declaration serves both the OpenCL flags arity
+  # and the WGSL zero-arg spelling.
   names = names.deduplicate()
-
-  # The intentional style-insensitive twin: WGSL `workgroupBarrier` is
-  # identifier-equal to `workgroup_barrier`. One declaration serves both
-  # arities, so the twin is the only spelling that collides with a declared
-  # name.
-  names.add "workgroupBarrier"
 
   proc norm(name: string): string =
     ## Nim default identifier matching: case- and underscore-insensitive.
@@ -125,11 +108,9 @@ block:
     byNorm.mgetOrPut(norm(name), @[]).add name
 
   for normalized, spellings in byNorm.pairs:
-    if spellings.len > 1:
-      doAssert spellings.len == 2 and "workgroup_barrier" in spellings and
-        "workgroupBarrier" in spellings,
-        "unexpected identifier collision: " & $spellings
-  echo "  OK — collision sweep: no unintended identifier-equal catalog names (only workgroup_barrier ≡ workgroupBarrier)"
+    doAssert spellings.len == 1,
+      "unexpected identifier collision: " & $spellings
+  echo "  OK — collision sweep: no identifier-equal catalog names"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

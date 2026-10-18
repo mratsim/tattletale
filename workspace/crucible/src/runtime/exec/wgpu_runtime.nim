@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/monotimes
+import ../errors
 import std/times
 import std/os
 import workspace/crucible/vendor/wgpu
@@ -32,17 +33,30 @@ type
     done*: bool
     errType*: WGPUErrorType
     message*: string
-  UncapturedErrorData* = object
+  UncapturedErrorData = object
     ## Uncaptured device error, recorded by `uncapturedErrorCb`.
     ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
     errType*: WGPUErrorType
     message*: string
-  WgpuContext* = object
+  WgpuContext* = ref WgpuContextObj
+  WgpuContextObj = object
     ## Live wgpu handles, instance → adapter → device → queue.
     instance*: WGPUInstance
     adapter*: WGPUAdapter
     device*: WGPUDevice
     queue*: WGPUQueue
+
+proc `=copy`(dst: var WgpuContextObj, src: WgpuContextObj) {.error:
+    "WgpuContext is ref-only, copy the ref not the object".}
+
+proc `=destroy`(c: var WgpuContextObj) =
+  if c.instance != nil:
+    wgpuDeviceRelease(c.device)
+    wgpuAdapterRelease(c.adapter)
+    wgpuInstanceRelease(c.instance)
+    c.device = nil
+    c.adapter = nil
+    c.instance = nil
 
 proc deviceName*(ctx: WgpuContext): string =
   ## Returns the WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
@@ -88,7 +102,7 @@ proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
     data.message = newString(message.length.int)
     copyMem(data.message[0].addr, message.data, message.length)
   data.done = true
-proc uncapturedErrorCb*(device: ptr WGPUDevice, errType: WGPUErrorType,
+proc uncapturedErrorCb(device: ptr WGPUDevice, errType: WGPUErrorType,
                         message: WGPUStringView,
                         userdata1: pointer,
                         userdata2: pointer) {.cdecl.} =
@@ -117,7 +131,7 @@ proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
   while not done:
     wgpuInstanceProcessEvents(instance)
     if deadline <= getMonoTime():
-      quit("WebGPU: timed out waiting for " & what & " request")
+      failLoud("WebGPU: timed out waiting for " & what & " request")
     sleep(2)
 
 proc initWgpu*(): WgpuContext =
@@ -175,12 +189,3 @@ proc initWgpu*(): WgpuContext =
     device: dd.device,
     queue: queue
   )
-proc shutdown*(ctx: var WgpuContext) =
-  ## Releases all wgpu resources. Idempotent, the engine's `=destroy` calls it.
-  if ctx.instance != nil:
-    wgpuDeviceRelease(ctx.device)
-    wgpuAdapterRelease(ctx.adapter)
-    wgpuInstanceRelease(ctx.instance)
-    ctx.device = nil
-    ctx.adapter = nil
-    ctx.instance = nil

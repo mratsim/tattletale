@@ -23,121 +23,50 @@ proc unwrapSingleStmt(n: NimNode): NimNode =
     n
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[],
-               deadStaticMask: seq[int] = @[]): GpuAst
+               staticParamsPositions: seq[int] = @[]): GpuAst
 
 proc isTypeDescNode(n: NimNode): bool =
-  ## True when the node is a TYPE used as a value: a generic type parameter
-  ## or a `typedesc` literal (e.g. `T` in `make_tensor(T, L)`). In the typed
-  ## AST such an argument is a type symbol whose type is `typedesc[T]`
-  ## (`typeKind == ntyTypeDesc`). CUDA has no type values, so these cannot be
-  ## lowered to a runtime value and are erased at gpuCall construction. The
-  ## matching `typedesc` param is dropped in `parseProcParameters`.
-  ## A genuine value symbol (var/let/param/result/const of a value type)
-  ## never has `ntyTypeDesc` type, so it is never erased.
   result = n.getTypeInst().typeKind == ntyTypeDesc
 
-proc bodyReferencesAny(body: NimNode, names: seq[string]): bool =
-  ## True when any of the given parameter names survives as a symbol reference in the body.
-  ##
-  ## On a sem-instantiated body a surviving reference is a genuine value read in the emitted code:
-  ## - sem reduces compile-time uses of `static` params into bound values
-  ## - matching is by name and errs on the side of keeping the parameter, so a shadowing
-  ##   local with the same name counts as a reference
-  if body.kind == nnkSym and body.repr in names:
-    return true
-  for child in body:
-    if bodyReferencesAny(child, names):
-      return true
-
-proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute], staticParamPositions: var seq[int],
-                         staticValueMask: seq[int] = @[],
-                         deadStaticMask: seq[int] = @[]): seq[GpuParam] =
-  ## Returns all parameters of the given procedure from the `params` node
-  ## of type `nnkFormalParams`.
-  ## `staticValueMask` lists the indices of `static T` value parameters
-  ## in the ORIGINAL definition (nnkStaticTy)
-  ## - the instantiated type node of a static value param IS the value,
-  ##   so the mask is not re-derivable at the call site
-  ## - threaded from the generic-instantiation scan
-  ## `deadStaticMask` lists the indices of `static T` scalar value parameters whose
-  ## sem-instantiated body has no surviving reference. Sem reduces every use into
-  ## the bound value (when-resolution, static expressions, forwarded call arguments),
-  ## so the parameter is compile-time only and, like the record/tuple case below,
-  ## carries no CUDA value.
-  ## `typedesc`/type-param params (`_: typedesc[T]`) are dropped: they carry
-  ## no runtime value in the emitted GPU source and the caller side erases the
-  ## matching argument (see the nnkCall handler), keeping call/callee arity
-  ## consistent.
+proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: NimNode, attrs: set[GpuAttribute],
+                         staticParamsPositions: seq[int] = @[]): seq[GpuParam] =
   doAssert params.kind == nnkFormalParams, "Argument is not FormalParams, but: " & $params.treerepr
   var curIdx = 0
   for i in 1 ..< params.len:
     let param = params[i]
     let numParams = param.len - 2 # 3 if one param, one more for each of same type, example:
     let typIdx = param.len - 2 # second to last is the type
-    # IdentDefs
-    #   Ident "x"
-    #   Ident "y"
-    #   Ident "res"
-    #   PtrTy
-    #     Ident "float32"   # `param.len - 2`
-    #   Empty               # `param.len - 1`
-    if isTypeDescNode(param[typIdx-1]):
-      curIdx += numParams
-      continue # typedesc[T] param — no CUDA value; skip whole IdentDefs (multi-name too)
-    # The TYPE node is `param[typIdx]` (second to last). `param[typIdx-1]` is the
-    # (last) NAME — whose type isTypeDescNode probes above. A static VALUE param's
-    # instantiated type node IS the value (e.g. `static MiniAtom` ->
-    # `MiniAtom(dtype: ..., k: ...)`), which resolveType cannot lower (record
-    # fields may hold enums). Scalar statics (`static int` etc.) lower as
-    # literals and are kept unless the instantiated body has no surviving reference
-    # (`deadStaticMask`). Sem reduces every use into a bound value, so the parameter
-    # is dead in the emitted code. A surviving reference (a value read in emitted code)
-    # keeps the runtime parameter.
-    if curIdx in staticValueMask and
-        (param[typIdx].kind in {nnkObjConstr, nnkTupleConstr, nnkBracket} or
-         curIdx in deadStaticMask):
-      # static record/tuple/array VALUE param — compile-time only, no CUDA value.
-      # The mask comes from the ORIGINAL proc definition (nnkStaticTy): the
-      # instantiated type node of a RUNTIME tuple-typed param is also an
-      # nnkTupleConstr, so the node kind alone cannot discriminate (flatten's
-      # `t: IntOrIntTuple` was wrongly dropped, emitting a parameterless def).
-      for j in 0 ..< numParams:
-        staticParamPositions.add(curIdx + j)
-      curIdx += numParams
-      continue
-    let paramType = resolveType(reg, param[typIdx-1].getTypeInst())
+    let marked = curIdx in staticParamsPositions or isTypeDescNode(param[typIdx-1])
     for j in 0 ..< numParams:
       var p = ctx.toGpuAst(reg, param[j])
       let symKind = if attGlobal in attrs: gsGlobalKernelParam
                     else: gsDeviceKernelParam
+      p.symbol.symKind = symKind ## Update the symbol kind
+      var paramType: GpuType
+      if marked:
+        paramType = GpuType(kind: gtCompileTimeValue)
+      else:
+        paramType = resolveType(reg, param[typIdx-1].getTypeInst())
       p.symbol.typ = paramType     ## Update the type of the symbol
-      p.symbol.symKind = symKind ## and the symbol kind
-      let byref = isLargeStruct(paramType)
+      let byref = paramType.kind != gtCompileTimeValue and isLargeStruct(paramType)
       # Explicit `ptr T` params are device pointers; implicit `var T`
       # params and scalars stay in per-thread registers.
       let paramAddrSpace =
         if paramType.kind == gtPtr and not paramType.implicit: asDevice
         else: asRMEM
-      let param = GpuParam(ident: p, typ: paramType,
-                           addressSpace: paramAddrSpace, passByRef: byref)
-      result.add(param)
+      result.add(GpuParam(ident: p, typ: paramType,
+                          addressSpace: paramAddrSpace, passByRef: byref))
     curIdx += numParams
 
 proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
     params: NimNode, attrs: set[GpuAttribute],
-    staticValueMask: seq[int] = @[],
-    deadStaticMask: seq[int] = @[]): GpuProcSignature =
+    staticParamsPositions: seq[int] = @[]): GpuProcSignature =
   ## Creates a `GpuProcSignature` from the given `params` node of type `nnkFormalParams`
   ##
-  ## NOTE: This procedure is only called from generically instantiated procs. Therefore,
-  ## we shouldn't need to worry about getting `gtInvalid` return types here.
-  var staticParamPositions: seq[int]
+  ## Only called on generically instantiated procs, so `gtInvalid` return types cannot occur.
   GpuProcSignature(
-    params: ctx.parseProcParameters(reg, params, attrs, staticParamPositions, staticValueMask,
-                                    deadStaticMask),
-    retType: resolveProcReturnType(reg, params),
-    staticParamPositions: staticParamPositions
+    params: ctx.parseProcParameters(reg, params, attrs, staticParamsPositions),
+    retType: resolveProcReturnType(reg, params)
   )
 
 proc isGenericProc(node: NimNode): bool =
@@ -151,8 +80,8 @@ proc isGenericProc(node: NimNode): bool =
     impl[5].len > 1 and impl[5][1].kind == nnkGenericParams
 
 proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
-  ## Returns the name for the function. Either the symbol name _or_
-  ## the `{.cudaName.}` pragma argument.
+  ## Returns the name for the function.
+  ## Either the symbol name _or_ the `{.cudaName.}` pragma argument.
   template toAst(fn): untyped = GpuAst(kind: gpuIdent, symbol: newSymbol(fn, symKind = gsProc))
   # check if the implementation has a pragma
 
@@ -189,15 +118,7 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
         of "/": result.symbol.name = "div"
         else: discard
         result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
-      # handle overloads with different signatures
       if n.strVal in ctx.symChoices:
-        # Magic and {.builtin.} procs keep their plain name on every
-        # backend: they are forwarded to the backend's native function
-        # (e.g. CUDA's max, MSL's rsqrt), which knows no hash. The contract
-        # is that a {.builtin.} proc is declared with the backend's
-        # own function name, so the forwarded name resolves natively
-        # wherever the tile layer targets. Mangling a builtin call breaks
-        # the printer's name-only forwarding, which resolves by the plain name.
         if not hasPragma(n.getImpl(), "magic") and not hasPragma(n.getImpl(), "builtin"):
           let id = ctx.sigTab[sig]
           id.symbol.name = id.symbol.iSym
@@ -235,12 +156,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   let inst = rawImpl
   let sig = node[0].getTypeInst()
 
-  # Which params were declared `static T` in the ORIGINAL definition? The
-  # instantiated signature's type node for a static VALUE param IS the value
-  # (nnkObjConstr/nnkTupleConstr/nnkBracket), but a RUNTIME tuple-typed param
-  # also instantiates to nnkTupleConstr — the declaration is the only reliable
-  # discriminator, so capture it before the params are replaced below.
-  var staticValueMask: seq[int]
+  var staticParamsPositions: seq[int]
   block:
     var curIdx = 0
     for i in 1 ..< inst.params.len:
@@ -252,51 +168,19 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
       if p[typIdx].kind in {nnkCommand, nnkBracketExpr} and
           p[typIdx].len > 0 and p[typIdx][0].repr == "static":
         for j in 0 ..< numParams:
-          staticValueMask.add(curIdx + j)
+          staticParamsPositions.add(curIdx + j)
       curIdx += numParams
 
   inst.params = sig.params # copy over the parameters
 
-  # A `static` scalar value param whose instantiated body has no surviving reference
-  # is compile-time only. Sem reduces every use into the bound value, so the runtime
-  # parameter is dead. The walk is per use in the instantiated body, and a param
-  # with a surviving value read keeps its runtime parameter.
-  var deadStaticMask: seq[int]
-  block:
-    var curIdx = 0
-    for i in 1 ..< inst.params.len:
-      let p = inst.params[i]
-      let numParams = p.len - 2
-      let typIdx = p.len - 2
-      if curIdx in staticValueMask and
-          p[typIdx].kind notin {nnkObjConstr, nnkTupleConstr, nnkBracket}:
-        # Multi-name IdentDefs (`a, b: static int`) drop as a whole.
-        # The group is dead only when NO name is referenced.
-        var names: seq[string]
-        for nameIdx in 0 ..< typIdx:
-          names.add p[nameIdx].repr
-        if not bodyReferencesAny(inst.body, names):
-          for j in 0 ..< numParams:
-            deadStaticMask.add(curIdx + j)
-      curIdx += numParams
-
   # turn the signature into a `GpuProcSignature`
   let attrs = collectProcAttributes(inst.pragma)
-  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs, staticValueMask,
-                                                deadStaticMask)
+  let procSig = ctx.toInstantiatedProcSignature(reg, sig.params, attrs, staticParamsPositions)
   if name in ctx.processedProcs:
     return
   else:
-    # Need to add isym here so that if we have recursive calls, we don't end up
-    # calling `toGpuAst` recursively forever
     ctx.processedProcs[name] = procSig
 
-  # Ambiguous builtins (system.min/max/abs): register the compiler-magic
-  # versions name-only so calls forward to the backend's native min/max/abs
-  # (which must keep their plain name — the base case CUDA/OpenCL/Vulkan/
-  # WebGPU support natively). User-defined overloads (no magic pragma) fall
-  # through to body-parsing exactly like +/*, so library overloads (e.g.
-  # ceramic's genBinOp) are allowed.
   if node[0].repr in NimGpuNumericBuiltinsFunctions:
     if hasPragma(inst, "magic"):
       let retType = resolveType(reg, sig.params[0])
@@ -304,12 +188,8 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
       ctx.builtinFns[name] = builtinFn
       return
 
-  # Operator builtins (system.* with magic: MulI etc.) — detect by name
-  # and register as builtin before reaching toGpuAst (which can't translate
-  # magic bodies and triggers a false isBuiltIn() assertion).
   if node[0].repr in NimGpuNumericBuiltinsOperators or
      node[0].repr in NimGpuBooleanOperators:
-    # Only for magic/builtin operators — skip user-defined overloads
     if hasPragma(inst, "magic"):
       let retType = resolveType(reg, sig.params[0])
       var builtinFn = GpuAst(kind: gpuProc, pName: name, pRetType: retType, pAttributes: {attDevice})
@@ -325,7 +205,7 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     ctx.addToFnTable(name, builtinFn, {fkBuiltin})
     return
 
-  let fn = ctx.toGpuAst(reg, inst, staticValueMask, deadStaticMask)
+  let fn = ctx.toGpuAst(reg, inst, staticParamsPositions)
   if fn.kind == gpuDiscard:
     doAssert inst.isBuiltIn()
     return
@@ -340,16 +220,6 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   # Iterating passes like `ensureBlock` only see instantiations in `allFnTab`.
   ctx.allFnTab[fn.pName] = fn
 
-proc isExpression(n: GpuAst): bool =
-  ## Returns whether the given AST node is an expression
-  case n.kind
-  of gpuCall: # only if it returns something!
-    result = n.cIsExpr
-  of gpuBinOp, gpuIdent, gpuLit, gpuArrayLit, gpuPrefix, gpuDot, gpuIndex, gpuObjConstr,
-     gpuAddr, gpuDeref, gpuConv, gpuCast, gpuConstexpr:
-    result = true
-  else:
-    result = false
 
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
@@ -411,8 +281,7 @@ proc toConstDefName(ctx: var GpuContext, identNode: NimNode): GpuAst =
     result = ctx.sigTab[s]
 
 proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
-               staticValueMask: seq[int] = @[],
-               deadStaticMask: seq[int] = @[]): GpuAst =
+               staticParamsPositions: seq[int] = @[]): GpuAst =
   ## XXX: things still left to do:
   ## - support `result` variable? Currently not supported. Maybe we will won't
 
@@ -521,14 +390,12 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         result.pRawPragmas = collectRawPragmas(node.pragma)
         result.pAttributes = collectProcAttributes(node.pragma)
         result.pWorkgroupSize = parseWorkgroupSize(node.pragma)
-        if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
+        if result.pAttributes.len == 0: # means a `builtin` pragma was applied
           ctx.builtinFns[name] = result # store in builtinFns, so that we know if it returns a value when called
           ctx.addToFnTable(name, result, {fkBuiltin})
           return GpuAst(kind: gpuDiscard)
       # Process parameters
-      var staticParamPositions: seq[int]
-      result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamPositions,
-                                               staticValueMask, deadStaticMask)
+      result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamsPositions)
       result.pBody = ctx.toGpuAst(reg, node.body)
       # Validation and transform passes run via ctx.runPasses()
       # Add to table of known functions (both old and new)
@@ -730,22 +597,17 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       ## XXX: for CUDA backend need to annotate all pulled in procs with `{.device.}`!
       ctx.registerGenericInstOrExternalProc(reg, node, name)
 
-    # Erase typedesc-typed arguments (types passed as values, e.g. `T` in
-    # make_tensor(T, L)): they have no CUDA value representation and are never
-    # converted. The callee's matching typedesc param is dropped in
-    # parseProcParameters, keeping call/callee arity consistent. Non-typedesc
-    # args keep their exact position/order. Operator builtins never receive
-    # typedesc operands in valid Nim, so this is safe for those branches too.
-    var staticSkip: seq[int]
-    if name in ctx.processedProcs:
-      staticSkip = ctx.processedProcs[name].staticParamPositions
+    # Compile-time args are carried as gpuDiscard placeholders, matching
+    # the callee's gtCompileTimeValue params: the compile-time argument has
+    # no device representation. The compile-time-parameter lowering pass
+    # erases them with the callee's matching params, arity stays 1:1.
     var args: seq[GpuAst]
+    let fnParams = ctx.getFnParams(name)
     for i in 1 ..< node.len:
-      if isTypeDescNode(node[i]): continue
-      if (i - 1) in staticSkip: continue # static VALUE arg (e.g. the atom record in
-                                          # gemm_warp) — compile-time only, its
-                                          # param was dropped in parseProcParameters
-      args.add ctx.toGpuAst(reg, node[i])
+      if (i - 1) < fnParams.len and fnParams[i - 1].typ.kind == gtCompileTimeValue:
+        args.add GpuAst(kind: gpuDiscard)
+      else:
+        args.add ctx.toGpuAst(reg, node[i])
     if name in ctx.builtinFns and node[0].repr in NimGpuNumericBuiltinsOperators:
       var op = GpuAst(kind: gpuIdent, symbol: newSymbol(NimGpuNumericBuiltinsOperators[node[0].repr]))
       op.symbol.iSym = op.symbol.name
@@ -757,8 +619,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
       result.bType = resolveType(reg, node.getTypeInst())
     else:
-      let fnIsExpr = ctx.fnReturnsValue(name)
-      result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
+      result = GpuAst(kind: gpuCall)
       result.cName = name
       result.cArgs = args
 
@@ -858,7 +719,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       let typ = resolveType(reg, node[0].getTypeImpl)
       doAssert node[1].kind == nnkIntLit
       let idx = node[1].intVal
-      let field = typ.oFields[idx].name
+      let field = typ.fields[idx].name
       result = GpuAst(kind: gpuDot,
                       dParent: ctx.toGpuAst(reg, node[0]),
                       dField: ctx.toGpuAst(reg, ident(field)))
@@ -1018,9 +879,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ## this should never see `genericParam` I think
     let typ = resolveType(reg, node)
     # get all fields of the type
-    let flds = if typ.kind == gtObject: typ.oFields
-               elif typ.kind == gtGenericInst: typ.gFields
-               else: error "ObjConstr must have an object type: " & $typ
+    if typ.kind notin {gtObject, gtGenericInst}:
+      error "ObjConstr must have an object type: " & $typ
+    let flds = typ.fields
     if flds.len == 0:
       # Empty struct (e.g. Int[N]) — produce empty-ocFields gpuObjConstr
       # so each backend emits language-appropriate init ({} / TypeName())
@@ -1052,7 +913,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
 
     result = GpuAst(kind: gpuObjConstr, ocType: typ)
     # get all fields of the type
-    let flds = typ.oFields
+    let flds = typ.fields
     # find all fields that have been defined by the user
     var ocFields: seq[GpuFieldInit]
     for i in 0 ..< node.len: # all fields to be init'd

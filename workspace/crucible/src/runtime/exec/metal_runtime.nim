@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
+import ../errors
 import workspace/crucible/src/abis/objc_abi as objc
 
 # ═════════════════════════════════════════════════
@@ -29,18 +30,19 @@ const
 # Error policy and records
 # ═════════════════════════════════════════════════
 
-template failLoud*(msg: string) =
-  ## Unified error policy: stacktrace + stderr + quit(1) with the caller's location.
-  ## A template so instantiationInfo() reports the call site.
-  writeStackTrace()
-  stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
-  quit 1
-
 type
   MetalCtx* = object
     ## Live Metal device and command queue, +1 objects owned by the caller.
     device*: objc.ID
     queue*: objc.ID
+
+proc `=copy`(dst: var MetalCtx, src: MetalCtx) {.error:
+    "MetalCtx owns its device and queue handles, copy the MetalEngine ref not the ctx".}
+
+proc `=destroy`(ctx: var MetalCtx) =
+    objc.withMemPool:
+      objc.release(ctx.queue)
+      objc.release(ctx.device)
 
 # ═════════════════════════════════════════════════
 # macOS-only execution primitives
@@ -62,7 +64,7 @@ when defined(macosx):
 
   proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>".}
 
-  proc mslLanguageVersion*(): objc.NSUInteger =
+  proc mslLanguageVersion(): objc.NSUInteger =
     ## MSL language version for this OS, from the `uname()` Darwin release:
     ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName

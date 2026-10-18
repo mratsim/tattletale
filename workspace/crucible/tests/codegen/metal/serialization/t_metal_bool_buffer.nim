@@ -1,6 +1,4 @@
-## Metal: bool buffer marshalling through the engine.
-## Bool buffer elements marshal at their Nim width (1 byte/element).
-## Scalar bools stay 4-byte i32 on the host (test_metal_scalar_marshalling.nim).
+## Metal bool buffers marshal at their Nim width, 1 byte per element (scalar bools stay 4-byte i32 on the host).
 ##
 ## Run:
 ##   cd tattletale

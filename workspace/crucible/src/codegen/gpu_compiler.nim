@@ -35,6 +35,7 @@ template registerCommonPasses*(reg: var PassRegistry) =
   ## Register passes common to all backends.
   reg.registerValidationPrePasses()
   reg.registerNormalizationPasses()
+  reg.registerTypeSystemPasses()
   reg.registerLegalizationPasses()
   reg.registerPreprocessingPasses()
   reg.registerOptimizationPasses()
@@ -151,48 +152,3 @@ macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
-proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
-              backend: BackendKind = bkCuda): string =
-  ## Generates the code based on the given AST (optionally at runtime) and restricts
-  ## it to a single global kernel (WebGPU) if any given.
-  ## Default backend is CUDA.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  case backend
-  of bkCuda:
-    reg.registerCudaPasses()
-  of bkWGSL:
-    reg.registerWgslPasses()
-  of bkOpenCL:
-    reg.registerOpenclPasses()
-  of bkVulkan:
-    reg.registerVulkanPasses()
-  of bkMetal:
-    reg.registerMetalPasses()
-  # Clone IR before running passes — passes mutate in place,
-  # so without cloning, one call contaminates later calls for a different backend.
-  let astCopy = ast.clone()
-  for fn in gen.procs:
-    let fnCopy = fn.clone()
-    ctx.genericInsts[fnCopy.pName] = fnCopy
-  for typ in gen.types:
-    let typCopy = typ.clone()
-    case typCopy.kind
-    of gpuTypeDef:
-      ctx.types[typCopy.tTyp] = typCopy
-    of gpuAlias:
-      ctx.types[typCopy.aTyp] = typCopy
-    else: raiseAssert "Unexpected node kind assigning to `types`: " & $typ
-  runPasses(ctx, reg)
-  case backend
-  of bkCuda:
-    result = ctx.codegenCuda(astCopy, kernel)
-  of bkWGSL:
-    result = ctx.codegenWebGpu(astCopy, kernel)
-  of bkOpenCL:
-    result = ctx.codegenOpenCL(astCopy, kernel)
-  of bkVulkan:
-    result = ctx.codegenVulkan(astCopy, kernel)
-  of bkMetal:
-    result = ctx.codegenMetal(astCopy, kernel)

@@ -1,13 +1,6 @@
-## Phase 1b: Type System Fixes test
+## GPU type system equality, hash and clone
 ##
-## Verifies:
-## - hasPragma returns true when magic is the second pragma
-## - GpuType.== on gtGenericInst with nil gFields does NOT crash
-## - gtPtr.== distinguishes mutable from immutable
-## - gtPtr.hash distinguishes mutable from immutable
-## - gtInvalid == gtInvalid returns false
-## - GpuProcSignature.== compares params by value (Symbol identity)
-## - clone preserves mutable for gtPtr
+## Test that GpuType and GpuProcSignature equality, hash and clone keep pointer mutability and reject gtInvalid
 ##
 ## Run:
 ##   cd tattletale
@@ -47,24 +40,24 @@ static:
     echo "  OK — hasPragma false for non-magic pragmas"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 3. GpuType.== on gtGenericInst with nil gFields does NOT crash (Bug 2)
+# 3. GpuType.== on gtGenericInst with nil fields does NOT crash (Bug 2)
 # ═══════════════════════════════════════════════════════════════════════
 block:
-  # Both have nil gFields (default from object construction)
+  # Both have nil fields (default from object construction)
   let a = GpuType(kind: gtGenericInst, gName: "Test")
   let b = GpuType(kind: gtGenericInst, gName: "Test")
   doAssert a == b,
-    "gtGenericInst with nil gFields/gArgs should compare equal"
-  echo "  OK — gtGenericInst nil gFields does not crash"
+    "gtGenericInst with nil fields/gArgs should compare equal"
+  echo "  OK — gtGenericInst nil fields does not crash"
 
 block:
-  # One has nil, other has non-nil gFields
+  # One has nil, other has non-nil fields
   let a = GpuType(kind: gtGenericInst, gName: "Test",
-    gFields: @[GpuTypeField(name: "x", typ: GpuType(kind: gtInt32))])
+    fields: @[GpuTypeField(name: "x", typ: GpuType(kind: gtInt32))])
   let b = GpuType(kind: gtGenericInst, gName: "Test")
   doAssert not (a == b),
-    "gtGenericInst: one nil gFields other non-nil should not be equal"
-  echo "  OK — gtGenericInst nil vs non-nil gFields distinguished"
+    "gtGenericInst: one nil fields other non-nil should not be equal"
+  echo "  OK — gtGenericInst nil vs non-nil fields distinguished"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 4. gtPtr.== distinguishes mutable from immutable (Bug 3)

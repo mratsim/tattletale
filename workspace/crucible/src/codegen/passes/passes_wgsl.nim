@@ -21,8 +21,9 @@ proc registerWgslPasses*(reg: var PassRegistry) =
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["override", "storage", "uniform", "workgroup"], "WGSL")
   )
-  # Explode before the passes below reshape pointer-bearing code.
-  reg.registerExplodePointerStructParams()
+  # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
+  reg.registerExpandStructKernelParams()
+  # Explode before the passes below reshape code carrying pointers.
   reg.register("injectAddressOf", pkTransform, phaseMain,
     "Replaces storage-buffer idents with &ident in global fns",
     dependsOn = @[],

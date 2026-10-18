@@ -62,7 +62,7 @@ block:
   let int32 = GpuType(kind: gtInt32)
   let f32 = GpuType(kind: gtFloat32)
   let obj = GpuType(kind: gtObject, name: "Foo",
-    oFields: @[GpuTypeField(name: "x", typ: int32), GpuTypeField(name: "y", typ: f32)])
+    fields: @[GpuTypeField(name: "x", typ: int32), GpuTypeField(name: "y", typ: f32)])
   let desc = gpuTypeToDesc(obj)
   doAssert desc.kind == tdkStruct, "Expected tdkStruct, got " & $desc.kind
   doAssert desc.tdStructName == "Foo", "Struct name should be Foo"

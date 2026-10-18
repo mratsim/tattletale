@@ -18,7 +18,7 @@ proc isGlobalFn*(fn: GpuAst): bool =
 # Pass 1: rewriteIndexDeref
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc rewriteIndexDerefImpl*(ctx: var GpuContext; n: var GpuAst) =
+proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Transform `gpuIndex(gpuDeref(ident))` into `gpuIndex(iArr=dOf(ident))`
   ## when the deref'd ident is a pointer (not array) type.
   ##
@@ -229,7 +229,7 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     TypeDesc(kind: tdkArray, tdElem: gpuTypeToDesc(t.aTyp), tdLen: t.aLen)
   of gtObject:
     var fields: seq[tuple[name: string, typ: TypeDesc]]
-    for f in t.oFields:
+    for f in t.fields:
       fields.add (f.name, gpuTypeToDesc(f.typ))
     TypeDesc(kind: tdkStruct, tdStructName: t.name, tdFields: fields)
   of gtUA:
@@ -245,6 +245,9 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     # Span is lowered to ptr+len before this pass
     TypeDesc(kind: tdkUnresolved)
   of gtInvalid:
+    TypeDesc(kind: tdkUnresolved)
+  of gtCompileTimeValue:
+    # the type slot holds the compile-time argument, there is no descriptor
     TypeDesc(kind: tdkUnresolved)
 
 proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
@@ -311,43 +314,6 @@ proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
     result = gpuTypeToDesc(arg.cTo)
   else:
     result = TypeDesc(kind: tdkUnresolved)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Pass 4: emitFunctionSignatures
-# ═══════════════════════════════════════════════════════════════════════════
-
-proc genFunctionSig(procNode: GpuAst): string =
-  ## Pre-compute the function signature string for a gpuProc node.
-  let retType = procNode.pRetType
-  let fnName = procNode.pName.ident()
-
-  var params: seq[string]
-  for p in procNode.pParams:
-    params.add(p.ident.ident())
-  let fnArgs = params.join(", ")
-
-  if retType.kind == gtPtr and retType.to.kind == gtArray:
-    let arrayTyp = retType.to.aTyp
-    let innerLen = $retType.to.aLen
-    result = &"__fnSig({fnName})({fnArgs})->[{innerLen}]"
-  else:
-    result = &"__fnSig({fnName})({fnArgs})"
-
-proc emitFunctionSignaturesImpl*(ctx: var GpuContext) =
-  ## Walk all gpuProc nodes in fnTable and pre-compute function signature
-  ## metadata. The signature is stored and codegen reads it directly
-  ## instead of calling genFunctionType.
-  for key, entry in ctx.fnTable.mpairs:
-    if not entry.body.isNil and entry.body.kind == gpuProc:
-      let sig = genFunctionSig(entry.body)
-      entry.sigString = sig
-      # Store as a comment node in the proc body preamble
-      let sigComment = GpuAst(kind: gpuComment, comment: "sig:" & sig)
-      if not entry.body.pBody.isNil:
-        let sigComment = GpuAst(kind: gpuComment, comment: "sig:" & sig)
-        entry.body.pBody.statements.insert(sigComment, 0)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Pass 5: mangleNames (with base58)
@@ -827,11 +793,7 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
       if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
         nil
       else:
-        let fields =
-          case pT.kind
-          of gtObject: pT.oFields
-          of gtGenericInst: pT.gFields
-          else: @[]
+        let fields = pT.fields
         var found: GpuType = nil
         for f in fields:
           if f.name == n.dField.symbol.name:
@@ -853,11 +815,7 @@ proc ptrFieldNames*(t: GpuType): seq[string] =
   ## Pointer field names of a struct type, in declaration order.
   case t.kind
   of gtObject:
-    for f in t.oFields:
-      if f.typ.kind == gtPtr:
-        result.add f.name
-  of gtGenericInst:
-    for f in t.gFields:
+    for f in t.fields:
       if f.typ.kind == gtPtr:
         result.add f.name
   else: discard
@@ -1038,7 +996,6 @@ proc registerPreprocessingPasses*(reg: var PassRegistry) =
   ## 1. rewriteIndexDeref (early — normalizes pointer/index patterns)
   ## 2. decomposeMemcpyVars (after rewriteIndexDeref, before lowering)
   ## 3. annotateTypesForCodegen (after decomposition, IR is stable)
-  ## 4. emitFunctionSignatures (after types annotated)
   ## 5. mangleNames (last — runs just before codegen)
   ## (Phase 6 passes are registered separately per backend)
 
@@ -1080,14 +1037,6 @@ proc registerPreprocessingPasses*(reg: var PassRegistry) =
       discard
       # Type descriptors are computed on-demand via getTypeDesc().
       # This pass registers the mechanism — actual computation is lazy.
-  )
-
-  # ── Pass 4: emitFunctionSignatures ──
-  reg.register("emitFunctionSignatures", pkTransform, phaseMain,
-    "Pre-computes function signature strings on gpuProc nodes",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      emitFunctionSignaturesImpl(ctx)
   )
 
   # ── Pass 5: mangleNames ──
