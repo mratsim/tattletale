@@ -15,9 +15,8 @@
 #export gpu_types
 
 ## Pragma templates for the GPU DSL. The address-space pragmas (`smem`,
-## `rmem`, `const_mem`) set a var declaration's address space. Unannotated
-## vars default to per-thread register memory (`asRMEM`).
-template nimonly*(): untyped {.pragma.}
+## `const_mem`) set a var declaration's address space.
+## Unannotated vars default to per-thread register memory (`asRMEM`).
 template cudaName*(s: string): untyped {.pragma.}
 
 template global*() {.pragma.}
@@ -54,11 +53,3 @@ template smem*(): untyped {.pragma.}
   ##
   ## Usage:
   ##   var scratch {.smem.}: array[64, uint32]
-template rmem*(): untyped {.pragma.}
-  ## Register memory (rmem) pragma for a var declaration inside a GPU block.
-  ## Allocates the var in per-thread storage.
-  ## The declaration is emitted unqualified: register/function storage is the default declaration form
-  ## in MSL, WGSL and CUDA, so no address-space qualifier exists for it.
-  ##
-  ## Usage:
-  ##   var tile {.rmem.}: array[16, half]

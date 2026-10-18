@@ -447,13 +447,6 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           clArgs.add ctx.genOpenCL(arg)
         result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `opencl` macro.")
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `opencl` macro.")
 
   of gpuBinOp:
     ctx.withoutSemicolon:

@@ -390,7 +390,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
         result.pRawPragmas = collectRawPragmas(node.pragma)
         result.pAttributes = collectProcAttributes(node.pragma)
         result.pWorkgroupSize = parseWorkgroupSize(node.pragma)
-        if result.pAttributes.len == 0: # means `nimonly` was applied / is a `builtin`
+        if result.pAttributes.len == 0: # means a `builtin` pragma was applied
           ctx.builtinFns[name] = result # store in builtinFns, so that we know if it returns a value when called
           ctx.addToFnTable(name, result, {fkBuiltin})
           return GpuAst(kind: gpuDiscard)

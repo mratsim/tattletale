@@ -26,7 +26,7 @@ proc registerMetalPasses*(reg: var PassRegistry) =
   reg.registerExpandStructKernelParams()
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
     "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
-    dependsOn = @["emitFunctionSignatures"],
+    dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       materializeIndexBuiltinParamsImpl(ctx)
   )

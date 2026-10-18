@@ -295,10 +295,6 @@ proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRe
       let pt = if i < params.len: params[i].typ else: GpuType(kind: gtVoid)
       let p = ctx.blitExprSlot(slot.cArgs[i], pt, fnRetType)
       result.add p
-  of gpuTemplateCall:
-    for i in 0 ..< slot.tcArgs.len:
-      let p = ctx.blitExprSlot(slot.tcArgs[i], GpuType(kind: gtVoid), fnRetType)
-      result.add p
   of gpuReturn:
     result = ctx.blitExprSlot(slot.rValue, fnRetType, fnRetType)
   of gpuAssign:
@@ -429,10 +425,6 @@ proc blitFnBody(ctx: var GpuContext; body: var GpuAst; fnRetType: GpuType) =
         for j in 0 ..< stmt.cArgs.len:
           let pt = if j < params.len: params[j].typ else: GpuType(kind: gtVoid)
           let p = ctx.blitExprSlot(stmt.cArgs[j], pt, fnRetType)
-          preamble.add p
-      of gpuTemplateCall:
-        for j in 0 ..< stmt.tcArgs.len:
-          let p = ctx.blitExprSlot(stmt.tcArgs[j], GpuType(kind: gtVoid), fnRetType)
           preamble.add p
       of gpuReturn:
         if preamble.len == 0:
@@ -576,9 +568,6 @@ proc unwrapBlockInDot(n: var GpuAst) =
     unwrapBlockInDot(n.aOf)
   of gpuCall:
     for arg in n.cArgs.mitems:
-      unwrapBlockInDot(arg)
-  of gpuTemplateCall:
-    for arg in n.tcArgs.mitems:
       unwrapBlockInDot(arg)
   of gpuObjConstr:
     for f in n.ocFields.mitems:

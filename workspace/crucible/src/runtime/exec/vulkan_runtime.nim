@@ -108,6 +108,9 @@ proc `=destroy`(c: var VulkanContextObj) =
   if c.instance != nil and vkDestroyInstancePtr != nil:
     vkDestroyInstancePtr(c.instance, nil)
     c.instance = nil
+  if c.vkLib != nil:
+    unloadLib(c.vkLib)
+    c.vkLib = nil
 
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =

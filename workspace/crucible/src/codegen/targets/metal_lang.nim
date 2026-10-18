@@ -453,13 +453,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         for a in ast.cArgs:
           args.add ctx.genMetalImpl(a, 0)
         result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `metal` macro.")
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `metal` macro.")
 
   of gpuBinOp:
     ctx.withoutSemicolon:

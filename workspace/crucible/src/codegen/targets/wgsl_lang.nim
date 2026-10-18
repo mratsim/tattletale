@@ -508,10 +508,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         error("Types that require memcpy not supported on WGSL. Probably a better solution.")
       else:
         raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
-      when false:
-        result.add ";\n"
-        result.add indentStr & genMemcpy(address(ast.vName.ident()), ctx.address(ast.vInit),
-                                         size(ast.vName.ident()))
 
   of gpuAssign:
     if ast.aRequiresMemcpy:
@@ -519,9 +515,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         error("Types that require memcpy not supported on WGSL. Probably a better solution.")
       else:
         raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
-      when false:
-        result = indentStr & genMemcpy(ctx.address(ast.aLeft), ctx.address(ast.aRight),
-                                       ctx.size(ast.aLeft))
     else:
       let leftId = ast.aLeft.determineIdent()
       if leftId.kind != gpuDiscard and leftId.symbol.typ.kind == gtPtr and leftId.symbol.typ.to.kind == gtInt32:
@@ -618,14 +611,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
                    ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `webgpu` macro.")
-
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `webgpu` macro.")
 
 
   of gpuBinOp:

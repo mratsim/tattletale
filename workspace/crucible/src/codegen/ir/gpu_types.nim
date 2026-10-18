@@ -21,7 +21,6 @@ type
     gpuDiscard         # Just an empty statement. Useful to not emit anything
     gpuProc         # Function definition (both device and global)
     gpuCall         # Function call
-    gpuTemplateCall # Call to a Nim template
     gpuIf           # If statement
     gpuTernary      # Ternary expression (cond ? then : else)
     gpuFor          # For loop
@@ -121,7 +120,6 @@ type
     body*: GpuAst          # function definition AST (nil for externals/builtins)
     kind*: set[FunctionKind]
     namePolicy*: NamePolicy  # set by mangleNames pass later
-    sigString*: string       # pre-computed function signature (set by emitFunctionSignatures pass)
   GpuAttribute* = enum
     attDevice = "__device__"
     attGlobal = "__global__"
@@ -152,9 +150,6 @@ type
     of gpuCall:
       cName*: GpuAst ## Will be a `GpuIdent`
       cArgs*: seq[GpuAst]
-    of gpuTemplateCall:
-      tcName*: GpuAst ## Will be a `GpuIdent`
-      tcArgs*: seq[GpuAst]  # Arguments for template instantiation
     of gpuIf:
       ifCond*: GpuAst
       ifThen*: GpuAst
@@ -372,7 +367,7 @@ type
     ## - Value: signature of the (possibly generic) instantiation
     processedProcs*: OrderedTable[GpuAst, GpuProcSignature]
 
-    ## Stores all builtin / nimonly / importc / ... functions we encounter so that we can
+    ## Stores all builtin / importc / ... functions we encounter so that we can
     ## check if they return a value when we encounter them in a `gpuCall`
     builtinFns*: OrderedTable[GpuAst, GpuAst]
 
@@ -536,11 +531,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result.cName = ast.cName.clone()
     for arg in ast.cArgs:
       result.cArgs.add(arg.clone())
-  of gpuTemplateCall:
-    result = GpuAst(kind: gpuTemplateCall)
-    result.tcName = ast.tcName.clone()
-    for arg in ast.tcArgs:
-      result.tcArgs.add(arg.clone())
   of gpuIf:
     result = GpuAst(kind: gpuIf)
     result.ifCond = ast.ifCond.clone()
@@ -887,7 +877,6 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
     result.add pretty(n.cName, indent + 2)
     for arg in n.cArgs:
       result.add pretty(arg, indent + 2)
-  of gpuTemplateCall: discard
   of gpuIf:
     result.add idd("IfCond")
     result.add pretty(n.ifCond, indent + 4)

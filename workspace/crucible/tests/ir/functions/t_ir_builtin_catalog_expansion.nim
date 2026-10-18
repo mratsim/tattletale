@@ -110,12 +110,6 @@ block:
   # Two declarations share one identifier: not a collision.
   names = names.deduplicate()
 
-  # The intentional style-insensitive twin: WGSL `workgroupBarrier` is
-  # identifier-equal to `workgroup_barrier`. One declaration serves both
-  # arities, so the twin is the only spelling that collides with a declared
-  # name.
-  names.add "workgroupBarrier"
-
   proc norm(name: string): string =
     ## Nim default identifier matching: case- and underscore-insensitive.
     name.replace("_", "").toLowerAscii()
@@ -125,11 +119,9 @@ block:
     byNorm.mgetOrPut(norm(name), @[]).add name
 
   for normalized, spellings in byNorm.pairs:
-    if spellings.len > 1:
-      doAssert spellings.len == 2 and "workgroup_barrier" in spellings and
-        "workgroupBarrier" in spellings,
-        "unexpected identifier collision: " & $spellings
-  echo "  OK — collision sweep: no unintended identifier-equal catalog names (only workgroup_barrier ≡ workgroupBarrier)"
+    doAssert spellings.len == 1,
+      "unexpected identifier collision: " & $spellings
+  echo "  OK — collision sweep: no identifier-equal catalog names"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

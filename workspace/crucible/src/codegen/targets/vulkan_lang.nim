@@ -457,13 +457,6 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           vkArgs.add ctx.genVulkan(arg)
         result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
 
-  of gpuTemplateCall:
-    when nimvm:
-      error("Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `vulkan` macro.")
-    else:
-      raise newException(ValueError, "Template calls are not supported at the moment. In theory there shouldn't even _be_ any template " &
-        "calls in the expanded body of the `vulkan` macro.")
 
   of gpuBinOp:
     ctx.withoutSemicolon:

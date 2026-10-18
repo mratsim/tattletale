@@ -23,8 +23,6 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
       return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
   NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)
 
-proc address*(a: string): string = "&" & a
-proc size*(a: string): string = "sizeof(" & a & ")"
 
 proc genAsmStmt*(ast: GpuAst): string =
   ## Substitute the TAG_IDENT_IN_ASM<n> placeholders with the operand

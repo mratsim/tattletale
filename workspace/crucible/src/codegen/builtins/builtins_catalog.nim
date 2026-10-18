@@ -135,18 +135,10 @@ template get_num_groups*(d: static int): int =
 
 # GLSL idiom
 template gl_GlobalInvocationID*(): untyped = thread_position_in_grid
-template gl_WorkGroupID*(): untyped = threadgroup_position_in_grid
-template gl_LocalInvocationID*(): untyped = thread_position_in_threadgroup
-template gl_WorkGroupSize*(): untyped = threads_per_threadgroup
-template gl_NumWorkGroups*(): untyped = threadgroups_per_grid
 template gl_LocalInvocationIndex*(): untyped = thread_index_in_threadgroup
 
 # WGSL idiom
 template global_id*(): untyped = thread_position_in_grid
-template workgroup_id*(): untyped = threadgroup_position_in_grid
-template local_invocation_id*(): untyped = thread_position_in_threadgroup
-template num_workgroups*(): untyped = threadgroups_per_grid
-template local_invocation_index*(): untyped = thread_index_in_threadgroup
 # No `workgroup_size` alias: WGSL has no `workgroup_size` builtin:
 # only the `@workgroup_size` attribute exists, so `threads_per_threadgroup` is deferred on WGSL.
 
@@ -187,15 +179,6 @@ template barrier*(flags: static uint32 = CLK_LOCAL_MEM_FENCE): untyped =
   static: doAssert flags == CLK_LOCAL_MEM_FENCE
   threadgroup_barrier()
 
-# OpenCL 2.0 / WGSL idiom
-template workgroup_barrier*(flags: uint32 = 0): untyped = threadgroup_barrier()
-  ## One declaration serves both arities. The WGSL `workgroupBarrier`
-  ## and the OpenCL `workgroup_barrier(flags)` are identifier-equal
-  ## under Nim's style-insensitive matching.
 
-# ═══════════════════════════════════════════════════════════
-# 3. Other (CUDA-only)
-# ═══════════════════════════════════════════════════════════
-# `malloc`/`free`/`memcpy` dummies were dropped: memcpy is emitted only by the `decomposeMemcpy` pass
 # as `__builtin_memcpy`, never via the dummy.
 

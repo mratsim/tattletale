@@ -185,7 +185,7 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     of "device": result.incl attDevice
     of "global": result.incl attGlobal
     of "inline", "forceinline": result.incl attForceInline
-    of "nimonly", "builtin":
+    of "builtin":
       # used to fully ignore functions!
       return
     of "importc": # encountered if we analyze a proc from outside `cuda` scope
@@ -254,10 +254,6 @@ proc collectAddressSpace*(n: NimNode): AddressSpace =
       doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
       seen = true
       result = asSMEM
-    of "rmem":
-      doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
-      seen = true
-      result = asRMEM
     of "const_mem":
       doAssert not seen, "Multiple address-space pragmas on one variable: " & $n.treerepr
       seen = true
