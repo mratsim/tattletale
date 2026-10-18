@@ -35,6 +35,7 @@ template registerCommonPasses*(reg: var PassRegistry) =
   ## Register passes common to all backends.
   reg.registerValidationPrePasses()
   reg.registerNormalizationPasses()
+  reg.registerTypeSystemPasses()
   reg.registerLegalizationPasses()
   reg.registerPreprocessingPasses()
   reg.registerOptimizationPasses()
@@ -176,6 +177,9 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
   for fn in gen.procs:
     let fnCopy = fn.clone()
     ctx.genericInsts[fnCopy.pName] = fnCopy
+    # both tables alias the same proc, like the parse path does, so passes
+    # see the instantiations they must rewrite (pruneCompileTimeParams, ...)
+    ctx.allFnTab[fnCopy.pName] = fnCopy
   for typ in gen.types:
     let typCopy = typ.clone()
     case typCopy.kind

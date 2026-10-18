@@ -671,10 +671,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
          gbkThreadgroupsPerGrid, gbkThreadPositionInThreadgroup:
         # Canonical vector coordinates map to the injected `@builtin` param names,
         # u32 in WGSL (global_id, workgroup_id, num_workgroups, local_invocation_id).
-        # Whole-value use constructs the int vector, so a component read
-        # nests inside the wrapper.
+        # Whole-value use constructs the u32 vector, the canonical ivec3 domain.
         let n = wgslBuiltinParamName(ast.ident())
-        result = "vec3<i32>(i32(" & n & ".x), i32(" & n & ".y), i32(" & n & ".z))"
+        result = "vec3<u32>(" & n & ".x, " & n & ".y, " & n & ".z)"
       of gbkThreadIndexInThreadgroup:
         # `local_invocation_index` is u32 in WGSL, cast to the int domain.
         result = "i32(" & wgslBuiltinParamName(ast.ident()) & ')'

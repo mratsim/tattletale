@@ -7,22 +7,22 @@
 import std/[strutils, tables]
 
 import ../../codegen/ir/gpu_types
-import ../kernel_args
+import ../engines_common
+import ../errors
+import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
 export metal_runtime
 
 when defined(macosx):
-  import ../chevrons
+  import ../launch/launch_kernel
+
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════
-type
-  MetalDeviceCtx = object
-    ## RAII value wrapper: `=destroy` fires when the engine ref dies.
-    ctx: MetalCtx
 
+type
   MetalCache = object
     ## Two per-engine caches:
     ## - library, keyed by source, replaced by re-ingest
@@ -31,11 +31,9 @@ type
     psos: Table[string, objc.ID]
 
   MetalEngine* = ref object
-    ## A Metal engine, build with `bkMetal.init()`: runtime-compiled MSL kernels
-    ## on one GPU. All Objective-C resources release when the engine dies.
     source: string
-    ctx: MetalDeviceCtx
-    cache: MetalCache   # after ctx: released before ctx shutdown
+    ctx: MetalCtx
+    cache: MetalCache   # after ctx: released before the context destroy
 
 proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
 
@@ -44,6 +42,29 @@ proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
 # ═════════════════════════════════════════════════
 
 when defined(macosx):
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ Launch serialization
+  # ─────────────────────────────────────────────────────────────────────────
+
+  type SerializationCtx = object
+    encoder: objc.ID
+
+  proc store(ctx: var SerializationCtx, v: objc.ID, argIdx: int) =
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                    v, objc.NSUInteger(0), objc.NSUInteger(argIdx))
+
+  proc store[P: ptr|pointer](ctx: var SerializationCtx, v: P, argIdx: int) =
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                    cast[objc.ID](v), objc.NSUInteger(0), objc.NSUInteger(argIdx))
+
+  proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+    const size = deviceLayout(T, bkMetal).size
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkMetal)
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
+                    blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
+
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE constants
   # ─────────────────────────────────────────────────────────────────────────
@@ -66,10 +87,6 @@ when defined(macosx):
     if objc.isNil(result.queue):
       failLoud("newCommandQueue returned nil")
 
-  proc `=destroy`(ctx: var MetalDeviceCtx) =
-    objc.withMemPool:
-      objc.release(ctx.ctx.queue)
-      objc.release(ctx.ctx.device)
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
@@ -81,7 +98,7 @@ when defined(macosx):
   proc newMetalEngine(): MetalEngine =
     objc.withMemPool:
       result = MetalEngine(
-        ctx: MetalDeviceCtx(ctx: newMetalCtx()),
+        ctx: newMetalCtx(),
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
@@ -90,11 +107,9 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   proc ingest*(engine: MetalEngine, source: string) =
-    ## Store the MSL source and compile it into a library. Calling ingest again
-    ## replaces the previous artifact and invalidates both cache levels.
     objc.withMemPool:
       let opts = compileOptions()
-      let library = compileLibrary(engine.ctx.ctx.device, source, opts)
+      let library = compileLibrary(engine.ctx.device, source, opts)
       objc.release(opts)
       when defined(debug):
         echo "[INFO]: metal ingest: invalidating previous artifact"
@@ -106,12 +121,11 @@ when defined(macosx):
       engine.source = source
 
   proc getArtifact*(engine: MetalEngine): string =
-    ## Returns the MSL kernel source.
     engine.source
 
   proc deviceName*(engine: MetalEngine): string =
     objc.withMemPool:
-      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.ctx.device, objc.`$$`("name")))
+      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE run path
@@ -125,7 +139,7 @@ when defined(macosx):
   proc allocDevice*(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
       failLoud("allocDevice: size must be positive, got " & $n)
-    result = objc.msgSend(engine.ctx.ctx.device, objc.`$$`("newBufferWithLength:options:"),
+    result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
                           objc.NSUInteger(n), SharedUntrackedOptions)
     if objc.isNil(result):
       failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
@@ -145,77 +159,50 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc launchKernel*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg = LaunchConfig()) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
-  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+    ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
-      # blk is dispatch-time, so run validates the launch geometry.
-      if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
-        failLoud("Metal run: grid must be ≥ 1 per axis, got " &
-                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-      if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
-        failLoud("Metal run: blk must be ≥ 1 per axis, got " &
-                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
-      # Per-axis cap before the product. Three ≤ 1024 axes cannot overflow,
-      # so a wrapped product cannot pass the 1024-thread guard.
-      if cfg.blk.x > 1024 or cfg.blk.y > 1024 or cfg.blk.z > 1024:
-        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-                 $cfg.blk.z & " has an axis above 1024, exceeds the Apple " &
-                 "Silicon maximum of 1024 threads per threadgroup")
-      let threadsPerThreadgroup = cfg.blk.x * cfg.blk.y * cfg.blk.z
-      if threadsPerThreadgroup > 1024:
-        failLoud("Metal run: blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" &
-                 $cfg.blk.z & " = " & $threadsPerThreadgroup &
-                 " threads per threadgroup, exceeds the Apple Silicon " &
-                 "maximum of 1024")
+      if grid.x < 1 or grid.y < 1 or grid.z < 1:
+        failLoud("Metal run: grid must be ≥ 1 per axis, got " & $grid.x & "x" & $grid.y & "x" & $grid.z)
+      if blk.x < 1 or blk.y < 1 or blk.z < 1:
+        failLoud("Metal run: blk must be ≥ 1 per axis, got " & $blk.x & "x" & $blk.y & "x" & $blk.z)
+      if blk.x * blk.y * blk.z > 1024:
+        failLoud("Metal run: blk " & $blk.x & "x" & $blk.y & "x" & $blk.z & " exceeds the 1024 threads-per-threadgroup max")
 
       var pso: objc.ID
       if engine.cache.psos.hasKey(kernel):
         pso = engine.cache.psos[kernel]
       else:
-        pso = compilePipelineState(engine.ctx.ctx.device, engine.cache.library, kernel)
+        pso = compilePipelineState(engine.ctx.device, engine.cache.library, kernel)
         engine.cache.psos[kernel] = pso
 
-      let cmdBuf = objc.msgSend(engine.ctx.ctx.queue, objc.`$$`("commandBuffer"))
+      let cmdBuf = objc.msgSend(engine.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
-      # deliver the launch values whole, positional
-      type SinkCtx = object
-        encoder: objc.ID
-      proc sinkArg(ctx: var SinkCtx, isBuffer: bool, h: objc.ID, idx: int, p: pointer, len: int) {.nimcall.} =
-        if isBuffer:
-          discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          h, objc.NSUInteger(0), objc.NSUInteger(idx))
-        else:
-          discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          p, objc.NSUInteger(len), objc.NSUInteger(idx))
-      var dctx = SinkCtx(encoder: encoder)
-      bindArgs(dctx, bkMetal, output, args, true, sinkArg)
-      if cfg.sharedMem > 0:
-        discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
-                        objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))
-      let grid = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
-                         height: objc.NSUInteger(cfg.grid.y),
-                         depth: objc.NSUInteger(cfg.grid.z))
-      let blk = objc.MTLSize(width: objc.NSUInteger(cfg.blk.x),
-                        height: objc.NSUInteger(cfg.blk.y),
-                        depth: objc.NSUInteger(cfg.blk.z))
+
+
+      var dctx = SerializationCtx(encoder: encoder)
+      bindArgs(dctx, output, args, store, objc.ID)
+      let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
+                         height: objc.NSUInteger(grid.y),
+                         depth: objc.NSUInteger(grid.z))
+      let blk = objc.MTLSize(width: objc.NSUInteger(blk.x),
+                        height: objc.NSUInteger(blk.y),
+                        depth: objc.NSUInteger(blk.z))
       discard objc.msgSend(encoder, objc.`$$`("dispatchThreadgroups:threadsPerThreadgroup:"),
                       grid, blk)
       discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
       discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
       discard objc.msgSend(cmdBuf, objc.`$$`("waitUntilCompleted"))
 
-      # The device can reject a dispatch after commit (oversized grid, bad binding).
-      # Without a status check, the stale output would read back as success.
       let status = objc.msgSendUInt(cmdBuf, objc.`$$`("status"))
       if status != MTLCommandBufferStatusCompleted:
         var detail = "no NSError object provided"
         let err = objc.msgSend(cmdBuf, objc.`$$`("error"))
         if not objc.isNil(err):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
-        failLoud("Metal run: command buffer failed (status " & $status &
-                 " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
+        failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
 # ═════════════════════════════════════════════════
 # ▸ Non-macOS entry point
@@ -223,4 +210,4 @@ when defined(macosx):
 
 else:
   proc newMetalEngine(): MetalEngine =
-    quit("bkMetal requires macOS")
+    failLoud("bkMetal requires macOS")

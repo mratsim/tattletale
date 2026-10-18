@@ -51,7 +51,7 @@ proc exprGpuType(n: GpuAst): GpuType =
 proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   ## Build a map of function name → span params to split
   result = newTable[string, seq[SpanParam]]()
-  
+
   template scanFn(fn: GpuAst) =
     if fn.isNil or fn.kind != gpuProc:
       continue
@@ -98,14 +98,14 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
   if fnName.len == 0: return
   let spans = sigMap.getOrDefault(fnName)
   if spans.len == 0: return
-  
+
   var newParams: seq[GpuParam]
   var skipMask: seq[bool]
   skipMask.setLen(fn.pParams.len)
-  
+
   for s in spans:
     skipMask[s.paramIdx] = true
-  
+
   for idx, p in fn.pParams:
     if idx < skipMask.len and skipMask[idx]:
       # Find the span info for this param
@@ -129,7 +129,7 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
 
 proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
   ## Walk AST, rewriting span idents and adjusting call sites
-  
+
   case n.kind
   of gpuIdent:
     # Span-typed ident → ptr ident (same name, ptr type)
@@ -149,7 +149,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
     var fnName: string
     if n.cName.kind == gpuIdent:
       fnName = n.cName.symbol.name
-    
+
     # Handle builtin calls: len(span) → span_len
     if fnName == "len" or fnName.startsWith("len_"):
       if n.cArgs.len >= 1:
@@ -255,7 +255,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
           newArgs.add n.cArgs[argIdx]
         argIdx += 1
       n.cArgs = newArgs
-    
+
     # Recurse into args
     for child in mitems(n):
       child.rewriteNode(sigMap)
@@ -289,6 +289,121 @@ proc lowerSpans*(ctx: var GpuContext) =
   rewriteTab(ctx.allFnTab)
   rewriteTab(ctx.genericInsts)
   rewriteTab(ctx.fnTab)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Compile-time parameter pruning
+# ═══════════════════════════════════════════════════════════════════
+
+proc eraseCallArgs(n: var GpuAst, callee: string, dropped: seq[int]) =
+  ## Removes the arguments at `dropped` positions from every call to `callee`
+  if n.kind == gpuCall and n.cName.symbol.name == callee:
+    var kept: seq[GpuAst]
+    for i, arg in n.cArgs:
+      if i notin dropped:
+        kept.add arg
+    n.cArgs = kept
+  for child in n.mitems:
+    child.eraseCallArgs(callee, dropped)
+
+proc pruneCompileTimeParams*(ctx: var GpuContext) =
+  ## Drops parameters whose type has no runtime bytes: compile-time
+  ## arguments and phantoms, the value lives in the type
+  ## Erases the matching call arguments.
+  var drops: Table[string, seq[int]]
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.kind != gpuProc: continue
+    var dropped: seq[int]
+    for i, p in fn.pParams:
+      if size(p.typ) == 0:
+        # no runtime representation: compile-time args and phantoms
+        dropped.add i
+    if dropped.len > 0:
+      drops[fn.pName.symbol.name] = dropped
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    for callee, dropped in drops:
+      fn.pBody.eraseCallArgs(callee, dropped)
+    if fn.pName.symbol.name in drops:
+      let dropped = drops[fn.pName.symbol.name]
+      var kept: seq[GpuParam]
+      for i, p in fn.pParams:
+        if i notin dropped:
+          kept.add p
+      fn.pParams = kept
+
+proc registerTypeSystemPasses*(reg: var PassRegistry) =
+  ## Passes that lower the Nim type system onto the target: compile-time
+  ## parameters have no representation there. Run before the legalizations.
+  reg.register(
+    name = "pruneCompileTimeParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
+    run = pruneCompileTimeParams
+  )
+
+proc getOperandType(n: GpuAst): GpuType =
+  ## Type of an expression for deref insertion, nil when undeterminable:
+  ## synthesized idents and blit temps may carry no type, those are never pointers.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil: n.symbol.typ else: nil
+  of gpuLit: n.lType
+  of gpuCast: n.cTo
+  of gpuConv: n.convTo
+  of gpuObjConstr: n.ocType
+  of gpuDeref:
+    let d = getOperandType(n.dOf)
+    if d != nil and d.kind == gtPtr: d.to else: d
+  of gpuDot:
+    let parent = getOperandType(n.dParent)
+    if parent != nil and parent.kind in {gtObject, gtGenericInst} and
+        n.dField.kind == gpuIdent and n.dField.symbol != nil:
+      for f in parent.structFields:
+        if f.name == n.dField.symbol.name:
+          return f.typ
+    nil
+  else:
+    nil
+
+proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:
+  ##
+  ## - array indexing over a pointer to an array
+  ## - field access over a pointer
+  ## - deref over a pointer
+  ##
+  ## Address-of subtrees are untouched, the reference itself is the value there.
+  ## Backends that cannot index pointers render the deref as a block-member access, C-family backends collapse it.
+  case n.kind
+  of gpuAddr:
+    discard
+  of gpuIndex:
+    insertPointerDerefImpl(ctx, n.iIndex)
+    if n.iArr.kind != gpuDeref:
+      let t = getOperandType(n.iArr)
+      if t != nil and t.kind == gtPtr and t.to != nil and t.to.kind in {gtArray, gtUA}:
+        n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
+  of gpuDot:
+    insertPointerDerefImpl(ctx, n.dField)
+    if n.dParent.kind != gpuDeref:
+      let t = getOperandType(n.dParent)
+      if t != nil and t.kind == gtPtr:
+        n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
+  of gpuDeref:
+    if n.dOf.kind != gpuDeref:
+      let t = getOperandType(n.dOf)
+      if t != nil and t.kind == gtPtr:
+        n.dOf = GpuAst(kind: gpuDeref, dOf: n.dOf)
+  else:
+    for ch in mitems(n):
+      insertPointerDerefImpl(ctx, ch)
+
+proc insertPointerDeref*(ctx: var GpuContext) =
+  for _, fn in ctx.allFnTab.mpairs:
+    insertPointerDerefImpl(ctx, fn.pBody)
 
 proc registerLoweringPasses*(reg: var PassRegistry) =
   reg.register(

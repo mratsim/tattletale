@@ -345,6 +345,8 @@ BANNED = [
      lambda l: l.rstrip().endswith(":"),
      "name the thing directly, the item, the preceding entries, or restate the mechanism "
      "(a colon-terminated lead-in announcing the adjacent example is exempt)"),
+    (r"\blands? at\b|\bsits? at\b", None,
+     "state the offset or position directly, or restate the layout"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -2030,6 +2032,7 @@ def scan(path, text, findings):
             # same kind, a block boundary or a kind switch breaks reflow
             if (wc <= 2 and "`" not in c and not c.endswith(":")
                     and not pseudo_code(c)
+                    and indent < 3
                     and not (c[0:1].isupper()
                              and not c.endswith((".", ",", ";"))
                              and (n + 1) in blank_nos)

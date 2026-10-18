@@ -1,10 +1,4 @@
-## Phase 0: typedesc-argument erasure test
-##
-## Verifies the frontend erases `typedesc`-typed arguments at gpuCall
-## construction and drops the matching `typedesc` params from the emitted
-## callee signature, so type-as-value calls (e.g. make_tensor_like →
-## make_tensor(T, L)) stay arity-consistent. Non-typedesc args keep their
-## exact position/order; genuine value symbols are never erased.
+## typedesc args: the frontend carries type-as-value call args 1:1, sentinel param plus gpuDiscard, pruneCompileTimeParams drops them.
 ##
 ## Run:
 ##   cd tattletale
@@ -20,26 +14,43 @@ import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/ir/gpu_types
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
 import workspace/crucible/src/codegen/ir/nim_to_gpu
+import workspace/crucible/src/codegen/passes/passes_lowering
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────
 type
   Layout = object
+    rows: int32
   TensorView[T] = object
     layout: Layout
 
-proc make_tensor*[T](_: typedesc[T]; L: Layout): TensorView[T] =
+proc make_tensor*[T](_: typedesc[T], L: Layout): TensorView[T] =
   TensorView[T](layout: L)
 
 func make_tensor_like*[T](t: TensorView[T]): TensorView[T] =
-  ## Mirrors tensor_datatypes.nim:47-48 — the generic type param `T` is passed
-  ## as a typedesc VALUE argument to make_tensor.
+  ## tensor_datatypes.nim passes the generic type param `T` as a typedesc
+  ## VALUE argument to make_tensor.
   make_tensor(T, t.layout)
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+macro toGpuAstWithInstsPruned(body: typed): untyped =
+  ## Like `toGpuAstWithInsts` plus a pruneCompileTimeParams run, so tests can
+  ## inspect the post-prune callee signature.
+  var ctx = GpuContext()
+  var typeReg = TypeRegistry(types: ctx.types)
+  var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
+  ctx.types = typeReg.types
+  var gen = GpuGenericsInfo()
+  for k, v in ctx.genericInsts:
+    gen.procs.add v
+  pruneCompileTimeParams(ctx)
+  result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
+
+
 macro toGpuAstWithInsts(body: typed): untyped =
   ## Runs the frontend like `toGpuAst` but also returns the generic
-  ## instantiations (GpuGenericsInfo), so tests can inspect the emitted callee
-  ## signatures. Mirrors GpuContext extraction used by the runtime codegen.
+  ## instantiations (GpuGenericsInfo):
+  ## - tests inspect the emitted callee signatures
+  ## - the extraction matches the runtime codegen's GpuContext
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
   var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
@@ -49,7 +60,7 @@ macro toGpuAstWithInsts(body: typed): untyped =
     gen.procs.add v
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
-proc getProcNamed(ir: GpuAst; name: string): GpuAst =
+proc getProcNamed(ir: GpuAst, name: string): GpuAst =
   ## Extract the gpuProc whose pName starts with `name` from a toGpuAst block.
   doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
   for st in ir.statements:
@@ -57,7 +68,7 @@ proc getProcNamed(ir: GpuAst; name: string): GpuAst =
       return st
   doAssert false, "No gpuProc starting with " & name & " in block"
 
-proc findCall(n: GpuAst; name: string): GpuAst =
+proc findCall(n: GpuAst, name: string): GpuAst =
   ## Find the first gpuCall whose cName starts with `name` in a subtree.
   if n == nil: return nil
   if n.kind == gpuCall and n.cName.ident().startsWith(name):
@@ -67,7 +78,7 @@ proc findCall(n: GpuAst; name: string): GpuAst =
     if not r.isNil: return r
   return nil
 
-proc findInst(gen: GpuGenericsInfo; name: string): GpuAst =
+proc findInst(gen: GpuGenericsInfo, name: string): GpuAst =
   ## Find the generic instantiation whose pName starts with `name`.
   for p in gen.procs:
     if p.pName.ident().startsWith(name):
@@ -91,59 +102,95 @@ proc argRepr(a: GpuAst): string =
 # ── Test 1: typedesc arg (first position) erased; callee param dropped ────
 block:
   let (ir, gen) = toGpuAstWithInsts:
-    proc fill(_: typedesc[float32]; a: int32; L: Layout) {.device.} =
+    proc fill(_: typedesc[float32], a: int32, L: Layout) {.device.} =
       discard
     proc kernel(x: int32) {.device.} =
       var L: Layout
       fill(float32, 7, L)
   let inst = gen.findInst("fill")
-  doAssert inst.pParams.len == 2,
-    "typedesc param must be dropped from the emitted callee signature, got " &
-    $inst.pParams.len & " params: " & paramNames(inst)
-  doAssert inst.pParams[0].ident.ident() == "a",
-    "first kept callee param must be 'a', got '" & inst.pParams[0].ident.ident() & "'"
-  doAssert inst.pParams[1].ident.ident() == "L",
-    "second kept callee param must be 'L', got '" & inst.pParams[1].ident.ident() & "'"
+  doAssert inst.pParams.len == 3,
+    "frontend keeps arity 1:1, got " & $inst.pParams.len & " params: " & paramNames(inst)
+  doAssert inst.pParams[0].typ.kind == gtCompileTimeValue,
+    "typedesc param carries the gtCompileTimeValue sentinel"
   let call = ir.getProcNamed("kernel").findCall("fill")
   doAssert not call.isNil, "Expected a gpuCall to fill in the kernel body"
-  doAssert call.cArgs.len == 2,
-    "typedesc arg must be erased from gpuCall, got " & $call.cArgs.len & " args"
-  doAssert call.cArgs[0].kind == gpuLit and call.cArgs[0].lValue == "7",
-    "first kept arg must be literal 7, got " & argRepr(call.cArgs[0])
-  doAssert call.cArgs[1].ident() == "L",
-    "second kept arg must be L, got " & argRepr(call.cArgs[1])
-echo "  OK — typedesc arg (first position) erased; matching callee param dropped"
+  doAssert call.cArgs.len == 3,
+    "frontend keeps call arity 1:1, got " & $call.cArgs.len & " args"
+  doAssert call.cArgs[0].kind == gpuDiscard,
+    "typedesc arg becomes a gpuDiscard placeholder"
+  doAssert call.cArgs[1].kind == gpuLit and call.cArgs[1].lValue == "7",
+    "second arg must be literal 7, got " & argRepr(call.cArgs[1])
+  doAssert call.cArgs[2].ident() == "L",
+    "third arg must be L, got " & argRepr(call.cArgs[2])
+  let (ir2, gen2) = toGpuAstWithInstsPruned:
+    proc fill(_: typedesc[float32], a: int32, L: Layout) {.device.} =
+      discard
+    proc kernel(x: int32) {.device.} =
+      var L: Layout
+      fill(float32, 7, L)
+  let inst2 = gen2.findInst("fill")
+  doAssert inst2.pParams.len == 2,
+    "prune drops the typedesc param, got " & $inst2.pParams.len &
+    " params: " & paramNames(inst2)
+  doAssert inst2.pParams[0].ident.ident() == "a",
+    "first kept callee param must be 'a', got '" & inst2.pParams[0].ident.ident() & "'"
+  doAssert inst2.pParams[1].ident.ident() == "L",
+    "second kept callee param must be 'L', got '" & inst2.pParams[1].ident.ident() & "'"
+  let call2 = ir2.getProcNamed("kernel").findCall("fill")
+  doAssert not call2.isNil, "Expected a gpuCall to fill in the pruned kernel body"
+  doAssert call2.cArgs.len == 2,
+    "prune erases the typedesc arg, got " & $call2.cArgs.len & " args"
+  doAssert call2.cArgs[0].kind == gpuLit and call2.cArgs[0].lValue == "7",
+    "first kept arg must be literal 7, got " & argRepr(call2.cArgs[0])
+  doAssert call2.cArgs[1].ident() == "L",
+    "second kept arg must be L, got " & argRepr(call2.cArgs[1])
+echo "  OK - typedesc arg (first position): frontend 1:1, prune drops param and arg"
 
 # ── Test 2: typedesc arg NOT first — non-typedesc args keep position/order ──
 block:
   let (ir, gen) = toGpuAstWithInsts:
-    proc fill2(a: int32; _: typedesc[float32]; L: Layout) {.device.} =
+    proc fill2(a: int32, _: typedesc[float32], L: Layout) {.device.} =
       discard
     proc kernel2() {.device.} =
       var L: Layout
       fill2(7, float32, L)
   let inst = gen.findInst("fill2")
-  doAssert inst.pParams.len == 2,
-    "typedesc param (middle) must be dropped, got " & $inst.pParams.len &
+  doAssert inst.pParams.len == 3,
+    "frontend keeps arity 1:1 (middle position), got " & $inst.pParams.len &
     " params: " & paramNames(inst)
-  doAssert inst.pParams[0].ident.ident() == "a",
-    "first kept callee param must be 'a', got '" & inst.pParams[0].ident.ident() & "'"
-  doAssert inst.pParams[1].ident.ident() == "L",
-    "second kept callee param must be 'L', got '" & inst.pParams[1].ident.ident() & "'"
+  doAssert inst.pParams[1].typ.kind == gtCompileTimeValue,
+    "middle typedesc param carries the sentinel"
   let call = ir.getProcNamed("kernel2").findCall("fill2")
-  doAssert not call.isNil, "Expected a gpuCall to fill2 in the kernel body"
-  doAssert call.cArgs.len == 2,
-    "typedesc arg must be erased (middle position), got " & $call.cArgs.len & " args"
-  doAssert call.cArgs[0].kind == gpuLit and call.cArgs[0].lValue == "7",
-    "kept arg 0 must be literal 7 (order preserved), got " & argRepr(call.cArgs[0])
-  doAssert call.cArgs[1].ident() == "L",
-    "kept arg 1 must be L (order preserved), got " & argRepr(call.cArgs[1])
-echo "  OK — typedesc arg (middle position) erased; non-typedesc args keep order"
+  doAssert call.cArgs[1].kind == gpuDiscard,
+    "middle typedesc arg becomes a gpuDiscard placeholder"
+  let (ir2, gen2) = toGpuAstWithInstsPruned:
+    proc fill2(a: int32, _: typedesc[float32], L: Layout) {.device.} =
+      discard
+    proc kernel2() {.device.} =
+      var L: Layout
+      fill2(7, float32, L)
+  let inst2 = gen2.findInst("fill2")
+  doAssert inst2.pParams.len == 2,
+    "prune drops the middle typedesc param, got " & $inst2.pParams.len &
+    " params: " & paramNames(inst2)
+  doAssert inst2.pParams[0].ident.ident() == "a",
+    "first kept callee param must be 'a', got '" & inst2.pParams[0].ident.ident() & "'"
+  doAssert inst2.pParams[1].ident.ident() == "L",
+    "second kept callee param must be 'L', got '" & inst2.pParams[1].ident.ident() & "'"
+  let call2 = ir2.getProcNamed("kernel2").findCall("fill2")
+  doAssert not call2.isNil, "Expected a gpuCall to fill2 in the pruned kernel body"
+  doAssert call2.cArgs.len == 2,
+    "prune erases the middle typedesc arg, got " & $call2.cArgs.len & " args"
+  doAssert call2.cArgs[0].kind == gpuLit and call2.cArgs[0].lValue == "7",
+    "kept arg 0 must be literal 7 (order preserved), got " & argRepr(call2.cArgs[0])
+  doAssert call2.cArgs[1].ident() == "L",
+    "kept arg 1 must be L (order preserved), got " & argRepr(call2.cArgs[1])
+echo "  OK - typedesc arg (middle position): order preserved through prune"
 
 # ── Test 3: genuine value symbols are NEVER erased (INV-C3) ──────────────
 block:
   let (ir, gen) = toGpuAstWithInsts:
-    proc usev(a: int32; b: float32) {.device.} =
+    proc usev(a: int32, b: float32) {.device.} =
       discard
     proc kernel3() {.device.} =
       const K = 5
@@ -167,15 +214,27 @@ block:
       let s = make_tensor_like(tv)
       discard s
   let inst = gen.findInst("make_tensor")
-  doAssert inst.pParams.len == 1,
-    "make_tensor callee must have only the Layout param, got " & $inst.pParams.len &
+  doAssert inst.pParams.len == 2,
+    "frontend keeps make_tensor arity 1:1, got " & $inst.pParams.len &
     " params: " & paramNames(inst)
-  doAssert inst.pParams[0].ident.ident() == "L",
-    "make_tensor callee param must be 'L', got '" & inst.pParams[0].ident.ident() & "'"
+  doAssert inst.pParams[0].typ.kind == gtCompileTimeValue,
+    "typedesc param carries the sentinel"
   let call = ir.getProcNamed("kernel4").findCall("make_tensor_like")
   doAssert not call.isNil, "Expected a gpuCall to make_tensor_like in the kernel body"
   doAssert call.cArgs.len == 1,
-    "make_tensor_like must keep only the tensor arg, got " & $call.cArgs.len & " args"
+    "make_tensor_like has no typedesc param: the tensor arg stays, got " &
+    $call.cArgs.len & " args"
+  let (ir2, gen2) = toGpuAstWithInstsPruned:
+    proc kernel4() {.device.} =
+      var tv: TensorView[float32]
+      let s = make_tensor_like(tv)
+      discard s
+  let inst2 = gen2.findInst("make_tensor")
+  doAssert inst2.pParams.len == 1,
+    "prune drops the typedesc param, got " & $inst2.pParams.len &
+    " params: " & paramNames(inst2)
+  doAssert inst2.pParams[0].ident.ident() == "L",
+    "make_tensor callee param must be 'L', got '" & inst2.pParams[0].ident.ident() & "'"
 echo "  OK — generic make_tensor_like: callee signature has no typedesc param"
 
 # ── Test 5: full CUDA emission of the make_tensor_like shape (REQ-C3 text) ──

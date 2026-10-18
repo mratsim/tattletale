@@ -23,11 +23,7 @@ proc registerMetalPasses*(reg: var PassRegistry) =
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
   )
-  # The runtime path fills `genericInsts`, not `allFnTab`, so the keyword pass
-  # above iterates nothing there. The printer's `checkReservedIdent` rejects
-  # reserved identifiers at emission, guarding params, locals and function names.
-  # MSL kernels take exploded ptr/scalar/value params, never whole structs.
-  reg.registerExplodePointerStructParams()
+  reg.registerExpandStructKernelParams()
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
     "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
     dependsOn = @["emitFunctionSignatures"],

@@ -205,13 +205,15 @@ proc genLit*(ast: GpuAst): string =
       result = ast.lValue
 
 proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
-  ## Emits the kernel's MSL parameter list:
-  ## - pointers: `device T* name [[buffer(n)]]`, the index counts pointers only
-  ## - scalars: `constant T& name`, unattributed, set inline via setBytes at the argument position
-  ## - coordinate builtins emit `uint3 name [[name]]`, the flat thread index emits `uint`, no binding and no index
+  ## Emits the kernel's MSL parameter list. The argument table is one slot
+  ## sequence in parameter order:
+  ## - pointers: `device T* name [[buffer(n)]]`, n is the parameter's slot
+  ## - scalars: `constant T& name`, unattributed, auto-assigned the free slot
+  ##   in declaration order, set inline via setBytes
+  ## - coordinate builtins emit `uint3 name [[name]]`, no binding and no slot
   ##   `materializeIndexBuiltinParams` appends them
   var params: seq[string]
-  var bufferIdx = 0
+  var slot = 0
   for p in fn.pParams:
     let name = p.ident.ident()
     checkReservedIdent(name, "parameter")
@@ -227,13 +229,13 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
       if inner.kind == gtUA:
         inner = inner.uaTo
       var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-      params.add "device " & elem & "* " & name & " [[buffer(" & $bufferIdx & ")]]"
-      inc bufferIdx
+      params.add "device " & elem & "* " & name & " [[buffer(" & $slot & ")]]"
     else:
       var elem = gpuTypeToString(p.typ, allowEmptyIdent = true)
       if p.typ.kind == gtBool:
         elem = "int"
       params.add "constant " & elem & "& " & name
+    inc slot
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =

@@ -6,27 +6,52 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible/src/abis/cl_abi
+import ../errors
 
 type
 
   OpenCLDevice* = object
     id: Pdevice_id
 
-  OpenCLContext* = object
+  OpenCLContext* = ref OpenCLContextObj
+  OpenCLContextObj = object
     device*: OpenCLDevice
     platform: Pplatform_id
     context: Pcontext
     commands: Pcommand_queue
 
   OpenCLBuffer* = object
-    ctx: OpenCLContext
+    commands: Pcommand_queue
     size: int
     mem: Pmem
 
-  OpenCLKernel* = object
-    ctx: OpenCLContext
+  OpenCLKernel* = ref OpenCLKernelObj
+  OpenCLKernelObj = object
+    commands: Pcommand_queue
     kernel: Pkernel
     program: Pprogram
+
+
+proc `=copy`(dst: var OpenCLContextObj, src: OpenCLContextObj) {.error:
+    "OpenCLContext is ref-only, copy the ref not the object".}
+
+proc `=copy`(dst: var OpenCLKernelObj, src: OpenCLKernelObj) {.error:
+    "OpenCLKernel is ref-only, copy the ref not the object".}
+
+proc `=destroy`(ctx: var OpenCLContextObj) =
+  ## Releases the OpenCL context and command queue, nil-guarded against double teardown.
+  if ctx.context != nil:
+    discard releaseCommandQueue(ctx.commands)
+    discard releaseContext(ctx.context)
+    ctx.commands = nil
+    ctx.context = nil
+
+proc `=destroy`(k: var OpenCLKernelObj) =
+  ## Releases the kernel and its program, nil fields skip.
+  if k.kernel != nil:
+    discard releaseKernel(k.kernel)
+  if k.program != nil:
+    discard releaseProgram(k.program)
 
 template check*(res: TClResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
@@ -34,9 +59,7 @@ template check*(res: TClResult) =
   ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != SUCCESS:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: OpenCL error " & $code & '\n')
-    quit 1
+    failLoud("OpenCL error " & $code)
 
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
@@ -79,6 +102,7 @@ proc isGpu(device: OpenCLDevice): bool =
   result = (deviceType.int64 and DEVICE_TYPE_GPU.int64) != 0
 
 proc initOpenCL(device: OpenCLDevice): OpenCLContext =
+  result = OpenCLContext()
   var
     id = device.id
     status: TClResult
@@ -91,8 +115,8 @@ proc initOpenCL(device: OpenCLDevice): OpenCLContext =
 proc initOpenCL*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
-    quit("OpenCL: no devices found")
-  # Pick first GPU; fall back to first device
+    failLoud("OpenCL: no devices found")
+  # Pick first GPU, fall back to first device
   var dev = devices[0]
   for d in devices:
     if d.isGpu():
@@ -100,17 +124,9 @@ proc initOpenCL*(): OpenCLContext =
       break
   result = initOpenCL(dev)
 
-proc shutdown*(ctx: var OpenCLContext) =
-  ## Idempotent: safe to call multiple times (manual shutdown + =destroy).
-  if ctx.context != nil:
-    discard releaseCommandQueue(ctx.commands)
-    discard releaseContext(ctx.context)
-    ctx.commands = nil
-    ctx.context = nil
-
 proc allocBuffer*(ctx: OpenCLContext, size: int): OpenCLBuffer =
   var status: TClResult
-  result.ctx = ctx
+  result.commands = ctx.commands
   result.size = size
   result.mem = createBuffer(ctx.context, MEM_READ_WRITE, cl_size_t(size), nil, status.addr)
   check status
@@ -120,21 +136,22 @@ proc dealloc*(buffer: var OpenCLBuffer) =
 
 proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   if size != buffer.size:
-    quit("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
-  check buffer.ctx.commands.enqueueWriteBuffer(
+    failLoud("OpenCL writeBuffer: attempted to write " & $size & " bytes, but buffer size is " & $buffer.size)
+  check buffer.commands.enqueueWriteBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
 proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   ## Raw readback into a caller-provided buffer (used by the engines).
   if size > buffer.size:
-    quit("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
-  check buffer.ctx.commands.enqueueReadBuffer(
+    failLoud("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
+  check buffer.commands.enqueueReadBuffer(
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
-  result.ctx = ctx
+  result = OpenCLKernel()
+  result.commands = ctx.commands
   let strings = allocCStringArray([source])
   defer: deallocCStringArray(strings)
 
@@ -154,30 +171,26 @@ proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKer
       var log = newString(logLength.int)
       check getProgramBuildInfo(program, ctx.device.id, PROGRAM_BUILD_LOG,
                                 logLength, log[0].addr, nil)
-      quit("OpenCL failed to build program '" & name & "': " & log)
+      failLoud("OpenCL failed to build program '" & name & "': " & log)
     else:
-      quit("OpenCL failed to build program '" & name & "'")
+      failLoud("OpenCL failed to build program '" & name & "'")
   else:
     check status
 
   result.kernel = createKernel(program, name.cstring, status.addr)
   check status
 
-proc destroyKernel*(kernel: var OpenCLKernel) =
-  discard releaseKernel(kernel.kernel)
-  discard releaseProgram(kernel.program)
-
 proc setArg*(kernel: var OpenCLKernel, index: int, buffer: OpenCLBuffer) =
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(sizeof(Pmem)), buffer.mem.unsafeAddr)
 
 proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[cl_size_t]) =
   if globalWorkSize.len == 0:
-    quit("OpenCL runKernel: global work size must have at least one dimension")
+    failLoud("OpenCL runKernel: global work size must have at least one dimension")
   if globalWorkSize.len != localWorkSize.len:
-    quit("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
+    failLoud("OpenCL runKernel: dimension of global work size must equal dimension of local work size")
 
   check enqueueNDRangeKernel(
-    kernel.ctx.commands,
+    kernel.commands,
     kernel.kernel,
     cl_uint(globalWorkSize.len),
     nil,
@@ -185,8 +198,8 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
     unsafeAddr localWorkSize[0],
     0, nil, nil
   )
-  check finish(kernel.ctx.commands)
+  check finish(kernel.commands)
 
 proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
-  ## Bind a scalar kernel argument by value (e.g. alpha/beta coefficients).
+  ## Binds a scalar kernel argument by value (such as alpha/beta coefficients)
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(size), data)

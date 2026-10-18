@@ -18,7 +18,7 @@ proc isGlobalFn*(fn: GpuAst): bool =
 # Pass 1: rewriteIndexDeref
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc rewriteIndexDerefImpl*(ctx: var GpuContext; n: var GpuAst) =
+proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Transform `gpuIndex(gpuDeref(ident))` into `gpuIndex(iArr=dOf(ident))`
   ## when the deref'd ident is a pointer (not array) type.
   ##
@@ -245,6 +245,9 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     # Span is lowered to ptr+len before this pass
     TypeDesc(kind: tdkUnresolved)
   of gtInvalid:
+    TypeDesc(kind: tdkUnresolved)
+  of gtCompileTimeValue:
+    # the type slot holds the compile-time argument, there is no descriptor
     TypeDesc(kind: tdkUnresolved)
 
 proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
