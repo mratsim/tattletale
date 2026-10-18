@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/tables
+import std/[macros, tables]
 import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
@@ -48,6 +48,11 @@ proc store(ctx: var SerializationCtx, v: OpenCLBuffer, argIdx: int) =
   ctx.kern.setArg(argIdx, v)
 
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  ## OpenCL kernel pointer params bind as cl_mem objects: raw pointer bits are
+  ## meaningless to the driver, buffer args must be OpenCLBuffer values
+  when T is ptr|pointer:
+    static:
+      error "OpenCL pointer args bind as cl_mem: pass the OpenCLBuffer from allocDevice, got " & $T
   const size = deviceLayout(T, bkOpenCL).size
   var blob: array[size, byte]
   var off = 0
