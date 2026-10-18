@@ -341,6 +341,10 @@ type
       ## WGSL structs cannot hold pointer fields, so the printer deletes them
       ## from constructors and rewrites `foo.field` accesses to the recorded
       ## ident, with `&` in global scope and the bare ident in device functions.
+    ptrFieldBindings*: Table[(string, string), GpuAst]
+      ## WGSL: pointer-field binding per variable, keyed (variable name, field name).
+      ## Two variables of one struct type carry different buffers, so the type-keyed
+      ## structsWithPtrs table alone would alias them.
     ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]]
       ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
       ## One tuple per distinct space combination observed at a construction site, in first-seen order.

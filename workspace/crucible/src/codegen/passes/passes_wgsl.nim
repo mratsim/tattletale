@@ -101,7 +101,12 @@ proc makeCodeValidImpl*(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
       doAssert n.dField.kind == gpuIdent
       let field = n.dField.ident()
       if id.kind != gtVoid and (id, field) in ctx.structsWithPtrs:
-        let v = ctx.structsWithPtrs[(id, field)]
+        var v = ctx.structsWithPtrs[(id, field)]
+        # Prefer the variable-keyed entry:
+        # the type-keyed table cannot tell two variables of one struct type apart.
+        let owner = if p.kind == gpuIdent: p.ident() else: ""
+        if owner.len > 0 and (owner, field) in ctx.ptrFieldBindings:
+          v = ctx.ptrFieldBindings[(owner, field)]
         if inGlobal:
           n = GpuAst(kind: gpuAddr, aOf: v)
         else:
@@ -173,8 +178,8 @@ proc updateSymsInGlobalsImpl*(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.updateSymsInGlobalsImpl(ch)
 
-proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, GpuParam]) =
-  ## Scans for gpuCall nodes, generates generic instantiations for pointer args.
+proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, GpuParam], owner = "") =
+  ## Scans for gpuCall nodes, generates generic instantiations for pointer args, records pointer-field bindings under the scanned variable name.
   case n.kind
   of gpuCall:
     let fn = n.cName
@@ -206,6 +211,8 @@ proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[strin
     else:
       for ch in n:
         ctx.scanGenericsImpl(ch, callerParams)
+  of gpuVar:
+    ctx.scanGenericsImpl(n.vInit, callerParams, n.vName.ident())
   of gpuObjConstr:
     for f in n.ocFields:
       if f.typ.kind == gtPtr:
@@ -213,9 +220,14 @@ proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[strin
         let id = f.value.determineIdent()
         doAssert id.symbol.symKind == gsGlobalKernelParam
         ctx.structsWithPtrs[(n.ocType, f.name)] = id
+        # Also record by variable name:
+        # the type-keyed table stores one entry per struct type, so constructions
+        # after the first overwrite its entry.
+        if owner.len > 0:
+          ctx.ptrFieldBindings[(owner, f.name)] = id
   else:
     for ch in n:
-      ctx.scanGenericsImpl(ch, callerParams)
+      ctx.scanGenericsImpl(ch, callerParams, owner)
 
 proc getStructType*(n: GpuAst): GpuType =
   ## Given an ident, return the struct type or void if not a struct.
