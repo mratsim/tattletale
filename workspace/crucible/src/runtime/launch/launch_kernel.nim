@@ -32,6 +32,8 @@ type
   ##     `engine.launchKernel("k", out, (a, b)) do:`
   ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
   ##       `blk = (32, 1)`
+
+proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
   LaunchSugar[E](engine: engine)
 
 macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped]) =

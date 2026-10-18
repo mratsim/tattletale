@@ -17,7 +17,7 @@ import workspace/crucible/src/runtime/errors
 import workspace/ceramic/bench/gemm_gpu/bench_gemm_template
 import workspace/ceramic/bench/gemm_gpu/apple_nax_utils
 
-const ProblemSizes = [1024, 2048, 4096]
+const ProblemSizes = [256, 512, 1024, 2048, 4096]
 
 const MlxSteelGemmSrc =
   staticRead("mlx_steel_gemm.metal") & staticRead("steel_bench_wrappers.metal")
