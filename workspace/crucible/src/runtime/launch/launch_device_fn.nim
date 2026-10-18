@@ -28,16 +28,17 @@ type
     engine: E
     grid: Dim3
     blk: Dim3
+    sharedMem: int
 
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
 # ═════════════════════════════════════════════════════════════════════════
 
-proc makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
+func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
   DeviceFnSugar[E](engine: engine)
 
-proc base58(h: int): string =
+func base58(h: int): string =
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   var x = uint64(h)
   if x == 0: return "1"
@@ -69,22 +70,22 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
 
-proc isCompileTime(ftype: NimNode): bool =
+func isCompileTime(ftype: NimNode): bool =
   ftype.kind == nnkStaticTy or
     (ftype.kind in {nnkIdent, nnkSym} and ftype.eqIdent("typedesc")) or
     (ftype.kind in {nnkCommand, nnkBracketExpr, nnkCall} and
      $ftype[0] in ["static", "typedesc"])
 
-proc isDeviceMemType(t: NimNode): bool =
+func isDeviceMemType(t: NimNode): bool =
   t.kind == nnkBracketExpr and t[0].eqIdent("DeviceMem")
 
-proc getElemType(formal: NimNode): NimNode =
+func getElemType(formal: NimNode): NimNode =
   formal.expectKind(nnkPtrTy)
   let p = formal[0]
   if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"): p[1]
   else: p
 
-proc assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
+func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
   if formal.kind != nnkPtrTy:
     error("launchDeviceFn " & $kernel & ": parameter " & $pname & " is " &
       formal.repr & ", a DeviceMem argument needs a pointer parameter")
@@ -92,7 +93,7 @@ proc assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
     error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
       getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
-proc getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
+func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   ## DeviceMem fields of the value's type: a top-level DeviceMem yields
   ## the value itself with an empty name
   let t = v.getTypeInst()
@@ -116,7 +117,7 @@ proc getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   else:
     discard
 
-proc hashNode(n: NimNode): Hash =
+func hashNode(n: NimNode): Hash =
   ## Structural hash of an AST node: kind, leaves by value, children by shape
   result = hash(n.kind)
   case n.kind
@@ -133,7 +134,7 @@ proc hashNode(n: NimNode): Hash =
       result = result !& hashNode(child)
   result = !$result
 
-proc bindFormalGenericArgs(formal, v: NimNode): NimNode =
+func bindFormalGenericArgs(formal, v: NimNode): NimNode =
   let vt = v.getTypeInst()
   if formal.kind != nnkDistinctTy or vt.kind != nnkBracketExpr:
     return formal
@@ -154,7 +155,7 @@ proc bindFormalGenericArgs(formal, v: NimNode): NimNode =
       args.add(a)
   return args
 
-proc getBridgeParamType(kernel: NimNode, formalName, formalType, arg: NimNode): NimNode =
+func getBridgeParamType(kernel: NimNode, formalName, formalType, arg: NimNode): NimNode =
   let argType = arg.getTypeInst()
   if isDeviceMemType(argType):
     assertValidDeviceMem(kernel, formalName, formalType, argType)
@@ -163,7 +164,7 @@ proc getBridgeParamType(kernel: NimNode, formalName, formalType, arg: NimNode): 
     return bindFormalGenericArgs(formalType, arg)
   return argType
 
-proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
+func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
   ## ```
   ##   kernel  = kern                                        (typed callee symbol)
   ##   statics = [tiledMma(f32, f16, f16, 32, 32, 16)]       (raw, one per compile-time parameter)
@@ -219,7 +220,7 @@ proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
     nnkStmtList.newTree(kcall))
   return procdef
 
-macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN: untyped, values: varargs[typed]): untyped =
+macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, values: varargs[typed]): untyped =
   ## Builds the `{.global.}` proc for the kernel, ingests its lowered source
   ## when it differs and launches it: the first value is the output.
   let procdef = buildGlobalFn(kernel, statics, values)
@@ -228,6 +229,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
   let bridgeSource = ident("crucibleBridgeSource" & $procdef.name)
   let gridD = bindSym"dim3".newCall(gridN)
   let blkD = bindSym"dim3".newCall(blkN)
+  let sharedMemD = sharedMemN
   let outputN = values[0]
   var argsN = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
@@ -237,9 +239,10 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
       const `bridgeSource` = `bridgeN`(`engine`, `procdef`)
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
-      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`, LaunchConfig(grid: `gridD`, blk: `blkD`))
+      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`,
+        LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
 
-macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
+macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN: untyped, args: varargs[untyped]): untyped =
   ## Call an autogenerated {.global.} kernel
   ## This defers arguments so they are inlined in the global function and ccGetBackend resolves properly
   let impl = kernel.getImpl()
@@ -254,7 +257,7 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN: untyped, a
     "launchDeviceFn " & $kernel & ": " & $args.len & " args for " &
     $formalTypes.len & " parameters"
   var statics = nnkBracket.newTree()
-  result = bindSym"launchGlobalFn".newCall(engine, kernel, statics, gridN, blkN)
+  result = bindSym"launchGlobalFn".newCall(engine, kernel, statics, gridN, blkN, sharedMemN)
   for i, a in args:
     if isCompileTime(formalTypes[i]):
       statics.add(a)
@@ -275,8 +278,13 @@ macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   ##       `blk = (32, 1)`
   result = newCall(bindSym"makeDeviceFnSugar", engine)
 
-proc `<<`*[E: HwEngine, G, B: int|tuple](r: DeviceFnSugar[E], cfg: tuple[grid: G, blk: B]): DeviceFnProxy[E] {.inline.} =
+func `<<`*[E: HwEngine, G, B: int|tuple](r: DeviceFnSugar[E], cfg: tuple[grid: G, blk: B]): DeviceFnProxy[E] {.inline.} =
   DeviceFnProxy[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))
+
+func `<<`*[E: HwEngine, G, B: int|tuple, S: int](r: DeviceFnSugar[E],
+    cfg: tuple[grid: G, blk: B, sharedMem: S]): DeviceFnProxy[E] {.inline.} =
+  DeviceFnProxy[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk),
+                   sharedMem: cfg.sharedMem)
 
 macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   ## Launches a device function with whole values, the schedule is a `do:` block.
@@ -293,14 +301,16 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
     callNode = nnkCall.newTree(call[0 ..< call.len - 1])
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
+  var sharedMemN = newLit(0)
   if not schedule.isNil:
     for a in schedule:
-      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk"], "launchDeviceFn: schedule expects grid = ... / blk = ..., got " & a.repr
-      if $a[0] == "grid":
-        gridN = a[1]
-      else:
-        blkN = a[1]
-  result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN)
+      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem"],
+        "launchDeviceFn: schedule expects grid = ... / blk = ... / sharedMem = ..., got " & a.repr
+      case $a[0]
+      of "grid": gridN = a[1]
+      of "blk": blkN = a[1]
+      else: sharedMemN = a[1]
+  result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN, sharedMemN)
   for i in 1 ..< callNode.len:
     result.add(callNode[i])
 
@@ -312,6 +322,7 @@ macro `>>`*[E: HwEngine](proxy: DeviceFnProxy[E], call: untyped): untyped =
   result = bindSym"resolveDeviceCall".newCall(
     proxy.newDotExpr(ident"engine"), callNode[0],
     proxy.newDotExpr(ident"grid"),
-    proxy.newDotExpr(ident"blk"))
+    proxy.newDotExpr(ident"blk"),
+    proxy.newDotExpr(ident"sharedMem"))
   for i in 1 ..< callNode.len:
     result.add(callNode[i])

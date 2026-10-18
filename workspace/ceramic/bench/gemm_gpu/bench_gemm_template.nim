@@ -64,7 +64,7 @@ proc fillGemmInputs[TVa, TVb](aTV: TVa, bTV: TVb, M, N, K: int) =
     for k in 0 ..< K:
       bTV[n, k] = F16.from(float32(1 + (3 * k + 11 * n) mod 17))
 
-proc checkGemmRef[E: HwEngine, H](engine: var E, M, N, K: int, launch: LaunchFn[E, H], msg: string) =
+proc checkGemmRef[E: HwEngine, H](engine: E, M, N, K: int, launch: LaunchFn[E, H], msg: string) =
   let one = 1  # runtime int, the layouts stay dynamic
   var
     aHost = newSeq[F16](M * K)
@@ -96,7 +96,7 @@ proc checkGemmRef[E: HwEngine, H](engine: var E, M, N, K: int, launch: LaunchFn[
   engine.freeDevice(bDev)
   engine.freeDevice(dDev)
 
-proc gemmBench*[E: HwEngine, H](engine: var E, launch: LaunchFn[E, H], M, N, K: int, iters: int, text: string) =
+proc gemmBench*[E: HwEngine, H](engine: E, launch: LaunchFn[E, H], M, N, K: int, iters: int, text: string) =
   checkGemmRef(engine, 128, 128, 512, launch, text & " vs gemm_ref") # Correctness + warmup
   checkGemmRef(engine, 1024, 64, 512, launch, text & " vs gemm_ref")
 

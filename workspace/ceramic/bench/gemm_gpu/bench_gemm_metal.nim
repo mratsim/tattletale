@@ -61,9 +61,8 @@ proc launchMlxGemm[H](engine: MetalEngine, dDev: DeviceMem[H, float32], aDev, bD
     batch_stride_a: 0, batch_stride_b: 0, batch_stride_d: 0,
     swizzle_log: swizzleLog, gemm_k_iterations_aligned: K div 16,
     batch_ndim: 0)
-  engine.launchKernel("mlx_gemm_64x64x16", dDev, (aDev, bDev, params, iters),
-    LaunchConfig(grid: dim3((tn * tile, ceil_div(tm, tile), 1)),
-                 blk: dim3((128, 1, 1)), sharedMem: 5376))
+  engine.launchKernel<<(grid: (tn * tile, ceil_div(tm, tile), 1), blk: (128, 1, 1), sharedMem: 5376)>>(
+    "mlx_gemm_64x64x16", dDev, (aDev, bDev, params, iters))
 
 proc launchNaxGemm[H](engine: MetalEngine, dDev: DeviceMem[H, float32], aDev, bDev: DeviceMem[H, F16], M, N, K, iters: int) =
   # The hardcoded wrapper config covers exactly M, N multiples of 64,
@@ -79,9 +78,8 @@ proc launchNaxGemm[H](engine: MetalEngine, dDev: DeviceMem[H, float32], aDev, bD
     batch_stride_a: 0, batch_stride_b: 0, batch_stride_d: 0,
     swizzle_log: 0, gemm_k_iterations_aligned: K div 256,
     batch_ndim: 0)
-  engine.launchKernel("mlx_gemm_nax_64x64", dDev, (aDev, bDev, params, iters),
-    LaunchConfig(grid: dim3((ceil_div(N, 64), ceil_div(M, 64), 1)),
-                 blk: dim3((128, 1, 1))))
+  engine.launchKernel<<(grid: (ceil_div(N, 64), ceil_div(M, 64), 1), blk: (128, 1, 1))>>(
+    "mlx_gemm_nax_64x64", dDev, (aDev, bDev, params, iters))
 
 proc main() =
   var engine = bkMetal.init()
@@ -99,11 +97,11 @@ proc main() =
       for oi in order:
         case oi
         of 0:
-          gemmBench(engine, launchGemm[objc.ID], mnk, mnk, mnk, iters, "tiledMma 32x32x16 fp16")
+          gemmBench[MetalEngine, objc.ID](engine, launchGemm, mnk, mnk, mnk, iters, "tiledMma 32x32x16 fp16")
         of 1:
-          gemmBench(engine, launchMlxGemm[objc.ID], mnk, mnk, mnk, iters, "mlx steel gemm 64x64x16")
+          gemmBench[MetalEngine, objc.ID](engine, launchMlxGemm, mnk, mnk, mnk, iters, "mlx steel gemm 64x64x16")
         else:
-          gemmBench(engine, launchNaxGemm[objc.ID], mnk, mnk, mnk, iters, "mlx NAX gemm 64x64x256")
+          gemmBench[MetalEngine, objc.ID](engine, launchNaxGemm, mnk, mnk, mnk, iters, "mlx NAX gemm 64x64x256")
       separator()
     inc sizeIdx
 

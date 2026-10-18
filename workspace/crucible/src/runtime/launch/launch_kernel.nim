@@ -25,7 +25,6 @@ type
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
-proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
   ## Chevron accessor: bare access returns chevron sugar.
   ## - Chevrons:
   ##   `engine.launchKernel<<(16, 16), (32, 8)>>("k", out, (a, b))`
@@ -44,7 +43,7 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
   ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
   ##       `blk = (32, 1)`
   var argsNode: NimNode = nil
-  var cfgNode = bindSym"LaunchConfig".newCall()
+  var cfgNode = nnkObjConstr.newTree(bindSym"LaunchConfig")
   case rest.len
   of 1:
     argsNode = rest[0]
@@ -59,7 +58,9 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
           fields.add(newColonExpr(a[0], bindSym"dim3".newCall(a[1])))
         else:
           fields.add(newColonExpr(a[0], a[1]))
-      cfgNode = bindSym"LaunchConfig".newCall(fields)
+      cfgNode = nnkObjConstr.newTree(bindSym"LaunchConfig")
+      for f in fields:
+        cfgNode.add(f)
     else:
       argsNode = rest[0]
       cfgNode = rest[1]
@@ -69,12 +70,18 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
   return quote do:
     `impl`(`engine`, `kernel`, `output`, `argsNode`, `cfgNode`)
 
-proc `<<`*[E: HwEngine, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchSugar[E] =
+func `<<`*[E: HwEngine, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchSugar[E] {.inline.} =
   result = r
   result.cfg.grid = dim3(cfg.grid)
   result.cfg.blk = dim3(cfg.blk)
 
-proc `<<`*[E: HwEngine](r: LaunchSugar[E], cfg: LaunchConfig): LaunchSugar[E] =
+func `<<`*[E: HwEngine, G, B: int|tuple, S: int](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B, sharedMem: S]): LaunchSugar[E] {.inline.} =
+  result = r
+  result.cfg.grid = dim3(cfg.grid)
+  result.cfg.blk = dim3(cfg.blk)
+  result.cfg.sharedMem = cfg.sharedMem
+
+func `<<`*[E: HwEngine](r: LaunchSugar[E], cfg: LaunchConfig): LaunchSugar[E] {.inline.} =
   LaunchSugar[E](engine: r.engine, cfg: cfg)
 
 macro `>>`*(proxy: typed, call: untyped): untyped =
