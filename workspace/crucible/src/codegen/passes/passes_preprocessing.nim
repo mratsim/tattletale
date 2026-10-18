@@ -533,7 +533,7 @@ proc dotParentType(ctx: GpuContext, n: GpuAst): GpuType =
 proc ptrFieldNames*(t: GpuType): seq[string] =
   ## Pointer field names of a struct type, in declaration order.
   case t.kind
-  of gtObject:
+  of gtObject, gtGenericInst:
     for f in t.fields:
       if f.typ.kind == gtPtr:
         result.add f.name
