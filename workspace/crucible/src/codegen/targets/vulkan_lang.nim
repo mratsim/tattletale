@@ -31,8 +31,7 @@ proc refTypeName(inner: GpuType): string =
   ## GLSL name of the buffer-reference block binding `inner`:
   ## a pointer renders as its reference block type
   let pt = if inner.kind == gtUA: inner.uaTo else: inner
-  let base = if pt.kind == gtVoid: "uint8_t"
-             else: gpuTypeToString(pt, allowEmptyIdent = true)
+  let base = gpuTypeToString(pt, allowEmptyIdent = true)
   result = "Ref_" & base.multiReplace((" ", "_"), ("[", ""), ("]", ""),
                                       (",", "_"), ("(", ""), (")", ""))
 
@@ -42,9 +41,9 @@ proc refBlockDecl(inner: GpuType): string =
   ##
   ## Member shapes:
   ## - runtime array (UncheckedArray): `T x[]`, fixed-array elements nest
-  ##   after the runtime dimension (`uint8_t x[][32]`), the unsized
+  ##   after the runtime dimension (`uint32_t x[][32]`), the unsized
   ##   dimension is only legal in the outermost position
-  ## - pointer to one fixed array: fixed member `uint8_t x[32]`
+  ## - pointer to one fixed array: fixed member `uint32_t x[32]`
 
   proc arrayDims(t: GpuType): tuple[base: GpuType, dims: string] =
     ## Strips the array nesting, collecting the dimension suffixes outermost
@@ -78,6 +77,29 @@ proc refBlockDecl(inner: GpuType): string =
       gpuTypeToString(inner, "x") & "[]"
   let name = refTypeName(inner)
   result = "layout(buffer_reference, std430) buffer " & name & " { " & member & "; };"
+
+proc collectRefPointees(t: GpuType, pointees: var seq[GpuType]) =
+  ## Collects the pointee of every pointer reachable from the type tree:
+  ## through pointer targets, fixed-array elements, runtime-array elements
+  ## and object fields. Dedup by reference-block name.
+  case t.kind
+  of gtPtr:
+    if t.to != nil:
+      let name = refTypeName(t.to)
+      if not pointees.anyIt(refTypeName(it) == name):
+        pointees.add t.to
+      collectRefPointees(t.to, pointees)
+  of gtArray:
+    if t.aTyp != nil:
+      collectRefPointees(t.aTyp, pointees)
+  of gtUA:
+    if t.uaTo != nil:
+      collectRefPointees(t.uaTo, pointees)
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      collectRefPointees(f.typ, pointees)
+  else:
+    discard
 
 proc gpuTypeToString*(t: GpuTypeKind): string =
   case t
@@ -576,6 +598,44 @@ proc codegen*(ctx: var GpuContext): string =
 
   # Check if we need fp64 / fp16 / bf16 extensions or the subgroup
   # shuffles (which need the KHR subgroup shuffle extensions)
+
+
+  # ── Step 1: Build the push-constant block and reference block info ──
+  # Pointers are BDA references: 64-bit addresses packed in the push block.
+  # Ref blocks are declared for the pointer surfaces of every function,
+  # kernels included. Device fns take pointer params, return pointers, hold
+  # pointer locals and cast to pointers inside their bodies.
+  var refPointees: seq[GpuType]
+  var pushConstDecls: seq[string]
+  for (fnIdent, fn) in mpairs(ctx.fnTab):
+    for p in fn.pParams:
+      collectRefPointees(p.typ, refPointees)
+      if fn.isGlobal() and p.addressSpace != asSMEM:
+        # multi-kernel sources share one block, same-name params dedup
+        let decl = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        if decl notin pushConstDecls:
+          pushConstDecls.add decl
+    if fn.pRetType != nil:
+      collectRefPointees(fn.pRetType, refPointees)
+    var ptrees = @[fn.pBody]
+    for blk in ctx.globalBlocks:
+      if blk.kind in {gpuTypeDef, gpuAlias}:
+        ptrees.add blk
+    while ptrees.len > 0:
+      let n = ptrees.pop()
+      if n.kind == gpuVar and n.vType != nil:
+        collectRefPointees(n.vType, refPointees)
+      if n.kind == gpuTypeDef:
+        for f in n.tFields:
+          collectRefPointees(f.typ, refPointees)
+      if n.kind == gpuCast and n.cTo != nil:
+        collectRefPointees(n.cTo, refPointees)
+      if n.kind == gpuConv and n.convTo != nil:
+        collectRefPointees(n.convTo, refPointees)
+      for ch in n:
+        if not ch.isNil:
+          ptrees.add ch
+
   var needsFp64 = false
   var needsFp16 = false
   var needsBf16 = false
@@ -601,6 +661,12 @@ proc codegen*(ctx: var GpuContext): string =
         needsInt8 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
+  for pt in refPointees:
+    var b = pt
+    while b.kind in {gtArray, gtUA}:
+      b = if b.kind == gtArray: b.aTyp else: b.uaTo
+    if b.kind == gtUint8:
+      needsInt8 = true
 
   # Emit GLSL header
   result = "#version 450\n"
@@ -629,59 +695,9 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
   result.add "\n"
 
-  # ── Step 1: Build the push-constant block and reference block info ──
-  # Pointers are BDA references: 64-bit addresses packed in the push block.
-  # Ref blocks are declared for the pointer surfaces of every function,
-  # kernels included. Device fns take pointer params, return pointers, hold
-  # pointer locals and cast to pointers inside their bodies.
-  var refPointees: seq[string]
-  var pushConstDecls: seq[string]
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    for p in fn.pParams:
-      if p.typ.kind == gtPtr:
-        let decl = refBlockDecl(p.typ.to)
-        if decl notin refPointees:
-          refPointees.add decl
-      if fn.isGlobal() and p.addressSpace != asSMEM:
-        # multi-kernel sources share one block, same-name params dedup
-        let decl = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-        if decl notin pushConstDecls:
-          pushConstDecls.add decl
-    if fn.pRetType != nil and fn.pRetType.kind == gtPtr:
-      let decl = refBlockDecl(fn.pRetType.to)
-      if decl notin refPointees:
-        refPointees.add decl
-    var ptrees = @[fn.pBody]
-    for blk in ctx.globalBlocks:
-      if blk.kind in {gpuTypeDef, gpuAlias}:
-        ptrees.add blk
-    while ptrees.len > 0:
-      let n = ptrees.pop()
-      if n.kind == gpuVar and n.vType != nil and n.vType.kind == gtPtr:
-        let decl = refBlockDecl(n.vType.to)
-        if decl notin refPointees:
-          refPointees.add decl
-      if n.kind == gpuTypeDef:
-        for f in n.tFields:
-          if f.typ.kind == gtPtr:
-            let decl = refBlockDecl(f.typ.to)
-            if decl notin refPointees:
-              refPointees.add decl
-      if n.kind == gpuCast and n.cTo != nil and n.cTo.kind == gtPtr:
-        let decl = refBlockDecl(n.cTo.to)
-        if decl notin refPointees:
-          refPointees.add decl
-      if n.kind == gpuConv and n.convTo != nil and n.convTo.kind == gtPtr:
-        let decl = refBlockDecl(n.convTo.to)
-        if decl notin refPointees:
-          refPointees.add decl
-      for ch in n:
-        if not ch.isNil:
-          ptrees.add ch
-
   # ── Step 1b: Emit reference block typedefs, before the structs using them ──
-  for decl in refPointees:
-    result.add decl
+  for pt in refPointees:
+    result.add refBlockDecl(pt)
     result.add "\n"
   if refPointees.len > 0:
     result.add "\n"
