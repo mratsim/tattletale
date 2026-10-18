@@ -11,6 +11,7 @@ import ../ir/gpu_types
 
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
+import ../passes/passes_wgsl as pw
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -339,16 +340,16 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
       for p in fn.pParams:
         ctx.globals[p.ident.symbol.iSym] = p
       fn.pParams.setLen(0)
-      pp.updateSymsInGlobalsImpl(ctx, fn)
+      pw.updateSymsInGlobalsImpl(ctx, fn)
     else:
       discard
 
   # 2.b filter out all `var foo {.const_mem.}: dtype`
   if ctx.globalBlocks.len > 0:
-    pp.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
+    pw.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
   # 2.c remove all fields of structs, which have pointer type
   if ctx.globalBlocks.len > 1:
-    pp.removeStructPointerFieldsImpl(ctx.globalBlocks[1])
+    pw.removeStructPointerFieldsImpl(ctx.globalBlocks[1])
 
   # 3. Collect value address spaces before scanGenerics derives generic
   # argument spaces from the authoritative map.
@@ -361,20 +362,20 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     var callParams = initTable[string, GpuParam]()
     for p in fnOrig.pParams:
       callParams[p.ident.symbol.iSym] = p
-    pp.scanGenericsImpl(ctx, fn, callParams)
+    pw.scanGenericsImpl(ctx, fn, callParams)
 
   # 4. injectAddressOf for globals
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     if fn.isGlobal():
-      pp.injectAddressOfImpl(ctx, fn)
+      pw.injectAddressOfImpl(ctx, fn)
 
   # 5. makeCodeValid
   for (fnIdent, fn) in mpairs(ctx.fnTab):
-    pp.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
+    pw.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
 
   # 6. checkCodeValid
   for (fnIdent, fn) in pairs(ctx.fnTab):
-    pp.checkCodeValidImpl(ctx, fn)
+    pw.checkCodeValidImpl(ctx, fn)
 
   # 7. Inline device-proc calls that cannot carry their pointer parameters
   #    through a WGSL function signature.

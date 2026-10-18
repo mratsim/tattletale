@@ -8,7 +8,7 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/codegen/ir/gpu_types
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/codegen/passes/passes_wgsl
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. injectAddressOfImpl wraps ptr globals in gpuAddr
