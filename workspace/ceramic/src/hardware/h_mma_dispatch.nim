@@ -202,18 +202,11 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
     for i in 0 ..< bV: bNames.add($scalars[dV + aV + i])
     for i in 0 ..< dV: cNames.add($scalars[dV + aV + bV + i])
     let aType = constStr(atom, "aType")
-    let bType = constStr(atom, "bType")
-    doAssert aType == bType,
-      "gemm_mma: the Apple simdgroup intrinsic requires aType == bType on atom `" &
-      $atom & "`"
-    if aType.len == 0:
-      error("gemm_mma: atom `" & $atom & "` is missing the `aType` registry " &
-            "property (\"float\"/\"half\"/\"bfloat\") for the Apple staging payload")
     let cType = constStr(atom, "cType")
     var staged: seq[(string, NimNode, string, string)]
     for i in 0 ..< dV: staged.add((dNames[i], scalars[i], "float", "accumulator"))
     for i in 0 ..< aV: staged.add((aNames[i], scalars[dV + i], aType, "A operand"))
-    for i in 0 ..< bV: staged.add((bNames[i], scalars[dV + aV + i], bType, "B operand"))
+    for i in 0 ..< bV: staged.add((bNames[i], scalars[dV + aV + i], aType, "B operand"))
     for i in 0 ..< dV: staged.add((cNames[i], scalars[dV + aV + bV + i], cType, "addend"))
     for (name, node, dtype, operand) in staged:
       assertStagedDtype(name, node, dtype, operand)
