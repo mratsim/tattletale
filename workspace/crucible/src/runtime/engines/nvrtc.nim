@@ -146,14 +146,10 @@ proc load(nvrtc: var NVRTC) =
 
 type SerializationCtx[n: static int] = object
   addrs: array[n, pointer]
-  hvals: array[n, CUdeviceptr]
   bytes: array[n, seq[byte]]
 
-proc store[n: static int](ctx: var SerializationCtx[n], v: CUdeviceptr, argIdx: int) =
-  ctx.hvals[argIdx] = v
-  ctx.addrs[argIdx] = ctx.hvals[argIdx].addr
-
 proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
+  # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
   const size = deviceLayout(T, bkCuda).size
   ctx.bytes[argIdx] = newSeq[byte](size)
   if size > 0:
