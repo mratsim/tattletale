@@ -255,11 +255,11 @@ proc initVulkan*(): VulkanContext =
          pQueueFamilyPropertyCount: ptr uint32,
          pQueueFamilyProperties: pointer) {.cdecl.}
   ](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
-  # Pick the best physical device instead of blindly taking the first one:
-  # a software/experimental renderer (e.g. Mesa Xe KMD) can be enumerated
-  # before the real GPU, and its vkMapMemory fails at runtime with
-  # VK_ERROR_OBJECT_TYPE. Prefer a discrete GPU with a compute queue, then an
-  # integrated one; fall back to the first enumerated device otherwise.
+  var gpdf2 = cast[
+    proc(physicalDevice: VkPhysicalDevice, pFeatures: ptr VkPhysicalDeviceFeatures2): void {.cdecl.}
+  ](gpa("vkGetPhysicalDeviceFeatures2"))
+  # Software renderers (Mesa Xe KMD) can enumerate first and fail vkMapMemory,
+  # prefer a discrete GPU with a compute queue
   let initCtx = result   # nested proc shadows `result` — capture the ctx
   proc deviceScore(dev: VkPhysicalDevice): tuple[score: int, name: string] =
     let props = deviceProps(initCtx, dev)
@@ -275,9 +275,16 @@ proc initVulkan*(): VulkanContext =
           hasCompute = true
           break
     if not hasCompute:
-      # Compute dispatches require a queue family with VK_QUEUE_COMPUTE_BIT.
-      # Selecting a graphics-only device would leave queueFamilyIndex at 0 and
-      # fail at dispatch time, so reject such devices outright.
+      # A graphics-only device dispatches on queue family 0 and fails there
+      return (-1, name)
+    # Kernel launches pass BDA pointers, the device must enable the feature
+    var bdaFeat = VkPhysicalDeviceBufferDeviceAddressFeatures(
+      sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)
+    var f2 = VkPhysicalDeviceFeatures2(
+      sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+    f2.pNext = bdaFeat.addr
+    gpdf2(dev, f2.addr)
+    if bdaFeat.bufferDeviceAddress != VK_TRUE:
       return (-1, name)
     let typeScore = case props.deviceType
       of VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: 100
@@ -324,9 +331,6 @@ proc initVulkan*(): VulkanContext =
     pQueuePriorities: qprio.addr
   )
   # 16-bit float arithmetic + 16-bit storage (core features since Vulkan 1.1/1.2).
-  var gpdf2 = cast[
-    proc(physicalDevice: VkPhysicalDevice, pFeatures: ptr VkPhysicalDeviceFeatures2): void {.cdecl.}
-  ](gpa("vkGetPhysicalDeviceFeatures2"))
   var f16feat = VkPhysicalDeviceShaderFloat16Int8Features(
     sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
   var s16feat = VkPhysicalDevice16BitStorageFeatures(
