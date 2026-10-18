@@ -30,11 +30,11 @@ import workspace/fp_conv/fp_conv
 
 {.experimental: "callOperator".}
 
-type DevTensorView[DevMem, Sh, St] = object
+type DevTensorView*[DevMem, Sh, St] = object
   data: DevMem
   layout: Layout[Sh, St]
 
-func devView2D[DevMem](data: DevMem, shape, strides: (int, int)): DevTensorView[DevMem, (int, int), (int, int)] =
+func devView2D*[DevMem](data: DevMem, shape, strides: (int, int)): DevTensorView[DevMem, (int, int), (int, int)] =
   DevTensorView[DevMem, (int, int), (int, int)](data: data, layout: make_layout(shape, strides))
 
 # ═══════════════════════════════════════════════════════════════

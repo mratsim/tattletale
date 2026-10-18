@@ -43,14 +43,6 @@ export fp_conv
 
 {.experimental: "callOperator".}
 
-type DevTensorView*[DevMem, Sh, St] = object
-  ## Host-side TensorView for DeviceMem
-  data: DevMem
-  layout: Layout[Sh, St]
-
-func devView2D*[DevMem](data: DevMem, shape, strides: (int, int)): DevTensorView[DevMem, (int, int), (int, int)] =
-  DevTensorView[DevMem, (int, int), (int, int)](data: data, layout: make_layout(shape, strides))
-
 type LaunchFn[E, H] = proc (engine: E,
     dDev: DeviceMem[H, float32],
     aDev, bDev: DeviceMem[H, F16],
@@ -79,10 +71,8 @@ proc checkGemmRef[E: HwEngine, H](engine: E, M, N, K: int, launch: LaunchFn[E, H
     dDev = engine.allocDevice(float32, M * N)
   engine.copyToDeviceFromHost(aDev, addr aHost[0], M * K)
   engine.copyToDeviceFromHost(bDev, addr bHost[0], K * N)
-  stderr.writeLine "DBG checkGemmRef: launch done " & msg
   when not defined(skipLaunch):
     launch(engine, dDev, aDev, bDev, M, N, K, 1)
-  stderr.writeLine "DBG checkGemmRef: kernel done " & msg
   var gotHost = newSeq[float32](M * N)
   var refHost = newSeq[float32](M * N)
   engine.copyToHostFromDevice(addr gotHost[0], dDev, M * N)
@@ -121,9 +111,7 @@ proc gemmBench*[E: HwEngine, H](engine: E, launch: LaunchFn[E, H], M, N, K: int,
   # the GPU loops the device function `iters` times inside one launch,
   # the launch overhead leaves the measurement
   let benchStart = getMonoTime()
-  stderr.writeLine "DBG timing launch start " & text
   launch(engine, dDev, aDev, bDev, M, N, K, iters)
-  stderr.writeLine "DBG timing launch done " & text
   let benchStop = getMonoTime()
   discard report(text & ": gemm", config, benchStart, benchStop, iters, flops)
 
