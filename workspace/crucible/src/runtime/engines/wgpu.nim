@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[monotimes, os, strutils, tables, times]
+import std/[macros, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
@@ -71,6 +71,11 @@ proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
   ctx.handles[argIdx] = v
 
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  ## WebGPU binds pointer args as storage buffers: raw pointer bits are
+  ## meaningless in the scalar scratch, buffer args must be WGPUBuffer values
+  when T is ptr|pointer:
+    static:
+      error "WebGPU pointer args bind as storage buffers: pass the WGPUBuffer from allocDevice, got " & $T
   ctx.pn = roundStepUp(ctx.pn, 256)
   ctx.chunkOff[argIdx] = ctx.pn
   const size = deviceLayout(T, bkWGSL).size
