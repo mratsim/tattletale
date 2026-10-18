@@ -76,7 +76,6 @@ proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
   let idxTyp = initGpuType(gtInt32)
   GpuAst(
     kind: gpuCall,
-    cIsExpr: true,
     cName: GpuAst(kind: gpuIdent, symbol: newSymbol("toOpenArray")),
     cArgs: @[
       arr,

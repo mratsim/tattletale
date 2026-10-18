@@ -93,16 +93,11 @@ type
     of gtStatic:
       sValue*: int  # The actual static integer value
     of gtSpan:
-      sKind*: GpuSpanKind  # kOpenArray or kVarargs
       sElemTyp*: GpuType   # element type T
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
     else: discard
-
-  GpuSpanKind* = enum
-    kOpenArray   # Nim openArray[T] — ptr + runtime length
-    kVarargs     # Unsupported at th moment
 
   GpuRangeKind* = enum
     rkInclusive    # Nim `a..b` — emitted as `i <= end` or equivalent
@@ -155,7 +150,6 @@ type
       pWorkgroupSize*: tuple[x, y, z: int]  ## `{.workgroup: (X, Y, Z).}` annotation, (0,0,0) = unset
       forwardDeclare*: bool ## can be set to true to _only_ generate a forward declaration
     of gpuCall:
-      cIsExpr*: bool ## If the call returns a value
       cName*: GpuAst ## Will be a `GpuIdent`
       cArgs*: seq[GpuAst]
     of gpuTemplateCall:
@@ -233,7 +227,6 @@ type
     of gpuAlias:
       aTyp*: GpuType ## Name of the type alias
       aTo*: GpuAst ## Type the alias maps to
-      aDistinct*: bool ## If the alias is a distinct type in Nim.
     of gpuObjConstr:
       ocType*: GpuType  # type we construct
       ## XXX: it would be better if we already fill the fields with default values here
@@ -291,7 +284,6 @@ type
     coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
-    module*: string     ## Module provenance (optional)
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -396,8 +388,6 @@ type
     ## allow overloading by function signatures.
     symChoices*: HashSet[string]
 
-    ## Phase 6: Vulkan SSBO canonical slots (name, inner type) per indexed position
-    ssboCanonicalInfo*: seq[tuple[name: string, innerType: GpuType]]
     ## Phase 6: Vulkan push-constant param info (type, name strings stored as comments
     ## in globalBlocks for codegen to read)
   GenericArg* = object
@@ -465,13 +455,12 @@ const TAG_IDENT_IN_ASM* = "\x01"
   ## The printers substitute the symbol's (mangled) display name at codegen time.
   ## A control byte is used so the marker can never collide with valid asm text.
 
-proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone, module: string = ""): Symbol =
+proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
   new(result)
   result.name = name
   result.iSym = if iSym == "": name else: iSym
   result.typ = typ
   result.symKind = symKind
-  result.module = module
 
 proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   var sym = newSymbol(ident, symKind = symKind)
@@ -493,12 +482,6 @@ proc scopeGet*(scope: seq[(string, Symbol)]; name: string): Symbol =
     if n == name:
       return s
   raiseAssert "Scope lookup failed: '" & name & "' not found"
-
-proc scopeGetOrDefault*(scope: seq[(string, Symbol)]; name: string): Symbol =
-  ## Look up a name in a scope table. Returns nil if not found.
-  for (n, s) in scope:
-    if n == name:
-      return s
 
 proc clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
@@ -550,7 +533,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result.forwardDeclare = ast.forwardDeclare
   of gpuCall:
     result = GpuAst(kind: gpuCall)
-    result.cIsExpr = ast.cIsExpr
     result.cName = ast.cName.clone()
     for arg in ast.cArgs:
       result.cArgs.add(arg.clone())
@@ -654,7 +636,6 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuAlias)
     result.aTyp = ast.aTyp.clone()
     result.aTo = ast.aTo.clone()
-    result.aDistinct = ast.aDistinct
   of gpuObjConstr:
     result = GpuAst(kind: gpuObjConstr)
     result.ocType = ast.ocType.clone()

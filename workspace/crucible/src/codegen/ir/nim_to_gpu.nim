@@ -220,16 +220,6 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
   # Iterating passes like `ensureBlock` only see instantiations in `allFnTab`.
   ctx.allFnTab[fn.pName] = fn
 
-proc isExpression(n: GpuAst): bool =
-  ## Returns whether the given AST node is an expression
-  case n.kind
-  of gpuCall: # only if it returns something!
-    result = n.cIsExpr
-  of gpuBinOp, gpuIdent, gpuLit, gpuArrayLit, gpuPrefix, gpuDot, gpuIndex, gpuObjConstr,
-     gpuAddr, gpuDeref, gpuConv, gpuCast, gpuConstexpr:
-    result = true
-  else:
-    result = false
 
 proc fnReturnsValue(ctx: GpuContext, fn: GpuAst): bool =
   ## Returns true if the given `fn` (gpuIdent) returns a value.
@@ -629,8 +619,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       result = GpuAst(kind: gpuBinOp, bOp: op, bLeft: args[0], bRight: args[1], bIsOverloaded: false)
       result.bType = resolveType(reg, node.getTypeInst())
     else:
-      let fnIsExpr = ctx.fnReturnsValue(name)
-      result = GpuAst(kind: gpuCall, cIsExpr: fnIsExpr)
+      result = GpuAst(kind: gpuCall)
       result.cName = name
       result.cArgs = args
 

@@ -14,7 +14,6 @@ proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
                       allowEmptyIdent = false): string
-proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
 proc getInnerArrayType(t: GpuType): string =
   ## Returns the name of the inner most type for a nested array.
@@ -148,8 +147,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genCuda(a))
-proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genCuda(a))
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 

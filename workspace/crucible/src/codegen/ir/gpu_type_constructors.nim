@@ -43,12 +43,12 @@ proc initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
   ## Initializes an object/struct type
   result = GpuType(kind: gtObject, name: name, fields: flds)
 
-proc initGpuSpanType*(kind: GpuSpanKind, elemTyp: GpuType): GpuType =
+proc initGpuSpanType*(elemTyp: GpuType): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type
   if elemTyp.kind == gtInvalid:
     result = GpuType(kind: gtInvalid)
   else:
-    result = GpuType(kind: gtSpan, sKind: kind, sElemTyp: elemTyp)
+    result = GpuType(kind: gtSpan, sElemTyp: elemTyp)
 
 proc toTypeDef*(typ: GpuType): GpuAst =
   ## Converts a given object or generic instantiation type into an AST of a

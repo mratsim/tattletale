@@ -49,7 +49,4 @@ proc init*(backend: static BackendKind): auto =
   else:
     {.error: "init: unknown BackendKind".}
 
-proc init*(backend: static BackendKind, source: string): auto =
-  result = init(backend)
-  result.ingest(source)
 

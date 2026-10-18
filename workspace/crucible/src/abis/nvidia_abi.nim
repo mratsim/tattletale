@@ -847,7 +847,6 @@ type
 
 proc cuInit*(flags: uint32): CUresult
 
-proc cuDeviceGetCount*(count: var int32): CUresult
 proc cuDeviceGet*(device: var CUdevice, ordinal: int32): CUresult
 proc cuDeviceGetName*(name: ptr char, len: int32, dev: CUdevice): CUresult
 proc cuDeviceGetAttribute*(r: var int32, attrib: CUdevice_attribute, dev: CUdevice): CUresult
@@ -861,15 +860,8 @@ proc cuCtxSynchronize*(ctx: CUcontext): CUresult {.v2.}
 {.push noconv, importc, dynlib: libCuda.}
 
 proc cuCtxSynchronize*(): CUresult
-proc cuCtxGetCurrent*(ctx: var CUcontext): CUresult
 proc cuCtxSetCurrent*(ctx: CUcontext): CUresult
-proc cuCtxSetLimit*(limit: CUlimit, value: csize_t): CUresult
 
-proc cuEventCreate*(event: var CUevent, flags: cuint = 0): CUresult
-proc cuEventDestroy*(event: CUevent): CUresult
-proc cuEventRecord*(event: CUevent, stream: CUstream): CUresult
-proc cuEventSynchronize*(event: CUevent): CUresult
-proc cuEventElapsedTime*(ms: var cfloat, start, stop: CUevent): CUresult
 
 proc cuModuleUnload*(module: CUmodule): CUresult
 proc cuModuleGetFunction(kernel: var CUfunction, module: CUmodule, fnName: ptr char): CUresult {.used.}
@@ -891,19 +883,11 @@ proc cuLaunchKernel*(
 proc cuModuleGetGlobal*(dptr: var CUdeviceptr, bytes: ptr csize_t, hmod: CUmodule, name: cstring): CUresult {.v2.}
 
 proc cuMemAlloc*(devptr: var CUdeviceptr, size: csize_t): CUresult {.v2.}
-proc cuMemAllocManaged*(devptr: var CUdeviceptr, size: csize_t, flags: Flag[CUmemAttach_flags]): CUresult {.v1.}
 proc cuMemFree*(devptr: CUdeviceptr): CUresult {.v2.}
 proc cuMemcpyHtoD*(dst: CUdeviceptr, src: pointer, size: csize_t): CUresult {.v2.}
 proc cuMemcpyDtoH*(dst: pointer, src: CUdeviceptr, size: csize_t): CUresult {.v2.}
 
-proc cuDriverGetVersion*(driverVersion: var cint): CUresult {.v1.}
 
-proc cuLinkCreate*(numOptions: cuint; options: ptr CUjit_option;
-                   optionValues: ptr pointer; stateOut: ptr CUlinkState): CUresult {.v2.}
-proc cuLinkAddData*(state: CUlinkState; `type`: CUjitInputType; data: pointer;
-                   size: csize_t; name: cstring; numOptions: cuint;
-                   options: ptr CUjit_option; optionValues: ptr pointer): CUresult {.v2.}
-proc cuLinkComplete*(state: CUlinkState; cubinOut: ptr pointer; sizeOut: ptr csize_t): CUresult {.v1.}
 proc cuLinkAddFile*(state: CUlinkState; `type`: CUjitInputType; path: cstring;
                     numOptions: cuint; options: ptr CUjit_option;
                     optionValues: ptr pointer): CUresult {.v2.}

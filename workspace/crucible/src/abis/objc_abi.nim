@@ -187,4 +187,3 @@ when defined(macosx):
 
   proc MTLCreateSystemDefaultDevice*(): ID {.importc: "MTLCreateSystemDefaultDevice", cdecl, dynlib: "/System/Library/Frameworks/Metal.framework/Metal".}
 
-  proc setVersion*(cls: Class, version: cint) {.importc: "class_$1", cdecl, dynlib: ObjcLibName.}

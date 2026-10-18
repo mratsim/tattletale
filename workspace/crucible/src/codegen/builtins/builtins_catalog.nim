@@ -199,8 +199,3 @@ template workgroup_barrier*(flags: uint32 = 0): untyped = threadgroup_barrier()
 # `malloc`/`free`/`memcpy` dummies were dropped: memcpy is emitted only by the `decomposeMemcpy` pass
 # as `__builtin_memcpy`, never via the dummy.
 
-proc printf*(fmt: string) {.varargs, builtin.} = discard
-  ## CUDA device-side `printf`. Forwards the format string and arguments verbatim.
-proc cvtaGenericToShared*(p: pointer): uint32 {.cudaName: "__cvta_generic_to_shared", builtin.} = discard
-  ## CUDA's `__cvta_generic_to_shared`. Converts a generic pointer to a shared-memory address
-  ## and returns the 32-bit shared offset.

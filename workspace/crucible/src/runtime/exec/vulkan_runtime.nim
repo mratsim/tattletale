@@ -30,7 +30,6 @@ type
     layout: VkPipelineLayout
     vkDestroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
     vkDestroyPipelineLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
-    pushConstSize: int
 
   VulkanContext* = ref VulkanContextObj
   VulkanContextObj = object
@@ -572,7 +571,6 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   result.vkDestroyPipelineLayout = cast[
     proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineLayout"))
-  result.pushConstSize = pushConstSize
 
   let vkCreatePipelineLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkPipelineLayoutCreateInfo,

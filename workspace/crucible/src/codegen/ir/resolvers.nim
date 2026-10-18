@@ -462,11 +462,11 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
       result = initGpuUAType(resolveInnerPointerType(reg, n))
     of ntyOpenArray:
-      ## openArray[T] → gtSpan(kOpenArray, T)
+      ## openArray[T] → gtSpan(T)
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "openArray",
         "ntyOpenArray: expected BracketExpr(openArray, T), got " & $n.treerepr
       let innerTyp = resolveType(reg, n[1])
-      result = initGpuSpanType(kOpenArray, innerTyp)
+      result = initGpuSpanType(innerTyp)
     of ntyObject, ntyAlias, ntyTuple:
       # For aliases (type F = int), resolve to the underlying type.
       # Don't call resolveRecordFields on aliases of primitive types.

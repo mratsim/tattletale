@@ -16,7 +16,6 @@ type
   OpenCLContext* = ref OpenCLContextObj
   OpenCLContextObj = object
     device*: OpenCLDevice
-    platform: Pplatform_id
     context: Pcontext
     commands: Pcommand_queue
 

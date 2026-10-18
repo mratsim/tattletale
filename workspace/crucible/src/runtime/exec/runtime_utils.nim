@@ -17,7 +17,6 @@ proc getDebugDir(): string =
   ## getTempDir() / "tattletale" / "debug", all debug-only writes.
   result = getTempDir() / "tattletale" / "debug"
   createDir(result)
-
 proc getDebugPath*(name: string): string =
   ## getDebugDir() / sanitizePath(name), parent dirs created.
   let safe = sanitizePath(name)

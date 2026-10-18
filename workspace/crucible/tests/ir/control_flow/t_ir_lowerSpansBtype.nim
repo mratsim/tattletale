@@ -62,7 +62,7 @@ proc assertLenExprShape(n: GpuAst; expectTyp: GpuType) =
 
 proc buildSpanProc(firstIdx: GpuAst; bodyStmts: seq[GpuAst]): GpuAst =
   ## Build a `proc(s: openArray[int32])` whose body is `bodyStmts`.
-  let spanTyp = initGpuSpanType(kOpenArray, initGpuType(gtInt32))
+  let spanTyp = initGpuSpanType(initGpuType(gtInt32))
   result = GpuAst(
     kind: gpuProc,
     pName: GpuAst(kind: gpuIdent, symbol: newSymbol("spanLower", iSym = "spanLower", symKind = gsProc)),

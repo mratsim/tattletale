@@ -18,7 +18,6 @@ proc gpuTypeToString*(t: GpuType,
                       allowEmptyIdent = false,
                       addrSpace: AddressSpace = asRMEM): string
 
-proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
 
 proc addrSpaceToWgsl(space: AddressSpace): string =
@@ -127,22 +126,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     let typ = gpuTypeToString(typ, allowEmptyIdent = true)
     if typ.len > 0:
       result.add &" -> {typ}"
-
-proc patchType(t: GpuType): GpuType =
-  ## Applies patches needed for WGSL support. E.g. `bool` cannot be a storage variable.
-  result = t
-  if result.kind == gtBool:
-    result.kind = gtInt32
-  elif result.kind == gtPtr and result.to.kind == gtBool:
-    result.to.kind = gtInt32
-
-proc patchSymbol(n: GpuAst): GpuAst =
-  ## Applies patches needed for WGSL support. E.g. `bool` cannot be a storage variable.
-  doAssert n.kind == gpuIdent, "Must be an ident, is: " & $n.kind
-  result = n
-  if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
-    result.symbol.typ = patchType(result.symbol.typ)
-
 proc determineIdent(arg: GpuAst): GpuAst =
   ## Tries to determine the underlying ident that is contained in this node.
   ## The issue is the argument to a `gpuCall` can be a complicated expression.
@@ -397,8 +380,6 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   #    through a WGSL function signature.
   ctx.inlinePointerParamCalls()
 
-proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genWebGpu(a))
-proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genWebGpu(a))
 
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the WGSL backend.

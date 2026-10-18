@@ -14,7 +14,6 @@ proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
                       allowEmptyIdent = false): string
-proc size*(ctx: var GpuContext, a: GpuType): string = size(gpuTypeToString(a, allowEmptyIdent = true))
 
 proc getInnerArrayType(t: GpuType): string =
   ## Returns the name of the inner most type for a nested array.
@@ -156,19 +155,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
 
 
-proc containsFloat64(t: GpuType): bool =
-  ## Returns true if the type tree contains float64 (double) somewhere.
-  case t.kind
-  of gtPtr:
-    result = t.to.containsFloat64()
-  of gtArray:
-    result = t.aTyp.containsFloat64()
-  of gtUA:
-    result = t.uaTo.containsFloat64()
-  of gtFloat64: result = true
-  else: result = false
-
-
 proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   ## True if the type tree contains `kind` somewhere.
   case t.kind
@@ -234,8 +220,6 @@ proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-proc size(ctx: var GpuContext, a: GpuAst): string = size(ctx.genVulkan(a))
-proc address(ctx: var GpuContext, a: GpuAst): string = address(ctx.genVulkan(a))
 
 # ── Preprocess ────────────────────────────────────────────────────────
 
