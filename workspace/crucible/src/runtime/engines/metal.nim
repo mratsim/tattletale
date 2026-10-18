@@ -154,16 +154,16 @@ when defined(macosx):
     copyMem(dst, bufferContents(src), n)
 
 
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
-      if grid.x < 1 or grid.y < 1 or grid.z < 1:
-        failLoud("Metal run: grid must be ≥ 1 per axis, got " & $grid.x & "x" & $grid.y & "x" & $grid.z)
-      if blk.x < 1 or blk.y < 1 or blk.z < 1:
-        failLoud("Metal run: blk must be ≥ 1 per axis, got " & $blk.x & "x" & $blk.y & "x" & $blk.z)
-      if blk.x * blk.y * blk.z > 1024:
-        failLoud("Metal run: blk " & $blk.x & "x" & $blk.y & "x" & $blk.z & " exceeds the 1024 threads-per-threadgroup max")
+      if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
+        failLoud("Metal run: cfg.grid must be ≥ 1 per axis, got " & $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
+      if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
+        failLoud("Metal run: cfg.blk must be ≥ 1 per axis, got " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
+      if cfg.blk.x * cfg.blk.y * cfg.blk.z > 1024:
+        failLoud("Metal run: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z & " exceeds the 1024 threads-per-threadgroup max")
 
       var pso: objc.ID
       if engine.cache.psos.hasKey(kernel):
@@ -175,18 +175,23 @@ when defined(macosx):
       let cmdBuf = objc.msgSend(engine.ctx.queue, objc.`$$`("commandBuffer"))
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
+      if cfg.sharedMem > 0:
+        # Metal requires a 16-byte multiple of threadgroup memory
+        let tgMem = roundStepUp(cfg.sharedMem, 16)
+        discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
+                        objc.NSUInteger(tgMem), objc.NSUInteger(0))
 
 
       var dctx = SerializationCtx(encoder: encoder)
-      bindArgs(dctx, output, args, store, objc.ID)
-      let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
-                         height: objc.NSUInteger(grid.y),
-                         depth: objc.NSUInteger(grid.z))
-      let blk = objc.MTLSize(width: objc.NSUInteger(blk.x),
-                        height: objc.NSUInteger(blk.y),
-                        depth: objc.NSUInteger(blk.z))
+      bindArgs(dctx, output, args, store, objc.ID, bkMetal)
+      let gridSize = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
+                         height: objc.NSUInteger(cfg.grid.y),
+                         depth: objc.NSUInteger(cfg.grid.z))
+      let blkSize = objc.MTLSize(width: objc.NSUInteger(cfg.blk.x),
+                        height: objc.NSUInteger(cfg.blk.y),
+                        depth: objc.NSUInteger(cfg.blk.z))
       discard objc.msgSend(encoder, objc.`$$`("dispatchThreadgroups:threadsPerThreadgroup:"),
-                      grid, blk)
+                      gridSize, blkSize)
       discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
       discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
       discard objc.msgSend(cmdBuf, objc.`$$`("waitUntilCompleted"))
@@ -206,3 +211,4 @@ when defined(macosx):
 else:
   proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")
+

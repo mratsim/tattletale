@@ -16,9 +16,9 @@ type
     ## A 3D launch dims, `Dim3(x: n)` defaults y/z to 1.
     x*, y*, z* = 1
 
-  LaunchConfig*[E] = object
-    engine*: E
+  LaunchConfig* = object
     grid*, blk*: Dim3
+    sharedMem*, stream*: int
 
 template dim3*(a, b, c: SomeInteger = 1): Dim3 =
   Dim3(x: int(a), y: int(b), z: int(c))

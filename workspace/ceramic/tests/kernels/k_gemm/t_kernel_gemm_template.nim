@@ -30,6 +30,13 @@ import workspace/fp_conv/fp_conv
 
 {.experimental: "callOperator".}
 
+type DevTensorView*[DevMem, Sh, St] = object
+  data: DevMem
+  layout: Layout[Sh, St]
+
+func devView2D*[DevMem](data: DevMem, shape, strides: (int, int)): DevTensorView[DevMem, (int, int), (int, int)] =
+  DevTensorView[DevMem, (int, int), (int, int)](data: data, layout: make_layout(shape, strides))
+
 # ═══════════════════════════════════════════════════════════════
 #  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
@@ -39,11 +46,13 @@ func view2D[T](data: ptr UncheckedArray[T], shape, strides: (int, int)):
   ## 2D view over a presized buffer
   make_view(data, make_layout(shape, strides))
 
-proc gemm_ref*[ShA, StA, ShB, StB, ShC, StC](alpha: float32,
+proc gemm_ref*[ShA, StA, ShB, StB, ShC, StC](refOut: TensorView[float32, ShC, StC],
+               alpha: float32,
                A: TensorView[F16, ShA, StA],
                B: TensorView[F16, ShB, StB],
                beta: float32,
-               C, refOut: TensorView[float32, ShC, StC]) =
+               C: TensorView[float32, ShC, StC]) =
+  ## Host fp32 reference: refOut = alpha * A * B^T + beta * C, BLAS B^T form
   let
     M = A.getLayout().shape[0]
     N = B.getLayout().shape[0]
@@ -85,19 +94,19 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
     dHost = newSeq[float32](MaxM * MaxN)
     refHost = newSeq[float32](MaxM * MaxN)
   let
-    aDev = engine.allocDevice(MaxM * MaxK * sizeof(F16))
-    bDev = engine.allocDevice(MaxK * MaxN * sizeof(F16))
-    cDev = engine.allocDevice(MaxM * MaxN * sizeof(float32))
-    dDev = engine.allocDevice(MaxM * MaxN * sizeof(float32))
+    aDev = engine.allocDevice(F16, MaxM * MaxK)
+    bDev = engine.allocDevice(F16, MaxK * MaxN)
+    cDev = engine.allocDevice(float32, MaxM * MaxN)
+    dDev = engine.allocDevice(float32, MaxM * MaxN)
   for i in 0 ..< aHost.len:
     aHost[i] = F16.from(rng.rand(1.0'f32 .. 2.0'f32))
   for i in 0 ..< bHost.len:
     bHost[i] = F16.from(rng.rand(1.0'f32 .. 2.0'f32))
   for i in 0 ..< cHost.len:
     cHost[i] = rng.rand(1.0'f32 .. 2.0'f32)
-  engine.copyToDeviceFromHost(aDev, addr aHost[0], aHost.len * sizeof(F16))
-  engine.copyToDeviceFromHost(bDev, addr bHost[0], bHost.len * sizeof(F16))
-  engine.copyToDeviceFromHost(cDev, addr cHost[0], cHost.len * sizeof(float32))
+  engine.copyToDeviceFromHost(aDev, addr aHost[0], aHost.len)
+  engine.copyToDeviceFromHost(bDev, addr bHost[0], bHost.len)
+  engine.copyToDeviceFromHost(cDev, addr cHost[0], cHost.len)
 
   proc checkGemm(M, N, K: int, sA, sB, sC: (int, int), alpha = 2.0'f32, beta = 1.0'f32) =
     let
@@ -106,10 +115,10 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
       cTV = view2D(cast[ptr UncheckedArray[float32]](addr cHost[0]), (M, N), sC)
       dTV = view2D(cast[ptr UncheckedArray[float32]](addr dHost[0]), (M, N), sC)
       refTV = view2D(cast[ptr UncheckedArray[float32]](addr refHost[0]), (M, N), (N, 1))
-      dD = view2D(cast[ptr UncheckedArray[float32]](dDev), (M, N), sC)
-      dC = view2D(cast[ptr UncheckedArray[float32]](cDev), (M, N), sC)
-      dA = view2D(cast[ptr UncheckedArray[float16]](aDev), (M, K), sA)
-      dB = view2D(cast[ptr UncheckedArray[float16]](bDev), (N, K), sB)
+      dD = devView2D(dDev, (M, N), sC)
+      dC = devView2D(cDev, (M, N), sC)
+      dA = devView2D(aDev, (M, K), sA)
+      dB = devView2D(bDev, (N, K), sB)
     # the blocks loop over the tile grid, any launch grid completes it
     let
       gridX = rng.rand(1 .. 2 * ceil_div(M, 32))
@@ -118,8 +127,8 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
                              dD, alpha, dA, dB, beta, dC) do:
       grid = (gridX, gridY)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr dHost[0], dDev, M * N * sizeof(float32))
-    gemm_ref(alpha, aTV, bTV, beta, cTV, refTV)
+    engine.copyToHostFromDevice(addr dHost[0], dDev, M * N)
+    gemm_ref(refTV, alpha, aTV, bTV, beta, cTV)
     assertAllClose(dTV, refTV, rtol = 1e-5, abstol = 1e-3)
 
   # stride permutations at the atom tile size

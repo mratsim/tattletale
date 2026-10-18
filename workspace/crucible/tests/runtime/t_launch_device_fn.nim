@@ -1,4 +1,6 @@
-## launchDeviceFn on Metal: grouped parameters, compile-time arguments written into the kernel.
+## launchDeviceFn on Metal: DeviceMem arguments, grouped parameters, compile-time arguments written into the kernel.
+##
+## Test that DeviceMem arguments pass through launchDeviceFn to pointer parameters.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -18,25 +20,25 @@ proc runTest() =
   var engine = bkMetal.init()
 
   block groupedWithStatic:
-    let dev = engine.allocDevice(sizeof(float32))
-    engine.launchDeviceFn mix(3, cast[ptr UncheckedArray[float32]](dev), 10, 4, 0.5'f32) do:
+    let dev = engine.allocDevice(float32, 1)
+    engine.launchDeviceFn mix(3, dev, 10, 4, 0.5'f32) do:
       grid = (1, 1)
       blk = (1, 1)
     var host: float32
-    engine.copyToHostFromDevice(addr host, dev, sizeof(float32))
+    engine.copyToHostFromDevice(addr host, dev, 1)
     engine.freeDevice(dev)
     let expected = float32(3) * (float32(10 + 4) + 0.5'f32)
     doAssert host == expected,
       "mix: got " & $host & " want " & $expected
-    echo "[OK] launchDeviceFn: grouped parameters, compile-time parameter, int/float/ptr values"
+    echo "[OK] launchDeviceFn: grouped parameters, compile-time parameter, int/float/DeviceMem values"
 
   block allValues:
-    let dev = engine.allocDevice(sizeof(float32))
-    engine.launchDeviceFn blend(cast[ptr UncheckedArray[float32]](dev), 6, 7, 2.25'f32) do:
+    let dev = engine.allocDevice(float32, 1)
+    engine.launchDeviceFn blend(dev, 6, 7, 2.25'f32) do:
       grid = (1, 1)
       blk = (1, 1)
     var host: float32
-    engine.copyToHostFromDevice(addr host, dev, sizeof(float32))
+    engine.copyToHostFromDevice(addr host, dev, 1)
     engine.freeDevice(dev)
     let expected = float32(6 * 7) - 2.25'f32
     doAssert host == expected,

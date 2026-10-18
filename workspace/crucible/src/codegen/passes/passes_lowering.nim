@@ -367,13 +367,20 @@ proc getOperandType(n: GpuAst): GpuType =
       of gtPtr: t.to
       else: nil
   of gpuDot:
-    # The dot's type is the type of the field: the parser records each
-    # identifier's type on its symbol, so the field ident already knows it
+    # Synthesized field idents carry no type: resolve through the parent struct
     if n.dField.kind == gpuIdent and n.dField.symbol != nil and
-        n.dField.symbol.typ != nil:
+        n.dField.symbol.typ != nil and n.dField.symbol.typ.kind != gtVoid:
       n.dField.symbol.typ
     else:
-      nil
+      let parent = getOperandType(n.dParent)
+      if parent.isNil or parent.kind notin {gtObject, gtGenericInst} or
+          n.dField.kind != gpuIdent:
+        nil
+      else:
+        for f in parent.fields:
+          if f.name == n.dField.symbol.name:
+            return f.typ
+        nil
   else:
     nil
 
