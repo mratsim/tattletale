@@ -44,6 +44,7 @@ Rule table (rule | trigger | severity):
 | hidden-context       | an advisory hidden-context word ("mirrors"), the audience is a CS undergraduate that just cloned   | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
+| test-header-testthat | a test file header with no "Test that" line, or one after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
@@ -165,6 +166,11 @@ BULLET_RE = re.compile(r"^\s*([-*+•]|\d+[.)])\s")
 RUN_CMD_RE = re.compile(
     r"\bnim test_\w+|^\s*(?:\$|nim\s|python3?\s|uv\s|pytest\b)|(?i:run):\s"
     r"|\btest_\w+ task in config\.nims")
+
+# The Test that line states the single behavior the test asserts.
+# Comment markers are already stripped from header content, the phrase
+# anchors at the line start after any indent.
+TEST_THAT_RE = re.compile(r"^\s*Test that\b")
 
 # The test file name shapes differ by language.
 # Nim tasks scan test_* and t_* files.
@@ -485,6 +491,8 @@ RULES = {
                                  "a module header past 8 tight prose lines"),
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
+    "test-header-testthat": Rule("test-header-testthat", True,
+                                 "a test file header with no \"Test that\" line, the shape is title, Test that, blank, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1470,6 +1478,15 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
         findings.append(Finding(
             path, first_line, "test-header-command",
             "test file header carries no run command line"))
+    # The header shape is title, then Test that, then the run command.
+    # The run command may wrap, so its first line anchors it.
+    test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
+    run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
+    if is_test and (not test_that or (run_cmd and min(test_that) > min(run_cmd))):
+        findings.append(Finding(
+            path, first_line, "test-header-testthat",
+            "test file header carries no \"Test that\" line before the run command, "
+            "the shape is title, Test that, blank, run command"))
 
 
 def _type_decl_and_field_lines(lines):

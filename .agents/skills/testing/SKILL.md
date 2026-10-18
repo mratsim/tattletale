@@ -83,9 +83,30 @@ Ban list, enforced by the linters:
 - setup helpers import `tests/layer_utils.nim` for layer setup,
   `tests/stateful_utils.nim` for the stateful context
 - ulp math imports `tests/ulp_utils.nim`
-- headers carry the run command and the contract, never the journey
+- headers: title, `Test that`, run command, the shape below
 - `std/unittest` (`suite`/`test`/`check`) is retired for suites,
   existing conversions remove it
+
+## Test file header
+
+Every test file opens with the same shape, nothing else:
+
+```
+## <title, one line>
+##
+## Test that <the single behavior the test asserts>
+##
+## Run:
+##   <run command, verbatim, copy-paste runnable>
+```
+
+- the title names the surface under test, one line
+- `Test that` states the one important behavior the test asserts,
+  not the line shape, no mechanism narration, no journey
+- the run command is the exact command that runs the test
+
+The linter enforces this (`test-header-testthat`): a test file header
+without a `Test that` line before the run command fails the check.
 
 ## Adding a new model, the short version
 

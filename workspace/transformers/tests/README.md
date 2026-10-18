@@ -9,6 +9,26 @@ the suites themselves stay honest.
 
 The extension recipe lives in the [ARCHITECTURE extension points](../ARCHITECTURE.md#extension-points) section.
 
+## Test file header
+
+Every test file opens with the same shape, nothing else:
+
+```
+## <title, one line>
+##
+## Test that <the single behavior the test asserts>
+##
+## Run:
+##   <run command, verbatim, copy-paste runnable>
+```
+
+- the title names the surface under test, one line
+- `Test that` states the one important behavior the test asserts,
+  not the line shape
+- the run command is the exact command that runs the test
+- the linter enforces the shape (`test-header-testthat`), the full
+  contract lives in the [testing skill](../../../.agents/skills/testing/SKILL.md)
+
 ## Stakes
 
 We reimplement the HF transformers models in Nim, kernel by kernel.
