@@ -641,6 +641,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsBf16 = false
   var needsSubgroup = false
   var needsInt8 = false
+  var needsInt64 = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat64):
       needsFp64 = true
@@ -650,6 +651,8 @@ proc codegen*(ctx: var GpuContext): string =
       needsBf16 = true
     if fn.pRetType.containsKind(gtUint8):
       needsInt8 = true
+    if fn.pRetType.containsKind(gtInt64) or fn.pRetType.containsKind(gtUint64):
+      needsInt64 = true
     for p in fn.pParams:
       if p.typ.containsKind(gtFloat64):
         needsFp64 = true
@@ -659,6 +662,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsBf16 = true
       if p.typ.containsKind(gtUint8):
         needsInt8 = true
+      if p.typ.containsKind(gtInt64) or p.typ.containsKind(gtUint64):
+        needsInt64 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
   for pt in refPointees:
@@ -667,6 +672,8 @@ proc codegen*(ctx: var GpuContext): string =
       b = if b.kind == gtArray: b.aTyp else: b.uaTo
     if b.kind == gtUint8:
       needsInt8 = true
+    if b.kind == gtInt64 or b.kind == gtUint64:
+      needsInt64 = true
 
   # Emit GLSL header
   result = "#version 450\n"
@@ -680,6 +687,9 @@ proc codegen*(ctx: var GpuContext): string =
   if needsBf16:
     result.add "#extension GL_EXT_bfloat16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
+  if needsInt64:
+    # uint64_t members in push-constant and buffer-reference blocks
+    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
   if needsInt8:
     # uint8_t members in push-constant and buffer-reference blocks need
     # both extensions: explicit_int8 defines the type, 8bit_storage

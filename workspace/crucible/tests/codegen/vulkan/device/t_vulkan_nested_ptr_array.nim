@@ -14,7 +14,7 @@ import workspace/crucible
 import workspace/crucible/src/runtime/engines/vk
 
 const kernelCode = vulkan:
-  proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint8]]) {.global.} =
+  proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint64]]) {.global.} =
     ps[0][1] = ps[2][3]
     sink[0] = uint32(ps[0][1])
 
@@ -25,8 +25,8 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     let sDev = engine.allocDevice(sizeof(uint32))
     var devs: array[4, VulkanBuffer]
     for i in 0 ..< 4:
-      devs[i] = engine.allocDevice(4 * sizeof(uint8))
-    var seed: array[4, uint8] = [7'u8, 8'u8, 9'u8, 10'u8]
+      devs[i] = engine.allocDevice(4 * sizeof(uint64))
+    var seed: array[4, uint64] = [7'u64, 8'u64, 9'u64, 10'u64]
     for i in 0 ..< 4:
       engine.copyToDeviceFromHost(devs[i], addr seed[0], sizeof(seed))
     engine.launchKernel("k", sDev, (devs[0], devs[1], devs[2], devs[3]))
