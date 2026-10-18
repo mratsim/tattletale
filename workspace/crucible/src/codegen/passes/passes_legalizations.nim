@@ -696,7 +696,7 @@ proc buildLeafConstr(t: GpuType, name: string): GpuAst =
       result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
 
 proc expandStructKernelParamsImpl(ctx: var GpuContext) =
-  ## Kernel entry args cannot be structs carrying pointers on Metal/Vulkan/WebGPU
+  ## Kernel entry args cannot be structs carrying pointers on Metal/WebGPU
   ## Deconstruct body in kernel entry and reconstruct before device function calls
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
@@ -722,10 +722,10 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
 proc registerExpandStructKernelParams*(reg: var PassRegistry) =
   ## Registers the `expandStructKernelParams` pass on `reg`.
   ## Wiring contract:
-  ## - Metal only
-  ## - CUDA and OpenCL take structs carrying pointers natively, never wire
-  ## - Vulkan and WebGPU need a body rewrite instead: GLSL and WGSL storage
-  ##   cannot hold structs carrying pointers, not yet provided
+  ## - Metal and WebGPU: their languages cannot index through a pointer field,
+  ##   kernels receive leaves and rebuild the struct in the body
+  ## - CUDA and OpenCL: structs carrying pointers cross natively, skip
+  ## - Vulkan: pointer fields cross as 64-bit buffer device addresses, skip
   reg.register(
     name = "expandStructKernelParams",
     kind = pkTransform,

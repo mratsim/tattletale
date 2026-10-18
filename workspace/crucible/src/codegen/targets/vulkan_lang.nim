@@ -28,6 +28,25 @@ proc getInnerArrayType(t: GpuType): string =
 # Type mapping – GLSL 450 (Vulkan compute)
 # ═══════════════════════════════════════════════════════════════════════
 
+proc refTypeName(inner: GpuType): string =
+  ## GLSL name of the buffer-reference block binding `inner`:
+  ## a pointer renders as its reference block type
+  let pt = if inner.kind == gtUA: inner.uaTo else: inner
+  let base = if pt.kind == gtVoid: "uint8_t"
+             else: gpuTypeToString(pt, allowEmptyIdent = true)
+  result = "Ref_" & base.multiReplace((" ", "_"), ("[", ""), ("]", ""),
+                                      (",", "_"), ("(", ""), (")", ""))
+
+proc refBlockDecl(inner: GpuType): string =
+  ## `layout(buffer_reference, std430) buffer Ref_X { T x[]; } Ref_X;`
+  ## for one pointee type, runtime-sized member
+  let pt = if inner.kind == gtUA: inner.uaTo else: inner
+  let member = if pt.kind == gtVoid: "uint8_t x[]"
+               elif pt.kind == gtUA: gpuTypeToString(pt.uaTo, "x", allowEmptyIdent = true) & "[]"
+               else: gpuTypeToString(pt, "x") & "[]"
+  let name = refTypeName(inner)
+  result = "layout(buffer_reference, std430) buffer " & name & " { " & member & "; };"
+
 proc gpuTypeToString*(t: GpuTypeKind): string =
   case t
   of gtBool: "bool"
@@ -46,29 +65,22 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtSize_t: "uint"
   of gtPtr: raiseAssert "Vulkan GLSL does not support raw pointers — lower to SSBO/indexing first"
   of gtVoidPtr: raiseAssert "Vulkan GLSL does not support void* pointers — lower to SSBO/indexing first"
-  of gtObject: "struct"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
+  of gtObject: "struct"
   else:
     raiseAssert "Invalid type : " & $t
 
-proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
-                      allowEmptyIdent = false,
-                    ): string =
+proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, allowEmptyIdent = false): string =
+  ## Struct types render their own (mangled) name
   ## Given an optional identifier required for array types
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
-    if inner.kind == gtArray: # ptr to array type
-      let ptrStar = gpuTypeToString(t.kind)
-      result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
-      skipIdent = true
-    else:
-      let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
-      let ptrStar = gpuTypeToString(t.kind)
-      result = typ & ptrStar
+    result = refTypeName(t.to)
+  of gtVoidPtr:
+    result = refTypeName(GpuType(kind: gtVoid))
   of gtArray:
     if ident.len == 0 and not allowEmptyIdent:
       when nimvm:
@@ -136,33 +148,8 @@ proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
   else:
     result = t.kind == kind
 
-proc needsStd430Align8(t: GpuType): bool =
-  ## True when the type tree contains a 64-bit scalar, std430 aligns those
-  ## to 8 bytes and the flat 4-byte packed push-constant block cannot honor
-  ## it. The 64-bit scalars: int64, uint64, float64, size_t.
-  t.containsKind(gtInt64) or t.containsKind(gtUint64) or
-    t.containsKind(gtFloat64) or t.containsKind(gtSize_t)
-
-proc containsPtrFieldDeep(t: GpuType): bool =
-  ## True when a gtPtr sits in the type tree, object fields and array
-  ## element types included.
-  case t.kind
-  of gtPtr: result = true
-  of gtArray:
-    result = containsPtrFieldDeep(t.aTyp)
-  of gtUA:
-    result = containsPtrFieldDeep(t.uaTo)
-  of gtObject:
-    for f in t.oFields:
-      if containsPtrFieldDeep(f.typ): return true
-  of gtGenericInst:
-    for f in t.gFields:
-      if containsPtrFieldDeep(f.typ): return true
-  else: discard
-
 proc usesReductionBuiltin(n: GpuAst): bool =
-  ## True when the AST contains a reduction builtin call (the subgroup
-  ## shuffles), which needs the GLSL subgroup extensions at module scope.
+  ## True when the AST contains a reduction builtin call needing the GLSL subgroup extensions at module scope.
   if n.kind == gpuCall and n.cName.symbol != nil and
      n.cName.symbol.reductionBuiltin != gbkNone:
     return true
@@ -187,18 +174,12 @@ proc glslSafeName*(name: string): string =
   else:
     result = name
 
-proc genSsboDeclaration(name: string, innerType: string, binding: int): string =
-  ## Generates a GLSL SSBO declaration:
-  ##   layout(set = 0, binding = N) buffer BufN { uint payload[]; };
-  let safeName = glslSafeName(name)
-  result = &"layout(set = 0, binding = {binding}) buffer Buf{binding} {{ {innerType} {safeName}[]; }};\n"
-
 # Preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and checks for all `gpuCall` nodes. Any function
-  ## called in the scope is added to `fnTab`. This is a form of dead code elimination.
+  ## Iterates over the given function and adds every called function to `fnTab`,
+  ## a form of dead code elimination.
   case n.kind
   of gpuCall:
     let fn = n.cName
@@ -316,11 +297,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     let isKernel = attGlobal in ast.pAttributes
     var params: seq[string]
     for p in ast.pParams:
-      # For kernel parameters that are pointers, we lift them to SSBOs
-      if isKernel and p.typ.kind == gtPtr:
-        # Skip — these will be emitted as SSBO declarations at the top level
-        discard
-      elif p.addressSpace == asSMEM:
+      if p.addressSpace == asSMEM:
         # shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"shared {inner} {p.ident.ident()}[]"
@@ -510,22 +487,18 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = ast.pOp & ctx.genVulkan(ast.pVal)
 
   of gpuTypeDef:
-    if ast.tFields.anyIt(containsPtrFieldDeep(it.typ)):
-      # Struct values carrying pointers have no GLSL representation
-      result = ""
+    result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
+    if ast.tFields.len == 0:
+      # GLSL requires at least one field in a struct.
+      result.add "  uint _padding;\n"
     else:
-      result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-      if ast.tFields.len == 0:
-        # GLSL requires at least one field in a struct.
-        result.add "  uint _padding;\n"
-      else:
-        for el in ast.tFields:
-          result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-      result.add '}'
+      for el in ast.tFields:
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    result.add '}'
 
   of gpuObjConstr:
     if ast.ocFields.len == 0:
-      # Empty ocFields — struct has backend-added padding, use {0} for zero-init
+      # Empty ocFields: struct has backend-added padding, use {0} for zero-init
       result = gpuTypeToString(ast.ocType) & "(0)"
     else:
       # GLSL uses constructor syntax TypeName(val1, val2), not C-style {val1, val2}
@@ -563,7 +536,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
 
   of gpuDeref:
-    raiseAssert "Vulkan GLSL does not support deref — lower to SSBO/indexing first"
+    # a buffer reference: the block's member, indexed or field-accessed by the parent node
+    result = ctx.genVulkan(ast.dOf) & ".x"
 
   of gpuConstexpr:
     if ast.cType.kind == gtArray:
@@ -580,16 +554,6 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 # ═══════════════════════════════════════════════════════════════════════
 # Top-level codegen
 # ═══════════════════════════════════════════════════════════════════════
-
-proc renameIdentRefs(n: var GpuAst, symToRename: Table[string, string]) =
-  ## Rename `gpuIdent` nodes whose `iSym` is in the rename table.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in symToRename:
-      n.symbol.name = symToRename[n.symbol.iSym]
-  else:
-    for ch in mitems(n):
-      renameIdentRefs(ch, symToRename)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
@@ -619,6 +583,8 @@ proc codegen*(ctx: var GpuContext): string =
 
   # Emit GLSL header
   result = "#version 450\n"
+  result.add "#extension GL_EXT_buffer_reference : enable\n"
+  result.add "#extension GL_EXT_buffer_reference2 : enable\n"
   if needsFp64:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   if needsFp16:
@@ -629,35 +595,55 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
   if needsSubgroup:
     # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
-    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle. The umbrella
-    # GL_KHR_shader_subgroup is not a GLSL extension name and glslang
-    # rejects it. Both are emitted when either kind is used: the
-    # tile reduction trees use the two together (the down tree then the
-    # leader broadcast).
+    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle.
+    # The umbrella GL_KHR_shader_subgroup is not a GLSL extension name, glslang rejects it.
+    # Tile reduction trees use the two together, down tree then leader broadcast.
     result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
   result.add "\n"
 
-  # Note: SSBO name normalization and type validation is done by lowerSsboParams pass.
-
-  # ── Step 1: Build SSBO and push-const info from IR (after pass normalization) ──
-  var canonicalSsbo: seq[tuple[name: string, inner: string]]
+  # ── Step 1: Build the push-constant block and reference block info ──
+  # Pointers are BDA references: 64-bit addresses packed in the push block.
+  var refPointees: seq[string]
   var pushConstDecls: seq[string]
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     if fn.isGlobal():
-      var ssboIdx = 0
       for p in fn.pParams:
         if p.typ.kind == gtPtr:
-          let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-          if ssboIdx >= canonicalSsbo.len:
-            canonicalSsbo.add (p.ident.ident(), inner)
-          inc ssboIdx
-        elif p.addressSpace != asSMEM:
-          if p.typ.needsStd430Align8():
-            error "Vulkan: by-value param '" & p.ident.ident() &
-              "' carries a 64-bit type, the push-constant block packs " &
-              "4-byte aligned and cannot honor the std430 8-byte alignment"
-          pushConstDecls.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+          let decl = refBlockDecl(p.typ.to)
+          if decl notin refPointees:
+            refPointees.add decl
+        if p.addressSpace != asSMEM:
+          # multi-kernel sources share one block, same-name params dedup
+          let decl = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+          if decl notin pushConstDecls:
+            pushConstDecls.add decl
+      var ptrees = @[fn.pBody]
+      for blk in ctx.globalBlocks:
+        if blk.kind in {gpuTypeDef, gpuAlias}:
+          ptrees.add blk
+      while ptrees.len > 0:
+        let n = ptrees.pop()
+        if n.kind == gpuVar and n.vType != nil and n.vType.kind == gtPtr:
+          let decl = refBlockDecl(n.vType.to)
+          if decl notin refPointees:
+            refPointees.add decl
+        if n.kind == gpuTypeDef:
+          for f in n.tFields:
+            if f.typ.kind == gtPtr:
+              let decl = refBlockDecl(f.typ.to)
+              if decl notin refPointees:
+                refPointees.add decl
+        for ch in n:
+          if not ch.isNil:
+            ptrees.add ch
+
+  # ── Step 1b: Emit reference block typedefs, before the structs using them ──
+  for decl in refPointees:
+    result.add decl
+    result.add "\n"
+  if refPointees.len > 0:
+    result.add "\n"
 
   # ── Step 2: Emit struct typedefs the push-constant block references ──
   # GLSL resolves types at their declaration site. The push-constant block's
@@ -673,16 +659,10 @@ proc codegen*(ctx: var GpuContext): string =
 
   # ── Step 3: Emit push-constant block (if any) ──
   if pushConstDecls.len > 0:
-    result.add "layout(push_constant) uniform KernelParams {\n"
+    result.add "layout(push_constant, std430) uniform KernelParams {\n"
     for decl in pushConstDecls:
       result.add "  " & decl & ";\n"
     result.add "};\n\n"
-
-  # ── Step 4: Emit SSBO declarations by position ──
-  for idx, (name, inner) in canonicalSsbo.pairs:
-    result.add genSsboDeclaration(name, inner, idx)
-  if canonicalSsbo.len > 0:
-    result.add "\n"
 
   # ── Generate code for the remaining global blocks (global vars etc) ──
   for blk in ctx.globalBlocks:

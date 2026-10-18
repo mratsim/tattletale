@@ -2032,6 +2032,7 @@ def scan(path, text, findings):
             # same kind, a block boundary or a kind switch breaks reflow
             if (wc <= 2 and "`" not in c and not c.endswith(":")
                     and not pseudo_code(c)
+                    and indent < 3
                     and not (c[0:1].isupper()
                              and not c.endswith((".", ",", ";"))
                              and (n + 1) in blank_nos)

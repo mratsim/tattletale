@@ -16,6 +16,7 @@ import ../launch/launch_serialization
 import ../exec/opencl_runtime
 
 export opencl_runtime
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
@@ -35,6 +36,23 @@ proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 # ═════════════════════════════════════════════════════════════════════════
 proc newOpenCLEngine(): OpenCLEngine =
   OpenCLEngine(ctx: initOpenCL())
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ═════════════════════════════════════════════════════════════════════════
+
+type SerializationCtx = object
+  kern: OpenCLKernel
+
+proc store(ctx: var SerializationCtx, v: OpenCLBuffer, argIdx: int) =
+  ctx.kern.setArg(argIdx, v)
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  const size = deviceLayout(T, bkOpenCL).size
+  var blob: array[size, byte]
+  var off = 0
+  blob.packFrom(off, v, bkOpenCL)
+  ctx.kern.setArg(argIdx, size, blob[0].addr)
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -66,17 +84,8 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
     engine.kernelCache.kernels[kernel] = engine.ctx.compileKernel(kernel, engine.source)
   let kern = engine.kernelCache.kernels[kernel]
 
-  type SerializationCtx = object
-    kern: OpenCLKernel
-    
-  proc serializer(ctx: var SerializationCtx, bufferHandle: OpenCLBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-    if viaBuffer:
-      ctx.kern.setArg(argIdx, bufferHandle)
-    else:
-      ctx.kern.setArg(argIdx, len, p)
-
   var dctx = SerializationCtx(kern: kern)
-  bindArgs(dctx, output, args, serializer, bkOpenCL, false)
+  bindArgs(dctx, output, args, store, OpenCLBuffer)
 
   let globalSize = [cl_size_t(grid.x * blk.x),
                     cl_size_t(grid.y * blk.y),

@@ -28,14 +28,8 @@ type
     device: VkDevice
     handle: VkPipeline
     layout: VkPipelineLayout
-    descriptorSetLayout: VkDescriptorSetLayout
-    descriptorPool: VkDescriptorPool
-    descriptorSet: VkDescriptorSet
     vkDestroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
     vkDestroyPipelineLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
-    vkDestroyDescriptorSetLayout: proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
-    vkDestroyDescriptorPool: proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
-    ssboCount: int
     pushConstSize: int
 
   VulkanContext* = ref VulkanContextObj
@@ -52,17 +46,13 @@ type
 
 
 proc `=destroy`(p: var VulkanPipelineObj) =
-  ## Releases the pipeline and its descriptor objects, nil fields skip.
+  ## Releases the pipeline and its layout, nil fields skip.
   if p.device == nil:
     return
   if p.handle != nil and p.vkDestroyPipeline != nil:
     p.vkDestroyPipeline(p.device, p.handle, nil)
   if p.layout != nil and p.vkDestroyPipelineLayout != nil:
     p.vkDestroyPipelineLayout(p.device, p.layout, nil)
-  if p.descriptorSetLayout != nil and p.vkDestroyDescriptorSetLayout != nil:
-    p.vkDestroyDescriptorSetLayout(p.device, p.descriptorSetLayout, nil)
-  if p.descriptorPool != nil and p.vkDestroyDescriptorPool != nil:
-    p.vkDestroyDescriptorPool(p.device, p.descriptorPool, nil)
 
 template check*(res: VkResult) =
   ## Unified error policy: stacktrace + stderr + quit(1).
@@ -229,12 +219,10 @@ proc initVulkan*(): VulkanContext =
     applicationVersion: 1,
     pEngineName: "Positron",
     engineVersion: 1,
-    apiVersion: 0x00403000
+    apiVersion: 0x00404000
   )
-  # MoltenVK is a portability driver: macOS requires the instance to opt in
-  # via VK_KHR_portability_enumeration, otherwise vkCreateInstance fails with
-  # VK_ERROR_INCOMPATIBLE_DRIVER (-9). The loader provides the extension on
-  # every platform, so this is a no-op outside macOS.
+  # MoltenVK needs the portability enumeration opt-in or vkCreateInstance fails
+  # with VK_ERROR_INCOMPATIBLE_DRIVER (-9). The extension is a no-op outside macOS.
   # flags 0x00000001 = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR.
   var portabilityExt = [cstring"VK_KHR_portability_enumeration"]
   var instCI = VkInstanceCreateInfo(
@@ -343,9 +331,13 @@ proc initVulkan*(): VulkanContext =
     sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES)
   var s16feat = VkPhysicalDevice16BitStorageFeatures(
     sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES)
+  var bdaFeat = VkPhysicalDeviceBufferDeviceAddressFeatures(
+    sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+    bufferDeviceAddress: VK_TRUE)
   var f2 = VkPhysicalDeviceFeatures2(
     sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
   f16feat.pNext = s16feat.addr
+  s16feat.pNext = bdaFeat.addr
   f2.pNext = f16feat.addr
   gpdf2(result.physicalDevice, f2.addr)
   var dci = VkDeviceCreateInfo(
@@ -417,7 +409,8 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     size: VkDeviceSize(size),
     usage: VK_BUFFER_USAGE_STORAGE_BUFFER_BIT or
            VK_BUFFER_USAGE_TRANSFER_SRC_BIT or
-           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+           VK_BUFFER_USAGE_TRANSFER_DST_BIT or
+           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
     sharingMode: VK_SHARING_MODE_EXCLUSIVE
   )
   check vkCreateBuffer(ctx.device, bci.addr, nil, result.handle.addr)
@@ -485,13 +478,27 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     echo "  [allocBuffer] size=", size, " memTypeBits=", memReq.memoryTypeBits,
          " chosen type ", memTypeIdx,
          " heap=", memProps.memoryTypes[memTypeIdx].heapIndex
+  var allocFlags = VkMemoryAllocateFlagsInfo(
+    sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+    flags: VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT)
   var allocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    pNext: allocFlags.addr,
     allocationSize: memReq.size,
     memoryTypeIndex: memTypeIdx
   )
   check vkAllocateMemory(ctx.device, allocInfo.addr, nil, result.memory.addr)
   check vkBindBufferMemory(ctx.device, result.handle, result.memory, 0)
+
+proc deviceAddress*(buf: VulkanBuffer, ctx: VulkanContext): uint64 =
+  ## Shader-visible 64-bit address of a buffer, the value a pointer param carries.
+  let vkGetBufferDeviceAddress = cast[
+    proc(device: VkDevice, pInfo: ptr VkBufferDeviceAddressInfo): VkDeviceAddress {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkGetBufferDeviceAddress"))
+  var info = VkBufferDeviceAddressInfo(
+    sType: VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+    buffer: buf.handle)
+  result = uint64(vkGetBufferDeviceAddress(ctx.device, info.addr))
 
 proc dealloc*(buffer: var VulkanBuffer, ctx: VulkanContext) =
   if buffer.handle == nil:
@@ -549,8 +556,10 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
-                     ssboCount: int, entryPoint: string = "main",
+                     entryPoint: string = "main",
                      pushConstSize: int = 0): VulkanPipeline =
+  ## Compute pipeline with push constants only: buffers bind by device
+  ## address (BDA), there are no descriptors.
   result = VulkanPipeline()
   result.device = ctx.device
   result.vkDestroyPipeline = cast[
@@ -559,34 +568,13 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   result.vkDestroyPipelineLayout = cast[
     proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineLayout"))
-  result.vkDestroyDescriptorSetLayout = cast[
-    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
-  result.vkDestroyDescriptorPool = cast[
-    proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
-  result.ssboCount = ssboCount
   result.pushConstSize = pushConstSize
 
-  let vkCreateDescriptorSetLayout = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
-         pAllocator: pointer,
-         pSetLayout: ptr VkDescriptorSetLayout): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorSetLayout"))
   let vkCreatePipelineLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkPipelineLayoutCreateInfo,
          pAllocator: pointer,
          pPipelineLayout: ptr VkPipelineLayout): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCreatePipelineLayout"))
-  let vkCreateDescriptorPool = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkDescriptorPoolCreateInfo,
-         pAllocator: pointer,
-         pDescriptorPool: ptr VkDescriptorPool): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorPool"))
-  let vkAllocateDescriptorSets = cast[
-    proc(device: VkDevice, pAllocateInfo: ptr VkDescriptorSetAllocateInfo,
-         pDescriptorSets: ptr VkDescriptorSet): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkAllocateDescriptorSets"))
   let vkCreateComputePipelines = cast[
     proc(device: VkDevice, pipelineCache: VkPipelineCache,
          createInfoCount: uint32,
@@ -595,26 +583,8 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
          pPipelines: ptr VkPipeline): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCreateComputePipelines"))
 
-  var bindings = newSeq[VkDescriptorSetLayoutBinding](ssboCount)
-  for i in 0 ..< ssboCount:
-    bindings[i] = VkDescriptorSetLayoutBinding(
-      binding: uint32(i),
-      descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-      descriptorCount: 1,
-      stageFlags: VK_SHADER_STAGE_COMPUTE_BIT
-    )
-  var dslCI = VkDescriptorSetLayoutCreateInfo(
-    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-    bindingCount: uint32(ssboCount),
-    pBindings: bindings[0].addr
-  )
-  check vkCreateDescriptorSetLayout(ctx.device, dslCI.addr, nil, result.descriptorSetLayout.addr)
-
   var plCI = VkPipelineLayoutCreateInfo(
-    sType: VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-    setLayoutCount: 1,
-    pSetLayouts: result.descriptorSetLayout.addr
-  )
+    sType: VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
   var pushConstRange: VkPushConstantRange
   if pushConstSize > 0:
     pushConstRange = VkPushConstantRange(
@@ -625,26 +595,6 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
     plCI.pushConstantRangeCount = 1
     plCI.pPushConstantRanges = pushConstRange.addr
   check vkCreatePipelineLayout(ctx.device, plCI.addr, nil, result.layout.addr)
-
-  var poolSize = VkDescriptorPoolSize(
-    `type`: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-    descriptorCount: uint32(ssboCount)
-  )
-  var dpCI = VkDescriptorPoolCreateInfo(
-    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    maxSets: 1,
-    poolSizeCount: 1,
-    pPoolSizes: poolSize.addr
-  )
-  check vkCreateDescriptorPool(ctx.device, dpCI.addr, nil, result.descriptorPool.addr)
-
-  var dsAI = VkDescriptorSetAllocateInfo(
-    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-    descriptorPool: result.descriptorPool,
-    descriptorSetCount: 1,
-    pSetLayouts: result.descriptorSetLayout.addr
-  )
-  check vkAllocateDescriptorSets(ctx.device, dsAI.addr, result.descriptorSet.addr)
 
   var stageInfo = VkPipelineShaderStageCreateInfo(
     sType: VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -659,36 +609,6 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   )
   check vkCreateComputePipelines(ctx.device, ctx.pipelineCache, 1, cpCI.addr, nil, result.handle.addr)
 
-proc setArg*(pipeline: var VulkanPipeline, index: int, buf: VulkanBuffer,
-            ctx: VulkanContext) =
-  let vkUpdateDescriptorSets = cast[
-    proc(device: VkDevice, descriptorWriteCount: uint32,
-         pDescriptorWrites: ptr VkWriteDescriptorSet,
-         descriptorCopyCount: uint32,
-         pDescriptorCopies: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkUpdateDescriptorSets"))
-  var binfo = VkDescriptorBufferInfo(
-    buffer: buf.handle,
-    offset: 0,
-    range: VkDeviceSize(buf.size)
-  )
-  # Workaround removed — the real bug was VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-  # having the wrong enum value (2 = SAMPLED_IMAGE) in the Nim Vulkan bindings.
-  # The correct value is 7 per the Vulkan spec.
-  var wd = VkWriteDescriptorSet(
-    sType: VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-    pNext: nil,
-    dstSet: pipeline.descriptorSet,
-    dstBinding: uint32(index),
-    dstArrayElement: 0,
-    descriptorCount: 1,
-    descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-    pImageInfo: nil,
-    pBufferInfo: binfo.addr,
-    pTexelBufferView: nil
-  )
-  vkUpdateDescriptorSets(pipeline.device, 1, wd.addr, 0, nil)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Kernel execution
 # ═══════════════════════════════════════════════════════════════════════
@@ -697,50 +617,28 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
                 globalWorkSize, localWorkSize: openArray[uint32],
                 pushConstData: pointer = nil, pushConstSize: int = 0) =
   let vkAllocateCommandBuffers = cast[
-    proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo,
-         pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
+    proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateCommandBuffers"))
   let vkBeginCommandBuffer = cast[
-    proc(commandBuffer: VkCommandBuffer,
-         pBeginInfo: ptr VkCommandBufferBeginInfo): VkResult {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, pBeginInfo: ptr VkCommandBufferBeginInfo): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkBeginCommandBuffer"))
   let vkCmdBindPipeline = cast[
-    proc(commandBuffer: VkCommandBuffer,
-         pipelineBindPoint: VkPipelineBindPoint,
-         pipeline: VkPipeline) {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, pipelineBindPoint: VkPipelineBindPoint, pipeline: VkPipeline) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCmdBindPipeline"))
-  let vkCmdBindDescriptorSets = cast[
-    proc(commandBuffer: VkCommandBuffer,
-         pipelineBindPoint: VkPipelineBindPoint,
-         layout: VkPipelineLayout,
-         firstSet: uint32,
-         descriptorSetCount: uint32,
-         pDescriptorSets: ptr VkDescriptorSet,
-         dynamicOffsetCount: uint32,
-         pDynamicOffsets: ptr uint32) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkCmdBindDescriptorSets"))
   let vkCmdDispatch = cast[
-    proc(commandBuffer: VkCommandBuffer,
-         groupCountX: uint32, groupCountY: uint32,
-         groupCountZ: uint32) {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, groupCountX: uint32, groupCountY: uint32, groupCountZ: uint32) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCmdDispatch"))
   let vkEndCommandBuffer = cast[
     proc(commandBuffer: VkCommandBuffer): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkEndCommandBuffer"))
   let vkCreateFence = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkFenceCreateInfo,
-         pAllocator: pointer, pFence: ptr VkFence): VkResult {.cdecl.}
+    proc(device: VkDevice, pCreateInfo: ptr VkFenceCreateInfo, pAllocator: pointer, pFence: ptr VkFence): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCreateFence"))
   let vkQueueSubmit = cast[
-    proc(queue: VkQueue, submitCount: uint32,
-         pSubmits: ptr VkSubmitInfo,
-         fence: VkFence): VkResult {.cdecl.}
+    proc(queue: VkQueue, submitCount: uint32, pSubmits: ptr VkSubmitInfo, fence: VkFence): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkQueueSubmit"))
   let vkWaitForFences = cast[
-    proc(device: VkDevice, fenceCount: uint32,
-         pFences: ptr VkFence,
-         waitAll: VkBool32,
-         timeout: uint64): VkResult {.cdecl.}
+    proc(device: VkDevice, fenceCount: uint32, pFences: ptr VkFence, waitAll: VkBool32, timeout: uint64): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkWaitForFences"))
   let vkDestroyFence = cast[
     proc(device: VkDevice, fence: VkFence, pAllocator: pointer) {.cdecl.}
@@ -767,14 +665,10 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   check vkBeginCommandBuffer(cmdBuf, beginInfo.addr)
 
   vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.handle)
-  vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout,
-                          0, 1, pipeline.descriptorSet.addr, 0, nil)
 
   if pushConstSize > 0:
     let vkCmdPushConstants = cast[
-      proc(commandBuffer: VkCommandBuffer, layout: VkPipelineLayout,
-           stageFlags: uint32, offset: uint32, size: uint32,
-           pValues: pointer) {.cdecl.}
+      proc(commandBuffer: VkCommandBuffer, layout: VkPipelineLayout, stageFlags: uint32, offset: uint32, size: uint32, pValues: pointer) {.cdecl.}
     ](ctx.gpaAddr(ctx.instance, "vkCmdPushConstants"))
     vkCmdPushConstants(cmdBuf, pipeline.layout, uint32(VK_SHADER_STAGE_COMPUTE_BIT),
                        0, uint32(pushConstSize), pushConstData)

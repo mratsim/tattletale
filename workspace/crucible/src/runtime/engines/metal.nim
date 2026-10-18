@@ -17,9 +17,11 @@ export metal_runtime
 
 when defined(macosx):
   import ../launch/launch_kernel
+
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════
+
 type
   MetalCache = object
     ## Two per-engine caches:
@@ -40,6 +42,29 @@ proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
 # ═════════════════════════════════════════════════
 
 when defined(macosx):
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ Launch serialization
+  # ─────────────────────────────────────────────────────────────────────────
+
+  type SerializationCtx = object
+    encoder: objc.ID
+
+  proc store(ctx: var SerializationCtx, v: objc.ID, argIdx: int) =
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                    v, objc.NSUInteger(0), objc.NSUInteger(argIdx))
+
+  proc store[P: ptr|pointer](ctx: var SerializationCtx, v: P, argIdx: int) =
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                    cast[objc.ID](v), objc.NSUInteger(0), objc.NSUInteger(argIdx))
+
+  proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+    const size = deviceLayout(T, bkMetal).size
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkMetal)
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
+                    blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
+
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE constants
   # ─────────────────────────────────────────────────────────────────────────
@@ -157,19 +182,8 @@ when defined(macosx):
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
 
 
-      type SerializationCtx = object
-        encoder: objc.ID
-
-      proc serializer(ctx: var SerializationCtx, bufferHandle: objc.ID, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        if viaBuffer:
-          discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                          bufferHandle, objc.NSUInteger(0), objc.NSUInteger(argIdx))
-        else:
-          discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
-                          p, objc.NSUInteger(len), objc.NSUInteger(argIdx))
-
       var dctx = SerializationCtx(encoder: encoder)
-      bindArgs(dctx, output, args, serializer, bkMetal, true)
+      bindArgs(dctx, output, args, store, objc.ID)
       let grid = objc.MTLSize(width: objc.NSUInteger(grid.x),
                          height: objc.NSUInteger(grid.y),
                          depth: objc.NSUInteger(grid.z))

@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Kernel arg delivery: lowered widths, chunk packing, positional streaming
+## Kernel arg delivery: launchArgCount widths, packFrom layout, serialize leaf walk, bindArgs plumbing.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \

@@ -352,6 +352,67 @@ proc registerTypeSystemPasses*(reg: var PassRegistry) =
     run = pruneCompileTimeParams
   )
 
+proc getOperandType(n: GpuAst): GpuType =
+  ## Type of an expression for deref insertion, nil when undeterminable:
+  ## synthesized idents and blit temps may carry no type, those are never pointers.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil: n.symbol.typ else: nil
+  of gpuLit: n.lType
+  of gpuCast: n.cTo
+  of gpuConv: n.convTo
+  of gpuObjConstr: n.ocType
+  of gpuDeref:
+    let d = getOperandType(n.dOf)
+    if d != nil and d.kind == gtPtr: d.to else: d
+  of gpuDot:
+    let parent = getOperandType(n.dParent)
+    if parent != nil and parent.kind in {gtObject, gtGenericInst} and
+        n.dField.kind == gpuIdent and n.dField.symbol != nil:
+      for f in parent.structFields:
+        if f.name == n.dField.symbol.name:
+          return f.typ
+    nil
+  else:
+    nil
+
+proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:
+  ##
+  ## - array indexing over a pointer to an array
+  ## - field access over a pointer
+  ## - deref over a pointer
+  ##
+  ## Address-of subtrees are untouched, the reference itself is the value there.
+  ## Backends that cannot index pointers render the deref as a block-member access, C-family backends collapse it.
+  case n.kind
+  of gpuAddr:
+    discard
+  of gpuIndex:
+    insertPointerDerefImpl(ctx, n.iIndex)
+    if n.iArr.kind != gpuDeref:
+      let t = getOperandType(n.iArr)
+      if t != nil and t.kind == gtPtr and t.to != nil and t.to.kind in {gtArray, gtUA}:
+        n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
+  of gpuDot:
+    insertPointerDerefImpl(ctx, n.dField)
+    if n.dParent.kind != gpuDeref:
+      let t = getOperandType(n.dParent)
+      if t != nil and t.kind == gtPtr:
+        n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
+  of gpuDeref:
+    if n.dOf.kind != gpuDeref:
+      let t = getOperandType(n.dOf)
+      if t != nil and t.kind == gtPtr:
+        n.dOf = GpuAst(kind: gpuDeref, dOf: n.dOf)
+  else:
+    for ch in mitems(n):
+      insertPointerDerefImpl(ctx, ch)
+
+proc insertPointerDeref*(ctx: var GpuContext) =
+  for _, fn in ctx.allFnTab.mpairs:
+    insertPointerDerefImpl(ctx, fn.pBody)
+
 proc registerLoweringPasses*(reg: var PassRegistry) =
   reg.register(
     name = "lowerSpans",

@@ -14,6 +14,7 @@ import ../exec/cuda_runtime
 import ../engines_common
 import ../errors
 import ../launch/launch_serialization
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
@@ -139,27 +140,31 @@ proc load(nvrtc: var NVRTC) =
 
   nvrtc.moduleLoaded = true
 
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ═════════════════════════════════════════════════════════════════════════
 
 type SerializationCtx[n: static int] = object
   addrs: array[n, pointer]
   hvals: array[n, CUdeviceptr]
   bytes: array[n, seq[byte]]
 
-proc serializer[n: static int](ctx: var SerializationCtx[n], bufferHandle: CUdeviceptr,
-    p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-  if viaBuffer:
-    ctx.hvals[argIdx] = bufferHandle
-    ctx.addrs[argIdx] = ctx.hvals[argIdx].addr
-  else:
-    ctx.bytes[argIdx] = newSeq[byte](len)
-    if len > 0:
-      copyMem(ctx.bytes[argIdx][0].addr, p, len)
-    ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
+proc store[n: static int](ctx: var SerializationCtx[n], v: CUdeviceptr, argIdx: int) =
+  ctx.hvals[argIdx] = v
+  ctx.addrs[argIdx] = ctx.hvals[argIdx].addr
+
+proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
+  const size = deviceLayout(T, bkCuda).size
+  ctx.bytes[argIdx] = newSeq[byte](size)
+  if size > 0:
+    var off = 0
+    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
+  ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
 proc cudaBindArgs(output: CUdeviceptr, args: tuple): auto =
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr)
   result = SerializationCtx[n]()
-  bindArgs(result, output, args, serializer[n], bkCuda, false)
+  bindArgs(result, output, args, store, CUdeviceptr)
 
 proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
@@ -183,7 +188,7 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, 
     engine.nvrtc.kernel,
     uint32(grid.x), uint32(grid.y), uint32(grid.z),
     uint32(blk.x), uint32(blk.y), uint32(blk.z),
-    0, 0,  # no shared memory, no stream
+    0'u32, CUstream(nil),  # no shared memory, no stream
     dctx.addrs[0].addr, nil)
 
   check cuCtxSynchronize()

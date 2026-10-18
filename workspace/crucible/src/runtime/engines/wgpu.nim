@@ -16,9 +16,11 @@ import ../errors
 import ../launch/launch_serialization
 
 export wgpu_runtime
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
+
 type
   WgpuPipelineCache = object
     pipeline: WGPUComputePipeline
@@ -54,6 +56,33 @@ proc newWgpuEngine(): WgpuEngine =
     ctx: initWgpu(),
     cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
   )
+
+# ═════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ═════════════════════════════════════════════════════════════════════════
+
+type SerializationCtx = object
+  handles: array[64, WGPUBuffer]
+  chunkOff, chunkLen: array[64, int]
+  blob: seq[byte]
+  pn: int
+
+proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
+  ctx.handles[argIdx] = v
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  ctx.pn = roundStepUp(ctx.pn, 256)
+  ctx.chunkOff[argIdx] = ctx.pn
+  const size = deviceLayout(T, bkWGSL).size
+  let padded = roundStepUp(size, 4)
+  ctx.chunkLen[argIdx] = padded
+  ctx.blob.setLen(ctx.pn + padded)
+  if size > 0:
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkWGSL)
+    copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
+  inc ctx.pn, padded
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
@@ -147,29 +176,10 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
 
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
   # the device keeps the spec-default limits, the spec-default alignment is 256.
-  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWGSL)
-
-  type SerializationCtx = object
-    handles: array[n, WGPUBuffer]
-    chunkOff, chunkLen: array[n, int]
-    blob: seq[byte]
-    pn: int
-
-  proc serializer(ctx: var SerializationCtx, bufferHandle: WGPUBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-    if viaBuffer:
-      ctx.handles[argIdx] = bufferHandle
-    else:
-      ctx.pn = (ctx.pn + 255) div 256 * 256
-      ctx.chunkOff[argIdx] = ctx.pn
-      # storage-buffer binding sizes are multiples of 4 bytes
-      let padded = (len + 3) div 4 * 4
-      ctx.chunkLen[argIdx] = padded
-      ctx.blob.setLen(ctx.pn + padded)
-      copyMem(ctx.blob[ctx.pn].addr, p, len)
-      inc ctx.pn, padded
+  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer)
 
   var dctx = SerializationCtx()
-  bindArgs(dctx, output, args, serializer, bkWGSL, false)
+  bindArgs(dctx, output, args, store, WGPUBuffer)
   let scalarBytes = dctx.blob
 
   var scratch = WGPUBuffer(nil)

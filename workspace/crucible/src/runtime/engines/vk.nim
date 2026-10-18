@@ -17,13 +17,14 @@ import ../errors
 import ../launch/launch_serialization
 
 export vulkan_runtime
+
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
 type
   VulkanCaches = object
     spirvCache: Table[string, seq[uint32]]
-    pipelineCache: Table[(string, int, int), VulkanPipeline]
+    pipelineCache: Table[(string, int), VulkanPipeline]
 
   VulkanEngine* = ref object
     source: string
@@ -46,6 +47,41 @@ proc newVulkanEngine(): VulkanEngine =
     caches: VulkanCaches())
 
 # ═════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ═════════════════════════════════════════════════════════════════════════
+
+type SerializationCtx = object
+  vctx: VulkanContext
+  pushBuf: array[128, byte]
+  pn: int
+
+proc write8(ctx: var SerializationCtx, x: uint64) =
+  ctx.pn = roundStepUp(ctx.pn, 8)
+  if ctx.pn + 8 > 128:
+    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
+  inc ctx.pn, 8
+
+proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
+  ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
+
+proc store[P: ptr|pointer](ctx: var SerializationCtx, v: P, argIdx: int) =
+  ctx.write8(cast[uint64](v))
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  const lay = deviceLayout(T, bkVulkan)
+  if lay.align > 1:
+    ctx.pn = roundStepUp(ctx.pn, lay.align)
+  if ctx.pn + lay.size > 128:
+    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  var blob: array[lay.size, byte]
+  var off = 0
+  blob.packFrom(off, v, bkVulkan)
+  if lay.size > 0:
+    copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
+  inc ctx.pn, lay.size
+
+# ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -55,19 +91,31 @@ proc ingest*(engine: VulkanEngine, source: string) =
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
 
-  if countKernels(source) > 1 and "layout(push_constant) uniform KernelParams" in source:
-    failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
-         "use one kernel per source when passing by-value scalars")
+  # multi-kernel sources cannot address per-kernel scalars in the shared
+  # deduped push block, ingest quits loudly
+  if countKernels(source) > 1:
+    var inPush = false
+    for line in source.splitLines():
+      if "layout(push_constant" in line:
+        inPush = true
+      elif inPush and line.strip().startsWith("}"):
+        inPush = false
+      elif inPush:
+        let t = line.strip()
+        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
+          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
+                   "use one kernel per source when passing by-value scalars")
 
-  engine.caches.pipelineCache = initTable[(string, int, int), VulkanPipeline]()
+  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
   engine.caches.spirvCache.clear()
   engine.source = source
   engine.entryPoint = parseEntryPoint(source)
   engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(source)
 
-proc getArtifact*(engine: VulkanEngine): seq[uint32] =
-  engine.spirv
+proc getArtifact*(engine: VulkanEngine): string =
+  ## Ingested GLSL source, the ingest-if-differs identity
+  engine.source
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
   engine.ctx.deviceName(engine.ctx.physicalDevice)
@@ -124,7 +172,7 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffer, args: tuple, grid, squadron = Dim3()) =
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, grid, squadron = Dim3()) =
   let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
               engine.shaderSquadron
             else:
@@ -149,28 +197,11 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
-  type SerializationCtx = object
-    pushBuf: array[128, byte]
-    pn: int
-    inputBuffers: seq[VulkanBuffer]
-
-  proc serializer(ctx: var SerializationCtx, bufferHandle: VulkanBuffer, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-    if viaBuffer:
-      if argIdx > 0:
-        ctx.inputBuffers.add bufferHandle
-    else:
-      if len mod 4 != 0:
-        failLoud("Vulkan by-value (push-constant) args must be 4-byte-aligned std430 types, got " & $len & " bytes")
-      if ctx.pn + len > 128:
-        failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
-      copyMem(ctx.pushBuf[ctx.pn].addr, p, len)
-      inc ctx.pn, len
-
-  var dctx = SerializationCtx()
-  bindArgs(dctx, output, args, serializer, bkVulkan, false)
+  var dctx = SerializationCtx(vctx: engine.ctx)
+  bindArgs(dctx, output, args, store, VulkanBuffer)
   let pushConstLen = dctx.pn
 
-  let pipelineKey = (kernel, dctx.inputBuffers.len + 1, pushConstLen)
+  let pipelineKey = (kernel, pushConstLen)
   if not engine.caches.pipelineCache.hasKey(pipelineKey):
     let vkCreateShaderModule = cast[
       proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
@@ -190,14 +221,8 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: VulkanBuffe
       ](engine.ctx.gpaAddr(engine.ctx.instance, "vkDestroyShaderModule"))
       if shaderModule != nil and vkDestroyShaderModule != nil:
         vkDestroyShaderModule(engine.ctx.device, shaderModule, nil)
-    var pipeline = engine.ctx.createPipeline(shaderModule, dctx.inputBuffers.len + 1, entry,
-                                     pushConstLen)
+    var pipeline = engine.ctx.createPipeline(shaderModule, entry, pushConstLen)
     engine.caches.pipelineCache[pipelineKey] = pipeline
-
-  # Output first (binding 0), then buffer inputs
-  engine.caches.pipelineCache[pipelineKey].setArg(0, output, engine.ctx)
-  for i in 0 ..< dctx.inputBuffers.len:
-    engine.caches.pipelineCache[pipelineKey].setArg(i + 1, dctx.inputBuffers[i], engine.ctx)
 
   # Dispatch grid groups (runKernel computes groupCount = ceil(global/local))
   engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
