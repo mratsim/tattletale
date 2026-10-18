@@ -724,16 +724,10 @@ proc cgsReport*(runner: string, receipts: openArray[CgsReceipt]) =
     "-".repeat(margW) & "|"
   when hasDump:
     const dumpW = 46
-    const cgsDumpDirDefault = "workspace/ceramic/bench/codegen_size/dumps"
-      ## Dump location of -d:TTT_CgsDump, relative to the run directory.
-    const TTT_CgsDumpDir {.strdefine.} = ""
-      ## -d:TTT_CgsDumpDir="..." value, the default dump location applies when empty.
-    var dumpDirPath = cgsDumpDirDefault
-    if TTT_CgsDumpDir.len > 0:
-      dumpDirPath = TTT_CgsDumpDir
-    rotateDumps(dumpDirPath, runner)
-    let kernelDir = dumpDirPath / "cur_kernels"
-    let reportDir = dumpDirPath / "cur_reports"
+    const TTT_CgsDumpDir {.strdefine.} = currentSourcePath.parentDir / "dumps"
+    rotateDumps(TTT_CgsDumpDir, runner)
+    let kernelDir = TTT_CgsDumpDir / "cur_kernels"
+    let reportDir = TTT_CgsDumpDir / "cur_reports"
     header &= ctr("Dump", dumpW) & "|"
     lineSep &= "-".repeat(dumpW) & "|"
   echo "\nrunner: ", runner
