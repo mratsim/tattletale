@@ -685,6 +685,48 @@ proc unwrapBlockInDot(n: var GpuAst) =
   else:
     discard
 
+func containsPtrDeep(t: GpuType): bool =
+  ## True when a pointer is reachable through the type's fields
+  case t.kind
+  of gtPtr: true
+  of gtObject, gtGenericInst:
+    for f in t.structFields:
+      if f.typ.containsPtrDeep: return true
+    false
+  of gtArray: t.aTyp.containsPtrDeep
+  else: false
+
+
+type KernelParamLeaf = object
+  ## One signature entry of an expanded struct kernel param
+  name*: string
+  typ*: GpuType
+  isBuffer*: bool
+
+proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
+  ## Kernel entry args cannot be structs carrying pointers on Metal and WebGPU:
+  ## the signature expands such a param to its leaves, depth-first in field order,
+  ## matching the launch serializer's binding order. Size-0 fields expand to nothing.
+  result = newSeq[KernelParamLeaf]()
+  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
+    case t.kind
+    of gtPtr:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
+    of gtObject, gtGenericInst:
+      if t.containsPtrDeep:
+        for f in t.structFields:
+          if size(f.typ) > 0:
+            walk(f.typ, name & "_" & f.name, leaves)
+      else:
+        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    else:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+  walk(t, name, result)
+
 proc buildLeafConstr(t: GpuType, name: string): GpuAst =
   result = GpuAst(kind: gpuObjConstr, ocType: t)
   for f in t.structFields:
