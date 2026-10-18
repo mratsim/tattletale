@@ -400,12 +400,6 @@ type
     ssboCanonicalInfo*: seq[tuple[name: string, innerType: GpuType]]
     ## Phase 6: Vulkan push-constant param info (type, name strings stored as comments
     ## in globalBlocks for codegen to read)
-  ## only need the `genericInsts` field data (the values). Trying to `newLit` the full `GpuContext`
-  ## causes trouble.
-  GpuGenericsInfo* = object
-    procs*: seq[GpuAst]
-    types*: seq[GpuAst]
-
   GenericArg* = object
     addrSpace*: AddressSpace ## We store the address space, because that's what matters
     mutable*: bool # if the argument is mutable or not

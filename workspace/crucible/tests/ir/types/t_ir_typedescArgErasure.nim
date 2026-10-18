@@ -39,25 +39,22 @@ macro toGpuAstWithInstsPruned(body: typed): untyped =
   var typeReg = TypeRegistry(types: ctx.types)
   var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
   ctx.types = typeReg.types
-  var gen = GpuGenericsInfo()
+  var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
-    gen.procs.add v
+    gen.add v
   pruneCompileTimeParams(ctx)
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 
 macro toGpuAstWithInsts(body: typed): untyped =
-  ## Runs the frontend like `toGpuAst` but also returns the generic
-  ## instantiations (GpuGenericsInfo):
-  ## - tests inspect the emitted callee signatures
-  ## - the extraction matches the runtime codegen's GpuContext
+  ## Runs the frontend like `toGpuAst` and also returns the generic instantiations, so tests can inspect the callee signatures
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
   var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
   ctx.types = typeReg.types
-  var gen = GpuGenericsInfo()
+  var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
-    gen.procs.add v
+    gen.add v
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 proc getProcNamed(ir: GpuAst, name: string): GpuAst =
@@ -78,12 +75,12 @@ proc findCall(n: GpuAst, name: string): GpuAst =
     if not r.isNil: return r
   return nil
 
-proc findInst(gen: GpuGenericsInfo, name: string): GpuAst =
+proc findInst(gen: seq[GpuAst], name: string): GpuAst =
   ## Find the generic instantiation whose pName starts with `name`.
-  for p in gen.procs:
+  for p in gen:
     if p.pName.ident().startsWith(name):
       return p
-  doAssert false, "No generic instantiation starting with " & name & " in GpuGenericsInfo"
+  doAssert false, "No generic instantiation starting with " & name
 
 proc paramNames(fn: GpuAst): string =
   ## Comma-joined param names of a gpuProc for assertion messages.
