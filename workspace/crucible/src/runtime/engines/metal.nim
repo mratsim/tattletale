@@ -53,11 +53,9 @@ when defined(macosx):
     discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
                     v, objc.NSUInteger(0), objc.NSUInteger(argIdx))
 
-  proc store[P: ptr|pointer](ctx: var SerializationCtx, v: P, argIdx: int) =
-    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                    cast[objc.ID](v), objc.NSUInteger(0), objc.NSUInteger(argIdx))
-
   proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+    when T is ptr|pointer:
+      {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
     const size = deviceLayout(T, bkMetal).size
     var blob: array[size, byte]
     var off = 0

@@ -65,10 +65,9 @@ proc write8(ctx: var SerializationCtx, x: uint64) =
 proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
   ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
 
-proc store[P: ptr|pointer](ctx: var SerializationCtx, v: P, argIdx: int) =
-  ctx.write8(cast[uint64](v))
-
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  when T is ptr|pointer:
+    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = deviceLayout(T, bkVulkan)
   if lay.align > 1:
     ctx.pn = roundStepUp(ctx.pn, lay.align)
