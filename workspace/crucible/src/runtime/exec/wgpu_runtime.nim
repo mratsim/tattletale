@@ -33,7 +33,7 @@ type
     done*: bool
     errType*: WGPUErrorType
     message*: string
-  UncapturedErrorData* = object
+  UncapturedErrorData = object
     ## Uncaptured device error, recorded by `uncapturedErrorCb`.
     ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
     errType*: WGPUErrorType
@@ -102,7 +102,7 @@ proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
     data.message = newString(message.length.int)
     copyMem(data.message[0].addr, message.data, message.length)
   data.done = true
-proc uncapturedErrorCb*(device: ptr WGPUDevice, errType: WGPUErrorType,
+proc uncapturedErrorCb(device: ptr WGPUDevice, errType: WGPUErrorType,
                         message: WGPUStringView,
                         userdata1: pointer,
                         userdata2: pointer) {.cdecl.} =

@@ -61,7 +61,7 @@ when defined(macosx):
 
   proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>".}
 
-  proc mslLanguageVersion*(): objc.NSUInteger =
+  proc mslLanguageVersion(): objc.NSUInteger =
     ## MSL language version for this OS, from the `uname()` Darwin release:
     ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName
