@@ -36,6 +36,9 @@ type
     device*: objc.ID
     queue*: objc.ID
 
+proc `=copy`(dst: var MetalCtx, src: MetalCtx) {.error:
+    "MetalCtx owns its device and queue handles, copy the MetalEngine ref not the ctx".}
+
 proc `=destroy`(ctx: var MetalCtx) =
     objc.withMemPool:
       objc.release(ctx.queue)
