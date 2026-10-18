@@ -39,13 +39,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkVulkan.init()
   engine.ingest(code1)
 
-  let oDev = engine.allocDevice(sizeof(uint32))
+  let oDev = engine.allocDevice(uint32, 1)
   # Sentinel: with the misbinding regression the kernel never writes this
   # buffer and the runtime reads it back unchanged — silent wrong result.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
-  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], sizeof(uint32))
+  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("kernelWithVal", oDev, (7'u32,))
-  engine.copyToHostFromDevice(addr gpuOut[0], oDev, sizeof(uint32))
+  engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
   doAssert gpuOut[0] == 7, &"push-constant scalar: got {gpuOut[0]:#x}, expected 7"
 
   echo "  OK — scalar by-value param via push constants"
@@ -53,9 +53,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # Re-ingest (RAII field replacement) + two scalars: proves packing order
   # matches the KernelParams block member order.
   engine.ingest(code2)
-  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], sizeof(uint32))
+  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("kernelWithTwoVals", oDev, (3'u32, 4'u32,))
-  engine.copyToHostFromDevice(addr gpuOut[0], oDev, sizeof(uint32))
+  engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
   engine.freeDevice(oDev)
   doAssert gpuOut[0] == 7, &"two push-constant scalars: got {gpuOut[0]}, expected 7"
 

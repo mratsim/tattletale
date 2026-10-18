@@ -40,9 +40,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var Buf: array[1, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelComplement)
-      let oDev = engine.allocDevice(sizeof(Buf))
+      let oDev = engine.allocDevice(int32, Buf.len)
       engine.launchKernel<<(1, 1)>>("kComplement", oDev, ())
-      engine.copyToHostFromDevice(addr Buf[0], oDev, sizeof(Buf))
+      engine.copyToHostFromDevice(addr Buf[0], oDev, Buf.len)
       engine.freeDevice(oDev)
       check Buf[0] == 1
 

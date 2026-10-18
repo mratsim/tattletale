@@ -55,22 +55,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:  # entry kernel, run twice with different data on the same engine
     var a: array[2, uint32] = [10'u32, 20'u32]
     var b: array[2, uint32] = [1'u32, 2'u32]
-    let aDev = engine.allocDevice(a.len * sizeof(uint32))
-    let bDev = engine.allocDevice(b.len * sizeof(uint32))
-    let oDev = engine.allocDevice(2 * sizeof(uint32))
+    let aDev = engine.allocDevice(uint32, a.len)
+    let bDev = engine.allocDevice(uint32, b.len)
+    let oDev = engine.allocDevice(uint32, 2)
     var out32: array[2, uint32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
     doAssert out32[0] == 11 and out32[1] == 22
     echo "  addKernel run 1: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     a = [100'u32, 200'u32]
     b = [30'u32, 40'u32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
     engine.freeDevice(oDev)
@@ -81,22 +81,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:  # non-entry kernel, run twice (per-kernel SPIR-V cache)
     var a: array[2, uint32] = [10'u32, 20'u32]
     var b: array[2, uint32] = [1'u32, 2'u32]
-    let aDev = engine.allocDevice(a.len * sizeof(uint32))
-    let bDev = engine.allocDevice(b.len * sizeof(uint32))
-    let oDev = engine.allocDevice(2 * sizeof(uint32))
+    let aDev = engine.allocDevice(uint32, a.len)
+    let bDev = engine.allocDevice(uint32, b.len)
+    let oDev = engine.allocDevice(uint32, 2)
     var out32: array[2, uint32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("subKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
     doAssert out32[0] == 9 and out32[1] == 18
     echo "  subKernel run 1: [10,20] - [1,2] = [", out32[0], ", ", out32[1], "]"
     a = [50'u32, 80'u32]
     b = [10'u32, 10'u32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("subKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
     engine.freeDevice(oDev)
@@ -108,14 +108,14 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.ingest(codeMul)
     var a: array[2, uint32] = [3'u32, 4'u32]
     var b: array[2, uint32] = [5'u32, 6'u32]
-    let aDev = engine.allocDevice(a.len * sizeof(uint32))
-    let bDev = engine.allocDevice(b.len * sizeof(uint32))
-    let oDev = engine.allocDevice(2 * sizeof(uint32))
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+    let aDev = engine.allocDevice(uint32, a.len)
+    let bDev = engine.allocDevice(uint32, b.len)
+    let oDev = engine.allocDevice(uint32, 2)
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     var out32: array[2, uint32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
     engine.freeDevice(oDev)

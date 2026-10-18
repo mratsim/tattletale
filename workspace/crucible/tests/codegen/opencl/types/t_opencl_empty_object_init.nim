@@ -29,9 +29,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkOpenCL.init()
     engine.ingest(kernelCode)
     var outVal: array[1, uint32]
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("kernelMain", oDev, ())
-    engine.copyToHostFromDevice(addr outVal[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
     engine.freeDevice(oDev)
     doAssert outVal[0] == 42
     echo "  OK"

@@ -55,11 +55,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var fullBuf: array[4, float32]
   var engine1 = bkCuda.init()
   engine1.ingest(kernel1)
-  let iDev1 = engine1.allocDevice(sizeof(fullIn))
-  engine1.copyToDeviceFromHost(iDev1, addr fullIn[0], sizeof(fullIn))
-  let oDev1 = engine1.allocDevice(sizeof(fullBuf))
+  let iDev1 = engine1.allocDevice(float32, fullIn.len)
+  engine1.copyToDeviceFromHost(iDev1, addr fullIn[0], fullIn.len)
+  let oDev1 = engine1.allocDevice(float32, fullBuf.len)
   engine1.launchKernel<<(1, 1)>>("kernelFull", oDev1, (iDev1, 4'i32))
-  engine1.copyToHostFromDevice(addr fullBuf[0], oDev1, sizeof(fullBuf))
+  engine1.copyToHostFromDevice(addr fullBuf[0], oDev1, fullBuf.len)
   engine1.freeDevice(iDev1)
   engine1.freeDevice(oDev1)
   for i in 0 .. 3:
@@ -72,11 +72,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var halfBuf: array[2, float32]
   var engine2 = bkCuda.init()
   engine2.ingest(kernel2)
-  let iDev2 = engine2.allocDevice(sizeof(halfIn))
-  engine2.copyToDeviceFromHost(iDev2, addr halfIn[0], sizeof(halfIn))
-  let oDev2 = engine2.allocDevice(sizeof(halfBuf))
+  let iDev2 = engine2.allocDevice(float32, halfIn.len)
+  engine2.copyToDeviceFromHost(iDev2, addr halfIn[0], halfIn.len)
+  let oDev2 = engine2.allocDevice(float32, halfBuf.len)
   engine2.launchKernel<<(1, 1)>>("kernelHalf", oDev2, (iDev2, 4'i32))
-  engine2.copyToHostFromDevice(addr halfBuf[0], oDev2, sizeof(halfBuf))
+  engine2.copyToHostFromDevice(addr halfBuf[0], oDev2, halfBuf.len)
   engine2.freeDevice(iDev2)
   engine2.freeDevice(oDev2)
   for i in 0 .. 1:

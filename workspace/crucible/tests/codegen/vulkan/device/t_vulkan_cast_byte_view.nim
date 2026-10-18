@@ -23,12 +23,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:
     var engine = bkVulkan.init()
     engine.ingest(kernelCode)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     var zero: uint32 = 0
-    engine.copyToDeviceFromHost(oDev, addr zero, sizeof(uint32))
+    engine.copyToDeviceFromHost(oDev, addr zero, 1)
     engine.launchKernel("k", oDev, ())
     var got: uint32
-    engine.copyToHostFromDevice(addr got, oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr got, oDev, 1)
     engine.freeDevice(oDev)
     doAssert got == 16777217'u32, &"byte view wrote the top byte: {got} != 16777217"
     echo "  OK — byte view through a cast pulls in the int8 extensions"

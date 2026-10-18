@@ -30,22 +30,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(code)
       var a = [7'u32]
       var b = [3'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      let oDev = engine.allocDevice(2 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      let bDev = engine.allocDevice(uint32, 1)
+      let oDev = engine.allocDevice(uint32, 2)
       var res: array[2, uint32]
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
       engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2)
       check res[0] == 7
       check res[1] == 1
       a[0] = 2
       b[0] = 9
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
       engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)

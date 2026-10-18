@@ -22,11 +22,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var alpha = 3.0'f32
     var beta = 4'i32
     var output: array[1, float32]
-    let aDev = engine.allocDevice(a.len * sizeof(float32))
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(float32))
-    let oDev = engine.allocDevice(sizeof(float32))
+    let aDev = engine.allocDevice(float32, a.len)
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    let oDev = engine.allocDevice(float32, 1)
     engine.launchKernel("scaleKernel", oDev, (aDev, alpha, beta))
-    engine.copyToHostFromDevice(addr output[0], oDev, sizeof(float32))
+    engine.copyToHostFromDevice(addr output[0], oDev, 1)
     engine.freeDevice(aDev)
     engine.freeDevice(oDev)
     doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"

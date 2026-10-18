@@ -29,10 +29,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkVulkan.init()
       engine.ingest(kernelCode)
       echo kernelCode
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
       engine.freeDevice(oDev)
       check buf[0] == 1
 
@@ -40,10 +40,10 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkVulkan.init()
       engine.ingest(kernelCode2)
       echo kernelCode2
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
       engine.freeDevice(oDev)
       check buf[0] == 1
 

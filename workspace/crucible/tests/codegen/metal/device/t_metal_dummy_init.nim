@@ -32,10 +32,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo kernelCode
       check kernelCode.contains("FixMe8")
       check not kernelCode.contains("= {}")
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 1
 
@@ -45,10 +45,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo kernelCode2
       check kernelCode2.contains("FixMe1") and kernelCode2.contains("FixMe8")
       check not kernelCode2.contains("= {")
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 1
 

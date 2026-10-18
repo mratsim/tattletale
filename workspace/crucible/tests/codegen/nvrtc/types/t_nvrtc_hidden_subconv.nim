@@ -15,9 +15,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(int64, buf.len)
   engine.launchKernel("hiddenSubConvKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"hiddenSubConv: got {buf[0]}"
   echo "  OK (test_nvrtc_hidden_subconv)"

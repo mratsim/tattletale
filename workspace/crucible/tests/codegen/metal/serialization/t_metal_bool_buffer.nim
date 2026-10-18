@@ -33,12 +33,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBoolRead)
       let flags = [true, false, true, false]
-      let fDev = engine.allocDevice(flags.len * sizeof(bool))
-      engine.copyToDeviceFromHost(fDev, unsafeAddr flags[0], flags.len * sizeof(bool))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.launchKernel<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
+      let fDev = engine.allocDevice(bool, flags.len)
+      engine.copyToDeviceFromHost(fDev, unsafeAddr flags[0], flags.len)
+      let oDev = engine.allocDevice(uint32, 4)
+      engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       engine.freeDevice(fDev)
       engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
@@ -47,12 +47,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBoolRead)
       let flags = @[true, false, true, false]
-      let fDev = engine.allocDevice(flags.len * sizeof(bool))
-      engine.copyToDeviceFromHost(fDev, addr flags[0], flags.len * sizeof(bool))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.launchKernel<<(grid: (4, 1))>>("boolReadKernel", oDev, (fDev,))
+      let fDev = engine.allocDevice(bool, flags.len)
+      engine.copyToDeviceFromHost(fDev, addr flags[0], flags.len)
+      let oDev = engine.allocDevice(uint32, 4)
+      engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       engine.freeDevice(fDev)
       engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
@@ -61,12 +61,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBoolWrite)
       let vals = [1'u32, 0'u32, 1'u32, 0'u32]
-      let vDev = engine.allocDevice(vals.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(vDev, unsafeAddr vals[0], vals.len * sizeof(uint32))
-      let oDev = engine.allocDevice(4 * sizeof(bool))
-      engine.launchKernel<<(grid: (4, 1))>>("boolWriteKernel", oDev, (vDev,))
+      let vDev = engine.allocDevice(uint32, vals.len)
+      engine.copyToDeviceFromHost(vDev, unsafeAddr vals[0], vals.len)
+      let oDev = engine.allocDevice(bool, 4)
+      engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolWriteKernel", oDev, (vDev,))
       var outBools: array[4, bool]
-      engine.copyToHostFromDevice(addr outBools[0], oDev, 4 * sizeof(bool))
+      engine.copyToHostFromDevice(addr outBools[0], oDev, 4)
       engine.freeDevice(vDev)
       engine.freeDevice(oDev)
       check outBools == [true, false, true, false]

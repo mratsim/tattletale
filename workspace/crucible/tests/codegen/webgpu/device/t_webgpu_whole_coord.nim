@@ -25,9 +25,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkWGSL.init()
       engine.ingest(kernelWhole)
       var res: array[8, uint32]
-      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 2))>>("whole", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(oDev)
       for y in 0 ..< 2:
         for x in 0 ..< 4:

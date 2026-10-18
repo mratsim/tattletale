@@ -41,10 +41,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelI32)
       echo kernelI32
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("scalarI32Kernel", oDev, (-42'i32,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == uint32(-42'i32)
 
@@ -52,10 +52,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelU32)
       echo kernelU32
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("scalarU32Kernel", oDev, (7'u32,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 7
 
@@ -63,10 +63,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelF32)
       echo kernelF32
-      let oDev = engine.allocDevice(sizeof(float32))
+      let oDev = engine.allocDevice(float32, 1)
       engine.launchKernel("scalarF32Kernel", oDev, (1.5'f32,))
       var res: array[1, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 1.5'f32
 
@@ -74,13 +74,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBool)
       echo kernelBool
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("scalarBoolKernel", oDev, (true,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 1
       engine.launchKernel("scalarBoolKernel", oDev, (false,))
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 0
 

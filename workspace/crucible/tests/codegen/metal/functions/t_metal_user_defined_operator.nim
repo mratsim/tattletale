@@ -104,14 +104,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(basicMsl)
       var a: array[1, uint32] = [13'u32]
       var b: array[1, uint32] = [5'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let bDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("basicKernel", oDev, (aDev, bDev))
       var out32: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 10)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -132,14 +132,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo structMsl
       var a: array[1, uint32] = [7'u32]
       var b: array[1, uint32] = [3'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let bDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("structKernel", oDev, (aDev, bDev))
       var out32b: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32b[0], oDev, 10 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr out32b[0], oDev, 10)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -160,14 +160,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo structMsl2
       var a: array[1, uint32] = [14'u32]
       var b: array[1, uint32] = [3'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      let oDev = engine.allocDevice(10 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let bDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("structKernel2", oDev, (aDev, bDev))
       var out32c: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32c[0], oDev, 10 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr out32c[0], oDev, 10)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)

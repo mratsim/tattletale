@@ -28,9 +28,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkOpenCL.init()
       engine.ingest(kernel2d)
       var res: array[64 + 8, uint32]
-      let oDev = engine.allocDevice((64 + 8) * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 64 + 8)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, (64 + 8) * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 64 + 8)
       engine.freeDevice(oDev)
       # global flat id = gy * 8 + gx for each of the 64 work-items
       for i in 0 ..< 64:

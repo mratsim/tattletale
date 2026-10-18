@@ -29,13 +29,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   var engine = bkVulkan.init()
   engine.ingest(kernelCode)
-  let oDev = engine.allocDevice(8 * sizeof(uint32))
+  let oDev = engine.allocDevice(uint32, 8)
   # 2 work-groups of (4, 2). Each group stages identical values, so the
   # group count is not pinned by this test; the neighbor-slot dependency
   # is within-group.
   engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
   var res: array[8, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 8 * sizeof(uint32))
+  engine.copyToHostFromDevice(addr res[0], oDev, 8)
   engine.freeDevice(oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32

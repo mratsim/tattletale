@@ -83,55 +83,55 @@ suite "Vulkan - constexpr tuple init":
   test "Pattern A — constexpr tuple in let RHS":
     var engine = bkVulkan.init()
     engine.ingest(kernelA)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testA", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern B — constexpr in arithmetic":
     var engine = bkVulkan.init()
     engine.ingest(kernelB)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testB", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 128
   test "Pattern C — template wrapConst":
     var engine = bkVulkan.init()
     engine.ingest(kernelC)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testC", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern D — tuple bracket access":
     var engine = bkVulkan.init()
     engine.ingest(kernelD)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testD", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern E — block with constexpr temp":
     var engine = bkVulkan.init()
     engine.ingest(kernelE)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testE", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern F — constexpr tuple field access":
     var engine = bkVulkan.init()
     engine.ingest(kernelF)
-    let oDev = engine.allocDevice(sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testF", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
     engine.freeDevice(oDev)
     check res[0] == 8
 

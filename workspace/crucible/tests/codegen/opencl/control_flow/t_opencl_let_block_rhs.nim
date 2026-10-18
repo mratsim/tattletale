@@ -41,9 +41,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelDirect)
       echo kernelDirect
       var buf: array[1, uint32]
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
       engine.freeDevice(oDev)
       check buf[0] == 1
 
@@ -52,9 +52,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       var buf: array[1, uint32]
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
       engine.freeDevice(oDev)
       check buf[0] == 1
 
@@ -63,9 +63,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.ingest(kernelBlock)
       echo kernelBlock
       var buf: array[1, uint32]
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
       engine.freeDevice(oDev)
       check buf[0] == 1
 

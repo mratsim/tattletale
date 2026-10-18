@@ -107,14 +107,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(idxMsl)
       var inVal: array[1, int32] = [10'i32]
-      let inDev = engine.allocDevice(sizeof(int32))
-      engine.copyToDeviceFromHost(inDev, addr inVal[0], sizeof(int32))
-      let oDev = engine.allocDevice(2 * sizeof(int32))
+      let inDev = engine.allocDevice(int32, 1)
+      engine.copyToDeviceFromHost(inDev, addr inVal[0], 1)
+      let oDev = engine.allocDevice(int32, 2)
       var zero: array[2, int32] = [0'i32, 0]
-      engine.copyToDeviceFromHost(oDev, addr zero[0], 2 * sizeof(int32))
-      engine.launchKernel("idxReadKernel", cast[pointer](oDev), (5'i32, inDev))
+      engine.copyToDeviceFromHost(oDev, addr zero[0], 2)
+      engine.launchKernel("idxReadKernel", oDev, (5'i32, inDev))
       var out32: array[2, int32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 2 * sizeof(int32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 2)
       engine.freeDevice(inDev)
       engine.freeDevice(oDev)
       check out32 == [5'i32, 10]
@@ -122,15 +122,15 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "a ptr-free struct binds as one chunk at the lowered field widths":
       var engine = bkMetal.init()
       engine.ingest(gemmParamsMsl)
-      let oDev = engine.allocDevice(6 * sizeof(int32))
+      let oDev = engine.allocDevice(int32, 6)
       var zero: array[6, int32] = [0'i32, 0, 0, 0, 0, 0]
-      engine.copyToDeviceFromHost(oDev, addr zero[0], 6 * sizeof(int32))
+      engine.copyToDeviceFromHost(oDev, addr zero[0], 6)
       var p = GemmParams(m: 1, n: 2, k: 3,
                          strideA: 4_000_000'i64, strideB: 5_000_000'i64,
                          batchA: 6)
-      engine.launchKernel("paramsReadKernel", cast[pointer](oDev), (p,))
+      engine.launchKernel("paramsReadKernel", oDev, (p,))
       var out32: array[6, int32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 6 * sizeof(int32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 6)
       engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 5, 6]
 
@@ -138,13 +138,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # the MSL struct pads `big` to offset 16, the chunk must too
       var engine = bkMetal.init()
       engine.ingest(gapMsl)
-      let oDev = engine.allocDevice(5 * sizeof(int32))
+      let oDev = engine.allocDevice(int32, 5)
       var zero: array[5, int32] = [0'i32, 0, 0, 0, 0]
-      engine.copyToDeviceFromHost(oDev, addr zero[0], 5 * sizeof(int32))
+      engine.copyToDeviceFromHost(oDev, addr zero[0], 5)
       var g = GapStruct(a: 1, b: 2, c: 3, big: 4_000_000'i64, f: 2.5'f32)
-      engine.launchKernel("gapReadKernel", cast[pointer](oDev), (g,))
+      engine.launchKernel("gapReadKernel", oDev, (g,))
       var out32: array[5, int32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 5 * sizeof(int32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 5)
       engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 2]
 
@@ -152,16 +152,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(mixMsl)
       var inVal: array[1, int32] = [10'i32]
-      let inDev = engine.allocDevice(sizeof(int32))
-      engine.copyToDeviceFromHost(inDev, addr inVal[0], sizeof(int32))
-      let oDev = engine.allocDevice(5 * sizeof(int32))
+      let inDev = engine.allocDevice(int32, 1)
+      engine.copyToDeviceFromHost(inDev, addr inVal[0], 1)
+      let oDev = engine.allocDevice(int32, 5)
       var zero: array[5, int32] = [0'i32, 0, 0, 0, 0]
-      engine.copyToDeviceFromHost(oDev, addr zero[0], 5 * sizeof(int32))
+      engine.copyToDeviceFromHost(oDev, addr zero[0], 5)
       var p = MixParams(m: 1, n: 2, k: 3, iters: 4)
-      engine.launchKernel("mixReadKernel", cast[pointer](oDev),
-                 (cast[pointer](inDev), p, 7'i32))
+      engine.launchKernel("mixReadKernel", oDev,
+                 (inDev, p, 7'i32))
       var out32: array[5, int32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 5 * sizeof(int32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, 5)
       engine.freeDevice(inDev)
       engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 7, 10]

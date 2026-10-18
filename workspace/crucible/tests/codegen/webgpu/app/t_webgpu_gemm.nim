@@ -39,9 +39,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var engine = bkWGSL.init()
     engine.ingest(kernelCode)
     var res: array[4, uint32]
-    let oDev = engine.allocDevice(res.len * sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, res.len)
     engine.launchKernel("gemmKernel", oDev, ())
-    engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+    engine.copyToHostFromDevice(addr res[0], oDev, res.len)
     engine.freeDevice(oDev)
     let expected = [58'u32, 64, 139, 154]
     for i in 0 ..< 4:

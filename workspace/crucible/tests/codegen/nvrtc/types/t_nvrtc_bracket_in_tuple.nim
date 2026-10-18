@@ -28,9 +28,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("tupleGenericKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
   doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"

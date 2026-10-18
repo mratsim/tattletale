@@ -47,10 +47,10 @@ proc runTest() =
       check "uint b = 1;" in msl
       check "Pair p;" in msl
       check "thread uint a" notin msl
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("varParamKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       engine.freeDevice(oDev)
       check res[0] == 10'u32
       check res[1] == 20'u32

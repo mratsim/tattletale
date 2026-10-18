@@ -19,13 +19,13 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     var a: array[1, uint32] = [10'u32]
     var out32: array[1, uint32]
 
-    let aDev = engine.allocDevice(a.len * sizeof(uint32))
-    let oDev = engine.allocDevice(out32.len * sizeof(uint32))
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+    let aDev = engine.allocDevice(uint32, a.len)
+    let oDev = engine.allocDevice(uint32, out32.len)
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
     # 0x4400 is the f16 bit pattern of 4.0
     let x = cast[float16](0x4400'u16)
     engine.launchKernel("f16ScaleKernel", oDev, (aDev, x))
-    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len * sizeof(uint32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
     engine.freeDevice(aDev)
     engine.freeDevice(oDev)
 

@@ -35,10 +35,10 @@ const kernel = cuda:
       var output: array[2, int32]
       var engine = bkCuda.init()
       engine.ingest(kernel)
-      let oDev = engine.allocDevice(sizeof(output))
-      engine.copyToDeviceFromHost(oDev, addr output[0], sizeof(output))
+      let oDev = engine.allocDevice(int32, output.len)
+      engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
       engine.freeDevice(oDev)
       check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
       check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2

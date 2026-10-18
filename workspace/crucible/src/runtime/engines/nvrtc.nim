@@ -161,12 +161,12 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
     ctx.bytes[argIdx].packFrom(off, v, bkCuda)
   ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
-proc cudaBindArgs(output: CUdeviceptr, args: tuple): auto =
+proc cudaBindArgs(output: auto, args: tuple): auto =
   const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr)
   result = SerializationCtx[n]()
   bindArgs(result, output, args, store, CUdeviceptr)
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))

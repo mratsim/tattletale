@@ -161,7 +161,7 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, squadron = Dim3()) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: tuple, grid, squadron = Dim3()) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
 
@@ -281,8 +281,8 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
 
   bgEntries[0] = WGPUBindGroupEntry(
     binding: 0.cuint,
-    buffer: output,
-    size: wgpuBufferGetSize(output).csize_t
+    buffer: dctx.handles[0],
+    size: wgpuBufferGetSize(dctx.handles[0]).csize_t
   )
   for i in 1 ..< n:
     bgEntries[i] = WGPUBindGroupEntry(

@@ -51,9 +51,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("externalTypeKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
   echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]

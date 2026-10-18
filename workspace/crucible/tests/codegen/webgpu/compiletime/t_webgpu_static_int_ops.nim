@@ -62,11 +62,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var engine = bkWGSL.init()
       engine.ingest(kernelCode)
       var out32: array[10, int32]
-      let dynDev = engine.allocDevice(dynArr.len * sizeof(int32))
-      let oDev = engine.allocDevice(out32.len * sizeof(int32))
-      engine.copyToDeviceFromHost(dynDev, addr dynArr[0], dynArr.len * sizeof(int32))
+      let dynDev = engine.allocDevice(int32, dynArr.len)
+      let oDev = engine.allocDevice(int32, out32.len)
+      engine.copyToDeviceFromHost(dynDev, addr dynArr[0], dynArr.len)
       engine.launchKernel("staticIntOps", oDev, (dynDev,))
-      engine.copyToHostFromDevice(addr out32[0], oDev, out32.len * sizeof(int32))
+      engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
       engine.freeDevice(dynDev)
       engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1

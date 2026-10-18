@@ -56,10 +56,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     var engine = bkVulkan.init()
     engine.ingest(codeSingle)
     var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
-    let oDev = engine.allocDevice(sizeof(uint32))
-    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], sizeof(uint32))
+    let oDev = engine.allocDevice(uint32, 1)
+    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
     engine.launchKernel("kernelB", oDev, (3'u32, 4'u32,))
-    engine.copyToHostFromDevice(addr gpuOut[0], oDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
     engine.freeDevice(oDev)
     echo &"  single-kernel kernelB(3, 4): got {gpuOut[0]}, expected 7"
     doAssert gpuOut[0] == 7

@@ -39,20 +39,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
-      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, res.len)
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6
       check res[3] == 8
       var b = [10'u32, 20'u32, 30'u32, 40'u32]
-      engine.copyToDeviceFromHost(aDev, addr b[0], b.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr b[0], b.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 20
@@ -65,18 +65,18 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
-      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, res.len)
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       check res[0] == 2
       check res[1] == 4
       engine.ingest(kernelTriple)
       echo kernelTriple
       engine.launchKernel("tripleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 3
@@ -90,12 +90,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkWGSL.init()
       engine.ingest(kernelDouble)
       var res: array[4, uint32]
-      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, res.len)
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res == [2'u32, 4, 6, 8]

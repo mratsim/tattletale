@@ -34,9 +34,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 4)>>("codegenKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   doAssert buf[0] == 100, &"tid0: {buf[0]}"
   doAssert buf[3] == 103, &"tid3: {buf[3]}"

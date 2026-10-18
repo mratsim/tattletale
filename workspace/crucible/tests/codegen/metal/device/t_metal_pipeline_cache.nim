@@ -41,20 +41,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      let oDev = engine.allocDevice(uint32, 4)
       var res: array[4, uint32]
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6
       check res[3] == 8
       var b = [10'u32, 20'u32, 30'u32, 40'u32]
-      engine.copyToDeviceFromHost(aDev, addr b[0], b.len * sizeof(uint32))
+      engine.copyToDeviceFromHost(aDev, addr b[0], b.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       check res[0] == 20
       check res[1] == 40
       check res[2] == 60
@@ -67,18 +67,18 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(kernelDouble)
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      let oDev = engine.allocDevice(uint32, 4)
       var res: array[4, uint32]
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       check res[0] == 2
       check res[1] == 4
       engine.ingest(kernelTriple)
       echo kernelTriple
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       check res[0] == 3
       check res[1] == 6
       check res[2] == 9
