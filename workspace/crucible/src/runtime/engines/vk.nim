@@ -12,7 +12,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import ../../codegen/ir/gpu_types
 import ../exec/vulkan_runtime
-import ../engines_common
+import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
@@ -40,7 +40,7 @@ proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
 
-proc newVulkanEngine(): VulkanEngine =
+proc newVulkanEngine*(): VulkanEngine =
   let vctx = initVulkan()
   VulkanEngine(
     ctx: vctx,
@@ -232,17 +232,17 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
 
-proc allocDevice*(engine: VulkanEngine, n: int): VulkanBuffer =
+proc allocDeviceImpl*(engine: VulkanEngine, n: int): VulkanBuffer =
   engine.ctx.allocBuffer(n)
 
-proc freeDevice*(engine: VulkanEngine, h: VulkanBuffer) =
+proc freeDeviceImpl*(engine: VulkanEngine, h: VulkanBuffer) =
   var h = h
   h.dealloc(engine.ctx)
 
-proc copyToDeviceFromHost*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
   var dst = dst
   engine.ctx.writeBuffer(dst, src, n)
 
-proc copyToHostFromDevice*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
+proc copyToHostFromDeviceImpl*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
   let res = readBuffer[byte](engine.ctx, src)
   copyMem(dst, res[0].addr, n)

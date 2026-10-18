@@ -8,7 +8,7 @@
 import std/macros
 import std/typetraits
 import ../../codegen/ir/gpu_types
-import ../engines_common
+import ../engines/engines_common
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Compile-time binding
@@ -31,8 +31,8 @@ func isStaticArg[T](_: typedesc[T]): bool {.compileTime.} =
   else: result = false
 
 func hasBufferLeaf[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
-  ## True when `T` holds a pointer or handle anywhere
-  when T is H or T is ptr or T is pointer: true
+  ## True when `T` holds a pointer, handle or DeviceMem anywhere
+  when T is H or T is DeviceMem or T is ptr or T is pointer: true
   elif T is object|tuple:
     for f in fields(default(T)):
       if hasBufferLeaf(typeof(f), H): return true
@@ -65,7 +65,7 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
 
 func argCount[T, H](_: typedesc[T], _: typedesc[H]): int {.compileTime.} =
   ## Device args one launch value delivers
-  when T is H or T is ptr or T is pointer: 1
+  when T is H or T is DeviceMem or T is ptr or T is pointer: 1
   elif T is object|tuple:
     when isStaticArg(T): 0
     elif hasBufferLeaf(T, H):
@@ -127,8 +127,11 @@ macro serialize*(ctx: var auto, v: auto, pos: var int, store: untyped, H: typede
     when not supportsCopyMem(typeof(`v`)):
       {.error: "kernel args are trivially copyable types only, " &
           $typeof(`v`) & " does not support copyMem".}
-    when typeof(`v`) is `H` or typeof(`v`) is ptr|pointer:
-      `store`(`ctx`, `v`, `pos`)
+    when typeof(`v`) is `H` or typeof(`v`) is DeviceMem or typeof(`v`) is ptr|pointer:
+      when typeof(`v`) is DeviceMem:
+        `store`(`ctx`, `v`.mem, `pos`)
+      else:
+        `store`(`ctx`, `v`, `pos`)
       inc `pos`
     elif typeof(`v`) is object|tuple:
       when isStaticArg(typeof(`v`)):

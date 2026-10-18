@@ -7,19 +7,14 @@
 
 ## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, Vulkan, WebGPU, Metal.
 ##
-## Public API, one import: `import workspace/crucible`
+## Public API, one import: `import workspace/crucible`.
+## The curated surface lives in `src/crucible.nim`.
+## Everything not exported there is internal, only IR tests reach into the internals.
 ##
 ## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
 ## - var engine = bkCuda.init()
 ## - engine.ingest(kernelCode)
 ## - engine.launchKernel<<grid, blk>>("addKernel", out, (a, b))
-##
-## Re-exports:
-## - gpu_compiler, the DSL macros + builtins
-## - runtime/engines, the HwEngine concept and the five backends
-## - runtime/launch_device_fn and launchDeviceFn
 
-import ./src/codegen/gpu_compiler
-import ./src/runtime/engines
-import ./src/runtime/launch/launch_device_fn
-export gpu_compiler, engines, launchDeviceFn
+import ./src/crucible
+export crucible

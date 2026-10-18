@@ -5,7 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Dependency-free leaf: the launch modules and engines.nim both import it.
+## Shared leaf: the launch modules, the engines and the public API import it.
+## Imports gpu_types for BackendKind only (the IR does not import back).
+
+import ../../codegen/ir/gpu_types
+export gpu_types.BackendKind
 
 type
   Dim3* = object
@@ -34,24 +38,24 @@ type
     proc ingest(engine: E, source: string)
     proc getArtifact(engine: E)
     proc deviceName(engine: E): string
-    proc allocDevice(engine: E, nbytes: int)
-    proc freeDevice(engine: E, handle: auto)
-    proc copyToDeviceFromHost(engine: E, dst: auto, src: pointer, n: int)
-    proc copyToHostFromDevice(engine: E, dst: pointer, src: auto, n: int)
+    proc allocDeviceImpl(engine: E, nbytes: int)
+    proc freeDeviceImpl(engine: E, handle: auto)
+    proc copyToDeviceFromHostImpl(engine: E, dst: auto, src: pointer, n: int)
+    proc copyToHostFromDeviceImpl(engine: E, dst: pointer, src: auto, n: int)
 
-proc allocDevice*(engine: HwEngine, T: typedesc, len: int): auto {.inline.} =
-  mixin allocDevice
-  let h = engine.allocDevice(len * sizeof(T))
-  DeviceMem[typeof(h), T](mem: h)
+mixin newCudaEngine, newOpenCLEngine, newVulkanEngine, newWgpuEngine, newMetalEngine
 
-proc freeDevice*[H, T](engine: HwEngine, mem: DeviceMem[H, T]) {.inline.} =
-  mixin freeDevice
-  engine.freeDevice(mem.mem)
+proc init*(backend: static BackendKind): auto =
+  when backend == bkCuda:
+    result = newCudaEngine()
+  elif backend == bkOpenCL:
+    result = newOpenCLEngine()
+  elif backend == bkVulkan:
+    result = newVulkanEngine()
+  elif backend == bkWGSL:
+    result = newWgpuEngine()
+  elif backend == bkMetal:
+    result = newMetalEngine()
+  else:
+    {.error: "init: unknown BackendKind".}
 
-proc copyToDeviceFromHost*[H, T](engine: HwEngine, dst: DeviceMem[H, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  mixin copyToDeviceFromHost
-  engine.copyToDeviceFromHost(dst.mem, src, n * sizeof(T))
-
-proc copyToHostFromDevice*[H, T](engine: HwEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[H, T], n: int) {.inline.} =
-  mixin copyToHostFromDevice
-  engine.copyToHostFromDevice(dst, src.mem, n * sizeof(T))

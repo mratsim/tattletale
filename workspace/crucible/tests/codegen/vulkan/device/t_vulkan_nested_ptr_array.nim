@@ -11,7 +11,7 @@
 
 import std/strformat
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/vk
+import workspace/crucible/src/runtime/engines/vk # VulkanBuffer: dies in the DeviceMem migration
 
 const kernelCode = vulkan:
   proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint64]]) {.global.} =

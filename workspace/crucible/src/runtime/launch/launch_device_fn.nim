@@ -7,7 +7,7 @@
 
 import std/[macros, hashes]
 import ../../codegen/gpu_compiler
-import ../engines_common
+import ../engines/engines_common
 import launch_kernel {.all.}
 import launch_serialization {.all.}
 
