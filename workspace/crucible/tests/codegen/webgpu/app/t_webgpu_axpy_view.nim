@@ -6,7 +6,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/metal/app/t_webgpu_axpy_view.nim
+##     workspace/crucible/tests/codegen/webgpu/app/t_webgpu_axpy_view.nim
 
 import workspace/crucible
 
