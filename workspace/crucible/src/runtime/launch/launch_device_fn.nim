@@ -92,6 +92,30 @@ proc assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
     error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
       getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
+proc getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
+  ## DeviceMem fields of the value's type: a top-level DeviceMem yields
+  ## the value itself with an empty name
+  let t = v.getTypeInst()
+  if isDeviceMemType(t):
+    result.add((name: "", t: t))
+    return
+  let impl = v.getTypeImpl()
+  case impl.kind
+  of nnkObjectTy:
+    let rec = impl[^1]
+    if rec.kind != nnkRecList: return
+    for f in rec:
+      f.expectKind(nnkIdentDefs)
+      if isDeviceMemType(f[^2]):
+        for j in 0 ..< f.len - 2:
+          result.add((name: $f[j], t: f[^2]))
+  of nnkTupleTy:
+    for i, f in impl:
+      if isDeviceMemType(f[^2]):
+        result.add((name: "field" & $i, t: f[^2]))
+  else:
+    discard
+
 proc hashNode(n: NimNode): Hash =
   ## Structural hash of an AST node: kind, leaves by value, children by shape
   result = hash(n.kind)
@@ -154,6 +178,9 @@ proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
       if isDeviceMemType(ptype):
         # DeviceMem: type the bridge parameter from the kernel type signature
         assertValidDeviceMem(kernel, formalNames[i], formalTypes[i], ptype)
+        ptype = formalTypes[i]
+      elif getDeviceMemFields(v).len > 0:
+        # View argument: the kernel parameter type is the device-side shape
         ptype = formalTypes[i]
       params.add(nnkIdentDefs.newTree(pname, ptype, newEmptyNode()))
       kcall.add(pname)
