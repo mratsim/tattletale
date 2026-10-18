@@ -166,29 +166,31 @@ proc cudaBindArgs(output: auto, args: tuple): auto =
   result = SerializationCtx[n]()
   bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
 
   check cuCtxSetCurrent(engine.nvrtc.context)
-  doAssert grid.x > 0 and grid.y > 0 and grid.z > 0,
-    "CUDA grid dims must have every axis > 0, got " &
-    $grid.x & ", " & $grid.y & ", " & $grid.z
-  doAssert blk.x > 0 and blk.y > 0 and blk.z > 0,
+  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
+    "CUDA cfg.grid dims must have every axis > 0, got " &
+    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
+  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
     "CUDA block dims must have every axis > 0, got " &
-    $blk.x & ", " & $blk.y & ", " & $blk.z
+    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
   if not engine.nvrtc.moduleLoaded:
     engine.nvrtc.load()
   check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
 
   let dctx = cudaBindArgs(output, args)
 
+  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
   check cuLaunchKernel(
     engine.nvrtc.kernel,
-    uint32(grid.x), uint32(grid.y), uint32(grid.z),
-    uint32(blk.x), uint32(blk.y), uint32(blk.z),
-    0'u32, CUstream(nil),  # no shared memory, no stream
+    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
+    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
+    uint32(cfg.sharedMem),
+    stream,
     dctx.addrs[0].addr, nil)
 
   check cuCtxSynchronize()

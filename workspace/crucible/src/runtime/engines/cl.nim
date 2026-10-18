@@ -80,9 +80,11 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+  if cfg.sharedMem != 0 or cfg.stream != 0:
+    failLoud("OpenCL run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   if kernel notin engine.kernelCache.kernels:
     engine.kernelCache.kernels[kernel] = engine.ctx.compileKernel(kernel, engine.source)
   let kern = engine.kernelCache.kernels[kernel]
@@ -90,10 +92,10 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   var dctx = SerializationCtx(kern: kern)
   bindArgs(dctx, output, args, store, OpenCLBuffer, bkOpenCL)
 
-  let globalSize = [cl_size_t(grid.x * blk.x),
-                    cl_size_t(grid.y * blk.y),
-                    cl_size_t(grid.z * blk.z)]
-  let localSize = [cl_size_t(blk.x), cl_size_t(blk.y), cl_size_t(blk.z)]
+  let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),
+                    cl_size_t(cfg.grid.y * cfg.blk.y),
+                    cl_size_t(cfg.grid.z * cfg.blk.z)]
+  let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
   kern.runKernel(globalSize, localSize)
 
 proc allocDeviceImpl*(engine: OpenCLEngine, n: int): OpenCLBuffer =

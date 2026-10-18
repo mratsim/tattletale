@@ -161,14 +161,16 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: tuple, grid, squadron = Dim3()) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+  if cfg.sharedMem != 0 or cfg.stream != 0:
+    failLoud("WebGPU run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
 
-  let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
+  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
               engine.shaderSquadron
             else:
-              squadron
+              cfg.blk
   if engine.shaderSquadron.x == 0 or
      squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
      squadron.z != engine.shaderSquadron.z:
@@ -318,7 +320,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: t
   wgpuComputePassEncoderSetPipeline(pass, cache.pipeline)
   wgpuComputePassEncoderSetBindGroup(pass, 0, bg, 0, nil)
   wgpuDevicePushErrorScope(device, wgpuErrorFilterValidation)
-  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(grid.x), uint32(grid.y), uint32(grid.z))
+  wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z))
   wgpuComputePassEncoderEnd(pass)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
 

@@ -184,11 +184,13 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, grid, squadron = Dim3()) =
-  let squadron = if squadron.x == 1 and squadron.y == 1 and squadron.z == 1:
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+  if cfg.sharedMem != 0 or cfg.stream != 0:
+    failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
+  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
               engine.shaderSquadron
             else:
-              squadron
+              cfg.blk
 
   if engine.shaderSquadron.x == 0 or
      squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
@@ -236,11 +238,11 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     var pipeline = engine.ctx.createPipeline(shaderModule, entry, pushConstLen)
     engine.caches.pipelineCache[pipelineKey] = pipeline
 
-  # Dispatch grid groups (runKernel computes groupCount = ceil(global/local))
+  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
   engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
-                 [uint32(grid.x * squadron.x),
-                  uint32(grid.y * squadron.y),
-                  uint32(grid.z * squadron.z)],
+                 [uint32(cfg.grid.x * squadron.x),
+                  uint32(cfg.grid.y * squadron.y),
+                  uint32(cfg.grid.z * squadron.z)],
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
