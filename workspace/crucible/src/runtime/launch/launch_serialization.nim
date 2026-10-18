@@ -14,7 +14,7 @@ import ../engines_common
 # ▸ Compile-time binding
 # ═════════════════════════════════════════════════════════════════════════
 
-func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
+func argWidth*[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
   ## Crucible-lowered byte width of scalar `T`
   when T is int|uint|enum: 4
   elif T is bool: (when backend == bkCuda: 1 else: 4)
@@ -41,13 +41,12 @@ func hasBufferLeaf[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
   else: result = false
 
-func roundStepUp(x, step: int): int {.inline.} =
+func roundStepUp*(x, step: int): int {.inline.} =
   ((x + step - 1) div step) * step
 
-func deviceLayout[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
-  ## Padded and aligned type on device
-  ## This skips phnatom types, static values
-  ## and handle Nim int being lowered to 4-byte integer even on 64-bit.
+func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
+  ## Device size and alignment, phantom/static types excluded,
+  ##  Nim int/uint lowered to 4 bytes
   when T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
@@ -64,14 +63,14 @@ func deviceLayout[T](_: typedesc[T], backend: static BackendKind): tuple[size, a
   else:
     result = (argWidth(T, backend), argWidth(T, backend))
 
-func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+func argCount[T, H](_: typedesc[T], _: typedesc[H]): int {.compileTime.} =
   ## Device args one launch value delivers
   when T is H or T is ptr or T is pointer: 1
   elif T is object|tuple:
     when isStaticArg(T): 0
     elif hasBufferLeaf(T, H):
       for f in fields(default(T)):
-        result += argCount(typeof(f), H, backend)
+        result += argCount(typeof(f), H)
     else: 1
   elif T is array: 1
   else: 1
@@ -103,87 +102,59 @@ proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
     else:
       copyMem(dst[off].addr, v.unsafeAddr, w)
 
-proc packInto[T](dst: var openArray[byte], off: var int, v: T, backend: static BackendKind) {.inline.} =
-  ## Serializes to the device layout.
-  ## Nim's int/uint are lowered to 32-bit.
-  ## bool to 4 bytes (1 on CUDA).
+proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static BackendKind) {.inline.} =
+  ## Packs one value at its device layout, aligned, ints lowered to 32-bit
   when T is object|tuple:
     when not isStaticArg(T):
       let a = deviceLayout(T, backend).align
-      off = (off + a - 1) div a * a
+      off = roundStepUp(off, a)
       for f in fields(v):
-        packInto(dst, off, f, backend)
-      off = (off + a - 1) div a * a
+        dst.packFrom(off, f, backend)
+      off = roundStepUp(off, a)
   elif T is array:
     let a = deviceLayout(T, backend).align
-    off = (off + a - 1) div a * a
+    off = roundStepUp(off, a)
     copyMem(dst[off].addr, v.addr, sizeof(v))
     off += sizeof(v)
   else:
     const a = argWidth(T, backend)
-    off = (off + a - 1) div a * a
+    off = roundStepUp(off, a)
     putBytes(dst, off, v, a)
     off += a
 
-proc serialize[H, C](ctx: var C, pos: var int, v: auto,
-                     serializer: proc(ctx: var C, bufferHandle: H, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.},
-                     backend: static BackendKind, ptrAsBuffer: static bool) {.inline.} =
-  ## Serializes one value (or value subtree) through `serializer`
-  when not supportsCopyMem(typeof(v)):
-    {.error: "kernel args are trivially copyable types only, " &
-        $typeof(v) & " does not support copyMem".}
-  when typeof(v) is H:
-    serializer(ctx, v, nil, 0, pos, true)
-    inc pos
-  elif typeof(v) is ptr or typeof(v) is pointer:
-    when ptrAsBuffer:
-      serializer(ctx, cast[H](v), nil, 0, pos, true)
+macro serialize*(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc) =
+  result = quote do:
+    when not supportsCopyMem(typeof(`v`)):
+      {.error: "kernel args are trivially copyable types only, " &
+          $typeof(`v`) & " does not support copyMem".}
+    when typeof(`v`) is `H` or typeof(`v`) is ptr|pointer:
+      `store`(`ctx`, `v`, `pos`)
+      inc `pos`
+    elif typeof(`v`) is object|tuple:
+      when isStaticArg(typeof(`v`)):
+        discard
+      elif hasBufferLeaf(typeof(`v`), `H`):
+        for f in fields(`v`):
+          serialize(`ctx`, f, `pos`, `store`, `H`)
+      else:
+        `store`(`ctx`, `v`, `pos`)
+        inc `pos`
     else:
-      var copy = v
-      serializer(ctx, default(H), copy.addr, sizeof(pointer), pos, false)
-    inc pos
-  elif typeof(v) is object|tuple:
-    when isStaticArg(typeof(v)):
-      discard
-    elif hasBufferLeaf(typeof(v), H):
-      var copy = v
-      for f in fields(copy):
-        serialize(ctx, pos, f, serializer, backend, ptrAsBuffer)
-    else:
-      const size = deviceLayout(typeof(v), backend).size
-      var blob: array[size, byte]
-      var off = 0
-      packInto(blob, off, v, backend)
-      serializer(ctx, default(H), blob.addr, off, pos, false)
-      inc pos
-  elif typeof(v) is array:
-    var copy = v
-    serializer(ctx, default(H), copy.addr, sizeof(copy), pos, false)
-    inc pos
-  else:
-    const w = argWidth(typeof(v), backend)
-    var staging: array[w, byte]
-    const n = if sizeof(typeof(v)) < w: sizeof(typeof(v)) else: w
-    copyMem(staging[0].addr, v.unsafeAddr, n)
-    serializer(ctx, default(H), staging.addr, w, pos, false)
-    inc pos
+      `store`(`ctx`, `v`, `pos`)
+      inc `pos`
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ═════════════════════════════════════════════════════════════════════════
 
-func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
-  ## Device args one launch delivers, output first
-  result = argCount(O, H, backend)
+func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H]): int {.compileTime.} =
+  result = argCount(O, H)
   for f in fields(default(A)):
-    result += argCount(typeof(f), H, backend)
+    result += argCount(typeof(f), H)
 
-proc bindArgs*[H, C](ctx: var C, output: auto, args: tuple,
-                     serializer: proc(ctx: var C, bufferHandle: H, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.},
-                     backend: static BackendKind, ptrAsBuffer: static bool) =
-  ## Sinks the output then the args tuple, positional
+template bindArgs*(ctx: var auto, output: auto, args: tuple, store: untyped, H: typedesc) =
   var pos = 0
-  serialize(ctx, pos, output, serializer, backend, ptrAsBuffer)
+  serialize(ctx, output, pos, store, H)
   var argsCopy = args
   for f in fields(argsCopy):
-    serialize(ctx, pos, f, serializer, backend, ptrAsBuffer)
+    serialize(ctx, f, pos, store, H)

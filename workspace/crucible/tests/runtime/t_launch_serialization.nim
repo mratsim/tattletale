@@ -31,34 +31,36 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:  # scalars deliver at lowered widths, positional
       type C = object
         idxs, lens: seq[int]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        c.idxs.add argIdx
-        c.lens.add len
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        ctx.idxs.add argIdx
+        ctx.lens.add deviceLayout(T, bkMetal).size
       var c: C
-      bindArgs(c, 7, (8'u, 1.5'f64, 2'i32, 3'i64), collect, bkMetal, false)
+      bindArgs(c, 7, (8'u, 1.5'f64, 2'i32, 3'i64), store, TestHandle)
       doAssert c.idxs == @[0, 1, 2, 3, 4]
       doAssert c.lens == @[4, 4, 8, 4, 8]
 
   block:  # Nim int delivers truncated to 32 bits
       type C = object
         buf: array[8, byte]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        copyMem(c.buf[argIdx * 4].addr, p, len)
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        var off = argIdx * 4
+        ctx.buf.packFrom(off, v, bkMetal)
       var c: C
-      bindArgs(c, 7'i32, (0x1234_5678,), collect, bkMetal, false)
+      bindArgs(c, 7'i32, (0x1234_5678,), store, TestHandle)
       doAssert c.buf == [byte 7, 0, 0, 0, 0x78, 0x56, 0x34, 0x12]
 
   block:  # ptr-free composite delivers one chunk at natural alignment
       type C = object
         lens: seq[int]
         blob: array[32, byte]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        c.lens.add len
-        if len == 32:
-          copyMem(c.blob[0].addr, p, len)
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        ctx.lens.add deviceLayout(T, bkMetal).size
+        when T is Whole:
+          var off = 0
+          ctx.blob.packFrom(off, v, bkMetal)
       var c: C
       var w = Whole(a: 1, b: 2, c: 3, big: 8'i64, f: 2.5'f32)
-      bindArgs(c, 7'i32, (w,), collect, bkMetal, false)
+      bindArgs(c, 7'i32, (w,), store, TestHandle)
       doAssert c.lens == @[4, 32]
       doAssert c.blob[12 ..< 16] == [byte 0, 0, 0, 0]      # pad, big aligns to 16
       doAssert c.blob[16 ..< 24] == [byte 8, 0, 0, 0, 0, 0, 0, 0]
@@ -67,34 +69,34 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:  # composites carrying buffers bind one buffer per leaf
       type C = object
         kinds: seq[bool]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        c.kinds.add viaBuffer
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        ctx.kinds.add T is TestHandle or T is ptr
       var c: C
       var p = cast[ptr uint32](0xDEAD'i64)
-      bindArgs(c, TestHandle(1), (WithPtr(p: p, n: 5),), collect, bkMetal, true)
+      bindArgs(c, TestHandle(1), (WithPtr(p: p, n: 5),), store, TestHandle)
       doAssert c.kinds == @[true, true, false]
 
   block:  # composite leaf advances the bind index once per leaf
       type C = object
         idxs: seq[int]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        c.idxs.add argIdx
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        ctx.idxs.add argIdx
       var c: C
       var p = cast[ptr uint32](0xDEAD'i64)
-      bindArgs(c, TestHandle(1), (WithPtr(p: p, n: 5), 7'i32), collect, bkMetal, true)
+      bindArgs(c, TestHandle(1), (WithPtr(p: p, n: 5), 7'i32), store, TestHandle)
       doAssert c.idxs == @[0, 1, 2, 3]
-      const n = launchArgCount(TestHandle, tuple[a: WithPtr, b: int32], TestHandle, bkMetal)
+      const n = launchArgCount(TestHandle, tuple[a: WithPtr, b: int32], TestHandle)
       doAssert n == c.idxs.len
 
   block:  # static composite consumes no bind slot
       type C = object
         idxs: seq[int]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        c.idxs.add argIdx
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        ctx.idxs.add argIdx
       var c: C
-      bindArgs(c, TestHandle(1), (Empty(), 7'i32), collect, bkMetal, false)
+      bindArgs(c, TestHandle(1), (Empty(), 7'i32), store, TestHandle)
       doAssert c.idxs == @[0, 1]
-      const n = launchArgCount(TestHandle, tuple[a: Empty, b: int32], TestHandle, bkMetal)
+      const n = launchArgCount(TestHandle, tuple[a: Empty, b: int32], TestHandle)
       doAssert n == c.idxs.len
 
   block:  # bool scalar delivers the lowered width, zero-padded
@@ -106,17 +108,18 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         doAssert junk[255] == 0xFF
       type C = object
         blob: array[8, byte]
-      proc collect(c: var C, bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        if not viaBuffer:
-          doAssert len == 4
-          copyMem(c.blob[0].addr, p, len)
+      proc store[T](ctx: var C, v: T, argIdx: int) =
+        when T is bool:
+          doAssert deviceLayout(T, bkWGSL).size == 4
+          var off = 0
+          ctx.blob.packFrom(off, v, bkWGSL)
       var c: C
       clobberStack()
-      bindArgs(c, TestHandle(1), (false,), collect, bkWGSL, false)
+      bindArgs(c, TestHandle(1), (false,), store, TestHandle)
       doAssert c.blob[0 .. 3] == [byte 0, 0, 0, 0]
       c = C()
       clobberStack()
-      bindArgs(c, TestHandle(1), (true,), collect, bkWGSL, false)
+      bindArgs(c, TestHandle(1), (true,), store, TestHandle)
       doAssert c.blob[0 .. 3] == [byte 1, 0, 0, 0]
 
   block:  # nested object packs at its deviceLayout-aligned offset
@@ -127,13 +130,15 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         Outer = object
           a: int32
           inner: Inner
-      proc collect(c: var seq[byte], bufferHandle: TestHandle, p: pointer, len: int, argIdx: int, viaBuffer: bool) {.nimcall.} =
-        if not viaBuffer:
-          c = newSeq[byte](len)
-          copyMem(c[0].addr, p, len)
+      proc store[T](ctx: var seq[byte], v: T, argIdx: int) =
+        when T is Outer:
+          const size = deviceLayout(T, bkMetal).size
+          ctx = newSeq[byte](size)
+          var off = 0
+          ctx.packFrom(off, v, bkMetal)
       var blobOut: seq[byte]
       var o = Outer(a: 0x01020304'i32, inner: Inner(b: 0x11121314'i32, c: 0x090A0B0C0D0E0F10'i64))
-      bindArgs(blobOut, TestHandle(1), (o,), collect, bkMetal, false)
+      bindArgs(blobOut, TestHandle(1), (o,), store, TestHandle)
       # Packed field offsets: a at 0, inner.b at 8, inner.c at 16
       doAssert blobOut.len == 24
       doAssert blobOut[0 .. 3] == [byte 4, 3, 2, 1]
@@ -141,7 +146,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert blobOut[16 .. 23] == [byte 0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09]
 
   block:  # launchArgCount matches the deliveries
-      const n = launchArgCount(int32, tuple[a: Whole, b: int64], TestHandle, bkMetal)
+      const n = launchArgCount(int32, tuple[a: Whole, b: int64], TestHandle)
       doAssert n == 3
 
 runTest()
