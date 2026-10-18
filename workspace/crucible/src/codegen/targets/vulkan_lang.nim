@@ -57,14 +57,16 @@ proc refBlockDecl(inner: GpuType): string =
       t = t.aTyp
     result.base = t
 
+  doAssert inner.kind notin {gtVoid, gtVoidPtr, gtObject, gtGenericInst},
+    "Pointing at " & (if inner.kind in {gtVoid, gtVoidPtr}: "void"
+        else: gpuTypeToString(inner, allowEmptyIdent = true)) &
+        " is currently unsupported, only integers, floats, bool and arrays of those are supported"
   let member =
     if inner.kind == gtUA:
       let el = inner.uaTo
       doAssert el.kind != gtUA,
         "Runtime array of runtime arrays is not expressible in a GLSL buffer block"
-      if el.kind == gtVoid:
-        "uint8_t x[]"
-      elif el.kind == gtArray:
+      if el.kind == gtArray:
         let (base, dims) = arrayDims(el)
         gpuTypeToString(base, "x", allowEmptyIdent = true) & "[]" & dims
       else:
@@ -72,8 +74,6 @@ proc refBlockDecl(inner: GpuType): string =
     elif inner.kind == gtArray:
       let (base, dims) = arrayDims(inner)
       gpuTypeToString(base, "x", allowEmptyIdent = true) & dims
-    elif inner.kind == gtVoid:
-      "uint8_t x[]"
     else:
       gpuTypeToString(inner, "x") & "[]"
   let name = refTypeName(inner)
