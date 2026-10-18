@@ -176,8 +176,10 @@ when defined(macosx):
       let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
       if cfg.sharedMem > 0:
+        # Metal requires a 16-byte multiple of threadgroup memory
+        let tgMem = roundStepUp(cfg.sharedMem, 16)
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
-                        objc.NSUInteger(cfg.sharedMem), objc.NSUInteger(0))
+                        objc.NSUInteger(tgMem), objc.NSUInteger(0))
 
 
       var dctx = SerializationCtx(encoder: encoder)
