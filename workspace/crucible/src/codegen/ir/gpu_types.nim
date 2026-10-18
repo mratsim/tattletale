@@ -773,6 +773,20 @@ proc `==`*(a, b: GpuType): bool =
     of gtInvalid: result = false
     else: discard
 
+proc `==`*(a, b: Symbol): bool =
+  ## Compares symbols by content (iSym, kind, type), not by pointer.
+  ##
+  ## Two Symbol objects can describe the same symbol: a function's name and a call to that function are created independently.
+  ##
+  ## Pointer comparison reports such pairs as different. The code emitter
+  ## then fails to find the callee definition in the function tables.
+  if a.isNil or b.isNil:
+    result = a.isNil and b.isNil
+  else:
+    result = a.iSym == b.iSym and a.symKind == b.symKind and
+      ((a.typ.isNil and b.typ.isNil) or
+       (not a.typ.isNil and not b.typ.isNil and a.typ == b.typ))
+
 proc `==`*(a, b: GpuAst): bool =
   if a.isNil or b.isNil: return false
   if a.kind != b.kind: result = false

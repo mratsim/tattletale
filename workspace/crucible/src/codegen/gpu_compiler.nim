@@ -180,6 +180,16 @@ proc codegen*(gen: GpuGenericsInfo, ast: GpuAst, kernel: string = "",
     # both tables alias the same proc, like the parse path does, so passes
     # see the instantiations they must rewrite (pruneCompileTimeParams, ...)
     ctx.allFnTab[fnCopy.pName] = fnCopy
+  # Rewrite passes visit only the functions registered in allFnTab.
+  # The kernel arrives pre-parsed, separate from gen.procs.
+  # Without a registration no pass visits the kernel body:
+  # the emitted call keeps a static argument the callee signature does not take
+  if astCopy.kind == gpuProc:
+    ctx.allFnTab[astCopy.pName] = astCopy
+  else:
+    for child in astCopy:
+      if child.kind == gpuProc:
+        ctx.allFnTab[child.pName] = child
   for typ in gen.types:
     let typCopy = typ.clone()
     case typCopy.kind
