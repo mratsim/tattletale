@@ -21,6 +21,20 @@ Killer apps:
 
 _At the moment the project is still in its infancy, we present key differentiators that will hopefully snowball into an unique product in the landscape._
 
+- Promising performance with very high-level approach (50LOC for matmul) based on tile algebra implemented on top of CuTe Layout Algebra:
+  
+  | M = N = K | Tattletale/Ceramic 32×32×16 fp16 | Apple MLX steel (Tensor core API) 64×64×16 | Apple MLX NAX (Neural Accelerator API) 64×64×256 |
+  |----------:|-----------------------:|-------------------:|------------------:|
+  |       256 |                 1.21  |              1.09  |             1.00  |
+  |       512 |                 5.32  |              4.36  |             5.17  |
+  |      1024 |                11.09  |             11.15  |            11.67  |
+  |      2048 |                12.21  |             13.00  |            12.48  |
+  |      4096 |                12.85  |             13.29  |            12.83  |
+  
+  *Apple M4 Max, Metal, fp16 inputs / fp32 accumulate, TFlops = 2·M·N·K / time.*
+  
+  [[Crucible/Ceramic] Fix lowering of struct containing pointers - Fix GEMM bench: 99% 🔥 vs Apple MLX and Apple Neural Accelerator (NAX) - #140](https://github.com/mratsim/tattletale/pull/140)
+
 - Embeddable, single dependency on drivers + libTorch C++.
   LibTorch dependency will be removed in the future.
 
@@ -29,9 +43,7 @@ _At the moment the project is still in its infancy, we present key differentiato
     https://github.com/mratsim/tattletale/blob/9975f37/workspace/libtorch/tests/python_integration/test_tensor_bridge.nim#L25-L85
   - Nim can call C/C++ and C/C++ can call Nim (by virtue of compiling to C/C++ as an intermediate language.
 
-- Nim -> Cuda, OpenCL, Vulkan, WebGPU compiler implemented in Nim macros.\
-  Build time or runtime portable code generation on any accelerator:\
-  https://github.com/mratsim/tattletale/tree/dbb44dd/workspace/positron/src/codegen
+- Nim -> Cuda, OpenCL, Metal, Vulkan, WebGPU compiler implemented in Nim macros.
 
 - IntrusiveAttention, a PagedRadixTrie implemented on top of intrusive WAVL-tree for guaranteed worst-case latency.\
   No rebuilding, rehashing or tombstones like with hashmaps\
@@ -46,11 +58,10 @@ _At the moment the project is still in its infancy, we present key differentiato
 
 ## Future highlights
 
-- [WIP] Porting CuteDSL/Cutlass/TileLang to Nim and enabling them across hardware vendors
 - No more libTorch dependencies, let's write my yet-another-tensor library in Nim
-  - Previous large: https://github.com/mratsim/Arraymancer
-  - Previous mini: https://github.com/mratsim/nim-julia-challenge/blob/master/src/tensor.nim
-  - Previous compiler-based: https://github.com/mratsim/laser/blob/master/laser/lux_compiler/lux_dsl.nim
+  - [[Design] Tensorcery: Migrating away from libtorch](https://github.com/mratsim/tattletale/issues/111)
+  - [[Design] Ceramic tile algebra & Tensorcery tensor library #127
+](https://github.com/mratsim/tattletale/issues/127)
 
 ## Documentation
 
