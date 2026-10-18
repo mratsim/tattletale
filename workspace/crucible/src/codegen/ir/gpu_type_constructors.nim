@@ -41,7 +41,7 @@ proc initGpuVoidPtr*(): GpuType =
 
 proc initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
   ## Initializes an object/struct type
-  result = GpuType(kind: gtObject, name: name, oFields: flds)
+  result = GpuType(kind: gtObject, name: name, fields: flds)
 
 proc initGpuSpanType*(kind: GpuSpanKind, elemTyp: GpuType): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type
@@ -56,8 +56,7 @@ proc toTypeDef*(typ: GpuType): GpuAst =
   # store the type instantiation
   result = GpuAst(kind: gpuTypeDef, tTyp: typ)
   case typ.kind
-  of gtObject:      result.tFields = typ.oFields
-  of gtGenericInst: result.tFields = typ.gFields
+  of gtObject, gtGenericInst: result.tFields = typ.fields
   else:
     raiseAssert "Type: " & $pretty(typ) & " is neither object type nor generic instantiation."
 

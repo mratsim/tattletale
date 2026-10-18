@@ -73,6 +73,7 @@ type
 
   GpuType* = ref object
     builtin*: bool ## Whether the type refers to a builtin type or not
+    fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
     case kind*: GpuTypeKind
     of gtPtr:
       to*: GpuType # `ptr T` points to `to`
@@ -84,7 +85,6 @@ type
     of gtUA: uaTo*: GpuType # `UncheckedArray[T]`
     of gtObject:
       name*: string
-      oFields*: seq[GpuTypeField]
     of gtArray:
       aTyp*: GpuType # the inner type
       aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
@@ -98,7 +98,6 @@ type
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
-      gFields*: seq[GpuTypeField] # same as `oFields` for `gtObject`
     else: discard
 
   GpuSpanKind* = enum
@@ -519,8 +518,8 @@ proc clone*(typ: GpuType): GpuType =
     result.uaTo = typ.uaTo.clone()
   of gtObject:
     result.name = typ.name
-    for f in typ.oFields:
-      result.oFields.add GpuTypeField(name: f.name, typ: f.typ.clone())
+    for f in typ.fields:
+      result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   of gtArray:
     result.aTyp = typ.aTyp.clone()
     result.aLen = typ.aLen
@@ -530,8 +529,8 @@ proc clone*(typ: GpuType): GpuType =
     result.gName = typ.gName
     for g in typ.gArgs:
       result.gArgs.add g.clone()
-    for f in typ.gFields:
-      result.gFields.add GpuTypeField(name: f.name, typ: f.typ.clone())
+    for f in typ.fields:
+      result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   else: discard
 
 proc clone*(ast: GpuAst): GpuAst =
@@ -716,7 +715,7 @@ proc hash*(t: GpuType): Hash =
     h = h !& hash(t.uaTo)
   of gtObject:
     h = h !& hash(t.name)
-    for f in t.oFields:
+    for f in t.fields:
       h = h !& hash(f)
   of gtArray:
     h = h !& hash(t.aTyp)
@@ -727,7 +726,7 @@ proc hash*(t: GpuType): Hash =
     h = h !& hash(t.gName)
     for g in t.gArgs:
       h = h !& hash(g)
-    for f in t.gFields:
+    for f in t.fields:
       h = h !& hash(f)
   of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
@@ -755,19 +754,19 @@ proc `==`*(a, b: GpuType): bool =
     of gtUA:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
-      if a.oFields.len != b.oFields.len: result = false
+      if a.fields.len != b.fields.len: result = false
       else:
-        for i in 0 ..< a.oFields.len:
-          result = result and (a.oFields[i] == b.oFields[i])
+        for i in 0 ..< a.fields.len:
+          result = result and (a.fields[i] == b.fields[i])
     of gtGenericInst:
       result = a.gName == b.gName
       if a.gArgs.len != b.gArgs.len: result = false
-      elif a.gFields.len != b.gFields.len: result = false
+      elif a.fields.len != b.fields.len: result = false
       else:
         for i in 0 ..< a.gArgs.len:
           result = result and (a.gArgs[i] == b.gArgs[i])
-        for i in 0 ..< a.gFields.len:
-          result = result and (a.gFields[i] == b.gFields[i])
+        for i in 0 ..< a.fields.len:
+          result = result and (a.fields[i] == b.fields[i])
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
     of gtStatic: result = a.sValue == b.sValue
     of gtInvalid: result = false
@@ -1171,23 +1170,13 @@ func size*(t: GpuType): int =
     # TODO: for generic/unresolved array, size is set to -1, but can that happen in practice?
     # Due to constant folding I would expect array length to always be resolved.
     result = t.aLen * size(t.aTyp)
-  of gtObject:
-    for f in t.oFields:
-      result += size(f.typ)
-  of gtGenericInst:
-    for f in t.gFields:
+  of gtObject, gtGenericInst:
+    for f in t.fields:
       result += size(f.typ)
   of gtInvalid:
     result = 0
   else:
     result = 4  # default fallback
-
-func structFields*(t: GpuType): seq[GpuTypeField] =
-  ## Fields of an object or instantiated generic, declaration order
-  case t.kind
-  of gtObject: t.oFields
-  of gtGenericInst: t.gFields
-  else: @[]
 
 func isLargeStruct*(t: GpuType): bool =
   ## Returns true if the type should be passed by hidden const reference.

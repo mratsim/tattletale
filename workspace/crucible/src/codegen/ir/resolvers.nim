@@ -147,7 +147,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
     doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
     ## XXX: use signature hash for type name? Otherwise will produce duplicates
     result = GpuType(kind: gtGenericInst, gName: t.repr)
-    result.gFields = resolveRecordFields(reg, impl)
+    result.fields = resolveRecordFields(reg, impl)
   of nnkStaticTy:
     # Static int — preserve the value for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
@@ -258,7 +258,7 @@ proc resolveAliasExpansion(reg: var TypeRegistry, app, rhs: NimNode): GpuType =
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(rhs))
     for i in 1 ..< rhs.len:
       result.gArgs.add resolveType(reg, rhs[i])
-    result.gFields = resolveRecordFields(reg, impl)
+    result.fields = resolveRecordFields(reg, impl)
   of nnkSym:
     if isAliasBase(rhs):
       # Nested alias through a named type: substitute its own args and recurse.
@@ -295,8 +295,8 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
     for i in 1 ..< t.len:
       result.gArgs.add resolveType(reg, t[i])
-    let impl = t.getTypeImpl() # impl for the `gFields`
-    result.gFields = resolveRecordFields(reg, impl)
+    let impl = t.getTypeImpl() # resolves the `fields` members
+    result.fields = resolveRecordFields(reg, impl)
   of nnkObjectTy:
     result = resolveStructuralType(reg, t, t)
   of nnkSym:

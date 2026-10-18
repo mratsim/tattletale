@@ -229,7 +229,7 @@ proc getExprType*(ctx: GpuContext; n: GpuAst): GpuType =
   of gpuDot:
     let parentType = ctx.getExprType(n.dParent)
     if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
-      let fields = if parentType.kind == gtObject: parentType.oFields else: parentType.gFields
+      let fields = parentType.fields
       for f in fields:
         if f.name == n.dField.symbol.name:
           result = f.typ
@@ -690,7 +690,7 @@ func containsPtrDeep(t: GpuType): bool =
   case t.kind
   of gtPtr: true
   of gtObject, gtGenericInst:
-    for f in t.structFields:
+    for f in t.fields:
       if f.typ.containsPtrDeep: return true
     false
   of gtArray: t.aTyp.containsPtrDeep
@@ -714,7 +714,7 @@ proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
       leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
     of gtObject, gtGenericInst:
       if t.containsPtrDeep:
-        for f in t.structFields:
+        for f in t.fields:
           if size(f.typ) > 0:
             walk(f.typ, name & "_" & f.name, leaves)
       else:
@@ -729,7 +729,7 @@ proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
 
 proc buildLeafConstr(t: GpuType, name: string): GpuAst =
   result = GpuAst(kind: gpuObjConstr, ocType: t)
-  for f in t.structFields:
+  for f in t.fields:
     if size(f.typ) == 0:
       result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
     elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:

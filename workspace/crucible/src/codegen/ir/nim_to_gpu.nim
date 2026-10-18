@@ -730,7 +730,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       let typ = resolveType(reg, node[0].getTypeImpl)
       doAssert node[1].kind == nnkIntLit
       let idx = node[1].intVal
-      let field = typ.oFields[idx].name
+      let field = typ.fields[idx].name
       result = GpuAst(kind: gpuDot,
                       dParent: ctx.toGpuAst(reg, node[0]),
                       dField: ctx.toGpuAst(reg, ident(field)))
@@ -890,9 +890,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
     ## this should never see `genericParam` I think
     let typ = resolveType(reg, node)
     # get all fields of the type
-    let flds = if typ.kind == gtObject: typ.oFields
-               elif typ.kind == gtGenericInst: typ.gFields
-               else: error "ObjConstr must have an object type: " & $typ
+    if typ.kind notin {gtObject, gtGenericInst}:
+      error "ObjConstr must have an object type: " & $typ
+    let flds = typ.fields
     if flds.len == 0:
       # Empty struct (e.g. Int[N]) — produce empty-ocFields gpuObjConstr
       # so each backend emits language-appropriate init ({} / TypeName())
@@ -924,7 +924,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
 
     result = GpuAst(kind: gpuObjConstr, ocType: typ)
     # get all fields of the type
-    let flds = typ.oFields
+    let flds = typ.fields
     # find all fields that have been defined by the user
     var ocFields: seq[GpuFieldInit]
     for i in 0 ..< node.len: # all fields to be init'd

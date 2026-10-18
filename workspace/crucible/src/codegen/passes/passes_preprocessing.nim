@@ -229,7 +229,7 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     TypeDesc(kind: tdkArray, tdElem: gpuTypeToDesc(t.aTyp), tdLen: t.aLen)
   of gtObject:
     var fields: seq[tuple[name: string, typ: TypeDesc]]
-    for f in t.oFields:
+    for f in t.fields:
       fields.add (f.name, gpuTypeToDesc(f.typ))
     TypeDesc(kind: tdkStruct, tdStructName: t.name, tdFields: fields)
   of gtUA:
@@ -830,11 +830,7 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
       if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
         nil
       else:
-        let fields =
-          case pT.kind
-          of gtObject: pT.oFields
-          of gtGenericInst: pT.gFields
-          else: @[]
+        let fields = pT.fields
         var found: GpuType = nil
         for f in fields:
           if f.name == n.dField.symbol.name:
@@ -856,11 +852,7 @@ proc ptrFieldNames*(t: GpuType): seq[string] =
   ## Pointer field names of a struct type, in declaration order.
   case t.kind
   of gtObject:
-    for f in t.oFields:
-      if f.typ.kind == gtPtr:
-        result.add f.name
-  of gtGenericInst:
-    for f in t.gFields:
+    for f in t.fields:
       if f.typ.kind == gtPtr:
         result.add f.name
   else: discard
