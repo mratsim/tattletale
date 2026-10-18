@@ -654,39 +654,53 @@ proc codegen*(ctx: var GpuContext): string =
 
   # ── Step 1: Build the push-constant block and reference block info ──
   # Pointers are BDA references: 64-bit addresses packed in the push block.
+  # Ref blocks are declared for the pointer surfaces of every function,
+  # kernels included. Device fns take pointer params, return pointers, hold
+  # pointer locals and cast to pointers inside their bodies.
   var refPointees: seq[string]
   var pushConstDecls: seq[string]
   for (fnIdent, fn) in mpairs(ctx.fnTab):
-    if fn.isGlobal():
-      for p in fn.pParams:
-        if p.typ.kind == gtPtr:
-          let decl = refBlockDecl(p.typ.to)
-          if decl notin refPointees:
-            refPointees.add decl
-        if p.addressSpace != asSMEM:
-          # multi-kernel sources share one block, same-name params dedup
-          let decl = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-          if decl notin pushConstDecls:
-            pushConstDecls.add decl
-      var ptrees = @[fn.pBody]
-      for blk in ctx.globalBlocks:
-        if blk.kind in {gpuTypeDef, gpuAlias}:
-          ptrees.add blk
-      while ptrees.len > 0:
-        let n = ptrees.pop()
-        if n.kind == gpuVar and n.vType != nil and n.vType.kind == gtPtr:
-          let decl = refBlockDecl(n.vType.to)
-          if decl notin refPointees:
-            refPointees.add decl
-        if n.kind == gpuTypeDef:
-          for f in n.tFields:
-            if f.typ.kind == gtPtr:
-              let decl = refBlockDecl(f.typ.to)
-              if decl notin refPointees:
-                refPointees.add decl
-        for ch in n:
-          if not ch.isNil:
-            ptrees.add ch
+    for p in fn.pParams:
+      if p.typ.kind == gtPtr:
+        let decl = refBlockDecl(p.typ.to)
+        if decl notin refPointees:
+          refPointees.add decl
+      if fn.isGlobal() and p.addressSpace != asSMEM:
+        # multi-kernel sources share one block, same-name params dedup
+        let decl = gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        if decl notin pushConstDecls:
+          pushConstDecls.add decl
+    if fn.pRetType != nil and fn.pRetType.kind == gtPtr:
+      let decl = refBlockDecl(fn.pRetType.to)
+      if decl notin refPointees:
+        refPointees.add decl
+    var ptrees = @[fn.pBody]
+    for blk in ctx.globalBlocks:
+      if blk.kind in {gpuTypeDef, gpuAlias}:
+        ptrees.add blk
+    while ptrees.len > 0:
+      let n = ptrees.pop()
+      if n.kind == gpuVar and n.vType != nil and n.vType.kind == gtPtr:
+        let decl = refBlockDecl(n.vType.to)
+        if decl notin refPointees:
+          refPointees.add decl
+      if n.kind == gpuTypeDef:
+        for f in n.tFields:
+          if f.typ.kind == gtPtr:
+            let decl = refBlockDecl(f.typ.to)
+            if decl notin refPointees:
+              refPointees.add decl
+      if n.kind == gpuCast and n.cTo != nil and n.cTo.kind == gtPtr:
+        let decl = refBlockDecl(n.cTo.to)
+        if decl notin refPointees:
+          refPointees.add decl
+      if n.kind == gpuConv and n.convTo != nil and n.convTo.kind == gtPtr:
+        let decl = refBlockDecl(n.convTo.to)
+        if decl notin refPointees:
+          refPointees.add decl
+      for ch in n:
+        if not ch.isNil:
+          ptrees.add ch
 
   # ── Step 1b: Emit reference block typedefs, before the structs using them ──
   for decl in refPointees:
