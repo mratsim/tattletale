@@ -8,6 +8,11 @@
 import std/[macros, hashes]
 import ../../codegen/gpu_compiler
 import ../engines/engines_common
+import ../engines/nvrtc
+import ../engines/cl
+import ../engines/vk
+import ../engines/wgpu
+import ../engines/metal
 import launch_kernel {.all.}
 import launch_serialization {.all.}
 
@@ -41,23 +46,51 @@ proc base58(h: int): string =
     x = x div 58
 
 macro bridge(engine: HwEngine, node: untyped): untyped =
+  ## Defers the generated global function generation
+  ## so that it happens in a `device` environment.
+  ## This allows functions that depend on `ccGetBackend`
+  ## to correctly resolve the target backend and not resolve the CPU host.
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let vulkanCg = bindSym"vulkan"
   let webgpuCg = bindSym"webgpu"
-  return quote do:
-    when typeof(`engine`).backendKind == bkMetal: `metalCg`(`node`)
-    elif typeof(`engine`).backendKind == bkCuda: `cudaCg`(`node`)
-    elif typeof(`engine`).backendKind == bkOpenCL: `openclCg`(`node`)
-    elif typeof(`engine`).backendKind == bkVulkan: `vulkanCg`(`node`)
-    else: `webgpuCg`(`node`)
+  let t = engine.getTypeInst()
+  if sameType(t, bindSym"MetalEngine"):
+    result = metalCg.newCall(node)
+  elif sameType(t, bindSym"CudaEngine"):
+    result = cudaCg.newCall(node)
+  elif sameType(t, bindSym"OpenCLEngine"):
+    result = openclCg.newCall(node)
+  elif sameType(t, bindSym"VulkanEngine"):
+    result = vulkanCg.newCall(node)
+  elif sameType(t, bindSym"WgpuEngine"):
+    result = webgpuCg.newCall(node)
+  else:
+    error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
 
 proc isCompileTime(ftype: NimNode): bool =
   ftype.kind == nnkStaticTy or
     (ftype.kind in {nnkIdent, nnkSym} and ftype.eqIdent("typedesc")) or
     (ftype.kind in {nnkCommand, nnkBracketExpr, nnkCall} and
      $ftype[0] in ["static", "typedesc"])
+
+proc isDeviceMemType(t: NimNode): bool =
+  t.kind == nnkBracketExpr and t[0].eqIdent("DeviceMem")
+
+proc getElemType(formal: NimNode): NimNode =
+  formal.expectKind(nnkPtrTy)
+  let p = formal[0]
+  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"): p[1]
+  else: p
+
+proc assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
+  if formal.kind != nnkPtrTy:
+    error("launchDeviceFn " & $kernel & ": parameter " & $pname & " is " &
+      formal.repr & ", a DeviceMem argument needs a pointer parameter")
+  if not sameType(vtype[2], getElemType(formal)):
+    error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
+      getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
 proc hashNode(n: NimNode): Hash =
   ## Structural hash of an AST node: kind, leaves by value, children by shape
@@ -85,6 +118,7 @@ proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
   ##     │  zip against the kernel's parameters, in declaration order:
   ##     │    compile-time parameter → its argument is written into the kernel call as-is
   ##     │    runtime parameter     → a new kernel parameter, typed by its argument
+  ##     │      (special-cased for DeviceMem: typed from the kernel's declared parameter)
   ##     ▼
   ##   proc kern_Xy3kP(x: Int[3], v: ptr float32) {.global.} =
   ##     kern(tiledMma(f32, f16, f16, 32, 32, 16), x, v)
@@ -116,10 +150,15 @@ proc buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
       vi.inc
       # fresh ident: the callee's parameter name nodes carry its scope binding
       let pname = ident($formalNames[i])
-      params.add(nnkIdentDefs.newTree(pname, v.getTypeInst(), newEmptyNode()))
+      var ptype = v.getTypeInst()
+      if isDeviceMemType(ptype):
+        # DeviceMem: type the bridge parameter from the kernel type signature
+        assertValidDeviceMem(kernel, formalNames[i], formalTypes[i], ptype)
+        ptype = formalTypes[i]
+      params.add(nnkIdentDefs.newTree(pname, ptype, newEmptyNode()))
       kcall.add(pname)
-      h = h !& hashNode(v.getTypeInst())
-  
+      h = h !& hashNode(ptype)
+
   doAssert vi > 0, "launchDeviceFn " & $kernel & ": the kernel needs a runtime parameter as output"
 
   let procdef = nnkProcDef.newTree(
