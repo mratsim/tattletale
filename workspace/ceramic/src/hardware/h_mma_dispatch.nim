@@ -7,6 +7,7 @@
 
 import std/[macros, strutils]
 import workspace/crucible
+import workspace/fp_conv/fp_conv
 import ./h_mma_registry
 
 {.experimental: "dynamicBindSym".}
@@ -86,16 +87,22 @@ func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string]
     " : " & operandClause(aNames, constraintLetter("uint32")) &
     ", " & operandClause(bNames, constraintLetter("uint32"))
 
+func recastToMmaType(name, inType: string): string =
+  ## Non-native host CPU types need to be reinterpreted
+  ## from their integer buffer
+  if inType == "float": result = "`" & name & "`"
+  else: result = "as_type<" & inType & ">(`" & name & "`)"
+
 func buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames: openArray[string], accType, inType: string): string =
   ## Metal codegen for one simdgroup_multiply_accumulate builtin
-  ## over caller-staged scalars, D = A·B + C. The accumulator is always
-  ## fp32 (`simdgroup_float8x8`), A and B carry the atom's operand dtype.
+  ## over caller-staged scalars, D = A·B + C.
   ##
   ## Expected input:
-  ##   - `dNames`/`aNames`/`bNames`/`cNames`: the staged scalars' names, one
-  ##     fragment value each, 2 per lane on the 8×8×8 atoms, in per-lane value order
-  ##   - `accType`/`inType`: the MSL element names, the accumulator is fp32
-  ##     ("float"), A and B carry the atom's operand dtype
+  ##   - `dNames`/`aNames`/`bNames`/`cNames`:
+  ##        the staged scalars' names
+  ##   - `accType`/`inType`: the MSL element names
+  ##        the accumulator is fp32 ("float"),
+  ##        A and B MUST be the atom's operand dtype
   result = "{\n"
   result.add "  simdgroup_" & accType & "8x8 sd = make_filled_simdgroup_matrix<" & accType &
             ", 8>(" & accType & "(0.0f));\n"
@@ -104,11 +111,11 @@ func buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames: openArray[string], a
   result.add "  simdgroup_" & inType & "8x8 sa = make_filled_simdgroup_matrix<" & inType &
             ", 8>(" & inType & "(0.0f));\n"
   for i, name in aNames:
-    result.add "  sa.thread_elements()[" & $i & "] = `" & name & "`;\n"
+    result.add "  sa.thread_elements()[" & $i & "] = " & recastToMmaType(name, inType) & ";\n"
   result.add "  simdgroup_" & inType & "8x8 sb = make_filled_simdgroup_matrix<" & inType &
             ", 8>(" & inType & "(0.0f));\n"
   for i, name in bNames:
-    result.add "  sb.thread_elements()[" & $i & "] = `" & name & "`;\n"
+    result.add "  sb.thread_elements()[" & $i & "] = " & recastToMmaType(name, inType) & ";\n"
   result.add "  simdgroup_multiply_accumulate(sd, sa, sb, sd);\n"
   for i, name in dNames:
     result.add "  `" & name & "` = sd.thread_elements()[" & $i & "];\n"
@@ -121,6 +128,20 @@ func buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames: openArray[string], a
 template constStr*(atom: untyped, suffix: untyped): string =
   ## The string value of a per-atom registry const.
   bindSym($atom & "_" & suffix).getImpl()[2].strVal
+
+proc assertStagedDtype(name: string, node: NimNode, dtype, operand: string) =
+  let expected = case dtype
+    of "float": bindSym"float32"
+    of "half": bindSym"F16"
+    of "bfloat": bindSym"BF16"
+    else:
+      error("gemm_mma: atom registry " & operand & " dtype `" & dtype &
+            "` is not a staging dtype (\"float\"/\"half\"/\"bfloat\")")
+      newEmptyNode()
+  if not sameType(node.getTypeInst(), expected):
+    error("gemm_mma: staged scalar `" & name & "` does not match the " & operand &
+          " dtype the atom registry declares (" & dtype & "), got " &
+          node.getTypeInst().repr & "; stage it in the registry dtype")
 
 proc leafProduct(n: NimNode): int =
   ## Product of the int literals in a type-AST subtree (layout shape parts).
@@ -149,7 +170,7 @@ template valuesPerThread*(atom: untyped, layoutKey: string): int =
 #  gemm_mma: one register-level MMA call
 # ═════════════════════════════════════════════════════════════════════════
 
-macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
+macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
   ## One register-level MMA call over caller-staged scalars: `d = a·b + c`,
   ## `atom.gemm_mma(d0, ..., a0, ..., b0, ..., c0, ...)`:
   ## - dV result scalars,
@@ -165,7 +186,7 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
   let bV = atom.valuesPerThread("bLayout")
 
   var args = scalars
-  if args.kind != nnkArgList:
+  if args.kind notin {nnkArgList, nnkBracket}:
     args = newTree(nnkArgList, args)
   if args.len != 2 * dV + aV + bV:
     error("gemm_mma: expected " & $(2 * dV + aV + bV) & " staged scalars (" &
@@ -188,6 +209,14 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[untyped]): untyped =
     if aType.len == 0:
       error("gemm_mma: atom `" & $atom & "` is missing the `aType` registry " &
             "property (\"float\"/\"half\"/\"bfloat\") for the Apple staging payload")
+    let cType = constStr(atom, "cType")
+    var staged: seq[(string, NimNode, string, string)]
+    for i in 0 ..< dV: staged.add((dNames[i], scalars[i], "float", "accumulator"))
+    for i in 0 ..< aV: staged.add((aNames[i], scalars[dV + i], aType, "A operand"))
+    for i in 0 ..< bV: staged.add((bNames[i], scalars[dV + aV + i], bType, "B operand"))
+    for i in 0 ..< dV: staged.add((cNames[i], scalars[dV + aV + bV + i], cType, "addend"))
+    for (name, node, dtype, operand) in staged:
+      assertStagedDtype(name, node, dtype, operand)
     result = newTree(nnkAsmStmt, newEmptyNode(),
       newLit(buildAppleSimdgroupAsm(dNames, aNames, bNames, cNames, "float", aType)))
   of "":
