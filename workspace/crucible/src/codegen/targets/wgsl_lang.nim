@@ -597,8 +597,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
        ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component of a u32 WGSL builtin, cast to standard Nim `int` from default u32.
-      result = "i32(" & ctx.genWebGpu(ast.dParent) & '.' & ctx.genWebGpu(ast.dField) & ')'
+      # A component use takes the bare builtin param, the whole-value
+      # construction may name an ivec3 alias this shader never declared
+      result = "i32(" & wgslBuiltinParamName(ast.dParent.ident()) & '.' &
+               ctx.genWebGpu(ast.dField) & ')'
     else:
       let fieldName = if ast.dField.kind == gpuIdent: wgslSafeMember(ast.dField.ident())
                       else: ctx.genWebGpu(ast.dField)
@@ -610,21 +612,18 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
     of gbkThreadgroupBarrier:
-      # Every backend spelling of the barrier is an alias template that sem
-      # expands to the canonical call, so only this kind reaches the IR.
-      # WGSL spells it `workgroupBarrier()`.
+      # Backend barrier spellings alias-expand in sem, only the canonical
+      # call reaches the IR. WGSL spells it `workgroupBarrier()`.
       result = indentStr & "workgroupBarrier()"
     of gbkThreadgroupBarrierDevice:
-      # WGSL has no combined barrier, workgroupBarrier() runs first,
-      # storageBarrier() then orders the storage address space
+      # WGSL has no combined barrier: workgroupBarrier(), then storageBarrier()
       result = indentStr & "workgroupBarrier();" & "\n" & indentStr &
                "storageBarrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
-        # gated by the `subgroups` feature (`enable subgroups;`, injected by
-        # the wgsl codegen header scan).
+        # SIMD-group gather from lane + delta, gated by the `subgroups` feature
+        # the header scan injects
         ctx.withoutSemicolon:
           result = indentStr & "subgroupShuffleDown(" &
                    ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
@@ -669,11 +668,9 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           "builtin, so the threadgroup size is not addressable from WGSL."
       of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
          gbkThreadgroupsPerGrid, gbkThreadPositionInThreadgroup:
-        # Canonical vector coordinates map to the injected `@builtin` param names,
-        # u32 in WGSL (global_id, workgroup_id, num_workgroups, local_invocation_id).
-        # Whole-value use constructs the u32 vector, the canonical ivec3 domain.
+        # u32 @builtin coords, whole-value use casts to the canonical ivec3
         let n = wgslBuiltinParamName(ast.ident())
-        result = "vec3<u32>(" & n & ".x, " & n & ".y, " & n & ".z)"
+        result = "ivec3(i32(" & n & ".x), i32(" & n & ".y), i32(" & n & ".z))"
       of gbkThreadIndexInThreadgroup:
         # `local_invocation_index` is u32 in WGSL, cast to the int domain.
         result = "i32(" & wgslBuiltinParamName(ast.ident()) & ')'
@@ -707,9 +704,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result.add '}'
 
   of gpuAlias:
-    # Aliases come from `ctx.types` and due to implementation details currently are _not_ wrapped
-    # in a `block` (as they are handled like regular `structs`). However, WebGPU requires semicolons
-    # after alias definitions, but not after `struct`. Hence we add `;` manually here
+    # Aliases emit like structs, WGSL wants `;` after a type alias,
+    # not after a struct
     result = "alias " & gpuTypeToString(ast.aTyp) & " = " & ctx.genWebGpu(ast.aTo) & ';'
 
   of gpuObjConstr:
