@@ -42,7 +42,7 @@ static:
     doAssert idx.iArr.kind == gpuDeref, "ptr-to-array indexing should be wrapped"
     echo "  OK - ptr to static array: gpuDeref inserted"
 
-  # ── 3. Leaves gpuIndex over a pointer to scalar alone ─────────────────────
+  # ── 3. Wraps gpuIndex over a pointer to scalar ───────────────────────────
   block:
     let int32 = GpuType(kind: gtInt32)
     let ptrTyp = GpuType(kind: gtPtr, to: int32)
@@ -52,8 +52,8 @@ static:
     var idx = GpuAst(kind: gpuIndex, iArr: ptrIdent, iIndex: lit0)
     var ctx = GpuContext()
     insertPointerDerefImpl(ctx, idx)
-    doAssert idx.iArr.kind == gpuIdent, "scalar-pointee index must not be wrapped"
-    echo "  OK - ptr to scalar: no gpuDeref"
+    doAssert idx.iArr.kind == gpuDeref, "scalar-pointee index must be wrapped: bare pointer indexing is unrenderable on Vulkan"
+    echo "  OK - ptr to scalar: gpuDeref inserted"
 
   # ── 4. Wraps gpuDot over a pointer parent ─────────────────────────────────
   block:
@@ -110,5 +110,38 @@ static:
     insertPointerDerefImpl(ctx, idx)
     doAssert idx.iArr.kind == gpuIdent, "plain array index must not be wrapped"
     echo "  OK - plain array: untouched"
+
+  # ── 8. Recurses into gpuIndex over a dot: p.f[i] wraps the dot's pointer parent ─
+  block:
+    let int32 = GpuType(kind: gtInt32)
+    let arrType = GpuType(kind: gtArray, aTyp: int32, aLen: 4)
+    let structTyp = GpuType(kind: gtObject)
+    let ptrTyp = GpuType(kind: gtPtr, to: structTyp)
+    let fieldSym = newSymbol("f", iSym = "f_h8", typ = arrType)
+    let ptrSym = newSymbol("p", iSym = "p_h8", typ = ptrTyp)
+    var dot = GpuAst(kind: gpuDot,
+                     dParent: GpuAst(kind: gpuIdent, symbol: ptrSym),
+                     dField: GpuAst(kind: gpuIdent, symbol: fieldSym))
+    var idx = GpuAst(kind: gpuIndex, iArr: dot, iIndex: GpuAst(kind: gpuLit, lValue: "0", lType: int32))
+    var ctx = GpuContext()
+    insertPointerDerefImpl(ctx, idx)
+    doAssert idx.iArr.kind == gpuDot, "the dot itself stays the index base"
+    doAssert idx.iArr.dParent.kind == gpuDeref, "the pointer parent inside iArr must be wrapped"
+    echo "  OK - p.f[i]: deref reaches inside iArr"
+
+  # ── 9. Wraps gpuIndex whose base is a nested gpuIndex over an array of pointers ─
+  block:
+    let int32 = GpuType(kind: gtInt32)
+    let ptrTyp = GpuType(kind: gtPtr, to: int32)
+    let arrOfPtr = GpuType(kind: gtArray, aTyp: ptrTyp, aLen: 4)
+    let arrSym = newSymbol("m", iSym = "m_h9", typ = arrOfPtr)
+    let inner = GpuAst(kind: gpuIndex,
+                       iArr: GpuAst(kind: gpuIdent, symbol: arrSym),
+                       iIndex: GpuAst(kind: gpuLit, lValue: "0", lType: int32))
+    var idx = GpuAst(kind: gpuIndex, iArr: inner, iIndex: GpuAst(kind: gpuLit, lValue: "1", lType: int32))
+    var ctx = GpuContext()
+    insertPointerDerefImpl(ctx, idx)
+    doAssert idx.iArr.kind == gpuDeref, "index over an indexed pointer element must be wrapped"
+    echo "  OK - m[i][j] over array of pointers: outer index wrapped"
 
 echo "insertPointerDeref: all cases pass"

@@ -357,14 +357,23 @@ proc getOperandType(n: GpuAst): GpuType =
   of gpuDeref:
     let d = getOperandType(n.dOf)
     if d != nil and d.kind == gtPtr: d.to else: d
+  of gpuIndex:
+    let t = getOperandType(n.iArr)
+    if t == nil: nil
+    else:
+      case t.kind
+      of gtArray: t.aTyp
+      of gtUA: t.uaTo
+      of gtPtr: t.to
+      else: nil
   of gpuDot:
-    let parent = getOperandType(n.dParent)
-    if parent != nil and parent.kind in {gtObject, gtGenericInst} and
-        n.dField.kind == gpuIdent and n.dField.symbol != nil:
-      for f in parent.structFields:
-        if f.name == n.dField.symbol.name:
-          return f.typ
-    nil
+    # The dot's type is the type of the field: the parser records each
+    # identifier's type on its symbol, so the field ident already knows it
+    if n.dField.kind == gpuIdent and n.dField.symbol != nil and
+        n.dField.symbol.typ != nil:
+      n.dField.symbol.typ
+    else:
+      nil
   else:
     nil
 
@@ -381,18 +390,21 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
   of gpuAddr:
     discard
   of gpuIndex:
+    insertPointerDerefImpl(ctx, n.iArr)
     insertPointerDerefImpl(ctx, n.iIndex)
     if n.iArr.kind != gpuDeref:
       let t = getOperandType(n.iArr)
-      if t != nil and t.kind == gtPtr and t.to != nil and t.to.kind in {gtArray, gtUA}:
+      if t != nil and t.kind == gtPtr and t.to != nil:
         n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
   of gpuDot:
+    insertPointerDerefImpl(ctx, n.dParent)
     insertPointerDerefImpl(ctx, n.dField)
     if n.dParent.kind != gpuDeref:
       let t = getOperandType(n.dParent)
       if t != nil and t.kind == gtPtr:
         n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
   of gpuDeref:
+    insertPointerDerefImpl(ctx, n.dOf)
     if n.dOf.kind != gpuDeref:
       let t = getOperandType(n.dOf)
       if t != nil and t.kind == gtPtr:
