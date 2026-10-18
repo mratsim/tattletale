@@ -21,10 +21,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:
     var engine = bkVulkan.init()
     engine.ingest(kernelCode)
-    let oDev = engine.allocDevice(64)
+    let oDev = engine.allocDevice(array[32, byte], 2)
     engine.launchKernel("k", oDev, ())
     var res: array[64, byte]
-    engine.copyToHostFromDevice(addr res[0], oDev, 64)
+    engine.copyToHostFromDevice(cast[ptr array[32, byte]](addr res[0]), oDev, 2)
     engine.freeDevice(oDev)
     for i in 0 ..< 64:
       doAssert res[i] == byte(i), &"digest byte {i}: {res[i]} != {i}"

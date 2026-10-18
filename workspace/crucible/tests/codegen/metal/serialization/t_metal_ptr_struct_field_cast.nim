@@ -73,13 +73,13 @@ proc runTest() =
       check "device uint* data;" in src
       check "(device uint*)" in src
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
-      let iDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.copyToDeviceFromHost(iDev, addr input[0], 4 * sizeof(uint32))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let iDev = engine.allocDevice(uint32, 4)
+      engine.copyToDeviceFromHost(iDev, addr input[0], 4)
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "ptrFieldDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr output[0], oDev, 4)
       engine.freeDevice(iDev)
       engine.freeDevice(oDev)
       for i in 0 ..< 4:
@@ -90,11 +90,11 @@ proc runTest() =
       let src = engine.getArtifact()
       check "threadgroup uint* data;" in src
       check "(threadgroup uint*)" in src
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "ptrFieldSmemKernel", oDev, ())
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr output[0], oDev, 4)
       engine.freeDevice(oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
@@ -106,18 +106,18 @@ proc runTest() =
       check "struct View{" in src
       check "struct View_smem{" in src
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
-      let iDev = engine.allocDevice(4 * sizeof(uint32))
-      engine.copyToDeviceFromHost(iDev, addr input[0], 4 * sizeof(uint32))
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let iDev = engine.allocDevice(uint32, 4)
+      engine.copyToDeviceFromHost(iDev, addr input[0], 4)
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "viewDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr output[0], oDev, 4)
       for i in 0 ..< 4:
         check output[i] == input[i]
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "viewSmemKernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr output[0], oDev, 4)
       engine.freeDevice(iDev)
       engine.freeDevice(oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)

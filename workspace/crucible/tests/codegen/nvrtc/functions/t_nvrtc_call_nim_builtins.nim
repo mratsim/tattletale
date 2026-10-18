@@ -17,9 +17,9 @@ template runIntKernel(t: typedesc; expected0, expected1: float32) =
     var buf: array[2, float32]
     var engine = bkCuda.init()
     engine.ingest(k)
-    let oDev = engine.allocDevice(sizeof(buf))
+    let oDev = engine.allocDevice(float32, buf.len)
     engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-    engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+    engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
     engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
@@ -42,9 +42,9 @@ template runFloatKernel(t: typedesc; expected0, expected1: float32) =
     var buf: array[2, float32]
     var engine = bkCuda.init()
     engine.ingest(k)
-    let oDev = engine.allocDevice(sizeof(buf))
+    let oDev = engine.allocDevice(float32, buf.len)
     engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-    engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+    engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
     engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
@@ -88,9 +88,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[2, float32]
       var engine = bkCuda.init()
       engine.ingest(wrapperKernel)
-      let oDev = engine.allocDevice(sizeof(buf))
+      let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
       engine.freeDevice(oDev)
       check buf[0] == 12'f32
       check buf[1] == 16'f32

@@ -136,14 +136,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t1Msl)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let bDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let bDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -153,12 +153,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t2Msl)
       var a: array[1, uint32] = [41'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -167,12 +167,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t3Msl)
       var a: array[1, uint32] = [20'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -181,12 +181,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t4Msl)
       var a: array[1, uint32] = [40'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -196,14 +196,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t5Msl)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
-      let aDev = engine.allocDevice(2 * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], 2 * sizeof(uint32))
-      let bDev = engine.allocDevice(2 * sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], 2 * sizeof(uint32))
-      let oDev = engine.allocDevice(2 * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 2)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 2)
+      let bDev = engine.allocDevice(uint32, 2)
+      engine.copyToDeviceFromHost(bDev, addr b[0], 2)
+      let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       var res: array[2, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -213,10 +213,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "emit is not silently dropped (must override the DSL write)":
       var engine = bkMetal.init()
       engine.ingest(t6Msl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
@@ -224,12 +224,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t7Msl)
       var x: array[1, uint32] = [41'u32]
-      let xDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let xDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -238,12 +238,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t8Msl)
       var x: array[1, uint32] = [41'u32]
-      let xDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(xDev, addr x[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let xDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -251,10 +251,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "trailing emit in a non-void device fn survives insertResult":
       var engine = bkMetal.init()
       engine.ingest(t10Msl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
@@ -262,12 +262,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(t11Msl)
       var a: array[1, uint32] = [42'u32]
-      let aDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t11Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -275,10 +275,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "call-form emit is not silently dropped (must override the DSL write)":
       var engine = bkMetal.init()
       engine.ingest(t12Msl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
@@ -288,10 +288,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let msl = engine.getArtifact()
       check "#define MSL_EMIT_TILE 32" in msl
       check "#define MSL_EMIT_TILE 32;" notin msl
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t14Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 33
 
@@ -304,20 +304,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "multi-item emit dropped an item:\n" & t15Msl
       var engine = bkMetal.init()
       engine.ingest(t15Msl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
       var engine = bkMetal.init()
       engine.ingest(t16Msl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 

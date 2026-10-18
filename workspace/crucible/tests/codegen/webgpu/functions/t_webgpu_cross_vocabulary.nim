@@ -44,9 +44,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "@builtin(local_invocation_index)" in src
       check "@builtin(workgroup_id)" in src
       var res: array[64 + 8, uint32]
-      let oDev = engine.allocDevice(res.len * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)

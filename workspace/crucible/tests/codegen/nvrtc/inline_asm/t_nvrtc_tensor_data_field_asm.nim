@@ -52,9 +52,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(float32, buf.len)
   engine.launchKernel("tensorDataAsmKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   echo "  [0]=", buf[0], " [1]=", buf[1], " [2]=", buf[2], " [3]=", buf[3], " [4]=", buf[4], " [5]=", buf[5]
   doAssert buf[0] == 6.0'f32   # 1 + 5
@@ -66,9 +66,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "  OK (test_nvrtc_tensor_data_field_asm)"
 
   var buf2: array[3, float32]
-  let oDev2 = engine.allocDevice(sizeof(buf2))
+  let oDev2 = engine.allocDevice(float32, buf2.len)
   engine.launchKernel("varArrayAsmKernel", oDev2, ())
-  engine.copyToHostFromDevice(addr buf2[0], oDev2, sizeof(buf2))
+  engine.copyToHostFromDevice(addr buf2[0], oDev2, buf2.len)
   engine.freeDevice(oDev2)
   echo "  [0]=", buf2[0], " [1]=", buf2[1], " [2]=", buf2[2]
   doAssert buf2[0] == 6.0'f32   # 1 + 5

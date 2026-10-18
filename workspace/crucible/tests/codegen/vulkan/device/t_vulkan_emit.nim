@@ -126,14 +126,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t1Vk)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      let bDev = engine.allocDevice(b.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      let bDev = engine.allocDevice(uint32, b.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -143,12 +143,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.init()
       engine.ingest(t2Vk)
       var a: array[1, uint32] = [41'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -157,12 +157,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.init()
       engine.ingest(t3Vk)
       var a: array[1, uint32] = [20'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -171,12 +171,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.init()
       engine.ingest(t4Vk)
       var a: array[1, uint32] = [40'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(aDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -186,14 +186,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(t5Vk)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
-      let aDev = engine.allocDevice(a.len * sizeof(uint32))
-      let bDev = engine.allocDevice(b.len * sizeof(uint32))
-      let oDev = engine.allocDevice(2 * sizeof(uint32))
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+      let aDev = engine.allocDevice(uint32, a.len)
+      let bDev = engine.allocDevice(uint32, b.len)
+      let oDev = engine.allocDevice(uint32, 2)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       var res: array[2, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 2)
       engine.freeDevice(aDev)
       engine.freeDevice(bDev)
       engine.freeDevice(oDev)
@@ -203,10 +203,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "emit is not silently dropped (must override the DSL write)":
       var engine = bkVulkan.init()
       engine.ingest(t6Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
@@ -214,12 +214,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.init()
       engine.ingest(t7Vk)
       var x: array[1, uint32] = [41'u32]
-      let xDev = engine.allocDevice(x.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      let xDev = engine.allocDevice(uint32, x.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -228,12 +228,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.init()
       engine.ingest(t8Vk)
       var x: array[1, uint32] = [41'u32]
-      let xDev = engine.allocDevice(x.len * sizeof(uint32))
-      let oDev = engine.allocDevice(sizeof(uint32))
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len * sizeof(uint32))
+      let xDev = engine.allocDevice(uint32, x.len)
+      let oDev = engine.allocDevice(uint32, 1)
+      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(xDev)
       engine.freeDevice(oDev)
       check res[0] == 42
@@ -241,50 +241,50 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "trailing emit in a non-void device fn survives insertResult":
       var engine = bkVulkan.init()
       engine.ingest(t10Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
       var engine = bkVulkan.init()
       engine.ingest(t12Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
       var engine = bkVulkan.init()
       engine.ingest(t14Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t14Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
       var engine = bkVulkan.init()
       engine.ingest(t15Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
       var engine = bkVulkan.init()
       engine.ingest(t16Vk)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42
 

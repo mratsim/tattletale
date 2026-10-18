@@ -41,10 +41,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # returns compiled SPIR-V instead of source text, so the source is
       # grepped directly.
       check "gl_LocalInvocationIndex" in kernel2d
-      let oDev = engine.allocDevice(72 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 72)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
       var res: array[64 + 8, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 72 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 72)
       engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)

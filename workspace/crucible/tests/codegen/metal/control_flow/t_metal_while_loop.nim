@@ -22,10 +22,10 @@ proc runTest() =
     test "output[i] = i for i in 0..<4":
       var engine = bkMetal.init()
       engine.ingest(whileMsl)
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("whileKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       engine.freeDevice(oDev)
       for i in 0 ..< 4:
         check res[i] == uint32(i)

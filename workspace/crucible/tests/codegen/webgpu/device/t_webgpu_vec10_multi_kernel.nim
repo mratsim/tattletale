@@ -21,20 +21,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   var engine = bkWGSL.init()
   engine.ingest(code)
   var res: array[10, uint32]
-  let aDev = engine.allocDevice(a.len * sizeof(uint32))
-  let bDev = engine.allocDevice(b.len * sizeof(uint32))
-  let oDev = engine.allocDevice(res.len * sizeof(uint32))
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(uint32))
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(uint32))
+  let aDev = engine.allocDevice(uint32, a.len)
+  let bDev = engine.allocDevice(uint32, b.len)
+  let oDev = engine.allocDevice(uint32, res.len)
+  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
 
   engine.launchKernel("vec10_add", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+  engine.copyToHostFromDevice(addr res[0], oDev, res.len)
   for i in 0 ..< 10:
     doAssert res[i] == a[i] + b[i]
   echo "  OK — vec10_add"
 
   engine.launchKernel("vec10_mul", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(uint32))
+  engine.copyToHostFromDevice(addr res[0], oDev, res.len)
   for i in 0 ..< 10:
     doAssert res[i] == a[i] * b[i]
   echo "  OK — vec10_mul"

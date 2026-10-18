@@ -16,7 +16,7 @@ const code = opencl:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = bkOpenCL.init()
   engine.ingest(code)
-  let oDev = engine.allocDevice(sizeof(uint32))
+  let oDev = engine.allocDevice(uint32, 1)
   # a raw pointer arg must fail to compile: it would bind garbage bits where
   # the kernel expects a cl_mem object
   engine.launchKernel("k", oDev, (cast[ptr UncheckedArray[uint32]](0),))

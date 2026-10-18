@@ -7,16 +7,13 @@
 import std/[strutils, tables]
 
 import ../../codegen/ir/gpu_types
-import ../engines_common
+import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
 export metal_runtime
-
-when defined(macosx):
-  import ../launch/launch_kernel
 
 # ═════════════════════════════════════════════════
 # ▸ Types
@@ -93,7 +90,7 @@ when defined(macosx):
         objc.release(pso)
       cache.psos.clear()
 
-  proc newMetalEngine(): MetalEngine =
+  proc newMetalEngine*(): MetalEngine =
     objc.withMemPool:
       result = MetalEngine(
         ctx: newMetalCtx(),
@@ -134,7 +131,7 @@ when defined(macosx):
     if result == nil:
       failLoud("contents() returned nil for a shared buffer")
 
-  proc allocDevice*(engine: MetalEngine, n: int): objc.ID =
+  proc allocDeviceImpl*(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
       failLoud("allocDevice: size must be positive, got " & $n)
     result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
@@ -142,16 +139,16 @@ when defined(macosx):
     if objc.isNil(result):
       failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
 
-  proc freeDevice*(engine: MetalEngine, h: objc.ID) =
+  proc freeDeviceImpl*(engine: MetalEngine, h: objc.ID) =
     if not objc.isNil(h):
       objc.release(h)
 
-  proc copyToDeviceFromHost*(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
+  proc copyToDeviceFromHostImpl*(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
     if n <= 0:
       failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
     copyMem(bufferContents(dst), src, n)
 
-  proc copyToHostFromDevice*(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+  proc copyToHostFromDeviceImpl*(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
     if n <= 0:
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, bufferContents(src), n)
@@ -207,5 +204,5 @@ when defined(macosx):
 # ═════════════════════════════════════════════════
 
 else:
-  proc newMetalEngine(): MetalEngine =
+  proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")

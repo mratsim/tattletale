@@ -43,10 +43,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "all five attribute params bind to real thread-space values":
       var engine = bkMetal.init()
       engine.ingest(attrSemMsl)
-      let oDev = engine.allocDevice(64 * 6 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 64 * 6)
       engine.launchKernel<<(grid: (2, 2, 2), blk: (2, 2, 2))>>("attrSem", oDev, ())
       var res: array[64 * 6, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 64 * 6 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 64 * 6)
       engine.freeDevice(oDev)
       # global (0,0,0): tg=(0,0,0), tpt=(2,2,2), tpg=(2,2,2), local=(0,0,0)
       check res[0] == 0'u32          # global x

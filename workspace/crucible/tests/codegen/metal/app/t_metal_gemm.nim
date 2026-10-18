@@ -38,10 +38,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "A(2×3) * B(3×2) = C(2×2) on the device":
       var engine = bkMetal.init()
       engine.ingest(kernelCode)
-      let oDev = engine.allocDevice(4 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("gemmKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 4)
       engine.freeDevice(oDev)
       let expected = [58'u32, 64, 139, 154]
       for i in 0 ..< 4:

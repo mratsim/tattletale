@@ -93,9 +93,9 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     var engine = bkCuda.init(kernelScalar)
     echo "PTX: ", engine.getArtifact().len, " bytes"
     var buf: array[4, uint32]
-    let o0 = engine.allocDevice(sizeof(buf))
+    let o0 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel<<(1, 1)>>("threadIdKernel", o0, ())
-    engine.copyToHostFromDevice(addr buf[0], o0, sizeof(buf))
+    engine.copyToHostFromDevice(addr buf[0], o0, buf.len)
     engine.freeDevice(o0)
     doAssert buf[0] == 0
     doAssert buf[1] == 0
@@ -107,9 +107,9 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
          # grid vs block so an exchange of the two extents is caught)
     var engine = bkCuda.init(kernel1d)
     var rec: array[3 * 5 * recordLen, uint32]
-    let o1 = engine.allocDevice(sizeof(rec))
+    let o1 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(3, 5)>>("threadState1d", o1, ())
-    engine.copyToHostFromDevice(addr rec[0], o1, sizeof(rec))
+    engine.copyToHostFromDevice(addr rec[0], o1, rec.len)
     engine.freeDevice(o1)
     for b in 0 ..< 3:
       for t in 0 ..< 5:
@@ -125,9 +125,9 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const by = 2
     var engine = bkCuda.init(kernel2d)
     var rec: array[gx * gy * bx * by * recordLen, uint32]
-    let o2 = engine.allocDevice(sizeof(rec))
+    let o2 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
-    engine.copyToHostFromDevice(addr rec[0], o2, sizeof(rec))
+    engine.copyToHostFromDevice(addr rec[0], o2, rec.len)
     engine.freeDevice(o2)
     for byy in 0 ..< gy:
       for bxx in 0 ..< gx:
@@ -151,9 +151,9 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const bz = 3
     var engine = bkCuda.init(kernel3d)
     var rec: array[gx * gy * gz * bx * by * bz * recordLen, uint32]
-    let o3 = engine.allocDevice(sizeof(rec))
+    let o3 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
-    engine.copyToHostFromDevice(addr rec[0], o3, sizeof(rec))
+    engine.copyToHostFromDevice(addr rec[0], o3, rec.len)
     engine.freeDevice(o3)
     for bzz in 0 ..< gz:
       for byy in 0 ..< gy:

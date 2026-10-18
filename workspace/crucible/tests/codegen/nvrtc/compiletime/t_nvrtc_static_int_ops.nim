@@ -64,11 +64,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var dynArr: array[1, int32] = [100'i32]
       var engine = bkCuda.init()
       engine.ingest(kernelCode)
-      let iDev = engine.allocDevice(sizeof(dynArr))
-      engine.copyToDeviceFromHost(iDev, addr dynArr[0], sizeof(dynArr))
-      let oDev = engine.allocDevice(sizeof(buf))
+      let iDev = engine.allocDevice(int32, dynArr.len)
+      engine.copyToDeviceFromHost(iDev, addr dynArr[0], dynArr.len)
+      let oDev = engine.allocDevice(int32, buf.len)
       engine.launchKernel<<(1, 1)>>("staticIntOps", oDev, (iDev,))
-      engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+      engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
       engine.freeDevice(iDev)
       engine.freeDevice(oDev)
       check buf[0] == 11    # Int[10]() + 1

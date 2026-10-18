@@ -6,7 +6,12 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
-import ../engines_common
+import ../engines/engines_common
+import ../engines/nvrtc
+import ../engines/cl
+import ../engines/vk
+import ../engines/wgpu
+import ../engines/metal
 import launch_serialization {.all.}
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -60,8 +65,9 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
       blkN = cfgN.newDotExpr(ident"blk")
   else:
     error "launchKernel takes (kernel, output, args[, cfg][, do-schedule]), got " & $(rest.len + 3) & " args"
+  let impl = bindSym"launchKernelImpl"
   return quote do:
-    `engine`.launchKernelImpl(`kernel`, `output`, `argsNode`, `gridN`, `blkN`)
+    `impl`(`engine`, `kernel`, `output`, `argsNode`, `gridN`, `blkN`)
 
 proc `<<`*[E: HwEngine, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchConfig[E] =
   LaunchConfig[E](engine: r.engine, grid: dim3(cfg.grid), blk: dim3(cfg.blk))

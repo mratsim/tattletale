@@ -41,9 +41,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      let oDev = engine.allocDevice(sizeof(output))
+      let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
       engine.freeDevice(oDev)
       check output[0] == 1
 
@@ -52,9 +52,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[1, uint32]
       var engine = bkCuda.init()
       engine.ingest(code)
-      let oDev = engine.allocDevice(sizeof(output))
+      let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
       engine.freeDevice(oDev)
       check output[0] == 1
 

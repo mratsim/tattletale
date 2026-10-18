@@ -15,9 +15,9 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   ## level, which would keep every context alive until program exit.
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(typeof(buf[0]), buf.len)
   engine.launchKernel(kernelName, oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
 
 # ═════════════════════════════════════════════════════════════════════
@@ -85,9 +85,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kIfExprCond)
-    let o5 = engine.allocDevice(sizeof(buf5))
+    let o5 = engine.allocDevice(uint32, buf5.len)
     engine.launchKernel<<(1, 4)>>("ifExprCondKernel", o5, ())
-    engine.copyToHostFromDevice(addr buf5[0], o5, sizeof(buf5))
+    engine.copyToHostFromDevice(addr buf5[0], o5, buf5.len)
     engine.freeDevice(o5)
   doAssert buf5[0] == 100, &"if-expr cond (tid=0): got {buf5[0]}, expected 100"
   doAssert buf5[1] == 100, &"if-expr cond (tid=1): got {buf5[1]}, expected 100"
@@ -125,9 +125,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   block:
     var engine = bkCuda.init()
     engine.ingest(kIfElifElse)
-    let o7 = engine.allocDevice(sizeof(buf7))
+    let o7 = engine.allocDevice(uint32, buf7.len)
     engine.launchKernel<<(1, 4)>>("ifElifElseKernel", o7, ())
-    engine.copyToHostFromDevice(addr buf7[0], o7, sizeof(buf7))
+    engine.copyToHostFromDevice(addr buf7[0], o7, buf7.len)
     engine.freeDevice(o7)
   doAssert buf7[0] == 100, &"if-elif-else (tid=0): got {buf7[0]}, expected 100"
   doAssert buf7[1] == 200, &"if-elif-else (tid=1): got {buf7[1]}, expected 200"

@@ -11,7 +11,7 @@ import std/[macros, monotimes, os, strutils, tables, times]
 import workspace/crucible/vendor/wgpu
 import ../../codegen/ir/gpu_types
 import ../exec/wgpu_runtime
-import ../engines_common
+import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
@@ -51,7 +51,7 @@ proc `=destroy`(cache: var WgpuCache) =
     wgpuPipelineLayoutRelease(c.pipelineLayout)
     wgpuBindGroupLayoutRelease(c.bindGroupLayout)
 
-proc newWgpuEngine(): WgpuEngine =
+proc newWgpuEngine*(): WgpuEngine =
   WgpuEngine(
     ctx: initWgpu(),
     cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
@@ -161,7 +161,7 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
   if result.z == 0: result.z = 1
 
 
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, args: tuple, grid, squadron = Dim3()) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: tuple, grid, squadron = Dim3()) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
 
@@ -281,8 +281,8 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
 
   bgEntries[0] = WGPUBindGroupEntry(
     binding: 0.cuint,
-    buffer: output,
-    size: wgpuBufferGetSize(output).csize_t
+    buffer: dctx.handles[0],
+    size: wgpuBufferGetSize(dctx.handles[0]).csize_t
   )
   for i in 1 ..< n:
     bgEntries[i] = WGPUBindGroupEntry(
@@ -343,7 +343,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: WGPUBuffer, a
   if uncaptured.errType != wgpuErrorTypeNoError:
     failLoud("WebGPU uncaptured error: " & uncaptured.message)
 
-proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
+proc allocDeviceImpl*(engine: WgpuEngine, n: int): WGPUBuffer =
   let device = engine.ctx.device
   var desc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
@@ -354,13 +354,13 @@ proc allocDevice*(engine: WgpuEngine, n: int): WGPUBuffer =
   if result == nil:
     failLoud("WebGPU: failed to create a " & $n & "-byte device buffer")
 
-proc freeDevice*(engine: WgpuEngine, h: WGPUBuffer) =
+proc freeDeviceImpl*(engine: WgpuEngine, h: WGPUBuffer) =
   wgpuBufferRelease(h)
 
-proc copyToDeviceFromHost*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
   wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
 
-proc copyToHostFromDevice*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
+proc copyToHostFromDeviceImpl*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
   var stagingDesc = WGPUBufferDescriptor(

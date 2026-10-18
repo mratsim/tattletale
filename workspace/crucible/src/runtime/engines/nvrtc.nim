@@ -11,7 +11,7 @@ import workspace/crucible/src/abis/c_abi
 
 import ../../codegen/ir/gpu_types
 import ../exec/cuda_runtime
-import ../engines_common
+import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
@@ -48,7 +48,7 @@ proc `=destroy`(nvrtc: NVRTC) =
     check cuCtxSetCurrent(nvrtc.context)
     check cuCtxDestroy nvrtc.context
 
-proc newCudaEngine(): CudaEngine =
+proc newCudaEngine*(): CudaEngine =
   result = CudaEngine()
   result.nvrtc = initNvrtc()
 
@@ -161,12 +161,12 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
     ctx.bytes[argIdx].packFrom(off, v, bkCuda)
   ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
-proc cudaBindArgs(output: CUdeviceptr, args: tuple): auto =
+proc cudaBindArgs(output: auto, args: tuple): auto =
   const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr)
   result = SerializationCtx[n]()
   bindArgs(result, output, args, store, CUdeviceptr)
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, args: tuple, grid, blk = Dim3()) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -193,14 +193,14 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: CUdeviceptr, 
 
   check cuCtxSynchronize()
 
-proc allocDevice*(engine: CudaEngine, n: int): CUdeviceptr =
+proc allocDeviceImpl*(engine: CudaEngine, n: int): CUdeviceptr =
   check cuMemAlloc(result, csize_t(n))
 
-proc freeDevice*(engine: CudaEngine, h: CUdeviceptr) =
+proc freeDeviceImpl*(engine: CudaEngine, h: CUdeviceptr) =
   check cuMemFree(h)
 
-proc copyToDeviceFromHost*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
   check cuMemcpyHtoD(dst, src, csize_t(n))
 
-proc copyToHostFromDevice*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
+proc copyToHostFromDeviceImpl*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
   check cuMemcpyDtoH(dst, src, csize_t(n))

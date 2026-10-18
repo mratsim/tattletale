@@ -38,9 +38,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[8, int32]
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 4 threads explicitly.
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(int32, buf.len)
   engine.launchKernel<<(1, 4)>>("nodeviceKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
 
   doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"

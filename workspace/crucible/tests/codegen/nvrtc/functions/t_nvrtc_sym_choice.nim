@@ -21,9 +21,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf: array[2, uint32]
   var engine = bkCuda.init()
   engine.ingest(kernelCode)
-  let oDev = engine.allocDevice(sizeof(buf))
+  let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("symChoiceKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, sizeof(buf))
+  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
   engine.freeDevice(oDev)
   echo "  output: [", buf[0], ", ", buf[1], "]"
   doAssert buf[0] == 11, &"uint32 addOne: {buf[0]} != 11"

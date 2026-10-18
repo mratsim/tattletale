@@ -31,9 +31,9 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
       engine.ingest(reductionWgsl)
 
       var res: array[3, float32]
-      let oDev = engine.allocDevice(res.len * sizeof(float32))
+      let oDev = engine.allocDevice(float32, res.len)
       engine.launchKernel("reductionKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len * sizeof(float32))
+      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       engine.freeDevice(oDev)
 
       echo "  reductionKernel: output = [", res[0], ", ", res[1], ", ", res[2], "]"

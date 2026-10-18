@@ -11,7 +11,6 @@
 
 import std/strformat
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/vk
 
 const kernelCode = vulkan:
   proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint64]]) {.global.} =
@@ -22,16 +21,15 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   block:
     var engine = bkVulkan.init()
     engine.ingest(kernelCode)
-    let sDev = engine.allocDevice(sizeof(uint32))
-    var devs: array[4, VulkanBuffer]
-    for i in 0 ..< 4:
-      devs[i] = engine.allocDevice(4 * sizeof(uint64))
+    let sDev = engine.allocDevice(uint32, 1)
+    var devs = [engine.allocDevice(uint64, 4), engine.allocDevice(uint64, 4),
+                engine.allocDevice(uint64, 4), engine.allocDevice(uint64, 4)]
     var seed: array[4, uint64] = [7'u64, 8'u64, 9'u64, 10'u64]
     for i in 0 ..< 4:
-      engine.copyToDeviceFromHost(devs[i], addr seed[0], sizeof(seed))
+      engine.copyToDeviceFromHost(devs[i], addr seed[0], seed.len)
     engine.launchKernel("k", sDev, (devs[0], devs[1], devs[2], devs[3]))
     var got: uint32
-    engine.copyToHostFromDevice(addr got, sDev, sizeof(uint32))
+    engine.copyToHostFromDevice(addr got, sDev, 1)
     for i in 0 ..< 4:
       engine.freeDevice(devs[i])
     engine.freeDevice(sDev)

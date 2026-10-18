@@ -47,10 +47,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelDirect)
       echo kernelDirect
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 8
 
@@ -58,10 +58,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelConstLet)
       echo kernelConstLet
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 8
 
@@ -69,10 +69,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkMetal.init()
       engine.ingest(kernelBlock)
       echo kernelBlock
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 8
 

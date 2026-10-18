@@ -31,10 +31,10 @@ proc runTest() =
     test "two-level chain forwards both builtins (kernel -> mid -> bump)":
       var engine = bkMetal.init()
       engine.ingest(chainMsl)
-      let oDev = engine.allocDevice(32 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("chainKernel", oDev, ())
       var res: array[32, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 32)
       engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
@@ -42,10 +42,10 @@ proc runTest() =
     test "kernel own ref and the chain share one attribute param":
       var engine = bkMetal.init()
       engine.ingest(chainMsl)
-      let oDev = engine.allocDevice(32 * sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("directKernel", oDev, ())
       var res: array[32, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32 * sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 32)
       engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)

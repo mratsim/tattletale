@@ -114,13 +114,13 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     echo "--- basicKernel ---"
     var out32: array[10, int32]
-    let aDev = engine.allocDevice(a.len * sizeof(int32))
-    let bDev = engine.allocDevice(b.len * sizeof(int32))
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
-    let oDev = engine.allocDevice(10 * sizeof(int32))
+    let aDev = engine.allocDevice(int32, a.len)
+    let bDev = engine.allocDevice(int32, b.len)
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    let oDev = engine.allocDevice(int32, 10)
     engine.launchKernel("basicKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 10 * sizeof(int32))
+    engine.copyToHostFromDevice(addr out32[0], oDev, 10)
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
     doAssert out32[0] == 18
@@ -140,11 +140,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     a[0] = 7
     b[0] = 3
     var out32b: array[10, int32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
-    let oDev2 = engine.allocDevice(10 * sizeof(int32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    let oDev2 = engine.allocDevice(int32, 10)
     engine.launchKernel("structKernel", oDev2, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32b[0], oDev2, 10 * sizeof(int32))
+    engine.copyToHostFromDevice(addr out32b[0], oDev2, 10)
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
     doAssert out32b[0] == 10
@@ -164,11 +164,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     a[0] = 14
     b[0] = 3
     var out32c: array[10, int32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len * sizeof(int32))
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len * sizeof(int32))
-    let oDev3 = engine.allocDevice(10 * sizeof(int32))
+    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    let oDev3 = engine.allocDevice(int32, 10)
     engine.launchKernel("structKernel2", oDev3, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32c[0], oDev3, 10 * sizeof(int32))
+    engine.copyToHostFromDevice(addr out32c[0], oDev3, 10)
     engine.freeDevice(aDev)
     engine.freeDevice(bDev)
     engine.freeDevice(oDev)

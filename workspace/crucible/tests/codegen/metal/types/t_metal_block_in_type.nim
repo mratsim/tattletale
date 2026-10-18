@@ -48,10 +48,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "block-valued `()` inside a device fn executes on the device":
       var engine = bkMetal.init()
       engine.ingest(kernel)
-      let oDev = engine.allocDevice(sizeof(float32))
+      let oDev = engine.allocDevice(float32, 1)
       engine.launchKernel("reproKernel", oDev, (7'i32, 3'i32))
       var res: array[1, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(float32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 7.0'f32
 

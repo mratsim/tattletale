@@ -16,7 +16,7 @@ const code = cuda:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = bkCuda.init()
   engine.ingest(code)
-  let oDev = engine.allocDevice(sizeof(uint32))
+  let oDev = engine.allocDevice(uint32, 1)
   # a raw pointer arg must fail to compile: it would bind host pointer bits
   # where the kernel expects device memory
   engine.launchKernel("k", oDev, (cast[ptr UncheckedArray[uint32]](0),))

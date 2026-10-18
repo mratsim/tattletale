@@ -24,10 +24,10 @@ proc runTest() =
     test "the declared param binds; no hidden param collides":
       var engine = bkMetal.init()
       engine.ingest(paramMsl)
-      let oDev = engine.allocDevice(sizeof(uint32))
+      let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("paramKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, sizeof(uint32))
+      engine.copyToHostFromDevice(addr res[0], oDev, 1)
       engine.freeDevice(oDev)
       check res[0] == 42'u32
 

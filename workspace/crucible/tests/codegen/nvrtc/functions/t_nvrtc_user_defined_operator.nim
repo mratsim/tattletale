@@ -31,9 +31,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelBasic)
-      let oB = engine.allocDevice(sizeof(output))
+      let oB = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBasic", oB, ())
-      engine.copyToHostFromDevice(addr output[0], oB, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oB, output.len)
       engine.freeDevice(oB)
       check output[0] == 18
       check output[1] == 8
@@ -121,9 +121,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelStruct)
-      let oS = engine.allocDevice(sizeof(output))
+      let oS = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct", oS, ())
-      engine.copyToHostFromDevice(addr output[0], oS, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oS, output.len)
       engine.freeDevice(oS)
       check output[0] == 10
       check output[1] == 4
@@ -140,9 +140,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[10, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelStruct2)
-      let oS2 = engine.allocDevice(sizeof(output))
+      let oS2 = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct2", oS2, ())
-      engine.copyToHostFromDevice(addr output[0], oS2, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oS2, output.len)
       engine.freeDevice(oS2)
       check output[0] == 17
       check output[1] == 11
@@ -159,9 +159,9 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var output: array[2, int32]
       var engine = bkCuda.init()
       engine.ingest(kernelBoth)
-      let oBoth = engine.allocDevice(sizeof(output))
+      let oBoth = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBoth", oBoth, ())
-      engine.copyToHostFromDevice(addr output[0], oBoth, sizeof(output))
+      engine.copyToHostFromDevice(addr output[0], oBoth, output.len)
       engine.freeDevice(oBoth)
       check output[0] == 10
       check output[1] == 17

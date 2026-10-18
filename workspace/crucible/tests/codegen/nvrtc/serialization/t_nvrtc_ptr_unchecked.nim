@@ -23,22 +23,22 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   var outBuf: array[8, uint32]
-  let oDev = engine.allocDevice(sizeof(outBuf))
+  let oDev = engine.allocDevice(uint32, outBuf.len)
   engine.launchKernel<<(1, 1)>>("fillKernel", oDev, ())
-  engine.copyToHostFromDevice(addr outBuf[0], oDev, sizeof(outBuf))
+  engine.copyToHostFromDevice(addr outBuf[0], oDev, outBuf.len)
   echo "  fill: ", outBuf
   for i in 0..7: doAssert outBuf[i] == uint32(i + 10)
 
   var a, b: array[8, uint32]
   for i in 0..7: a[i] = uint32(i); b[i] = uint32(i * 10)
   var c: array[8, uint32]
-  let aDev = engine.allocDevice(sizeof(a))
-  engine.copyToDeviceFromHost(aDev, addr a[0], sizeof(a))
-  let bDev = engine.allocDevice(sizeof(b))
-  engine.copyToDeviceFromHost(bDev, addr b[0], sizeof(b))
-  let cDev = engine.allocDevice(sizeof(c))
+  let aDev = engine.allocDevice(uint32, a.len)
+  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+  let bDev = engine.allocDevice(uint32, b.len)
+  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  let cDev = engine.allocDevice(uint32, c.len)
   engine.launchKernel<<(1, 1)>>("addKernel", cDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr c[0], cDev, sizeof(c))
+  engine.copyToHostFromDevice(addr c[0], cDev, c.len)
   engine.freeDevice(aDev)
   engine.freeDevice(bDev)
   engine.freeDevice(cDev)

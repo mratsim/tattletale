@@ -10,10 +10,10 @@ import std/[macros, tables]
 import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
-import ../engines_common
 import ../errors
 import ../launch/launch_serialization
 import ../exec/opencl_runtime
+import ./engines_common
 
 export opencl_runtime
 
@@ -34,7 +34,7 @@ proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
 # ═════════════════════════════════════════════════════════════════════════
-proc newOpenCLEngine(): OpenCLEngine =
+proc newOpenCLEngine*(): OpenCLEngine =
   OpenCLEngine(ctx: initOpenCL())
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -80,7 +80,7 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffer, args: tuple, grid, blk = Dim3()) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, grid, blk = Dim3()) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   if kernel notin engine.kernelCache.kernels:
@@ -96,15 +96,15 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: OpenCLBuffe
   let localSize = [cl_size_t(blk.x), cl_size_t(blk.y), cl_size_t(blk.z)]
   kern.runKernel(globalSize, localSize)
 
-proc allocDevice*(engine: OpenCLEngine, n: int): OpenCLBuffer =
+proc allocDeviceImpl*(engine: OpenCLEngine, n: int): OpenCLBuffer =
   engine.ctx.allocBuffer(n)
 
-proc freeDevice*(engine: OpenCLEngine, h: OpenCLBuffer) =
+proc freeDeviceImpl*(engine: OpenCLEngine, h: OpenCLBuffer) =
   var h = h
   h.dealloc()
 
-proc copyToDeviceFromHost*(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl*(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
   dst.writeBuffer(src, n)
 
-proc copyToHostFromDevice*(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
+proc copyToHostFromDeviceImpl*(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
   src.readBuffer(dst, n)
