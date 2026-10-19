@@ -9,8 +9,8 @@ import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
 import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
-type
 
+type
   VulkanBuffer* = object
     size*: int
     handle: VkBuffer

@@ -16,6 +16,7 @@ import workspace/crucible/vendor/wgpu
 #    High-level: WgpuContext
 #
 # ###########################################################
+
 type
   AdapterCallbackData = object
     adapter: WGPUAdapter
@@ -78,6 +79,7 @@ proc adapterCb(status: WGPURequestAdapterStatus,
   if status == wgpuRequestAdapterStatusSuccess:
     cast[ptr AdapterCallbackData](userdata1).adapter = adapter
   cast[ptr AdapterCallbackData](userdata1).done = true
+
 proc deviceCb(status: WGPURequestDeviceStatus,
               device: WGPUDevice,
               message: WGPUStringView,
@@ -86,10 +88,12 @@ proc deviceCb(status: WGPURequestDeviceStatus,
   if status == wgpuRequestDeviceStatusSuccess:
     cast[ptr DeviceCallbackData](userdata1).device = device
   cast[ptr DeviceCallbackData](userdata1).done = true
+
 proc bufferMapCb*(status: WGPUBufferMapAsyncStatus, message: WGPUStringView, userdata1, userdata2: pointer) {.cdecl.} =
   ## Records the map result into the caller's MapDoneData (userdata1).
   cast[ptr MapDoneData](userdata1).status = status
   cast[ptr MapDoneData](userdata1).done = true
+
 proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
                       errType: WGPUErrorType,
                       message: WGPUStringView,
@@ -102,6 +106,7 @@ proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
     data.message = newString(message.length.int)
     copyMem(data.message[0].addr, message.data, message.length)
   data.done = true
+
 proc uncapturedErrorCb(device: ptr WGPUDevice, errType: WGPUErrorType,
                         message: WGPUStringView,
                         userdata1: pointer,
@@ -126,6 +131,7 @@ proc takeUncapturedError*(): UncapturedErrorData =
 # wgpuDevicePoll needs a device handle that only appears after the callback.
 # Poll the non-blocking wgpuInstanceProcessEvents on a deadline, with a short
 # sleep between polls.
+
 proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
   let deadline = getMonoTime() + initDuration(seconds = 5)
   while not done:
