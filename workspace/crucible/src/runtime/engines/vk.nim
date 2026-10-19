@@ -18,8 +18,8 @@ import ../launch/launch_serialization
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-
 # ════════════════════════════════════════════════════════════════════════
+
 type
   VulkanCaches = object
     spirvCache: Table[string, seq[uint32]]
@@ -37,8 +37,8 @@ template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc ingest*(engine: VulkanEngine, source: string) =
   ## Stores the source, glslangValidator → SPIR-V, re-entrant.
   if engine.spirv.len > 0:
@@ -88,8 +88,8 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = initVulkan()
   VulkanEngine(
@@ -98,8 +98,8 @@ proc newVulkanEngine*(): VulkanEngine =
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-
 # ════════════════════════════════════════════════════════════════════════
+
 type SerializationCtx = object
   vctx: VulkanContext
   pushBuf: array[128, byte]
@@ -145,8 +145,8 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
   ## `layout(local_size_x = 256, local_size_y = 8, local_size_z = 1) in;`

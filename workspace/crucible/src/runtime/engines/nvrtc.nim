@@ -17,8 +17,8 @@ import ../launch/launch_serialization
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-
 # ════════════════════════════════════════════════════════════════════════
+
 type
   NVRTC = object
     prog: nvrtcProgram
@@ -39,8 +39,8 @@ template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
@@ -70,8 +70,8 @@ proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArr
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
     check cuCtxSetCurrent(nvrtc.context)
@@ -86,8 +86,8 @@ proc newCudaEngine*(): CudaEngine =
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-
 # ════════════════════════════════════════════════════════════════════════
+
 type SerializationCtx[n: static int] = object
   addrs: array[n, pointer]
   bytes: array[n, seq[byte]]
@@ -148,8 +148,8 @@ proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc initNvrtc(): NVRTC =
   var
     context: CUcontext

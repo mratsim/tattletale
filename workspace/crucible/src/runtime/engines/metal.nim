@@ -14,10 +14,9 @@ import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════
 type
   MetalCache = object
     ## Two per-engine caches:
@@ -33,10 +32,9 @@ type
 
 template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
-# ═════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════
 when defined(macosx):
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
@@ -44,6 +42,7 @@ when defined(macosx):
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ Constructors/destructors
+
   # ─────────────────────────────────────────────────────────────────────────
 
   proc newMetalCtx(): MetalCtx =
@@ -70,6 +69,7 @@ when defined(macosx):
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PUBLIC API
+
   # ─────────────────────────────────────────────────────────────────────────
 
   proc ingest*(engine: MetalEngine, source: string) =
@@ -107,6 +107,7 @@ when defined(macosx):
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ Launch serialization
+
   # ─────────────────────────────────────────────────────────────────────────
 
   type SerializationCtx = object
@@ -128,6 +129,7 @@ when defined(macosx):
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE constants
+
   # ─────────────────────────────────────────────────────────────────────────
 
   const
@@ -136,6 +138,7 @@ when defined(macosx):
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE run path
+
   # ─────────────────────────────────────────────────────────────────────────
 
   proc bufferContents(h: objc.ID): pointer =
@@ -210,11 +213,9 @@ when defined(macosx):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Non-macOS entry point
-# ═════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")
-

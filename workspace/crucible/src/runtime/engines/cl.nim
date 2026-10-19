@@ -18,6 +18,7 @@ import ./engines_common
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ════════════════════════════════════════════════════════════════════════
+
 type
   OpenCLKernelCache = object
     kernels: Table[string, OpenCLKernel]

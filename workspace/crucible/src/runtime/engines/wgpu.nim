@@ -17,8 +17,8 @@ import ../launch/launch_serialization
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-
 # ════════════════════════════════════════════════════════════════════════
+
 type
   WgpuPipelineCache = object
     pipeline: WGPUComputePipeline
@@ -39,8 +39,8 @@ template backendKind*(_: typedesc[WgpuEngine]): BackendKind = bkWGSL
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-
 # ════════════════════════════════════════════════════════════════════════
+
 template check*(status: WGPUBufferMapAsyncStatus) =
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
@@ -92,8 +92,8 @@ proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArr
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc `=destroy`(cache: var WgpuCache) =
   if cache.module != nil:
     wgpuShaderModuleRelease(cache.module)
@@ -110,8 +110,8 @@ proc newWgpuEngine*(): WgpuEngine =
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-
 # ════════════════════════════════════════════════════════════════════════
+
 type SerializationCtx = object
   handles: array[64, WGPUBuffer]
   chunkOff, chunkLen: array[64, int]
@@ -140,8 +140,8 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-
 # ════════════════════════════════════════════════════════════════════════
+
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
   ## `@compute @workgroup_size(64, 8, 1)`, 1..3 literal args, missing default to 1.
