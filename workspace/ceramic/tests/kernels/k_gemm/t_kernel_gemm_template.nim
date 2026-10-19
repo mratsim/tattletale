@@ -11,28 +11,11 @@
 ##   nim c -r --outdir:build \
 ##     workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm.nim (from tattletale)
 
-import std/[math, random, strformat, times]
+import std/[math, random, times]
 import workspace/crucible
 import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/int_tuples/int_tuples_streams
-import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/ism_coord_strides
-import workspace/ceramic/src/layout_algebra/layout_compiletime
-import workspace/ceramic/src/tensors
-import workspace/ceramic/src/hardware/h_mma_configgen
-import workspace/ceramic/src/hardware/h_mma_registry
-import workspace/ceramic/src/hardware/h_mma_properties
-import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/kernels/k_tile_gemm
-import workspace/ceramic/src/tile_algebra
 import workspace/fp_conv/fp_conv
-
-{.experimental: "callOperator".}
-
-# ═══════════════════════════════════════════════════════════════
-#  fp32 host reference
-# ═══════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
 #  fp32 host reference
