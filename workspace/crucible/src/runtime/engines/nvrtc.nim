@@ -37,6 +37,18 @@ type
 
 template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
+proc `=destroy`(nvrtc: NVRTC) =
+  if nvrtc.module.pointer != nil:
+    check cuCtxSetCurrent(nvrtc.context)
+    check cuModuleUnload nvrtc.module
+  if nvrtc.context.pointer != nil:
+    check cuCtxSetCurrent(nvrtc.context)
+    check cuCtxDestroy nvrtc.context
+
+proc newCudaEngine*(): CudaEngine =
+  result = CudaEngine()
+  result.nvrtc = initNvrtc()
+
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ════════════════════════════════════════════════════════════════════════
@@ -69,21 +81,6 @@ proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArr
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ════════════════════════════════════════════════════════════════════════
-
-proc `=destroy`(nvrtc: NVRTC) =
-  if nvrtc.module.pointer != nil:
-    check cuCtxSetCurrent(nvrtc.context)
-    check cuModuleUnload nvrtc.module
-  if nvrtc.context.pointer != nil:
-    check cuCtxSetCurrent(nvrtc.context)
-    check cuCtxDestroy nvrtc.context
-
-proc newCudaEngine*(): CudaEngine =
-  result = CudaEngine()
-  result.nvrtc = initNvrtc()
-
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════

@@ -38,6 +38,20 @@ type
 
 template backendKind*(_: typedesc[WgpuEngine]): BackendKind = bkWGSL
 
+proc `=destroy`(cache: var WgpuCache) =
+  if cache.module != nil:
+    wgpuShaderModuleRelease(cache.module)
+  for c in cache.pipelines.mvalues:
+    wgpuComputePipelineRelease(c.pipeline)
+    wgpuPipelineLayoutRelease(c.pipelineLayout)
+    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
+
+proc newWgpuEngine*(): WgpuEngine =
+  WgpuEngine(
+    ctx: initWgpu(),
+    cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
+  )
+
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ════════════════════════════════════════════════════════════════════════
@@ -92,23 +106,6 @@ proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArr
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ════════════════════════════════════════════════════════════════════════
-
-proc `=destroy`(cache: var WgpuCache) =
-  if cache.module != nil:
-    wgpuShaderModuleRelease(cache.module)
-  for c in cache.pipelines.mvalues:
-    wgpuComputePipelineRelease(c.pipeline)
-    wgpuPipelineLayoutRelease(c.pipelineLayout)
-    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
-
-proc newWgpuEngine*(): WgpuEngine =
-  WgpuEngine(
-    ctx: initWgpu(),
-    cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
-  )
-
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════

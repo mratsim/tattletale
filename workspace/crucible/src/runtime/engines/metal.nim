@@ -38,12 +38,12 @@ template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 # ▸ macOS-only engine implementation
 # ════════════════════════════════════════════════════════════════════════
 when defined(macosx):
+
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
   proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
 
   # ─────────────────────────────────────────────────────────────────────────
-  # ▸ Constructors/destructors
 
   # ─────────────────────────────────────────────────────────────────────────
 

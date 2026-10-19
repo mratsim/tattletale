@@ -35,6 +35,12 @@ type
 
 template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
 
+proc newVulkanEngine*(): VulkanEngine =
+  let vctx = initVulkan()
+  VulkanEngine(
+    ctx: vctx,
+    caches: VulkanCaches())
+
 # ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
 # ════════════════════════════════════════════════════════════════════════
@@ -87,15 +93,6 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ════════════════════════════════════════════════════════════════════════
-
-proc newVulkanEngine*(): VulkanEngine =
-  let vctx = initVulkan()
-  VulkanEngine(
-    ctx: vctx,
-    caches: VulkanCaches())
-
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════
