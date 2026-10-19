@@ -131,8 +131,8 @@ when defined(macosx):
   # ─────────────────────────────────────────────────────────────────────────
 
   const
-    ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
-    ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
+    ## Command buffer status left by `waitUntilCompleted`, anything but
+    ## Completed is a failed dispatch
     MTLCommandBufferStatusCompleted = 4
     MTLCommandBufferStatusError = 5
 
