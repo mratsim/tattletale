@@ -10,7 +10,7 @@
 ##
 ## Run:
 ##   nim c -r --outdir:build/tests \
-##     workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm.nim (from tattletale)
+##     workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm_metal.nim (from tattletale)
 
 import std/[math, strformat]
 import workspace/crucible
@@ -28,8 +28,6 @@ import workspace/ceramic/src/kernels/k_tile_gemm
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
 import workspace/fp_conv/fp_conv
-
-{.experimental: "callOperator".}
 
 proc main =
   var engine = bkMetal.newEngine()

@@ -26,7 +26,7 @@ import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/bench/gemm_gpu/bench_blueprint
-import workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm_template
+import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
 import workspace/fp_conv/fp_conv
 
 export bench_blueprint
@@ -38,10 +38,8 @@ export k_tile_gemm
 export tile_algebra
 export static_for
 export ceramic_testutils
-export t_kernel_gemm_template
+export kernel_gemm_template
 export fp_conv
-
-{.experimental: "callOperator".}
 
 type LaunchFn[E, H] = proc (engine: E,
     dDev: DeviceMem[H, float32],
