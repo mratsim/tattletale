@@ -7,7 +7,7 @@
 
 # Corrected NAX mma glue for the GEMM bench.
 #
-# The vendored mlx_steel_gemm.metal hardcodes BaseNAXFrag's lane ->
+# The vendored apple_gemm.metal hardcodes BaseNAXFrag's lane ->
 # (row, col) formula, which encodes one offline compiler's matmul2d
 # cooperative-tensor layout. The Metal spec makes that layout opaque,
 # compiler/GPU-derived, so the runtime compiler legally picks a different
@@ -522,13 +522,13 @@ proc splice(s, old: string, new: string, want: int): string {.compileTime.} =
 proc naxGemmIngestSrc*(): string {.compileTime.} =
   ## Returns:
   ##   the NAX bench ingest source:
-  ##   - the vendored mlx_steel_gemm.metal, read, never written
+  ##   - the vendored apple_gemm.metal, read, never written
   ##   - the BaseNAXFrag coordinate-dependent block replaced by AppleNaxGlueMsl
   ##   - the bench wrapper appended
   ## Preconditions:
   ##   every splice anchor matches exactly once, a vendored edit that moves
   ##   an anchor fails the build loudly
-  var src = staticRead("mlx_steel_gemm.metal")
+  var src = staticRead("apple_gemm.metal")
 
   # The BaseNAXFrag struct block, up to the adjacent NAXTile template.
   let start = src.find("struct BaseNAXFrag {")
@@ -553,4 +553,4 @@ proc naxGemmIngestSrc*(): string {.compileTime.} =
       "transpose_b, NAXFragRight>> Btile;",
     2)
 
-  result = src & staticRead("nax_bench_wrapper.metal")
+  result = src & staticRead("apple_nax_bench_entrypoint.metal")

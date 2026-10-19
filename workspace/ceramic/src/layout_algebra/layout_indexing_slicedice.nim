@@ -179,32 +179,32 @@ template dice*(target: Layout, selectors: varargs[untyped]): untyped =
       dice(t.shape, varargs_to_par(selectors)),
       dice(t.stride, varargs_to_par(selectors)))
 
-template hasUnderscoreImpl*(coord: typed): bool =
-  when coord is tuple:
-    block:
-      var found = false
-      for c in fields(coord):
-        when c.hasUnderscore():
-          found = true
-      found
-  elif coord is int:
-    false
-  elif coord is Int:
-    false
-  elif coord is X:
-    true
-  else:
-    {.error: "[ttt] unsupported type: " & typeof(coord).}
-
-macro hasUnderscore*(Cs: varargs[untyped]): bool =
-  let r = ident"r"
-  result = newStmtList()
-  result.add quote do:
-    var `r` = false
+macro hasUnderscore*(Cs: varargs[typed]): bool =
+  proc walkImpl(t: NimNode): bool {.compileTime.} =
+    ## True if the type subtree contains the X marker
+    let ty = t.getTypeInst()
+    if ty.kind in [nnkTupleTy, nnkPar, nnkTupleConstr]:
+      for i in 0 ..< ty.len:
+        if walkImpl(ty[i]):
+          return true
+      return false
+    if ty.kind == nnkBracketExpr:
+      # Int[V] instances and friends: the marker never hides in them
+      if ty[0].kind == nnkSym and ty[0].strVal == "Int":
+        return false
+      error "[ttt] unsupported type: " & ty.repr
+    if ty.kind == nnkSym:
+      if ty.strVal == "X":
+        return true
+      if ty.strVal == "int" or ty.strVal == "Int":
+        return false
+      let impl = ty.getImpl()
+      if impl.kind == nnkTupleTy:
+        for i in 0 ..< impl.len:
+          if walkImpl(impl[i]):
+            return true
+        return false
+    error "[ttt] unsupported type: " & ty.repr
+  result = newLit(false)
   for i in 0 ..< Cs.len:
-    let Ci = Cs[i]
-    result.add quote do:
-      `r` = `r` or hasUnderscoreImpl(`Ci`)
-  result.add quote do:
-    `r`
-  result = newBlockStmt(result)
+    result = newLit(result.boolVal or walkImpl(Cs[i]))

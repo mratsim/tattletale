@@ -262,9 +262,7 @@ macro inBounds*(coord: IntOrIntTuple, layout: Layout): auto =
 
 template `()`*(layout: Layout, args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
-  block:
-    evalOnceAs(coord, varargs_to_par(args))
-    when hasUnderscoreImpl(coord):
-      slice(layout, coord)
-    else:
-      crd2idx(layout, coord)
+  when hasUnderscore(varargs_to_par(args)):
+    slice(layout, args)
+  else:
+    crd2idx(layout, varargs_to_par(args))

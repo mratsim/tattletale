@@ -15,10 +15,21 @@
 
 import std/[math, random, strformat, times]
 import workspace/crucible
-import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/src/tensors
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_compiletime
+import workspace/ceramic/src/tensors
+import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/kernels/k_tile_sum
+
+export int_tuples
+export layout_algebra
+export tensors
+export k_tile_sum
+
+export int_tuples, int_tuples_streams
+export k_tile_sum
 
 # ═══════════════════════════════════════════════════════════════
 #  fp32 host reference

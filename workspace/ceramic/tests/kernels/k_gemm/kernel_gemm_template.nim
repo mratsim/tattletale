@@ -13,20 +13,32 @@
 
 import std/[math, random, times]
 import workspace/crucible
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_streams
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_compiletime
+import workspace/ceramic/src/layout_algebra/ism_coord_strides
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_registry
+import workspace/ceramic/src/hardware/h_mma_properties
+import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/kernels/k_tile_gemm
 import workspace/fp_conv/fp_conv
+
+export int_tuples, int_tuples_streams
+export layout_algebra
+export tensors
+export tile_algebra
+export k_tile_gemm
 
 # ═══════════════════════════════════════════════════════════════
 #  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
 
-proc gemm_ref*[ShA, StA, ShB, StB, ShC, StC](refOut: HostTensor[float32, ShC, StC],
-               alpha: float32,
-               A: HostTensor[F16, ShA, StA],
-               B: HostTensor[F16, ShB, StB],
-               beta: float32,
-               C: HostTensor[float32, ShC, StC]) =
+func gemm_ref*(refOut: distinct HostTensor, alpha: float32, A, B: distinct HostTensor, beta: float32, C: distinct HostTensor) =
   ## Host fp32 reference: refOut = alpha * A * B^T + beta * C, BLAS B^T form
   let
     M = A.layout.shape[0]
@@ -90,8 +102,7 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
     for sA in [(32, 1), (1, 32)]:
       for sB in [(1, 32), (32, 1)]:
         for sC in [(32, 1), (1, 32)]:
-          checkGemm(rng, engine,
-              32, 32, 32, sA, sB, sC)
+          checkGemm(rng, engine, 32, 32, 32, sA, sB, sC)
 
   # ragged edges, tile dims not multiples of the (32, 32, 16) mma atom
   for _ in 0 ..< Iters:

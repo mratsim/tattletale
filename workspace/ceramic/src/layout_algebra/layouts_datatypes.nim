@@ -11,6 +11,7 @@ import std/macros
 import std/typetraits
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/layout_algebra/ism_coord_strides
 import ./layouts_unsanctioned_helpers
 
@@ -152,25 +153,17 @@ func isLayoutTy*(n: NimNode): bool {.compileTime.} =
 #  cosize, max offset + 1 of a layout
 # ═══════════════════════════════════════════════════════════════
 
+macro cosizeImpl(sh, st: typed): untyped =
+  ## Cosize emit, one term per shape leaf
+  let one = IntCT(1)
+  result = one
+  for (shEv, stEv) in zip(sh.tupleStream(), st.tupleStream()):
+    if shEv.kind == kLeaf:
+      result = result + (shEv.leaf - one) * abs(stEv.leaf)
+
 func cosize*(layout: Layout): auto =
   ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
-  macro cosizeFlat(sh, st: typed): untyped =
-    ## Cosize emit, one term per shape leaf, a scalar stride broadcasts.
-    let one = IntCT(1)
-    var shDims, stDims: seq[NimNode] = @[]
-    for shEv in sh.tupleStream():
-      if shEv.kind == kLeaf:
-        shDims.add shEv.leaf
-    for stEv in st.tupleStream():
-      if stEv.kind == kLeaf:
-        stDims.add stEv.leaf
-    result = one
-    for i in 0 ..< shDims.len:
-      # a scalar stride is one leaf, it broadcasts over every shape leaf
-      let d = if stDims.len == 1: stDims[0] else: stDims[i]
-      let term = (shDims[i] - one) * abs(d)
-      result = result + term
-  cosizeFlat(flatten(layout.shape), flatten(layout.stride))
+  cosizeImpl(layout.shape, layout.stride)
 
 func cosize*[A, B](_: typedesc[Layout[A, B]]): static int {.inline.} =
   ## Compile-time cosize from the Layout type alone.

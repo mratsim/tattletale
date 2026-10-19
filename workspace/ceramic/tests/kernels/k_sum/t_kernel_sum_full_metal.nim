@@ -8,21 +8,11 @@
 ## Test:
 ##   tile_reductions full-tile sum on Metal
 ##
-## Test that the tile_reductions full-tile sum matches the host reference on Metal.
-##
 ## Run:
 ##   nim c -r --outdir:build/tests \
-##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_full.nim (from tattletale)
+##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_full_metal.nim (from tattletale)
 
-import std/strformat
 import workspace/crucible
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/int_tuples/int_tuples_streams
-import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/layout_compiletime
-import workspace/ceramic/src/tensors
-import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/src/kernels/k_tile_sum
 import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
 
 proc main =
