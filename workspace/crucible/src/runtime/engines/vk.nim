@@ -67,22 +67,22 @@ proc ingest*(engine: VulkanEngine, source: string) =
   engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(source)
 
-proc getArtifact*(engine: VulkanEngine): string =
+proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
   engine.source
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
   engine.ctx.deviceName(engine.ctx.physicalDevice)
 
-proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] =
+proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
   ## Allocates len elements of T on the engine
   DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
   ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) =
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) {.inline.} =
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
@@ -257,7 +257,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
 
-proc allocDeviceImpl(engine: VulkanEngine, n: int): VulkanBuffer =
+proc allocDeviceImpl(engine: VulkanEngine, n: int): VulkanBuffer {.inline.} =
   engine.ctx.allocBuffer(n)
 
 proc copyToDeviceFromHostImpl(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =

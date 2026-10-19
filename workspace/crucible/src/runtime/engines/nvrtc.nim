@@ -48,7 +48,7 @@ proc ingest*(engine: CudaEngine, source: string) =
   engine.source = source
   engine.ptx = engine.nvrtc.ptx
 
-proc getArtifact*(engine: CudaEngine): string =
+proc getArtifact*(engine: CudaEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: CudaEngine): string {.inline.} =
@@ -56,15 +56,15 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
 
-proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] =
+proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] {.inline.} =
   ## Allocates len elements of T on the engine
   DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
   ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) =
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) {.inline.} =
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
@@ -137,13 +137,13 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: v
 
   check cuCtxSynchronize()
 
-proc allocDeviceImpl(engine: CudaEngine, n: int): CUdeviceptr =
+proc allocDeviceImpl(engine: CudaEngine, n: int): CUdeviceptr {.inline.} =
   check cuMemAlloc(result, csize_t(n))
 
-proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) {.inline.} =
   check cuMemcpyHtoD(dst, src, csize_t(n))
 
-proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
+proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) {.inline.} =
   check cuMemcpyDtoH(dst, src, csize_t(n))
 
 # ════════════════════════════════════════════════════════════════════════

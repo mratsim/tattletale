@@ -30,7 +30,7 @@ type
 template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
   bkOpenCL
 
-proc newOpenCLEngine*(): OpenCLEngine =
+proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
   OpenCLEngine(ctx: initOpenCL())
 
 # ════════════════════════════════════════════════════════════════════════
@@ -44,21 +44,21 @@ proc ingest*(engine: OpenCLEngine, source: string) =
   engine.kernelCache.kernels = initTable[string, OpenCLKernel]()
   engine.source = source
 
-proc getArtifact*(engine: OpenCLEngine): string =
+proc getArtifact*(engine: OpenCLEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
   engine.ctx.device.name()
 
-proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] =
+proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
   ## Allocates len elements of T on the engine
   DeviceMem[OpenCLBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
   ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[OpenCLBuffer, T], n: int) =
+proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[OpenCLBuffer, T], n: int) {.inline.} =
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
@@ -104,11 +104,11 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
   kern.runKernel(globalSize, localSize)
 
-proc allocDeviceImpl(engine: OpenCLEngine, n: int): OpenCLBuffer =
+proc allocDeviceImpl(engine: OpenCLEngine, n: int): OpenCLBuffer {.inline.} =
   engine.ctx.allocBuffer(n)
 
-proc copyToDeviceFromHostImpl(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) {.inline.} =
   dst.writeBuffer(src, n)
 
-proc copyToHostFromDeviceImpl(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) {.inline.} =
   src.readBuffer(dst, n)
