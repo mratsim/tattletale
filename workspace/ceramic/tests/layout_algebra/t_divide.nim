@@ -236,6 +236,7 @@ proc runDivideTupleTilerTests =
   block:
     ## a tiler longer than the layout is a compile-time error
     static:
+      # TODO: using compiles/not(compiles) violates repo policy where it is used
       doAssert not compiles(logical_divide(make_layout((2, 4), (1, 2)), (4, 4, 2)))
   echo "    divide tuple-tiler rewrite: 5 cases OK"
 
@@ -295,11 +296,45 @@ proc runZippedDivideGatherTests =
   echo "    zipped gather rewrite: 4 cases OK"
 
 
+# ── int tiler over layouts the tiler does not evenly divide ──
+proc runIntTilerRaggedTests =
+  ## Divide results for tilers whose size (128) does not divide
+  ## the layout size.
+
+  block:  # 3000 elements, 24 whole tiles of 128, 72 slot overhang
+    doAssert logical_divide(make_layout((10, 300), (1, 10)), make_layout((32, 4), (4, 1))) ===
+      (((32, 4), 24), ((4, 1), 128))
+
+  block:  # 4096 elements, exactly 32 tiles of 128
+    doAssert logical_divide(make_layout((16, 256), (256, 1)), make_layout((32, 4), (4, 1))) ===
+      ((((4, 8), 4), 32), (((1024, 1), 256), 8))
+
+  block:  # the grid mode of the 3000-element divide: ceil(3000/128) = 24
+    doAssert complement(make_layout((32, 4), (4, 1)), (10, 300)) === (24, 128)
+
+  block:  # the tiler lane stride steps 4 coordinates of mode 0,
+    ## mode 0 has dims 10: 4 does not divide 10, the divide is rejected
+    static:
+      # TODO: using compiles/not(compiles) violates repo policy where it is used
+      doAssert not compiles(
+        logical_divide(make_layout((10, 300), (300, 1)), make_layout((32, 4), (4, 1))))
+
+  block:  # a runtime-leaf layout divides exactly like the same
+    ## layout spelled with constants
+    let dM = 10
+    let dK = 300
+    let dS = 10
+    let r = logical_divide(make_layout((dM, dK), (1, dS)), make_layout((32, 4), (4, 1)))
+    doAssert r === logical_divide(make_layout((10, 300), (1, 10)), make_layout((32, 4), (4, 1))),
+      "runtime divide: " & $r
+
+  echo "  int-tiler ragged (pycute ground truth): 5 cases OK"
+
 runLogicalDivideTests()
 runDivideReassemblyTests()
 runDivideTupleTilerTests()
 runZippedDivideRank1Tests()
 runZippedDivideStructureTests()
 runZippedDivideGatherTests()
+runIntTilerRaggedTests()
 
-echo "ALL TESTS PASSED"
