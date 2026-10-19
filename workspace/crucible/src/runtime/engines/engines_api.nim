@@ -20,7 +20,7 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
-proc newEngine*(backend: static BackendKind): auto =
+proc newEngine*(backend: static BackendKind): auto {.inline.} =
   when backend == bkCuda:
     newCudaEngine()
   elif backend == bkOpenCL:

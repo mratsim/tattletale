@@ -71,11 +71,20 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
 
+proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] =
+  ## Allocates len elements of T on the engine
+  DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
+proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
-
 
 proc initNvrtc(): NVRTC =
   var
@@ -203,15 +212,3 @@ proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer
 
 proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
   check cuMemcpyDtoH(dst, src, csize_t(n))
-
-proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] =
-  ## Allocates len elements of T on the engine
-  DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
-
-proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) =
-  ## Copies n elements from host to device
-  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
-
-proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) =
-  ## Copies n elements from device to host
-  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))

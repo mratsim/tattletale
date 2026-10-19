@@ -98,31 +98,6 @@ when defined(macosx):
       )
 
   # ─────────────────────────────────────────────────────────────────────────
-  # ▸ PUBLIC API
-  # ─────────────────────────────────────────────────────────────────────────
-
-  proc ingest*(engine: MetalEngine, source: string) =
-    objc.withMemPool:
-      let opts = compileOptions()
-      let library = compileLibrary(engine.ctx.device, source, opts)
-      objc.release(opts)
-      when defined(debug):
-        echo "[INFO]: metal ingest: invalidating previous artifact"
-      objc.release(engine.cache.library)
-      for pso in engine.cache.psos.values:
-        objc.release(pso)
-      engine.cache.psos.clear()
-      engine.cache.library = library
-      engine.source = source
-
-  proc getArtifact*(engine: MetalEngine): string =
-    engine.source
-
-  proc deviceName*(engine: MetalEngine): string =
-    objc.withMemPool:
-      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
-
-  # ─────────────────────────────────────────────────────────────────────────
   # ▸ PRIVATE run path
   # ─────────────────────────────────────────────────────────────────────────
 
@@ -149,6 +124,31 @@ when defined(macosx):
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, bufferContents(src), n)
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PUBLIC API
+  # ─────────────────────────────────────────────────────────────────────────
+
+  proc ingest*(engine: MetalEngine, source: string) =
+    objc.withMemPool:
+      let opts = compileOptions()
+      let library = compileLibrary(engine.ctx.device, source, opts)
+      objc.release(opts)
+      when defined(debug):
+        echo "[INFO]: metal ingest: invalidating previous artifact"
+      objc.release(engine.cache.library)
+      for pso in engine.cache.psos.values:
+        objc.release(pso)
+      engine.cache.psos.clear()
+      engine.cache.library = library
+      engine.source = source
+
+  proc getArtifact*(engine: MetalEngine): string =
+    engine.source
+
+  proc deviceName*(engine: MetalEngine): string =
+    objc.withMemPool:
+      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
+
   proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] =
     ## Allocates len elements of T on the engine
     DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
@@ -160,6 +160,7 @@ when defined(macosx):
   proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) =
     ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
 
 
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =

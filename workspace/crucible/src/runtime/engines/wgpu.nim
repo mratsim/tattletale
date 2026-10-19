@@ -128,6 +128,17 @@ proc getArtifact*(engine: WgpuEngine): string =
 proc deviceName*(engine: WgpuEngine): string {.inline.} =
   engine.ctx.deviceName()
 
+proc allocDevice*[T](engine: WgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] =
+  ## Allocates len elements of T on the engine
+  DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+proc copyToDeviceFromHost*[T](engine: WgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 # ─────────────────────────────────────────────────────────────────────────
 # ▸ PRIVATE
 # ─────────────────────────────────────────────────────────────────────────
@@ -159,7 +170,6 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
     return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
   if result.y == 0: result.y = 1
   if result.z == 0: result.z = 1
-
 
 proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -407,15 +417,3 @@ proc copyToHostFromDeviceImpl(engine: WgpuEngine, dst: pointer, src: WGPUBuffer,
   if mappedPtr != nil and n > 0:
     copyMem(dst, mappedPtr, n)
   wgpuBufferUnmap(stagingBuf)
-
-proc allocDevice*[T](engine: WgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] =
-  ## Allocates len elements of T on the engine
-  DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
-
-proc copyToDeviceFromHost*[T](engine: WgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) =
-  ## Copies n elements from host to device
-  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
-
-proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) =
-  ## Copies n elements from device to host
-  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
