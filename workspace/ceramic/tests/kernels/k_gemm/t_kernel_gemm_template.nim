@@ -84,7 +84,7 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
   let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
   rng.seed(int64(seed))
   echo "\n------------------------------------------------------\n"
-  echo moduleName, " PCG seed: ", seed
+  echo moduleName, " xoroshiro128+ seed: ", seed
   # stride permutations at the atom tile size
   for _ in 0 ..< Iters:
     for sA in [(32, 1), (1, 32)]:
