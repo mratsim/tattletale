@@ -91,10 +91,10 @@ proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int
   assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
 
 # ═══════════════════════════════════════════════════════════════
-#  The driver
+#  The drivers
 # ═══════════════════════════════════════════════════════════════
 
-proc run_sum_tests*[E: HwEngine](engine: E, moduleName: string) =
+proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
   var rng: Rand
   let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
   rng.seed(int64(seed))
@@ -104,53 +104,70 @@ proc run_sum_tests*[E: HwEngine](engine: E, moduleName: string) =
   # stride permutations within one covered tile: the (8, 4) block covers (8, 128)
   checkSum(rng, engine, 8, 128, (128, 1))
   checkSum(rng, engine, 8, 128, (1, 8))
-  checkSumAxis(rng, engine, 8, 128, (128, 1))
-  checkSumAxis(rng, engine, 8, 128, (1, 8))
 
-  # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 64) ──
+  # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 60) ──
   block:
     var src = randomHostTensor(rng, float32, (2, 2, 60), (120, 60, 1))
     var sumGot = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
-    var axisGot = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
     let srcDev = engine.bridge(src)
-    var
-      expectSum = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
-      expectAxis = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
+    var expectSum = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
     expectSum.data[0] = refSum(src.view())
-    refSum(expectAxis.view(), src.view(), 2)
     let sumDev = engine.bridge(sumGot)
     engine.launchDeviceFn sum_full((2, 2, 2), sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
-    let axisDev = engine.bridge(axisGot)
-    engine.launchDeviceFn sum_axis((2, 2, 2), axisDev, engine.bridge(src)) do:
-      grid = (1, 1)
-      blk = (32, 1)
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
-    engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 4)
-    assertAllClose(sumGot.view(), expectSum.view())
-    assertAllClose(axisGot.view(), expectAxis.view(), msg = "3D sum with axis")
+    assertAllClose(sumGot.view(), expectSum.view(), msg = "3D sum full")
 
-  # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 64) ──
+  # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
   block:
     var src = randomHostTensor(rng, float32, (2, 2, 2, 50), (200, 100, 50, 1))
     var sumGot = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
-    var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
     let srcDev = engine.bridge(src)
-    var
-      expectSum = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
-      expectAxis = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
+    var expectSum = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
     expectSum.data[0] = refSum(src.view())
-    refSum(expectAxis.view(), src.view(), 3)
     let sumDev = engine.bridge(sumGot)
     engine.launchDeviceFn sum_full((2, 2, 2, 2), sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
+    engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
+    assertAllClose(sumGot.view(), expectSum.view(), msg = "4D sum full")
+
+proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
+  var rng: Rand
+  let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
+  rng.seed(int64(seed))
+  echo "\n------------------------------------------------------\n"
+  echo moduleName, " xoroshiro128+ seed: ", seed
+
+  # stride permutations within one covered tile: the (8, 4) block covers (8, 128)
+  checkSumAxis(rng, engine, 8, 128, (128, 1))
+  checkSumAxis(rng, engine, 8, 128, (1, 8))
+
+  # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 60) ──
+  block:
+    var src = randomHostTensor(rng, float32, (2, 2, 60), (120, 60, 1))
+    var axisGot = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
+    let srcDev = engine.bridge(src)
+    var expectAxis = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
+    refSum(expectAxis.view(), src.view(), 2)
+    let axisDev = engine.bridge(axisGot)
+    engine.launchDeviceFn sum_axis((2, 2, 2), axisDev, engine.bridge(src)) do:
+      grid = (1, 1)
+      blk = (32, 1)
+    engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 4)
+    assertAllClose(axisGot.view(), expectAxis.view(), msg = "3D sum with axis")
+
+  # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
+  block:
+    var src = randomHostTensor(rng, float32, (2, 2, 2, 50), (200, 100, 50, 1))
+    var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
+    let srcDev = engine.bridge(src)
+    var expectAxis = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
+    refSum(expectAxis.view(), src.view(), 3)
     let axisDev = engine.bridge(axisGot)
     engine.launchDeviceFn sum_axis((2, 2, 2, 2), axisDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
     engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 8)
-    assertAllClose(sumGot.view(), expectSum.view())
     assertAllClose(axisGot.view(), expectAxis.view(), msg = "4D sum with axis")

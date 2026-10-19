@@ -27,7 +27,8 @@ import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
 
 proc main =
   var engine = bkMetal.newEngine()
-  run_sum_tests(engine, moduleName = "test_k_sum_metal")
+  run_sum_full_tests(engine, moduleName = "test_k_sum_full_metal")
+  run_sum_axis_tests(engine, moduleName = "test_k_sum_axis_metal")
 
 when isMainModule:
   main()
