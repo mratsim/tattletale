@@ -104,8 +104,7 @@ template getMatmulThreadmap*(mma: static TiledMma, op: static MmaOperand): untyp
     repOuter = (when op == opB: mma.NT else: mma.MT) div cellOuter
     repLast = (when op == opC: mma.NT else: mma.KT) div cellLast
     tileOuter = cellOuter * repOuter
-    atomTileFlat = compose(make_layout((cellOuter, cellLast), (1, tileOuter)),
-                           atomMap)
+    atomTileFlat = compose(make_layout((cellOuter, cellLast), (1, tileOuter)), atomMap)
   make_layout((atomTileFlat.shape, (repOuter, repLast)),
               (atomTileFlat.stride, (cellOuter, tileOuter * cellLast)))
 

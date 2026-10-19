@@ -22,16 +22,47 @@ import workspace/ceramic/src/tensors
 import ./tile_matmul
 
 # ═══════════════════════════════════════════════════════════════
-#  Register tiles
+#  Tile datatype
 # ═══════════════════════════════════════════════════════════════
 
+type Tile*[T, Sh, St] = TensorOwned[T, Sh, St]
+
 macro rt*(T: typedesc, L: typed): typedesc =
-  ## Register tile type from a layout, e.g. an atom's thread->value layout:
-  ## the TensorOwned over T with the layout's static shape and stride.
+  ## Register tile type from a layout, e.g. an atom's thread->value map.
+  ##
+  ## Contract:
+  ## - the Tile over T with the layout's static shape and stride
   let ty = getTypeInst(L)
   doAssert ty.kind == nnkBracketExpr and ty.len == 3,
     "rt: expected a Layout[Shape, Stride] type, got " & ty.repr
-  result = nnkBracketExpr.newTree(bindSym"TensorOwned", T, ty[1], ty[2])
+  result = nnkBracketExpr.newTree(bindSym"Tile", T, ty[1], ty[2])
+
+func staticShape*(n: NimNode): seq[int] {.compileTime.} =
+  ## Static ints of a shape node: a tuple literal, a tuple type, or a typedesc wrapping one
+  var nn = n
+  if nn.kind == nnkStmtListExpr:
+    nn = nn[^1]
+  if nn.kind in {nnkTupleConstr, nnkPar}:
+    for e in nn:
+      result.add e.getStaticInt()
+    return
+  var ty = nn.getTypeInst()
+  if ty.kind == nnkBracketExpr and ty[0].kind == nnkSym and $ty[0] == "typeDesc":
+    ty = ty[1]
+  if ty.isTupleTy():
+    for i in 0 ..< ty.len:
+      result.add ty[i].getStaticInt()
+  else:
+    result.add ty.getStaticInt()
+
+template rt*(T: typedesc, dims: IntOrIntTuple): untyped =
+  ## Register tile type from a static shape, LayoutLeft: the lane's
+  ## register block under the blocked convention.
+  ##
+  ## Contract:
+  ## - the block's last axis spreads across the simdgroup's 32 lanes
+  ## - the other axes live in-thread
+  make_tensor(T, dims)
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile geometry
