@@ -195,7 +195,7 @@ NIM_EXPORTED_CALLABLE_RE = re.compile(
 # Proc, func, and template definition lines whose name carries an Of suffix.
 # Call sites and ordinary prose never match, the keyword anchors the shape.
 OF_SUFFIX_DECL_RE = re.compile(
-    r"^\s*(?:proc|func|template)\s+\*?([A-Za-z_]\w*)")
+    r"^\s*(?:proc|func|macro|template)\s+\*?([A-Za-z_]\w*)")
 
 # The inbounds-call-syntax rule. Plain call sites of inBounds, the house
 # convention is the method call coord.inBounds(shape). Definitions and
