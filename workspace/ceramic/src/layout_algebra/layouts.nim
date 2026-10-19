@@ -59,7 +59,6 @@ func isCompact*(layout: static Layout): static bool {.inline.} =
 #  Padding
 # ═══════════════════════════════════════════════════════════════
 
-
 macro padRightImpl(originalLayout, sh, st: typed, rank: static int): untyped =
   ## Pass every outer dimension through whole, append `(1, 0)` pads after.
   var builder = TupleBuilderFlat.new(2)

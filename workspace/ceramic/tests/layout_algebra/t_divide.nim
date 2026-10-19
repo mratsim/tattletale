@@ -147,7 +147,6 @@ proc runLogicalDivideTests =
     doAssert rank(ld) === 2, "logical_divide rank: " & $rank(ld)
     doAssert ld === (((2, 2), (2, 8)), ((1, 4), (2, 8))), "ld: " & $ld
 
-# ── tiled_divide / flat_divide reassembly ────────────────────
 # ═══════════════════════════════════════════════════════════════
 #  Section 21. tiled_divide / flat_divide
 # ═══════════════════════════════════════════════════════════════

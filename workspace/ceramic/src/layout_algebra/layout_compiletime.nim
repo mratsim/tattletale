@@ -119,7 +119,6 @@ macro hier_unzip(splitter: untyped, layout: typed, tiler: typed): untyped =
 #  emitLayout, builder-to-layout constructor
 # ═══════════════════════════════════════════════════════════════
 
-
 proc emitLayoutLit*(shapeVal, shapeTy, strideVal, strideTy: NimNode): NimNode {.compileTime.} =
   ## Layout[shapeTy, strideTy](shape: shapeVal, stride: strideVal),
   ## all parts already literal nodes.

@@ -38,8 +38,6 @@ func getCopyAsyncAtom*(T: typedesc): static auto {.inline.} =
 #  copy_unpack: instruction emission from a registry entry
 # ═════════════════════════════════════════════════════════════════════════
 
-
-
 proc copyBody(atomName: string;
               dstView, srcView: NimNode; srcSize: NimNode;
               zfill: bool; chunkBytes: int): NimNode =

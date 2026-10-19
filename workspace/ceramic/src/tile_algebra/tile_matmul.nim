@@ -66,10 +66,6 @@ proc tiledMma*[TAcc, TA, TB](
     {.error: "the tile dimensions are not multiples of the resolved atom's cell dimensions".}
 
 # ═══════════════════════════════════════════════════════════════
-#  Tile schedule queries
-# ═══════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════
 #  Per-operand register tiles and thread->value maps
 # ═══════════════════════════════════════════════════════════════
 

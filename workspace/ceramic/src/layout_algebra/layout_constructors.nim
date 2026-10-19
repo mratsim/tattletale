@@ -13,6 +13,7 @@ import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
 import ./ism_coord_strides
 export ism_coord_strides
+
 # ═══════════════════════════════════════════════════════════════
 #  col_major_strides, canonical column-major strides
 # ═══════════════════════════════════════════════════════════════

@@ -989,11 +989,9 @@ proc runFlatProductTests =
   echo "    flat_divide/product: 5 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  zipped_divide, rank-1 layout with Layout and int tiler terminals
-# ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
 #  tile_to_shape [CUTE]
 # ═══════════════════════════════════════════════════════════════
+
 proc runTileToShapeTests: void =
   block:
     ## [tensor-layouts] 2D: block=(2,3):(1,2), target=(8,6)
