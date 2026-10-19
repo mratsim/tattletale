@@ -25,7 +25,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     engine.launchKernel("k", oDev, ())
     var res: array[64, byte]
     engine.copyToHostFromDevice(cast[ptr array[32, byte]](addr res[0]), oDev, 2)
-    engine.freeDevice(oDev)
     for i in 0 ..< 64:
       doAssert res[i] == byte(i), &"digest byte {i}: {res[i]} != {i}"
     echo "  OK — runtime array of byte[32] blocks (sha256 shape) through a Vulkan ref block"

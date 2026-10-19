@@ -56,7 +56,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("kernelWithTwoVals", oDev, (3'u32, 4'u32,))
   engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
-  engine.freeDevice(oDev)
   doAssert gpuOut[0] == 7, &"two push-constant scalars: got {gpuOut[0]}, expected 7"
 
   echo "  OK — two scalar by-value params (packing order, re-ingest)"

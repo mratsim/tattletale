@@ -36,7 +36,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
   var res: array[8, uint32]
   engine.copyToHostFromDevice(addr res[0], oDev, 8)
-  engine.freeDevice(oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32
     doAssert res[i] == expected,

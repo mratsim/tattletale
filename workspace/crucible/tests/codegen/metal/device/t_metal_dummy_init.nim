@@ -36,7 +36,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "tuple of dummy structs const":
@@ -49,7 +48,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 1
 
 when isMainModule:

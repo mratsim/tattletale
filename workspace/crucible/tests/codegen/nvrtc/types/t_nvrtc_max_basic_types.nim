@@ -41,8 +41,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("maxBasic", oDev, (iDev,))
       engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       check buf[0] == 9.0    # max(2.5, 9.0)
       check buf[1] == 7.25   # max(3.5, 7.25)
       check buf[2] == 9.0    # max(9.0, 2.5)

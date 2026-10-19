@@ -57,8 +57,6 @@ proc runTest() =
     var gotY: array[N, float32]
     engine.copyToHostFromDevice(addr gotX[0], xDev, N)
     engine.copyToHostFromDevice(addr gotY[0], yDev, N)
-    engine.freeDevice(xDev)
-    engine.freeDevice(yDev)
     doAssert gotX[0] == yHost[0] + 1,
       "swap: inner's y param binds to the x buffer and reads y, got x[0]=" & $gotX[0] &
       " want " & $(yHost[0] + 1) & " y[0]=" & $gotY[0]
@@ -89,8 +87,6 @@ proc runTest() =
     var gotY: array[N, float32]
     engine.copyToHostFromDevice(addr gotX[0], xDev, N)
     engine.copyToHostFromDevice(addr gotY[0], yDev, N)
-    engine.freeDevice(xDev)
-    engine.freeDevice(yDev)
     doAssert gotX[0] == yHost[0] + 100,
       "plain: dst=x must receive src=y's value, got x[0]=" & $gotX[0] &
       " want " & $(yHost[0] + 100) & " y[0]=" & $gotY[0]

@@ -46,8 +46,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(float32, outBuf.len)
   engine.launchKernel<<(1, 1)>>("reproKernel", oDev, (iDev, 4'i32))
   engine.copyToHostFromDevice(addr outBuf[0], oDev, outBuf.len)
-  engine.freeDevice(iDev)
-  engine.freeDevice(oDev)
   doAssert abs(outBuf[0] - data[0]) < 1e-5, "output[0] = " & $outBuf[0] & " (expected " & $data[0] & ")"
   echo "  OK (test_nvrtc_hoist_block_call_trail)"
 

@@ -39,8 +39,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4)
-      engine.freeDevice(fDev)
-      engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "seq[bool] input reads 1-byte elements":
@@ -53,8 +51,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4)
-      engine.freeDevice(fDev)
-      engine.freeDevice(oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "array[bool] output writes 1-byte elements":
@@ -67,8 +63,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolWriteKernel", oDev, (vDev,))
       var outBools: array[4, bool]
       engine.copyToHostFromDevice(addr outBools[0], oDev, 4)
-      engine.freeDevice(vDev)
-      engine.freeDevice(oDev)
       check outBools == [true, false, true, false]
 
 when isMainModule:

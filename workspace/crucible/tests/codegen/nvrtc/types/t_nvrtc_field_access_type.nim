@@ -44,7 +44,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 1
 
     test "Case 2 — typeof field access in type definition":
@@ -55,7 +54,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 1
 
 when isMainModule:

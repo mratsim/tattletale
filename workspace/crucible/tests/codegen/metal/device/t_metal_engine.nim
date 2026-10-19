@@ -96,9 +96,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 30
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
 
     test "re-ingest with a changed body invalidates and recompiles":
       var engine = bkMetal.init()
@@ -118,9 +115,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 6
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
 
     test "dispatch with grid/blk via dispatchThreadgroups":
       var engine = bkMetal.init()
@@ -137,9 +131,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel<<(2, 64)>>("vecAdd", oDev, (aDev, bDev))
       var res: array[128, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 128)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       for i in 0 ..< 128:
         check res[i] == uint32(i) + 1
 
@@ -157,7 +148,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 2)
       check res[0] == 10
       check res[1] == 2
-      engine.freeDevice(oDev)
 
     test "deviceName returns the Metal device name":
       var engine = bkMetal.init()
@@ -179,9 +169,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
         var res: array[1, uint32]
         engine.copyToHostFromDevice(addr res[0], oDev, 1)
-        engine.freeDevice(aDev)
-        engine.freeDevice(bDev)
-        engine.freeDevice(oDev)
         check res[0] == 5
 
 when isMainModule:

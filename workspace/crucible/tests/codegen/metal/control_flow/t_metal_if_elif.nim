@@ -68,8 +68,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 40
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
 
     test "no else in source emits no else block":
       # The elif chain is emitted (`else if`), but no else-BLOCK: the source
@@ -96,8 +94,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 99  # no branch matched: sentinel preserved
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

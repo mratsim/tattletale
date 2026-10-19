@@ -35,7 +35,6 @@ proc runTest() =
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("chainKernel", oDev, ())
       var res: array[32, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 32)
-      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 
@@ -46,7 +45,6 @@ proc runTest() =
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("directKernel", oDev, ())
       var res: array[32, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 32)
-      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 

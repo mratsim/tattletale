@@ -169,11 +169,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev3 = engine.allocDevice(int32, 10)
     engine.launchKernel("structKernel2", oDev3, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32c[0], oDev3, 10)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
-    engine.freeDevice(oDev2)
-    engine.freeDevice(oDev3)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17

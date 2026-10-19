@@ -75,9 +75,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32[0] == 11
       check out32[1] == 22
 
@@ -94,9 +91,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32[0] == 103
       check out32[1] == 204
 
@@ -113,9 +107,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("maxKernel", oDev, (aDev, bDev))
       var outVal: array[1, uint32]
       engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check outVal[0] == 42
 
 when isMainModule:

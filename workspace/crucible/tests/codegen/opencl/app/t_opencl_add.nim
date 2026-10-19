@@ -81,9 +81,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
@@ -105,9 +102,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
@@ -129,9 +123,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("maxKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42

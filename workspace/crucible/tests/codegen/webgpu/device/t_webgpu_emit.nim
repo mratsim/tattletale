@@ -121,9 +121,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
@@ -140,8 +137,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
@@ -154,8 +149,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
@@ -168,8 +161,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -185,9 +176,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
@@ -198,7 +186,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t6Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
@@ -211,8 +198,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
@@ -225,8 +210,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
@@ -236,7 +219,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t10Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
@@ -246,7 +228,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t12Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "emitted statement carries exactly one terminator (no `;` appended)":
@@ -271,7 +252,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t15Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
@@ -281,7 +261,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t16Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

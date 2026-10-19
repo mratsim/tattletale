@@ -18,7 +18,6 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   let oDev = engine.allocDevice(typeof(buf[0]), buf.len)
   engine.launchKernel(kernelName, oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
 
 # ═════════════════════════════════════════════════════════════════════
 # Test 1: Basic if-else expression via let binding
@@ -88,7 +87,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let o5 = engine.allocDevice(uint32, buf5.len)
     engine.launchKernel<<(1, 4)>>("ifExprCondKernel", o5, ())
     engine.copyToHostFromDevice(addr buf5[0], o5, buf5.len)
-    engine.freeDevice(o5)
   doAssert buf5[0] == 100, &"if-expr cond (tid=0): got {buf5[0]}, expected 100"
   doAssert buf5[1] == 100, &"if-expr cond (tid=1): got {buf5[1]}, expected 100"
   doAssert buf5[2] == 200, &"if-expr cond (tid=2): got {buf5[2]}, expected 200"
@@ -128,7 +126,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let o7 = engine.allocDevice(uint32, buf7.len)
     engine.launchKernel<<(1, 4)>>("ifElifElseKernel", o7, ())
     engine.copyToHostFromDevice(addr buf7[0], o7, buf7.len)
-    engine.freeDevice(o7)
   doAssert buf7[0] == 100, &"if-elif-else (tid=0): got {buf7[0]}, expected 100"
   doAssert buf7[1] == 200, &"if-elif-else (tid=1): got {buf7[1]}, expected 200"
   doAssert buf7[2] == 300, &"if-elif-else (tid=2): got {buf7[2]}, expected 300"

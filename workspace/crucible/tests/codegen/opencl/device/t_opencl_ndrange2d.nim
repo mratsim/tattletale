@@ -30,7 +30,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("grid2d", oDev, ())
       var res: array[64, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 64)
-      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
 
@@ -41,7 +40,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.launchKernel<<(grid: (2, 2, 2), blk: (2, 2, 2))>>("grid3d", oDev, ())
       var res: array[64, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 64)
-      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
 

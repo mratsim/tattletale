@@ -45,9 +45,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[i] == a[i] + b[i]
       engine.launchKernel("vec10_mul", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 10)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       for i in 0 ..< 10:
         check res[i] == a[i] * b[i]
 

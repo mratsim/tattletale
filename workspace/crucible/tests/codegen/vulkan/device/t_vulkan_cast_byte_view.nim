@@ -29,7 +29,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     engine.launchKernel("k", oDev, ())
     var got: uint32
     engine.copyToHostFromDevice(addr got, oDev, 1)
-    engine.freeDevice(oDev)
     doAssert got == 16777217'u32, &"byte view wrote the top byte: {got} != 16777217"
     echo "  OK — byte view through a cast pulls in the int8 extensions"
 

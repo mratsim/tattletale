@@ -35,8 +35,6 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("accKernel", oDev, (aDev,))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(oDev)
 
     echo "  accKernel: output = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 17  # 10 + 6 + 1

@@ -32,7 +32,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("boundaryKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"nested val: {buf[0]}"
   doAssert buf[1] == 1, &"boundary static marker: {buf[1]}"
   echo "  OK — boundary patterns"

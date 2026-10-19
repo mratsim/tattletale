@@ -34,7 +34,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(float32, buf.len)
   engine.launchKernel("staticParamKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   echo "  [0]=", buf[0]
   doAssert buf[0] == 8.0'f32
   echo "  OK (test_nvrtc_static_record_param)"

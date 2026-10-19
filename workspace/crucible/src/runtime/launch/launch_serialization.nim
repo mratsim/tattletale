@@ -127,10 +127,10 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
     off += a
 
 macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc, backend: static BackendKind) =
+  ## Only whole-argument packing requires trivially-copyable args.
+  ## Struct-explode packing writes the buffer handle plus trivial fields,
+  ## so owning wrappers with destructors serialize fine there.
   result = quote do:
-    when not supportsCopyMem(typeof(`v`)):
-      {.error: "kernel args are trivially copyable types only, " &
-          $typeof(`v`) & " does not support copyMem".}
     when typeof(`v`) is `H` or typeof(`v`) is DeviceMem or typeof(`v`) is ptr|pointer:
       when typeof(`v`) is DeviceMem:
         `store`(`ctx`, `v`.mem, `pos`)
@@ -144,9 +144,15 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
         for f in fields(`v`):
           serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
       else:
+        when not supportsCopyMem(typeof(`v`)):
+          {.error: "kernel args are trivially copyable types only, " &
+              $typeof(`v`) & " does not support copyMem".}
         `store`(`ctx`, `v`, `pos`)
         inc `pos`
     else:
+      when not supportsCopyMem(typeof(`v`)):
+        {.error: "kernel args are trivially copyable types only, " &
+            $typeof(`v`) & " does not support copyMem".}
       `store`(`ctx`, `v`, `pos`)
       inc `pos`
 
@@ -159,9 +165,8 @@ func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], ba
   for f in fields(default(A)):
     result += argCount(typeof(f), H, backend)
 
-template bindArgs*(ctx: var auto, output: auto, args: tuple, store: untyped, H: typedesc, backend: static BackendKind) =
+template bindArgs*(ctx: var auto, output: auto, args: var tuple, store: untyped, H: typedesc, backend: static BackendKind) =
   var pos = 0
   serialize(ctx, output, pos, store, H, backend)
-  var argsCopy = args
-  for f in fields(argsCopy):
+  for f in fields(args):
     serialize(ctx, f, pos, store, H, backend)

@@ -80,7 +80,7 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
 # ─────────────────────────────────────────────────────────────────────────
 
 
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -101,7 +101,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
 proc allocDeviceImpl*(engine: OpenCLEngine, n: int): OpenCLBuffer =
   engine.ctx.allocBuffer(n)
 
-proc freeDeviceImpl*(engine: OpenCLEngine, h: OpenCLBuffer) =
+proc freeDeviceImpl*(h: OpenCLBuffer) =
   var h = h
   h.dealloc()
 

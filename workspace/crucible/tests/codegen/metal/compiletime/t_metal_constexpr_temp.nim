@@ -82,7 +82,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testA", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
     test "Pattern B — constexpr in arithmetic":
       var engine = bkMetal.init()
@@ -91,7 +90,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testB", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 128
     test "Pattern C — template wrapConst":
       var engine = bkMetal.init()
@@ -100,7 +98,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testC", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
     test "Pattern D — tuple bracket access":
       var engine = bkMetal.init()
@@ -109,7 +106,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testD", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern E — block with constexpr temp":
       var engine = bkMetal.init()
@@ -118,7 +114,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testE", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern F — constexpr tuple field access":
       var engine = bkMetal.init()
@@ -127,7 +122,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("testF", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

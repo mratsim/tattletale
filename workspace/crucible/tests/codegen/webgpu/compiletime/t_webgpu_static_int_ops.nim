@@ -67,8 +67,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToDeviceFromHost(dynDev, addr dynArr[0], dynArr.len)
       engine.launchKernel("staticIntOps", oDev, (dynDev,))
       engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-      engine.freeDevice(dynDev)
-      engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

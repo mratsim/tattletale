@@ -38,7 +38,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("gemmKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   let expected = [58'u32, 64, 139, 154]
   for i in 0 ..< 4:
     doAssert buf[i] == expected[i], &"C[{i}]: {buf[i]} != {expected[i]}"

@@ -28,7 +28,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("staticLoopKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"loop[0]: {buf[0]}"
   doAssert buf[1] == 20, &"loop[1]: {buf[1]}"
   doAssert buf[2] == 30, &"loop[2]: {buf[2]}"

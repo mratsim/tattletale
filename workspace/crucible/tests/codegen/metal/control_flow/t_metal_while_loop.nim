@@ -26,7 +26,6 @@ proc runTest() =
       engine.launchKernel("whileKernel", oDev, ())
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4)
-      engine.freeDevice(oDev)
       for i in 0 ..< 4:
         check res[i] == uint32(i)
 

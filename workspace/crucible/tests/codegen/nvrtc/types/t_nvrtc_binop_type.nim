@@ -39,7 +39,6 @@ const kernel = cuda:
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
       check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2
 

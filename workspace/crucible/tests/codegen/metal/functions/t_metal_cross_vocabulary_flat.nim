@@ -32,7 +32,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel<<(grid: (8, 1), blk: (8, 1))>>("crossVocabFlat", oDev, ())
       var res: array[64 + 8, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, (64 + 8))
-      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
       for i in 0 ..< 8:

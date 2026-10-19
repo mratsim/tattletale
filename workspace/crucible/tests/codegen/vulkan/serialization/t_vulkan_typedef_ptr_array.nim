@@ -33,7 +33,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     engine.launchKernel("k", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     doAssert res[0] == 27, &"edges[1] + band.hi + m: {res[0]} != 27"
     echo "  OK — struct with array field through a device function (Vulkan)"
 

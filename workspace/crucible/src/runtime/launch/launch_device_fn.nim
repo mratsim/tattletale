@@ -239,7 +239,8 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
       const `bridgeSource` = `bridgeN`(`engine`, `procdef`)
       if `engine`.getArtifact() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
-      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`,
+      var argsVal = `argsN`
+      `engine`.launchKernelImpl(`kname`, `outputN`, argsVal,
         LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
 
 macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN: untyped, args: varargs[untyped]): untyped =

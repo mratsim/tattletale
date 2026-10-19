@@ -75,8 +75,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("staticIntOps", oDev, (dDev,))
       var out32: array[10, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 10)
-      engine.freeDevice(dDev)
-      engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

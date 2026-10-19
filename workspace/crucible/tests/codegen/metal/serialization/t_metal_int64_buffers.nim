@@ -35,9 +35,6 @@ proc runTest() =
       engine.launchKernel("int64Kernel", oDev, (aDev, bDev))
       var res: array[2, uint64]
       engine.copyToHostFromDevice(addr res[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 7'u64
       check res[1] == 1000000000006'u64
 

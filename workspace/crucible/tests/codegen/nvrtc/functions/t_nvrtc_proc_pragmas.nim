@@ -20,7 +20,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("pragmaKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"proc pragmas: got {buf[0]}"
   echo "  OK (test_nvrtc_proc_pragmas)"
 

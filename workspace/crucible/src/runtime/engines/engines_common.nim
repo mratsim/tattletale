@@ -30,8 +30,16 @@ template dim3*(d: Dim3): Dim3 = d
 
 type
   DeviceMem*[H, T] = object
-    ## Typed on-device memory buffer
+    ## Typed on-device memory buffer owning its memory: released on scope
+    ## exit and move-only.
     mem*: H
+
+proc `=destroy`*[H, T](mem: var DeviceMem[H, T]) =
+  mixin freeDeviceImpl
+  freeDeviceImpl(mem.mem)
+
+proc `=copy`*[H, T](dst: var DeviceMem[H, T], src: DeviceMem[H, T]) {.
+    error: "DeviceMem owns its buffer and is move-only".}
 
 type
   HwEngine* = concept engine, type E
@@ -39,7 +47,7 @@ type
     proc getArtifact(engine: E)
     proc deviceName(engine: E): string
     proc allocDeviceImpl(engine: E, nbytes: int)
-    proc freeDeviceImpl(engine: E, handle: auto)
+    proc freeDeviceImpl(handle: auto)
     proc copyToDeviceFromHostImpl(engine: E, dst: auto, src: pointer, n: int)
     proc copyToHostFromDeviceImpl(engine: E, dst: pointer, src: auto, n: int)
 

@@ -87,7 +87,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testA", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern B — constexpr in arithmetic":
     var engine = bkVulkan.init()
@@ -96,7 +95,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testB", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 128
   test "Pattern C — template wrapConst":
     var engine = bkVulkan.init()
@@ -105,7 +103,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testC", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 1
   test "Pattern D — tuple bracket access":
     var engine = bkVulkan.init()
@@ -114,7 +111,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testD", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern E — block with constexpr temp":
     var engine = bkVulkan.init()
@@ -123,7 +119,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testE", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 0
   test "Pattern F — constexpr tuple field access":
     var engine = bkVulkan.init()
@@ -132,7 +127,6 @@ suite "Vulkan - constexpr tuple init":
     engine.launchKernel("testF", oDev, ())
     var res: array[1, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
-    engine.freeDevice(oDev)
     check res[0] == 8
 
 when isMainModule:

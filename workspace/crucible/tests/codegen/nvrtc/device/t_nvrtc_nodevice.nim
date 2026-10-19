@@ -41,7 +41,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(int32, buf.len)
   engine.launchKernel<<(1, 4)>>("nodeviceKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
 
   doAssert buf[0] == 2,  &"doubleIt(1) (no .device.): got {buf[0]}"
   doAssert buf[1] == 4,  &"doubleIt(2) (no .device.): got {buf[1]}"

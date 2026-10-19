@@ -34,7 +34,6 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(float32, res.len)
       engine.launchKernel("reductionKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
 
       echo "  reductionKernel: output = [", res[0], ", ", res[1], ", ", res[2], "]"
       doAssert res[0] == 11.0'f32  # lane 0: shuffleDown gathers lane 1's acc

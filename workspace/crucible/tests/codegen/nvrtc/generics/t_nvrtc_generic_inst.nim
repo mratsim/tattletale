@@ -64,7 +64,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let o32 = engine.allocDevice(uint32, buf32.len)
   engine.launchKernel("genericInstUint32", o32, ())
   engine.copyToHostFromDevice(addr buf32[0], o32, buf32.len)
-  engine.freeDevice(o32)
   echo "  maxGeneric[uint32](10,20)       = ", buf32[0]
   echo "  minGeneric[uint32](30,5)        = ", buf32[1]
   echo "  clampGeneric[uint32](50,0,25)   = ", buf32[2]
@@ -81,7 +80,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oI32 = engine.allocDevice(int32, bufI32.len)
   engine.launchKernel("genericInstInt32", oI32, ())
   engine.copyToHostFromDevice(addr bufI32[0], oI32, bufI32.len)
-  engine.freeDevice(oI32)
   echo "  maxGeneric[int32](1,-5)         = ", bufI32[0]
   echo "  minGeneric[int32](-10,20)       = ", bufI32[1]
   echo "  sumThree[int32](100,200,300)    = ", bufI32[2]

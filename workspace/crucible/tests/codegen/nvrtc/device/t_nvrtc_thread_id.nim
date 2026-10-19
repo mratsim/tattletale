@@ -96,7 +96,6 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     let o0 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel<<(1, 1)>>("threadIdKernel", o0, ())
     engine.copyToHostFromDevice(addr buf[0], o0, buf.len)
-    engine.freeDevice(o0)
     doAssert buf[0] == 0
     doAssert buf[1] == 0
     doAssert buf[2] == 0
@@ -110,7 +109,6 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     let o1 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(3, 5)>>("threadState1d", o1, ())
     engine.copyToHostFromDevice(addr rec[0], o1, rec.len)
-    engine.freeDevice(o1)
     for b in 0 ..< 3:
       for t in 0 ..< 5:
         let gid = b * 5 + t
@@ -128,7 +126,6 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     let o2 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
     engine.copyToHostFromDevice(addr rec[0], o2, rec.len)
-    engine.freeDevice(o2)
     for byy in 0 ..< gy:
       for bxx in 0 ..< gx:
         let blockId = byy * gx + bxx
@@ -154,7 +151,6 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     let o3 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
     engine.copyToHostFromDevice(addr rec[0], o3, rec.len)
-    engine.freeDevice(o3)
     for bzz in 0 ..< gz:
       for byy in 0 ..< gy:
         for bxx in 0 ..< gx:

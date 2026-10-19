@@ -166,7 +166,7 @@ proc cudaBindArgs(output: auto, args: tuple): auto =
   result = SerializationCtx[n]()
   bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -198,7 +198,7 @@ proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: t
 proc allocDeviceImpl*(engine: CudaEngine, n: int): CUdeviceptr =
   check cuMemAlloc(result, csize_t(n))
 
-proc freeDeviceImpl*(engine: CudaEngine, h: CUdeviceptr) =
+proc freeDeviceImpl*(h: CUdeviceptr) =
   check cuMemFree(h)
 
 proc copyToDeviceFromHostImpl*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =

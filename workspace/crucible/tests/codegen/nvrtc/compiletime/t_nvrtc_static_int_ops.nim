@@ -69,8 +69,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(int32, buf.len)
       engine.launchKernel<<(1, 1)>>("staticIntOps", oDev, (iDev,))
       engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       check buf[0] == 11    # Int[10]() + 1
       check buf[1] == 12    # 2 + Int[10]()
       check buf[2] == 30    # Int[10]() * 3

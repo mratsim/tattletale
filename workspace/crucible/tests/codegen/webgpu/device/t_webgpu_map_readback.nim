@@ -34,8 +34,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToDeviceFromHost(iDev, addr input[0], input.len)
       engine.launchKernel("mapReadbackKernel", oDev, (iDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

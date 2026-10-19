@@ -65,7 +65,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-      engine.freeDevice(oDev)
       check buf[0] == 42.0'f32
       check buf[127] == 42.0'f32
 

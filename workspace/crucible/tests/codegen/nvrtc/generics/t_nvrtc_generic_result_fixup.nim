@@ -22,7 +22,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("resultFixupKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"result fixup: got {buf[0]}"
   echo "  OK (test_nvrtc_generic_result_fixup)"
 

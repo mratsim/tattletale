@@ -34,7 +34,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("varParamKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   echo "  p.x=", buf[0], " p.y=", buf[1], " a=", buf[2], " b=", buf[3]
   doAssert buf[0] == 10
   doAssert buf[1] == 20

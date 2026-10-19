@@ -60,8 +60,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev1 = engine1.allocDevice(float32, fullBuf.len)
   engine1.launchKernel<<(1, 1)>>("kernelFull", oDev1, (iDev1, 4'i32))
   engine1.copyToHostFromDevice(addr fullBuf[0], oDev1, fullBuf.len)
-  engine1.freeDevice(iDev1)
-  engine1.freeDevice(oDev1)
   for i in 0 .. 3:
     let expected = float32(i + 1) * 2.0'f32
     echo &"full[{i}]: {fullBuf[i]} (expected {expected})"
@@ -77,8 +75,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev2 = engine2.allocDevice(float32, halfBuf.len)
   engine2.launchKernel<<(1, 1)>>("kernelHalf", oDev2, (iDev2, 4'i32))
   engine2.copyToHostFromDevice(addr halfBuf[0], oDev2, halfBuf.len)
-  engine2.freeDevice(iDev2)
-  engine2.freeDevice(oDev2)
   for i in 0 .. 1:
     let expected = float32(i + 3) * 2.0'f32
     echo &"half[{i}]: {halfBuf[i]} (expected {expected})"

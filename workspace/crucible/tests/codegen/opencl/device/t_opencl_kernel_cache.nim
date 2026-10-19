@@ -44,9 +44,6 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
     doAssert outVal[0] == 300
     echo "  OK - cached kernel reused across runs"
 
@@ -70,9 +67,6 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     engine.ingest(kernelCode2)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
     doAssert outVal[0] == 1003
     echo "  OK - re-ingest invalidated cached kernel"
 

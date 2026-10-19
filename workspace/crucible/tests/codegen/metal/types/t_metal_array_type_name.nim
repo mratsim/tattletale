@@ -30,7 +30,6 @@ proc runTest() =
       engine.launchKernel("repro", oDev, ())
       var res: array[1, int32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8'i32
 
 when isMainModule:

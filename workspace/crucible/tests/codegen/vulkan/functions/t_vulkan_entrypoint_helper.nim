@@ -56,7 +56,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("entryKernel", oDev, ())
   engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
-  engine.freeDevice(oDev)
   echo &"  entryKernel: got {gpuOut[0]}, expected 42"
   doAssert gpuOut[0] == 42, &"entryKernel: got {gpuOut[0]}, expected 42"
 

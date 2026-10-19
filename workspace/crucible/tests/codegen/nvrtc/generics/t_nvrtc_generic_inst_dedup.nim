@@ -69,8 +69,6 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
   let oDev = engine.allocDevice(float32, outp.len)
   engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
   engine.copyToHostFromDevice(addr outp[0], oDev, outp.len)
-  engine.freeDevice(iDev)
-  engine.freeDevice(oDev)
   result = outp
 
 proc runTest() =

@@ -40,6 +40,9 @@ export vk.newVulkanEngine,   vk.ingest,     vk.getArtifact,    vk.deviceName
 export wgpu.newWgpuEngine,   wgpu.ingest,   wgpu.getArtifact,  wgpu.deviceName
 export metal.newMetalEngine, metal.ingest,  metal.getArtifact, metal.deviceName
 
+export nvrtc.freeDeviceImpl, cl.freeDeviceImpl, vk.freeDeviceImpl,
+       wgpu.freeDeviceImpl, metal.freeDeviceImpl
+
 export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn
 
@@ -47,9 +50,6 @@ proc allocDevice*(engine: HwEngine, T: typedesc, len: int): auto {.inline.} =
   ## Allocates len elements of T on the engine, returns a typed DeviceMem handle
   let h = engine.allocDeviceImpl(len * sizeof(T))
   DeviceMem[typeof(h), T](mem: h)
-
-proc freeDevice*[H, T](engine: HwEngine, mem: DeviceMem[H, T]) {.inline.} =
-  engine.freeDeviceImpl(mem.mem)
 
 proc copyToDeviceFromHost*[H, T](engine: HwEngine, dst: DeviceMem[H, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
   ## Copies n elements from host to device

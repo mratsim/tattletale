@@ -82,7 +82,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("staticArithKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 1,   &"summed[0]: {buf[0]}"
   doAssert buf[1] == 5,   &"summed[4]: {buf[1]}"
   doAssert buf[2] == 10,  &"mult[0]: {buf[2]}"

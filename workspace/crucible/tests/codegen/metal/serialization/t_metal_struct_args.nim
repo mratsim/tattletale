@@ -115,8 +115,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("idxReadKernel", oDev, (5'i32, inDev))
       var out32: array[2, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(inDev)
-      engine.freeDevice(oDev)
       check out32 == [5'i32, 10]
 
     test "a ptr-free struct binds as one chunk at the lowered field widths":
@@ -131,7 +129,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("paramsReadKernel", oDev, (p,))
       var out32: array[6, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 6)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 5, 6]
 
     test "a struct with an alignment gap packs each field at its declared offset":
@@ -145,7 +142,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("gapReadKernel", oDev, (g,))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 2]
 
     test "mixed pointer, struct and int args bind per the declared signature":
@@ -162,8 +158,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
                  (inDev, p, 7'i32))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5)
-      engine.freeDevice(inDev)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 7, 10]
 
 runTest()

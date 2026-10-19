@@ -31,8 +31,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     var got: uint32
     engine.copyToHostFromDevice(addr got, sDev, 1)
     for i in 0 ..< 4:
-      engine.freeDevice(devs[i])
-    engine.freeDevice(sDev)
     doAssert got == 10'u32, &"ps[0][1] = ps[2][3]: {got} != 10"
     echo "  OK — reference block declared from a nested array-of-refs pointee"
 

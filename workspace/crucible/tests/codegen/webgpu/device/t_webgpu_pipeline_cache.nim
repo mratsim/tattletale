@@ -53,8 +53,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr b[0], b.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 20
       check res[1] == 40
       check res[2] == 60
@@ -77,8 +75,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo kernelTriple
       engine.launchKernel("tripleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 3
       check res[1] == 6
       check res[2] == 9
@@ -96,8 +92,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res == [2'u32, 4, 6, 8]
 
 when isMainModule:

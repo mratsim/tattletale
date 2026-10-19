@@ -45,7 +45,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("scalarI32Kernel", oDev, (-42'i32,))
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == uint32(-42'i32)
 
     test "uint32 by value (4-byte blob)":
@@ -56,7 +55,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("scalarU32Kernel", oDev, (7'u32,))
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 7
 
     test "float32 by value (4-byte blob)":
@@ -67,7 +65,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("scalarF32Kernel", oDev, (1.5'f32,))
       var res: array[1, float32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 1.5'f32
 
     test "bool by value (widened to i32 on the host)":
@@ -81,7 +78,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 1
       engine.launchKernel("scalarBoolKernel", oDev, (false,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 0
 
 when isMainModule:

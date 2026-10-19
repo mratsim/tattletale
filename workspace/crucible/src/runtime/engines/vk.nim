@@ -184,7 +184,7 @@ proc parseEntryPoint(glsl: string): string =
   name
 
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
@@ -250,9 +250,9 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
 proc allocDeviceImpl*(engine: VulkanEngine, n: int): VulkanBuffer =
   engine.ctx.allocBuffer(n)
 
-proc freeDeviceImpl*(engine: VulkanEngine, h: VulkanBuffer) =
+proc freeDeviceImpl*(h: VulkanBuffer) =
   var h = h
-  h.dealloc(engine.ctx)
+  h.dealloc()
 
 proc copyToDeviceFromHostImpl*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
   var dst = dst

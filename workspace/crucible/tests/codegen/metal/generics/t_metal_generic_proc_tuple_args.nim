@@ -37,7 +37,6 @@ proc runTest() =
       engine.launchKernel("repro", oDev, ())
       var res: array[2, float32]
       engine.copyToHostFromDevice(addr res[0], oDev, 2)
-      engine.freeDevice(oDev)
       check res[0] == 6.0'f32
       check res[1] == 9.0'f32
 

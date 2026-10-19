@@ -28,7 +28,6 @@ proc runTest() =
       engine.launchKernel("paramKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42'u32
 
 when isMainModule:

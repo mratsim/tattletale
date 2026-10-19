@@ -28,7 +28,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 2))>>("whole", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       for y in 0 ..< 2:
         for x in 0 ..< 4:
           check res[y * 4 + x] == uint32(y * 4 + x)

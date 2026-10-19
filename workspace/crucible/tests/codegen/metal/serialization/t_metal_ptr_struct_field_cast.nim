@@ -80,8 +80,6 @@ proc runTest() =
         "ptrFieldDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 4)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       for i in 0 ..< 4:
         check output[i] == input[i]
     test "smem view field + cast qualify as `threadgroup` and run":
@@ -95,7 +93,6 @@ proc runTest() =
         "ptrFieldSmemKernel", oDev, ())
       var output: array[4, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 4)
-      engine.freeDevice(oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)
@@ -118,8 +115,6 @@ proc runTest() =
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "viewSmemKernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, 4)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)

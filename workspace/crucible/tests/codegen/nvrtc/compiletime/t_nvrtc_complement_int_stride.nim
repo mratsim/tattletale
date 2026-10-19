@@ -43,7 +43,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(int32, Buf.len)
       engine.launchKernel<<(1, 1)>>("kComplement", oDev, ())
       engine.copyToHostFromDevice(addr Buf[0], oDev, Buf.len)
-      engine.freeDevice(oDev)
       check Buf[0] == 1
 
 when isMainModule:

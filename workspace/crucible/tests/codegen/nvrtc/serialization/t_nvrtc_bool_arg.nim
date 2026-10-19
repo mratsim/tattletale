@@ -59,9 +59,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "  scale(3, true): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
 
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(rDev)
   echo "  OK (test_nvrtc_bool_arg)"
 
 when isMainModule:

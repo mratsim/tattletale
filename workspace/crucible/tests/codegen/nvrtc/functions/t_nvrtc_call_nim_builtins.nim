@@ -20,7 +20,6 @@ template runIntKernel(t: typedesc; expected0, expected1: float32) =
     let oDev = engine.allocDevice(float32, buf.len)
     engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
     engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-    engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -45,7 +44,6 @@ template runFloatKernel(t: typedesc; expected0, expected1: float32) =
     let oDev = engine.allocDevice(float32, buf.len)
     engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
     engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-    engine.freeDevice(oDev)
     check buf[0] == expected0
     check buf[1] == expected1
 
@@ -91,7 +89,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-      engine.freeDevice(oDev)
       check buf[0] == 12'f32
       check buf[1] == 16'f32
 

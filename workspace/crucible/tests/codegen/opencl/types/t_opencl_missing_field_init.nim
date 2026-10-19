@@ -39,7 +39,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel("kernelMain", oDev, ())
     engine.copyToHostFromDevice(addr out32[0], oDev, 4)
-    engine.freeDevice(oDev)
     doAssert out32[0] == 7, "set field must keep its value"
     doAssert out32[1] == 0, "omitted array field must be zeroed"
     doAssert out32[2] == 0, "omitted array field must be zeroed"

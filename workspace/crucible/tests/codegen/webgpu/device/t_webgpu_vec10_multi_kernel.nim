@@ -39,9 +39,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     doAssert res[i] == a[i] * b[i]
   echo "  OK — vec10_mul"
 
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(oDev)
   echo "  OK — Multi-kernel vec10 (WebGPU), one engine, one ingest"
 
 when isMainModule:

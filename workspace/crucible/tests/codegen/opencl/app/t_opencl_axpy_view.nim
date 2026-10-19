@@ -43,8 +43,6 @@ proc runTest() =
 
   var got: array[N, float32]
   engine.copyToHostFromDevice(addr got[0], yDev, N)
-  engine.freeDevice(xDev)
-  engine.freeDevice(yDev)
   for i in 0 ..< N:
     let expected = 2.5'f32 * xHost[i] + yHost[i]
     doAssert got[i] == expected,

@@ -84,7 +84,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testA", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 1
     test "Pattern B — constexpr in arithmetic":
       var engine = bkWGSL.init()
@@ -93,7 +92,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testB", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 128
     test "Pattern C — template wrapConst":
       var engine = bkWGSL.init()
@@ -102,7 +100,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testC", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 1
     test "Pattern D — tuple bracket access":
       var engine = bkWGSL.init()
@@ -111,7 +108,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testD", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern E — block with constexpr temp":
       var engine = bkWGSL.init()
@@ -120,7 +116,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testE", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 0
     test "Pattern F — constexpr tuple field access":
       var engine = bkWGSL.init()
@@ -129,7 +124,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("testF", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

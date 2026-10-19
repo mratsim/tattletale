@@ -112,9 +112,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("basicKernel", oDev, (aDev, bDev))
       var out32: array[10, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 10)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32[0] == 18
       check out32[1] == 8
       check out32[2] == 65
@@ -140,9 +137,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("structKernel", oDev, (aDev, bDev))
       var out32b: array[10, uint32]
       engine.copyToHostFromDevice(addr out32b[0], oDev, 10)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32b[0] == 10
       check out32b[1] == 4
       check out32b[2] == 21
@@ -168,9 +162,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("structKernel2", oDev, (aDev, bDev))
       var out32c: array[10, uint32]
       engine.copyToHostFromDevice(addr out32c[0], oDev, 10)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32c[0] == 17
       check out32c[1] == 11
       check out32c[2] == 42

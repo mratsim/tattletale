@@ -27,7 +27,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("pairReturnKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 42, &"a[0]: {buf[0]}"
   doAssert buf[1] == 42, &"a[3]: {buf[1]}"
   echo "  OK — generic return type (B10)"

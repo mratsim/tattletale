@@ -34,7 +34,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let o1 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel("kernelMain", o1, ())
     engine.copyToHostFromDevice(addr buf[0], o1, buf.len)
-    engine.freeDevice(o1)
     doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
     echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
 
@@ -54,7 +53,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let o2 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel("kernelMain", o2, ())
     engine.copyToHostFromDevice(addr buf[0], o2, buf.len)
-    engine.freeDevice(o2)
     doAssert buf[0] == 42, &"fn return: expected 42, got {buf[0]}"
     echo "  ✅ Test 2 — function return arg: ", buf[0]
 

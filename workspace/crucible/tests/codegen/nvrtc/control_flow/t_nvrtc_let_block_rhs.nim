@@ -48,7 +48,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oA = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oA, ())
       engine.copyToHostFromDevice(addr output[0], oA, output.len)
-      engine.freeDevice(oA)
       check output[0] == 1
 
     test "Pattern B — const + let":
@@ -59,7 +58,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oB = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oB, ())
       engine.copyToHostFromDevice(addr output[0], oB, output.len)
-      engine.freeDevice(oB)
       check output[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -70,7 +68,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       let oC = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oC, ())
       engine.copyToHostFromDevice(addr output[0], oC, output.len)
-      engine.freeDevice(oC)
       check output[0] == 1
 
 when isMainModule:

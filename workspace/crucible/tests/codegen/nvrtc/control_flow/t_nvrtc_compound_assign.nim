@@ -24,7 +24,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
       engine.launchKernel<<(1, 1)>>("compoundKernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 30  # (10 + 5) * 2
       check output[1] == 32  # (11 + 5) * 2
       check output[2] == 34  # (12 + 5) * 2

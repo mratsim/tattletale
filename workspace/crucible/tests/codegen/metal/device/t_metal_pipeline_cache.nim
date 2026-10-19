@@ -59,8 +59,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 40
       check res[2] == 60
       check res[3] == 80
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
 
     test "re-ingest invalidates cached pipelines":
       var engine = bkMetal.init()
@@ -83,8 +81,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 6
       check res[2] == 9
       check res[3] == 12
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()
