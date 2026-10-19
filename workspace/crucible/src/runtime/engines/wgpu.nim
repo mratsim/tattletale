@@ -9,11 +9,12 @@
 import std/[macros, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
+
 import ../../codegen/ir/gpu_types
-import ../exec/wgpu_runtime
-import ./engines_common
 import ../errors
+import ../exec/wgpu_runtime
 import ../launch/launch_serialization
+import ./engines_common
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types

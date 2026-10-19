@@ -7,12 +7,13 @@
 {.experimental: "codeReordering".}
 
 import std/[macros, tables]
+
 import workspace/crucible/src/abis/cl_abi
 
 import ../../codegen/ir/gpu_types
 import ../errors
-import ../launch/launch_serialization
 import ../exec/opencl_runtime
+import ../launch/launch_serialization
 import ./engines_common
 
 # ════════════════════════════════════════════════════════════════════════
