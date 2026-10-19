@@ -5,12 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GEMM kernel test driver, whole-value launches, backend agnostic
-##
-## Run:
-##   nim c -r --outdir:build \
-##     workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm.nim (from tattletale)
-
 import std/[math, random, times]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
@@ -67,9 +61,9 @@ const
 proc checkGemm*[E: HwEngine](rng: var Rand, engine: E, M, N, K: int, sA, sB, sC: (int, int), alpha = 2.0'f32, beta = 1.0'f32) =
   ## One GEMM launch over random (M, K) x (K, N) tensors
   var
-    aHost = randomHostTensor(rng, F16, (M, K), sA)
-    bHost = randomHostTensor(rng, F16, (N, K), sB)
-    cHost = randomHostTensor(rng, float32, (M, N), sC)
+    aHost = rng.randomHostTensor( F16, (M, K), sA)
+    bHost = rng.randomHostTensor( F16, (N, K), sB)
+    cHost = rng.randomHostTensor( float32, (M, N), sC)
     dHost = makeHostTensor(float32, (M, N), sC)
     refHost = makeHostTensor(float32, (M, N), (N, 1))
   let
@@ -102,29 +96,20 @@ proc run_gemm_tests*[E: HwEngine](engine: E, Iters: static int, moduleName: stri
     for sA in [(32, 1), (1, 32)]:
       for sB in [(1, 32), (32, 1)]:
         for sC in [(32, 1), (1, 32)]:
-          checkGemm(rng, engine, 32, 32, 32, sA, sB, sC)
+          rng.checkGemm( engine, 32, 32, 32, sA, sB, sC)
 
   # ragged edges, tile dims not multiples of the (32, 32, 16) mma atom
   for _ in 0 ..< Iters:
-    checkGemm(rng, engine,
-        32, 32, 41, (41, 1), (1, 32), (32, 1))
-    checkGemm(rng, engine,
-        40, 32, 32, (32, 1), (1, 32), (32, 1))
-    checkGemm(rng, engine,
-        32, 45, 32, (32, 1), (1, 45), (45, 1))
-    checkGemm(rng, engine,
-        40, 45, 41, (41, 1), (1, 45), (45, 1))
-    checkGemm(rng, engine,
-        70, 50, 100, (100, 1), (1, 50), (50, 1))
-    checkGemm(rng, engine,
-        70, 50, 96, (96, 1), (1, 50), (50, 1))
+    rng.checkGemm(engine, 32, 32, 41, (41, 1), (1, 32), (32, 1))
+    rng.checkGemm(engine, 40, 32, 32, (32, 1), (1, 32), (32, 1))
+    rng.checkGemm(engine, 32, 45, 32, (32, 1), (1, 45), (45, 1))
+    rng.checkGemm(engine, 40, 45, 41, (41, 1), (1, 45), (45, 1))
+    rng.checkGemm(engine, 70, 50, 100, (100, 1), (1, 50), (50, 1))
+    rng.checkGemm(engine, 70, 50, 96, (96, 1), (1, 50), (50, 1))
 
   # alpha scaling and beta accumulation against C
   for _ in 0 ..< Iters:
-    checkGemm(rng, engine,
-        32, 32, 32, (32, 1), (1, 32), (32, 1), alpha = 1.0'f32, beta = 0.0'f32)
-    checkGemm(rng, engine,
-        32, 32, 32, (32, 1), (1, 32), (32, 1), alpha = 0.5'f32, beta = 2.0'f32)
-    checkGemm(rng, engine,
-        40, 45, 41, (41, 1), (1, 45), (45, 1), beta = 2.0'f32)
+    rng.checkGemm(engine, 32, 32, 32, (32, 1), (1, 32), (32, 1), alpha = 1.0'f32, beta = 0.0'f32)
+    rng.checkGemm(engine, 32, 32, 32, (32, 1), (1, 32), (32, 1), alpha = 0.5'f32, beta = 2.0'f32)
+    rng.checkGemm(engine, 40, 45, 41, (41, 1), (1, 45), (45, 1), beta = 2.0'f32)
 

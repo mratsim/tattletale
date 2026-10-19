@@ -5,9 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Test:
-##   tile_reductions last-axis sum on Metal
-##
 ## Run:
 ##   nim c -r --outdir:build/tests \
 ##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_axis_metal.nim (from tattletale)

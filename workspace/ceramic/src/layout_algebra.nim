@@ -72,6 +72,7 @@ export layout_indexing_slicedice.X
 export layout_indexing_slicedice.Y
 export layout_indexing_slicedice._
 export layout_indexing_slicedice.`*`
+export layout_indexing_slicedice.`*`
 export layout_indexing_slicedice.slice
 export layout_indexing_slicedice.dice
 

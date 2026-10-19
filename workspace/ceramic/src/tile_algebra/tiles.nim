@@ -22,6 +22,42 @@ import workspace/ceramic/src/tensors
 import ./tile_matmul
 
 # ═══════════════════════════════════════════════════════════════
+#  Backend magic functions
+# ═══════════════════════════════════════════════════════════════
+
+template getThreadCount*: int =
+  ## Returns the width of the lanes of one co-executing group
+  ## as a compile-time constant, assuming the reference hardware.
+  ## Pass the tile map explicitly with `rt(T, make_layout(...))` on other devices.
+  ## - CUDA: one warp, 32 lanes
+  ## - Metal: one simdgroup, 32 lanes
+  ## - OpenCL or Vulkan: one subgroup, 32 lanes (NVIDIA warp, AMD wave32)
+  ## - WebGPU: one subgroup, 32 lanes (typical subgroup min size)
+  when ccGetBackend() == ctCuda: 32
+  elif ccGetBackend() == ctMetal: 32
+  elif ccGetBackend() == ctOpenCL: 32
+  elif ccGetBackend() == ctVulkan: 32
+  elif ccGetBackend() == ctWebGPU: 32
+
+template getDefaultTileLayout*(T: typedesc): untyped =
+  ## Returns the default register tile map
+  ##
+  ## For float32 (4-bytes) over a warp size of 32 threads:
+  ##
+  ##   getDefaultTileLayout(float32) == make_layout((32, 4), (4, 1))
+  ##   # mode 0 = thread index, mode 1 = element slot
+  ##   # thread t owns elements t*4 .. t*4+3 of a 128-element block
+  ##
+  ## Explanation:
+  ## - chunk = 16 div sizeof(T): one 16-byte vector load per thread
+  ## - 32 contiguous chunks: the threadgroup's span stays coalesced
+  ## - thread stride is chunk: one 16-byte vector load per thread,
+  ##   an interleaved map costs chunk scalar loads per thread
+  ## - a tile map is a thread->element assignment
+  const chunk = max(1, 16 div sizeof(T))
+  make_layout((getThreadCount(), chunk), (chunk, 1))
+
+# ═══════════════════════════════════════════════════════════════
 #  Tile datatype
 # ═══════════════════════════════════════════════════════════════
 
@@ -37,32 +73,9 @@ macro rt*(T: typedesc, L: typed): typedesc =
     "rt: expected a Layout[Shape, Stride] type, got " & ty.repr
   result = nnkBracketExpr.newTree(bindSym"Tile", T, ty[1], ty[2])
 
-func staticShape*(n: NimNode): seq[int] {.compileTime.} =
-  ## Static ints of a shape node: a tuple literal, a tuple type, or a typedesc wrapping one
-  var nn = n
-  if nn.kind == nnkStmtListExpr:
-    nn = nn[^1]
-  if nn.kind in {nnkTupleConstr, nnkPar}:
-    for e in nn:
-      result.add e.getStaticInt()
-    return
-  var ty = nn.getTypeInst()
-  if ty.kind == nnkBracketExpr and ty[0].kind == nnkSym and $ty[0] == "typeDesc":
-    ty = ty[1]
-  if ty.isTupleTy():
-    for i in 0 ..< ty.len:
-      result.add ty[i].getStaticInt()
-  else:
-    result.add ty.getStaticInt()
-
-template rt*(T: typedesc, dims: IntOrIntTuple): untyped =
-  ## Register tile type from a static shape, LayoutLeft: the lane's
-  ## register block under the blocked convention.
-  ##
-  ## Contract:
-  ## - the block's last axis spreads across the simdgroup's 32 lanes
-  ## - the other axes live in-thread
-  make_tensor(T, dims)
+template rt*(T: typedesc): typedesc =
+  ## Register tile with the default tile map
+  rt(T, getDefaultTileLayout(T))
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile geometry

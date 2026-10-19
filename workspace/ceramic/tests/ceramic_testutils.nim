@@ -74,8 +74,9 @@ func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
   TensorView[T, Sh, St](data: ht.data, layout: ht.layout)
 
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
-  let dev = engine.allocDevice(T, ht.len)
-  engine.copyToDeviceFromHost(dev, ht.data, ht.len)
+  let n = ht.layout.cosize()
+  let dev = engine.allocDevice(T, n)
+  engine.copyToDeviceFromHost(dev, ht.data, n)
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
 
 # ═══════════════════════════════════════════════════════════════

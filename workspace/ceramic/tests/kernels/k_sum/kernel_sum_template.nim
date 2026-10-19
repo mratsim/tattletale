@@ -5,14 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Backend-agnostic test driver for the tensor reductions.
-##
-## Test that the full and last-axis tensor sums match the host references.
-##
-## Run:
-##   nim c -r --outdir:build/tests \
-##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum.nim (from tattletale)
-
 import std/[math, random, strformat, times]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
@@ -65,7 +57,7 @@ func refSum[T, ShS, StS, ShD, StD](dst: TensorView[T, ShD, StD], src: TensorView
 
 proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sSrc: static (int, int)) =
   ## One sum_full launch over a random (rows, cols) tensor
-  var src = randomHostTensor(rng, float32, (rows, cols), sSrc)
+  var src = rng.randomHostTensor( float32, (rows, cols), sSrc)
   var got = makeHostTensor(float32, (1, 1), (1, 1))
   let
     srcDev = engine.bridge(src)
@@ -84,7 +76,7 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
 
 proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sSrc: static (int, int)) =
   ## One sum_axis launch over a random (rows, cols) tensor
-  var src = randomHostTensor(rng, float32, (rows, cols), sSrc)
+  var src = rng.randomHostTensor( float32, (rows, cols), sSrc)
   var got = makeHostTensor(float32, (rows, 1), (1, 1))
   let
     srcDev = engine.bridge(src)
@@ -113,12 +105,12 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
   echo moduleName, " xoroshiro128+ seed: ", seed
 
   # stride permutations within one covered tile: the (8, 4) block covers (8, 128)
-  checkSum(rng, engine, 8, 128, (128, 1))
-  checkSum(rng, engine, 8, 128, (1, 8))
+  rng.checkSum( engine, 8, 128, (128, 1))
+  rng.checkSum( engine, 8, 128, (1, 8))
 
   # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 60) ──
   block:
-    var src = randomHostTensor(rng, float32, (2, 2, 60), (120, 60, 1))
+    var src = rng.randomHostTensor( float32, (2, 2, 60), (120, 60, 1))
     var sumGot = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
     let srcDev = engine.bridge(src)
     var expectSum = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
@@ -132,7 +124,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
 
   # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
   block:
-    var src = randomHostTensor(rng, float32, (2, 2, 2, 50), (200, 100, 50, 1))
+    var src = rng.randomHostTensor( float32, (2, 2, 2, 50), (200, 100, 50, 1))
     var sumGot = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
     let srcDev = engine.bridge(src)
     var expectSum = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
@@ -152,12 +144,12 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
   echo moduleName, " xoroshiro128+ seed: ", seed
 
   # stride permutations within one covered tile: the (8, 4) block covers (8, 128)
-  checkSumAxis(rng, engine, 8, 128, (128, 1))
-  checkSumAxis(rng, engine, 8, 128, (1, 8))
+  rng.checkSumAxis( engine, 8, 128, (128, 1))
+  rng.checkSumAxis( engine, 8, 128, (1, 8))
 
   # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 60) ──
   block:
-    var src = randomHostTensor(rng, float32, (2, 2, 60), (120, 60, 1))
+    var src = rng.randomHostTensor( float32, (2, 2, 60), (120, 60, 1))
     var axisGot = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
     let srcDev = engine.bridge(src)
     var expectAxis = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
@@ -171,7 +163,7 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
 
   # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
   block:
-    var src = randomHostTensor(rng, float32, (2, 2, 2, 50), (200, 100, 50, 1))
+    var src = rng.randomHostTensor( float32, (2, 2, 2, 50), (200, 100, 50, 1))
     var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
     let srcDev = engine.bridge(src)
     var expectAxis = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))

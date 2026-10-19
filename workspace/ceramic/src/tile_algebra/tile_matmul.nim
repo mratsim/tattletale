@@ -69,9 +69,6 @@ proc tiledMma*[TAcc, TA, TB](
 #  Tile schedule queries
 # ═══════════════════════════════════════════════════════════════
 
-template getThreadCount*(mma: static TiledMma): int =
-  mma.atom.getThreadCount()
-
 # ═══════════════════════════════════════════════════════════════
 #  Per-operand register tiles and thread->value maps
 # ═══════════════════════════════════════════════════════════════

@@ -10,7 +10,7 @@
 ## - `matmul`: D = A·B
 ## - `gemm`: D = alpha·A·B + beta·C, beta = 0 skips the C read
 ## - per-lane operand register tiles load through the atom's thread->value map
-## - ragged edge tiles go through guardedLoad / guardedStore, interior tiles take the unchecked flat path
+## - ragged edge tiles go through paddedLoad / guardedStore, interior tiles take the unchecked flat path
 
 import workspace/crucible
 import workspace/ceramic/src/tensors
@@ -46,10 +46,10 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
   let (_, kTiles) = aGeom.getTileGrid()
   let thrID = mma.getLocalThreadID()
 
-  if thrID < mma.getThreadCount():
+  if thrID < getThreadCount():
     let
       cSize = cGrid.size()
-      gridStride = int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * int(threadgroups_per_grid.z)
+      gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
     for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
       var rD: rt(D.T, cLayout)

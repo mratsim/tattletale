@@ -22,12 +22,11 @@ import workspace/ceramic/src/hardware/h_mma_configgen
 import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/tile_algebra/tiles
 import workspace/ceramic/src/tile_algebra/tile_loadstore
-import workspace/ceramic/src/tile_algebra/tile_reductions
 import workspace/ceramic/src/tile_algebra/tile_matmul
 
 export tensors.TensorOwned, tensors.TensorView
 export layouts_datatypes.size
-export tiles, tile_loadstore, tile_reductions, tile_matmul
+export tiles, tile_loadstore, tile_matmul
 
 # Whitelist: the symbols the tile templates' macro emissions resolve at the caller's scope
 export int_tuples_datatypes.Int
