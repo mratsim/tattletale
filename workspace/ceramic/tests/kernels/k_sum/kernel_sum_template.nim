@@ -18,7 +18,7 @@ import workspace/crucible
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/tests/kernels/k_sum/k_sum_kernels
+import workspace/ceramic/src/kernels/k_tile_sum
 
 # ═══════════════════════════════════════════════════════════════
 #  fp32 host reference
@@ -63,7 +63,7 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
   let
     gridX = rng.rand(1 .. 2 * ceil_div(rows, 32))
     gridY = rng.rand(1 .. 2 * ceil_div(cols, 32))
-  engine.launchDeviceFn sumCaseFull(gotDev, srcDev) do:
+  engine.launchDeviceFn sum_full((8, 4), gotDev, srcDev) do:
     grid = (gridX, gridY)
     blk = (32, 1)
   var expect = makeHostTensor(float32, (1, 1), (1, 1))
@@ -82,7 +82,7 @@ proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int
   let
     gridX = rng.rand(1 .. 2 * ceil_div(rows, 32))
     gridY = rng.rand(1 .. 2 * ceil_div(cols, 32))
-  engine.launchDeviceFn sumCaseAxis(gotDev, srcDev) do:
+  engine.launchDeviceFn sum_axis((8, 4), gotDev, srcDev) do:
     grid = (gridX, gridY)
     blk = (32, 1)
   var expect = makeHostTensor(float32, (rows, 1), (1, 1))
@@ -119,11 +119,11 @@ proc run_sum_tests*[E: HwEngine](engine: E, moduleName: string) =
     expectSum.data[0] = refSum(src.view())
     refSum(expectAxis.view(), src.view(), 2)
     let sumDev = engine.bridge(sumGot)
-    engine.launchDeviceFn sumCase3DFull(sumDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum_full((2, 2, 2), sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     let axisDev = engine.bridge(axisGot)
-    engine.launchDeviceFn sumCase3DAxis(axisDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum_axis((2, 2, 2), axisDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
@@ -143,11 +143,11 @@ proc run_sum_tests*[E: HwEngine](engine: E, moduleName: string) =
     expectSum.data[0] = refSum(src.view())
     refSum(expectAxis.view(), src.view(), 3)
     let sumDev = engine.bridge(sumGot)
-    engine.launchDeviceFn sumCase4DFull(sumDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum_full((2, 2, 2, 2), sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     let axisDev = engine.bridge(axisGot)
-    engine.launchDeviceFn sumCase4DAxis(axisDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum_axis((2, 2, 2, 2), axisDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)

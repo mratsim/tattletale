@@ -22,8 +22,8 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_compiletime
 import workspace/ceramic/src/tensors
 import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/tests/kernels/k_sum/k_sum_kernels
-import workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_template
+import workspace/ceramic/src/kernels/k_tile_sum
+import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
 
 proc main =
   var engine = bkMetal.newEngine()
