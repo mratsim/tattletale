@@ -93,7 +93,6 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════
 

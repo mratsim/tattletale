@@ -106,7 +106,6 @@ proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArr
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════
 

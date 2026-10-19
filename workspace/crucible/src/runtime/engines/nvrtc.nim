@@ -81,7 +81,6 @@ proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArr
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ════════════════════════════════════════════════════════════════════════
-# ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ════════════════════════════════════════════════════════════════════════
 
