@@ -165,7 +165,7 @@ func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], ba
   for f in fields(default(A)):
     result += argCount(typeof(f), H, backend)
 
-template bindArgs*(ctx: var auto, output: auto, args: var tuple, store: untyped, H: typedesc, backend: static BackendKind) =
+template bindArgs*(ctx: var auto, output: auto, args: untyped, store: untyped, H: typedesc, backend: static BackendKind) =
   var pos = 0
   serialize(ctx, output, pos, store, H, backend)
   for f in fields(args):

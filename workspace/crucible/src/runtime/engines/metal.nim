@@ -13,8 +13,6 @@ import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
 import ../exec/metal_runtime
 
-export metal_runtime
-
 # ═════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════
@@ -81,7 +79,6 @@ when defined(macosx):
     result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
     if objc.isNil(result.queue):
       failLoud("newCommandQueue returned nil")
-
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
@@ -161,8 +158,6 @@ when defined(macosx):
     ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-
-
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
@@ -189,7 +184,6 @@ when defined(macosx):
         let tgMem = roundStepUp(cfg.sharedMem, 16)
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(tgMem), objc.NSUInteger(0))
-
 
       var dctx = SerializationCtx(encoder: encoder)
       bindArgs(dctx, output, args, store, objc.ID, bkMetal)

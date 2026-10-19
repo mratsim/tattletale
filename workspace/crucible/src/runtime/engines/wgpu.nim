@@ -15,8 +15,6 @@ import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
-export wgpu_runtime
-
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════

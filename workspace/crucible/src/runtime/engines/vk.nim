@@ -16,8 +16,6 @@ import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
-export vulkan_runtime
-
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════

@@ -15,8 +15,6 @@ import ../launch/launch_serialization
 import ../exec/opencl_runtime
 import ./engines_common
 
-export opencl_runtime
-
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ═════════════════════════════════════════════════════════════════════════
