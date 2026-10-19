@@ -6,13 +6,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Test:
-##   tile_reductions' two sums on Metal
+##   tile_reductions full-tile sum on Metal
 ##
-## Test that the full and last-axis tensor sums match the host references on Metal.
+## Test that the tile_reductions full-tile sum matches the host reference on Metal.
 ##
 ## Run:
 ##   nim c -r --outdir:build/tests \
-##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum.nim (from tattletale)
+##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_full.nim (from tattletale)
 
 import std/strformat
 import workspace/crucible
@@ -28,7 +28,6 @@ import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
 proc main =
   var engine = bkMetal.newEngine()
   run_sum_full_tests(engine, moduleName = "test_k_sum_full_metal")
-  run_sum_axis_tests(engine, moduleName = "test_k_sum_axis_metal")
 
 when isMainModule:
   main()
