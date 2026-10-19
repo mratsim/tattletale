@@ -37,7 +37,7 @@ type
     cache: WgpuCache
     shaderSquadron: Dim3
 
-proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
+template backendKind*(_: typedesc[WgpuEngine]): BackendKind = bkWGSL
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

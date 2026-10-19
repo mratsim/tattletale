@@ -30,11 +30,9 @@ type
     ctx: OpenCLContext
     kernelCache: OpenCLKernelCache
 
-proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
+template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
+  bkOpenCL
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
 proc newOpenCLEngine*(): OpenCLEngine =
   OpenCLEngine(ctx: initOpenCL())
 

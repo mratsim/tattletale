@@ -34,7 +34,7 @@ type
     ptx: string
     nvrtc: NVRTC
 
-proc backendKind*(_: typedesc[CudaEngine]): static BackendKind = bkCuda
+template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

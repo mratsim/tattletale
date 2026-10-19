@@ -34,7 +34,7 @@ type
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     caches: VulkanCaches
 
-proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
+template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Constructors/destructors

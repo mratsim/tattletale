@@ -32,7 +32,7 @@ type
     ctx: MetalCtx
     cache: MetalCache   # after ctx: released before the context destroy
 
-proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
+template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
 # ═════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
