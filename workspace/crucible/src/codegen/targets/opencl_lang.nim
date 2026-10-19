@@ -426,6 +426,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       case ast.cName.symbol.reductionBuiltin
       of gbkReduceAdd:
         result = indentStr & "sub_group_reduce_add(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "sub_group_reduce_max(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
       of gbkNone:
         var clArgs: seq[string]
         for arg in ast.cArgs:

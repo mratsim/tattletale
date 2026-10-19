@@ -19,3 +19,12 @@ proc reduceAdd*[T](v: T): T {.builtin.} = discard
   ## Backends emit: MSL `simd_sum`, GLSL `subgroupAdd`,
   ## WGSL `subgroupAdd`, OpenCL `sub_group_reduce_add`.
   ## CUDA lowers to a `__shfl_xor_sync` butterfly over deltas 16/8/4/2/1.
+
+proc reduceMax*[T](v: T): T {.builtin.} = discard
+  ## Reduces `v` across the subgroup with max and broadcasts
+  ## the result to every active lane. The value of `v` is only read
+  ## on the active lanes.
+  ##
+  ## Backends emit: MSL `simd_max`, GLSL `subgroupMax`,
+  ## WGSL `subgroupMax`, OpenCL `sub_group_reduce_max`.
+  ## CUDA lowers to a `__shfl_xor_sync` butterfly over deltas 16/8/4/2/1.

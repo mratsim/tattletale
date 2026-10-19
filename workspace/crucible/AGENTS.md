@@ -166,6 +166,7 @@ emit the native spellings below.
 | `thread_index_in_threadgroup` | `(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)` | `(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))` | `gl_LocalInvocationIndex` | `local_invocation_index` | `thread_index_in_threadgroup` |
 | `threadgroup_barrier` | `__syncthreads()` | `barrier(CLK_LOCAL_MEM_FENCE)` | `barrier()` | `workgroupBarrier()` | `threadgroup_barrier(mem_flags::mem_threadgroup)` |
 | `reduceAdd` | `warpReduceAdd` (emitted `__forceinline__` template) | `sub_group_reduce_add` | `subgroupAdd` | `subgroupAdd` (no directive; subgroups device feature, see note) | `simd_sum` |
+| `reduceMax` | `warpReduceMax` (emitted `__forceinline__` template) | `sub_group_reduce_max` | `subgroupMax` | `subgroupMax` (no directive; subgroups device feature, see note) | `simd_max` |
 
 - CUDA and OpenCL spell the vector coordinates per component (`d` is the accessed component).
   Whole-value uses of the coordinate vectors are out of scope.

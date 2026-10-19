@@ -268,7 +268,8 @@ type
 
   GpuReductionBuiltinKind* = enum
     gbkNone,              ## Not a reduction builtin
-    gbkReduceAdd          ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
+    gbkReduceAdd,         ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
+    gbkReduceMax          ## Canonical `reduceMax`: cross-lane max, broadcast to all lanes
 
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
@@ -423,6 +424,7 @@ let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuilti
 ## builtin marking like the other canonical name tables.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
   "reduceAdd": gbkReduceAdd,
+  "reduceMax": gbkReduceMax,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =

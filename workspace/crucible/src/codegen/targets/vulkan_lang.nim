@@ -455,6 +455,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       case ast.cName.symbol.reductionBuiltin
       of gbkReduceAdd:
         result = indentStr & "subgroupAdd(" & ctx.genVulkan(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "subgroupMax(" & ctx.genVulkan(ast.cArgs[0]) & ')'
       of gbkNone:
         var vkArgs: seq[string]
         for arg in ast.cArgs:

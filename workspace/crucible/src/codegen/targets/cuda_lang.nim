@@ -353,6 +353,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       case ast.cName.symbol.reductionBuiltin
       of gbkReduceAdd:
         result = indentStr & "warpReduceAdd(" & ctx.genCuda(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "warpReduceMax(" & ctx.genCuda(ast.cArgs[0]) & ')'
       of gbkNone:
         var cudaArgs: seq[string]
         for i, arg in ast.cArgs:
@@ -469,14 +471,14 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     echo "Unhandled node kind in genCuda: ", ast.kind
     raiseAssert "Unhandled node kind in genCuda: " & ast.repr
 
-proc usesReduceAdd(n: GpuAst): bool =
-  ## True when the AST contains a `reduceAdd` call, which needs
-  ## the warp-reduce template emitted at module scope.
+proc usesWarpReduce(n: GpuAst, kind: GpuReductionBuiltinKind): bool =
+  ## True when the AST contains a reduceAdd/reduceMax call of `kind`,
+  ## which needs its warp-reduce template emitted at module scope.
   if n.kind == gpuCall and n.cName.symbol != nil and
-     n.cName.symbol.reductionBuiltin == gbkReduceAdd:
+     n.cName.symbol.reductionBuiltin == kind:
     return true
   for ch in n:
-    if usesReduceAdd(ch):
+    if usesWarpReduce(ch, kind):
       return true
 
 proc codegen*(ctx: var GpuContext): string =
@@ -485,18 +487,29 @@ proc codegen*(ctx: var GpuContext): string =
   for blk in ctx.globalBlocks:
     result.add ctx.genCuda(blk) & ";\n\n"
 
-  # 1b. emit the warp-reduce template if any kernel uses reduceAdd.
+  # 1b. emit the warp-reduce templates for the builtins in use.
   # CUDA has no float warp-reduce intrinsic: `__reduce_add_sync` is
   # int-only. The butterfly is a __shfl_xor_sync tree over deltas 16/8/4/2/1.
   var needsReduceAdd = false
+  var needsReduceMax = false
   for (fnIdent, fn) in ctx.fnTab.pairs:
-    if usesReduceAdd(fn.pBody):
+    if usesWarpReduce(fn.pBody, gbkReduceAdd):
       needsReduceAdd = true
+    if usesWarpReduce(fn.pBody, gbkReduceMax):
+      needsReduceMax = true
   if needsReduceAdd:
     result.add "template <typename T> __forceinline__ __device__ T warpReduceAdd(T v) {\n"
     result.add "  #pragma unroll\n"
     result.add "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
     result.add "    v += __shfl_xor_sync(0xffffffff, v, delta, 32);\n"
+    result.add "  }\n"
+    result.add "  return v;\n"
+    result.add "}\n\n"
+  if needsReduceMax:
+    result.add "template <typename T> __forceinline__ __device__ T warpReduceMax(T v) {\n"
+    result.add "  #pragma unroll\n"
+    result.add "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
+    result.add "    v = max(v, __shfl_xor_sync(0xffffffff, v, delta, 32));\n"
     result.add "  }\n"
     result.add "  return v;\n"
     result.add "}\n\n"

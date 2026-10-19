@@ -440,6 +440,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       case ast.cName.symbol.reductionBuiltin
       of gbkReduceAdd:
         result = indentStr & "simd_sum(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
+      of gbkReduceMax:
+        result = indentStr & "simd_max(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
       of gbkNone:
         var args: seq[string]
         for a in ast.cArgs:
