@@ -26,7 +26,7 @@ import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/src/kernels/k_tile_gemm
 import workspace/ceramic/src/tile_algebra
-import workspace/ceramic/tests/kernels/k_gemm/t_kernel_gemm_template
+import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
 import workspace/fp_conv/fp_conv
 
 {.experimental: "callOperator".}
