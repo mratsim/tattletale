@@ -74,7 +74,9 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       of kLeaf:
         if strideEvent.kind != shapeEvent.kind:
           error "crd2idx: `shape` and `stride` have different structures", stride
-        sum = if sum == nil: pending else: sum + pending
+
+        if pending != nil: # pending is nil before the subtree's first leaf
+          sum = if sum == nil: pending else: sum + pending
         let shapeLeaf = shapeEvent.leaf
         let strideLeaf = strideEvent.leaf
         let oldRemaining = remaining
