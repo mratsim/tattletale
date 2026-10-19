@@ -169,12 +169,17 @@ proc initWgpu*(): WgpuContext =
   )
   # The uncaptured-error callback receives errors outside any pushed error scope,
   # e.g. dispatch validation reported at submit time.
-  # the WGSL `enable f16` extension requires the shader-f16 device feature
-  var reqFeatures: array[1, uint32]
+  # - the WGSL `enable f16` extension requires the shader-f16 device feature
+  # - the subgroup builtins are native-only in wgpu: no WGSL directive,
+  #   the feature must be requested on the device (gfx-rs/wgpu#8202)
+  var reqFeatures: array[2, uint32]
   var reqFeatureCount = 0
   if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_ShaderF16) != 0:
-    reqFeatures[0] = WGPUFeatureName_ShaderF16
-    reqFeatureCount = 1
+    reqFeatures[reqFeatureCount] = WGPUFeatureName_ShaderF16
+    inc reqFeatureCount
+  if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_Subgroups) != 0:
+    reqFeatures[reqFeatureCount] = WGPUFeatureName_Subgroups
+    inc reqFeatureCount
   var deviceDesc = WGPUDeviceDescriptor(
     requiredFeatures: if reqFeatureCount > 0: reqFeatures[0].addr else: nil,
     requiredFeatureCount: reqFeatureCount.csize_t,

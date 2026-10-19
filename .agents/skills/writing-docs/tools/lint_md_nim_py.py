@@ -44,7 +44,7 @@ Rule table (rule | trigger | severity):
 | hidden-context       | an advisory hidden-context word ("mirrors"), the audience is a CS undergraduate that just cloned   | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
-| test-header-testthat | a test file header with no "Test that" line, or one after the run command                          | counted  |
+| test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
@@ -343,6 +343,10 @@ BANNED = [
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
     (r"\bmutations?\b", None, "use change or variation"),
+    (r"\bspelled\b|\bspell\b|\bspells\b|\bspelling\b|\bspellings\b|\bspelt\b",
+     None, "state the value or the syntax directly, do not narrate how it is written"),
+    (r"\w+\(\s*rng\b",
+     None, "use method call syntax: rng.rand(...), rng.seed(...)"),
     (r"\bconvict[s]?\b|\bacquit[s]?\b", None,
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
@@ -1482,10 +1486,12 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
     # The run command may wrap, so its first line anchors it.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
     run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
-    if is_test and (not test_that or (run_cmd and min(test_that) > min(run_cmd))):
+    # A bare Run header (title, blank, run command) is also valid;
+    # "Test that" is only required when present to sit before the run command.
+    if is_test and test_that and (run_cmd and min(test_that) > min(run_cmd)):
         findings.append(Finding(
             path, first_line, "test-header-testthat",
-            "test file header carries no \"Test that\" line before the run command, "
+            "the \"Test that\" line sits after the run command, "
             "the shape is title, Test that, blank, run command"))
 
 

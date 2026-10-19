@@ -453,26 +453,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                "barrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
-        # gated by GL_KHR_shader_subgroup_shuffle_relative (the umbrella
-        # GL_KHR_shader_subgroup is not a GLSL extension name).
-        # The delta/lane operand is uint in GLSL, int-literal
-        # args get the U suffix, the canonical Nim arg is int,
-        # the printer casts.
-        var delta = ctx.genVulkan(ast.cArgs[1])
-        if delta.allCharsInSet(Digits):
-          delta.add 'U'
-        result = indentStr & "subgroupShuffleDown(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " & delta & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index, gated by
-        # GL_KHR_shader_subgroup_shuffle. Lane operand is uint in GLSL.
-        var lane = ctx.genVulkan(ast.cArgs[1])
-        if lane.allCharsInSet(Digits):
-          lane.add 'U'
-        result = indentStr & "subgroupShuffle(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " & lane & ')'
+      of gbkReduceAdd:
+        result = indentStr & "subgroupAdd(" & ctx.genVulkan(ast.cArgs[0]) & ')'
       of gbkNone:
         var vkArgs: seq[string]
         for arg in ast.cArgs:
@@ -697,12 +679,8 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
     result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
   if needsSubgroup:
-    # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
-    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle.
-    # The umbrella GL_KHR_shader_subgroup is not a GLSL extension name, glslang rejects it.
-    # Tile reduction trees use the two together, down tree then leader broadcast.
-    result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
   result.add "\n"
 
   # ── Step 1b: Emit reference block typedefs, before the structs using them ──

@@ -268,8 +268,7 @@ type
 
   GpuReductionBuiltinKind* = enum
     gbkNone,              ## Not a reduction builtin
-    gbkSimdShuffleDown,   ## Canonical `simd_shuffle_down`: gather from lane + delta
-    gbkSimdShuffle        ## Canonical `simd_shuffle`: gather from an absolute lane
+    gbkReduceAdd          ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
 
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
@@ -423,8 +422,7 @@ let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuilti
 ## Canonical reduction intrinsic name -> IR kind, resolved once at the
 ## builtin marking like the other canonical name tables.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
-  "simdShuffleDown": gbkSimdShuffleDown,
-  "simdShuffle": gbkSimdShuffle,
+  "reduceAdd": gbkReduceAdd,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =

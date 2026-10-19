@@ -438,16 +438,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       result = indentStr & "threadgroup_barrier(mem_flags::mem_device)"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: `simd_shuffle_down(v, delta)`.
-        result = indentStr & "simd_shuffle_down(" &
-                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane: `simd_shuffle(v, lane)`.
-        result = indentStr & "simd_shuffle(" &
-                 ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                 ctx.genMetalImpl(ast.cArgs[1], 0) & ')'
+      of gbkReduceAdd:
+        result = indentStr & "simd_sum(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
       of gbkNone:
         var args: seq[string]
         for a in ast.cArgs:

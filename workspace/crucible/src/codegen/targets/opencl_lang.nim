@@ -424,23 +424,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
-        # function. Apple's 1.2 runtime rejects it, so this spelling is
-        # pinned as emitted text only. The delta operand is uint,
-        # int-literal args get the U suffix (the canonical Nim arg is int).
-        var delta = ctx.genOpenCL(ast.cArgs[1])
-        if delta.allCharsInSet(Digits):
-          delta.add 'U'
-        result = indentStr & "sub_group_shuffle_down(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " & delta & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index, uint operand.
-        var lane = ctx.genOpenCL(ast.cArgs[1])
-        if lane.allCharsInSet(Digits):
-          lane.add 'U'
-        result = indentStr & "sub_group_shuffle(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " & lane & ')'
+      of gbkReduceAdd:
+        result = indentStr & "sub_group_reduce_add(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
       of gbkNone:
         var clArgs: seq[string]
         for arg in ast.cArgs:
