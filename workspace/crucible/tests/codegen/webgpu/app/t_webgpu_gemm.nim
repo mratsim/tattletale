@@ -36,7 +36,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(kernelCode)
     var res: array[4, uint32]
     let oDev = engine.allocDevice(uint32, res.len)

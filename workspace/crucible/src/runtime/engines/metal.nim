@@ -131,7 +131,7 @@ when defined(macosx):
     if result == nil:
       failLoud("contents() returned nil for a shared buffer")
 
-  proc allocDeviceImpl*(engine: MetalEngine, n: int): objc.ID =
+  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
       failLoud("allocDevice: size must be positive, got " & $n)
     result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
@@ -139,19 +139,27 @@ when defined(macosx):
     if objc.isNil(result):
       failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
 
-  proc freeDeviceImpl*(h: objc.ID) =
-    if not objc.isNil(h):
-      objc.release(h)
-
-  proc copyToDeviceFromHostImpl*(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
+  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
     if n <= 0:
       failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
     copyMem(bufferContents(dst), src, n)
 
-  proc copyToHostFromDeviceImpl*(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
     if n <= 0:
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, bufferContents(src), n)
+
+  proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] =
+    ## Allocates len elements of T on the engine
+    DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+    ## Copies n elements from host to device
+    engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) =
+    ## Copies n elements from device to host
+    engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =

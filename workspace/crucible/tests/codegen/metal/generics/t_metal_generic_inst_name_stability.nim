@@ -69,7 +69,7 @@ func discriminators(artifact, procName: string): HashSet[string] =
     i = j
 
 proc runKernel(artifact: string, launcher: string): seq[float32] =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(artifact)
   var inp = newSeq[float32](1)
   inp[0] = 1.0'f32

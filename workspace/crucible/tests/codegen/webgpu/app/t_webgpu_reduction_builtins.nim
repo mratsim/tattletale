@@ -27,7 +27,7 @@ const reductionWgsl = webgpu:
 proc runTest() =   # private, tests run in a proc so engines are destroyed at return
   when wgslSubgroupsExecutable:
     block: # reductionKernel: out = [acc(lane 1), v(lane 0), v(lane 0)]
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(reductionWgsl)
 
       var res: array[3, float32]
@@ -44,7 +44,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     echo "All reduction builtin execution tests passed"
   else:
     # Emission check: the WGSL is ingested and read back without dispatch.
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(reductionWgsl)
     discard engine.getArtifact()
     echo "  SKIP: WGSL subgroup execution unavailable, naga rejects enable subgroups (wgpu#5555)"

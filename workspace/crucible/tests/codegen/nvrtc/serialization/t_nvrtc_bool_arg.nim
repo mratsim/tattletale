@@ -22,7 +22,7 @@ const kernelCode = cuda:
         output[tid] = uint32(int32(input[tid]) * factor)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
 
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"

@@ -32,7 +32,7 @@ proc outerPlain(y: AxpyView, x: AxpyView) =
   innerPlain(x, y)
 
 proc runTest() =
-  var engine = bkWGSL.init()
+  var engine = bkWGSL.newEngine()
   const N = 4
 
   # Swap variant: the callee's param names collide with the caller's

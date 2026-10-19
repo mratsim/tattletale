@@ -32,7 +32,7 @@ import workspace/fp_conv/fp_conv
 {.experimental: "callOperator".}
 
 proc main =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   run_gemm_tests(engine, Iters = 2, moduleName = "test_k_tile_gemm_metal")
 
 when isMainModule:

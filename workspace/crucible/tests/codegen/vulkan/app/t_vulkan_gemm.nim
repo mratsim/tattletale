@@ -40,7 +40,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel("gemmKernel", oDev, ())

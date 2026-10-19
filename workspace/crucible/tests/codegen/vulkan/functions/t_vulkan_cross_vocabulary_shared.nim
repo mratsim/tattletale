@@ -27,7 +27,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     "Vulkan shared-array emission missing:\n" & kernelCode
   doAssert "barrier()" in kernelCode, "Vulkan barrier lowering missing:\n" & kernelCode
 
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, 8)
   # 2 work-groups of (4, 2). Each group stages identical values, so the

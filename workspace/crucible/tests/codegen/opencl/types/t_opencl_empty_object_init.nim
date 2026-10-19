@@ -26,7 +26,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
     var outVal: array[1, uint32]
     let oDev = engine.allocDevice(uint32, 1)

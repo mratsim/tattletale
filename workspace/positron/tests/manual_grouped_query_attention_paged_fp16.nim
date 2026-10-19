@@ -89,7 +89,7 @@ proc pagedAttnKernel(
     numSeqs, H, Nkv, maxPages, numLayers, layer, nQo, D: int): F.Tensor =
   ## Runs pagedD128 on the fp16-rounded layer-major slabs, returning the
   ## fp16 output converted to fp32.
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(pagedMsl)
   var kSlab = newSeq[uint16](kf.len)
   var vSlab = newSeq[uint16](vf.len)

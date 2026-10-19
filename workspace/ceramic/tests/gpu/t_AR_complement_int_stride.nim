@@ -55,7 +55,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       # The complement must emit concrete ints (static Int value lowered) so the
       # kernel compiles and executes. A regression causes engine.ingest() to abort.
       var Buf: array[64, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelPartition)
       engine.launchKernel<<(1, 8)>>("partKernel", Buf, ())
       check Buf[0] == 1.0'f32

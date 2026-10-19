@@ -23,7 +23,7 @@ const kernelCode2 = opencl:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "OpenCL - dummy-field initializers":
     test "single dummy struct const":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelCode)
       echo "===="
       echo kernelCode
@@ -35,7 +35,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check buf[0] == 1
 
     test "tuple of dummy structs const":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelCode2)
       echo "===="
       echo kernelCode2

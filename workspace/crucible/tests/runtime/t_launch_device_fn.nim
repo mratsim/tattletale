@@ -17,7 +17,7 @@ proc blend(outP: ptr UncheckedArray[float32], a, b: int, alpha: float32) =
   outP[0] = float32(a * b) - alpha
 
 proc runTest() =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
 
   block groupedWithStatic:
     let dev = engine.allocDevice(float32, 1)

@@ -24,7 +24,7 @@ const kernelCode = cuda:
 
 proc runTest() =
   var buf: array[3, uint32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)

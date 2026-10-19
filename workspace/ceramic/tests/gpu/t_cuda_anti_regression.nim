@@ -64,7 +64,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Issue 1 — make_layout with genSym":
       var output: array[2, uint32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelLayout)
       engine.launchKernel<<(1, 1)>>("kernel1", output, ())
       check output[0] == 8
@@ -72,21 +72,21 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Issue 2 — nnkObjConstr Empty child":
       var output: array[1, uint32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelObjConstr)
       engine.launchKernel<<(1, 1)>>("kernel2", output, ())
       check output[0] == 1
 
     test "Issue 3 — let-block-RHS":
       var output: array[1, uint32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelLetBlock)
       engine.launchKernel<<(1, 1)>>("kernel3", output, ())
       check output[0] == 1
 
     test "Issue 4 — make_layout + make_view + tv[]=":
       var buf: array[16, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelTensorView)
       for i in 0 ..< buf.len: buf[i] = -1.0'f32
       engine.launchKernel<<(1, 1)>>("kernel4", buf, ())

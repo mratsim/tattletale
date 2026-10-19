@@ -46,7 +46,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - block-in-type":
     test "block-valued `()` inside a device fn executes on the device":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernel)
       let oDev = engine.allocDevice(float32, 1)
       engine.launchKernel("reproKernel", oDev, (7'i32, 3'i32))

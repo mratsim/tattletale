@@ -7,7 +7,7 @@
 
 import std/[macros, hashes]
 import ../../codegen/gpu_compiler
-import ../engines/engines_common
+import ../engines/engines_api
 import ../engines/nvrtc
 import ../engines/cl
 import ../engines/vk

@@ -71,7 +71,7 @@ const kernelCode = metal:
     gemmTileDistinctCFrag(C, A, B)
 
 proc runTest() =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(kernelCode)
   let
     aDev = engine.allocDevice(M * kSlices * K * sizeof(float32))

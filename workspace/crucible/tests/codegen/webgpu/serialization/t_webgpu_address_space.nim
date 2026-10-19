@@ -32,7 +32,7 @@ const addressSpaceWgsl = webgpu:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "WebGPU - address-space tagging":
     test "unannotated locals emit no address-space template and run":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(addressSpaceWgsl)
       let src = engine.getArtifact()
       check "<private>" notin src
@@ -44,7 +44,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       check res[0] == 7'u32
     test "let alias of a storage param keeps ptr<storage, ...> and runs":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(addressSpaceWgsl)
       let src = engine.getArtifact()
       check "let p: ptr<storage, array<u32>, read_write> = (&output);" in src
@@ -55,7 +55,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 7'u32
       check res[1] == 7'u32
     test "let alias of a smem var keeps ptr<workgroup, ...> and runs":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(addressSpaceWgsl)
       let src = engine.getArtifact()
       check "var<workgroup> scratch: array<u32, 4>;" in src

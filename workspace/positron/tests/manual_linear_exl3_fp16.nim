@@ -35,7 +35,7 @@ proc exl3LinearKernel(xBits: seq[uint16], trellis: seq[int16],
                       suh, svh: seq[uint16], M, K, N, bits: int): F.Tensor =
   ## Runs the fused linear kernel on the fp16 inputs and returns the
   ## fp16 output converted to fp32.
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(exl3LinearMsl)
   var outO = newSeq[uint16](M * N)
   engine.launchKernel << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (

@@ -12,7 +12,7 @@
 ## Everything not exported there is internal, only IR tests reach into the internals.
 ##
 ## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
-## - var engine = bkCuda.init()
+## - var engine = bkCuda.newEngine()
 ## - engine.ingest(kernelCode)
 ## - engine.launchKernel<<grid, blk>>("addKernel", out, (a, b))
 

@@ -122,7 +122,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "═══════════════════════════════════════════════════════════════════"
 
   var outBuf: array[1, float32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernel)
   let oDev = engine.allocDevice(float32, outBuf.len)
   engine.launchKernel<<(1, 1)>>("gemmKernel", oDev, (128'i32, 64'i32))
@@ -135,7 +135,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "═══════════════════════════════════════════════════════════════════"
 
   var outBuf2: array[1, float32]
-  var engine2 = bkCuda.init()
+  var engine2 = bkCuda.newEngine()
   engine2.ingest(kernelGensym)
   let oDev2 = engine2.allocDevice(float32, outBuf2.len)
   engine2.launchKernel<<(1, 1)>>("reproKernel", oDev2, ())

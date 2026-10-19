@@ -22,7 +22,7 @@ const paramMsl = metal:
 proc runTest() =
   suite "Metal - device fn param named like a builtin":
     test "the declared param binds; no hidden param collides":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(paramMsl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("paramKernel", oDev, ())

@@ -82,7 +82,7 @@ proc launchNaxGemm[H](engine: MetalEngine, dDev: DeviceMem[H, float32], aDev, bD
     "mlx_gemm_nax_64x64", dDev, (aDev, bDev, params, iters))
 
 proc main() =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   var wanted: seq[int]
   for p in commandLineParams():
     wanted.add parseInt(p)

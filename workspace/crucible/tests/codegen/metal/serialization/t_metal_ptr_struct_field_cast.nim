@@ -67,7 +67,7 @@ const msl = metal:
 proc runTest() =
   suite "Metal - pointer struct fields and casts carry address spaces":
     test "device view field + cast qualify as `device` and run":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
       check "device uint* data;" in src
@@ -83,7 +83,7 @@ proc runTest() =
       for i in 0 ..< 4:
         check output[i] == input[i]
     test "smem view field + cast qualify as `threadgroup` and run":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
       check "threadgroup uint* data;" in src
@@ -97,7 +97,7 @@ proc runTest() =
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)
     test "one view type over device and threadgroup memory specializes per space":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
       check "struct View{" in src

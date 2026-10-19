@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
-import ../engines/engines_common
+import ../engines/engines_api
 import ../engines/nvrtc
 import ../engines/cl
 import ../engines/vk

@@ -24,7 +24,7 @@ proc axpy(y: AxpyView, alpha: float32, x: AxpyView) =
     y.p[i] = alpha * x.p[i] + y.p[i]
 
 proc runTest() =
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   const N = 7
   let xDev = engine.allocDevice(float32, N)
   let yDev = engine.allocDevice(float32, N)

@@ -29,7 +29,7 @@ const kernelInline = cuda:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   block:
     var buf: array[1, uint32]
-    var engine = bkCuda.init()
+    var engine = bkCuda.newEngine()
     engine.ingest(kernelInline)
     let o1 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel("kernelMain", o1, ())
@@ -48,7 +48,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   block:
     var buf: array[1, uint32]
-    var engine = bkCuda.init()
+    var engine = bkCuda.newEngine()
     engine.ingest(kernelFnRet)
     let o2 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel("kernelMain", o2, ())

@@ -33,7 +33,7 @@ const kernel = cuda:
   suite "gpuBinOp self-carried bType":
     test "fold do-block pulled into device procs compiles and executes":
       var output: array[2, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernel)
       let oDev = engine.allocDevice(int32, output.len)
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)

@@ -47,7 +47,7 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
 proc siluAndMulKernel(gs, us: seq[float32], M, N: int): F.Tensor =
   ## Runs siluAndMulKernel on the fp16-rounded (g, u) interleaved
   ## buffer; returns the fp16 output converted to fp32.
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(siluMsl)
   var X = newSeq[uint16](M * 2 * N)
   for r in 0 ..< M:

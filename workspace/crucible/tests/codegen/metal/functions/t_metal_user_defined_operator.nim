@@ -100,7 +100,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - user-defined operators":
     test "basicKernel: the 10-binop set on uint32":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(basicMsl)
       var a: array[1, uint32] = [13'u32]
       var b: array[1, uint32] = [5'u32]
@@ -124,7 +124,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check out32[9] == 8
 
     test "structKernel: operator syntax on Wrapper":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(structMsl)
       echo structMsl
       var a: array[1, uint32] = [7'u32]
@@ -149,7 +149,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check out32b[9] == (7'u32 xor 3)
 
     test "structKernel2: name-collision handling on Wrapper2":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(structMsl2)
       echo structMsl2
       var a: array[1, uint32] = [14'u32]

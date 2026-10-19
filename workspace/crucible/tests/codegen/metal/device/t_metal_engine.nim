@@ -1,8 +1,8 @@
-## Metal engine end-to-end: `bkMetal.init()` → `ingest()` → `run()`,
-## with verified device output. Covers ingest-once/run-many cache reuse,
-## re-ingest invalidation, grid/blk dispatch, scalar args, deviceName, and repeated
-## init/run cycles that exercise the RAII `=destroy` path. The plain add-kernel
-## smoke itself is owned by t_metal_add.nim.
+## Metal engine end-to-end: `bkMetal.newEngine()` → `ingest()` → `run()`,
+## with verified device output.
+##
+## Test that engine construction, ingest cache reuse and re-ingest
+##   invalidation produce correct kernel results across repeated runs.
 ##
 ## Run:
 ##   cd tattletale
@@ -76,48 +76,58 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "ingest-once run-many keeps producing correct results across runs":
       # "No recompiles" is structural. Ingest is the only compileLibrary call site,
       # and the PSO cache is keyed by (kernel, argSizes).
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(addMsl)
       var a: array[1, uint32] = [2'u32]
       var b: array[1, uint32] = [3'u32]
-      let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
-      let bDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.launchKernel("addKernel", oDev, (aDev, bDev))
+      block: # a launch consumes its inputs, each round allocates fresh buffers
+        let aDev = engine.allocDevice(uint32, 1)
+        let bDev = engine.allocDevice(uint32, 1)
+        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 5
       var a2: array[1, uint32] = [10'u32]
       var b2: array[1, uint32] = [20'u32]
-      engine.copyToDeviceFromHost(aDev, addr a2[0], 1)
-      engine.copyToDeviceFromHost(bDev, addr b2[0], 1)
-      engine.launchKernel("addKernel", oDev, (aDev, bDev))
+      block:
+        let aDev = engine.allocDevice(uint32, 1)
+        let bDev = engine.allocDevice(uint32, 1)
+        engine.copyToDeviceFromHost(aDev, addr a2[0], 1)
+        engine.copyToDeviceFromHost(bDev, addr b2[0], 1)
+        engine.launchKernel("addKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 30
 
     test "re-ingest with a changed body invalidates and recompiles":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(addMsl)
       var a: array[1, uint32] = [2'u32]
       var b: array[1, uint32] = [3'u32]
-      let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
-      let bDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.launchKernel("addKernel", oDev, (aDev, bDev))
+      block: # a launch consumes its inputs, each round allocates fresh buffers
+        let aDev = engine.allocDevice(uint32, 1)
+        let bDev = engine.allocDevice(uint32, 1)
+        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 5
       engine.ingest(mulMsl)
-      engine.launchKernel("addKernel", oDev, (aDev, bDev))
+      block:
+        let aDev = engine.allocDevice(uint32, 1)
+        let bDev = engine.allocDevice(uint32, 1)
+        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.launchKernel("addKernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 6
 
     test "dispatch with grid/blk via dispatchThreadgroups":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(vecAddMsl)
       var a, b: array[128, uint32]
       for i in 0 ..< 128:
@@ -135,7 +145,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[i] == uint32(i) + 1
 
     test "scalar args pack into the constant buffer at 16-byte slots":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(scalarMsl)
       echo scalarMsl
       let oDev = engine.allocDevice(uint32, 2)
@@ -150,14 +160,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 2
 
     test "deviceName returns the Metal device name":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       let name = engine.deviceName()
       echo "  device: ", name
       check name.len > 0
 
     test "repeated init/run cycles destroy cleanly (RAII)":
       for i in 0 ..< 5:
-        var engine = bkMetal.init()
+        var engine = bkMetal.newEngine()
         engine.ingest(addMsl)
         var a: array[1, uint32] = [2'u32]
         var b: array[1, uint32] = [3'u32]

@@ -910,7 +910,7 @@ proc kvRoundTrip(
   for i in 0 ..< poolTokens * tokenDim:
     kSlab[i] = fp32ToFp16(kf[i])
     vSlab[i] = fp32ToFp16(vf[i])
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(kvquantMsl)
   var cacheZero = newSeq[int32](numSeqs)
   var cacheRows = newSeq[int32](numSeqs)

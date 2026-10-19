@@ -142,8 +142,8 @@ proc fp16Checks(engine: HwEngine, big: BigHost) =
     &"{fpSnap.len + f32Snap.len + statePost.len + ringPost.len}"
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(MegaGdnFp16Msl)
   let t0 = epochTime()
   fp16Checks(engine, buildBigHost(Seed, fp16Bits))

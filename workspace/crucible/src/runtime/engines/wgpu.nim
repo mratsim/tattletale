@@ -345,7 +345,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: v
   if uncaptured.errType != wgpuErrorTypeNoError:
     failLoud("WebGPU uncaptured error: " & uncaptured.message)
 
-proc allocDeviceImpl*(engine: WgpuEngine, n: int): WGPUBuffer =
+proc allocDeviceImpl(engine: WgpuEngine, n: int): WGPUBuffer =
   let device = engine.ctx.device
   var desc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
@@ -356,13 +356,10 @@ proc allocDeviceImpl*(engine: WgpuEngine, n: int): WGPUBuffer =
   if result == nil:
     failLoud("WebGPU: failed to create a " & $n & "-byte device buffer")
 
-proc freeDeviceImpl*(h: WGPUBuffer) =
-  wgpuBufferRelease(h)
-
-proc copyToDeviceFromHostImpl*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
   wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
 
-proc copyToHostFromDeviceImpl*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
   var stagingDesc = WGPUBufferDescriptor(
@@ -410,3 +407,15 @@ proc copyToHostFromDeviceImpl*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer
   if mappedPtr != nil and n > 0:
     copyMem(dst, mappedPtr, n)
   wgpuBufferUnmap(stagingBuf)
+
+proc allocDevice*[T](engine: WgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] =
+  ## Allocates len elements of T on the engine
+  DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+proc copyToDeviceFromHost*[T](engine: WgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))

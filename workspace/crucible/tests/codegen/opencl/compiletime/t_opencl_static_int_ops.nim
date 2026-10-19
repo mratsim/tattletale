@@ -59,7 +59,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "all five overload shapes compile, run, and produce the right values":
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelCode)
       var out32: array[10, int32]
       let dDev = engine.allocDevice(int32, dynArr.len)

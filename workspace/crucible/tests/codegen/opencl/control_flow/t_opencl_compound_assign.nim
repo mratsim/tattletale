@@ -24,7 +24,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
   echo "=== OpenCL compound-assign execution ===\n"
 
   block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(accCl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]

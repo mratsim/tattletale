@@ -67,7 +67,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - static-int +/* overload set":
     test "all five overload shapes compile, run, and produce the right values":
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelCode)
       let dDev = engine.allocDevice(int32, dynArr.len)
       engine.copyToDeviceFromHost(dDev, addr dynArr[0], dynArr.len)

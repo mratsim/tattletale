@@ -81,7 +81,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
 suite "Vulkan - constexpr tuple init":
   test "Pattern A — constexpr tuple in let RHS":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelA)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testA", oDev, ())
@@ -89,7 +89,7 @@ suite "Vulkan - constexpr tuple init":
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
     check res[0] == 1
   test "Pattern B — constexpr in arithmetic":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelB)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testB", oDev, ())
@@ -97,7 +97,7 @@ suite "Vulkan - constexpr tuple init":
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
     check res[0] == 128
   test "Pattern C — template wrapConst":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelC)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testC", oDev, ())
@@ -105,7 +105,7 @@ suite "Vulkan - constexpr tuple init":
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
     check res[0] == 1
   test "Pattern D — tuple bracket access":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelD)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testD", oDev, ())
@@ -113,7 +113,7 @@ suite "Vulkan - constexpr tuple init":
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
     check res[0] == 0
   test "Pattern E — block with constexpr temp":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelE)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testE", oDev, ())
@@ -121,7 +121,7 @@ suite "Vulkan - constexpr tuple init":
     engine.copyToHostFromDevice(addr res[0], oDev, 1)
     check res[0] == 0
   test "Pattern F — constexpr tuple field access":
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelF)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("testF", oDev, ())

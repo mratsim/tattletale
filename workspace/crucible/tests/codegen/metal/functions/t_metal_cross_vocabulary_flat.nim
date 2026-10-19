@@ -23,7 +23,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - cross-vocabulary coordinates + barrier":
 
     test "CUDA idiom + native scalar flat index + barrier execute correctly":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernel1d)
       let msl = engine.getArtifact()
       check "uint thread_index_in_threadgroup [[thread_index_in_threadgroup]]" in msl

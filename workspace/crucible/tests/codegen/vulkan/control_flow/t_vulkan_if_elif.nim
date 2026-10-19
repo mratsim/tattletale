@@ -34,7 +34,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Vulkan - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      var engine = bkVulkan.init()
+      var engine = bkVulkan.newEngine()
       engine.ingest(elifGlsl)
       var x = [0'i32]
       let xDev = engine.allocDevice(int32, 1)
@@ -50,7 +50,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[0] == want
 
     test "no else in source emits no else block":
-      var engine = bkVulkan.init()
+      var engine = bkVulkan.newEngine()
       engine.ingest(noElseGlsl)
       var x = [0'i32]
       let xDev = engine.allocDevice(int32, 1)

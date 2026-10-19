@@ -20,7 +20,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - multi-axis dispatch":
 
     test "2D: grid (2, 4) × blk (4, 2) = 8×8 work-items":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernel2d)
       let oDev = engine.allocDevice(uint32, 64)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("grid2d", oDev, ())

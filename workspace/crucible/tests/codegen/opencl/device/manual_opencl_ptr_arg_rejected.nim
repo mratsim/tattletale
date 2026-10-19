@@ -14,7 +14,7 @@ const code = opencl:
     output[0] = 1'u32
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  var engine = bkOpenCL.init()
+  var engine = bkOpenCL.newEngine()
   engine.ingest(code)
   let oDev = engine.allocDevice(uint32, 1)
   # a raw pointer arg must fail to compile: it would bind garbage bits where

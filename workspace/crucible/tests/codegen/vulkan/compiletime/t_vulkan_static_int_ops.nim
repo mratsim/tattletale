@@ -63,7 +63,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "all five overload shapes compile, run, and produce the right values":
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkVulkan.init()
+      var engine = bkVulkan.newEngine()
       engine.ingest(kernelCode)
       let dynDev = engine.allocDevice(int32, 1)
       engine.copyToDeviceFromHost(dynDev, addr dynArr[0], 1)

@@ -24,7 +24,7 @@ import ./kvcache_exl3_test_utils
 
 proc runTest(): bool =
   var shapes = initShapeCases("exl3_kvquant")
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(kvquantMsl)
   echo kvquantMsl            # keep the generated MSL inspectable
   let hAll = runKvQuantSuite(engine, shapes)

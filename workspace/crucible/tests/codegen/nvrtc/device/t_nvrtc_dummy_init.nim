@@ -22,7 +22,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "CUDA - dummy-field initializers":
     test "single dummy struct const":
       var buf: array[1, uint32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelCode)
       let oDev = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -31,7 +31,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "tuple of dummy structs const":
       var buf: array[1, uint32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelCode2)
       let oDev = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())

@@ -47,7 +47,7 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
 proc gatedMlpSiluKernel(xf, wgf, wuf, wdf: seq[float32], M, K, NIntm, NOut: int): F.Tensor =
   ## Runs gatedMlpSiluKernel on the fp16-rounded inputs; returns the
   ## fp16 output converted to fp32.
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(mlpMsl)
   var xb = newSeq[uint16](M * K)
   var wgb = newSeq[uint16](K * NIntm)
