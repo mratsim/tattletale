@@ -53,8 +53,7 @@ proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
     layout: layout)
 
 template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
-  # Workaround `..` or Slice[T](...) not resolving T as a default value,
-  # the conversions route int literals into distinct element types like F16
+  # Workaround `..` or Slice[T](...) not resolving T as a default value
   Slice[T](a: T(start), b: T(stopIncl))
 
 proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[T](1, 2)): auto =
