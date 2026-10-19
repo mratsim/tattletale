@@ -52,19 +52,21 @@ proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
     data: cast[ptr UncheckedArray[T]](allocShared(bytes)),
     layout: layout)
 
-proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple): auto =
-  ## A heap-backed host tensor of (shape, strides), values uniform random
-  ## in [1, 2). Float types sample in T, low-precision types convert from f32
+template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
+  # Workaround `..` or Slice[T](...) not resolving T as a default value,
+  # the conversions route int literals into distinct element types like F16
+  Slice[T](a: T(start), b: T(stopIncl))
+
+proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[T](1, 2)): auto =
   let layout = make_layout(shape, strides)
   result = HostTensor[T, typeof(shape), typeof(strides)](
-    data: cast[ptr UncheckedArray[T]](
-        allocShared(toInt(layout.cosize()) * sizeof(T))),
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
     layout: layout)
   for i in 0 ..< toInt(layout.cosize()):
     when T is float32 or T is float64:
-      result.data[i] = rng.rand(T(1) .. T(2))
+      result.data[i] = rng.rand(bounds)
     else:
-      result.data[i] = T.from(rng.rand(1.0'f32 .. 2.0'f32))
+      result.data[i] = T.from(rng.rand(float32.from(bounds.a) .. float32.from(bounds.b)))
 
 func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
   toInt(ht.layout.cosize())
@@ -72,7 +74,7 @@ func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
 func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
   TensorView[T, Sh, St](data: ht.data, layout: ht.layout)
 
-proc bridge*[E: HwEngine, T, Sh, St](engine: E,ht: HostTensor[T, Sh, St]): auto =
+proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
   let dev = engine.allocDevice(T, ht.len)
   engine.copyToDeviceFromHost(dev, ht.data, ht.len)
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
