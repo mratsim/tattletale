@@ -22,13 +22,12 @@ const kernelCode = cuda:
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var buf: array[3, uint32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("complexKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 1,   &"a[0]: {buf[0]}"
   doAssert buf[1] == 2,   &"a[1]: {buf[1]}"
   doAssert buf[2] == 42,  &"b[0]: {buf[2]}"

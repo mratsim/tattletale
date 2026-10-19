@@ -109,7 +109,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - {.emit.} raw WGSL injection":
 
     test "single string literal emits the sum":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t1Wgsl)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
@@ -121,13 +121,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t2Wgsl)
       let src = engine.getArtifact()
       # The interpolated buffer param renders through WGSL codegen
@@ -140,12 +137,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t3Wgsl)
       var a: array[1, uint32] = [20'u32]
       var res: array[1, uint32]
@@ -154,12 +149,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t4Wgsl)
       var a: array[1, uint32] = [40'u32]
       var res: array[1, uint32]
@@ -168,12 +161,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t5Wgsl)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
@@ -185,24 +176,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
     test "emit is not silently dropped (must override the DSL write)":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t6Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t6Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t7Wgsl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
@@ -211,12 +198,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t8Wgsl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
@@ -225,34 +210,30 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t10Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t10Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t12Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t12Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "emitted statement carries exactly one terminator (no `;` appended)":
       # WGSL has no preprocessor, so the byte-exact probe is the statement
       # line itself: one `;` from the emitted text, none from the printer.
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t1Wgsl)
       let src = engine.getArtifact()
       check "C[0] = A[0] + B[0];" in src
@@ -265,23 +246,21 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "multi-item emit rendered on a single line:\n" & t15Wgsl
       doAssert "C[0] = 1;" in t15Wgsl and "C[0] = 2;" in t15Wgsl,
         "multi-item emit dropped an item:\n" & t15Wgsl
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t15Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t15Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(t16Wgsl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t16Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

@@ -7,19 +7,19 @@
 {.experimental: "codeReordering".}
 
 import std/[macros, tables]
+
 import workspace/crucible/src/abis/cl_abi
 
-import ../../codegen/ir/gpu_types
-import ../errors
-import ../launch/launch_serialization
-import ../exec/opencl_runtime
-import ./engines_common
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/opencl_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
-export opencl_runtime
-
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+
 type
   OpenCLKernelCache = object
     kernels: Table[string, OpenCLKernel]
@@ -29,17 +29,44 @@ type
     ctx: OpenCLContext
     kernelCache: OpenCLKernelCache
 
-proc backendKind*(_: typedesc[OpenCLEngine]): static BackendKind = bkOpenCL
+template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
+  bkOpenCL
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
-proc newOpenCLEngine*(): OpenCLEngine =
+proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
   OpenCLEngine(ctx: initOpenCL())
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ════════════════════════════════════════════════════════════════════════
+
+proc ingest*(engine: OpenCLEngine, source: string) =
+  if engine.source.len > 0:
+    when defined(debug):
+      echo "[INFO]: opencl ingest: invalidating previous artifact"
+  engine.kernelCache.kernels = initTable[string, OpenCLKernel]()
+  engine.source = source
+
+proc getArtifact*(engine: OpenCLEngine): string {.inline.} =
+  engine.source
+
+proc deviceName*(engine: OpenCLEngine): string {.inline.} =
+  engine.ctx.device.name()
+
+proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
+  ## Allocates len elements of T on the engine
+  DeviceMem[OpenCLBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[OpenCLBuffer, T], n: int) {.inline.} =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   kern: OpenCLKernel
@@ -57,30 +84,11 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   blob.packFrom(off, v, bkOpenCL)
   ctx.kern.setArg(argIdx, size, blob[0].addr)
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
-
-proc ingest*(engine: OpenCLEngine, source: string) =
-  if engine.source.len > 0:
-    when defined(debug):
-      echo "[INFO]: opencl ingest: invalidating previous artifact"
-  engine.kernelCache.kernels = initTable[string, OpenCLKernel]()
-  engine.source = source
-
-proc getArtifact*(engine: OpenCLEngine): string =
-  engine.source
-
-proc deviceName*(engine: OpenCLEngine): string {.inline.} =
-  engine.ctx.device.name()
-
-
-# ─────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
 
-
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -98,15 +106,11 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   let localSize = [cl_size_t(cfg.blk.x), cl_size_t(cfg.blk.y), cl_size_t(cfg.blk.z)]
   kern.runKernel(globalSize, localSize)
 
-proc allocDeviceImpl*(engine: OpenCLEngine, n: int): OpenCLBuffer =
+proc allocDeviceImpl(engine: OpenCLEngine, n: int): OpenCLBuffer {.inline.} =
   engine.ctx.allocBuffer(n)
 
-proc freeDeviceImpl*(engine: OpenCLEngine, h: OpenCLBuffer) =
-  var h = h
-  h.dealloc()
-
-proc copyToDeviceFromHostImpl*(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) {.inline.} =
   dst.writeBuffer(src, n)
 
-proc copyToHostFromDeviceImpl*(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) {.inline.} =
   src.readBuffer(dst, n)

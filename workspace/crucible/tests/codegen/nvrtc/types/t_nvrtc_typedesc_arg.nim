@@ -29,12 +29,11 @@ const kernelCode = cuda:
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var buf: array[4, float32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(float32, buf.len)
   engine.launchKernel<<(1, 1)>>("typedescKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 10.0, &"scaleType(float32, 2.5, 4.0): {buf[0]}"
   doAssert buf[1] == 6.0, &"scaleType(float32, 3.0, 2.0): {buf[1]}"
   doAssert buf[2] == 5.75, &"mixArgs(2.0, float32, 2.5, 1.5): {buf[2]}"

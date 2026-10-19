@@ -96,7 +96,7 @@ proc fp32sToFp16*(fs: seq[float32]): seq[uint16] =
     result[i] = fp32ToFp16(fs[i])
 
 proc moeKernelBits(g: MoEG, r: MoeRow): seq[uint16] =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(moeMsl)
   let gu = 2 * r.inter
   var outO = newSeq[uint16](r.tokens * r.hidden)
@@ -310,7 +310,7 @@ proc checkConfigGuard() =
   moeFwdConfigGuard(2, 2048, 256, 512, 8, 1)
   echo "  accepted the GLM and Qwen rows"
   # the device half drops the launch, the output stays the prefill
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(moeMsl)
   var outO = newSeq[uint16](8 * 2048)
   for i in 0 ..< outO.len:

@@ -26,7 +26,7 @@ const kernelCode = cuda:
     output[1] = shadowIfElse(false, 10'u32, 20'u32)
 
 var buf: array[2, uint32]
-var engine = bkCuda.init()
+var engine = bkCuda.newEngine()
 engine.ingest(kernelCode)
 engine.launchKernel<<(1, 1)>>("shadowKernel", buf, ())
 # Expected: 0 (outer implicit result, never assigned).

@@ -20,13 +20,12 @@ const sharedMsl = metal:
 proc runTest() =
   suite "Metal - shared memory + barrier":
     test "64 threads reverse-fill through threadgroup memory":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(sharedMsl)
       let oDev = engine.allocDevice(uint32, 64)
       engine.launchKernel<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", oDev, ())
       var res: array[64, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 64)
-      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(63 - i)
 

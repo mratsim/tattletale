@@ -33,7 +33,7 @@ const kernelCode = cuda:
 # If compilation succeeds, the nnkSym+allowArrayIdent=true path
 # did not crash (getImpl.intVal was not called unconditionally).
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 

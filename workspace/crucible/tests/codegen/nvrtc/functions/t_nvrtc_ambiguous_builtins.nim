@@ -41,12 +41,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       output[5] = clampU32(15'u32, 10'u32, 20'u32)
 
   var buf: array[6, uint32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("builtinKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   doAssert buf[0] == 10, &"direct min: {buf[0]}"
   doAssert buf[1] == 30, &"direct max: {buf[1]}"
   doAssert buf[2] == 5, &"direct abs: {buf[2]}"

@@ -33,13 +33,12 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
     var out32: array[4, uint32]
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel("kernelMain", oDev, ())
     engine.copyToHostFromDevice(addr out32[0], oDev, 4)
-    engine.freeDevice(oDev)
     doAssert out32[0] == 7, "set field must keep its value"
     doAssert out32[1] == 0, "omitted array field must be zeroed"
     doAssert out32[2] == 0, "omitted array field must be zeroed"

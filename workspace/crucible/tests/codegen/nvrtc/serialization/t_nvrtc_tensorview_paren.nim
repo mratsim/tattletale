@@ -51,12 +51,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "crd2idx with DotExpr arg inside cuda:":
       let code = kernel
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(code)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 0.0
 
 when isMainModule:

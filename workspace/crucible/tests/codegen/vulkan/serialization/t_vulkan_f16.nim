@@ -51,7 +51,7 @@ const f16Vk = vulkan:
     C[i] = A[i] * B[i]
 
 proc runTest() =
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   engine.ingest(f16Vk)
   const N = 64
   var rng = initRand(0xF16)
@@ -68,9 +68,6 @@ proc runTest() =
   engine.copyToDeviceFromHost(bDev, addr B[0], N)
   engine.launchKernel("f16MulKernel", cDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr C[0], cDev, N)
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(cDev)
   # Products ≤ 225 are exact in f16 and f32: the gate is bit-exact.
   for i in 0 ..< N:
     let refVal = f16ToF32(A[i]) * f16ToF32(B[i])

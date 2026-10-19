@@ -24,7 +24,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
   echo "=== OpenCL compound-assign execution ===\n"
 
   block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(accCl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -35,8 +35,6 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("accKernel", oDev, (aDev,))
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(oDev)
 
     echo "  accKernel: output = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 17  # 10 + 6 + 1

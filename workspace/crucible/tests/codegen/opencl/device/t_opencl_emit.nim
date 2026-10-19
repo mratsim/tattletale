@@ -116,7 +116,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "OpenCL - {.emit.} raw OpenCL C injection":
 
     test "single string literal emits the sum":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t1Cl)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
@@ -128,13 +128,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t2Cl)
       var a: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
@@ -143,12 +140,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t3Cl)
       var a: array[1, uint32] = [20'u32]
       var res: array[1, uint32]
@@ -157,12 +152,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t4Cl)
       var a: array[1, uint32] = [40'u32]
       var res: array[1, uint32]
@@ -171,12 +164,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t5Cl)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
@@ -188,24 +179,20 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
       check res[1] == 13
 
     test "emit is not silently dropped (must override the DSL write)":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t6Cl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t7Cl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
@@ -214,12 +201,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t8Cl)
       var x: array[1, uint32] = [41'u32]
       var res: array[1, uint32]
@@ -228,32 +213,28 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t10Cl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t12Cl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t14Cl)
       let src = engine.getArtifact()
       check "#define OPENCL_EMIT_TILE 32" in src
@@ -262,7 +243,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t14Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
@@ -272,23 +252,21 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "multi-item emit rendered on a single line:\n" & t15Cl
       doAssert "C[0] = 1;" in t15Cl and "C[0] = 2;" in t15Cl,
         "multi-item emit dropped an item:\n" & t15Cl
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t15Cl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(t16Cl)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

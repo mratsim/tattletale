@@ -22,13 +22,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - whole-value coordinate":
 
     test "let p = thread_position_in_grid keeps the i32 domain":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelWhole)
       var res: array[8, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 2))>>("whole", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
       for y in 0 ..< 2:
         for x in 0 ..< 4:
           check res[y * 4 + x] == uint32(y * 4 + x)

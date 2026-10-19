@@ -76,32 +76,29 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Operator rename via do-block":
     test "do-block body +/*":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelDo)
       let o1 = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", o1, ())
       engine.copyToHostFromDevice(addr output[0], o1, output.len)
-      engine.freeDevice(o1)
       check output[0] == 16.0'f32
 
     test "chained template with state":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelChain)
       let o2 = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", o2, ())
       engine.copyToHostFromDevice(addr output[0], o2, output.len)
-      engine.freeDevice(o2)
       check output[0] == 16.0'f32
 
     test "recursive fold (2 iterations)":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelRec)
       let o3 = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", o3, ())
       engine.copyToHostFromDevice(addr output[0], o3, output.len)
-      engine.freeDevice(o3)
       # iter0: 0 + 8*2 = 16
       # iter1: 16 + 3*4 = 28
       check output[0] == 28.0'f32

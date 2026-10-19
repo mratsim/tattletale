@@ -47,14 +47,13 @@ const kernelCode = cuda:
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var buf: array[4, uint32]
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
 
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("externalTypeKernel", oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(oDev)
   echo "  Vec2(10,20)+Vec2(1,2) = (", buf[0], ", ", buf[1], ")"
   echo "  dot(Vec2(10,20), Vec2(1,2)) = ", buf[2]
   echo "  sum(Vec4(1,2,3,4))  = ", buf[3]

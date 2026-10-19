@@ -29,12 +29,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Operator codegen":
     test "basic types (int32) — all operators on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelBasic)
       let oB = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBasic", oB, ())
       engine.copyToHostFromDevice(addr output[0], oB, output.len)
-      engine.freeDevice(oB)
       check output[0] == 18
       check output[1] == 8
       check output[2] == 65
@@ -119,12 +118,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "User-defined operators":
     test "struct types (Wrapper) — operator syntax on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelStruct)
       let oS = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct", oS, ())
       engine.copyToHostFromDevice(addr output[0], oS, output.len)
-      engine.freeDevice(oS)
       check output[0] == 10
       check output[1] == 4
       check output[2] == 21
@@ -138,12 +136,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "struct types (Wrapper2) — operator syntax on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelStruct2)
       let oS2 = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct2", oS2, ())
       engine.copyToHostFromDevice(addr output[0], oS2, output.len)
-      engine.freeDevice(oS2)
       check output[0] == 17
       check output[1] == 11
       check output[2] == 42
@@ -157,12 +154,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "struct types (both Wrapper + Wrapper2) — name collision":
       var output: array[2, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelBoth)
       let oBoth = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBoth", oBoth, ())
       engine.copyToHostFromDevice(addr output[0], oBoth, output.len)
-      engine.freeDevice(oBoth)
       check output[0] == 10
       check output[1] == 17
 

@@ -31,7 +31,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - multi-kernel source":
     test "vec10_add and vec10_mul from one library":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(code)
       let aDev = engine.allocDevice(uint32, a.len)
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
@@ -45,9 +45,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[i] == a[i] + b[i]
       engine.launchKernel("vec10_mul", oDev, (aDev, bDev))
       engine.copyToHostFromDevice(addr res[0], oDev, 10)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       for i in 0 ..< 10:
         check res[i] == a[i] * b[i]
 

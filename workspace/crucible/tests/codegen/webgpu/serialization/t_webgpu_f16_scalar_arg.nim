@@ -13,7 +13,7 @@ const f16ScalarWgsl = webgpu:
 
 proc runTest() =   # private, tests run in a proc so engines are destroyed at return
   block: # f16ScaleKernel (float16 scalar by value)
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(f16ScalarWgsl)
 
     var a: array[1, uint32] = [10'u32]
@@ -26,8 +26,6 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     let x = cast[float16](0x4400'u16)
     engine.launchKernel("f16ScaleKernel", oDev, (aDev, x))
     engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-    engine.freeDevice(aDev)
-    engine.freeDevice(oDev)
 
     doAssert out32[0] == 14, "f16ScaleKernel: " & $out32[0] & ", expected 14"
     echo "  OK: float16 scalar arg (4.0) added to 10 = 14"

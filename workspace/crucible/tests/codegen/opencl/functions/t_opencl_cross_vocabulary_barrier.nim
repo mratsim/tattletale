@@ -21,7 +21,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   doAssert "barrier(CLK_LOCAL_MEM_FENCE)" in kernelCode,
     "OpenCL barrier lowering missing:\n" & kernelCode
 
-  var engine = bkOpenCL.init()
+  var engine = bkOpenCL.newEngine()
   engine.ingest(kernelCode)
   var res: array[8, uint32]
   # 2 work-groups of (4, 2). Each group stages identical values, so the
@@ -30,7 +30,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   let oDev = engine.allocDevice(uint32, 8)
   engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabBarrierKernel", oDev, ())
   engine.copyToHostFromDevice(addr res[0], oDev, 8)
-  engine.freeDevice(oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32
     doAssert res[i] == expected,

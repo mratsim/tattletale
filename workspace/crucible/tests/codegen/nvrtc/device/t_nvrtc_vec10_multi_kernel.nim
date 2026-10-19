@@ -21,7 +21,7 @@ const kernelCode = cuda:
       output[tid] = a[tid] * b[tid]
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
 
   engine.ingest(kernelCode)
 
@@ -42,9 +42,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   engine.launchKernel<<(1, 10)>>("vec10_mul", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(oDev)
   echo "  vec10_mul: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] * b[i]

@@ -22,7 +22,7 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
   echo "=== OpenCL kernel cache ===\n"
 
   block: # same kernel, two runs with different data (cache hit on second run)
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
 
     var a: array[1, uint32] = [10'u32]
@@ -44,14 +44,11 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
     doAssert outVal[0] == 300
     echo "  OK - cached kernel reused across runs"
 
   block: # re-ingest invalidates the cache, new source takes effect
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
 
     var a: array[1, uint32] = [1'u32]
@@ -70,9 +67,6 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     engine.ingest(kernelCode2)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
     doAssert outVal[0] == 1003
     echo "  OK - re-ingest invalidated cached kernel"
 

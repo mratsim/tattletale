@@ -27,7 +27,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - direct contents() readback":
 
     test "multi-element uint32 output readback":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelCode)
       echo kernelCode
       var input = [1'u32, 2'u32, 3'u32, 4'u32]
@@ -37,8 +37,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("mapReadbackKernel", oDev, (iDev,))
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

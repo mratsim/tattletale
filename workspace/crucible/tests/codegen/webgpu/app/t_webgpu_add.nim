@@ -69,7 +69,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== wgpu-native execution ===\n"
 
   block: # addKernel
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(addWgsl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -83,9 +83,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
@@ -93,7 +90,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(vec2Wgsl)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -107,9 +104,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
@@ -117,7 +111,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # maxKernel (generic instantiation)
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(maxWgsl)
 
     var a: array[1, uint32] = [42'u32]
@@ -131,9 +125,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
     engine.launchKernel("maxKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr outVal[0], oDev, outVal.len)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42

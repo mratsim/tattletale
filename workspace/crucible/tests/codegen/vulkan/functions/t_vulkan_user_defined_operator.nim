@@ -110,7 +110,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== Vulkan execution ===\n"
 
   block:
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(basicVk)
 
     var a: array[1, int32] = [13'i32]
@@ -171,9 +171,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     engine.launchKernel("structKernel2", oDev, (aDev, bDev))
     var out32c: array[10, int32]
     engine.copyToHostFromDevice(addr out32c[0], oDev, 10)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17

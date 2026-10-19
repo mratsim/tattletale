@@ -42,7 +42,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert elifWgsl.find("else if (((&x)[0] == 1))") < elifWgsl.find("else if (((&x)[0] == 2))")
       for v in ["(&output)[0] = 10;", "(&output)[0] = 20;", "(&output)[0] = 30;", "(&output)[0] = 40;"]:
         doAssert v in elifWgsl
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(elifWgsl)
       var res: array[1, int32]
       var x = [0'i32]
@@ -66,14 +66,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 40
 
     test "no else in source emits no else block":
       doAssert "else if (((&x)[0] == 1)) {" in noElseWgsl
       doAssert "else {" notin noElseWgsl
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(noElseWgsl)
       var res: array[1, int32]
       var x = [0'i32]
@@ -92,8 +90,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
       engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
       check res[0] == 99  # no branch matched: sentinel preserved
 
 when isMainModule:

@@ -37,7 +37,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - pipeline cache":
 
     test "same kernel, different input arrays (byte-exact outputs)":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
@@ -59,11 +59,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 40
       check res[2] == 60
       check res[3] == 80
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
 
     test "re-ingest invalidates cached pipelines":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
@@ -83,8 +81,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 6
       check res[2] == 9
       check res[3] == 12
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

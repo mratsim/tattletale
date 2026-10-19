@@ -36,7 +36,7 @@ const code2 = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: scalar by-value param via push constants ===\n"
 
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   engine.ingest(code1)
 
   let oDev = engine.allocDevice(uint32, 1)
@@ -56,7 +56,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("kernelWithTwoVals", oDev, (3'u32, 4'u32,))
   engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
-  engine.freeDevice(oDev)
   doAssert gpuOut[0] == 7, &"two push-constant scalars: got {gpuOut[0]}, expected 7"
 
   echo "  OK — two scalar by-value params (packing order, re-ingest)"

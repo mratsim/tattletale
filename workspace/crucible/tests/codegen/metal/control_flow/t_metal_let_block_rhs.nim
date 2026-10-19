@@ -44,36 +44,33 @@ const kernelBlock = metal:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - let-block-RHS":
     test "Pattern A — direct tuple let":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelDirect)
       echo kernelDirect
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
     test "Pattern B — const + let":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
     test "Pattern C — block with const then yield":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelBlock)
       echo kernelBlock
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

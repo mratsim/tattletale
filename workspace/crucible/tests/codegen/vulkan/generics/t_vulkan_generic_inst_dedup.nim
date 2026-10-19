@@ -60,7 +60,7 @@ const dedupSrc = vulkan:
     outp[0] = scaleSwap[7, 5](inp[0])
 
 proc runScale(launcher: string, inpVal = 1.0'f32): float32 =
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   engine.ingest(dedupSrc)
   var inp = newSeq[float32](1)
   inp[0] = inpVal
@@ -70,8 +70,6 @@ proc runScale(launcher: string, inpVal = 1.0'f32): float32 =
   engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
   var outp = newSeq[float32](1)
   engine.copyToHostFromDevice(addr outp[0], oDev, 1)
-  engine.freeDevice(iDev)
-  engine.freeDevice(oDev)
   result = outp[0]
 
 proc runTest() =

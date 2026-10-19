@@ -49,7 +49,7 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
     if abs(ap[i] - bp[i]) > result: result = abs(ap[i] - bp[i])
 proc checkGGUFLinear(): bool =
   # per-scheme x scale keeps the output O(1) (weight RMS ~2e2..3e3)
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
   engine.ingest(ggufLinearMsl)
   let cases = [
     (0, 32, 128, 128, 200, 1.0'f32 / 16384.0'f32, "ggufLinearQ8", genQ8_0, decodeWeightsQ8_0),

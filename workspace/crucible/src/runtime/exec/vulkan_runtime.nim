@@ -9,13 +9,16 @@ import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
 import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
-type
 
+type
   VulkanBuffer* = object
     size*: int
     handle: VkBuffer
     memory: VkDeviceMemory
     device: VkDevice
+    # resolved at alloc time so the free is engine-free
+    destroyBuffer: proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
+    freeMemory: proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
 
   # Not in the vendored ABI — the C struct is {stageFlags: uint32, offset, size}
   VkPushConstantRange = object
@@ -392,6 +395,12 @@ proc initVulkan*(): VulkanContext =
 proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   result.size = size
   result.device = ctx.device
+  result.destroyBuffer = cast[
+    proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyBuffer"))
+  result.freeMemory = cast[
+    proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkFreeMemory"))
 
   let vkCreateBuffer = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkBufferCreateInfo,
@@ -506,20 +515,14 @@ proc deviceAddress*(buf: VulkanBuffer, ctx: VulkanContext): uint64 =
     buffer: buf.handle)
   result = uint64(vkGetBufferDeviceAddress(ctx.device, info.addr))
 
-proc dealloc*(buffer: var VulkanBuffer, ctx: VulkanContext) =
+proc dealloc*(buffer: var VulkanBuffer) =
   if buffer.handle == nil:
     return
-  let vkDestroyBuffer = cast[
-    proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkDestroyBuffer"))
-  let vkFreeMemory = cast[
-    proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkFreeMemory"))
-  if buffer.handle != nil and vkDestroyBuffer != nil:
-    vkDestroyBuffer(buffer.device, buffer.handle, nil)
+  if buffer.handle != nil and buffer.destroyBuffer != nil:
+    buffer.destroyBuffer(buffer.device, buffer.handle, nil)
     buffer.handle = nil
-  if buffer.memory != nil and vkFreeMemory != nil:
-    vkFreeMemory(buffer.device, buffer.memory, nil)
+  if buffer.memory != nil and buffer.freeMemory != nil:
+    buffer.freeMemory(buffer.device, buffer.memory, nil)
     buffer.memory = nil
 proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size: int) =
   if size > buf.size:

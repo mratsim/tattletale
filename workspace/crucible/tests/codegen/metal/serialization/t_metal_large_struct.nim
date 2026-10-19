@@ -36,24 +36,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - large struct by value":
     test "inline constructor arg":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(code1)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("kernelMain", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 30
 
     test "function return arg":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(code2)
       echo code2
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("kernelMain", oDev, ())
       var res: array[1, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 42
 
 when isMainModule:

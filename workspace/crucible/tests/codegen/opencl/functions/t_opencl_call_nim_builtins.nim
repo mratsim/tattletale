@@ -15,13 +15,12 @@ template runMulKernel(t: typedesc; expected0, expected1: float32) =
         let x = `*`(a, b)
         C[i] = float32(x)
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(k)
     var res: array[2, float32]
     let oDev = engine.allocDevice(float32, 2)
     engine.launchKernel("mulKernel", oDev, ())
     engine.copyToHostFromDevice(addr res[0], oDev, 2)
-    engine.freeDevice(oDev)
     check res[0] == expected0
     check res[1] == expected1
 
@@ -34,13 +33,12 @@ template runFloatMulKernel(t: typedesc; expected0, expected1: float32) =
         let x = `*`(a, b)
         C[i] = float32(x)
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(k)
     var res: array[2, float32]
     let oDev = engine.allocDevice(float32, 2)
     engine.launchKernel("mulKernel", oDev, ())
     engine.copyToHostFromDevice(addr res[0], oDev, 2)
-    engine.freeDevice(oDev)
     check res[0] == expected0
     check res[1] == expected1
 

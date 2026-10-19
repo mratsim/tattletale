@@ -71,52 +71,47 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Crucible - constexpr tuple init in expression slots":
     test "Pattern A — constexpr tuple in let RHS (block-unwrapped)":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelA)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 1.0'f32
 
     test "Pattern B — constexpr in arithmetic expression":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelB)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 128.0'f32
 
     test "Pattern C — template wrapConst (block with constexpr)":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelC)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 1.0'f32
 
     test "Pattern E — block with constexpr temp (evalOnceAs sim)":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelE)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 0.0'f32
 
     test "Pattern F — constexpr tuple field access":
       var output: array[1, float32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelF)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 8.0'f32
 
 when isMainModule:

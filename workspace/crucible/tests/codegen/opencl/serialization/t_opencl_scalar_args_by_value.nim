@@ -16,7 +16,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
     var a: array[1, float32] = [2.5'f32]
     var alpha = 3.0'f32
@@ -27,8 +27,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(float32, 1)
     engine.launchKernel("scaleKernel", oDev, (aDev, alpha, beta))
     engine.copyToHostFromDevice(addr output[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(oDev)
     doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
     echo "  OK"
 

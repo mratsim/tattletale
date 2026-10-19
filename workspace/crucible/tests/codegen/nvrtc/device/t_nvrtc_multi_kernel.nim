@@ -16,7 +16,7 @@ const kernelCode = cuda:
       c[tid] = a[tid] + b[tid]
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
 
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
@@ -36,9 +36,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
   engine.launchKernel<<(1, 8)>>("addKernel", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(oDev)
   echo "  add: ", buf
   for i in 0..7: doAssert buf[i] == uint32(i + i*10)
   echo "  OK (test_nvrtc_multi_kernel)"

@@ -69,7 +69,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== Vulkan execution ===\n"
 
   block: # addKernel
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(addVk)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -84,9 +84,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
@@ -94,7 +91,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(vec2Vk)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -109,9 +106,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
@@ -119,7 +113,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # maxKernel (generic instantiation)
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(maxVk)
 
     var a: array[1, uint32] = [42'u32]
@@ -134,9 +128,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     var outVal: array[1, uint32]
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDev)
 
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42

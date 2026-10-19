@@ -37,36 +37,33 @@ const kernelBlock = opencl:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "OpenCL - let-block-RHS":
     test "Pattern A — direct tuple let":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelDirect)
       echo kernelDirect
       var buf: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, 1)
-      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "Pattern B — const + let":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       var buf: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, 1)
-      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "Pattern C — block with const then yield":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelBlock)
       echo kernelBlock
       var buf: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       engine.copyToHostFromDevice(addr buf[0], oDev, 1)
-      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

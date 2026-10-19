@@ -246,8 +246,8 @@ proc runCase(engine: HwEngine, seed: uint64, Hv, Hk, B, T: int, splitsA, splitsB
   suiteTotal += j.total
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(GdnPropMsl)
   runCase(engine, 0xC04D0611'u64, 1, 1, 1, 64, @[64], @[32, 32], 0, "split aligned")
   runCase(engine, 0xC04D0612'u64, 1, 1, 1, 64, @[64], @[40, 24], 0, "split ragged")

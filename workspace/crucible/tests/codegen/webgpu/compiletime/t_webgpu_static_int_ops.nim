@@ -59,7 +59,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "all five overload shapes compile, run, and produce the right values":
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelCode)
       var out32: array[10, int32]
       let dynDev = engine.allocDevice(int32, dynArr.len)
@@ -67,8 +67,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToDeviceFromHost(dynDev, addr dynArr[0], dynArr.len)
       engine.launchKernel("staticIntOps", oDev, (dynDev,))
       engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-      engine.freeDevice(dynDev)
-      engine.freeDevice(oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

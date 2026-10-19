@@ -23,7 +23,7 @@ proc runTest() =
   suite "Metal - device-scope barrier":
 
     test "threadgroup_barrier_device emits the mem_device spelling and runs":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(deviceExchangeMsl)
       let msl = engine.getArtifact()
       check "threadgroup_barrier(mem_flags::mem_device)" in msl
@@ -32,7 +32,6 @@ proc runTest() =
       engine.launchKernel<<(grid: (2, 1), blk: (64, 1))>>("deviceExchangeKernel", oDev, ())
       var res: array[128, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 128)
-      engine.freeDevice(oDev)
       for i in 0 ..< 128:
         check res[i] == uint32((i div 64) * 64 + 63 - (i mod 64))
 

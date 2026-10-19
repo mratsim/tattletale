@@ -4,21 +4,23 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
+{.experimental: "codeReordering".}
+
 import std/[strutils, tables]
 
-import ../../codegen/ir/gpu_types
-import ./engines_common
-import ../errors
-import ../launch/launch_serialization
 import workspace/crucible/src/abis/objc_abi as objc
-import ../exec/metal_runtime
 
-export metal_runtime
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/metal_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════
 type
   MetalCache = object
     ## Two per-engine caches:
@@ -32,17 +34,84 @@ type
     ctx: MetalCtx
     cache: MetalCache   # after ctx: released before the context destroy
 
-proc backendKind*(_: typedesc[MetalEngine]): static BackendKind = bkMetal
+template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
-# ═════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════
 when defined(macosx):
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ Launch serialization
+
+  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
+  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
+
   # ─────────────────────────────────────────────────────────────────────────
 
+  # ─────────────────────────────────────────────────────────────────────────
+
+  proc newMetalCtx(): MetalCtx =
+    result.device = objc.MTLCreateSystemDefaultDevice()
+    if objc.isNil(result.device):
+      failLoud("no Metal device")
+    result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
+    if objc.isNil(result.queue):
+      failLoud("newCommandQueue returned nil")
+
+  proc `=destroy`(cache: var MetalCache) =
+    objc.withMemPool:
+      objc.release(cache.library)
+      for pso in cache.psos.values:
+        objc.release(pso)
+      cache.psos.clear()
+
+  proc newMetalEngine*(): MetalEngine =
+    objc.withMemPool:
+      result = MetalEngine(
+        ctx: newMetalCtx(),
+        cache: MetalCache(psos: initTable[string, objc.ID]())
+      )
+
+  # ════════════════════════════════════════════════════════════════════════
+  # ▸ PUBLIC API
+  # ════════════════════════════════════════════════════════════════════════
+  proc ingest*(engine: MetalEngine, source: string) =
+    objc.withMemPool:
+      let opts = compileOptions()
+      let library = compileLibrary(engine.ctx.device, source, opts)
+      objc.release(opts)
+      when defined(debug):
+        echo "[INFO]: metal ingest: invalidating previous artifact"
+      objc.release(engine.cache.library)
+      for pso in engine.cache.psos.values:
+        objc.release(pso)
+      engine.cache.psos.clear()
+      engine.cache.library = library
+      engine.source = source
+
+  proc getArtifact*(engine: MetalEngine): string {.inline.} =
+    engine.source
+
+  proc deviceName*(engine: MetalEngine): string =
+    objc.withMemPool:
+      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
+
+  proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] {.inline.} =
+    ## Allocates len elements of T on the engine
+    DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+    ## Copies n elements from host to device
+    engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) {.inline.} =
+    ## Copies n elements from device to host
+    engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+  # ════════════════════════════════════════════════════════════════════════
+  # ▸ Launch serialization
+  # ════════════════════════════════════════════════════════════════════════
   type SerializationCtx = object
     encoder: objc.ID
 
@@ -60,78 +129,22 @@ when defined(macosx):
     discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
                     blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE constants
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   const
-    ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
-    ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
     MTLCommandBufferStatusCompleted = 4
     MTLCommandBufferStatusError = 5
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ Constructors/destructors
-  # ─────────────────────────────────────────────────────────────────────────
-
-  proc newMetalCtx(): MetalCtx =
-    result.device = objc.MTLCreateSystemDefaultDevice()
-    if objc.isNil(result.device):
-      failLoud("no Metal device")
-    result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
-    if objc.isNil(result.queue):
-      failLoud("newCommandQueue returned nil")
-
-
-  proc `=destroy`(cache: var MetalCache) =
-    objc.withMemPool:
-      objc.release(cache.library)
-      for pso in cache.psos.values:
-        objc.release(pso)
-      cache.psos.clear()
-
-  proc newMetalEngine*(): MetalEngine =
-    objc.withMemPool:
-      result = MetalEngine(
-        ctx: newMetalCtx(),
-        cache: MetalCache(psos: initTable[string, objc.ID]())
-      )
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ PUBLIC API
-  # ─────────────────────────────────────────────────────────────────────────
-
-  proc ingest*(engine: MetalEngine, source: string) =
-    objc.withMemPool:
-      let opts = compileOptions()
-      let library = compileLibrary(engine.ctx.device, source, opts)
-      objc.release(opts)
-      when defined(debug):
-        echo "[INFO]: metal ingest: invalidating previous artifact"
-      objc.release(engine.cache.library)
-      for pso in engine.cache.psos.values:
-        objc.release(pso)
-      engine.cache.psos.clear()
-      engine.cache.library = library
-      engine.source = source
-
-  proc getArtifact*(engine: MetalEngine): string =
-    engine.source
-
-  proc deviceName*(engine: MetalEngine): string =
-    objc.withMemPool:
-      result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
-
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE run path
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   proc bufferContents(h: objc.ID): pointer =
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
       failLoud("contents() returned nil for a shared buffer")
 
-  proc allocDeviceImpl*(engine: MetalEngine, n: int): objc.ID =
+  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
       failLoud("allocDevice: size must be positive, got " & $n)
     result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
@@ -139,22 +152,17 @@ when defined(macosx):
     if objc.isNil(result):
       failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
 
-  proc freeDeviceImpl*(engine: MetalEngine, h: objc.ID) =
-    if not objc.isNil(h):
-      objc.release(h)
-
-  proc copyToDeviceFromHostImpl*(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
+  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
     if n <= 0:
       failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
     copyMem(bufferContents(dst), src, n)
 
-  proc copyToHostFromDeviceImpl*(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
     if n <= 0:
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, bufferContents(src), n)
 
-
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
@@ -181,7 +189,6 @@ when defined(macosx):
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(tgMem), objc.NSUInteger(0))
 
-
       var dctx = SerializationCtx(encoder: encoder)
       bindArgs(dctx, output, args, store, objc.ID, bkMetal)
       let gridSize = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
@@ -204,11 +211,11 @@ when defined(macosx):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
-# ═════════════════════════════════════════════════
-# ▸ Non-macOS entry point
-# ═════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Non-macOS entry point
+# ════════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")
-

@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - pipeline cache":
 
     test "same kernel, different input arrays (cache reuse)":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
@@ -53,15 +53,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr b[0], b.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 20
       check res[1] == 40
       check res[2] == 60
       check res[3] == 80
 
     test "re-ingest invalidates cached pipelines":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
@@ -77,8 +75,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       echo kernelTriple
       engine.launchKernel("tripleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == 3
       check res[1] == 6
       check res[2] == 9
@@ -87,7 +83,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "first pipeline creation is a cache miss and must not hang the error-scope callback":
       # Pipeline creation pops a validation error scope around
       # wgpuDeviceCreateComputePipeline, so a fresh engine exercises the miss path.
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelDouble)
       var res: array[4, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
@@ -96,8 +92,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res == [2'u32, 4, 6, 8]
 
 when isMainModule:

@@ -29,24 +29,22 @@ const chainMsl = metal:
 proc runTest() =
   suite "Metal - transitive builtin threading through device-fn chains":
     test "two-level chain forwards both builtins (kernel -> mid -> bump)":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(chainMsl)
       let oDev = engine.allocDevice(uint32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("chainKernel", oDev, ())
       var res: array[32, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 32)
-      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 
     test "kernel own ref and the chain share one attribute param":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(chainMsl)
       let oDev = engine.allocDevice(uint32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("directKernel", oDev, ())
       var res: array[32, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 32)
-      engine.freeDevice(oDev)
       for i in 0 ..< 32:
         check res[i] == uint32(i + 100)
 

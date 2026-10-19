@@ -107,7 +107,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== WebGPU execution ===\n"
 
   block:
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(basicWgsl)
 
     var a: array[1, uint32] = [13'u32]
@@ -122,7 +122,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDev = engine.allocDevice(uint32, out32.len)
     engine.launchKernel("basicKernel", oDev, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
-    engine.freeDevice(oDev)
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
     doAssert out32[0] == 18
@@ -147,7 +146,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDevB = engine.allocDevice(uint32, out32b.len)
     engine.launchKernel("structKernel", oDevB, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32b[0], oDevB, out32b.len)
-    engine.freeDevice(oDevB)
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
     doAssert out32b[0] == 10
@@ -172,9 +170,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     let oDevC = engine.allocDevice(uint32, out32c.len)
     engine.launchKernel("structKernel2", oDevC, (aDev, bDev))
     engine.copyToHostFromDevice(addr out32c[0], oDevC, out32c.len)
-    engine.freeDevice(aDev)
-    engine.freeDevice(bDev)
-    engine.freeDevice(oDevC)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17

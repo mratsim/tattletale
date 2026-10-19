@@ -17,7 +17,7 @@ proc blend(outP: ptr UncheckedArray[float32], a, b: int, alpha: float32) =
   outP[0] = float32(a * b) - alpha
 
 proc runTest() =
-  var engine = bkMetal.init()
+  var engine = bkMetal.newEngine()
 
   block groupedWithStatic:
     let dev = engine.allocDevice(float32, 1)
@@ -26,7 +26,6 @@ proc runTest() =
       blk = (1, 1)
     var host: float32
     engine.copyToHostFromDevice(addr host, dev, 1)
-    engine.freeDevice(dev)
     let expected = float32(3) * (float32(10 + 4) + 0.5'f32)
     doAssert host == expected,
       "mix: got " & $host & " want " & $expected
@@ -39,7 +38,6 @@ proc runTest() =
       blk = (1, 1)
     var host: float32
     engine.copyToHostFromDevice(addr host, dev, 1)
-    engine.freeDevice(dev)
     let expected = float32(6 * 7) - 2.25'f32
     doAssert host == expected,
       "blend: got " & $host & " want " & $expected

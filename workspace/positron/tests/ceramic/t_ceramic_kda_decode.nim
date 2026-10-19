@@ -461,8 +461,8 @@ proc runCrossCheck(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, dk, cas
   suiteLaunches += launches
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(CeramicDecodeMsl)
 
   proc secF16Baseline =

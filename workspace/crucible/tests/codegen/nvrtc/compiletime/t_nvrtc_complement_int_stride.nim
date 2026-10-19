@@ -38,12 +38,11 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       # The static value must be lowered so max(1, stride) resolves to 1 and the
       # kernel compiles. A regression causes engine.ingest() to abort below.
       var Buf: array[1, int32]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernelComplement)
       let oDev = engine.allocDevice(int32, Buf.len)
       engine.launchKernel<<(1, 1)>>("kComplement", oDev, ())
       engine.copyToHostFromDevice(addr Buf[0], oDev, Buf.len)
-      engine.freeDevice(oDev)
       check Buf[0] == 1
 
 when isMainModule:

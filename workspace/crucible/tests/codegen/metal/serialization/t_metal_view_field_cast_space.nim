@@ -36,7 +36,7 @@ const viewCastMsl = metal:
 proc runTest() =
   suite "Metal - address-space propagation through pointer casts":
     test "view base pointer arithmetic keeps the device address space":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(viewCastMsl)
       var A = [uint16(10), 20, 30, 40, 50, 60, 70, 80]
       let aDev = engine.allocDevice(uint16, A.len)
@@ -46,8 +46,6 @@ proc runTest() =
       # baseOff = 2 * strideRow + strideCol = 2 * 3 + 1 = 7
       engine.launchKernel("viewCastKernel", oDev, (aDev, int32(4), int32(3)))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(oDev)
       check res[0] == uint32(A[7])
 
 when isMainModule:

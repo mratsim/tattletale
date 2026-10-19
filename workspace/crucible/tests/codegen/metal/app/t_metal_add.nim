@@ -63,7 +63,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - add":
 
     test "addKernel: [10,20] + [1,2] = [11,22]":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(addMsl)
       var a: array[2, uint32] = [10'u32, 20'u32]
       var b: array[2, uint32] = [1'u32, 2'u32]
@@ -75,14 +75,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32[0] == 11
       check out32[1] == 22
 
     test "vec2AddKernel (external type + fn)":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(vec2Msl)
       var a: array[2, uint32] = [100'u32, 200'u32]
       var b: array[2, uint32] = [3'u32, 4'u32]
@@ -94,14 +91,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check out32[0] == 103
       check out32[1] == 204
 
     test "maxKernel (generic instantiation)":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(maxMsl)
       var a: array[1, uint32] = [42'u32]
       var b: array[1, uint32] = [17'u32]
@@ -113,9 +107,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("maxKernel", oDev, (aDev, bDev))
       var outVal: array[1, uint32]
       engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
-      engine.freeDevice(aDev)
-      engine.freeDevice(bDev)
-      engine.freeDevice(oDev)
       check outVal[0] == 42
 
 when isMainModule:

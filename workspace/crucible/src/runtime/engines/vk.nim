@@ -10,17 +10,16 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-import ../../codegen/ir/gpu_types
-import ../exec/vulkan_runtime
-import ./engines_common
-import ../errors
-import ../launch/launch_serialization
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/vulkan_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
-export vulkan_runtime
-
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+
 type
   VulkanCaches = object
     spirvCache: Table[string, seq[uint32]]
@@ -34,11 +33,7 @@ type
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     caches: VulkanCaches
 
-proc backendKind*(_: typedesc[VulkanEngine]): static BackendKind = bkVulkan
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
+template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
 
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = initVulkan()
@@ -46,9 +41,60 @@ proc newVulkanEngine*(): VulkanEngine =
     ctx: vctx,
     caches: VulkanCaches())
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+# ▸ PUBLIC API
+# ════════════════════════════════════════════════════════════════════════
+
+proc ingest*(engine: VulkanEngine, source: string) =
+  ## Stores the source, glslangValidator → SPIR-V, re-entrant.
+  if engine.spirv.len > 0:
+    when defined(debug):
+      echo "[INFO]: vulkan ingest: invalidating previous artifact"
+
+  # multi-kernel sources cannot address per-kernel scalars in the shared
+  # deduped push block, ingest quits loudly
+  if countKernels(source) > 1:
+    var inPush = false
+    for line in source.splitLines():
+      if "layout(push_constant" in line:
+        inPush = true
+      elif inPush and line.strip().startsWith("}"):
+        inPush = false
+      elif inPush:
+        let t = line.strip()
+        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
+          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
+                   "use one kernel per source when passing by-value scalars")
+
+  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
+  engine.caches.spirvCache.clear()
+  engine.source = source
+  engine.entryPoint = parseEntryPoint(source)
+  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
+  engine.shaderSquadron = parseShaderSquadron(source)
+
+proc getArtifact*(engine: VulkanEngine): string {.inline.} =
+  ## Ingested GLSL source, the ingest-if-differs identity
+  engine.source
+
+proc deviceName*(engine: VulkanEngine): string {.inline.} =
+  engine.ctx.deviceName(engine.ctx.physicalDevice)
+
+proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
+  ## Allocates len elements of T on the engine
+  DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) {.inline.} =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   vctx: VulkanContext
@@ -93,48 +139,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
-
-proc ingest*(engine: VulkanEngine, source: string) =
-  ## Stores the source, glslangValidator → SPIR-V, re-entrant.
-  if engine.spirv.len > 0:
-    when defined(debug):
-      echo "[INFO]: vulkan ingest: invalidating previous artifact"
-
-  # multi-kernel sources cannot address per-kernel scalars in the shared
-  # deduped push block, ingest quits loudly
-  if countKernels(source) > 1:
-    var inPush = false
-    for line in source.splitLines():
-      if "layout(push_constant" in line:
-        inPush = true
-      elif inPush and line.strip().startsWith("}"):
-        inPush = false
-      elif inPush:
-        let t = line.strip()
-        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
-          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
-                   "use one kernel per source when passing by-value scalars")
-
-  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
-  engine.caches.spirvCache.clear()
-  engine.source = source
-  engine.entryPoint = parseEntryPoint(source)
-  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
-  engine.shaderSquadron = parseShaderSquadron(source)
-
-proc getArtifact*(engine: VulkanEngine): string =
-  ## Ingested GLSL source, the ingest-if-differs identity
-  engine.source
-
-proc deviceName*(engine: VulkanEngine): string {.inline.} =
-  engine.ctx.deviceName(engine.ctx.physicalDevice)
-
-# ─────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
@@ -183,8 +190,7 @@ proc parseEntryPoint(glsl: string): string =
     name = "main"
   name
 
-
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
@@ -247,17 +253,13 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
 
-proc allocDeviceImpl*(engine: VulkanEngine, n: int): VulkanBuffer =
+proc allocDeviceImpl(engine: VulkanEngine, n: int): VulkanBuffer {.inline.} =
   engine.ctx.allocBuffer(n)
 
-proc freeDeviceImpl*(engine: VulkanEngine, h: VulkanBuffer) =
-  var h = h
-  h.dealloc(engine.ctx)
-
-proc copyToDeviceFromHostImpl*(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: VulkanEngine, dst: VulkanBuffer, src: pointer, n: int) =
   var dst = dst
   engine.ctx.writeBuffer(dst, src, n)
 
-proc copyToHostFromDeviceImpl*(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
   let res = readBuffer[byte](engine.ctx, src)
   copyMem(dst, res[0].addr, n)

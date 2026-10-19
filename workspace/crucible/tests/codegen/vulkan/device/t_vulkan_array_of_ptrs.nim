@@ -17,7 +17,7 @@ const kernelCode = vulkan:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block:
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelCode)
     let sDev = engine.allocDevice(uint32, 1)
     var devs = [engine.allocDevice(uint32, 4), engine.allocDevice(uint32, 4),
@@ -29,8 +29,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     var got: uint32
     engine.copyToHostFromDevice(addr got, sDev, 1)
     for i in 0 ..< 4:
-      engine.freeDevice(devs[i])
-    engine.freeDevice(sDev)
     doAssert got == 11'u32, &"ps[0][1] = ps[2][3] + 1: {got} != 11"
     echo "  OK — array of buffer references in the push constants"
 

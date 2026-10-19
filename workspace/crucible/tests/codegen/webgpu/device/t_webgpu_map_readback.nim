@@ -24,7 +24,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "WebGPU - staging-buffer map readback":
 
     test "multi-element uint32 output readback":
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(kernelCode)
       echo kernelCode
       var input = [1'u32, 2'u32, 3'u32, 4'u32]
@@ -34,8 +34,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       engine.copyToDeviceFromHost(iDev, addr input[0], input.len)
       engine.launchKernel("mapReadbackKernel", oDev, (iDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(iDev)
-      engine.freeDevice(oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

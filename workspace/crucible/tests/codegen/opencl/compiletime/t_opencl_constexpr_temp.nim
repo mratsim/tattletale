@@ -71,63 +71,57 @@ const kernelF = opencl:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "OpenCL - constexpr tuple init":
     test "Pattern A — constexpr tuple in let RHS":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelA)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testA", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern B — constexpr in arithmetic":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelB)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testB", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 128
 
     test "Pattern C — template wrapConst":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelC)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testC", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 1
 
     test "Pattern D — tuple bracket access":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelD)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testD", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 0
 
     test "Pattern E — block with constexpr temp":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelE)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testE", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 0
 
     test "Pattern F — constexpr tuple field access":
-      var engine = bkOpenCL.init()
+      var engine = bkOpenCL.newEngine()
       engine.ingest(kernelF)
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testF", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8
 
 when isMainModule:

@@ -36,14 +36,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - CuTe Layout + Tile":
     test "tileAt reads and dot products on the device":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelMsl)
       var res: array[6, uint32]
       let oDev = engine.allocDevice(uint32, 6)
       engine.copyToDeviceFromHost(oDev, addr res[0], 6)
       engine.launchKernel("cuteKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, 6)
-      engine.freeDevice(oDev)
       check res[0] == 10
       check res[1] == 20
       check res[2] == 60

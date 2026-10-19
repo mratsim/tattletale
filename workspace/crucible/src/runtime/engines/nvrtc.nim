@@ -6,18 +6,19 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/c_abi
+import workspace/crucible/src/abis/nvidia_abi
 
-import ../../codegen/ir/gpu_types
-import ../exec/cuda_runtime
-import ./engines_common
-import ../errors
-import ../launch/launch_serialization
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/cuda_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
+
 type
   NVRTC = object
     prog: nvrtcProgram
@@ -34,11 +35,7 @@ type
     ptx: string
     nvrtc: NVRTC
 
-proc backendKind*(_: typedesc[CudaEngine]): static BackendKind = bkCuda
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
+template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
@@ -52,9 +49,9 @@ proc newCudaEngine*(): CudaEngine =
   result = CudaEngine()
   result.nvrtc = initNvrtc()
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
@@ -63,7 +60,7 @@ proc ingest*(engine: CudaEngine, source: string) =
   engine.source = source
   engine.ptx = engine.nvrtc.ptx
 
-proc getArtifact*(engine: CudaEngine): string =
+proc getArtifact*(engine: CudaEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: CudaEngine): string {.inline.} =
@@ -71,11 +68,83 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
 
+proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] {.inline.} =
+  ## Allocates len elements of T on the engine
+  DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-# ─────────────────────────────────────────────────────────────────────────
+proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) {.inline.} =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ════════════════════════════════════════════════════════════════════════
+
+type SerializationCtx[n: static int] = object
+  addrs: array[n, pointer]
+  bytes: array[n, seq[byte]]
+
+proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
+  when T is ptr|pointer:
+    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
+  # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
+  const size = deviceLayout(T, bkCuda).size
+  ctx.bytes[argIdx] = newSeq[byte](size)
+  if size > 0:
+    var off = 0
+    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
+  ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
+
+proc cudaBindArgs(output: auto, args: tuple): auto =
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  result = SerializationCtx[n]()
+  bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
+
+proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
+  ## Runs `kernel` on the engine's GPU, loading the module on first use.
+  ## Usage:
+  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
+
+  check cuCtxSetCurrent(engine.nvrtc.context)
+  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
+    "CUDA cfg.grid dims must have every axis > 0, got " &
+    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
+  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
+    "CUDA block dims must have every axis > 0, got " &
+    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
+  if not engine.nvrtc.moduleLoaded:
+    engine.nvrtc.load()
+  check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
+
+  let dctx = cudaBindArgs(output, args)
+
+  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
+  check cuLaunchKernel(
+    engine.nvrtc.kernel,
+    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
+    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
+    uint32(cfg.sharedMem),
+    stream,
+    dctx.addrs[0].addr, nil)
+
+  check cuCtxSynchronize()
+
+proc allocDeviceImpl(engine: CudaEngine, n: int): CUdeviceptr {.inline.} =
+  check cuMemAlloc(result, csize_t(n))
+
+proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) {.inline.} =
+  check cuMemcpyHtoD(dst, src, csize_t(n))
+
+proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) {.inline.} =
+  check cuMemcpyDtoH(dst, src, csize_t(n))
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
-
+# ════════════════════════════════════════════════════════════════════════
 
 proc initNvrtc(): NVRTC =
   var
@@ -141,68 +210,3 @@ proc load(nvrtc: var NVRTC) =
     failLoud("Module load failed: " & $error_str)
 
   nvrtc.moduleLoaded = true
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
-
-type SerializationCtx[n: static int] = object
-  addrs: array[n, pointer]
-  bytes: array[n, seq[byte]]
-
-proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
-  when T is ptr|pointer:
-    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
-  const size = deviceLayout(T, bkCuda).size
-  ctx.bytes[argIdx] = newSeq[byte](size)
-  if size > 0:
-    var off = 0
-    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
-  ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
-
-proc cudaBindArgs(output: auto, args: tuple): auto =
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
-  result = SerializationCtx[n]()
-  bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
-
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
-  ## Runs `kernel` on the engine's GPU, loading the module on first use.
-  ## Usage:
-  ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
-
-  check cuCtxSetCurrent(engine.nvrtc.context)
-  doAssert cfg.grid.x > 0 and cfg.grid.y > 0 and cfg.grid.z > 0,
-    "CUDA cfg.grid dims must have every axis > 0, got " &
-    $cfg.grid.x & ", " & $cfg.grid.y & ", " & $cfg.grid.z
-  doAssert cfg.blk.x > 0 and cfg.blk.y > 0 and cfg.blk.z > 0,
-    "CUDA block dims must have every axis > 0, got " &
-    $cfg.blk.x & ", " & $cfg.blk.y & ", " & $cfg.blk.z
-  if not engine.nvrtc.moduleLoaded:
-    engine.nvrtc.load()
-  check cuModuleGetFunction(engine.nvrtc.kernel, engine.nvrtc.module, kernel)
-
-  let dctx = cudaBindArgs(output, args)
-
-  let stream = if cfg.stream == 0: CUstream(nil) else: cast[CUstream](cfg.stream)
-  check cuLaunchKernel(
-    engine.nvrtc.kernel,
-    uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z),
-    uint32(cfg.blk.x), uint32(cfg.blk.y), uint32(cfg.blk.z),
-    uint32(cfg.sharedMem),
-    stream,
-    dctx.addrs[0].addr, nil)
-
-  check cuCtxSynchronize()
-
-proc allocDeviceImpl*(engine: CudaEngine, n: int): CUdeviceptr =
-  check cuMemAlloc(result, csize_t(n))
-
-proc freeDeviceImpl*(engine: CudaEngine, h: CUdeviceptr) =
-  check cuMemFree(h)
-
-proc copyToDeviceFromHostImpl*(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) =
-  check cuMemcpyHtoD(dst, src, csize_t(n))
-
-proc copyToHostFromDeviceImpl*(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) =
-  check cuMemcpyDtoH(dst, src, csize_t(n))

@@ -27,14 +27,13 @@ const reductionWgsl = webgpu:
 proc runTest() =   # private, tests run in a proc so engines are destroyed at return
   when wgslSubgroupsExecutable:
     block: # reductionKernel: out = [acc(lane 1), v(lane 0), v(lane 0)]
-      var engine = bkWGSL.init()
+      var engine = bkWGSL.newEngine()
       engine.ingest(reductionWgsl)
 
       var res: array[3, float32]
       let oDev = engine.allocDevice(float32, res.len)
       engine.launchKernel("reductionKernel", oDev, ())
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-      engine.freeDevice(oDev)
 
       echo "  reductionKernel: output = [", res[0], ", ", res[1], ", ", res[2], "]"
       doAssert res[0] == 11.0'f32  # lane 0: shuffleDown gathers lane 1's acc
@@ -45,7 +44,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     echo "All reduction builtin execution tests passed"
   else:
     # Emission check: the WGSL is ingested and read back without dispatch.
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(reductionWgsl)
     discard engine.getArtifact()
     echo "  SKIP: WGSL subgroup execution unavailable, naga rejects enable subgroups (wgpu#5555)"

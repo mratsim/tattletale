@@ -240,8 +240,8 @@ proc runCase(engine: HwEngine; w: Weights; seed: uint64; tokens: int;
   echo &"[moe fwd decode {entry}] relaunch bit-identical, extent sentinels clean"
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(MoEFwdDecodeMsl)
   var w = buildWeights(0xC04D0610'u64)
   defer:

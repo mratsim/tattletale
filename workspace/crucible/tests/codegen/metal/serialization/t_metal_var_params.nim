@@ -37,7 +37,7 @@ const varParamMsl = metal:
 proc runTest() =
   suite "Metal - var T params":
     test "setPair + swap round-trip":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(varParamMsl)
       let msl = engine.getArtifact()
       # Unannotated locals emit no address-space qualifier: register (thread)
@@ -51,7 +51,6 @@ proc runTest() =
       engine.launchKernel("varParamKernel", oDev, ())
       var res: array[4, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 4)
-      engine.freeDevice(oDev)
       check res[0] == 10'u32
       check res[1] == 20'u32
       check res[2] == 2'u32

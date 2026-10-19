@@ -23,13 +23,12 @@ const fillMsl = metal:
 proc runTest() =
   suite "Metal - ptr UncheckedArray device fn":
     test "fillArray writes i + 10 into the kernel output buffer":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(fillMsl)
       let oDev = engine.allocDevice(uint32, 8)
       engine.launchKernel("fillKernel", oDev, ())
       var res: array[8, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 8)
-      engine.freeDevice(oDev)
       for i in 0 ..< 8:
         check res[i] == uint32(i + 10)
 

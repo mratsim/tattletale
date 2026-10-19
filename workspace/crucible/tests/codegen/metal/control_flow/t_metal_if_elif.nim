@@ -43,7 +43,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert elifMsl.find("else if ((x[0] == 1))") < elifMsl.find("else if ((x[0] == 2))")
       for v in ["output[0] = 10;", "output[0] = 20;", "output[0] = 30;", "output[0] = 40;"]:
         doAssert v in elifMsl
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(elifMsl)
       let xDev = engine.allocDevice(int32, 1)
       let oDev = engine.allocDevice(int32, 1)
@@ -68,15 +68,13 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("elifDispatch", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 40
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
 
     test "no else in source emits no else block":
       # The elif chain is emitted (`else if`), but no else-BLOCK: the source
       # has no `else`, so a spurious `else { }` must not appear.
       doAssert "else if ((x[0] == 1)) {" in noElseMsl
       doAssert "else {" notin noElseMsl
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(noElseMsl)
       let xDev = engine.allocDevice(int32, 1)
       let oDev = engine.allocDevice(int32, 1)
@@ -96,8 +94,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("elifNoElse", oDev, (xDev,))
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 99  # no branch matched: sentinel preserved
-      engine.freeDevice(xDev)
-      engine.freeDevice(oDev)
 
 when isMainModule:
   runTest()

@@ -24,13 +24,12 @@ const kernelMsl = metal:
 proc runTest() =
   suite "Metal - array types in proc signatures":
     test "a tuple-of-array param names without recursion":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelMsl)
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("repro", oDev, ())
       var res: array[1, int32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 8'i32
 
 when isMainModule:

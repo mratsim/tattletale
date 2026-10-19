@@ -24,13 +24,12 @@ const kernelMsl = metal:
 proc runTest() =
   suite "Metal - arithmetic array lengths":
     test "array[2 * 2, T] resolves its length in a pulled-in proc signature":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(kernelMsl)
       let oDev = engine.allocDevice(float32, 1)
       engine.launchKernel("repro", oDev, ())
       var res: array[1, float32]
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
-      engine.freeDevice(oDev)
       check res[0] == 3.0'f32
 
 when isMainModule:

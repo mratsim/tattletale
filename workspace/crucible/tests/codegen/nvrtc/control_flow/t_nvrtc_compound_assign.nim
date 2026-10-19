@@ -18,13 +18,12 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       # must READ the stored value and write the accumulation back, otherwise
       # the result would not depend on the initialization at all.
       var output: array[4, int32] = [10'i32, 11, 12, 13]
-      var engine = bkCuda.init()
+      var engine = bkCuda.newEngine()
       engine.ingest(kernel)
       let oDev = engine.allocDevice(int32, output.len)
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
       engine.launchKernel<<(1, 1)>>("compoundKernel", oDev, ())
       engine.copyToHostFromDevice(addr output[0], oDev, output.len)
-      engine.freeDevice(oDev)
       check output[0] == 30  # (10 + 5) * 2
       check output[1] == 32  # (11 + 5) * 2
       check output[2] == 34  # (12 + 5) * 2

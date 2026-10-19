@@ -56,7 +56,7 @@ const dedupSrc = opencl:
     scaleSwap[7, 5](outp, inp)
 
 proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
-  var engine = bkOpenCL.init()
+  var engine = bkOpenCL.newEngine()
   engine.ingest(dedupSrc)
   let outW = if outWidth < 0: width else: outWidth
   var inp = newSeq[float32](width)
@@ -68,8 +68,6 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
   let oDev = engine.allocDevice(float32, outW)
   engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
   engine.copyToHostFromDevice(addr outp[0], oDev, outW)
-  engine.freeDevice(iDev)
-  engine.freeDevice(oDev)
   result = outp
 
 proc runTest() =

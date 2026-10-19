@@ -26,25 +26,23 @@ const kernelCode2 = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "Vulkan - dummy-field initializers":
     test "single dummy struct const":
-      var engine = bkVulkan.init()
+      var engine = bkVulkan.newEngine()
       engine.ingest(kernelCode)
       echo kernelCode
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
       engine.copyToHostFromDevice(addr buf[0], oDev, 1)
-      engine.freeDevice(oDev)
       check buf[0] == 1
 
     test "tuple of dummy structs const":
-      var engine = bkVulkan.init()
+      var engine = bkVulkan.newEngine()
       engine.ingest(kernelCode2)
       echo kernelCode2
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
       engine.copyToHostFromDevice(addr buf[0], oDev, 1)
-      engine.freeDevice(oDev)
       check buf[0] == 1
 
 when isMainModule:

@@ -32,13 +32,12 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   echo "=== wgpu-native execution ===\n"
   block:
-    var engine = bkWGSL.init()
+    var engine = bkWGSL.newEngine()
     engine.ingest(kernelWgsl)
     var res: array[6, uint32]
     let oDev = engine.allocDevice(uint32, res.len)
     engine.launchKernel("cuteKernel", oDev, ())
     engine.copyToHostFromDevice(addr res[0], oDev, res.len)
-    engine.freeDevice(oDev)
     doAssert res[0]==10 and res[1]==20 and res[2]==60
     doAssert res[4]==21 and res[5]==61
     echo "  OK — CuTe Layout + Tile  (WebGPU)"

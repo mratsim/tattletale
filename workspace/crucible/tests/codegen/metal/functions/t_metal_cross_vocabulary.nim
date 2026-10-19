@@ -24,7 +24,7 @@ proc runTest() =
   suite "Metal - cross-vocabulary builtin aliases":
 
     test "CUDA idiom blockIdx + syncthreads lowers to canonical MSL and runs":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(crossVocabMsl)
       let msl = engine.getArtifact()
       check "threadgroup_position_in_grid.x" in msl
@@ -33,7 +33,6 @@ proc runTest() =
       engine.launchKernel<<(grid: (2, 1), blk: (64, 1))>>("crossVocabKernel", oDev, ())
       var res: array[128, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, 128)
-      engine.freeDevice(oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(63 - i)
       for i in 64 ..< 128:

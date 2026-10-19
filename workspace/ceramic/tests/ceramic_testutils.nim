@@ -11,10 +11,72 @@
 ## - `assertAllClose` for TensorView, element-wise tolerance check
 ##   with mismatch diagnostics
 
-import std/[macros, math]
+import std/[macros, math, random]
+import workspace/crucible
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
 import workspace/fp_conv/fp_conv
+
+# ═══════════════════════════════════════════════════════════════
+#  Randomness
+# ═══════════════════════════════════════════════════════════════
+
+proc seed*(rng: var Rand, x: SomeInteger) =
+  ## Re-seed a std/rand state, constantine-style method call
+  rng = initRand(int64(x))
+
+# ═══════════════════════════════════════════════════════════════
+#  Host and bridge tensors
+# ═══════════════════════════════════════════════════════════════
+
+type
+  HostTensor*[T, Sh, St] = object
+    data*: ptr UncheckedArray[T]
+    layout*: Layout[Sh, St]
+
+  BridgeTensor*[DevMem, Sh, St] = object
+    data*: DevMem
+    layout*: Layout[Sh, St]
+
+proc `=destroy`*[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
+  if ht.data != nil:
+    freeShared(ht.data)
+    ht.data = nil
+
+proc `=copy`*[T, Sh, St](dst: var HostTensor[T, Sh, St], src: HostTensor[T, Sh, St]) {.error: "HostTensor is move-only".}
+
+proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
+  let layout = make_layout(shape, strides)
+  let bytes = toInt(layout.cosize()) * sizeof(T)
+  HostTensor[T, typeof(shape), typeof(strides)](
+    data: cast[ptr UncheckedArray[T]](allocShared(bytes)),
+    layout: layout)
+
+template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
+  # Workaround `..` or Slice[T](...) not resolving T as a default value
+  Slice[T](a: T(start), b: T(stopIncl))
+
+proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[T](1, 2)): auto =
+  let layout = make_layout(shape, strides)
+  result = HostTensor[T, typeof(shape), typeof(strides)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    layout: layout)
+  for i in 0 ..< toInt(layout.cosize()):
+    when T is float32 or T is float64:
+      result.data[i] = rng.rand(bounds)
+    else:
+      result.data[i] = T.from(rng.rand(float32.from(bounds.a) .. float32.from(bounds.b)))
+
+func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
+  toInt(ht.layout.cosize())
+
+func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
+  TensorView[T, Sh, St](data: ht.data, layout: ht.layout)
+
+proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
+  let dev = engine.allocDevice(T, ht.len)
+  engine.copyToDeviceFromHost(dev, ht.data, ht.len)
+  BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
 
 # ═══════════════════════════════════════════════════════════════
 #  Tensor assertions
@@ -43,7 +105,6 @@ proc allClose*[T, ShA, StA, ShB, StB](
     rtol, abstol: float64): AllCloseReport =
   ## Element-wise closeness, |a - e| <= abstol + rtol*|e| per element,
   ## compared in float64, same shape required, strides may differ.
-  ## One compiled copy per pair of view types.
   let n = flatSize(actual.getLayout())
   doAssert n == flatSize(expected.getLayout()),
     "allClose: size mismatch, got " & $n &
@@ -51,7 +112,7 @@ proc allClose*[T, ShA, StA, ShB, StB](
   for i in 0 ..< n:
     let crd = idx2crd(actual.getLayout().shape, i)
     let a = toF64(actual.data[toInt crd2idx(actual.getLayout(), crd)])
-    let e = toF64(expected.data[toInt crd2idx(expected.getLayout(), crd)])
+    let e = toF64(expected.data[toInt crd2idx(expected.getLayout(), idx2crd(expected.getLayout().shape, i))])
     # NaN never matches, a NaN difference is not greater than any bound,
     # an infinite expected value must not inflate the relative bound
     var d = abs(a - e)

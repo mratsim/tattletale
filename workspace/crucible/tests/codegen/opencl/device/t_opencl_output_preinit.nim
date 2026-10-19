@@ -14,7 +14,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkOpenCL.init()
+    var engine = bkOpenCL.newEngine()
     engine.ingest(kernelCode)
 
     # Seed the output buffer on the host, then run in place twice:
@@ -30,7 +30,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     # Second run: the buffer holds 1 and the in-place kernel reads 1 and writes 2.
     engine.launchKernel("incInPlace", oDev, ())
     engine.copyToHostFromDevice(addr outBuf[0], oDev, 1)
-    engine.freeDevice(oDev)
     doAssert outBuf[0] == 2, "second run must see the previous output contents"
     echo "  OK"
 

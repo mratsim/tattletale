@@ -104,7 +104,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "positional binding: args bind in launch order":
       # hand-written kernels bind positionally, the launch tuple's order
       # is the signature
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(idxMsl)
       var inVal: array[1, int32] = [10'i32]
       let inDev = engine.allocDevice(int32, 1)
@@ -115,12 +115,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("idxReadKernel", oDev, (5'i32, inDev))
       var out32: array[2, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-      engine.freeDevice(inDev)
-      engine.freeDevice(oDev)
       check out32 == [5'i32, 10]
 
     test "a ptr-free struct binds as one chunk at the lowered field widths":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(gemmParamsMsl)
       let oDev = engine.allocDevice(int32, 6)
       var zero: array[6, int32] = [0'i32, 0, 0, 0, 0, 0]
@@ -131,12 +129,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("paramsReadKernel", oDev, (p,))
       var out32: array[6, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 6)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 5, 6]
 
     test "a struct with an alignment gap packs each field at its declared offset":
       # the MSL struct pads `big` to offset 16, the chunk must too
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(gapMsl)
       let oDev = engine.allocDevice(int32, 5)
       var zero: array[5, int32] = [0'i32, 0, 0, 0, 0]
@@ -145,11 +142,10 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.launchKernel("gapReadKernel", oDev, (g,))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 4, 2]
 
     test "mixed pointer, struct and int args bind per the declared signature":
-      var engine = bkMetal.init()
+      var engine = bkMetal.newEngine()
       engine.ingest(mixMsl)
       var inVal: array[1, int32] = [10'i32]
       let inDev = engine.allocDevice(int32, 1)
@@ -162,8 +158,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
                  (inDev, p, 7'i32))
       var out32: array[5, int32]
       engine.copyToHostFromDevice(addr out32[0], oDev, 5)
-      engine.freeDevice(inDev)
-      engine.freeDevice(oDev)
       check out32 == [1'i32, 2, 3, 7, 10]
 
 runTest()

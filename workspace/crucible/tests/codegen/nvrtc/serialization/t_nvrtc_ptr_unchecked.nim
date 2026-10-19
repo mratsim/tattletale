@@ -17,7 +17,7 @@ const kernelCode = cuda:
     addArrays(c, a, b, 8)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.init()
+  var engine = bkCuda.newEngine()
 
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
@@ -39,10 +39,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   let cDev = engine.allocDevice(uint32, c.len)
   engine.launchKernel<<(1, 1)>>("addKernel", cDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr c[0], cDev, c.len)
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(cDev)
-  engine.freeDevice(oDev)
   echo "  add:  ", c
   for i in 0..7: doAssert c[i] == uint32(i + i*10)
   echo "  OK (test_nvrtc_ptr_unchecked)"

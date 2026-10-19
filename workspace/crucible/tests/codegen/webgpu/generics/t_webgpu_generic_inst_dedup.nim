@@ -58,7 +58,7 @@ const dedupSrc = webgpu:
     scaleSwap[7, 5](outp, inp)
 
 proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
-  var engine = bkWGSL.init()
+  var engine = bkWGSL.newEngine()
   engine.ingest(dedupSrc)
   let outW = if outWidth < 0: width else: outWidth
   var inp = newSeq[float32](width)
@@ -70,8 +70,6 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
   engine.copyToDeviceFromHost(inpDev, addr inp[0], width)
   engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>(launcher, outDev, (inpDev,))
   engine.copyToHostFromDevice(addr outp[0], outDev, outW)
-  engine.freeDevice(inpDev)
-  engine.freeDevice(outDev)
   result = outp
 
 proc runTest() =

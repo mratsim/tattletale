@@ -24,7 +24,7 @@ proc axpy(y: AxpyView, alpha: float32, x: AxpyView) =
     y.p[i] = alpha * x.p[i] + y.p[i]
 
 proc runTest() =
-  var engine = bkOpenCL.init()
+  var engine = bkOpenCL.newEngine()
   const N = 7
   let xDev = engine.allocDevice(float32, N)
   let yDev = engine.allocDevice(float32, N)
@@ -43,8 +43,6 @@ proc runTest() =
 
   var got: array[N, float32]
   engine.copyToHostFromDevice(addr got[0], yDev, N)
-  engine.freeDevice(xDev)
-  engine.freeDevice(yDev)
   for i in 0 ..< N:
     let expected = 2.5'f32 * xHost[i] + yHost[i]
     doAssert got[i] == expected,

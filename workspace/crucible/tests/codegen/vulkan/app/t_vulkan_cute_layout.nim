@@ -35,13 +35,12 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   echo "=== Vulkan execution ===\n"
   block:
-    var engine = bkVulkan.init()
+    var engine = bkVulkan.newEngine()
     engine.ingest(kernelVk)
     let oDev = engine.allocDevice(uint32, 6)
     engine.launchKernel("cuteKernel", oDev, ())
     var res: array[6, uint32]
     engine.copyToHostFromDevice(addr res[0], oDev, 6)
-    engine.freeDevice(oDev)
     doAssert res[0]==10 and res[1]==20 and res[2]==60
     doAssert res[4]==21 and res[5]==61
     echo "  OK — CuTe Layout + Tile  (Vulkan)"

@@ -255,8 +255,8 @@ proc runCase(engine: HwEngine, dt: ScalarKind, Hv, Hk, hkRatio, B, T, chunkLen: 
 # ─── Main, the shape × dtype matrix ──────────────────────────────────
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(GdnPrefillMsl)
 
   proc secF16T8 =

@@ -20,7 +20,7 @@ const code = vulkan:
     discard
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  var engine = bkVulkan.init()
+  var engine = bkVulkan.newEngine()
   engine.ingest(code)
   echo "UNREACHABLE — object pointee refs must be rejected at compile time"
 

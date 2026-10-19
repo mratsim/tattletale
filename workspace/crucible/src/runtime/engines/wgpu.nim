@@ -9,17 +9,16 @@
 import std/[macros, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
-import ../../codegen/ir/gpu_types
-import ../exec/wgpu_runtime
-import ./engines_common
-import ../errors
-import ../launch/launch_serialization
 
-export wgpu_runtime
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/wgpu_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 type
   WgpuPipelineCache = object
@@ -37,11 +36,7 @@ type
     cache: WgpuCache
     shaderSquadron: Dim3
 
-proc backendKind*(_: typedesc[WgpuEngine]): static BackendKind = bkWGSL
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
+template backendKind*(_: typedesc[WgpuEngine]): BackendKind = bkWGSL
 
 proc `=destroy`(cache: var WgpuCache) =
   if cache.module != nil:
@@ -57,39 +52,9 @@ proc newWgpuEngine*(): WgpuEngine =
     cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
   )
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
-
-type SerializationCtx = object
-  handles: array[64, WGPUBuffer]
-  chunkOff, chunkLen: array[64, int]
-  blob: seq[byte]
-  pn: int
-
-proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
-  ctx.handles[argIdx] = v
-
-proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
-  when T is ptr|pointer:
-    static:
-      error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  ctx.pn = roundStepUp(ctx.pn, 256)
-  ctx.chunkOff[argIdx] = ctx.pn
-  const size = deviceLayout(T, bkWGSL).size
-  let padded = roundStepUp(size, 4)
-  ctx.chunkLen[argIdx] = padded
-  ctx.blob.setLen(ctx.pn + padded)
-  if size > 0:
-    var blob: array[size, byte]
-    var off = 0
-    blob.packFrom(off, v, bkWGSL)
-    copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
-  inc ctx.pn, padded
-
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 
 template check*(status: WGPUBufferMapAsyncStatus) =
   let code = status
@@ -122,15 +87,57 @@ proc ingest*(engine: WgpuEngine, source: string) =
   engine.source = source
   engine.shaderSquadron = parseShaderSquadron(source)
 
-proc getArtifact*(engine: WgpuEngine): string =
+proc getArtifact*(engine: WgpuEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: WgpuEngine): string {.inline.} =
   engine.ctx.deviceName()
 
-# ─────────────────────────────────────────────────────────────────────────
+proc allocDevice*[T](engine: WgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] {.inline.} =
+  ## Allocates len elements of T on the engine
+  DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+
+proc copyToDeviceFromHost*[T](engine: WgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
+  ## Copies n elements from host to device
+  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) {.inline.} =
+  ## Copies n elements from device to host
+  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+# ════════════════════════════════════════════════════════════════════════
+
+type SerializationCtx = object
+  handles: array[64, WGPUBuffer]
+  chunkOff, chunkLen: array[64, int]
+  blob: seq[byte]
+  pn: int
+
+proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
+  ctx.handles[argIdx] = v
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  when T is ptr|pointer:
+    static:
+      error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
+  ctx.pn = roundStepUp(ctx.pn, 256)
+  ctx.chunkOff[argIdx] = ctx.pn
+  const size = deviceLayout(T, bkWGSL).size
+  let padded = roundStepUp(size, 4)
+  ctx.chunkLen[argIdx] = padded
+  ctx.blob.setLen(ctx.pn + padded)
+  if size > 0:
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkWGSL)
+    copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
+  inc ctx.pn, padded
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
@@ -160,8 +167,7 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
   if result.y == 0: result.y = 1
   if result.z == 0: result.z = 1
 
-
-proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("WebGPU run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let device = engine.ctx.device
@@ -345,7 +351,7 @@ proc launchKernelImpl*(engine: WgpuEngine, kernel: string, output: auto, args: t
   if uncaptured.errType != wgpuErrorTypeNoError:
     failLoud("WebGPU uncaptured error: " & uncaptured.message)
 
-proc allocDeviceImpl*(engine: WgpuEngine, n: int): WGPUBuffer =
+proc allocDeviceImpl(engine: WgpuEngine, n: int): WGPUBuffer =
   let device = engine.ctx.device
   var desc = WGPUBufferDescriptor(
     usage: wgpuBufferUsageStorage or wgpuBufferUsageCopySrc or
@@ -356,13 +362,10 @@ proc allocDeviceImpl*(engine: WgpuEngine, n: int): WGPUBuffer =
   if result == nil:
     failLoud("WebGPU: failed to create a " & $n & "-byte device buffer")
 
-proc freeDeviceImpl*(engine: WgpuEngine, h: WGPUBuffer) =
-  wgpuBufferRelease(h)
-
-proc copyToDeviceFromHostImpl*(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) =
+proc copyToDeviceFromHostImpl(engine: WgpuEngine, dst: WGPUBuffer, src: pointer, n: int) {.inline.} =
   wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
 
-proc copyToHostFromDeviceImpl*(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: WgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
   var stagingDesc = WGPUBufferDescriptor(

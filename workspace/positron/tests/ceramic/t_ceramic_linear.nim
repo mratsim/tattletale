@@ -209,8 +209,8 @@ proc runCombo(engine: HwEngine; dt: ScalarKind, M, N, K, TileC, cases: int;
   suiteTotal += total
 
 proc main =
-  echo "device: ", bkMetal.init().deviceName()
-  var engine = bkMetal.init()
+  echo "device: ", bkMetal.newEngine().deviceName()
+  var engine = bkMetal.newEngine()
   engine.ingest(DenseLinearMsl)
   runCombo(engine, kBfloat16, 1, 128, 64, 64, 32, 0xC04D0511'u64, "gemv",
     "cer_dense_linear_bf16")
