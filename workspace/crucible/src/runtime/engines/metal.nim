@@ -17,6 +17,8 @@ import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
 # ════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
 # ════════════════════════════════════════════════════════════════════════
 type
@@ -33,6 +35,8 @@ type
     cache: MetalCache   # after ctx: released before the context destroy
 
 template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
+
+# ════════════════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
@@ -69,11 +73,9 @@ when defined(macosx):
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ PUBLIC API
-
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   proc ingest*(engine: MetalEngine, source: string) =
     objc.withMemPool:
       let opts = compileOptions()
@@ -107,11 +109,9 @@ when defined(macosx):
     ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ Launch serialization
-
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   type SerializationCtx = object
     encoder: objc.ID
 
@@ -129,20 +129,16 @@ when defined(macosx):
     discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
                     blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE constants
-
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   const
     MTLCommandBufferStatusCompleted = 4
     MTLCommandBufferStatusError = 5
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE run path
-
-  # ─────────────────────────────────────────────────────────────────────────
-
+  # ════════════════════════════════════════════════════════════════════════
   proc bufferContents(h: objc.ID): pointer =
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
@@ -214,6 +210,8 @@ when defined(macosx):
         if not objc.isNil(err):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
+
+# ════════════════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Non-macOS entry point
