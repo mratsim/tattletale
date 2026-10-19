@@ -144,9 +144,6 @@ proc runTest() =
     echo &"  gemm_tile Apple distinct-addend trial: ",
          (if pass: &"PASS worst |d| = {worst}" else: &"FAIL worst |d| = {worst}")
 
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(cDev)
   if not allOk: quit 1
 
 when isMainModule:

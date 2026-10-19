@@ -82,9 +82,6 @@ proc checkGemmRef[E: HwEngine, H](engine: E, M, N, K: int, launch: LaunchFn[E, H
     make_layout((M, N), (N, one)))
   gemm_ref(refTV, 1.0'f32, aTV, bTV, 0.0'f32, gotTV)
   assertAllClose(gotTV, refTV, rtol = 1e-5, abstol = 1e-3, msg = msg)
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(dDev)
 
 proc gemmBench*[E: HwEngine, H](engine: E, launch: LaunchFn[E, H], M, N, K: int, iters: int, text: string) =
   checkGemmRef(engine, 128, 128, 512, launch, text & " vs gemm_ref") # Correctness + warmup
@@ -115,6 +112,3 @@ proc gemmBench*[E: HwEngine, H](engine: E, launch: LaunchFn[E, H], M, N, K: int,
   let benchStop = getMonoTime()
   discard report(text & ": gemm", config, benchStart, benchStop, iters, flops)
 
-  engine.freeDevice(aDev)
-  engine.freeDevice(bDev)
-  engine.freeDevice(dDev)
