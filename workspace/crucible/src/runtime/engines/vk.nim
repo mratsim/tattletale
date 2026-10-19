@@ -10,11 +10,11 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-import ../../codegen/ir/gpu_types
-import ../errors
-import ../exec/vulkan_runtime
-import ../launch/launch_serialization
-import ./engines_common
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/vulkan_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types

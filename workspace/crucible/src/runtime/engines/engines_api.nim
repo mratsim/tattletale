@@ -7,9 +7,12 @@
 
 ## Engine API surface: the HwEngine concept, the backend dispatch, the engines' API re-exports.
 
-import
-  ./engines_common,
-  ./nvrtc, ./cl, ./vk, ./wgpu, ./metal
+import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/engines/nvrtc
+import workspace/crucible/src/runtime/engines/cl
+import workspace/crucible/src/runtime/engines/vk
+import workspace/crucible/src/runtime/engines/wgpu
+import workspace/crucible/src/runtime/engines/metal
 
 type
   HwEngine* = concept engine, type E

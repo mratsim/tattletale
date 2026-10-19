@@ -7,8 +7,8 @@
 
 import std/macros
 import std/typetraits
-import ../../codegen/ir/gpu_types
-import ../engines/engines_common
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/engines/engines_common
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Compile-time binding

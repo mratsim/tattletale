@@ -6,15 +6,15 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/[macros, hashes]
-import ../../codegen/gpu_compiler
-import ../engines/engines_api
-import ../engines/nvrtc
-import ../engines/cl
-import ../engines/vk
-import ../engines/wgpu
-import ../engines/metal
-import launch_kernel {.all.}
-import launch_serialization {.all.}
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/runtime/engines/engines_api
+import workspace/crucible/src/runtime/engines/nvrtc
+import workspace/crucible/src/runtime/engines/cl
+import workspace/crucible/src/runtime/engines/vk
+import workspace/crucible/src/runtime/engines/wgpu
+import workspace/crucible/src/runtime/engines/metal
+import workspace/crucible/src/runtime/launch/launch_kernel {.all.}
+import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Types

@@ -10,15 +10,15 @@
 ## and its allocator live in one scope like the stdlib's memalloc and seqs_v2,
 ## the release procs are private and never re-exported.
 
-import ../../codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_types
 export gpu_types.BackendKind
 
-import ../../abis/nvidia_abi
-import ../../abis/objc_abi as objc
-import ../../../vendor/wgpu
-import ../errors
-import ../exec/opencl_runtime
-import ../exec/vulkan_runtime
+import workspace/crucible/src/abis/nvidia_abi
+import workspace/crucible/src/abis/objc_abi as objc
+import workspace/crucible/vendor/wgpu
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/opencl_runtime
+import workspace/crucible/src/runtime/exec/vulkan_runtime
 
 type
   Dim3* = object

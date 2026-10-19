@@ -10,11 +10,11 @@ import std/[macros, tables]
 
 import workspace/crucible/src/abis/cl_abi
 
-import ../../codegen/ir/gpu_types
-import ../errors
-import ../exec/opencl_runtime
-import ../launch/launch_serialization
-import ./engines_common
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/opencl_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types

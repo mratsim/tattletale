@@ -10,11 +10,11 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/objc_abi as objc
 
-import ../../codegen/ir/gpu_types
-import ../errors
-import ../exec/metal_runtime
-import ../launch/launch_serialization
-import ./engines_common
+import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/runtime/errors
+import workspace/crucible/src/runtime/exec/metal_runtime
+import workspace/crucible/src/runtime/launch/launch_serialization
+import workspace/crucible/src/runtime/engines/engines_common
 
 # ════════════════════════════════════════════════════════════════════════
 # ▸ Types
