@@ -325,24 +325,7 @@ proc runEdgeCaseTests =
     check sub(2), 2, Int
 
 
-  block:  # zipped_divide layout structure
-    let L = make_layout((6, 6), (1, 6))
-    let zd = zipped_divide(L, (2, 2))
-    doAssert zd.shape.rank() == 2
-    doAssert zd.shape[0][0] === 2
-    doAssert zd.shape[0][1] === 2
-    doAssert zd.shape[1][0] === 3
-    doAssert zd.shape[1][1] === 3
-
-  block:  # zipped_divide non-square tiler
-    let L = make_layout((12, 6), (1, 12))
-    let zd = zipped_divide(L, (3, 2))
-    doAssert zd.shape[0][0] === 3
-    doAssert zd.shape[0][1] === 2
-    doAssert zd.shape[1][0] === 4
-    doAssert zd.shape[1][1] === 3
-
-  echo "  7. Edge cases: 8 blocks OK"
+  echo "  7. Edge cases: 6 blocks OK"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

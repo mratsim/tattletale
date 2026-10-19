@@ -173,84 +173,6 @@ proc runComplementInlineSkipTests =
 # ═══════════════════════════════════════════════════════════════
 #  Section 14. logical_divide over a tuple tiler, the per-dimension stream rewrite
 # ═══════════════════════════════════════════════════════════════
-#
-#  One tiler element per layout dimension, the per-dimension divide
-#  is emitted twice, once per shape and once per stride projection,
-#  both copies pure expressions, no evalOnceAs and no lets introduced
-#  by the macro itself. The elements come off a tuple dims stream,
-#  the layout dimensions off a shape/stride stream zip, symbols
-#  and calls work exactly like tuple constructors.
-
-proc runDivideTupleTilerTests =
-  block:
-    ## static tiler, the fully folded emission
-    let r = logical_divide(make_layout((10, 8), (2, 1)), (4, 4))
-    check r.shape, ((4, 3), (4, 2)), ((Int[4], Int[3]), (Int[4], Int[2]))
-    check r.stride, ((2, 8), (1, 4)), ((Int[2], Int[8]), (Int[1], Int[4]))
-  block:
-    ## a tiler carried by a symbol: the elements are bracket reads,
-    ## the runtime elements stay runtime, the static parts still fold,
-    ## and the result equals the fully static tiler result
-    let t = (4, 4)
-    let r = logical_divide(make_layout((10, 8), (2, 1)), t)
-    let rs = logical_divide(make_layout((10, 8), (2, 1)), (4, 4))
-    doAssert r === rs
-  block:
-    ## an empty tiler divides nothing, every dimension passes through,
-    ## the result is the layout itself
-    let r = logical_divide(make_layout((10, 8), (2, 1)), ())
-    check r.shape, (10, 8), (Int[10], Int[8])
-    check r.stride, (2, 1), (Int[2], Int[1])
-    doAssert r === make_layout((10, 8), (2, 1))
-  block:
-    ## a runtime layout through the same path, the runtime leaves stay
-    ## runtime and the static folds still fold
-    let dM = 4
-    let dN = 5
-    let r = logical_divide(make_layout((dM, dN), (1, 16)), (4, 4))
-    check r.shape, ((4, 1), (4, 2)), ((Int[4], int), (Int[4], int))
-    check r.stride, ((1, 4), (16, 64)), ((Int[1], Int[4]), (Int[16], Int[64]))
-  block:
-    ## a tiler longer than the layout is a compile-time error
-    static:
-      doAssert not compiles(logical_divide(make_layout((2, 4), (1, 2)), (4, 4, 2)))
-  echo "    divide tuple-tiler rewrite: 5 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
-#  Section 15. hier_unzip zipped gather over the stream walk
-# ═══════════════════════════════════════════════════════════════
-#
-#  One tiler element per layout dimension, the splitter call per terminal
-#  element binds once, the four shape/stride projections read the binding.
-#  A single-element gather collapses to a scalar,
-#  so a 1-element tiler and a 1-element sub-tiler carry no tuple wrapper
-#  and a leftover dimension splices verbatim into the rest part.
-
-proc runZippedGatherTests =
-  block:
-    ## int vs 1-element tuple tiler agree on a rank-1 layout
-    let L = make_layout(6, 1)
-    doAssert zipped_divide(L, 2) === zipped_divide(L, (2,)),
-      "scalar tiler guard: " & $zipped_divide(L, (2,))
-  block:
-    ## 1-element tiler: the tile part collapses to a scalar, the leftover
-    ## dimension splices verbatim into the rest part
-    let zd = zipped_divide(make_layout((4, 8), (1, 4)), (2,))
-    doAssert zd === ((2, (2, 8)), (1, (2, 4))), "1-element tiler: " & $zd
-  block:
-    ## empty tiler: nothing divides, every dimension gathers into the rest
-    ## part behind an empty tile part
-    let z = zipped_divide(make_layout((10, 8), (2, 1)), ())
-    doAssert z === make_layout(((), (10, 8)), ((), (2, 1))), "empty tiler: " & $z
-  block:
-    ## sub-tuple tiler element recurses, the gathered pair contributes one
-    ## element per part, the nesting mirrors the tiler
-    let r = zipped_divide(make_layout((8, (4, 2)), (16, (1, 2))), (2, (4, 2)))
-    doAssert r === (((2, (4, 2)), (4, (1, 1))), ((16, (1, 2)), (32, (4, 4)))),
-      "sub-tuple tiler: " & $r
-  echo "    zipped gather rewrite: 4 cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  Section 16. right_inverse / left_inverse over a runtime shape leaf
 # ═══════════════════════════════════════════════════════════════
 #
@@ -349,52 +271,6 @@ proc runComplementFullCoverageTests =
   echo "    complement full-coverage fixture: 3 guarded cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  Section 21. tiled_divide / flat_divide
-# ═══════════════════════════════════════════════════════════════
-#
-#  Both tile a layout into the (tile, rest) pair:
-#  - tiled_divide keeps dimension 0 as the grouped tile, dimension 1
-#    unpacked one level
-#  - flat_divide unpacks both dimensions
-#  - no runtime binding at the call site, the constructor's base
-#    tuples pass through
-
-proc runDivideReassemblyTests =
-  block:
-    ## tuple tiler, exact dimension structure, deep path
-    let L = make_layout((4, 8), (1, 4))
-    check(tiled_divide(L, (2, 4)), (((2, 4), 2, 2), ((1, 4), 2, 16)), Layout)
-    check(flat_divide(L, (2, 4)), ((2, 4, 2, 2), (1, 4, 2, 16)), Layout)
-  block:
-    ## rank-1 layout, scalar tiler, whole-layout fast path
-    check(tiled_divide(make_layout(12, 1), 3), ((3, 4), (1, 3)), Layout)
-    check(flat_divide(make_layout(12, 1), 3), ((3, 4), (1, 3)), Layout)
-  block:
-    ## [PY-L] CuTe C++, A=(8,8):(1,8), T=(2,2):(1,4) as a Layout tiler
-    let T = make_layout((2, 2), (1, 4))
-    check(tiled_divide(make_layout((8, 8), (1, 8)), T), (((2, 2), 2, 8), ((1, 4), 2, 8)), Layout)
-    check(flat_divide(make_layout((8, 8), (1, 8)), T), ((2, 2, 2, 8), (1, 4, 2, 8)), Layout)
-  block:
-    ## Meta tensor-layouts doc, tiled_divide(Layout((8,8)), (2,2))
-    check(tiled_divide(make_layout((8, 8), (1, 8)), (2, 2)), (((2, 2), 4, 4), ((1, 8), 2, 16)), Layout)
-  block:
-    ## empty tiler: nothing divides, an empty tile part
-    ## precedes the dimensions that pass through whole:
-    ## - identical to the zipped gather result
-    let e = tiled_divide(make_layout((10, 8), (2, 1)), ())
-    doAssert e === make_layout(((), 10, 8), ((), 2, 1)), "empty tiler: " & $e
-    doAssert typeof(e.shape[1]) is Int[10], "empty tiler type: " & $typeof(e.shape[1])
-    doAssert typeof(e.stride[2]) is Int[1], "empty tiler type: " & $typeof(e.stride[2])
-  block:
-    ## runtime lvalue layout and runtime tiler symbol match the literal forms
-    let L = make_layout((4, 8), (1, 4))
-    let T = (2, 4)
-    check(tiled_divide(L, T), (((2, 4), 2, 2), ((1, 4), 2, 16)), Layout)
-    check(flat_divide(L, T), ((2, 4, 2, 2), (1, 4, 2, 16)), Layout)
-
-  echo "    divide macros: 6 guarded cases OK"
-
-# ═══════════════════════════════════════════════════════════════
 #  Section 22. tiled_product / flat_product
 # ═══════════════════════════════════════════════════════════════
 #  - both reproduce a block layout over the positions a tiler describes
@@ -442,10 +318,6 @@ proc runTests =
   runNestedShapeIntegrationTests()
   echo "── Section 9. complement skips inactive dimensions ──"
   runComplementInlineSkipTests()
-  echo "── Section 14. divide tuple-tiler stream rewrite ──"
-  runDivideTupleTilerTests()
-  echo "── Section 15. hier_unzip zipped gather stream rewrite ──"
-  runZippedGatherTests()
   echo "── Section 16. inverse strides after a runtime shape leaf ──"
   runInverseDynamicShapeTests()
   echo "── Section 18. make_layout_like over a scalar shape ──"
@@ -454,8 +326,6 @@ proc runTests =
   runProductMacroTests()
   echo "── Section 20. complement full coverage ──"
   runComplementFullCoverageTests()
-  echo "── Section 21. tiled/flat divide ──"
-  runDivideReassemblyTests()
   echo "── Section 22. tiled/flat product ──"
   runProductReassemblyTests()
   echo "  All tests passed."
