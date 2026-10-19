@@ -4,6 +4,7 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
+{.experimental: "codeReordering".}
 import std/[strutils, tables]
 
 import ../../codegen/ir/gpu_types
@@ -37,36 +38,9 @@ template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 # ═════════════════════════════════════════════════
 
 when defined(macosx):
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ Launch serialization
-  # ─────────────────────────────────────────────────────────────────────────
-
-  type SerializationCtx = object
-    encoder: objc.ID
-
-  proc store(ctx: var SerializationCtx, v: objc.ID, argIdx: int) =
-    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
-                    v, objc.NSUInteger(0), objc.NSUInteger(argIdx))
-
-  proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
-    when T is ptr|pointer:
-      {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-    const size = deviceLayout(T, bkMetal).size
-    var blob: array[size, byte]
-    var off = 0
-    blob.packFrom(off, v, bkMetal)
-    discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
-                    blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ PRIVATE constants
-  # ─────────────────────────────────────────────────────────────────────────
-
-  const
-    ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
-    ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
-    MTLCommandBufferStatusCompleted = 4
-    MTLCommandBufferStatusError = 5
+  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
+  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ Constructors/destructors
@@ -93,33 +67,6 @@ when defined(macosx):
         ctx: newMetalCtx(),
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # ▸ PRIVATE run path
-  # ─────────────────────────────────────────────────────────────────────────
-
-  proc bufferContents(h: objc.ID): pointer =
-    result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
-    if result == nil:
-      failLoud("contents() returned nil for a shared buffer")
-
-  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID =
-    if n <= 0:
-      failLoud("allocDevice: size must be positive, got " & $n)
-    result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
-                          objc.NSUInteger(n), SharedUntrackedOptions)
-    if objc.isNil(result):
-      failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
-
-  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
-    if n <= 0:
-      failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
-    copyMem(bufferContents(dst), src, n)
-
-  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
-    if n <= 0:
-      failLoud("copyToHostFromDevice: n must be positive, got " & $n)
-    copyMem(dst, bufferContents(src), n)
 
   # ─────────────────────────────────────────────────────────────────────────
   # ▸ PUBLIC API
@@ -157,6 +104,64 @@ when defined(macosx):
   proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) =
     ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ Launch serialization
+  # ─────────────────────────────────────────────────────────────────────────
+
+  type SerializationCtx = object
+    encoder: objc.ID
+
+  proc store(ctx: var SerializationCtx, v: objc.ID, argIdx: int) =
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBuffer:offset:atIndex:"),
+                    v, objc.NSUInteger(0), objc.NSUInteger(argIdx))
+
+  proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+    when T is ptr|pointer:
+      {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
+    const size = deviceLayout(T, bkMetal).size
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkMetal)
+    discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
+                    blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PRIVATE constants
+  # ─────────────────────────────────────────────────────────────────────────
+
+  const
+    ## `MTLCommandBufferStatus` values (MTLCommandBuffer.h): 4 = completed,
+    ## 5 = error. `waitUntilCompleted` leaves the buffer in one of these.
+    MTLCommandBufferStatusCompleted = 4
+    MTLCommandBufferStatusError = 5
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ▸ PRIVATE run path
+  # ─────────────────────────────────────────────────────────────────────────
+
+  proc bufferContents(h: objc.ID): pointer =
+    result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
+    if result == nil:
+      failLoud("contents() returned nil for a shared buffer")
+
+  proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID =
+    if n <= 0:
+      failLoud("allocDevice: size must be positive, got " & $n)
+    result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
+                          objc.NSUInteger(n), SharedUntrackedOptions)
+    if objc.isNil(result):
+      failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
+
+  proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
+    if n <= 0:
+      failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
+    copyMem(bufferContents(dst), src, n)
+
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+    if n <= 0:
+      failLoud("copyToHostFromDevice: n must be positive, got " & $n)
+    copyMem(dst, bufferContents(src), n)
 
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
     ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.

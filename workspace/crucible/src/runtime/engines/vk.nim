@@ -16,9 +16,10 @@ import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════
 type
   VulkanCaches = object
     spirvCache: Table[string, seq[uint32]]
@@ -34,67 +35,10 @@ type
 
 template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
-
-proc newVulkanEngine*(): VulkanEngine =
-  let vctx = initVulkan()
-  VulkanEngine(
-    ctx: vctx,
-    caches: VulkanCaches())
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
-
-type SerializationCtx = object
-  vctx: VulkanContext
-  pushBuf: array[128, byte]
-  pn: int
-
-proc write8(ctx: var SerializationCtx, x: uint64) =
-  ctx.pn = roundStepUp(ctx.pn, 8)
-  if ctx.pn + 8 > 128:
-    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
-  copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
-  inc ctx.pn, 8
-
-proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
-  ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
-
-proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
-  when T is ptr|pointer:
-    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = deviceLayout(T, bkVulkan)
-  if lay.align > 1:
-    ctx.pn = roundStepUp(ctx.pn, lay.align)
-  if ctx.pn + lay.size > 128:
-    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
-  var blob: array[lay.size, byte]
-  var off = 0
-  when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
-    for f in fields(v):
-      when typeof(f) is DeviceMem:
-        off = roundStepUp(off, 8)
-        let a = deviceAddress(f.mem, ctx.vctx)
-        copyMem(blob[off].addr, a.unsafeAddr, 8)
-        inc off, 8
-      else:
-        blob.packFrom(off, f, bkVulkan)
-    off = roundStepUp(off, lay.align)
-    doAssert off == lay.size,
-      "host packing of " & $T & " does not match the device layout"
-  else:
-    blob.packFrom(off, v, bkVulkan)
-  if lay.size > 0:
-    copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
-  inc ctx.pn, lay.size
-
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════
 proc ingest*(engine: VulkanEngine, source: string) =
   ## Stores the source, glslangValidator → SPIR-V, re-entrant.
   if engine.spirv.len > 0:
@@ -141,10 +85,68 @@ proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer,
 proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) =
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
-# ─────────────────────────────────────────────────────────────────────────
-# ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
 
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+
+# ════════════════════════════════════════════════════════════════════════
+proc newVulkanEngine*(): VulkanEngine =
+  let vctx = initVulkan()
+  VulkanEngine(
+    ctx: vctx,
+    caches: VulkanCaches())
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+
+# ════════════════════════════════════════════════════════════════════════
+type SerializationCtx = object
+  vctx: VulkanContext
+  pushBuf: array[128, byte]
+  pn: int
+
+proc write8(ctx: var SerializationCtx, x: uint64) =
+  ctx.pn = roundStepUp(ctx.pn, 8)
+  if ctx.pn + 8 > 128:
+    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
+  inc ctx.pn, 8
+
+proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
+  ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  when T is ptr|pointer:
+    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
+  const lay = deviceLayout(T, bkVulkan)
+  if lay.align > 1:
+    ctx.pn = roundStepUp(ctx.pn, lay.align)
+  if ctx.pn + lay.size > 128:
+    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  var blob: array[lay.size, byte]
+  var off = 0
+  when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
+    for f in fields(v):
+      when typeof(f) is DeviceMem:
+        off = roundStepUp(off, 8)
+        let a = deviceAddress(f.mem, ctx.vctx)
+        copyMem(blob[off].addr, a.unsafeAddr, 8)
+        inc off, 8
+      else:
+        blob.packFrom(off, f, bkVulkan)
+    off = roundStepUp(off, lay.align)
+    doAssert off == lay.size,
+      "host packing of " & $T & " does not match the device layout"
+  else:
+    blob.packFrom(off, v, bkVulkan)
+  if lay.size > 0:
+    copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
+  inc ctx.pn, lay.size
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ PRIVATE
+
+# ════════════════════════════════════════════════════════════════════════
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
   ## `layout(local_size_x = 256, local_size_y = 8, local_size_z = 1) in;`

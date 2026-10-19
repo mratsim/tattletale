@@ -15,10 +15,10 @@ import ./engines_common
 import ../errors
 import ../launch/launch_serialization
 
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════
 type
   WgpuPipelineCache = object
     pipeline: WGPUComputePipeline
@@ -37,58 +37,10 @@ type
 
 template backendKind*(_: typedesc[WgpuEngine]): BackendKind = bkWGSL
 
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Constructors/destructors
-# ═════════════════════════════════════════════════════════════════════════
-
-proc `=destroy`(cache: var WgpuCache) =
-  if cache.module != nil:
-    wgpuShaderModuleRelease(cache.module)
-  for c in cache.pipelines.mvalues:
-    wgpuComputePipelineRelease(c.pipeline)
-    wgpuPipelineLayoutRelease(c.pipelineLayout)
-    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
-
-proc newWgpuEngine*(): WgpuEngine =
-  WgpuEngine(
-    ctx: initWgpu(),
-    cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
-  )
-
-# ═════════════════════════════════════════════════════════════════════════
-# ▸ Launch serialization
-# ═════════════════════════════════════════════════════════════════════════
-
-type SerializationCtx = object
-  handles: array[64, WGPUBuffer]
-  chunkOff, chunkLen: array[64, int]
-  blob: seq[byte]
-  pn: int
-
-proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
-  ctx.handles[argIdx] = v
-
-proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
-  when T is ptr|pointer:
-    static:
-      error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  ctx.pn = roundStepUp(ctx.pn, 256)
-  ctx.chunkOff[argIdx] = ctx.pn
-  const size = deviceLayout(T, bkWGSL).size
-  let padded = roundStepUp(size, 4)
-  ctx.chunkLen[argIdx] = padded
-  ctx.blob.setLen(ctx.pn + padded)
-  if size > 0:
-    var blob: array[size, byte]
-    var off = 0
-    blob.packFrom(off, v, bkWGSL)
-    copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
-  inc ctx.pn, padded
-
-# ═════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════
 template check*(status: WGPUBufferMapAsyncStatus) =
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
@@ -137,10 +89,59 @@ proc copyToDeviceFromHost*[T](engine: WgpuEngine, dst: DeviceMem[WGPUBuffer, T],
 proc copyToHostFromDevice*[T](engine: WgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) =
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
-# ─────────────────────────────────────────────────────────────────────────
-# ▸ PRIVATE
-# ─────────────────────────────────────────────────────────────────────────
 
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Constructors/destructors
+
+# ════════════════════════════════════════════════════════════════════════
+proc `=destroy`(cache: var WgpuCache) =
+  if cache.module != nil:
+    wgpuShaderModuleRelease(cache.module)
+  for c in cache.pipelines.mvalues:
+    wgpuComputePipelineRelease(c.pipeline)
+    wgpuPipelineLayoutRelease(c.pipelineLayout)
+    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
+
+proc newWgpuEngine*(): WgpuEngine =
+  WgpuEngine(
+    ctx: initWgpu(),
+    cache: WgpuCache(pipelines: initTable[(string, seq[int]), WgpuPipelineCache]())
+  )
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ Launch serialization
+
+# ════════════════════════════════════════════════════════════════════════
+type SerializationCtx = object
+  handles: array[64, WGPUBuffer]
+  chunkOff, chunkLen: array[64, int]
+  blob: seq[byte]
+  pn: int
+
+proc store(ctx: var SerializationCtx, v: WGPUBuffer, argIdx: int) =
+  ctx.handles[argIdx] = v
+
+proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+  when T is ptr|pointer:
+    static:
+      error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
+  ctx.pn = roundStepUp(ctx.pn, 256)
+  ctx.chunkOff[argIdx] = ctx.pn
+  const size = deviceLayout(T, bkWGSL).size
+  let padded = roundStepUp(size, 4)
+  ctx.chunkLen[argIdx] = padded
+  ctx.blob.setLen(ctx.pn + padded)
+  if size > 0:
+    var blob: array[size, byte]
+    var off = 0
+    blob.packFrom(off, v, bkWGSL)
+    copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
+  inc ctx.pn, padded
+
+# ════════════════════════════════════════════════════════════════════════
+# ▸ PRIVATE
+
+# ════════════════════════════════════════════════════════════════════════
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
   ## `@compute @workgroup_size(64, 8, 1)`, 1..3 literal args, missing default to 1.
