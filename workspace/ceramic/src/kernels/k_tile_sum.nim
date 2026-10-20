@@ -49,32 +49,31 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
     discard atomicFetchAdd(dst.data[0].addr, total)
 
 proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
-  ## Sums over the input axis: dst is shaped as src with the axis size 1,
-  ## one partial per kept coordinate.
+  ## Sum reduction over the input axis
   ##
   ## Args:
-  ## - dst: shaped as src with the axis size 1
+  ## - dst: shaped like src with the axis size 1, every slot receives its total
   ## - src: the source tensor
   ## - axis: the input axis summed over
   let thrID = thread_index_in_threadgroup
   let
-    red = src.getLayout().diceAxes(axis)
+    reduced = src.getLayout().diceAxes(axis)
     gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
-    
-  # Consecutive threads own consecutive strips
+  # Consecutive threads own consecutive strips, 32 reduced elements staged per step
   let threadStride = gridStride * getThreadCount()
   for g in countup(getLocalTileID(dst.shape) * getThreadCount() + thrID, dst.size() - 1, threadStride):
-    let crd = idx2crd(dst.shape, g)
-    let strip = make_view(src.displace(crd).data, red)
+    var crd = idx2crd(dst.shape, g)
     var acc = zero(src.T)
-    # per-thread staging tile, thread t owns slots 32t .. 32t+31
     var batch: tile(src.T, (32, 32))
-    let fullEnd = (red.size() div 32) * 32
+    let fullEnd = (reduced.size() div 32) * 32
     for i0 in countup(0, fullEnd - 1, 32):
       for e in 0 ..< 32:
-        batch((thrID, e)) = strip(i0 + e)
+        crd[axis] = i0 + e
+        batch((thrID, e)) = src[crd]
       for e in 0 ..< 32:
         acc += batch((thrID, e))
-    for i in fullEnd ..< red.size():
-      acc += strip(i)
+    for i in fullEnd ..< reduced.size():
+      crd[axis] = i
+      acc += src[crd]
+    crd[axis] = 0
     dst[crd] = acc

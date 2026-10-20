@@ -7,15 +7,15 @@ import mlx.core as mx
 
 # (shape, strides, axis, iters) per rank
 CASES2 = [
-    ((4096, 4096), (4096, 1), 1, 50),   # row-major, red stride 1
+    ((4096, 4096), (4096, 1), 1, 50),   # row-major, reduced stride 1
     ((4096, 4096), (1, 4096), 1, 50),   # column-major
-    ((4096, 4096), (8192, 1), 0, 50),   # red-axis skip
+    ((4096, 4096), (8192, 1), 0, 50),   # reduced-axis skip
     ((64, 64), (64, 1), 1, 200),        # small, launch bound
     ((16384, 16384), (16384, 1), 1, 20),  # large row-major
     ((4096, 4096), (8192, 2), 1, 20),   # gappy non-reduced plane
 ]
 CASES3 = [
-    ((256, 128, 512), (65536, 512, 1), 0, 20),   # row-major red stride 65536
+    ((256, 128, 512), (65536, 512, 1), 0, 20),   # row-major reduced stride 65536
     ((256, 128, 512), (65536, 1, 128), 1, 20),   # middle stride fastest
     ((256, 128, 512), (512, 131072, 1), 2, 20),  # middle stride slowest
     ((512, 512, 512), (262144, 512, 1), 0, 20),  # large row-major
