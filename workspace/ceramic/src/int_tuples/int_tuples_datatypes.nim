@@ -143,6 +143,15 @@ func round_step_up*(a, b: static int): static int {.inline.} =
   ## Static overload, both arguments fold at compile time.
   ceil_div(a, b) * b
 
+func round_step_down*(a, b: int): int {.inline.} =
+  ## Rounds a down to the previous multiple of b.
+  (a div b) * b
+
+func round_step_down*(a, b: static int): static int {.inline.} =
+  ## Rounds a down to the previous multiple of b.
+  ## Static overload, both arguments fold at compile time.
+  (a div b) * b
+
 func sign*(x: int): int {.inline.} =
   if x > 0: 1 elif x < 0: -1 else: 0
 
@@ -176,6 +185,7 @@ genBinOp(`max`)
 genBinOp(`min`)
 genBinOp(`ceil_div`)
 genBinOp(`round_step_up`)
+genBinOp(`round_step_down`)
 genBinOp(`gcd`)
 
 template `+=`*[V: static int](a: var int; b: Int[V]) = a += V

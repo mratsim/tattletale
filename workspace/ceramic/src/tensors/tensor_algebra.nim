@@ -8,9 +8,34 @@
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing
 import ./tensor_datatypes
+import std/macros
 
 export layout_indexing.slice, layout_indexing.dice
 export layout_indexing.sliceAxes, layout_indexing.diceAxes
+
+macro sliceAxes*[T, Sh, St](t: TensorOwned[T, Sh, St], axes: varargs[int]{lit|`const`}): untyped =
+  ## Sliced layout over the tensor's axes, the others keep their place.
+  result = bindSym"sliceAxes".newCall(newDotExpr(t, bindSym"getLayout"))
+  for a in axes:
+    result.add(a)
+
+macro sliceAxes*(tv: TensorView, axes: varargs[int]{lit|`const`}): untyped =
+  ## Sliced layout over the tensor's axes, the others keep their place.
+  result = bindSym"sliceAxes".newCall(newDotExpr(tv, newIdentNode("layout")))
+  for a in axes:
+    result.add(a)
+
+macro diceAxes*[T, Sh, St](t: TensorOwned[T, Sh, St], axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout over the picked axes alone, in the given order.
+  result = bindSym"diceAxes".newCall(newDotExpr(t, bindSym"getLayout"))
+  for a in axes:
+    result.add(a)
+
+macro diceAxes*(tv: TensorView, axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout over the picked axes alone, in the given order.
+  result = bindSym"diceAxes".newCall(newDotExpr(tv, newIdentNode("layout")))
+  for a in axes:
+    result.add(a)
 
 func logical_divide*[T, Sh, St](t: TensorOwned[T, Sh, St], tiler: Layout): auto {.inline.} =
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler))

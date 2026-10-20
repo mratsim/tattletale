@@ -15,7 +15,7 @@ import ./tiles
 
 proc sum*[T, Sh, St](src: Tile[T, Sh, St]): T {.inline.} =
   ## Full-tile sum, every lane holds the total.
-  let owned = src.size() div getThreadCount()
+  let owned = src.size() div getLaneWidth()
   var acc = zero(T)
   for i in 0 ..< owned:
     acc += src.data[i]

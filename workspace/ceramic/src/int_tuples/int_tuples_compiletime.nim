@@ -73,6 +73,11 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
       let a = t[1].intVal.int
       let b = t[2].intVal.int
       if b == 0: DynamicSentinel else: a.round_step_up(b)
+    elif t[0].eqIdent("round_step_down") and t.len == 3 and
+        t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
+      let a = t[1].intVal.int
+      let b = t[2].intVal.int
+      if b == 0: DynamicSentinel else: a.round_step_down(b)
     else:
       DynamicSentinel
   of nnkObjConstr:

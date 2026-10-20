@@ -173,6 +173,26 @@ func genAxisCases*[Sh: tuple](shapes: varargs[Sh]): seq[tuple[src, dst: tuple[sh
       skip3[k] *= 3
       orders.add(skip2)
       orders.add(skip3)
+    # Compact-permuted planes: kept modes stay row-major, summed axis moved outside.
+    # Memory stays dense but whether the slots form contiguous runs depends on the axis.
+    # The kernel cannot assume a fixed stride between slots here.
+    for axis in 0 ..< dims.len - 1:
+      var kept: seq[int]
+      for i in 0 ..< dims.len:
+        if i != axis:
+          kept.add(dims[i])
+      let keptRm = rowmajor(kept)
+      var sdims = newSeq[int](dims.len)
+      var k = 0
+      for i in 0 ..< dims.len:
+        if i != axis:
+          sdims[i] = keptRm[k]
+          k.inc
+      sdims[axis] = np div dims[axis]
+      orders.add(sdims)
+      var skip2 = sdims
+      skip2[axis] *= 2
+      orders.add(skip2)
     for sdims in orders:
       for axis in 0 ..< dims.len:
         var ddims = dims

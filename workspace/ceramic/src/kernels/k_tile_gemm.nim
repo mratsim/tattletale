@@ -46,10 +46,10 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
   let (_, kTiles) = aGeom.getTileGrid()
   let thrID = mma.getLocalThreadID()
 
-  if thrID < getThreadCount():
+  if thrID < getLaneWidth():
     let
       cSize = cGrid.size()
-      gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
+      gridStride = getGridSize()
     for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
       var rD: tile(D.T, cLayout)

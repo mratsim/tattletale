@@ -31,7 +31,7 @@ proc axpy*(y, x: distinct TensorView, alpha: float32) {.inline.} =
   let grid = tiled.getTileGrid()
   let
     cSize = grid.size()
-    gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
+    gridStride = getGridSize()
   for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
     let rx = tile(x.T).load(x, thrID, tileID)
     var ry = tile(y.T).load(y, thrID, tileID)

@@ -25,7 +25,7 @@ import ./tile_matmul
 #  Backend magic functions
 # ═══════════════════════════════════════════════════════════════
 
-template getThreadCount*: int =
+template getLaneWidth*: int =
   ## Returns the width of the lanes of one co-executing group
   ## as a compile-time constant, assuming the reference hardware.
   ## Pass the tile map explicitly with `tile(T, make_layout(...))` on other devices.
@@ -38,6 +38,10 @@ template getThreadCount*: int =
   elif ccGetBackend() == ctOpenCL: 32
   elif ccGetBackend() == ctVulkan: 32
   elif ccGetBackend() == ctWebGPU: 32
+
+template getGridSize*: int =
+  ## Returns the total number of threadgroups in the launch grid
+  threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z # gridsize-allow
 
 template getDefaultTileLayout*(T: typedesc): untyped =
   ## Returns the default register tile map
@@ -55,7 +59,7 @@ template getDefaultTileLayout*(T: typedesc): untyped =
   ##   an interleaved map costs chunk scalar loads per thread
   ## - a tile map is a thread->element assignment
   const chunk = max(1, 16 div sizeof(T))
-  make_layout((getThreadCount(), chunk), (chunk, 1))
+  make_layout((getLaneWidth(), chunk), (chunk, 1))
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile datatype

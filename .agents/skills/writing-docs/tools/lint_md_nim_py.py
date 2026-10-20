@@ -3609,7 +3609,11 @@ TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
 RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
 TOINT_CALL_RE = re.compile(r"(?<![\w.\"'`])toInt\s*\(")
 GRIDSTRIDE_RE = re.compile(r"threadgroups_per_grid\.")
+GRIDSIZE_PRODUCT_RE = re.compile(
+    r"threadgroups_per_grid\.\w+\s*\*\s*threadgroups_per_grid\.\w+")
 CEILDIV_CALL_RE = re.compile(r"(?<![\w.\"'`])ceil_div\s*\(")
+GETLAYOUT_CHAIN_RE = re.compile(
+    r"\.getLayout\(\)\s*\.\s*(stride|shape|sliceAxes|diceAxes)\b")
 CEILDIV_RE = re.compile(
     r"\(\s*([\w.()\[\]]+)\s*\+\s*([\w.()\[\]]+)\s*-\s*1\s*\)"
     r"\s*div\s*\2(?!\w)")
@@ -3752,6 +3756,12 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             findings.append(Finding(
                 path, i + 1, "ceil-div-method",
                 "ceil_div reads as a prefix call here, write a.ceil_div(b)"))
+        if GETLAYOUT_CHAIN_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "getlayout-chain",
+                ".getLayout().stride and .getLayout().shape chains are "
+                "banned, tensors expose shape and stride, call sliceAxes or "
+                "diceAxes on the tensor directly"))
         if GRIDSTRIDE_RE.search(code):
             joined, j = code, i + 1
             while (j < len(lines) and GRIDSTRIDE_RE.search(
@@ -3762,6 +3772,13 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
                 findings.append(Finding(
                     path, i + 1, "gridstride-one-line",
                     "the threadgroups product goes on a single line"))
+        if (GRIDSIZE_PRODUCT_RE.search(code)
+                and "gridsize-allow" not in raw
+                and "gridsize-allow" not in prev):
+            findings.append(Finding(
+                path, i + 1, "threadgroups-product",
+                "the threadgroups_per_grid component product is banned, "
+                "call getGridSize()"))
         if TUPLELEN_RE.search(code) and not allowed:
             findings.append(Finding(
                 path, i + 1, "tuplelen-rank",

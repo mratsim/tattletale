@@ -110,10 +110,12 @@ proc allClose*[T, ShA, StA, ShB, StB](
   doAssert n == flatSize(expected.getLayout()),
     "allClose: size mismatch, got " & $n &
     " want " & $flatSize(expected.getLayout())
+  let actualL = actual.getLayout()
+  let expectedL = expected.getLayout()
   for i in 0 ..< n:
-    let crd = idx2crd(actual.getLayout().shape, i)
-    let a = toF64(actual.data[toInt crd2idx(actual.getLayout(), crd)])
-    let e = toF64(expected.data[toInt crd2idx(expected.getLayout(), idx2crd(expected.getLayout().shape, i))])
+    let crd = idx2crd(actual.shape, i)
+    let a = toF64(actual.data[toInt crd2idx(actualL, crd)])
+    let e = toF64(expected.data[toInt crd2idx(expectedL, idx2crd(expected.shape, i))])
     # NaN never matches, a NaN difference is not greater than any bound,
     # an infinite expected value must not inflate the relative bound
     var d = abs(a - e)
