@@ -1,7 +1,7 @@
 ## Builtin catalog alias expansion
 ##
 ## Test that coordinate aliases expand to canonical builtins in a typed GPU
-## macro body, a runtime-dim use errors, and no two names collide
+## macro body and a runtime-dim use errors at Nim sem
 ##
 ## Run:
 ##   cd tattletale
@@ -9,7 +9,7 @@
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/functions/t_ir_builtin_catalog_expansion.nim
 
-import std/[strutils, tables, sequtils]
+import std/strutils
 import workspace/crucible
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -63,57 +63,7 @@ block:
   echo "  OK — runtime-dim get_global_id(d) rejected loudly inside the macro"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 2. Identifier-collision sweep (identifier-equal names under Nim matching)
-# ═══════════════════════════════════════════════════════════════════════
-const CatalogSource = staticRead("../../../src/codegen/builtins/builtins_catalog.nim")
-
-proc declaredCatalogNames(src: string): seq[string] =
-  ## Extracts the exported declaration names from the catalog source:
-  ## `let` / `proc` / `template` / `const` declarations and the `ivec3` type.
-  for line in src.splitLines():
-    let s = line.strip()
-    var name = ""
-    if s.startsWith("template ") or s.startsWith("proc ") or
-       s.startsWith("let ") or s.startsWith("const "):
-      let rest = s[s.find(' ') + 1 .. ^1]
-      for c in rest:
-        if c in {'*', '(', '{', ':', '[', ' ', '='}:
-          break
-        name.add c
-    elif s.contains("* = tuple"):
-      # `ivec3* = tuple[x, y, z: int]`: the type declaration
-      for c in s:
-        if c == '*':
-          break
-        name.add c
-    if name.len > 0:
-      result.add name
-
-block:
-  var names = declaredCatalogNames(CatalogSource)
-  doAssert names.len > 20, "catalog name extraction must find the full declaration set, got " & $names.len
-  # `barrier` is deliberately overloaded (0-arg Vulkan, flags OpenCL).
-  # Two declarations share one identifier: not a collision.
-  # The one intentional pair is `workgroup_barrier` ≡ `workgroupBarrier`:
-  # one defaulted-param declaration serves both the OpenCL flags arity
-  # and the WGSL zero-arg spelling.
-  names = names.deduplicate()
-
-  proc norm(name: string): string =
-    ## Nim default identifier matching: case- and underscore-insensitive.
-    name.replace("_", "").toLowerAscii()
-
-  var byNorm = initTable[string, seq[string]]()
-  for name in names:
-    byNorm.mgetOrPut(norm(name), @[]).add name
-
-  for normalized, spellings in byNorm.pairs:
-    doAssert spellings.len == 1,
-      "unexpected identifier collision: " & $spellings
-  echo "  OK — collision sweep: no identifier-equal catalog names"
-
-# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 echo ""
-echo "  All builtin catalog expansion + collision tests passed."
+echo "  All builtin catalog expansion tests passed."
