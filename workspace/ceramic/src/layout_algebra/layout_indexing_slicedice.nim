@@ -10,6 +10,7 @@ import std/macros
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layout_compiletime
 import workspace/ceramic/src/macros/varargs_to_par
 
 # ═══════════════════════════════════════════════════════════════
@@ -208,3 +209,45 @@ macro hasUnderscore*(Cs: varargs[typed]): bool =
   result = newLit(false)
   for i in 0 ..< Cs.len:
     result = newLit(result.boolVal or walkImpl(Cs[i]))
+
+# ═══════════════════════════════════════════════════════════════
+#  sliceAxes and diceAxes, reduction-axis selection by axis number
+# ═══════════════════════════════════════════════════════════════
+
+proc axesSelector(n: int, axes: seq[int], rest, axis: string): NimNode =
+  ## Per-mode selector: `axis` marker at the axes, `rest` marker elsewhere
+  result = nnkPar.newTree()
+  for i in 0 ..< n:
+    var isAxis = false
+    for a in axes:
+      if a == i:
+        isAxis = true
+    if isAxis:
+      result.add ident(axis)
+    else:
+      result.add ident(rest)
+
+macro sliceAxes*(target: Layout, axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout keeping every mode except `axes`.
+  ##
+  ##   sliceAxes(make_layout((2, 3, 4), (6, 2, 1)), 1)  ==  (2, 4):(6, 1)
+  var ax: seq[int]
+  for a in axes:
+    ax.add a.intVal.int
+  let sel = axesSelector(target.rank(), ax, "X", "Y")
+  result = bindSym"slice".newCall(target)
+  for e in sel:
+    result.add e
+
+macro diceAxes*(target: Layout, axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout of only the `axes` modes.
+  ##
+  ##   diceAxes(make_layout((2, 3, 4), (6, 2, 1)), 1)  ==  (3,):(2,)
+  var ax: seq[int]
+  for a in axes:
+    ax.add a.intVal.int
+  let sel = axesSelector(target.rank(), ax, "X", "Y")
+  result = bindSym"dice".newCall(target)
+  for e in sel:
+    result.add e
+

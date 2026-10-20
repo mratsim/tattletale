@@ -3608,9 +3608,14 @@ RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
 TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
 RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
 TOINT_CALL_RE = re.compile(r"(?<![\w.\"'`])toInt\s*\(")
+GRIDSTRIDE_RE = re.compile(r"threadgroups_per_grid\.")
+CEILDIV_CALL_RE = re.compile(r"(?<![\w.\"'`])ceil_div\s*\(")
+CEILDIV_RE = re.compile(
+    r"\(\s*([\w.()\[\]]+)\s*\+\s*([\w.()\[\]]+)\s*-\s*1\s*\)"
+    r"\s*div\s*\2(?!\w)")
 TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
 BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
-                      "int_tuples_datatypes.nim")
+                      "int_tuples_unsanctioned_helpers.nim")
 BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
                      "int_tuples_datatypes.nim")
 
@@ -3727,6 +3732,36 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
                 path, i + 1, "toint-comparison",
                 "toInt beside ==/=== bypasses the Int comparison "
                 "overloads, compare the Int directly or mark # toint-allow"))
+        if (TOINT_ANY_RE.search(code)
+                and not _rel(path).endswith(BLESSED_TOINT_FILE)):
+            findings.append(Finding(
+                path, i + 1, "toint-ban",
+                "toInt is banned outright, keep values as Int, the "
+                "selectors and crd2idx take Int directly"))
+        if re.search(r"int\s*\(\s*threadgroups", code):
+            findings.append(Finding(
+                path, i + 1, "int-threadgroups-cast",
+                "int(...) casts on threadgroups_per_grid are banned, "
+                "use the components directly"))
+        if CEILDIV_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "ceil-div-pattern",
+                "the (n + step - 1) div step spelling is banned, "
+                "write n.ceil_div(step) or round_step_up(n, step)"))
+        if CEILDIV_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "ceil-div-method",
+                "ceil_div reads as a prefix call here, write a.ceil_div(b)"))
+        if GRIDSTRIDE_RE.search(code):
+            joined, j = code, i + 1
+            while (j < len(lines) and GRIDSTRIDE_RE.search(
+                    _strip_comment(lines[j])[0])):
+                joined += " " + _strip_comment(lines[j])[0].strip()
+                j += 1
+            if not (".x" in joined and ".y" in joined and ".z" in joined):
+                findings.append(Finding(
+                    path, i + 1, "gridstride-one-line",
+                    "the threadgroups product goes on a single line"))
         if TUPLELEN_RE.search(code) and not allowed:
             findings.append(Finding(
                 path, i + 1, "tuplelen-rank",

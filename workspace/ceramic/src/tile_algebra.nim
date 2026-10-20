@@ -13,6 +13,7 @@ export builtins_gpu_types.float16, builtins_gpu_types.bfloat16
 
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/int_tuples/int_tuples_datatypes
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/int_tuples/int_tuples_transforms
 import workspace/ceramic/src/layout_algebra/layout_constructors
@@ -22,11 +23,12 @@ import workspace/ceramic/src/hardware/h_mma_configgen
 import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/tile_algebra/tiles
 import workspace/ceramic/src/tile_algebra/tile_loadstore
+import workspace/ceramic/src/tile_algebra/tile_reductions
 import workspace/ceramic/src/tile_algebra/tile_matmul
 
 export tensors.TensorOwned, tensors.TensorView
 export layouts_datatypes.size
-export tiles, tile_loadstore, tile_matmul
+export tiles, tile_loadstore, tile_reductions, tile_matmul
 
 # Whitelist: the symbols the tile templates' macro emissions resolve at the caller's scope
 export int_tuples_datatypes.Int
@@ -35,7 +37,7 @@ export int_tuples_transforms.flatten
 export int_tuples_datatypes.`+`, int_tuples_datatypes.`-`, int_tuples_datatypes.`*`
 export int_tuples_datatypes.`div`, int_tuples_datatypes.`mod`
 export int_tuples_datatypes.`==`
-export int_tuples_datatypes.toInt
+export int_tuples_unsanctioned_helpers.toInt
 export ism_coord_strides.CoordStride
 export ism_coord_strides.`*`, ism_coord_strides.`+`
 export layout_constructors.make_layout

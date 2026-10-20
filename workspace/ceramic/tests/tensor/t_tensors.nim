@@ -374,7 +374,7 @@ proc runDisplaceTests =
     var buf: array[100, float32]
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
-    let sub = displace(v, (3, 2))
+    let sub = v.displace((3, 2))
     doAssert sub.shape === (7, 8) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
     doAssert sub[1, 0] == 24.0'f32
@@ -384,7 +384,7 @@ proc runDisplaceTests =
     var buf: array[100, float32]
     for i in 0 ..< 100: buf[i] = i.float32
     let v = make_view(addr(buf[0]), make_layout((10, 10), (1, 10)))
-    let sub = displace(v, (0, 0))
+    let sub = v.displace((0, 0))
     doAssert sub.shape === (10, 10) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 0.0'f32
     doAssert sub[9, 9] == 99.0'f32
@@ -393,7 +393,7 @@ proc runDisplaceTests =
     var buf = newSeq[float32](100)
     for i in 0 ..< 100: buf[i] = i.float32
     let t = make_view(buf +% 0, make_layout((10, 10), (1, 10)))
-    let sub = displace(t, (3, 2))
+    let sub = t.displace((3, 2))
     doAssert sub.shape === (7, 8) and sub.stride === (1, 10)
     doAssert sub[0, 0] == 23.0'f32
 

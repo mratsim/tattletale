@@ -66,7 +66,7 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
   let
     gridX = rng.rand(1 .. 2 * ceil_div(rows, 32))
     gridY = rng.rand(1 .. 2 * ceil_div(cols, 32))
-  engine.launchDeviceFn sum_full((8, 4), gotDev, srcDev) do:
+  engine.launchDeviceFn sum(gotDev, srcDev) do:
     grid = (gridX, gridY)
     blk = (32, 1)
   var expect = makeHostTensor(float32, (1, 1), (1, 1))
@@ -85,7 +85,7 @@ proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int
   let
     gridX = rng.rand(1 .. 2 * ceil_div(rows, 32))
     gridY = rng.rand(1 .. 2 * ceil_div(cols, 32))
-  engine.launchDeviceFn sum_axis((8, 4), gotDev, srcDev) do:
+  engine.launchDeviceFn sum(gotDev, srcDev, 1) do:
     grid = (gridX, gridY)
     blk = (32, 1)
   var expect = makeHostTensor(float32, (rows, 1), (1, 1))
@@ -116,7 +116,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     var expectSum = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
     expectSum.data[0] = refSum(src.view())
     let sumDev = engine.bridge(sumGot)
-    engine.launchDeviceFn sum_full((2, 2, 2), sumDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
@@ -130,7 +130,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     var expectSum = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
     expectSum.data[0] = refSum(src.view())
     let sumDev = engine.bridge(sumGot)
-    engine.launchDeviceFn sum_full((2, 2, 2, 2), sumDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
@@ -155,7 +155,7 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
     var expectAxis = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
     refSum(expectAxis.view(), src.view(), 2)
     let axisDev = engine.bridge(axisGot)
-    engine.launchDeviceFn sum_axis((2, 2, 2), axisDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum(axisDev, engine.bridge(src), 2) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 4)
@@ -164,12 +164,12 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
   # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
   block:
     var src = rng.randomHostTensor( float32, (2, 2, 2, 50), (200, 100, 50, 1))
-    var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
+    var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (4, 2, 1, 1))
     let srcDev = engine.bridge(src)
-    var expectAxis = makeHostTensor(float32, (2, 2, 2, 1), (2, 2, 1, 1))
+    var expectAxis = makeHostTensor(float32, (2, 2, 2, 1), (4, 2, 1, 1))
     refSum(expectAxis.view(), src.view(), 3)
     let axisDev = engine.bridge(axisGot)
-    engine.launchDeviceFn sum_axis((2, 2, 2, 2), axisDev, engine.bridge(src)) do:
+    engine.launchDeviceFn sum(axisDev, engine.bridge(src), 3) do:
       grid = (1, 1)
       blk = (32, 1)
     engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 8)

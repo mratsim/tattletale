@@ -15,6 +15,31 @@ export layouts_unsanctioned_helpers
 export layouts_datatypes
 import ./ism_coord_strides
 
+# ═══════════════════════════════════════════════════════════════
+#  rank
+# ═══════════════════════════════════════════════════════════════
+
+func rank*(n: NimNode): int =
+  ## Number of top-level modes of a type or value node
+  ## - a bare Int[N] or int is rank 1
+  ## - a tuple has one mode per member
+  ## - a Layout[Sh, St] type ranks its shape
+  ## - an expression ranks its type
+  case n.kind
+  of nnkBracketExpr:
+    if n[0].kind == nnkSym and n[0].strVal == "Layout":
+      n[1].rank()
+    else:
+      1
+  of nnkTupleTy, nnkTupleConstr, nnkPar:
+    if n.len == 1 and n[0].kind in {nnkPar, nnkTupleTy, nnkTupleConstr}:
+      n[0].rank()
+    else:
+      n.len
+  else:
+    n.getTypeInst().rank()
+
+# ═══════════════════════════════════════════════════════════════
 #  hier_unzip, split a layout dimension by dimension, gather tiles and rest
 # ═══════════════════════════════════════════════════════════════
 
