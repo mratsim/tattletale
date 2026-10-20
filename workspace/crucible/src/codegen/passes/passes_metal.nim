@@ -73,6 +73,21 @@ proc hoistSmemVars(fn: var GpuAst) =
       kept.add stmt
   fn.pBody.statements = kept
 
+proc hasArgNamed(call: GpuAst, name: string): bool =
+  for a in call.cArgs:
+    if a.kind == gpuIdent and a.symbol.name == name:
+      return true
+  false
+
+proc markCalleeSmemParam(ctx: var GpuContext, cName: GpuAst, idx: int) =
+  ## Marks every table's copy, the tables can hold the same body under several keys.
+  for tab in [ctx.fnTab.addr, ctx.allFnTab.addr, ctx.genericInsts.addr]:
+    for fnKey, fn in tab[].pairs:
+      if fn.kind == gpuProc and fn.pName.symbol.iSym == cName.symbol.iSym:
+        if idx < fn.pParams.len:
+          fn.pParams[idx].addressSpace = asSMEM
+          stripSmemDerefs(fn)
+
 proc hasOwnSmemArena(fn: GpuAst, name: string): bool =
   for p in fn.pParams:
     if p.addressSpace == asSMEM and p.ident.symbol.name == name:
@@ -88,6 +103,76 @@ proc hasOwnSmemArena(fn: GpuAst, name: string): bool =
           return true
   false
 
+proc stripSmemDerefs(fn: GpuAst) =
+  ## `{.smem.}`-bound params are references and MSL rejects `(*ref)`.
+  var names: seq[string]
+  for p in fn.pParams:
+    if p.addressSpace == asSMEM:
+      names.add p.ident.symbol.name
+  if names.len == 0:
+    return
+  fn.pBody.walk(proc(n: var GpuAst) =
+    if n.kind == gpuDeref and n.dOf.kind == gpuIdent and
+        n.dOf.symbol != nil and n.dOf.symbol.name in names:
+      n = n.dOf)
+
+proc bindSmemCallSites(ctx: var GpuContext, fn: var GpuAst) =
+  ## Callers own the `{.smem.}` arena, the callee receives it as a threadgroup reference.
+  ## Kernel entries without an arena get one synthesized.
+  var calls: seq[GpuAst]
+  fn.pBody.walk(proc(n: var GpuAst) =
+    if n.kind == gpuCall:
+      calls.add n)
+  for call in calls:
+    for i, arg in call.cArgs.mpairs:
+      # A `var T` argument arrives as an implicit address-of, the arena
+      # name hides behind it. An array arena arrives as `stage[thrID]`.
+      let bare = if arg.kind == gpuAddr: arg.aOf else: arg
+      let isSmemArg = (bare.kind == gpuIdent and bare.symbol != nil and
+          hasOwnSmemArena(fn, bare.symbol.name)) or
+        (bare.kind == gpuIndex and bare.iArr.kind == gpuIdent and
+          bare.iArr.symbol != nil and hasOwnSmemArena(fn, bare.iArr.symbol.name))
+      if isSmemArg:
+        markCalleeSmemParam(ctx, call.cName, i)
+        # The bound param is a threadgroup reference, the call passes the lvalue.
+        call.cArgs[i] = bare
+    for pi, p in ctx.getFnParams(call.cName).pairs:
+      if p.addressSpace != asSMEM:
+        continue
+      # Hoisted params have no declared argument yet, a param already
+      # carrying its arena stays put.
+      if pi < call.cArgs.len:
+        continue
+      let pname = p.ident.symbol.name
+      if hasOwnSmemArena(fn, pname):
+        # The caller owns the arena, bind it by name.
+        let arg = newGpuIdent()
+        arg.symbol.name = pname
+        arg.symbol.typ = p.typ
+        call.cArgs.add(arg)
+      elif attGlobal in fn.pAttributes:
+        let arrType = p.typ.to
+        doAssert arrType.kind in {gtArray, gtObject, gtGenericInst},
+          "smem arena synthesis needs the hoisted type, got: " & $arrType.kind
+        let arena = GpuAst(kind: gpuVar)
+        arena.vName = newGpuIdent()
+        arena.vName.symbol.name = pname
+        arena.vName.symbol.typ = arrType
+        arena.vType = arrType
+        arena.addressSpace = asSMEM
+        arena.vInit = GpuAst(kind: gpuDiscard)
+        arena.vMutable = true
+        fn.pBody.statements.insert(arena, 0)
+        let arg = newGpuIdent()
+        arg.symbol.name = pname
+        arg.symbol.typ = p.typ
+        call.cArgs.add(arg)
+      else:
+        doAssert false, "device fn '" & $call.cName.symbol.iSym &
+          "' hoists its {.smem.} var '" & pname &
+          "' to a threadgroup param, the caller '" & $fn.pName.symbol.iSym &
+          "' must declare a matching {.smem.} var"
+
 proc smemArenaImpl(ctx: var GpuContext) =
   # Sweep 1: the tables share GpuAst refs, hoisting is idempotent.
   for fnKey in ctx.allFnTab.keys:
@@ -101,54 +186,26 @@ proc smemArenaImpl(ctx: var GpuContext) =
       fn.hoistSmemVars()
       ctx.genericInsts[fnKey] = fn
 
-  # Sweep 2: bind call sites.
+  # Sweep 2: bind call sites, each function once, the tables can hold
+  # the same body under several keys.
+  var done: seq[string]
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
-    if fn.kind != gpuProc:
-      continue
-    var calls: seq[GpuAst]
-    fn.pBody.walk(proc(n: var GpuAst) =
-      if n.kind == gpuCall:
-        calls.add n)
-    for call in calls:
-      for p in ctx.getFnParams(call.cName):
-        if p.addressSpace != asSMEM:
-          continue
-        let pname = p.ident.symbol.name
-        if hasOwnSmemArena(fn, pname):
-          # The caller owns the arena, bind it by name.
-          let arg = newGpuIdent()
-          arg.symbol.name = pname
-          arg.symbol.typ = p.typ
-          call.cArgs.add(arg)
-        elif attGlobal in fn.pAttributes:
-          let arrType = p.typ.to
-          doAssert arrType.kind in {gtArray, gtObject, gtGenericInst},
-            "smem arena synthesis needs the hoisted type, got: " & $arrType.kind
-          let arena = GpuAst(kind: gpuVar)
-          arena.vName = newGpuIdent()
-          arena.vName.symbol.name = pname
-          arena.vName.symbol.typ = arrType
-          arena.vType = arrType
-          arena.addressSpace = asSMEM
-          arena.vInit = GpuAst(kind: gpuDiscard)
-          arena.vMutable = true
-          fn.pBody.statements.insert(arena, 0)
-          let arg = newGpuIdent()
-          arg.symbol.name = pname
-          arg.symbol.typ = p.typ
-          call.cArgs.add(arg)
-        else:
-          doAssert false, "device fn '" & $call.cName.symbol.iSym &
-            "' hoists its {.smem.} var '" & pname &
-            "' to a threadgroup param, the caller '" & $fn.pName.symbol.iSym &
-            "' must declare a matching {.smem.} var"
-    if fn.pName.symbol.name.startsWith("foldKernel_bGL"):
-      var kinds = ""
-      for st in fn.pBody.statements:
-        kinds &= $st.kind & ","
-      echo "SMEMDBG pasend stmts=", fn.pBody.statements.len, " kinds=", kinds
-    ctx.allFnTab[fnKey] = fn
+    if fn.kind == gpuProc:
+      let key = fn.pName.symbol.iSym
+      if key notin done:
+        done.add key
+        bindSmemCallSites(ctx, fn)
+      ctx.allFnTab[fnKey] = fn
+  for fnKey in ctx.genericInsts.keys:
+    var fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      let key = fn.pName.symbol.iSym
+      if key notin done:
+        done.add key
+        bindSmemCallSites(ctx, fn)
+      ctx.genericInsts[fnKey] = fn
+
 
 # ═════════════════════════════════════════════════════════
 #  Coordinate-builtin param materialization

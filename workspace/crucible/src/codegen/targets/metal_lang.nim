@@ -240,10 +240,9 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   result = params.join(", ")
 
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
-  ## MSL parameter for a device function (non-kernel). Pointer params carry an address space:
-  ## `thread` for implicit `var T` params (locals), `device` for explicit `ptr T` params (kernel buffers).
-  ## Large passByRef structs are emitted `thread const T&`.
-  ## Such a reference binds thread-space values and temporaries, like a C++ const reference.
+  ## Pointer params carry an explicit MSL address space.
+  ## `thread` names the caller's locals, `device` names kernel buffers,
+  ## `threadgroup` names `{.smem.}` arenas.
   let name = p.ident.ident()
   checkReservedIdent(name, "parameter")
   if p.typ.kind == gtPtr:
@@ -323,10 +322,11 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     else:
       for p in ast.pParams:
         if p.passByRef:
-          # MSL requires an explicit address-space qualifier on reference params.
-          # The referenced struct lives in the calling thread's memory.
+          # Reference params carry the space of their argument: the caller's
+          # threadgroup arena or the calling thread's memory.
           checkReservedIdent(p.ident.ident(), "parameter")
-          params.add "thread const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
+          let space = if p.addressSpace == asSMEM: "threadgroup " else: "thread const "
+          params.add space & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
           params.add ctx.genDeviceParam(p)
     let fnArgs = params.join(", ")
