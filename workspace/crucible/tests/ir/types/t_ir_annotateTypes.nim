@@ -14,22 +14,10 @@ import workspace/crucible/src/codegen/passes/passes_preprocessing
 # 1. gpuTypeToDesc for primitive types
 # ═══════════════════════════════════════════════════════════════════════════
 block:
-  let int32 = GpuType(kind: gtInt32)
-  let desc = gpuTypeToDesc(int32)
-  doAssert desc.kind == tdkInt32, "Expected tdkInt32, got " & $desc.kind
-  echo "  OK — gtInt32 maps to tdkInt32"
-
-block:
-  let f64 = GpuType(kind: gtFloat64)
-  let desc = gpuTypeToDesc(f64)
-  doAssert desc.kind == tdkFloat64, "Expected tdkFloat64, got " & $desc.kind
-  echo "  OK — gtFloat64 maps to tdkFloat64"
-
-block:
-  let void = GpuType(kind: gtVoid)
-  let desc = gpuTypeToDesc(void)
-  doAssert desc.kind == tdkVoid, "Expected tdkVoid, got " & $desc.kind
-  echo "  OK — gtVoid maps to tdkVoid"
+  doAssert gpuTypeToDesc(GpuType(kind: gtInt32)).kind == tdkInt32
+  doAssert gpuTypeToDesc(GpuType(kind: gtFloat64)).kind == tdkFloat64
+  doAssert gpuTypeToDesc(GpuType(kind: gtVoid)).kind == tdkVoid
+  echo "  OK — primitive types map 1:1 to their tdk kinds"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. gpuTypeToDesc for pointer types
