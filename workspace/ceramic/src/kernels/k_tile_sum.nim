@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Tensor sums as device functions over the default register tile.
@@ -10,6 +10,8 @@
 ## - `sum(dst, src)`: one total for the whole tensor
 ## - `sum(dst, src, axis)`: sums over the input axis, dst shaped as
 ##   src with the axis size 1
+
+{.experimental: "codeReordering".}
 
 import std/typetraits
 import workspace/crucible
@@ -30,13 +32,16 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   let grid = tiled.getTileGrid()
   const owned = reg.size() div getThreadCount()
   var acc = zero(src.T)
-  # Replicate loop: every threadgroup folds the entire tile grid, so every
-  # threadgroup computes the same total and the lane-0 writes are idempotent.
-  # TODO: optimization, this has large memory traffic
+  # 1. Partial sums
+  #    Every threadgroup folds the entire tile grid into its lanes,
+  #    replication keeps the single-launch form correct, the two-pass
+  #    form at the bottom lifts it at scale.
   for tileID in 0 ..< grid.size():
     reg.loadTile(src, thrID, tileID)
     for i in 0 ..< owned:
       acc += reg.data[i]
+  # 2. Epilogue
+  #    Butterfly across the lanes, lane 0 banks the total.
   let total = reduceAdd(acc)
   if thrID == 0:
     dst.data[0] = total
