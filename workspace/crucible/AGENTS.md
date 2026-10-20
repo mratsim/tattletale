@@ -88,7 +88,11 @@ Exception: tests for backends not supported in the current environment. For thos
 
 ### What counts as a test
 
-A test drives code whose output can differ from its input.
+A test exercises compiler functionality: an AST transformation, an emission, a runtime result.
+
+Hand-built AST fed to an internal accessor with the expected kind
+hardcoded asserts the type of the test, not the compiler.
+
 In scope: passes, rewrites, folds, lowerings, codegen.
 The assertion targets the delta between input and output.
 
