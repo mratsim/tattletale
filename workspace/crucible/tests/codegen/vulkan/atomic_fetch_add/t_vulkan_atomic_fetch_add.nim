@@ -51,6 +51,11 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.ingest(addFpSameVk)
       let cDev = engine.allocDevice(float32, 1)
       let oDev = engine.allocDevice(float32, 32)
+      # vkAllocateMemory contents are undefined, initialize the buffers
+      var zeroF: array[1, float32]
+      var zerosF: array[32, float32]
+      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
+      engine.copyToDeviceFromHost(oDev, addr zerosF[0], 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addFpSame", cDev.mem, (oDev.mem, ()))
       var old: array[32, float32]
       engine.copyToHostFromDevice(addr old[0], oDev, 32)
@@ -67,16 +72,31 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.newEngine()
       engine.ingest(addFpVk)
       let cDev = engine.allocDevice(float32, 1)
-      engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addFp", cDev.mem, ())
+      let oDev = engine.allocDevice(float32, 32)
+      # vkAllocateMemory contents are undefined, initialize the buffers
+      var zeroF: array[1, float32]
+      var zerosF: array[32, float32]
+      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
+      engine.copyToDeviceFromHost(oDev, addr zerosF[0], 32)
+      engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addFp", cDev.mem, (oDev.mem, ()))
+      var old: array[32, float32]
+      engine.copyToHostFromDevice(addr old[0], oDev, 32)
       var counter: array[1, float32]
       engine.copyToHostFromDevice(addr counter[0], cDev, 1)
       # sum of lanes 0..31 = 496, exact in fp32 and order-independent
+      # distinct adds make the per-lane old values order-dependent,
+      # bounded by the exact sum
+      for lane in 0 ..< 32:
+        check old[lane] >= 0.0 and old[lane] <= 496.0
       check counter[0] == 496.0
 
     test "int: 32 lanes increment, counter ends at 32":
       var engine = bkVulkan.newEngine()
       engine.ingest(addIntVk)
       let cDev = engine.allocDevice(int32, 1)
+      # vkAllocateMemory contents are undefined, initialize the counter
+      var zeroI: array[1, int32]
+      engine.copyToDeviceFromHost(cDev, addr zeroI[0], 1)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addInt", cDev.mem, ())
       var counter: array[1, int32]
       engine.copyToHostFromDevice(addr counter[0], cDev, 1)
@@ -86,6 +106,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = bkVulkan.newEngine()
       engine.ingest(addMultiTgVk)
       let cDev = engine.allocDevice(float32, 1)
+      # vkAllocateMemory contents are undefined, initialize the counter
+      var zeroF: array[1, float32]
+      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
       engine.launchKernel<<(grid: (4, 1), blk: (32, 1))>>("addMultiTg", cDev.mem, ())
       var counter: array[1, float32]
       engine.copyToHostFromDevice(addr counter[0], cDev, 1)
