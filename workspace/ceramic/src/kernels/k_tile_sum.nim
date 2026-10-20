@@ -24,27 +24,29 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   ## Computes sum at dst[0]
   ##
   ## Args:
-  ## - dst: a one-slot tensor for the total
+  ## - dst: a one-slot tensor for the total, must be zero-initialized,
+  ##   the accumulation is atomic
   ## - src: the source tensor
   let thrID = thread_index_in_threadgroup
   var reg: tile(src.T)
   let tiled = make_layout(src.size()).logical_divide(reg.getLayout())
-  let grid = tiled.getTileGrid()
+  let axisTiles = tiled.getTileGrid().size()
+  let gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
   const owned = reg.size() div getThreadCount()
   var acc = zero(src.T)
   # 1. Partial sums
-  #    Every threadgroup folds the entire tile grid into its lanes,
-  #    replication keeps the single-launch form correct, the two-pass
-  #    form at the bottom lifts it at scale.
-  for tileID in 0 ..< grid.size():
+  #    Each threadgroup folds its grid-stride strip of the tile grid,
+  #    one launch covers any launch grid size.
+  for tileID in countup(getLocalTileID(src.shape), axisTiles - 1, gridStride):
     reg.loadTile(src, thrID, tileID)
     for i in 0 ..< owned:
       acc += reg.data[i]
   # 2. Epilogue
-  #    Butterfly across the lanes, lane 0 banks the total.
+  #    Butterfly across the lanes, the threadgroup leader banks
+  #    its strip total with one atomic add.
   let total = reduceAdd(acc)
   if thrID == 0:
-    dst.data[0] = total
+    discard atomicFetchAdd(dst.data[0].addr, total)
 
 proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
   ## Sums over the input axis: dst is shaped as src with the axis size 1,
