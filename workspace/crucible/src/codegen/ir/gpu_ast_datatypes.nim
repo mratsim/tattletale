@@ -271,6 +271,10 @@ type
     gbkReduceAdd,         ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
     gbkReduceMax          ## Canonical `reduceMax`: cross-lane max, broadcast to all lanes
 
+  GpuAtomicsBuiltinKind* = enum
+    gbkNone,              ## Not an atomics builtin
+    gbkAtomicFetchAdd     ## Canonical `atomicFetchAdd`: atomic add through a device pointer
+
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
     iSym*: string       ## IMMUTABLE fingerprint -- used as FnTable key (stays forever)
@@ -279,6 +283,7 @@ type
     coordBuiltin*: GpuCoordBuiltinKind ## Coordinate builtin kind -> gbkNone when not a coordinate
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
+    atomicsBuiltin*: GpuAtomicsBuiltinKind ## Atomics builtin kind -> gbkNone when not an atomic intrinsic
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -427,6 +432,11 @@ let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBu
   "reduceMax": gbkReduceMax,
 }.toTable()
 
+## Canonical atomics intrinsic name -> IR kind, resolved at the builtin marking like the other canonical name tables.
+let GpuAtomicsBuiltinKindByName* {.compileTime.}: Table[string, GpuAtomicsBuiltinKind] = {
+  "atomicFetchAdd": gbkAtomicFetchAdd,
+}.toTable()
+
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
   ## Returns the IR kind of a canonical coordinate name. Unmapped names
   ## (printf, cvtaGenericToShared, shadowing locals) resolve to `gbkNone`.
@@ -441,6 +451,11 @@ proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
   ## Returns the IR kind of a canonical reduction intrinsic name.
   ## Unmapped names resolve to `gbkNone`.
   GpuReductionBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
+  ## Returns the IR kind of a canonical atomics intrinsic name.
+  ## Unmapped names resolve to `gbkNone`.
+  GpuAtomicsBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
@@ -850,6 +865,7 @@ proc pretty*(t: GpuType): string =
       result = "Invalid"
     else:
       result = ($t.kind).removePrefix("gt")
+
 proc pretty*(n: GpuAst, indent: int = 0): string =
   template id(): untyped = repeat(" ", indent)
   template idn(x): untyped = repeat(" ", indent) & $x
@@ -1157,54 +1173,12 @@ func isLargeStruct*(t: GpuType): bool =
   else:
     result = false
 
-proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
-  ## Look up the parameters of a function by its identifier.
-  ## Phase 3: checks fnTable first, then falls back to old tables.
-  let key = fn.symbol.iSym
-  if key in ctx.fnTable:
-    let entry = ctx.fnTable[key]
-    if not entry.body.isNil and entry.body.kind == gpuProc:
-      result = entry.body.pParams
-    else:
-      result = @[]
-  elif fn in ctx.allFnTab:
-    result = ctx.allFnTab[fn].pParams
-  elif fn in ctx.fnTab:
-    result = ctx.fnTab[fn].pParams
-  elif fn in ctx.genericInsts:
-    result = ctx.genericInsts[fn].pParams
-  elif fn in ctx.builtinFns:
-    result = ctx.builtinFns[fn].pParams
-  elif fn in ctx.processedProcs:
-    result = ctx.processedProcs[fn].params
 proc ident*(n: GpuAst): string =
   ## Returns the associated identifier (string) of the given symbol. The input
   ## must be a `gpuIdent`
   doAssert n.kind == gpuIdent, "The input is not a `gpuIdent`, but a " & $n.kind
   result = n.symbol.name
 
-proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
-  ## Look up the return type of a function by its identifier.
-  ## Phase 3: checks fnTable first, then falls back to old tables.
-  let key = fn.symbol.iSym
-  if key in ctx.fnTable:
-    let entry = ctx.fnTable[key]
-    if not entry.body.isNil and entry.body.kind == gpuProc:
-      result = entry.body.pRetType
-    else:
-      result = GpuType(kind: gtVoid)
-  elif fn in ctx.allFnTab:
-    result = ctx.allFnTab[fn].pRetType
-  elif fn in ctx.fnTab:
-    result = ctx.fnTab[fn].pRetType
-  elif fn in ctx.genericInsts:
-    result = ctx.genericInsts[fn].pRetType
-  elif fn in ctx.builtinFns:
-    result = ctx.builtinFns[fn].pRetType
-  elif fn in ctx.processedProcs:
-    result = ctx.processedProcs[fn].retType
-  else:
-    raiseAssert "Function not found: " & $fn & " (name=" & fn.ident() & ")"
 
 template withoutSemicolon*(ctx: var GpuContext, body: untyped): untyped =
   if not ctx.skipSemicolon: # if we are already skipping, leave true

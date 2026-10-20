@@ -11,7 +11,7 @@
 
 import std/[macros, strutils]
 import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
 # Helper: count nodes matching a predicate (avoid sequtils generics)

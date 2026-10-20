@@ -6,7 +6,7 @@
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_insertPointerDeref.nim
 
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
 
 # Pass impls run at compile time, getExprType raises through the `error` macro.

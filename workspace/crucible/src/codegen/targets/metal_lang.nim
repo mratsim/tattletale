@@ -9,7 +9,8 @@
 
 import std / [macros, strformat, strutils, sequtils, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
 
@@ -443,10 +444,24 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       of gbkReduceMax:
         result = indentStr & "simd_max(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
       of gbkNone:
-        var args: seq[string]
-        for a in ast.cArgs:
-          args.add ctx.genMetalImpl(a, 0)
-        result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
+        case ast.cName.symbol.atomicsBuiltin
+        of gbkAtomicFetchAdd:
+          # MSL atomics act on `atomic_*` pointees: cast the raw device
+          # pointer at the call site. The only permitted order is relaxed.
+          # fp32 needs Metal 3+ (__HAVE_ATOMIC_FLOAT__).
+          let atomicTy = case getPointeeKind(getAstType(ast.cArgs[0]))
+                         of gtFloat32: "atomic_float"
+                         of gtInt32: "atomic_int"
+                         of gtUint32: "atomic_uint"
+                         else: raiseAssert "Metal atomicFetchAdd: unsupported pointee type"
+          result = indentStr & "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
+                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                   ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
+        of gbkNone:
+          var args: seq[string]
+          for a in ast.cArgs:
+            args.add ctx.genMetalImpl(a, 0)
+          result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:
@@ -609,6 +624,7 @@ proc codegen*(ctx: var GpuContext): string =
   # pointer fields before any emission needs them.
   pp.collectValueAddressSpaces(ctx)
   result.add "#include <metal_stdlib>\n"
+  result.add "#include <metal_atomic>\n"
   result.add "using namespace metal;\n\n"
 
   # 1. generate code for the global blocks (types, global vars etc).

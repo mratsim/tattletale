@@ -10,7 +10,8 @@
 
 import std / [tables, sequtils, sets, strutils]
 import std/macros # for the `warning` builtin (compile-time diagnostics)
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
 
@@ -23,30 +24,6 @@ type
     lenTyp: GpuType      # int32
 
   SpanSigMap = TableRef[string, seq[SpanParam]]
-
-proc exprGpuType(n: GpuAst): GpuType =
-  ## Best-effort GpuType of a lowering expression (span ptr/len args).
-  ## The lowering sites build fresh gpuBinOps whose bType must be non-nil:
-  ## the tail of the gpuBlock(isExpr: true) built in rewriteNode below is
-  ## read by getExprType (the lenExpr binop), so it must carry a real type.
-  ## A nil/void derivation is as unusable as an unknown shape: the constructed
-  ## `+ 1` literal's lType is this type (genLit derefs it at emission — a nil
-  ## GpuType there raises a FieldDefect) and the lenExpr binop's bType is read
-  ## by getExprType. Route everything through the one loud gtInt32 fallback so
-  ## exprGpuType can never hand back nil to the lowering sites.
-  case n.kind
-  of gpuIdent: result = n.symbol.typ
-  of gpuLit: result = n.lType
-  of gpuBinOp: result = n.bType
-  of gpuConv: result = n.convTo
-  else:
-    discard
-  if result.isNil or result.kind == gtVoid:
-    # Span ptr/len args are ints in practice, but a silent wrong-width
-    # assumption must not pass unnoticed — surface it when this fires.
-    result = initGpuType(gtInt32)
-    warning "[lowerSpans] WARNING: exprGpuType could not derive a type for " & $n.kind &
-      "; assuming gtInt32 for span index/pointer arithmetic"
 
 proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   ## Build a map of function name → span params to split
@@ -343,46 +320,6 @@ proc registerTypeSystemPasses*(reg: var PassRegistry) =
     description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
     run = pruneCompileTimeParams
   )
-
-proc getOperandType(n: GpuAst): GpuType =
-  ## Type of an expression for deref insertion, nil when undeterminable:
-  ## synthesized idents and blit temps may carry no type, those are never pointers.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil: n.symbol.typ else: nil
-  of gpuLit: n.lType
-  of gpuCast: n.cTo
-  of gpuConv: n.convTo
-  of gpuObjConstr: n.ocType
-  of gpuDeref:
-    let d = getOperandType(n.dOf)
-    if not d.isNil and d.kind == gtPtr: d.to else: d
-  of gpuIndex:
-    let t = getOperandType(n.iArr)
-    if t.isNil: nil
-    else:
-      case t.kind
-      of gtArray: t.aTyp
-      of gtUA: t.uaTo
-      of gtPtr: t.to
-      else: nil
-  of gpuDot:
-    # Synthesized field idents carry no type: resolve through the parent struct
-    if n.dField.kind == gpuIdent and n.dField.symbol != nil and
-        n.dField.symbol.typ != nil and n.dField.symbol.typ.kind != gtVoid:
-      n.dField.symbol.typ
-    else:
-      let parent = getOperandType(n.dParent)
-      if parent.isNil or parent.kind notin {gtObject, gtGenericInst} or
-          n.dField.kind != gpuIdent:
-        nil
-      else:
-        for f in parent.fields:
-          if f.name == n.dField.symbol.name:
-            return f.typ
-        nil
-  else:
-    nil
 
 proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:

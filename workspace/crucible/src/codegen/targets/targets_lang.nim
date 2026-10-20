@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./vulkan_lang, ./metal_lang
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
 
 proc codegenCuda*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
   cuda_lang.preprocess(ctx, ast, kernel)

@@ -6,7 +6,9 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / [macros, sequtils, sets, strutils, tables]
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/nim_to_gpu_type_resolvers
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 
 proc insertResult(ctx: var GpuContext; fn: GpuAst) =
@@ -152,98 +154,6 @@ proc liftConstexpr(pbody: var GpuAst) =
     liftConstexpr(pbody.wBody)
   else:
     discard
-
-proc getExprType*(ctx: GpuContext; n: GpuAst): GpuType =
-  ## Read the type of an expression from existing node fields.
-  ## Errors if the node kind doesn't carry its own type (e.g. gpuDot, gpuIndex).
-  ## Those cases require the caller to provide the type from context instead.
-  if n == nil: error "Cannot get type of nil node"
-  case n.kind
-  of gpuIdent:
-    result = n.symbol.typ
-    # Ident analogue of the gpuBinOp read-site policy (SLOP-009): a gpuIdent
-    # whose symbol carries no type must not silently fall through to the
-    # blitExprSlot fnRetType rung (which absorbs it in value-returning
-    # procs) — the same silent wrong-type class. Error at the read site.
-    if result.isNil or result.kind == gtVoid:
-      error "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
-        "block expression (nil/void symbol.typ on a gpuIdent is a defect — idents reaching getExprType must carry a type)"
-  of gpuLit: result = n.lType
-  of gpuCall: result = ctx.getFnReturnType(n.cName)
-  of gpuObjConstr: result = n.ocType
-  of gpuBinOp:
-    # Presence-only check by design: verifies bType is non-nil/non-void, never its
-    # value correctness — that is the construction sites' + literal oracles' job.
-    # A nil/void bType must not silently fall through to the blitExprSlot fnRetType
-    # rung (or raise a misleading "blit temp" error on a perfectly typed binop), so
-    # it is surfaced as a defect at the read site instead of returning nil.
-    result = n.bType
-    if result.isNil or result.kind == gtVoid:
-      error "gpuBinOp with nil or void bType: Cannot determine type for blit temp in " &
-        "block expression (nil/void bType on a gpuBinOp is a defect — all construction sites must populate bType)"
-  of gpuConstexpr: result = n.cType
-  of gpuMaterialize: result = n.mType
-  of gpuConv: result = n.convTo
-  of gpuCast: result = n.cTo
-  of gpuBlock:
-    if n.statements.len > 0:
-      result = ctx.getExprType(n.statements[^1])
-    else:
-      error "Empty block expression"
-  of gpuIndex:
-    # `iArr` may be `gpuDeref(p)` — a by-ref var-array access `(*p)[i]`, or a
-    # pointer-to-scalar `p[i]`. getExprType(gpuDeref) unwraps gtPtr to the
-    # POINTEE, so dispatch on the pointee: a pointer-to-array pointee is
-    # gtArray and indexing yields the ELEMENT type (aTyp); a scalar pointee
-    # passes through (`p[i]` is the pointee itself, pointer arithmetic).
-    # Direct array-ident indexing (`gpuIndex(arr, i)`) dispatches gtArray the
-    # same way. (Peeking at the deref's operand instead would return the
-    # pointer — and with it the array type for ptr-to-array, not the element.)
-    let arrType = ctx.getExprType(n.iArr)
-    if arrType != nil:
-      if n.iArr.kind == gpuDeref:
-        # pointee already unwrapped — index it
-        case arrType.kind
-        of gtPtr: result = arrType.to      # ptr-to-ptr: (*p) is ptr T
-        of gtArray: result = arrType.aTyp  # (*p)[i] → element type
-        of gtUA: result = arrType.uaTo
-        else: result = arrType             # scalar pointee: p[i] is the pointee
-      else:
-        case arrType.kind
-        of gtPtr: result = arrType.to
-        of gtArray: result = arrType.aTyp
-        of gtUA: result = arrType.uaTo
-        else:
-          error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
-  of gpuDeref:
-    let dType = ctx.getExprType(n.dOf)
-    if dType != nil and dType.kind == gtPtr:
-      result = dType.to       # by-ref params: ident typed as ptr, deref is the pointee
-    else:
-      result = dType
-  of gpuDot:
-    let parentType = ctx.getExprType(n.dParent)
-    if parentType != nil and parentType.kind in {gtObject, gtGenericInst}:
-      let fields = parentType.fields
-      for f in fields:
-        if f.name == n.dField.symbol.name:
-          result = f.typ
-          break
-    if result.isNil:
-      error "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
-  of gpuAddr:
-    result = ctx.getExprType(n.aOf)
-  of gpuTernary:
-    # Presence-only check by design (same convention as gpuBinOp): the if-expr
-    # construction guarantees both branches carry the same single-expression
-    # type; this only verifies the then-branch is typed, never its value.
-    result = ctx.getExprType(n.tThen)
-    if result.isNil or result.kind == gtVoid:
-      error "gpuTernary with nil or void type: Cannot determine type for blit temp in " &
-        "block expression (gpuTernary with an untyped then-branch is a defect — " &
-        "if-expr branches are single typed expressions)"
-  else:
-    error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
 proc blitExprSlot(ctx: var GpuContext; slot: var GpuAst; blitType: GpuType; fnRetType: GpuType): seq[GpuAst] =
   ## Process an expression slot. If `slot` is a gpuBlock(isExpr: true),

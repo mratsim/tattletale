@@ -7,7 +7,9 @@
 
 import std / [tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/nim_to_gpu_type_resolvers
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_legalizations

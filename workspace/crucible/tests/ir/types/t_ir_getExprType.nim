@@ -13,7 +13,7 @@
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/types/t_ir_getExprType.nim
 
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_legalizations
 
 static:

@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/symbol_resolution/t_ir_symbols.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Symbol creation and field access
@@ -124,13 +124,13 @@ block:
   echo "  OK — newGpuIdent creates Symbol correctly"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 7. shortHash is accessible from gpu_types
+# 7. shortHash is accessible from gpu_ast_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 block:
   let h = shortHash(42)
   doAssert h.len == 7, "shortHash should produce 7 characters"
   doAssert h == shortHash(42), "shortHash should be deterministic"
-  echo "  OK — shortHash from gpu_types"
+  echo "  OK — shortHash from gpu_ast_datatypes"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

@@ -9,7 +9,7 @@
 ## name tables the codegen consults.
 
 import std/tables
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
 import ./builtins_pragmas
 
 # ═════════════════════════════════════════════════════════════════════════

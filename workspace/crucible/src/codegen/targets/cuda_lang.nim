@@ -7,7 +7,7 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,
@@ -356,10 +356,16 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkReduceMax:
         result = indentStr & "warpReduceMax(" & ctx.genCuda(ast.cArgs[0]) & ')'
       of gbkNone:
-        var cudaArgs: seq[string]
-        for i, arg in ast.cArgs:
-          cudaArgs.add ctx.genCuda(arg)
-        result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+        case ast.cName.symbol.atomicsBuiltin
+        of gbkAtomicFetchAdd:
+          # atomicAdd overloads on the pointee type, no cast needed
+          result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
+                   ctx.genCuda(ast.cArgs[1]) & ')'
+        of gbkNone:
+          var cudaArgs: seq[string]
+          for i, arg in ast.cArgs:
+            cudaArgs.add ctx.genCuda(arg)
+          result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:

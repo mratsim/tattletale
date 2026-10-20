@@ -6,7 +6,7 @@
 ##     workspace/crucible/tests/ir/legalizations/t_ir_materializeIndexBuiltinParams.nim (from tattletale)
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_metal
 
 # ── IR builders ─────────────────────────────────────────────────────────────

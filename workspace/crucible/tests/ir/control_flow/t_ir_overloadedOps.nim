@@ -11,7 +11,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_overloadedOps.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_normalizations
 
 # ═══════════════════════════════════════════════════════════════════════

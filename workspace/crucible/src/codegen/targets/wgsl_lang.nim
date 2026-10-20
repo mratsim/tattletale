@@ -7,7 +7,8 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, sets, tables, options]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
@@ -708,17 +709,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = indentStr & "const " & ctx.genWebGpu(ast.cIdent) & ": " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & " = " & ctx.genWebGpu(ast.cValue)
   of gpuMaterialize:
     raiseAssert "gpuMaterialize should not reach WGSL backend — passByRef is not used"
-
-proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
-  case t.kind
-  of gtPtr:
-    result = t.to.containsKind(kind)
-  of gtArray:
-    result = t.aTyp.containsKind(kind)
-  of gtUA:
-    result = t.uaTo.containsKind(kind)
-  else:
-    result = t.kind == kind
 
 proc codegen*(ctx: var GpuContext): string =
   # NOTE: WGSL does not require forward declarations / does not care about

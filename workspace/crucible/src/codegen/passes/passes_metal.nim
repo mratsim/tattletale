@@ -7,7 +7,7 @@
 
 import std / [sequtils, sets, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_legalizations

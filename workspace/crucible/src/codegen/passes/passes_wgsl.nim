@@ -7,7 +7,8 @@
 
 import std / [sequtils, tables, options]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_legalizations
@@ -19,7 +20,6 @@ import ./passes_preprocessing
 # plus const_mem var pulling, struct pointer field stripping, code validation
 # and the generic instantiation scan.
 
-proc getStructType*(n: GpuAst): GpuType
 proc patchTypeImpl*(t: GpuType): GpuType
 proc patchSymbolImpl*(n: GpuAst): GpuAst
 proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
@@ -229,17 +229,6 @@ proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[strin
     for ch in n:
       ctx.scanGenericsImpl(ch, callerParams, owner)
 
-proc getStructType*(n: GpuAst): GpuType =
-  ## Given an ident, return the struct type or void if not a struct.
-  doAssert n.kind in [gpuIdent, gpuDeref]
-  var p = n
-  if p.kind == gpuDeref:
-    p = n.dOf
-  result = if p.symbol.typ.kind == gtPtr and p.symbol.typ.to.kind == gtObject:
-             p.symbol.typ.to
-           elif p.symbol.typ.kind == gtObject:
-             p.symbol.typ
-           else: GpuType(kind: gtVoid)
 
 proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string =
   ## Generates unique name for a generic WGSL function instantiation.

@@ -6,7 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / tables
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ../builtins/builtins_functions
 import ../builtins/builtins_gpu_types
 import ../passes/passes_optimizations

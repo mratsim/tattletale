@@ -5,13 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Type resolvers — Nim AST → GpuType / GpuAst metadata.
+## Nim-to-GPU type resolvers — Nim AST → GpuType.
 ##
 ## These functions need access to Nim compiler APIs (getTypeInst, getTypeImpl, etc.)
 ## but do NOT call `toGpuAst`. They are called from the construction switch in `nim_to_gpu.nim`.
 
 import std / [macros, strutils, sequtils, tables, sets]
-import ./gpu_types
+import ./gpu_ast_datatypes
 import ./gpu_type_constructors
 import ../builtins/builtins_gpu_types
 

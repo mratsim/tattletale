@@ -31,7 +31,7 @@
 
 import std/[strutils, tables]
 import workspace/crucible/src/codegen/passes/passes_lowering
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/ir/gpu_type_constructors
 
 proc countExprBlocks(n: GpuAst): int =

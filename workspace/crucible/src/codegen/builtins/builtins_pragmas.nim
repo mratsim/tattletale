@@ -8,11 +8,11 @@
 
 #import std / [macros, strutils, sequtils, options, sugar, tables, strformat, hashes, sets]
 #
-#import ./gpu_types
+#import ./gpu_ast_datatypes
 #import ./backends/backends
 #import ./nim_to_gpu
 #
-#export gpu_types
+#export gpu_ast_datatypes
 
 ## Pragma templates for the GPU DSL. The address-space pragmas (`smem`,
 ## `const_mem`) set a var declaration's address space.
