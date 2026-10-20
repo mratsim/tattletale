@@ -26,23 +26,22 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   ## - dst: a one-slot tensor for the total, must be zero-initialized,
   ##   the accumulation is atomic
   ## - src: the source tensor
-  let thrID = thread_index_in_threadgroup
+
+  let thrID = getLocalThreadID()
   var reg: tile(src.T)
   let tiled = make_layout(src.size()).logical_divide(reg.getLayout())
   let axisTiles = tiled.getTileGrid().size()
   let gridStride = getGridSize()
   const owned = reg.size() div getLaneWidth()
   var acc = zero(src.T)
+
   # 1. Partial sums
-  #    Each threadgroup folds its grid-stride strip of the tile grid,
-  #    one launch covers any launch grid size.
   for tileID in countup(getLocalTileID(src.shape), axisTiles - 1, gridStride):
     reg.load(src, thrID, tileID)
     for i in 0 ..< owned:
       acc += reg.data[i]
+
   # 2. Epilogue
-  #    Butterfly across the lanes, the threadgroup leader banks
-  #    its strip total with one atomic add.
   let total = reduceAdd(acc)
   if thrID == 0:
     discard atomicFetchAdd(dst.data[0].addr, total)
@@ -59,7 +58,7 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
     depthShare = 4  # per-lane unroll, the warp holds laneW * depthShare partials
   let
     laneW = getLaneWidth()
-    thrID = thread_index_in_threadgroup
+    thrID = getLocalThreadID()
     gridN = getGridSize()
     axisSize = src.shape[axis]
     lanesShareOutput = src.diceAxes(axis).maxCommonVector() >= laneW
@@ -69,9 +68,9 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
   for k in countup(out0, dst.size() - 1, outStep):
     let outCrd = idx2crd(dst.shape, k)
     var crd = outCrd
-    # The two configurations:
+    # Two configurations:
     #
-    #   the lanes share one output element, the reduced axis's elements are consecutive:
+    #   Lanes share one output element, the reduced axis's elements are consecutive:
     #
     #     reduced i : 0     1    ...  31    32   ...  127  128  ...
     #     lane/acc  : l0a0  l1a0 ...  l31a0 l0a1 ...  l31a1 l0a0 ...
@@ -80,7 +79,7 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
     #     i = l + j*laneW for j = 0..depthShare-1, then i jumps laneW*depthShare
     #     per-lane sum -- cross-lane reduce --> total -- lane 0 --> dst[out]
     #
-    #   each lane owns one output element, the reduced axis's elements are stride apart:
+    #   Each lane owns one output element, the reduced axis's elements are stride apart:
     #
     #     reduced i : i0   i0+1  i0+2  i0+3   i0+4  ...
     #     accs      : a0   a1    a2    a3     a0    ...  `depthOwn` in flight

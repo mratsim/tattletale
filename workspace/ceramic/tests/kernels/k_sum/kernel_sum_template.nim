@@ -15,6 +15,7 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/kernels/k_tile_sum
+import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
 
 export int_tuples
 export layout_algebra
@@ -55,6 +56,8 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
   ## One sum_full launch over a random (rows, cols) tensor
   var src = rng.randomHostTensor( float32, (rows, cols), sSrc)
   var got = makeHostTensor(float32, (1, 1), (1, 1))
+  var gotView = got.view()
+  fillWith_cpu(gotView, 0'f32)  # the accumulation contract: dst starts at zero
   let
     srcDev = engine.bridge(src)
     gotDev = engine.bridge(got)
@@ -77,6 +80,8 @@ proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
   dstShape[axis] = 1
   let dstLayout = make_layout(dstShape, dstStrides)
   var got = makeHostTensor(float32, dstShape, dstLayout.stride)
+  var gotView = got.view()
+  fillWith_cpu(gotView, 12345.0'f32)  # canary: the kernel must not read dst
   var expect = makeHostTensor(float32, dstShape, dstLayout.stride)
   refSum(expect.view(), src.view(), axis)
   let

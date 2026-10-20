@@ -3779,6 +3779,15 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
                 findings.append(Finding(
                     path, i + 1, "gridstride-one-line",
                     "the threadgroups product goes on a single line"))
+        if ("thread_index_in_threadgroup" in code
+                and _rel(path).startswith(tuple(
+                    Path(r).as_posix() + os.sep for r in KERNEL_ROOTS))
+                and "threadindex-allow" not in raw
+                and "threadindex-allow" not in prev):
+            findings.append(Finding(
+                path, i + 1, "raw-thread-index",
+                "thread_index_in_threadgroup is raw launch plumbing, "
+                "call getLocalThreadID()"))
         if (GRIDSIZE_PRODUCT_RE.search(code)
                 and "gridsize-allow" not in raw
                 and "gridsize-allow" not in prev):

@@ -25,7 +25,7 @@ proc axpy*(y, x: distinct TensorView, alpha: float32) {.inline.} =
   ## - alpha: the scale on x
   ## - x: the source tensor
   ## - y: the accumulator, updated in place
-  let thrID = thread_index_in_threadgroup
+  let thrID = getLocalThreadID()
   var reg: tile(y.T)
   let tiled = make_layout(y.size()).logical_divide(reg.getLayout())
   let grid = tiled.getTileGrid()

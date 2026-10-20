@@ -122,6 +122,6 @@ template getLocalTileID*(gridShape: IntOrIntTuple): auto =
   let fleet = make_layout(makeIntTuple((w, h, d)))
   crd2idx(fleet, (x, y, z))
 
-template getLocalThreadID*(mma: static TiledMma): int =
+template getLocalThreadID*: int =
   ## Lane index of the thread inside its squadron.
   thread_index_in_threadgroup

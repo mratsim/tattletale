@@ -44,7 +44,7 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
 
   let cGrid = cGeom.getTileGrid()
   let (_, kTiles) = aGeom.getTileGrid()
-  let thrID = mma.getLocalThreadID()
+  let thrID = getLocalThreadID()
 
   if thrID < getLaneWidth():
     let
