@@ -35,7 +35,9 @@ proc sumExpect*(np: int): float64 =
 
 proc sumLoop*(dst, src: distinct TensorView, iters: int) =
   ## Bench harness: iters full-sum reductions in one launch, launch
-  ## overhead excluded from the measurement.
+  ## overhead excluded from the measurement. The accumulation is atomic,
+  ## dst grows by the total per iteration, the bench resets dst before
+  ## timing and the cross-check divides by iters.
   for _ in 0 ..< iters:
     sum(dst, src)
 
@@ -50,9 +52,9 @@ template benchSum*(policy: string, G, np, iters: int, body: untyped) =
   let benchStop = getMonoTime()
   reportSum(policy, G, np, iters, benchStart, benchStop)
 
-proc benchReplicate*(engine: MetalEngine, np, iters: int): auto =
-  ## Grid-stride replicate: every threadgroup computes the full sum,
-  ## gx threadgroups race on the same dst.
+proc benchSumCeramic*(engine: MetalEngine, np, iters: int): auto =
+  ## Shipped sum, atomic single-pass: each threadgroup folds a grid-stride
+  ## strip and the leader banks it with one atomic add.
   let gx = min(ceil_div(np, 4096), 1024)
   let one = 1  # runtime int for the layouts to stay dynamic
   var
@@ -69,10 +71,11 @@ proc benchReplicate*(engine: MetalEngine, np, iters: int): auto =
       blk = (32, 1)
     engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
   # timed, the launch overhead leaves the measurement
+  dstHost.data[0] = 0
   let
     srcDev = engine.bridge(srcHost)
     dstDev = engine.bridge(dstHost)
-  benchSum("replicate", gx, np, iters):
+  benchSum("atomic", gx, np, iters):
     engine.launchDeviceFn sumLoop(dstDev, srcDev, iters) do:
       grid = (gx, 1)
       blk = (32, 1)
@@ -96,6 +99,7 @@ proc benchOneThreadgroup*(engine: MetalEngine, np, iters: int): auto =
       blk = (32, 1)
     engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
   # timed, the launch overhead leaves the measurement
+  dstHost.data[0] = 0
   let
     srcDev = engine.bridge(srcHost)
     dstDev = engine.bridge(dstHost)

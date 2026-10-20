@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Baseline benchmark: full-sum reduction bandwidth on Metal, GB/s.
-# - replicate: the shipped `sum(dst, src)` today
+# - atomic: the shipped `sum(dst, src)`, grid-stride strips banked atomically
 # - 1 group: one threadgroup folds the whole tensor
 # - 2-pass ceiling: raw Metal kernels, one partial per threadgroup +
 #   one-threadgroup finalize, both dispatches in one command buffer
@@ -64,16 +64,18 @@ proc main() =
       let iters = if np <= 200_000: 200
                   elif np <= 1_000_000: 50
                   else: 20
-      let dRep = benchReplicate(engine, np, iters)
+      let dRep = benchSumCeramic(engine, np, iters)
       let dOne = benchOneThreadgroup(engine, np, iters)
       # a G wider than the input sums empty threadgroups, skip it
       let dTwo256 = benchTwoPasses(engine, np, min(256, np), iters)
       let dTwo1024 = benchTwoPasses(engine, np, min(1024, np), iters)
       # the implementations must agree with the host reference
       let expect = sumExpect(np)
-      for (name, d) in [("replicate", dRep), ("1 group", dOne),
-                        ("2-pass G=256", dTwo256), ("2-pass G=1024", dTwo1024)]:
-        doAssert abs(d.data[0].float64 - expect) < 1e-2 * max(1.0, abs(expect)),
+      # the sumLoop rows run `iters` sums per launch, the accumulated
+      # total divides back to the per-sum value
+      for (name, d, reps) in [("atomic", dRep, iters), ("1 group", dOne, iters),
+                              ("2-pass G=256", dTwo256, 1), ("2-pass G=1024", dTwo1024, 1)]:
+        doAssert abs(d.data[0].float64 / reps.float - expect) < 1e-2 * max(1.0, abs(expect)),
           &"{name} sum wrong at {np}: got {d.data[0]}, expect {expect}"
       separator()
   separator()
