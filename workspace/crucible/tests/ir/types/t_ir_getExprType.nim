@@ -14,7 +14,8 @@
 ##     workspace/crucible/tests/ir/types/t_ir_getExprType.nim
 
 import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_legalizations
+import workspace/crucible/src/codegen/ir/gpu_ast_type_resolvers
+import workspace/crucible/src/codegen/gpu_compiler
 
 static:
   block: # 1. gpuDeref over a gtPtr ident unwraps to the pointee
