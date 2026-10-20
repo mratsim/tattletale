@@ -146,7 +146,7 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
            (n.cArgs[0].cName.symbol.name == "toOpenArray" or n.cArgs[0].cName.symbol.name.startsWith("toOpenArray_")) and
            n.cArgs[0].cArgs.len >= 3:
           let tc = n.cArgs[0]
-          let idxTyp = tc.cArgs[1].exprGpuType()
+          let idxTyp = tc.cArgs[1].getLoweringExprType()
           let lenSub = GpuAst(kind: gpuBinOp,
                               bType: idxTyp,
                               bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
@@ -158,8 +158,8 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                      bLeft: lenSub,
                      bRight: GpuAst(kind: gpuLit, lValue: "1",
                                     lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
-          # exprGpuType never returns nil, so idxTyp is taken above; the gtInt32
-          # arm is a defensive guard against genLit's nil-lType FieldDefect
+          # getLoweringExprType never returns nil so idxTyp is taken above,
+          # the gtInt32 variant guards genLit's nil-lType FieldDefect
           return
       return
 
@@ -177,11 +177,11 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                      else:
                        n.cArgs[0]
       let ptrPlus = GpuAst(kind: gpuBinOp,
-                           bType: dataExpr.exprGpuType(),
+                           bType: dataExpr.getLoweringExprType(),
                            bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
                            bLeft: dataExpr,
                            bRight: n.cArgs[1])
-      let idxTyp = n.cArgs[1].exprGpuType()
+      let idxTyp = n.cArgs[1].getLoweringExprType()
       let lenSub = GpuAst(kind: gpuBinOp,
                           bType: idxTyp,
                           bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
@@ -193,8 +193,8 @@ proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
                            bLeft: lenSub,
                            bRight: GpuAst(kind: gpuLit, lValue: "1",
                                           lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
-      # exprGpuType never returns nil, so idxTyp is taken above; the gtInt32
-      # arm is a defensive guard against genLit's nil-lType FieldDefect
+      # getLoweringExprType never returns nil so idxTyp is taken above,
+      # the gtInt32 variant guards genLit's nil-lType FieldDefect
       # Return as block containing both expressions
       n = GpuAst(kind: gpuBlock, isExpr: true, statements: @[ptrPlus, lenExpr])
       return
@@ -337,14 +337,14 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
     insertPointerDerefImpl(ctx, n.iArr)
     insertPointerDerefImpl(ctx, n.iIndex)
     if n.iArr.kind != gpuDeref:
-      let t = getOperandType(n.iArr)
+      let t = ctx.getOperandType(n.iArr)
       if not t.isNil and t.kind == gtPtr and not t.to.isNil:
         n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
   of gpuDot:
     insertPointerDerefImpl(ctx, n.dParent)
     insertPointerDerefImpl(ctx, n.dField)
     if n.dParent.kind != gpuDeref:
-      let t = getOperandType(n.dParent)
+      let t = ctx.getOperandType(n.dParent)
       if t != nil and t.kind == gtPtr:
         n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
   of gpuDeref:

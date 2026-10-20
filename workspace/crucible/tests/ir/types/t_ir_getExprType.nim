@@ -114,8 +114,9 @@ block: # 8. getOperandType(addr field) is a pointer to the field type
   let fieldIdent = GpuAst(kind: gpuIdent, symbol: fieldSym)
   let dot = GpuAst(kind: gpuDot, dParent: parent, dField: fieldIdent)
   let addrNode = GpuAst(kind: gpuAddr, aOf: dot)
+  var ctx = GpuContext()
 
-  let t = getOperandType(addrNode)
+  let t = ctx.getOperandType(addrNode)
 
   doAssert t != nil and t.kind == gtPtr and t.to.kind == gtFloat32,
     "addr of a struct field must be ptr to the field type, got " &
@@ -132,8 +133,9 @@ block: # 9. getOperandType of a struct-field pointer passes the atomic pointee c
   let fieldSym = newSymbol("counter", iSym = "counter_dot", typ = initGpuPtrType(f32, false))
   let fieldIdent = GpuAst(kind: gpuIdent, symbol: fieldSym)
   let dot = GpuAst(kind: gpuDot, dParent: parent, dField: fieldIdent)
+  var ctx = GpuContext()
 
-  let t = getOperandType(dot)
+  let t = ctx.getOperandType(dot)
 
   doAssert t != nil and t.kind == gtPtr and getPointeeKind(t) == gtFloat32,
     "a ptr-typed struct field must resolve to its pointer type for the atomic check"

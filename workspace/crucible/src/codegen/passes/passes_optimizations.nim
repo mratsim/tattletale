@@ -151,8 +151,8 @@ proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
     return false
 
   # Both operands must be basic numerics of the same type.
-  let tA = ctx.operandType(tThen)
-  let tB = ctx.operandType(tElse)
+  let tA = ctx.getOperandType(tThen)
+  let tB = ctx.getOperandType(tElse)
   if not isBasicNumeric(tA) or not isBasicNumeric(tB): return false
   if tA.kind != tB.kind: return false
   # The unguarded form on floats is not fmax.

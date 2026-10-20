@@ -187,15 +187,15 @@ proc usesReductionBuiltin(n: GpuAst): bool =
     if usesReductionBuiltin(ch):
       return true
 
-proc usesFloatAtomic(n: GpuAst): bool =
+proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
   ## True when the AST contains an fp `atomicFetchAdd` call, which needs
   ## GL_EXT_shader_atomic_float at module scope. int atomicAdd is core.
   if n.kind == gpuCall and n.cName.symbol != nil and
      n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
-     getPointeeKind(getOperandType(n.cArgs[0])) == gtFloat32:
+     getPointeeKind(ctx.getOperandType(n.cArgs[0])) == gtFloat32:
     return true
   for ch in n:
-    if usesFloatAtomic(ch):
+    if ctx.usesFloatAtomic(ch):
       return true
 
 
@@ -660,7 +660,7 @@ proc codegen*(ctx: var GpuContext): string =
         needsInt64 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
-    if usesFloatAtomic(fn.pBody):
+    if ctx.usesFloatAtomic(fn.pBody):
       needsAtomicFloat = true
   for pt in refPointees:
     var b = pt

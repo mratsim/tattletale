@@ -146,7 +146,7 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
     error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
 proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Lenient type of an expression node, nil when unknown.
+  ## Type of an expression node, nil when unknown.
   ## Private helper of getDotParentType, which must tolerate
   ## partially-typed preprocessing ASTs where getExprType would error.
   case n.kind
@@ -197,37 +197,31 @@ proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
     t = t.uaTo
   result = t
 
-proc operandType*(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Best-effort type of a pattern operand.
-  ## Returns nil when the pass cannot determine it,
-  ## and the fold then conservatively skips.
-  case n.kind
-  of gpuIdent: n.symbol.typ
-  of gpuLit: n.lType
-  of gpuBinOp: n.bType
-  of gpuPrefix: ctx.operandType(n.pVal)  # `-x` keeps x's type
-  of gpuCall: ctx.getFnReturnType(n.cName)
-  else: nil
-
-proc getOperandType*(n: GpuAst): GpuType =
-  ## Type of an expression for deref insertion, nil when undeterminable:
-  ## synthesized idents and blit temps may carry no type, those are never pointers.
+proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Type of an expression node, nil when undeterminable, never errors.
+  ##
+  ## - synthesized idents and blit temps may carry no type, those are
+  ##   never pointers
+  ## - callers skip the transform when nil
   case n.kind
   of gpuIdent:
     if n.symbol != nil: n.symbol.typ else: nil
   of gpuLit: n.lType
+  of gpuBinOp: n.bType
+  of gpuPrefix: ctx.getOperandType(n.pVal)  # `-x` keeps x's type
+  of gpuCall: ctx.getFnReturnType(n.cName)
   of gpuCast: n.cTo
   of gpuConv: n.convTo
   of gpuObjConstr: n.ocType
   of gpuAddr:
-    let inner = getOperandType(n.aOf)
+    let inner = ctx.getOperandType(n.aOf)
     if inner.isNil or inner.kind == gtInvalid: nil
     else: initGpuPtrType(inner, false)
   of gpuDeref:
-    let d = getOperandType(n.dOf)
+    let d = ctx.getOperandType(n.dOf)
     if not d.isNil and d.kind == gtPtr: d.to else: d
   of gpuIndex:
-    let t = getOperandType(n.iArr)
+    let t = ctx.getOperandType(n.iArr)
     if t.isNil: nil
     else:
       case t.kind
@@ -241,7 +235,7 @@ proc getOperandType*(n: GpuAst): GpuType =
         n.dField.symbol.typ != nil and n.dField.symbol.typ.kind != gtVoid:
       n.dField.symbol.typ
     else:
-      let parent = getOperandType(n.dParent)
+      let parent = ctx.getOperandType(n.dParent)
       if parent.isNil or parent.kind notin {gtObject, gtGenericInst} or
           n.dField.kind != gpuIdent:
         nil
@@ -253,12 +247,12 @@ proc getOperandType*(n: GpuAst): GpuType =
   else:
     nil
 
-proc exprGpuType*(n: GpuAst): GpuType =
-  ## Best-effort GpuType of a lowering expression (span ptr/len args)
+proc getLoweringExprType*(n: GpuAst): GpuType =
+  ## Type of a lowering expression for span ptr/len args, never nil.
   ##
-  ## - never nil: the lowering sites build fresh gpuBinOps whose bType
-  ##   and the constructed `+ 1` literal's lType are read downstream,
-  ##   a nil GpuType there raises a FieldDefect
+  ## - lowering sites build fresh gpuBinOps whose bType is read downstream,
+  ##   the constructed `+ 1` literal's lType likewise:
+  ##   a nil GpuType there is a FieldDefect
   ## - unresolvable shapes fall back to gtInt32 with a warning
   case n.kind
   of gpuIdent: result = n.symbol.typ
@@ -271,7 +265,7 @@ proc exprGpuType*(n: GpuAst): GpuType =
     # Span ptr/len args are ints in practice, a wrong-width fallback
     # must surface when it fires.
     result = initGpuType(gtInt32)
-    warning "[lowerSpans] WARNING: exprGpuType could not derive a type for " & $n.kind &
+    warning "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
       "; assuming gtInt32 for span index/pointer arithmetic"
 
 proc getStructType*(n: GpuAst): GpuType =

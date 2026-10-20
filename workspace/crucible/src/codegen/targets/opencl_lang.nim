@@ -437,7 +437,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           # int atomic_fetch_add is OpenCL 2.0 core.
           # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
           # __global pointer at the call site.
-          let atomicTy = case getPointeeKind(getOperandType(ast.cArgs[0]))
+          let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
                          of gtFloat32: "atomic_float"
                          of gtInt32: "atomic_int"
                          of gtUint32: "atomic_uint"
@@ -571,17 +571,17 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 # Top-level codegen
 # ═══════════════════════════════════════════════════════════════════════
 
-proc usesFloatAtomic(n: GpuAst): bool =
+proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
   ## True when the AST contains an fp `atomicFetchAdd` call
   ##
   ## - the cl_ext_float_atomics pragma is emitted at module scope
   ## - int atomic_fetch_add is OpenCL 2.0 core
   if n.kind == gpuCall and n.cName.symbol != nil and
      n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
-     getPointeeKind(getOperandType(n.cArgs[0])) == gtFloat32:
+     getPointeeKind(ctx.getOperandType(n.cArgs[0])) == gtFloat32:
     return true
   for ch in n:
-    if usesFloatAtomic(ch):
+    if ctx.usesFloatAtomic(ch):
       return true
 
 proc codegen*(ctx: var GpuContext): string =
@@ -604,7 +604,7 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp64 = true
       if p.typ.containsFloat16():
         needsFp16 = true
-    if usesFloatAtomic(fn.pBody):
+    if ctx.usesFloatAtomic(fn.pBody):
       needsFloatAtomic = true
 
   if needsFp64:

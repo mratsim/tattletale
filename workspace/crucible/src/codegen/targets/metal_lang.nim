@@ -449,7 +449,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
           # MSL atomics act on `atomic_*` pointees: cast the raw device
           # pointer at the call site. The only permitted order is relaxed.
           # fp32 needs Metal 3+ (__HAVE_ATOMIC_FLOAT__).
-          let atomicTy = case getPointeeKind(getOperandType(ast.cArgs[0]))
+          let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
                          of gtFloat32: "atomic_float"
                          of gtInt32: "atomic_int"
                          of gtUint32: "atomic_uint"

@@ -7,9 +7,11 @@
 ## expressions are gpuIdents typed gtInt64 — a NON-default type — so any
 ## default/hardcoded typing fails the `lType == idxTyp` assertions.
 ##
-## It also locks SLOP-010: exprGpuType must never hand back nil (a nil lType
-## on the literal crashes genLit with a FieldDefect at emission). Both
-## rewrites (len(toOpenArray) and bare toOpenArray inline) are covered.
+## It also locks the nil contract: getLoweringExprType never returns nil,
+## a nil lType on the literal crashes genLit at emission with a FieldDefect.
+##
+## Both rewrites are covered: the len(toOpenArray) rewrite
+## and the bare toOpenArray inline rewrite.
 ##
 ## Part (b) — loudness contract: an index of an unknown shape (gpuDot) hits
 ## the loud gtInt32 fallback, which uses the `warning` builtin (not a raw
@@ -157,11 +159,12 @@ static:
 
 # ── Part (c): nil-typed ident index — the exact pre-fix SLOP-010 FieldDefect shape ──
 static:
-  # Pre-fix, exprGpuType(gpuIdent) returned the nil symbol.typ, so the
-  # constructed `+ 1` literal carried lType = nil and genLit crashed with a
-  # FieldDefect (`ast.lType.kind` deref at emission). The loud gtInt32
-  # fallback must now absorb nil/void derivations: the literal gets a non-nil
-  # gtInt32 lType and the FieldDefect path is structurally unreachable.
+  # Pre-fix, getLoweringExprType(gpuIdent) returned a nil symbol.typ:
+  # the constructed `+ 1` literal carried lType = nil and genLit
+  # crashed with a FieldDefect (`ast.lType.kind` deref at emission).
+  # The loud gtInt32 fallback must now absorb nil/void derivations:
+  # the literal gets a non-nil gtInt32 lType, the FieldDefect path
+  # is structurally unreachable.
   let nilIdx = GpuAst(kind: gpuIdent,
                       symbol: newSymbol("first", iSym = "first", typ = nil))
   let lenCall = GpuAst(

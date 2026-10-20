@@ -19,7 +19,7 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
   ## else keep their name unchanged.
   let name = call.cName.ident()
   if name in NimGpuNumericBuiltinsFunctions:
-    let t = ctx.operandType(call.cArgs[0]) # builtin min/max/abs always have 1 or 2 cArgs
+    let t = ctx.getOperandType(call.cArgs[0]) # builtin min/max/abs always have 1 or 2 cArgs
     if not t.isNil:
       return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
   NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)
