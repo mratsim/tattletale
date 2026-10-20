@@ -17,3 +17,11 @@ func logical_divide*[T, Sh, St](t: TensorOwned[T, Sh, St], tiler: Layout): auto 
 
 func logical_divide*[T, Sh, St](t: TensorView[T, Sh, St], tiler: Layout): auto {.inline.} =
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler))
+
+func getIdentityLayout*[T, Sh, St](t: TensorView[T, Sh, St]): auto {.inline.} =
+  ## Identity layout over the tensor's shape, its coordinate space.
+  make_identity_layout(t.shape)
+
+func getIdentityLayout*[T, Sh, St](t: TensorOwned[T, Sh, St]): auto {.inline.} =
+  ## Identity layout over the tensor's shape, its coordinate space.
+  make_identity_layout(t.shape)

@@ -38,7 +38,7 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   #    Each threadgroup folds its grid-stride strip of the tile grid,
   #    one launch covers any launch grid size.
   for tileID in countup(getLocalTileID(src.shape), axisTiles - 1, gridStride):
-    reg.loadTile(src, thrID, tileID)
+    reg.load(src, thrID, tileID)
     for i in 0 ..< owned:
       acc += reg.data[i]
   # 2. Epilogue
@@ -69,7 +69,7 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
     let strip = make_view(src.displace(crd).data, red)
     var acc = zero(src.T)
     for tileID in 0 ..< axisTiles:
-      reg.loadTile(strip, thrID, tileID)
+      reg.load(strip, thrID, tileID)
       for i in 0 ..< owned:
         acc += reg.data[i]
     let total = reduceAdd(acc)

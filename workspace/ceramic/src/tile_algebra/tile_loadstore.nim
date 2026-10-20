@@ -17,25 +17,30 @@ import ./tiles
 #  Guarded access
 # ═══════════════════════════════════════════════════════════════
 
+template tileInBounds*(tiled, tileCrd, sel, domain): bool =
+  ## Whether the tile selected by `sel` **fully** fits inside `domain`.
+  let farCorner = tiled.crd2idx(sel) + tileCrd.crd2idx(tileCrd.size() - 1)
+  farCorner.inBounds(domain.shape)
+
 func paddedLoad[T, Sh, St](src: TensorView[T, Sh, St], crd: int or tuple, padWith: T): T {.inline.} =
   ## Guarded read of `src` at `crd`: in bounds reads the element,
   ## out of bounds reads `padWith`.
-  if crd.inBounds(src.getLayout().shape):
-    src.data[src.getLayout().crd2idx(crd)]
+  if crd.inBounds(src.shape):
+    src[crd]
   else:
     padWith
 
 func guardedStore[T, Sh, St](dst: TensorView[T, Sh, St], crd: int or tuple, val: T) {.inline.} =
   ## Guarded store into `dst` at `crd`: in bounds stores `val`,
   ## out of bounds drops the store.
-  if crd.inBounds(dst.getLayout().shape):
-    dst.data[dst.getLayout().crd2idx(crd)] = val
+  if crd.inBounds(dst.shape):
+    dst[crd] = val
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile load / store for tensor cores
 # ═══════════════════════════════════════════════════════════════
 
-proc loadTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
+proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
     dst: var Tile[T, ShD, StD], src: TensorView[T, ShS, StS],
     tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
     tileID: (int, int), padWith: T = zero(T)) =
@@ -53,18 +58,16 @@ proc loadTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
   ##   - dst: the register tile, sized by `tvm`'s register layout
   ##   - src: the global tensor
   ##   - padWith: the read past bounds
-  let srcLayout = src.getLayout()
-  let tiled = srcLayout.logical_divide(tvm.layout)
-  let thrBits = idx2crd(tvm.getThreadPartitioning(), threadIdx)
-  let thrSel = (((thrBits, _), _), tileID)
-  let srcReg = src.slice(tiled, thrSel)
-  let tiledCrd = make_identity_layout(srcLayout.shape).logical_divide(tvm.layout)
+  let tiled = src.logical_divide(tvm.layout)
+  let thrCrd = idx2crd(tvm.getThreadPartitioning(), threadIdx)
+  let thrSel = (((thrCrd, _), _), tileID)
+  let srcReg = tiled.slice(thrSel)
+  let tiledCrd = src.getIdentityLayout().logical_divide(tvm.layout)
   let regCrd = tiledCrd.slice(thrSel)
 
   let tileSel = (((_, _), _), tileID)
   let tileCrd = tiledCrd.slice(tileSel)
-  let farCorner = tiledCrd.crd2idx(tileSel) + tileCrd.crd2idx(tileCrd.size() - 1)
-  if farCorner.inBounds(srcLayout.shape):
+  if tileInBounds(tiledCrd, tileCrd, tileSel, src):
     for i in 0 ..< srcReg.size():
       dst[i] = srcReg[i]
   else:
@@ -72,7 +75,7 @@ proc loadTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
     for i in 0 ..< srcReg.size():
       dst[i] = src.paddedLoad(crdBase + regCrd.crd2idx(i), padWith)
 
-proc storeTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
+proc store*[T, ShD, StD, ShS, StS, Sh, St, TSh](
     dst: TensorView[T, ShD, StD], src: Tile[T, ShS, StS],
     tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
     tileID: (int, int)) =
@@ -89,18 +92,16 @@ proc storeTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
   ## Args:
   ##   - dst: the global tensor stored into
   ##   - src: the register tile, sized by `tvm`'s register layout
-  let dstLayout = dst.getLayout()
-  let tiled = dstLayout.logical_divide(tvm.layout)
-  let thrBits = idx2crd(tvm.getThreadPartitioning(), threadIdx)
-  let thrSel = (((thrBits, _), _), tileID)
-  let dstReg = dst.slice(tiled, thrSel)
-  let tiledCrd = make_identity_layout(dstLayout.shape).logical_divide(tvm.layout)
+  let tiled = dst.logical_divide(tvm.layout)
+  let thrCrd = idx2crd(tvm.getThreadPartitioning(), threadIdx)
+  let thrSel = (((thrCrd, _), _), tileID)
+  let dstReg = tiled.slice(thrSel)
+  let tiledCrd = dst.getIdentityLayout().logical_divide(tvm.layout)
   let regCrd = tiledCrd.slice(thrSel)
 
   let tileSel = (((_, _), _), tileID)
   let tileCrd = tiledCrd.slice(tileSel)
-  let farCorner = tiledCrd.crd2idx(tileSel) + tileCrd.crd2idx(tileCrd.size() - 1)
-  if farCorner.inBounds(dstLayout.shape):
+  if tileInBounds(tiledCrd, tileCrd, tileSel, dst):
     for i in 0 ..< dstReg.size():
       dstReg[i] = src[i]
   else:
@@ -112,7 +113,7 @@ proc storeTile*[T, ShD, StD, ShS, StS, Sh, St, TSh](
 #  Tile load / store for general case
 # ═══════════════════════════════════════════════════════════
 
-proc loadTile*[T, Sh, St, ShS, StS](
+proc load*[T, Sh, St, ShS, StS](
     dst: var Tile[T, Sh, St], src: TensorView[T, ShS, StS],
     threadIdx: int, tileID: int, padWith: T = zero(T)) {.inline.} =
   ## Tile load over the element positions: the register tile's map
@@ -129,14 +130,14 @@ proc loadTile*[T, Sh, St, ShS, StS](
     sel = ((threadIdx, _), tileID)
     box = tiled.slice(sel)
     offset = tiled.crd2idx(sel)
-  for e in 0 ..< box.size():
-    let crd = offset + box.crd2idx(e)
-    dst.data[e] = if crd < src.size():
-      src[idx2crd(src.shape, crd)]
-    else:
-      padWith
+  if tileInBounds(tiled, box, sel, src):
+    for e in 0 ..< box.size():
+      dst.data[e] = src[offset + box.crd2idx(e)]
+  else:
+    for e in 0 ..< box.size():
+      dst.data[e] = src.paddedLoad(offset + box.crd2idx(e), padWith)
 
-proc storeTile*[T, Sh, St, ShD, StD](
+proc store*[T, Sh, St, ShD, StD](
     dst: TensorView[T, ShD, StD], src: Tile[T, Sh, St],
     threadIdx: int, tileID: int) {.inline.} =
   ## Tile store over the element positions: out-of-bounds positions drop.
@@ -151,7 +152,21 @@ proc storeTile*[T, Sh, St, ShD, StD](
     sel = ((threadIdx, _), tileID)
     box = tiled.slice(sel)
     offset = tiled.crd2idx(sel)
-  for e in 0 ..< box.size():
-    let crd = offset + box.crd2idx(e)
-    if crd < dst.size():
-      dst[idx2crd(dst.shape, crd)] = src.data[e]
+  if tileInBounds(tiled, box, sel, dst):
+    for e in 0 ..< box.size():
+      dst[offset + box.crd2idx(e)] = src.data[e]
+  else:
+    for e in 0 ..< box.size():
+      dst.guardedStore(offset + box.crd2idx(e), src.data[e])
+
+proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
+    _: typedesc[Tile[T, ShD, StD]], src: TensorView[T, ShS, StS],
+    tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
+    tileID: (int, int), padWith: T = zero(T)): Tile[T, ShD, StD] {.inline.} =
+  load(result, src, tvm, threadIdx, tileID, padWith)
+
+proc load*[T, Sh, St, ShS, StS](
+    _: typedesc[Tile[T, Sh, St]], src: TensorView[T, ShS, StS],
+    threadIdx: int, tileID: int, padWith: T = zero(T)): Tile[T, Sh, St] {.inline.} =
+  load(result, src, threadIdx, tileID, padWith)
+

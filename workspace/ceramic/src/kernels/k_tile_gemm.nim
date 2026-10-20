@@ -57,8 +57,8 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
       var rB: tile(B.T, mma.getMmaLayout(opB))
       rD.fillWith(zero(D.T))
       for k in 0 ..< kTiles:
-        rA.loadTile(A, tvmA, thrID, (m, k))
-        rB.loadTile(B, tvmB, thrID, (n, k))
+        rA.load(A, tvmA, thrID, (m, k))
+        rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
       if alpha != 1.0'f32:
@@ -66,11 +66,10 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
           rD[i] = alpha * rD[i]
 
       if beta != 0.0'f32:
-        var rC: tile(C.T, cLayout)
-        rC.loadTile(C, tvmC, thrID, (m, n))
+        let rC = tile(C.T, cLayout).load(C, tvmC, thrID, (m, n))
         for i in 0 ..< cLayout.size():
           rD[i] += beta * rC[i]
-      D.storeTile(rD, tvmC, thrID, (m, n))
+      D.store(rD, tvmC, thrID, (m, n))
 
 proc matmul*(mma: static TiledMma, D, A, B: distinct TensorView) =
   ## D = A·B, same tile grid and launch mapping as gemm.
