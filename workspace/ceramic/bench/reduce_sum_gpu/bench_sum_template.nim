@@ -41,7 +41,7 @@ proc sumLoop*(dst, src: distinct TensorView, iters: int) =
   for _ in 0 ..< iters:
     sum(dst, src)
 
-proc reportSum(policy: string, G, np, iters: int, startTime, stopTime: MonoTime) =
+proc reportSum*(policy: string, G, np, iters: int, startTime, stopTime: MonoTime) =
   let ns = inNanoseconds(stopTime - startTime) div iters
   let gbps = np.float * 4.0 / (ns.float / 1e9) / 1e9
   echo &"{np:>9}  {iters:>6}  {policy:>8}    {G:>5}   {gbps:.1f}"
