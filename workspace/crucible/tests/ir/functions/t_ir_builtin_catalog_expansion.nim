@@ -16,12 +16,12 @@ import workspace/crucible
 # 1. In-macro template expansion (verified inside `opencl:`)
 # ═══════════════════════════════════════════════════════════════════════
 const expansionKernel = opencl:
-  proc expansionKernel(C: ptr UncheckedArray[uint32]) {.global.} =
+  proc expansionKernel(C: ptr UncheckedArray[int]) {.global.} =
     C[0] = blockIdx.x              # dot context
     C[1] = blockIdx[1]             # positional tuple-bracket access
-    C[2] = get_global_id(0'u32)    # static-dim: folds to component 0
-    C[3] = get_global_id(1'u32)    # static-dim: folds to component 1
-    C[4] = get_global_id(2'u32)    # static-dim: folds to component 2
+    C[2] = get_global_id(0)        # static-dim: folds to component 0
+    C[3] = get_global_id(1)        # static-dim: folds to component 1
+    C[4] = get_global_id(2)        # static-dim: folds to component 2
     C[5] = thread_index_in_threadgroup
     syncthreads()                  # CUDA-idiom barrier alias
     barrier(CLK_LOCAL_MEM_FENCE)   # OpenCL-idiom barrier alias
@@ -50,14 +50,14 @@ block:
   echo "  OK — in-macro alias expansion (dot / positional / static-dim / barrier aliases)"
 
 block:
-  # Runtime dim: a non-static argument cannot bind the `static uint32` template
+  # Runtime dim: a non-static argument cannot bind the `static int` template
   # param, so `get_global_id(d)` with a runtime `d` is a loud Nim error.
   # The rejection is verified here inside the `opencl:` macro body.
   static:
     doAssert not compiles(block:
       const bad = opencl:
-        proc bad(C: ptr UncheckedArray[uint32]) {.global.} =
-          let d = 0'u32
+        proc bad(C: ptr UncheckedArray[int]) {.global.} =
+          let d = 0
           C[0] = get_global_id(d)
     )
   echo "  OK — runtime-dim get_global_id(d) rejected loudly inside the macro"
@@ -69,7 +69,7 @@ const CatalogSource = staticRead("../../../src/codegen/builtins/builtins_catalog
 
 proc declaredCatalogNames(src: string): seq[string] =
   ## Extracts the exported declaration names from the catalog source:
-  ## `let` / `proc` / `template` / `const` declarations and the `uvec3` type.
+  ## `let` / `proc` / `template` / `const` declarations and the `ivec3` type.
   for line in src.splitLines():
     let s = line.strip()
     var name = ""
@@ -81,7 +81,7 @@ proc declaredCatalogNames(src: string): seq[string] =
           break
         name.add c
     elif s.contains("* = tuple"):
-      # `uvec3* = tuple[x, y, z: uint32]`: the type declaration
+      # `ivec3* = tuple[x, y, z: int]`: the type declaration
       for c in s:
         if c == '*':
           break
