@@ -124,4 +124,4 @@ template getLocalTileID*(gridShape: IntOrIntTuple): auto =
 
 template getLocalThreadID*: int =
   ## Lane index of the thread inside its squadron.
-  thread_index_in_threadgroup
+  thread_index_in_threadgroup  # threadindex-allow
