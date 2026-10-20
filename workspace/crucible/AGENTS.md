@@ -86,6 +86,32 @@ Exception: tests for backends not supported in the current environment. For thos
 1. Do a **sanity check** by inspecting the generated code text
 2. Report the run command to the user so they can execute it manually
 
+### What counts as a test
+
+A test drives code whose output can differ from its input.
+In scope: passes, rewrites, folds, lowerings, codegen.
+The assertion targets the delta between input and output.
+
+- echo tests are banned: hand-build a node, stuff a field, assert
+  the accessor returns it (`scopeAdd` then `scopeGet`), tests nothing
+  that can regress and ossifies internals
+- printer labels are not contracts, a `pretty()` output containing
+  "Var" is a rendering detail
+- a pass test whose every block asserts "nothing changed" never
+  exercises the rewrite
+
+Every pass test asserts the positive case plus a hazard negative,
+an input that must pass through untouched.
+
+- derived accessors are tested through their consumer pass:
+  `insertPointerDeref` deref depth, the atomic pointee check accepting
+  `addr s.counter`
+- value assertions beat shape assertions, a hand-built gtInt64 index
+  defeats a hardcoded-default regression, a structural check does not
+
+Linter rule of record: `test-header-testthat` caps the abstract
+at 2 lines and 3 one-liner bullets.
+
 ## Engine API — per-target notes
 
 The engine lifecycle: `init()` → `ingest(source)` → `getArtifact()` →
