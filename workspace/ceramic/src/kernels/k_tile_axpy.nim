@@ -26,15 +26,15 @@ proc axpy*(y, x: distinct TensorView, alpha: float32) {.inline.} =
   ## - x: the source tensor
   ## - y: the accumulator, updated in place
   let thrID = thread_index_in_threadgroup
-  var reg: rt(y.T)
+  var reg: tile(y.T)
   let tiled = make_layout(y.size()).logical_divide(reg.getLayout())
   let grid = tiled.getTileGrid()
   let
     cSize = grid.size()
     gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
   for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
-    var rx: rt(x.T)
-    var ry: rt(y.T)
+    var rx: tile(x.T)
+    var ry: tile(y.T)
     rx.loadTile(x, thrID, tileID)
     ry.loadTile(y, thrID, tileID)
     for i in 0 ..< rx.size():

@@ -7,7 +7,7 @@
 
 ## Register tiles on the layout algebra.
 ##
-## - `rt`: the unified register tile, an owned n-d tensor with a compile-time layout
+## - `tile`: the unified register tile, an owned n-d tensor with a compile-time layout
 ## - `zero`: the per-type zero for register cells and pad values
 ## - `getLocalTileID` / `getLocalThreadID`: launch mapping, the squadron's tile
 ##   and the thread's lane inside it
@@ -28,7 +28,7 @@ import ./tile_matmul
 template getThreadCount*: int =
   ## Returns the width of the lanes of one co-executing group
   ## as a compile-time constant, assuming the reference hardware.
-  ## Pass the tile map explicitly with `rt(T, make_layout(...))` on other devices.
+  ## Pass the tile map explicitly with `tile(T, make_layout(...))` on other devices.
   ## - CUDA: one warp, 32 lanes
   ## - Metal: one simdgroup, 32 lanes
   ## - OpenCL or Vulkan: one subgroup, 32 lanes (NVIDIA warp, AMD wave32)
@@ -63,19 +63,19 @@ template getDefaultTileLayout*(T: typedesc): untyped =
 
 type Tile*[T, Sh, St] = TensorOwned[T, Sh, St]
 
-macro rt*(T: typedesc, L: typed): typedesc =
+macro tile*(T: typedesc, L: typed): typedesc =
   ## Register tile type from a layout, e.g. an atom's thread->value map.
   ##
   ## Contract:
   ## - the Tile over T with the layout's static shape and stride
   let ty = getTypeInst(L)
   doAssert ty.kind == nnkBracketExpr and ty.len == 3,
-    "rt: expected a Layout[Shape, Stride] type, got " & ty.repr
+    "tile: expected a Layout[Shape, Stride] type, got " & ty.repr
   result = nnkBracketExpr.newTree(bindSym"Tile", T, ty[1], ty[2])
 
-template rt*(T: typedesc): typedesc =
+template tile*(T: typedesc): typedesc =
   ## Register tile with the default tile map
-  rt(T, getDefaultTileLayout(T))
+  tile(T, getDefaultTileLayout(T))
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile geometry

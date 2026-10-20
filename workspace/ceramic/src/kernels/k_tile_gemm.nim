@@ -52,9 +52,9 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
       gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
     for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
-      var rD: rt(D.T, cLayout)
-      var rA: rt(A.T, mma.getMmaLayout(opA))
-      var rB: rt(B.T, mma.getMmaLayout(opB))
+      var rD: tile(D.T, cLayout)
+      var rA: tile(A.T, mma.getMmaLayout(opA))
+      var rB: tile(B.T, mma.getMmaLayout(opB))
       rD.fillWith(zero(D.T))
       for k in 0 ..< kTiles:
         rA.loadTile(A, tvmA, thrID, (m, k))
@@ -66,7 +66,7 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
           rD[i] = alpha * rD[i]
 
       if beta != 0.0'f32:
-        var rC: rt(C.T, cLayout)
+        var rC: tile(C.T, cLayout)
         rC.loadTile(C, tvmC, thrID, (m, n))
         for i in 0 ..< cLayout.size():
           rD[i] += beta * rC[i]

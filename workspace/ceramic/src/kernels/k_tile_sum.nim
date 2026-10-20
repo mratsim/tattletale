@@ -25,7 +25,7 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   ## - dst: a one-slot tensor for the total
   ## - src: the source tensor
   let thrID = thread_index_in_threadgroup
-  var reg: rt(src.T)
+  var reg: tile(src.T)
   let tiled = make_layout(src.size()).logical_divide(reg.getLayout())
   let grid = tiled.getTileGrid()
   const owned = reg.size() div getThreadCount()
@@ -50,7 +50,7 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
   ## - src: the source tensor
   ## - axis: the input axis summed over
   let thrID = thread_index_in_threadgroup
-  var reg: rt(src.T)
+  var reg: tile(src.T)
   const owned = reg.size() div getThreadCount()
   let
     rest = src.getLayout().sliceAxes(axis)
