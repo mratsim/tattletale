@@ -1,35 +1,18 @@
-## lowerSpans bType + lType remediation test (TEST-001 / SLOP-002 / SLOP-010)
+## lowerSpans bType + lType remediation test
 ##
-## The SLOP-002 fix made the `+ 1` literal constructed by the two lowerSpans
-## rewrites carry the span index type (lType = idxTyp) instead of the
-## hardcoded gtInt32. This test closes the C3 gap by VALUE-asserting that
-## remediation: it drives lowerSpans on hand-built IR whose span index
-## expressions are gpuIdents typed gtInt64 — a NON-default type — so any
-## default/hardcoded typing fails the `lType == idxTyp` assertions.
+## Test that the lowerSpans rewrites carry the span index type into
+## the constructed `+ 1` literal, unknown-shape indexes fall back loudly
 ##
-## It also locks the nil contract: getLoweringExprType never returns nil,
-## a nil lType on the literal crashes genLit at emission with a FieldDefect.
-##
-## Both rewrites are covered: the len(toOpenArray) rewrite
-## and the bare toOpenArray inline rewrite.
-##
-## Part (b) — loudness contract: an index of an unknown shape (gpuDot) hits
-## the loud gtInt32 fallback, which uses the `warning` builtin (not a raw
-## echo — it is suppressible with --warnings:off). Compile WITHOUT
-## --warnings:off and grep the output: exactly TWO "[lowerSpans] WARNING:"
-## lines must be present (part (b) gpuDot + part (c) nil-typed ident — the
-## normal path in parts (a)/(a2) must emit none). The fallback always
-## produces a non-nil, usable gtInt32 type (no nil lType, no FieldDefect).
+## - a hand-built gtInt64-typed index defeats any default typing, VALUE-asserted
+## - getLoweringExprType never returns nil, a nil lType crashes genLit at emission
+## - the fallback warns via the `warning` builtin, suppressible with --warnings:off
 ##
 ## Run:
 ##   cd tattletale
 ##   nim c -r --hints:off --warnings:off --debugger:native \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerSpansBtype.nim
-## Loudness check (exactly 2 warnings, parts (b) + (c)):
-##   nim c -r --hints:off --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/ir/control_flow/t_ir_lowerSpansBtype.nim \
-##     2>&1 | grep -c "\[lowerSpans\] WARNING:"
+
 
 import std/[strutils, tables]
 import workspace/crucible/src/codegen/passes/passes_lowering
