@@ -35,9 +35,9 @@ proc sumExpect*(np: int): float64 =
 
 proc sumLoop*(dst, src: distinct TensorView, iters: int) =
   ## Bench harness: iters full-sum reductions in one launch, launch
-  ## overhead excluded from the measurement. The accumulation is atomic,
-  ## dst grows by the total per iteration, the bench resets dst before
-  ## timing and the cross-check divides by iters.
+  ## overhead excluded from the measurement.
+  ## - Accumulation is atomic, dst grows by the total per iteration
+  ## - The bench resets dst before timing, the cross-check divides by iters
   for _ in 0 ..< iters:
     sum(dst, src)
 

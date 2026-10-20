@@ -12,6 +12,7 @@ import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_compiletime
 import workspace/ceramic/src/tensors
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/kernels/k_tile_sum
 
@@ -35,21 +36,16 @@ func refSum[T, Sh, St](src: TensorView[T, Sh, St]): float32 =
   float32(acc)
 
 func refSum[T, ShS, StS, ShD, StD](dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS], axis: static int) =
-  ## Sums over the last axis, one accumulator per output slice
-  doAssert axis == src.shape.rank - 1
-  when src.shape.rank == 2:
-    for row in 0 ..< src.shape[0]:
-      var acc = 0.0
-      for col in 0 ..< src.shape[1]:
-        acc += float64(src[row, col])
-      dst[row, 0] = float32(acc)
-  else:
-    let lastExtent = src.shape[src.shape.rank - 1]
-    for s in 0 ..< src.size() div lastExtent:
-      var acc = 0.0
-      for i in s * lastExtent ..< (s + 1) * lastExtent:
-        acc += float64(src.data[i])
-      dst.data[s] = float32(acc)
+  ## Sums over `axis`, one f64 accumulator per output slot
+  let dstSlots = make_layout(dst.shape)
+  var acc = newSeq[float64](toInt(dst.size()))
+  for i in 0 ..< src.size():
+    var crd = idx2crd(src.shape, i)
+    crd[axis] = 0
+    acc[toInt(dstSlots.crd2idx(crd))] += float64(src(i))
+  for j in 0 ..< dst.size():
+    var crd = idx2crd(dst.shape, j)
+    dst[crd] = float32(acc[toInt(dstSlots.crd2idx(crd))])
 
 # ═══════════════════════════════════════════════════════════════
 #  The checks
@@ -74,28 +70,25 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
   engine.copyToHostFromDevice(addr got.data[0], gotDev.data, 1)
   assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
 
-proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sSrc: static (int, int)) =
-  ## One sum_axis launch over a random (rows, cols) tensor
-  var src = rng.randomHostTensor( float32, (rows, cols), sSrc)
-  var got = makeHostTensor(float32, (rows, 1), (1, 1))
+proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dstStrides: tuple, axis: static int, msg: string) =
+  ## One sum(axis) launch over a random tensor of any rank
+  var src = rng.randomHostTensor(float32, shape, srcStrides)
+  var dstShape = shape
+  dstShape[axis] = 1
+  let dstLayout = make_layout(dstShape, dstStrides)
+  var got = makeHostTensor(float32, dstShape, dstLayout.stride)
+  var expect = makeHostTensor(float32, dstShape, dstLayout.stride)
+  refSum(expect.view(), src.view(), axis)
   let
     srcDev = engine.bridge(src)
     gotDev = engine.bridge(got)
   # the kernel's grid-stride loop completes the tile grid from any launch grid
-  let
-    gridX = rng.rand(1 .. 2 * ceil_div(rows, 32))
-    gridY = rng.rand(1 .. 2 * ceil_div(cols, 32))
-  engine.launchDeviceFn sum(gotDev, srcDev, 1) do:
-    grid = (gridX, gridY)
+  let gridX = rng.rand(1 .. 8)
+  engine.launchDeviceFn sum(gotDev, srcDev, axis) do:
+    grid = (gridX, 1)
     blk = (32, 1)
-  var expect = makeHostTensor(float32, (rows, 1), (1, 1))
-  refSum(expect.view(), src.view(), 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, rows)
-  assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
-
-# ═══════════════════════════════════════════════════════════════
-#  The drivers
-# ═══════════════════════════════════════════════════════════════
+  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, toInt(got.layout.cosize()))
+  assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4, msg = msg)
 
 proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
   var rng: Rand
@@ -136,6 +129,63 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
     assertAllClose(sumGot.view(), expectSum.view(), msg = "4D sum full")
 
+func genAxisCases*[Sh: tuple](shapes: varargs[Sh]): seq[tuple[src, dst: tuple[shape, strides: Sh], axis, iters: int]] =
+  ## Axis-reduction cases, one entry per (stride order, axis) per shape:
+  ## - src strides: every compact order, row-major, column-major, middle
+  ##   fastest and slowest included, plus each axis stride scaled 2x and 3x
+  ## - dst: compact, axis size 1
+  ## - iters scaled by element count
+
+  func rowmajor(dims: seq[int]): seq[int] =
+    result = newSeq[int](dims.len)
+    var p = 1
+    for i in countdown(dims.len - 1, 0):
+      result[i] = p
+      p *= dims[i]
+
+  func asTuple(vals: seq[int]): Sh =
+    var i = 0
+    for f in fields(result):
+      f = vals[i]
+      i.inc
+
+  func perms(vals: seq[int]): seq[seq[int]] =
+    if vals.len <= 1:
+      return @[vals]
+    for i in 0 ..< vals.len:
+      var rest = vals
+      rest.delete(i)
+      for p in perms(rest):
+        result.add(@[vals[i]] & p)
+
+  for shape in shapes:
+    var dims: seq[int]
+    var np = 1
+    for f in fields(shape):
+      dims.add(f)
+      np *= f
+    let iters = if np <= 200_000: 200 elif np <= 1_000_000: 50 else: 20
+    var orders = perms(rowmajor(dims))
+    for k in 0 ..< dims.len:
+      var skip2 = rowmajor(dims)
+      skip2[k] *= 2
+      var skip3 = rowmajor(dims)
+      skip3[k] *= 3
+      orders.add(skip2)
+      orders.add(skip3)
+    for sdims in orders:
+      for axis in 0 ..< dims.len:
+        var ddims = dims
+        ddims[axis] = 1
+        result.add((
+          src: (shape: asTuple(dims), strides: asTuple(sdims)),
+          dst: (shape: asTuple(ddims), strides: asTuple(rowmajor(ddims))),
+          axis: axis, iters: iters))
+
+const AxisCases2 = genAxisCases((8, 4), (5, 3), (2, 16))
+const AxisCases3 = genAxisCases((2, 3, 4), (3, 5, 2), (2, 2, 6), (5, 2, 2))
+const AxisCases4 = genAxisCases((2, 3, 4, 5), (4, 3, 2, 2), (3, 2, 2, 5))
+
 proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
   var rng: Rand
   let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
@@ -144,10 +194,20 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
   echo moduleName, " xoroshiro128+ seed: ", seed
 
   # stride permutations within one covered tile: the (8, 4) block covers (8, 128)
-  rng.checkSumAxis( engine, 8, 128, (128, 1))
-  rng.checkSumAxis( engine, 8, 128, (1, 8))
+  rng.checkSumAxis(engine, (8, 128), (128, 1), (1, 1), 1, "2D tile permutation (128, 1)")
+  rng.checkSumAxis(engine, (8, 128), (1, 8), (1, 1), 1, "2D tile permutation (1, 8)")
 
-  # ── 3D tensor: the (2, 2, 2) block covers (2, 2, 60) ──
+  # ── layout cases: 2D/3D/4D, contiguous, swapped and column-major
+  #    sources, compact and mirrored destinations ──
+  template checkAxisCases(cases: untyped, label: string) =
+    staticFor ci, 0, cases.len:
+      checkSumAxis(rng, engine, cases[ci].src.shape, cases[ci].src.strides,
+          cases[ci].dst.strides, cases[ci].axis, label & " case " & $ci)
+  checkAxisCases(AxisCases2, "2D")
+  checkAxisCases(AxisCases3, "3D")
+  checkAxisCases(AxisCases4, "4D")
+
+  # ── partial tiles on the last axis: the (2, 2, 2) block covers (2, 2, 60) ──
   block:
     var src = rng.randomHostTensor( float32, (2, 2, 60), (120, 60, 1))
     var axisGot = makeHostTensor(float32, (2, 2, 1), (2, 1, 1))
@@ -161,7 +221,7 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 4)
     assertAllClose(axisGot.view(), expectAxis.view(), msg = "3D sum with axis")
 
-  # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
+  # ── partial tiles on the last axis: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
   block:
     var src = rng.randomHostTensor( float32, (2, 2, 2, 50), (200, 100, 50, 1))
     var axisGot = makeHostTensor(float32, (2, 2, 2, 1), (4, 2, 1, 1))
