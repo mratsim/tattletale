@@ -10,7 +10,7 @@
 ## They do NOT call getTypeInst / getTypeImpl / getImpl.
 
 import std / [macros, strutils, tables]
-import ./gpu_types
+import ./gpu_ast_datatypes
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GpuType constructors

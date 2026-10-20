@@ -25,7 +25,7 @@
 ##     workspace/crucible/tests/ir/optimizations/ir_foldMaxMin.nim
 
 import std/[tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_optimizations
 
 # ─── IR construction helpers (mirror the shapes nim_to_gpu produces) ───

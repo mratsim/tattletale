@@ -10,7 +10,7 @@ import std/[macros, tables]
 
 import workspace/crucible/src/abis/cl_abi
 
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/exec/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

@@ -8,7 +8,7 @@
 
 import std/[macros, tables]
 
-import ./ir/gpu_types
+import ./ir/gpu_ast_datatypes
 import ./targets/targets_lang
 import ./passes/passes_cuda
 import ./passes/passes_wgsl

@@ -5,7 +5,9 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 import std / [sequtils, sets, tables]
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/nim_to_gpu_type_resolvers
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 
 
@@ -55,18 +57,6 @@ const
 proc isBasicNumeric*(t: GpuType): bool =
   ## Returns whether `t` is a type the backends' native max/min accept.
   not t.isNil and t.kind in BasicNumericKinds
-
-proc operandType*(ctx: GpuContext; n: GpuAst): GpuType =
-  ## Best-effort type of a pattern operand.
-  ## Returns nil when the pass cannot determine it,
-  ## and the fold then conservatively skips.
-  case n.kind
-  of gpuIdent: n.symbol.typ
-  of gpuLit: n.lType
-  of gpuBinOp: n.bType
-  of gpuPrefix: ctx.operandType(n.pVal)  # `-x` keeps x's type
-  of gpuCall: ctx.getFnReturnType(n.cName)
-  else: nil
 
 proc sameExpr(a, b: GpuAst): bool =
   ## Structural equality for pattern operands.
@@ -161,8 +151,8 @@ proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
     return false
 
   # Both operands must be basic numerics of the same type.
-  let tA = ctx.operandType(tThen)
-  let tB = ctx.operandType(tElse)
+  let tA = ctx.getOperandType(tThen)
+  let tB = ctx.getOperandType(tElse)
   if not isBasicNumeric(tA) or not isBasicNumeric(tB): return false
   if tA.kind != tB.kind: return false
   # The unguarded form on floats is not fmax.

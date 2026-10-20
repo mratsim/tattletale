@@ -10,8 +10,8 @@
 ## and its allocator live in one scope like the stdlib's memalloc and seqs_v2,
 ## the release procs are private and never re-exported.
 
-import workspace/crucible/src/codegen/ir/gpu_types
-export gpu_types.BackendKind
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+export gpu_ast_datatypes.BackendKind
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc

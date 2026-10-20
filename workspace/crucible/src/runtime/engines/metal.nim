@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/objc_abi as objc
 
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/exec/metal_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

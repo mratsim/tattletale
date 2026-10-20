@@ -7,10 +7,11 @@
 
 import std / [macros, strutils, sequtils, options, tables, sets]
 
-import ./gpu_types
+import ./gpu_ast_datatypes
 import ./gpu_type_constructors
 import ../builtins/builtins_functions
-import ./resolvers
+import ./nim_to_gpu_type_resolvers
+import ./gpu_ast_type_resolvers
 import ../passes/pass_registry
 
 
@@ -779,6 +780,7 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode,
       result.symbol.coordBuiltin = coordBuiltinKind(result.symbol.name)
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
       result.symbol.reductionBuiltin = reductionBuiltinKind(result.symbol.name)
+      result.symbol.atomicsBuiltin = atomicsBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkIntLit, nnkInt32Lit:

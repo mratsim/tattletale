@@ -7,7 +7,7 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,
@@ -351,22 +351,21 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "__syncthreads()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta. The mask literal 0xffffffff
-        # marks all lanes active and the width is fixed at 32 lanes.
-        result = indentStr & "__shfl_down_sync(0xffffffff, " &
-                 ctx.genCuda(ast.cArgs[0]) & ", " &
-                 ctx.genCuda(ast.cArgs[1]) & ", 32)"
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index.
-        result = indentStr & "__shfl_sync(0xffffffff, " &
-                 ctx.genCuda(ast.cArgs[0]) & ", " &
-                 ctx.genCuda(ast.cArgs[1]) & ", 32)"
+      of gbkReduceAdd:
+        result = indentStr & "warpReduceAdd(" & ctx.genCuda(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "warpReduceMax(" & ctx.genCuda(ast.cArgs[0]) & ')'
       of gbkNone:
-        var cudaArgs: seq[string]
-        for i, arg in ast.cArgs:
-          cudaArgs.add ctx.genCuda(arg)
-        result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+        case ast.cName.symbol.atomicsBuiltin
+        of gbkAtomicFetchAdd:
+          # atomicAdd overloads on the pointee type, no cast needed
+          result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
+                   ctx.genCuda(ast.cArgs[1]) & ')'
+        of gbkNone:
+          var cudaArgs: seq[string]
+          for i, arg in ast.cArgs:
+            cudaArgs.add ctx.genCuda(arg)
+          result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:
@@ -478,11 +477,48 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     echo "Unhandled node kind in genCuda: ", ast.kind
     raiseAssert "Unhandled node kind in genCuda: " & ast.repr
 
+proc usesWarpReduce(n: GpuAst, kind: GpuReductionBuiltinKind): bool =
+  ## True when the AST contains a reduceAdd/reduceMax call of `kind`,
+  ## which needs its warp-reduce template emitted at module scope.
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.reductionBuiltin == kind:
+    return true
+  for ch in n:
+    if usesWarpReduce(ch, kind):
+      return true
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle
   # 1. generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
     result.add ctx.genCuda(blk) & ";\n\n"
+
+  # 1b. emit the warp-reduce templates for the builtins in use.
+  # CUDA has no float warp-reduce intrinsic: `__reduce_add_sync` is
+  # int-only. The butterfly is a __shfl_xor_sync tree over deltas 16/8/4/2/1.
+  var needsReduceAdd = false
+  var needsReduceMax = false
+  for (fnIdent, fn) in ctx.fnTab.pairs:
+    if usesWarpReduce(fn.pBody, gbkReduceAdd):
+      needsReduceAdd = true
+    if usesWarpReduce(fn.pBody, gbkReduceMax):
+      needsReduceMax = true
+  if needsReduceAdd:
+    result.add "template <typename T> __forceinline__ __device__ T warpReduceAdd(T v) {\n"
+    result.add "  #pragma unroll\n"
+    result.add "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
+    result.add "    v += __shfl_xor_sync(0xffffffff, v, delta, 32);\n"
+    result.add "  }\n"
+    result.add "  return v;\n"
+    result.add "}\n\n"
+  if needsReduceMax:
+    result.add "template <typename T> __forceinline__ __device__ T warpReduceMax(T v) {\n"
+    result.add "  #pragma unroll\n"
+    result.add "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
+    result.add "    v = max(v, __shfl_xor_sync(0xffffffff, v, delta, 32));\n"
+    result.add "  }\n"
+    result.add "  return v;\n"
+    result.add "}\n\n"
 
   # 2. generate all regular functions
   let fns = toSeq(ctx.fnTab.pairs)

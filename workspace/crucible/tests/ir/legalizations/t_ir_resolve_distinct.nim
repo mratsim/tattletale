@@ -10,8 +10,8 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import workspace/crucible/src/codegen/ir/gpu_types
-import workspace/crucible/src/codegen/ir/resolvers
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/codegen/ir/nim_to_gpu_type_resolvers
 
 type
   Kilometers = distinct int32

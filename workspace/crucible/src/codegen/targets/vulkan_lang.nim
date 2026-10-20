@@ -7,7 +7,8 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,
@@ -177,18 +178,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
 
 
-proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
-  ## True if the type tree contains `kind` somewhere.
-  case t.kind
-  of gtPtr:
-    result = t.to.containsKind(kind)
-  of gtArray:
-    result = t.aTyp.containsKind(kind)
-  of gtUA:
-    result = t.uaTo.containsKind(kind)
-  else:
-    result = t.kind == kind
-
 proc usesReductionBuiltin(n: GpuAst): bool =
   ## True when the AST contains a reduction builtin call needing the GLSL subgroup extensions at module scope.
   if n.kind == gpuCall and n.cName.symbol != nil and
@@ -196,6 +185,17 @@ proc usesReductionBuiltin(n: GpuAst): bool =
     return true
   for ch in n:
     if usesReductionBuiltin(ch):
+      return true
+
+proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
+  ## True when the AST contains an fp `atomicFetchAdd` call, which needs
+  ## GL_EXT_shader_atomic_float at module scope. int atomicAdd is core.
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
+     getPointeeKind(ctx.getOperandType(n.cArgs[0])) == gtFloat32:
+    return true
+  for ch in n:
+    if ctx.usesFloatAtomic(ch):
       return true
 
 
@@ -453,31 +453,24 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                "barrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: `subgroupShuffleDown(v, delta)`,
-        # gated by GL_KHR_shader_subgroup_shuffle_relative (the umbrella
-        # GL_KHR_shader_subgroup is not a GLSL extension name).
-        # The delta/lane operand is uint in GLSL, int-literal
-        # args get the U suffix, the canonical Nim arg is int,
-        # the printer casts.
-        var delta = ctx.genVulkan(ast.cArgs[1])
-        if delta.allCharsInSet(Digits):
-          delta.add 'U'
-        result = indentStr & "subgroupShuffleDown(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " & delta & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index, gated by
-        # GL_KHR_shader_subgroup_shuffle. Lane operand is uint in GLSL.
-        var lane = ctx.genVulkan(ast.cArgs[1])
-        if lane.allCharsInSet(Digits):
-          lane.add 'U'
-        result = indentStr & "subgroupShuffle(" &
-                 ctx.genVulkan(ast.cArgs[0]) & ", " & lane & ')'
+      of gbkReduceAdd:
+        result = indentStr & "subgroupAdd(" & ctx.genVulkan(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "subgroupMax(" & ctx.genVulkan(ast.cArgs[0]) & ')'
       of gbkNone:
-        var vkArgs: seq[string]
-        for arg in ast.cArgs:
-          vkArgs.add ctx.genVulkan(arg)
-        result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
+        case ast.cName.symbol.atomicsBuiltin
+        of gbkAtomicFetchAdd:
+          # fp needs GL_EXT_shader_atomic_float, emitted at module scope
+          # when the AST contains an fp atomicFetchAdd, int is core.
+          # Pointers are GL_EXT_buffer_reference handles, dereference
+          # the first element of the reference's member array.
+          result = indentStr & "atomicAdd(" & ctx.genVulkan(ast.cArgs[0]) &
+                   ".x[0], " & ctx.genVulkan(ast.cArgs[1]) & ')'
+        of gbkNone:
+          var vkArgs: seq[string]
+          for arg in ast.cArgs:
+            vkArgs.add ctx.genVulkan(arg)
+          result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
 
 
   of gpuBinOp:
@@ -640,6 +633,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsFp16 = false
   var needsBf16 = false
   var needsSubgroup = false
+  var needsAtomicFloat = false
   var needsInt8 = false
   var needsInt64 = false
   for fnIdent, fn in ctx.fnTab:
@@ -666,6 +660,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsInt64 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
+    if ctx.usesFloatAtomic(fn.pBody):
+      needsAtomicFloat = true
   for pt in refPointees:
     var b = pt
     while b.kind in {gtArray, gtUA}:
@@ -697,12 +693,10 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
     result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
   if needsSubgroup:
-    # subgroupShuffleDown is gated by GL_KHR_shader_subgroup_shuffle_relative,
-    # subgroupShuffle by GL_KHR_shader_subgroup_shuffle.
-    # The umbrella GL_KHR_shader_subgroup is not a GLSL extension name, glslang rejects it.
-    # Tile reduction trees use the two together, down tree then leader broadcast.
-    result.add "#extension GL_KHR_shader_subgroup_shuffle_relative : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
+  if needsAtomicFloat:
+    result.add "#extension GL_EXT_shader_atomic_float : enable\n"
   result.add "\n"
 
   # ── Step 1b: Emit reference block typedefs, before the structs using them ──

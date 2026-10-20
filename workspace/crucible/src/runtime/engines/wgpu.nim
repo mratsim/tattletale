@@ -10,7 +10,7 @@ import std/[macros, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/exec/wgpu_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

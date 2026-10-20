@@ -86,6 +86,36 @@ Exception: tests for backends not supported in the current environment. For thos
 1. Do a **sanity check** by inspecting the generated code text
 2. Report the run command to the user so they can execute it manually
 
+### What counts as a test
+
+A test exercises compiler functionality: an AST transformation, an emission, a runtime result.
+
+Hand-built AST fed to an internal accessor with the expected kind
+hardcoded asserts the type of the test, not the compiler.
+
+In scope: passes, rewrites, folds, lowerings, codegen.
+The assertion targets the delta between input and output.
+
+- echo tests are banned: hand-build a node, stuff a field, assert
+  the accessor returns it (`scopeAdd` then `scopeGet`), tests nothing
+  that can regress and ossifies internals
+- printer labels are not contracts, a `pretty()` output containing
+  "Var" is a rendering detail
+- a pass test whose every block asserts "nothing changed" never
+  exercises the rewrite
+
+Every pass test asserts the positive case plus a hazard negative,
+an input that must pass through untouched.
+
+- derived accessors are tested through their consumer pass:
+  `insertPointerDeref` deref depth, the atomic pointee check accepting
+  `addr s.counter`
+- value assertions beat shape assertions, a hand-built gtInt64 index
+  defeats a hardcoded-default regression, a structural check does not
+
+Linter rule of record: `test-header-testthat` caps the abstract
+at 2 lines and 3 one-liner bullets.
+
 ## Engine API — per-target notes
 
 The engine lifecycle: `init()` → `ingest(source)` → `getArtifact()` →
@@ -165,6 +195,8 @@ emit the native spellings below.
 | `threadgroups_per_grid` | `gridDim` | `get_num_groups(d)` | `gl_NumWorkGroups` | `num_workgroups` | `threadgroups_per_grid` |
 | `thread_index_in_threadgroup` | `(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)` | `(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))` | `gl_LocalInvocationIndex` | `local_invocation_index` | `thread_index_in_threadgroup` |
 | `threadgroup_barrier` | `__syncthreads()` | `barrier(CLK_LOCAL_MEM_FENCE)` | `barrier()` | `workgroupBarrier()` | `threadgroup_barrier(mem_flags::mem_threadgroup)` |
+| `reduceAdd` | `warpReduceAdd` (emitted `__forceinline__` template) | `sub_group_reduce_add` | `subgroupAdd` | `subgroupAdd` (no directive; subgroups device feature, see note) | `simd_sum` |
+| `reduceMax` | `warpReduceMax` (emitted `__forceinline__` template) | `sub_group_reduce_max` | `subgroupMax` | `subgroupMax` (no directive; subgroups device feature, see note) | `simd_max` |
 
 - CUDA and OpenCL spell the vector coordinates per component (`d` is the accessed component).
   Whole-value uses of the coordinate vectors are out of scope.

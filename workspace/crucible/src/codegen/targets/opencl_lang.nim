@@ -7,7 +7,8 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 import ../passes/passes_opencl
 import ../passes/passes_preprocessing as pp
@@ -424,28 +425,31 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta: the OpenCL 2.0 core sub-group
-        # function. Apple's 1.2 runtime rejects it, so this spelling is
-        # pinned as emitted text only. The delta operand is uint,
-        # int-literal args get the U suffix (the canonical Nim arg is int).
-        var delta = ctx.genOpenCL(ast.cArgs[1])
-        if delta.allCharsInSet(Digits):
-          delta.add 'U'
-        result = indentStr & "sub_group_shuffle_down(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " & delta & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index, uint operand.
-        var lane = ctx.genOpenCL(ast.cArgs[1])
-        if lane.allCharsInSet(Digits):
-          lane.add 'U'
-        result = indentStr & "sub_group_shuffle(" &
-                 ctx.genOpenCL(ast.cArgs[0]) & ", " & lane & ')'
+      of gbkReduceAdd:
+        result = indentStr & "sub_group_reduce_add(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
+        result = indentStr & "sub_group_reduce_max(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
       of gbkNone:
-        var clArgs: seq[string]
-        for arg in ast.cArgs:
-          clArgs.add ctx.genOpenCL(arg)
-        result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
+        case ast.cName.symbol.atomicsBuiltin
+        of gbkAtomicFetchAdd:
+          # fp needs cl_ext_float_atomics, the pragma is emitted at
+          # module scope when the AST contains an fp atomicFetchAdd.
+          # int atomic_fetch_add is OpenCL 2.0 core.
+          # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
+          # __global pointer at the call site.
+          let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
+                         of gtFloat32: "atomic_float"
+                         of gtInt32: "atomic_int"
+                         of gtUint32: "atomic_uint"
+                         else: raiseAssert "OpenCL atomicFetchAdd: unsupported pointee type"
+          result = indentStr & "atomic_fetch_add((volatile __global " & atomicTy & "*)" &
+                   ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                   ctx.genOpenCL(ast.cArgs[1]) & ')'
+        of gbkNone:
+          var clArgs: seq[string]
+          for arg in ast.cArgs:
+            clArgs.add ctx.genOpenCL(arg)
+          result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
 
   of gpuBinOp:
@@ -567,11 +571,25 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 # Top-level codegen
 # ═══════════════════════════════════════════════════════════════════════
 
+proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
+  ## True when the AST contains an fp `atomicFetchAdd` call
+  ##
+  ## - the cl_ext_float_atomics pragma is emitted at module scope
+  ## - int atomic_fetch_add is OpenCL 2.0 core
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
+     getPointeeKind(ctx.getOperandType(n.cArgs[0])) == gtFloat32:
+    return true
+  for ch in n:
+    if ctx.usesFloatAtomic(ch):
+      return true
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
   # Check if we need fp64/fp16 extensions
   var needsFp64 = false
   var needsFp16 = false
+  var needsFloatAtomic = false
   for blk in ctx.globalBlocks:
     # We could scan types here, but for now we check in the generated code
     discard
@@ -586,11 +604,15 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp64 = true
       if p.typ.containsFloat16():
         needsFp16 = true
+    if ctx.usesFloatAtomic(fn.pBody):
+      needsFloatAtomic = true
 
   if needsFp64:
     result = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n\n"
   if needsFp16:
     result = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n\n"
+  if needsFloatAtomic:
+    result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n\n"
 
   # 1. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:

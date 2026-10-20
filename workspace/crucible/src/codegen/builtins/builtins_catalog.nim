@@ -143,25 +143,6 @@ template global_id*(): untyped = thread_position_in_grid
 # only the `@workgroup_size` attribute exists, so `threads_per_threadgroup` is deferred on WGSL.
 
 # ═══════════════════════════════════════════════════════════
-# 1c. Reduction builtins (cross-backend subgroup shuffles)
-# ═══════════════════════════════════════════════════════════
-# Per-lane gathers every SIMD backend spells natively: MSL
-# simd_shuffle_down/simd_shuffle, CUDA __shfl_down_sync/__shfl_sync,
-# OpenCL sub_group_shuffle_down/sub_group_shuffle, GLSL and WGSL
-# subgroupShuffleDown/subgroupShuffle. The IR kinds live in
-# GpuReductionBuiltinKind and the printers case on the kind alone.
-
-proc simdShuffleDown*[T](v: T; delta: int): T {.builtin.} = discard
-  ## Returns, on each lane, the value of `v` held by the lane at
-  ## `lane + delta` (`simd_shuffle_down`). Out-of-range sources
-  ## return the calling lane's own value.
-
-proc simdShuffle*[T](v: T; lane: int): T {.builtin.} = discard
-  ## Returns, on each lane, the value of `v` held by the lane at
-  ## absolute index `lane` (`simd_shuffle`). Only the active lanes
-  ## must read `v`.
-
-# ═══════════════════════════════════════════════════════════
 # 2. Synchronization
 # ═══════════════════════════════════════════════════════════
 

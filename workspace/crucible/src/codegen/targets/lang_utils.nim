@@ -6,7 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / tables
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ../builtins/builtins_functions
 import ../builtins/builtins_gpu_types
 import ../passes/passes_optimizations
@@ -18,7 +19,7 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
   ## else keep their name unchanged.
   let name = call.cName.ident()
   if name in NimGpuNumericBuiltinsFunctions:
-    let t = ctx.operandType(call.cArgs[0]) # builtin min/max/abs always have 1 or 2 cArgs
+    let t = ctx.getOperandType(call.cArgs[0]) # builtin min/max/abs always have 1 or 2 cArgs
     if not t.isNil:
       return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
   NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)

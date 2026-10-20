@@ -21,7 +21,7 @@ import std/[macros, sequtils, strutils, tables]
 
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/ir/nim_to_gpu
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/pass_datatypes
 
 func constFolded[S: static int](): int32 = S

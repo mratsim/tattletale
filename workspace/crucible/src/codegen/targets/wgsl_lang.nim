@@ -7,7 +7,8 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, sets, tables, options]
 
-import ../ir/gpu_types
+import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
@@ -62,7 +63,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                            allowEmptyIdent = false,
                            addrSpace: AddressSpace = asRMEM
                     ): string =
-  ## WebGPU type generation is a bit more complicated than CUDA, due to their pointer semantics.
   var skipIdent = false
   case t.kind
   of gtPtr:
@@ -105,7 +105,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
   of gtStatic: result = "i32"
   else:        result = gpuTypeToString(t.kind)
 
-  if ident.len > 0 and not skipIdent: # still need to add ident
+  if ident.len > 0 and not skipIdent:
     result = ident & ": " & result
 
 proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
@@ -122,7 +122,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     ## XXX: wrong
     result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
   else:
-    # normal stuff
     result = &"{fn}({fnArgs})"
     let typ = gpuTypeToString(typ, allowEmptyIdent = true)
     if typ.len > 0:
@@ -181,7 +180,6 @@ proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
       substituteIdents(ch, subst)
 
 proc containsReturnStmt(n: GpuAst): bool =
-  ## True when the tree holds a `return` statement.
   if n.kind == gpuReturn:
     return true
   for ch in n:
@@ -189,7 +187,6 @@ proc containsReturnStmt(n: GpuAst): bool =
       return true
 
 proc collectIdentNames(n: GpuAst, names: var HashSet[string]) =
-  ## Collects every identifier name in the tree.
   if n.kind == gpuIdent and n.symbol != nil:
     names.incl n.symbol.name
   else:
@@ -337,16 +334,12 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   ctx.farmTopLevel(ast, kernel, varBlock)
   ctx.globalBlocks.add varBlock
 
-  # Now add the generics to the `allFnTab`
   for k, v in pairs(ctx.genericInsts):
     ctx.allFnTab[k] = v
-  # And all the known types
   var typBlock = GpuAst(kind: gpuBlock)
   for k, typ in pairs(ctx.types):
     typBlock.statements.add typ
   ctx.globalBlocks.add typBlock
-
-  # Delegate to passes_preprocessing passes
 
   # 2. Remove all arguments from global functions, as none are allowed in WGSL
   for (fnIdent, fn) in mpairs(ctx.fnTab):
@@ -359,10 +352,8 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     else:
       discard
 
-  # 2.b filter out all `var foo {.const_mem.}: dtype`
   if ctx.globalBlocks.len > 0:
     pw.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
-  # 2.c remove all fields of structs, which have pointer type
   if ctx.globalBlocks.len > 1:
     pw.removeStructPointerFieldsImpl(ctx.globalBlocks[1])
 
@@ -379,12 +370,10 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
       callParams[p.ident.symbol.iSym] = p
     pw.scanGenericsImpl(ctx, fn, callParams)
 
-  # 4. injectAddressOf for globals
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     if fn.isGlobal():
       pw.injectAddressOfImpl(ctx, fn)
 
-  # 5. Inline calls whose parameters cannot cross a WGSL function signature.
   ctx.inlinePointerParamCalls()
 
   for (fnIdent, fn) in mpairs(ctx.fnTab):
@@ -439,14 +428,15 @@ proc wgslBuiltinParam(canonical: string): WgslBuiltinParam =
       return p
 
 proc wgslBuiltinParamName(canonical: string): string =
-  ## The kernel-body spelling of a canonical coordinate builtin: the injected
-  ## `@builtin` param name. Unknown names pass through unchanged.
+  ## Unknown names pass through unchanged.
   let p = wgslBuiltinParam(canonical)
   if p.canonical.len > 0: p.param else: canonical
 
 proc collectWgslBuiltins(n: GpuAst, builtins: var seq[string]) =
-  ## Records the coordinate builtins the body references, in first-use order, deduped (the Metal `collectAttrIdents` pattern).
-  ## Only builtins with a real WGSL `@builtin` param are recorded. The `gpuCall` name is excluded from the walk.
+  ## Records the coordinate builtins the body references:
+  ## - first-use order, deduped
+  ## - only builtins with a real WGSL `@builtin` param
+  ## - the `gpuCall` name is excluded from the walk
   case n.kind
   of gpuIdent:
     if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
@@ -458,10 +448,9 @@ proc collectWgslBuiltins(n: GpuAst, builtins: var seq[string]) =
       collectWgslBuiltins(ch, builtins)
 
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
-  #echo "AST: ", $ast
   let indentStr = "  ".repeat(indent)
   case ast.kind
-  of gpuDiscard: return # nothing to emit
+  of gpuDiscard: return
   of gpuProc:
     let attrs = collect:
       for att in ast.pAttributes:
@@ -545,7 +534,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
        elif c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "0": "false"
        else: ctx.genWebGpu(c))
     # skip semicolon in the condition. Otherwise can lead to problematic code
-    ctx.withoutSemicolon: # skip semicolon for if bodies
+    ctx.withoutSemicolon:
       result = indentStr & "if (" & genCond(ast.ifCond) & ") {\n"
     result &= ctx.genWebGpu(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
@@ -599,8 +588,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
     of gbkThreadgroupBarrier:
-      # Backend barrier spellings alias-expand in sem, only the canonical
-      # call reaches the IR. WGSL spells it `workgroupBarrier()`.
       result = indentStr & "workgroupBarrier()"
     of gbkThreadgroupBarrierDevice:
       # WGSL has no combined barrier: workgroupBarrier(), then storageBarrier()
@@ -608,17 +595,12 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                "storageBarrier()"
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
-      of gbkSimdShuffleDown:
-        # SIMD-group gather from lane + delta, gated by the `subgroups` feature
-        # the header scan injects
+      of gbkReduceAdd:
         ctx.withoutSemicolon:
-          result = indentStr & "subgroupShuffleDown(" &
-                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
-      of gbkSimdShuffle:
-        # SIMD-group gather from an absolute lane index.
+          result = indentStr & "subgroupAdd(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
+      of gbkReduceMax:
         ctx.withoutSemicolon:
-          result = indentStr & "subgroupShuffle(" &
-                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+          result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
       of gbkNone:
         ctx.withoutSemicolon:
           result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
@@ -691,7 +673,6 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = gpuTypeToString(ast.ocType) & '('
     for i, el in ast.ocFields:
       if el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
-        # use type to construct a default value
         let typStr = gpuTypeToString(el.typ, allowEmptyIdent = true)
         result.add typStr & "()"
       else:
@@ -729,54 +710,26 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuMaterialize:
     raiseAssert "gpuMaterialize should not reach WGSL backend — passByRef is not used"
 
-proc containsKind(t: GpuType, kind: GpuTypeKind): bool =
-  ## True if the type tree contains `kind` somewhere.
-  case t.kind
-  of gtPtr:
-    result = t.to.containsKind(kind)
-  of gtArray:
-    result = t.aTyp.containsKind(kind)
-  of gtUA:
-    result = t.uaTo.containsKind(kind)
-  else:
-    result = t.kind == kind
-
-proc usesReductionBuiltin(n: GpuAst): bool =
-  ## True when the AST contains a reduction builtin call (the subgroup
-  ## shuffles), which needs the `subgroups` feature enabled at module scope.
-  if n.kind == gpuCall and n.cName.symbol != nil and
-     n.cName.symbol.reductionBuiltin != gbkNone:
-    return true
-  for ch in n:
-    if usesReductionBuiltin(ch):
-      return true
-
-
 proc codegen*(ctx: var GpuContext): string =
-  ## Generate the actual code for all pieces of the puzzle
-  ##
-  ## NOTE: WGSL does not require forward declarations / does not care about
-  ## the order in which functions are defined
+  # NOTE: WGSL does not require forward declarations / does not care about
+  # the order in which functions are defined
 
   var needsF16 = false
-  var needsSubgroups = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat16):
       needsF16 = true
     for p in fn.pParams:
       if p.typ.containsKind(gtFloat16):
         needsF16 = true
-    if usesReductionBuiltin(fn.pBody):
-      needsSubgroups = true
   for id, g in ctx.globals:
     if g.typ.containsKind(gtFloat16):
       needsF16 = true
   if needsF16:
     result.add "enable f16;\n\n"
-  if needsSubgroups:
-    # The subgroup shuffles are gated by the `subgroups` feature, declared
-    # module-wide like `enable f16;` above (the same injection mechanism).
-    result.add "enable subgroups;\n\n"
+  # No `enable subgroups` emission: native wgpu runs the subgroup builtins
+  # without the directive when the device requests the subgroups feature
+  # (gfx-rs/wgpu#8202, #5555). The directive is not implemented in Naga
+  # and would fail shader-module creation.
 
   var bindingCounter = 0
   proc mutateToAllowedTypes(p: GpuType): GpuType =
@@ -786,7 +739,7 @@ proc codegen*(ctx: var GpuContext): string =
     ##
     ## If we have a `bool` type, we need to convert it to a `i32` (also applies to `ptr bool`)
     case p.kind
-    of gtPtr: mutateToAllowedTypes(p.to) # if it is `ptr bool`
+    of gtPtr: mutateToAllowedTypes(p.to)
     of gtBool: ## boolean must become `i32`. Will inject `bool(foo)` into globals
       GpuType(kind: gtInt32)
     else: p
@@ -798,7 +751,7 @@ proc codegen*(ctx: var GpuContext): string =
     result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, addrSpace = p.addressSpace) & ";\n"
     inc bindingCounter
 
-  # 1. Generate the header for all global variables (deduped by param name)
+  # deduped by param name
   var emitted: seq[string]
   for id, g in ctx.globals:
     if g.ident.ident() notin emitted:
@@ -806,11 +759,9 @@ proc codegen*(ctx: var GpuContext): string =
       result.add genGlobal(g)
   result.add '\n'
 
-  # 2. generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:
     result.add ctx.genWebGpu(blk) & "\n\n"
 
-  # 3. Kernel + device functions.
   # Workgroup size from the `{.workgroup: (X, Y, Z).}` annotation.
   # Default 64×1×1.
   for fnIdent, fn in ctx.fnTab:

@@ -44,7 +44,7 @@ Rule table (rule | trigger | severity):
 | hidden-context       | an advisory hidden-context word ("mirrors"), the audience is a CS undergraduate that just cloned   | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
-| test-header-testthat | a test file header with no "Test that" line, or one after the run command                          | counted  |
+| test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
@@ -137,6 +137,9 @@ DEEP_EXAMPLE_INDENT = 4
 # split it into bullets or a diagram.
 TABLE_CELL_MAX_WORDS = 30
 MODULE_HEADER_MAX_LINES = 8
+TEST_THAT_ABSTRACT_MAX_LINES = 2
+TEST_THAT_BULLET_MAX = 3
+TEST_THAT_BULLET_ONE_LINE_COLS = 100
 # Bullet-shape caps. A bullet list holds at most 4 items and one item
 # spans at most 3 lines, a 5-item list is banned, longer bullet walls
 # belong in a table or diagram.
@@ -343,6 +346,10 @@ BANNED = [
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
     (r"\bmutations?\b", None, "use change or variation"),
+    (r"\bspelled\b|\bspell\b|\bspells\b|\bspelling\b|\bspellings\b|\bspelt\b",
+     None, "state the value or the syntax directly, do not narrate how it is written"),
+    (r"\w+\(\s*rng\b",
+     None, "use method call syntax: rng.rand(...), rng.seed(...)"),
     (r"\bconvict[s]?\b|\bacquit[s]?\b", None,
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
@@ -492,7 +499,7 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a test file header with no \"Test that\" line, the shape is title, Test that, blank, run command"),
+                                 "a Test that abstract past 2 lines, more than 3 bullets, or a wrapped bullet, the shape is title, Test that (2 lines), up to 3 one-liner bullets, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1482,11 +1489,53 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
     # The run command may wrap, so its first line anchors it.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
     run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
-    if is_test and (not test_that or (run_cmd and min(test_that) > min(run_cmd))):
+    if is_test and test_that and (run_cmd and min(test_that) > min(run_cmd)):
         findings.append(Finding(
             path, first_line, "test-header-testthat",
-            "test file header carries no \"Test that\" line before the run command, "
+            "the \"Test that\" line sits after the run command, "
             "the shape is title, Test that, blank, run command"))
+    if is_test and test_that:
+        # Shape: title, Test that abstract (2 lines max), then up to 3
+        # one-liner bullets, then the run command.
+        start = min(test_that)
+        run_min = min(run_cmd) if run_cmd else None
+        # the cap includes the Test that line itself
+        abstract = [next(c for n, c in header_lines if n == start)]
+        bullets = []
+        in_bullets, closed = False, False
+        for n, c in header_lines:
+            if n <= start or (run_min and n >= run_min):
+                continue
+            if not c.strip():
+                if abstract:
+                    closed = True
+                continue
+            if TEST_THAT_RE.search(c) or structural(c):
+                continue
+            if BULLET_RE.match(c):
+                in_bullets = True
+                bullets.append((n, c))
+            elif in_bullets:
+                bullets[-1] = (bullets[-1][0], bullets[-1][1] + ' ' + c.strip())
+            elif not in_bullets and not closed:
+                abstract.append((n, c))
+        if len(abstract) > TEST_THAT_ABSTRACT_MAX_LINES:
+            findings.append(Finding(
+                path, first_line, "test-header-testthat",
+                "the Test that abstract runs %d lines, cap is %d"
+                % (len(abstract), TEST_THAT_ABSTRACT_MAX_LINES)))
+        if len(bullets) > TEST_THAT_BULLET_MAX:
+            findings.append(Finding(
+                path, first_line, "test-header-testthat",
+                "the Test that section runs %d bullets, cap is %d one-liners"
+                % (len(bullets), TEST_THAT_BULLET_MAX)))
+        for n, c in bullets:
+            if len(c.strip()) > TEST_THAT_BULLET_ONE_LINE_COLS:
+                findings.append(Finding(
+                    path, n, "test-header-testthat",
+                    "Test that bullets are one-liners, cap is %d columns"
+                    % TEST_THAT_BULLET_ONE_LINE_COLS))
+                break
 
 
 def _type_decl_and_field_lines(lines):

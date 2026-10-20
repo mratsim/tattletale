@@ -7,7 +7,7 @@
 ##     workspace/crucible/tests/ir/mangling/t_ir_mangleNames.nim
 
 import std / [tables, sequtils, strutils]
-import workspace/crucible/src/codegen/ir/gpu_types
+import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
 import workspace/crucible/src/codegen/passes/passes_preprocessing
 
 # ═══════════════════════════════════════════════════════════════════════════

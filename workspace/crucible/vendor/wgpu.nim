@@ -358,6 +358,7 @@ proc wgpuInstanceRequestAdapter*(
   {.importc: "wgpuInstanceRequestAdapter", dynlib: libWgpu.}
 
 const WGPUFeatureName_ShaderF16* = 0x0000000B'u32
+const WGPUFeatureName_Subgroups* = 0x00000012'u32
 
 proc wgpuAdapterHasFeature*(adapter: WGPUAdapter, feature: uint32): uint32
   {.importc: "wgpuAdapterHasFeature", dynlib: libWgpu.}

@@ -50,23 +50,8 @@ const maxVk = vulkan:
 # ── Codegen tests (always runs) ─────────────────────────────────────────────
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  echo "=== Vulkan GLSL generation tests ===\n"
-
-  echo "--- addKernel ---"
-  echo addVk
-  echo ""
-
-  echo "--- vec2AddKernel (external type Vec2 + external fn vec2Add) ---"
-  echo vec2Vk
-  echo ""
-
-  echo "--- maxKernel (generic T -> uint32 instantiation) ---"
-  echo maxVk
-  echo ""
 
   # ── Execution via Vulkan runtime ────────────────────────────────────────────
-
-  echo "=== Vulkan execution ===\n"
 
   block: # addKernel
     var engine = bkVulkan.newEngine()
@@ -85,10 +70,8 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
 
-    echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
     doAssert out32[1] == 22
-    echo "  OK"
 
   block: # vec2AddKernel (external type + fn)
     var engine = bkVulkan.newEngine()
@@ -107,10 +90,8 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var out32: array[2, uint32]
     engine.copyToHostFromDevice(addr out32[0], oDev, 2)
 
-    echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
     doAssert out32[1] == 204
-    echo "  OK"
 
   block: # maxKernel (generic instantiation)
     var engine = bkVulkan.newEngine()
@@ -129,11 +110,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     var outVal: array[1, uint32]
     engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
 
-    echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42
-    echo "  OK"
-
-  echo "All execution tests passed ✅"
 
 when isMainModule:
   runTest()
