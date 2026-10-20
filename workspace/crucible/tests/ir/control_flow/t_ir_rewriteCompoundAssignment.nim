@@ -1,14 +1,20 @@
-## Phase 6: rewriteCompoundAssignment pass tests
+## rewriteCompoundAssignment compound-assign rewrite on the raw IR
+##
+## Test that rewriteCompoundAssignment expands compound assignments into
+## gpuAssign with a plain binop RHS and leaves other binops unchanged
+##
+## - `+=` and `*=` become gpuAssign whose RHS binop preserves the input bType
+## - comparison and simple binops pass through unchanged
+## - a gpuAddr LHS is stripped on both sides, the RHS read is an independent clone
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_rewriteCompoundAssignment.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. x += y → x = x + y

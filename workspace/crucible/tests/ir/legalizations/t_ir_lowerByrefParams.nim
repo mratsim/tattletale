@@ -1,13 +1,16 @@
-## lowerByrefParams renames passByRef params to `_p_` names and deref-wraps
-## the body idents. Hand-built IR, no engine.
+## lowerByrefParams pass
+##
+## Test that passByRef params rename to `_p_` names and body idents deref-wrap
+##
+## - no deref-init is prepended, the body keeps its original statements
+## - kernel functions carrying `attGlobal` are left untouched
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_lowerByrefParams.nim (from tattletale)
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_opencl
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. lowerByrefParamsImpl renames passByRef params to _p_ prefix

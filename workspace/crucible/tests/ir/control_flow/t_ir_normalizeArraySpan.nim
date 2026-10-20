@@ -1,8 +1,11 @@
-## normalizeArraySpanBody context-sensitivity test (SEC-B-004 / COMP-B-003):
-## the gpuDeref fold on array/span pointers is INDEX-CONTEXT-ONLY.
-## A deref under gpuAddr must survive — `&(*p)` is the array's address (T*),
-## while stripping to `&p` would take the pointer variable's address (T**).
-## A bare non-index deref keeps its element semantics.
+## normalizeArraySpanBody deref fold contexts on the raw IR
+##
+## Test that normalizeArraySpanBody folds gpuDeref off index bases only,
+## keeping the deref under gpuAddr and in bare element reads
+##
+## - gpuIndex(gpuDeref(p), i) folds to gpuIndex(p, i)
+## - gpuAddr(gpuDeref(p)) survives: &(*p) is the array address (T*)
+## - gpuAddr(gpuIndex(gpuDeref(p), i)) keeps the addr and folds the index
 ##
 ## Run:
 ##   cd tattletale
@@ -11,8 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_normalizeArraySpan.nim
 
 import std/[tables]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_normalizations
+import workspace/crucible/src/crucible_ir
 
 proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
   ## A `p: ptr array[4, int32]` ident + its gpuDeref — the IR shape of a

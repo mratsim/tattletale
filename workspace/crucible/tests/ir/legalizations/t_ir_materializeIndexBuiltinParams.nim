@@ -1,13 +1,18 @@
-## materializeIndexBuiltinParams appends one param per transitive
-## coordinate-builtin need into `pParams` and rewrites call sites to forward them.
+## materializeIndexBuiltinParams pass
+##
+## Test that the pass appends one param per coordinate-builtin need and
+## rewrites call sites to forward them
+##
+## - declared params keep positions, types, and unmarked `gbkNone` symbols
+## - call sites forward the callee's needs in the callee's order, deduped
+## - shadowing locals, barrier calls, and already-rewritten fns are skipped
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_materializeIndexBuiltinParams.nim (from tattletale)
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_metal
+import workspace/crucible/src/crucible_ir
 
 # ── IR builders ─────────────────────────────────────────────────────────────
 

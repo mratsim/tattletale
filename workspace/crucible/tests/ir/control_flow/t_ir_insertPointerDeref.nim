@@ -1,12 +1,19 @@
-## insertPointerDeref pass test: explicit derefs at value positions for pointer-indexing backends
+## insertPointerDeref pass
+##
+## Test that the pass wraps pointer-indexed reads in gpuDeref and leaves
+## address-of subtrees, explicit derefs, and plain array indexing alone.
+##
+## - gpuIndex over a pointer to unsized array, static array, or scalar wraps its base
+## - gpuDot over a pointer parent wraps the parent, including inside a gpuIndex iArr
+## - `m[i][j]` over an array of pointers wraps only the outer index base
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_insertPointerDeref.nim
 
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/crucible_ir
 import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
 
 # Pass impls run at compile time, getExprType raises through the `error` macro.

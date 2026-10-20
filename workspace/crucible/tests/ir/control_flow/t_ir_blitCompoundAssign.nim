@@ -1,28 +1,20 @@
-## Compound-assign LHS through the full common pipeline (rewrite → legalization)
+## Compound-assign LHS through the rewrite and blit pipeline
 ##
-## Regression (Class A of the sgemm_1 port): ceramic `tv[m,n] += ...` — a
-## statement-list-expression LHS wrapped in HiddenAddr — was by-value-blitted
-## into a discarded temp and emitted as `((&_blit_N) += (...))`, which NVRTC
-## rejects ("expression must be a modifiable lvalue") and which silently lost
-## the accumulation. The compound-assign rewrite (registered in
-## registerNormalizationPasses, BEFORE legalization) desugars `x += y` →
-## `x = x + y` with the HiddenAddr stripped; blitBlockExprs then keeps the
-## block-expr tail as the assignment LHS, so the store-back is direct.
+## Test that the compound-assign rewrite desugars `x += y` and the blit pass keeps
+## the block-expression tail as the direct assignment lvalue, never a temp.
+##
+## - Full common pipeline: `tv[m,n] += rhs` stores back through the real gpuIndex lvalue
+## - No by-value blit temp or address-of survives on the assignment LHS
+## - `cuda:` emission is a direct read-modify-write with the `+=` fully desugared
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_blitCompoundAssign.nim
-##
-##   cd workspace/crucible
-##   nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip \
-##     tests/ir/control_flow/t_ir_blitCompoundAssign.nim
 
 import std/[strutils, tables]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/pass_datatypes
+import workspace/crucible/src/crucible_ir
 
 proc countExprBlocks(n: GpuAst): int =
   ## Count gpuBlock(isExpr: true) nodes in a subtree.

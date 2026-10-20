@@ -14,9 +14,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/ir/types/t_ir_binop_btype.nim
 
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/ir/gpu_type_constructors
-import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/crucible_ir
 import workspace/crucible
 
 # ── Fold do-block (ceramic foldZipWith style, primitive int32) ──

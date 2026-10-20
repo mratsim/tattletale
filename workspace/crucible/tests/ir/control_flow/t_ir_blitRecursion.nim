@@ -1,33 +1,20 @@
-## Regression: blitBlockExprs final recursion (DEV-003 preamble-only walk)
+## blitBlockExprs preamble-only recursion into new blit content
 ##
-## blitFnBody's PASS 3 descends only into the NEW content produced by
-## blitting — blit scope blocks and hoisted lvalue wrappers — instead of
-## re-walking the whole statement list (which is O(N x blit-depth) and blows
-## up on deeply-nested expression-block trees such as ceramic evalOnceAs /
-## crd2idx). This test locks the preamble-recursion semantics:
+## Test that blit recursion descends only into newly blitted content, no
+## expression block left behind in deeply nested trees.
 ##
-##   1. Nested expr-block tree (toGpuAst from real Nim source): blit scope
-##      blocks nest; every gpuBlock(isExpr: true) must be gone after the pass.
-##   2. Hoisted lvalue wrappers (hand-built IR): an expr block used as an
-##      lvalue hoists its intermediate statements into the preamble; an
-##      intermediate var whose vInit is itself an expr block must be blitted
-##      inline, and the aRight expr block must become a blit scope block.
-##   3. Emission (cuda: macro): the emitted CUDA must contain the nested blit
-##      scope blocks with the inner statement order preserved — an emission
-##      anchor for the rewrite. A naive rewrite that leaves any expr block
-##      unblitted fails at compile time ("Block expression survived to
-##      codegen") or changes this emission.
+## - Nested expression-block trees from real Nim source blit fully into nested scope blocks
+## - Hoisted lvalue wrappers blit their intermediate var init inline and keep blit refs
+## - `cuda:` emission anchors the rewrite: three nested temps in inner-to-outer order
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_blitRecursion.nim
 
 import std/[macros, strutils, tables]
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/pass_datatypes
+import workspace/crucible/src/crucible_ir
 
 proc countExprBlocks(n: GpuAst): int =
   ## Count gpuBlock(isExpr: true) nodes in a subtree.

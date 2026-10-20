@@ -1,13 +1,20 @@
-## Phase 5: rewriteIndexDeref pass test
+## rewriteIndexDeref index-base deref fold on the raw IR
+##
+## Test that rewriteIndexDeref strips a gpuDeref from an index base only
+## when the pointer does not point at a static array
+##
+## - gpuIndex(gpuDeref(p), i) with p: ptr int32 folds to gpuIndex(p, i)
+## - p: ptr array[4, int32] keeps the deref so p[i] reads the array
+## - a gpuIndex with no gpuDeref base passes through unchanged
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_rewriteIndexDeref.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/crucible_ir
 import workspace/crucible/src/codegen/passes/passes_preprocessing {.all.}
 
 # ═══════════════════════════════════════════════════════════════════════════

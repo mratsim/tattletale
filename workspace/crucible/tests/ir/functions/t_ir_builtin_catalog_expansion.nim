@@ -1,7 +1,11 @@
 ## Builtin catalog alias expansion
 ##
 ## Test that coordinate aliases expand to canonical builtins in a typed GPU
-## macro body and a runtime-dim use errors at Nim sem
+## macro body and runtime-dim use errors at Nim sem
+##
+## - dot, positional, and static-dim aliases print as the native `get_*(d)` calls
+## - both barrier aliases fold into two `barrier(CLK_LOCAL_MEM_FENCE)` lines
+## - `get_global_id(d)` with a runtime `d` is rejected loudly at Nim sem
 ##
 ## Run:
 ##   cd tattletale

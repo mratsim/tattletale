@@ -1,22 +1,11 @@
-## IR test: foldMaxMinToBuiltins pass (passes_optimizations.nim)
+## foldMaxMinToBuiltins pass
 ##
-## Verifies the ternary max/min idiom is folded to the backend-native
-## max/min builtin (plain name — the ambiguous-builtin name every backend
-## supports for basic types) so it lowers to the hardware instruction
-## (PTX max.f32 / max.u32 / max.s32) instead of a compare+select sequence.
+## Test that the ternary max/min idiom folds to a plain `max` or `min`
+## builtin call so it lowers to the hardware instruction
 ##
-## Matched shapes (operands A = tThen, B = tElse):
-##   max: (B <= A) ? A : B                  — generic [T: not SomeFloat] body
-##        ((B <= A) || !(B == B)) ? A : B    — float32/64 body (NaN guard)
-##   min: (A <= B) ? A : B                  — generic [T: not SomeFloat] body
-##        ((A <= B) || !(B == B)) ? A : B    — float32/64 body (NaN guard)
-##
-## NOT folded (guards):
-##   - unguarded form on floats — NaN propagates to tElse there, so it is
-##     NOT fmax; only the NaN-guarded form is fmax-equivalent on floats
-##   - non-basic operand types (gtObject Int[N] structs, gtBool, ...) —
-##     ceramic's genBinOp handles those
-##   - then/else not matching the comparison operands
+## - float forms need the `!(x == x)` NaN guard, unguarded floats stay ternaries
+## - mismatched then/else and non-basic operand types (objects, bools) stay ternaries
+## - folded shapes cover float32/64, int32, and uint32 operands
 ##
 ## Run:
 ##   cd tattletale
@@ -25,8 +14,7 @@
 ##     workspace/crucible/tests/ir/optimizations/ir_foldMaxMin.nim
 
 import std/[tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_optimizations
+import workspace/crucible/src/crucible_ir
 
 # ─── IR construction helpers (mirror the shapes nim_to_gpu produces) ───
 

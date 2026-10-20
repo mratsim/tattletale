@@ -1,14 +1,19 @@
-## Phase 5: mangleNames pass test
+## mangleNames pass
+##
+## Test that namePolicy drives symbol renaming per FnTableEntry policy
+##
+## - npClean keeps the name, npHashSuffix appends a 7-char base58 suffix
+## - npPatch renames `+` to `add` and patches `iSym` alongside
+## - npUnassigned maps `fkGenericInst` entries to npHashSuffix
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/mangling/t_ir_mangleNames.nim
 
 import std / [tables, sequtils, strutils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. npClean — plain name unchanged

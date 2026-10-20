@@ -1,14 +1,20 @@
-## Phase 4: lowerIfExpr pass test
+## lowerIfExpr pass
+##
+## Test that gpuIf(isExpr: true) rewrites to gpuTernary, nested shapes included,
+## while statement-position gpuIf nodes stay untouched.
+##
+## - Condition, then, and else values carry over into the ternary fields
+## - A nested if-expression lowers to a nested ternary in one pass
+## - gpuIf(ifIsExpr: false) nodes remain statements, never ternaries
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerIfExpr.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_normalizations
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. gpuIf(isExpr: true) → gpuTernary

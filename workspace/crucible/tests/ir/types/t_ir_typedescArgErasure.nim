@@ -1,4 +1,10 @@
-## typedesc args: the frontend carries type-as-value call args 1:1, sentinel param plus gpuDiscard, pruneCompileTimeParams drops them.
+## typedesc argument erasure (pruneCompileTimeParams)
+##
+## Test that the frontend carries type-as-value call args 1:1 and pruneCompileTimeParams drops the sentinel param plus gpuDiscard
+##
+## - genuine value symbols are never erased
+## - non-typedesc args keep their positions through the prune
+## - CUDA emission shows no `T` arg and no typedesc param
 ##
 ## Run:
 ##   cd tattletale
@@ -10,11 +16,7 @@ import std/macros
 import std/sequtils
 import std/strutils
 import std/tables
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/ir/gpu_type_constructors
-import workspace/crucible/src/codegen/ir/nim_to_gpu
-import workspace/crucible/src/codegen/passes/passes_lowering
+import workspace/crucible/src/crucible_ir
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────
 type

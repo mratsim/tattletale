@@ -1,17 +1,17 @@
-## resolveType maps an ordinary distinct type to its base GPU type.
+## resolveType distinct-wrapper peeling
 ##
-## - getTypeImpl of a distinct returns an nnkDistinctTy wrapper
-## - the wrapper's typeKind is ntyDistinct again
-## - recursing on the wrapper re-enters the ntyDistinct branch forever, and the VM dies on call depth at macro expansion
-## - builtin distincts (float16, bfloat16) resolve by name, never reaching the typeKind switch
+## Test that resolveType maps an ordinary distinct type to its base GPU type
+##
+## - nested distincts peel one wrapper per resolve, the VM never re-enters `ntyDistinct`
+## - a distinct kernel param compiles through the public codegen API
+## - builtin distincts (`float16`, `bfloat16`) resolve by name
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/legalizations/t_ir_resolve_distinct.nim (from tattletale)
 
 import std/[macros, strutils]
 import workspace/crucible
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/ir/nim_to_gpu_type_resolvers
+import workspace/crucible/src/crucible_ir
 
 type
   Kilometers = distinct int32

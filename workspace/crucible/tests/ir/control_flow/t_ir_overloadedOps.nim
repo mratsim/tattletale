@@ -1,18 +1,20 @@
-## Phase 4: resolveOverloadedOperators pass test
+## resolveOverloadedOperators binop-to-call rewrite on the raw IR
 ##
-## Verifies:
-## - gpuBinOp with bIsOverloaded=true is converted to gpuCall
-## - gpuBinOp with bIsOverloaded=false remains gpuBinOp
+## Test that resolveOverloadedOperators turns overloaded gpuBinOp nodes into
+## gpuCall nodes and leaves plain gpuBinOp nodes unchanged
+##
+## - bIsOverloaded=false keeps kind gpuBinOp
+## - bIsOverloaded=true becomes gpuCall named by the operator symbol
+## - the rewritten gpuCall carries the two operands as cArgs
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_overloadedOps.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_normalizations
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. bIsOverloaded=false remains gpuBinOp

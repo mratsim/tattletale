@@ -1,14 +1,20 @@
-## Phase 5: decomposeMemcpyVars pass test
+## decomposeMemcpyVars pass
+##
+## Test that memcpy-flagged var and assign nodes decompose into plain
+## declarations plus `__builtin_memcpy` calls, unflagged nodes passing through.
+##
+## - Flagged gpuVar becomes a plain decl plus a 3-arg memcpy over the old init
+## - Flagged gpuAssign becomes a dst/src/size memcpy call outright
+## - Unflagged var and assign nodes keep their kind, init, and flags
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_decomposeMemcpy.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. gpuVar with vRequiresMemcpy is decomposed into var decl + memcpy call

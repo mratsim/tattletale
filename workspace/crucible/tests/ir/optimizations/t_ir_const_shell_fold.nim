@@ -1,28 +1,18 @@
-## Constant-shell elimination pass.
+## Constant-shell elimination pass
 ##
-## Zero-arg constant-returning functions are dissolved at their call sites, and the dead definitions are deleted.
+## Test that zero-arg constant-returning functions dissolve at their call
+## sites and their dead definitions are deleted
 ##
-## Nim's semcheck leaves a zero-arg (or all-args-unused) function whose body is a single constant.
-## The emitter keeps the shell and the call alive, so the pass substitutes the constant and deletes the definition.
-##
-## Locked:
-##
-## - in the IR, a zero-arg constant-returning function is gone after the pipeline, no definition and no call left
-## - in the IR, a dynamic (parameter-consuming) function shell survives
-## - in the IR, a shell with an effectful initializer or a foreign write survives
-## - in Metal emission, constants replace the calls, scalar and struct constructor alike, with no shell emitted
-##
-## The IR checks run inside a `runAndSummarize` macro (the function tables live on the compiler-run GpuContext, never reaching runtime).
+## - dynamic shells, effectful initializers, and foreign writes survive
+## - Metal emission inlines the constant, scalar and struct constructor alike
+## - folded calls keep their side-effecting arguments
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/optimizations/t_ir_const_shell_fold.nim (from tattletale)
 
 import std/[macros, sequtils, strutils, tables]
 
-import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/ir/nim_to_gpu
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/pass_datatypes
+import workspace/crucible/src/crucible_ir
 
 func constFolded[S: static int](): int32 = S
 func dynShift(x: int32): int32 = x + 1

@@ -1,15 +1,10 @@
-## Blit pass: block-expression branches of an if-expression must be
-## lowered before codegen.
+## blitBlockExprs on if-expression block branches
 ##
-## An if-expression `if cond: block: ... else: ...` lowers to a gpuTernary
-## during normalization. A block-expression branch of that ternary must be
-## blitted into a scope block + blit temp before codegen. ensureNoExprBlocks
-## rejects any block that survives to codegen, and the ceramic gemm_cta
-## tile-view templates expand into if-expr chains whose branches are block
-## expressions, so this case is required for gemm_cta entries.
+## Test that a block-expression branch of an if-expression lowers to a blit
+## scope block plus temp before codegen, with the ternary reading the temp.
 ##
-## The kernel must compile through the `cuda:` macro, whose run is the compile check.
-## The emitted text must show the block hoisted out of the ternary into a blit scope.
+## - `cuda:` macro compile is the check, no expression block survives to codegen
+## - The emitted ternary reads the blit temp, matching `((0U < x) ? _blit_0 : 7U)`
 ##
 ## Run:
 ##   cd tattletale

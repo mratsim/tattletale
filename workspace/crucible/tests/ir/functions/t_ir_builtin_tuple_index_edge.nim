@@ -1,8 +1,9 @@
-## Builtin tuple-index edge: `ivec3` tuple `[idx]` access.
+## Builtin tuple-index `[idx]` normalization on `ivec3`
+##
+## Test that a tuple `[idx]` access normalizes to the field access and a uint32 index is a compile error
 ##
 ## - canonical coordinates are `ivec3 = tuple[x, y, z: int]`
-## - tuple `[idx]` normalizes to a field access, the index must be
-##   an int literal, a uint32 index is a compile error
+## - the index must be an int literal, `[1]` emits the `.y` field
 ##
 ## Run:
 ##   cd tattletale

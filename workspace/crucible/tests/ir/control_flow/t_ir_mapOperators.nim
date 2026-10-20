@@ -1,20 +1,20 @@
-## Phase 4: mapOperators pass test
+## mapOperators operator-name patching on the raw IR
 ##
-## Verifies:
-## - Operator function names (+, -, *, /) are patched to valid C++ identifiers
-##   ONLY when the gpuIdent has symKind == gsProc (function identifiers)
-## - Operator symbols inside gpuBinOp.bOp (symKind == gsNone) are NOT patched
-## - The pass runs correctly on function bodies
+## Test that mapOperators rewrites operator function idents to valid C++
+## names and leaves binop operator symbols untouched
+##
+## - `+`, `-`, `*`, `/` idents with symKind gsProc become add, sub, mul, div
+## - plain non-operator idents with symKind gsProc keep their name and iSym
+## - gsNone operator symbols inside gpuBinOp.bOp stay unpatched
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_mapOperators.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_normalizations
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Operator function names (gsProc) are patched

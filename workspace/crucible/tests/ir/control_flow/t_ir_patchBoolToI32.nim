@@ -1,14 +1,20 @@
-## Phase 6: patchBoolToI32 pass tests
+## patchBoolToI32 global-bool conversion on the raw IR
+##
+## Test that patchBoolToI32 wraps bool-typed global idents in a gtBool
+## gpuConv and leaves every other ident unchanged
+##
+## - a global ident typed gtBool becomes gpuConv(convExpr, gtBool)
+## - a bool ident absent from ctx.globals keeps kind gpuIdent
+## - a global ident typed gtInt32 keeps kind gpuIdent
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_patchBoolToI32.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_preprocessing
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Bool global ident gets gpuConv(expr, gtBool)

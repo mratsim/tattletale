@@ -1,14 +1,19 @@
-## Phase 4: filterPragmas pass test
+## filterPragmas pass
+##
+## Test that filterPragmas maps raw proc pragmas to typed `pAttributes`
+##
+## - `device` and `global` land as `attDevice` and `attGlobal`
+## - Nim-specific pragmas drop, `inline` becomes `attForceInline`
+## - empty `pRawPragmas` yields empty `pAttributes`
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/functions/t_ir_filterPragmas.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_normalizations
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Device pragma is preserved

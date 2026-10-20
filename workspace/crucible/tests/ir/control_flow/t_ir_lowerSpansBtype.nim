@@ -15,9 +15,7 @@
 
 
 import std/tables
-import workspace/crucible/src/codegen/passes/passes_lowering
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/ir/gpu_type_constructors
+import workspace/crucible/src/crucible_ir
 
 proc assertLenExprShape(n: GpuAst; expectTyp: GpuType) =
   ## Assert a lowered lenExpr `(last - first) + 1`: the `+` binop, the inner

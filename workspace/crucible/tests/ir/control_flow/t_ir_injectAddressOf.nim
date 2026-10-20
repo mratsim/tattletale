@@ -1,14 +1,20 @@
-## Phase 6: injectAddressOf pass tests
+## injectAddressOf plus pullConstantPragmaVars and removeStructPointerFields
+##
+## Test that injectAddressOf wraps device-global idents and collapses ptr-global
+## derefs to the bare ident, the const-mem and ptr-field passes holding beside it.
+##
+## - Ptr globals wrap in gpuAddr, bool globals wrap in a bool gpuConv
+## - `{.const_mem.}` vars lift from the block body into ctx.globals
+## - Struct type defs drop pointer fields while plain fields keep their order
 ##
 ## Run:
 ##   cd tattletale
-##   nim c -r --hints:off --warnings:off --debugger:native \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_injectAddressOf.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
-import workspace/crucible/src/codegen/passes/passes_wgsl
+import workspace/crucible/src/crucible_ir
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. injectAddressOfImpl wraps ptr globals in gpuAddr
