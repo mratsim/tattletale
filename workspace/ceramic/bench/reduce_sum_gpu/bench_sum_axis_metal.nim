@@ -6,8 +6,10 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Benchmark: axis-sum reduction bandwidth on Metal, GB/s.
-# - shape (16, 16, cols), cols swept, the swept axis last
-# - axis 2 reads contiguous lines, axis 0/1 read strided lines of 16
+# - cube shape (n, n, n), n swept
+# - two stride layouts per cube: contiguous (n^2, n, 1) and the last
+#   two axes swapped (n^2, 1, n), so each reduced-axis stride
+#   (1, n, n^2) appears in both layouts
 # - GB/s counts source bytes read (each element is in exactly one strip)
 # Run:
 #   nim c -r -d:release --outdir:build/bench \
@@ -25,9 +27,7 @@ import workspace/ceramic/bench/reduce_sum_gpu/bench_sum_template
 
 export bench_sum_template
 
-const Cols = [1_000, 4_000, 16_000, 64_000]
-const Rows = 16
-const Mid = 16
+const Cubes = [64, 128, 256]
 
 proc fillAxisInputs(srcTV: TensorView) =
   for i in 0 ..< srcTV.size():
@@ -68,22 +68,19 @@ proc sumAxisLoop(dst, src: distinct TensorView, axis: static int, iters: int) =
   for _ in 0 ..< iters:
     sum(dst, src, axis)
 
-proc benchAxisSum(engine: MetalEngine, axis: static int, cols, iters: int): auto =
-  ## One axis-sum launch config, returned for the host cross-check
+proc benchAxisSum(engine: MetalEngine, axis: static int, n: int, swapped: static bool, iters: int): auto =
+  ## One axis-sum launch config on an n-cube, returned for the host cross-check
   let one = 1  # runtime int for the layouts to stay dynamic
-  let shape = (Rows, Mid, cols)
-  let dstShape = when axis == 0: (one, Mid, cols)
-                 elif axis == 1: (Rows, one, cols)
-                 else: (Rows, Mid, one)
+  let srcStrides = when swapped: (n * n, 1, n) else: (n * n, n, 1)
+  let dstShape = when axis == 0: (one, n, n)
+                 elif axis == 1: (n, one, n)
+                 else: (n, n, one)
+  let dstStrides = (dstShape[1] * dstShape[2], dstShape[2], 1)
   var
-    srcHost = makeHostTensor(float32, shape, (Mid * cols, cols, 1))
-    dstHost = makeHostTensor(float32, dstShape,
-                             (dstShape[1] * dstShape[2], dstShape[2], 1))
+    srcHost = makeHostTensor(float32, (n, n, n), srcStrides)
+    dstHost = makeHostTensor(float32, dstShape, dstStrides)
   fillAxisInputs(srcHost.view())
-  # strips: the output slots, one per kept coordinate
-  let strips = when axis == 0: Mid * cols
-               elif axis == 1: Rows * cols
-               else: Rows * Mid
+  let strips = n * n
   let gx = min(strips, 1024)
   # warmup
   block:
@@ -102,44 +99,42 @@ proc benchAxisSum(engine: MetalEngine, axis: static int, cols, iters: int): auto
     grid = (gx, 1)
     blk = (32, 1)
   let benchStop = getMonoTime()
-  let slots = when axis == 0: Mid * cols
-              elif axis == 1: Rows * cols
-              else: Rows * Mid
-  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, slots)
-  let np = shape[0] * shape[1] * shape[2]
-  reportSum("axis " & $axis, gx, np, iters, benchStart, benchStop)
+  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, n * n)
+  let np = n * n * n
+  reportSum(when swapped: "axis " & $axis & " sw" else: "axis " & $axis, gx, np, iters, benchStart, benchStop)
   dstHost
 
-proc runAxis(engine: MetalEngine, axis: static int, cols, iters: int) =
-  ## One axis: bench + f64-reference cross-check
-  var srcHost = makeHostTensor(float32, (Rows, Mid, cols), (Mid * cols, cols, 1))
+proc runAxis(engine: MetalEngine, axis: static int, n: int, swapped: static bool, iters: int) =
+  ## One (axis, layout): bench + f64-reference cross-check
+  let srcStrides = when swapped: (n * n, 1, n) else: (n * n, n, 1)
+  var srcHost = makeHostTensor(float32, (n, n, n), srcStrides)
   fillAxisInputs(srcHost.view())
   let expect = refSumAxis3(srcHost.view(), axis)
-  let got = benchAxisSum(engine, axis, cols, iters)
-  let slots = when axis == 0: Mid * cols
-              elif axis == 1: Rows * cols
-              else: Rows * Mid
-  for i in 0 ..< slots:
+  let got = benchAxisSum(engine, axis, n, swapped, iters)
+  for i in 0 ..< n * n:
     doAssert abs(got.data[i].float64 - expect[i].float64) <
       1e-2 * max(1.0, abs(expect[i].float64)),
-      &"axis {axis} sum wrong at slot {i}, cols {cols}: got {got.data[i]}, expect {expect[i]}"
+      &"axis {axis} sum wrong at slot {i}, n {n}: got {got.data[i]}, expect {expect[i]}"
 
 proc main() =
   var engine = bkMetal.newEngine()
-  echo "axis sum, Metal, blk = (32, 1), shape (16, 16, cols)"
+  echo "axis sum, Metal, blk = (32, 1), cube (n, n, n), contiguous and swapped strides"
   var wanted: seq[int]
   for p in commandLineParams():
     wanted.add parseInt(p)
   separator()
-  for cols in Cols:
-    if wanted.len == 0 or cols in wanted:
-      let np = Rows * Mid * cols
+  for n in Cubes:
+    if wanted.len == 0 or n in wanted:
+      let np = n * n * n
       let iters = if np <= 200_000: 200
                   elif np <= 1_000_000: 50
                   else: 20
-      runAxis(engine, 0, cols, iters)
-      runAxis(engine, 1, cols, iters)
-      runAxis(engine, 2, cols, iters)
+      runAxis(engine, 0, n, false, iters)
+      runAxis(engine, 1, n, false, iters)
+      runAxis(engine, 2, n, false, iters)
+      runAxis(engine, 0, n, true, iters)
+      runAxis(engine, 1, n, true, iters)
+      runAxis(engine, 2, n, true, iters)
       separator()
   separator()
 
