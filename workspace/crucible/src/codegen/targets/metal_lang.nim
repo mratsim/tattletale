@@ -250,9 +250,15 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
     var inner = p.typ.to
     if inner.kind == gtUA:
       inner = inner.uaTo
+    if inner.kind == gtArray:
+      inner = inner.aTyp
     var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-    let space = if p.typ.implicit: "thread" else: "device"
-    result = space & ' ' & elem & "* " & name
+    if p.addressSpace == asSMEM:
+      let op = if p.typ.to.kind in {gtObject, gtGenericInst}: "&" else: "*"
+      result = "threadgroup " & elem & op & ' ' & name
+    else:
+      let space = if p.typ.implicit: "thread" else: "device"
+      result = space & ' ' & elem & "* " & name
   else:
     # By-value array params decay to pointers in MSL. They are read-only
     # (a plain `array[T]` param), so emit `const`: the call site passes
