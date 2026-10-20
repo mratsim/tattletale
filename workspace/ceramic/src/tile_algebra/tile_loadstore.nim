@@ -22,7 +22,7 @@ template tileInBounds*(tiled, tileCrd, sel, domain): bool =
   let farCorner = tiled.crd2idx(sel) + tileCrd.crd2idx(tileCrd.size() - 1)
   farCorner.inBounds(domain.shape)
 
-func paddedLoad[T, Sh, St](src: TensorView[T, Sh, St], crd: int or tuple, padWith: T): T {.inline.} =
+func paddedLoad*[T, Sh, St](src: TensorView[T, Sh, St], crd: int or tuple, padWith: T): T {.inline.} =
   ## Guarded read of `src` at `crd`: in bounds reads the element,
   ## out of bounds reads `padWith`.
   if crd.inBounds(src.shape):

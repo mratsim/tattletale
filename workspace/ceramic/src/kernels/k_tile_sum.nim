@@ -57,21 +57,24 @@ proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
   ## - src: the source tensor
   ## - axis: the input axis summed over
   let thrID = thread_index_in_threadgroup
-  var reg: tile(src.T)
-  const owned = reg.size() div getThreadCount()
   let
-    rest = src.getLayout().sliceAxes(axis)
     red = src.getLayout().diceAxes(axis)
-    axisTiles = red.size().ceil_div(reg.size())
     gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
-  for g in countup(getLocalTileID(dst.shape), rest.size() - 1, gridStride):
+    
+  # Consecutive threads own consecutive strips
+  let threadStride = gridStride * getThreadCount()
+  for g in countup(getLocalTileID(dst.shape) * getThreadCount() + thrID, dst.size() - 1, threadStride):
     let crd = idx2crd(dst.shape, g)
     let strip = make_view(src.displace(crd).data, red)
     var acc = zero(src.T)
-    for tileID in 0 ..< axisTiles:
-      reg.load(strip, thrID, tileID)
-      for i in 0 ..< owned:
-        acc += reg.data[i]
-    let total = reduceAdd(acc)
-    if thrID == 0:
-      dst[crd] = total
+    # per-thread staging tile, thread t owns slots 32t .. 32t+31
+    var batch: tile(src.T, (32, 32))
+    let fullEnd = (red.size() div 32) * 32
+    for i0 in countup(0, fullEnd - 1, 32):
+      for e in 0 ..< 32:
+        batch((thrID, e)) = strip(i0 + e)
+      for e in 0 ..< 32:
+        acc += batch((thrID, e))
+    for i in fullEnd ..< red.size():
+      acc += strip(i)
+    dst[crd] = acc

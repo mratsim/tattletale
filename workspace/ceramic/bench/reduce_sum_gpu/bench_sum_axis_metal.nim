@@ -52,8 +52,8 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstShape, dstStrides: tuple
   fillWith_cpu(dstView, 0'f32)
   let
     np = toInt(srcView.size())
-    keptSize = toInt(dstView.size())
-    gx = min(keptSize, 1024)
+    nonReducedSize = toInt(dstView.size())
+    gx = min((nonReducedSize + 3) div 4, 8192)
   # warmup
   block:
     let
@@ -71,36 +71,49 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstShape, dstStrides: tuple
     grid = (gx, 1)
     blk = (32, 1)
   let benchStop = getMonoTime()
-  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, keptSize)
+  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, nonReducedSize)
   let label = &"axis {axis}"
   reportSum(label, gx, np, iters, benchStart, benchStop)
 
-# Ten cases, 5 rank-2, 4 rank-3, 1 rank-4: seven at ~16.7M elements,
-# one small and two large. Stride orders cover row-major, column-major,
-# middle-fastest, middle-slowest and one skip.
-const Cases2: array[5, tuple[src, dst: tuple[shape, strides: (int, int)], axis, iters: int]] = [
+const Cases2: array[6, tuple[src, dst: tuple[shape, strides: (int, int)], axis, iters: int]] = [
+  # row-major, reduced axis stride 1, dense strips
   ((shape: (4096, 4096), strides: (4096, 1)),
    (shape: (4096, 1), strides: (4096, 1)), 1, 50),
+  # column-major, reduced axis stride 4096
   ((shape: (4096, 4096), strides: (1, 4096)),
    (shape: (4096, 1), strides: (4096, 1)), 1, 50),
+  # reduced-axis skip, non-reduced plane contiguous
   ((shape: (4096, 4096), strides: (8192, 1)),
    (shape: (1, 4096), strides: (4096, 1)), 0, 50),
+  # small, launch bound
   ((shape: (64, 64), strides: (64, 1)),
    (shape: (64, 1), strides: (64, 1)), 1, 200),
+  # large row-major
   ((shape: (16384, 16384), strides: (16384, 1)),
-   (shape: (16384, 1), strides: (16384, 1)), 1, 20)]
+   (shape: (16384, 1), strides: (16384, 1)), 1, 20),
+  # gappy non-reduced plane, non-reduced slot stride 8192
+  ((shape: (4096, 4096), strides: (8192, 2)),
+   (shape: (4096, 1), strides: (4096, 1)), 1, 20)]
 
-const Cases3: array[4, tuple[src, dst: tuple[shape, strides: (int, int, int)], axis, iters: int]] = [
+const Cases3: array[5, tuple[src, dst: tuple[shape, strides: (int, int, int)], axis, iters: int]] = [
+  # row-major, reduced axis stride 65536, non-reduced plane contiguous
   ((shape: (256, 128, 512), strides: (65536, 512, 1)),
    (shape: (1, 128, 512), strides: (65536, 512, 1)), 0, 20),
+  # middle stride fastest, memory dense
   ((shape: (256, 128, 512), strides: (65536, 1, 128)),
    (shape: (256, 1, 512), strides: (512, 512, 1)), 1, 20),
+  # middle stride slowest, memory dense
   ((shape: (256, 128, 512), strides: (512, 131072, 1)),
    (shape: (256, 128, 1), strides: (128, 1, 1)), 2, 20),
+  # large row-major
   ((shape: (512, 512, 512), strides: (262144, 512, 1)),
-   (shape: (1, 512, 512), strides: (262144, 512, 1)), 0, 20)]
+   (shape: (1, 512, 512), strides: (262144, 512, 1)), 0, 20),
+  # gappy non-reduced plane, non-reduced rows 512 elements apart
+  ((shape: (256, 128, 512), strides: (131072, 1024, 1)),
+   (shape: (1, 128, 512), strides: (65536, 512, 1)), 0, 20)]
 
 const Cases4: array[1, tuple[src, dst: tuple[shape, strides: (int, int, int, int)], axis, iters: int]] = [
+  # rank-4, middle stride slowest
   ((shape: (64, 32, 64, 128), strides: (8192, 524288, 128, 1)),
    (shape: (64, 1, 64, 128), strides: (8192, 128, 128, 1)), 1, 20)]
 

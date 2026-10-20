@@ -1,27 +1,28 @@
 # Axis-sum benchmark: MLX mx.sum per axis, GB/s. Mirrors bench_sum_axis_metal.nim.
-# Same ten cases: seven at ~16.7M elements, one small, two large,
-# varying shape and stride order. Batched methodology (one mx.eval per
-# 20 sums). GB/s counts source bytes.
+# Batched methodology (one mx.eval per 20 sums). GB/s counts source
+# bytes. Case comments mirror bench_sum_axis_metal.nim.
 import math
 import time
 import mlx.core as mx
 
-# (shape, strides, axis, iters) per rank, dst stays compact in the Nim twin
+# (shape, strides, axis, iters) per rank
 CASES2 = [
-    ((4096, 4096), (4096, 1), 1, 50),
-    ((4096, 4096), (1, 4096), 1, 50),
-    ((4096, 4096), (8192, 1), 0, 50),
-    ((64, 64), (64, 1), 1, 200),
-    ((16384, 16384), (16384, 1), 1, 20),
+    ((4096, 4096), (4096, 1), 1, 50),   # row-major, red stride 1
+    ((4096, 4096), (1, 4096), 1, 50),   # column-major
+    ((4096, 4096), (8192, 1), 0, 50),   # red-axis skip
+    ((64, 64), (64, 1), 1, 200),        # small, launch bound
+    ((16384, 16384), (16384, 1), 1, 20),  # large row-major
+    ((4096, 4096), (8192, 2), 1, 20),   # gappy non-reduced plane
 ]
 CASES3 = [
-    ((256, 128, 512), (65536, 512, 1), 0, 20),
-    ((256, 128, 512), (65536, 1, 128), 1, 20),
-    ((256, 128, 512), (512, 131072, 1), 2, 20),
-    ((512, 512, 512), (262144, 512, 1), 0, 20),
+    ((256, 128, 512), (65536, 512, 1), 0, 20),   # row-major red stride 65536
+    ((256, 128, 512), (65536, 1, 128), 1, 20),   # middle stride fastest
+    ((256, 128, 512), (512, 131072, 1), 2, 20),  # middle stride slowest
+    ((512, 512, 512), (262144, 512, 1), 0, 20),  # large row-major
+    ((256, 128, 512), (131072, 1024, 1), 0, 20),  # gappy non-reduced plane
 ]
 CASES4 = [
-    ((64, 32, 64, 128), (8192, 524288, 128, 1), 1, 20),
+    ((64, 32, 64, 128), (8192, 524288, 128, 1), 1, 20),  # middle stride slowest
 ]
 
 def cosize(shape, strides):

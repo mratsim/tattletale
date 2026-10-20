@@ -77,6 +77,13 @@ template tile*(T: typedesc): typedesc =
   ## Register tile with the default tile map
   tile(T, getDefaultTileLayout(T))
 
+template tile*(T: typedesc, shape: tuple): typedesc =
+  ## Register tile type from a shape tuple, compact LayoutLeft strides
+  ## through make_layout: `tile(float32, (32, 32))`
+  ## - strides are the LayoutLeft prefix products, first mode stride 1
+  ## - tile maps stay composable without hand-written strides
+  tile(T, make_layout(shape))
+
 # ═══════════════════════════════════════════════════════════════
 #  Tile geometry
 # ═══════════════════════════════════════════════════════════════
@@ -106,12 +113,8 @@ template zero*(T: typedesc): untyped =
 template getLocalTileID*(gridShape: IntOrIntTuple): auto =
   ## Squadron position mapped to a flat index over the tile grid
   ## through the fleet layout.
-  let w = threadgroups_per_grid.x
-  let h = threadgroups_per_grid.y
-  let d = threadgroups_per_grid.z
-  let x = threadgroup_position_in_grid.x
-  let y = threadgroup_position_in_grid.y
-  let z = threadgroup_position_in_grid.z
+  let (w, h, d) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
+  let (x, y, z) = (threadgroup_position_in_grid.x, threadgroup_position_in_grid.y, threadgroup_position_in_grid.z)
   let fleet = make_layout(makeIntTuple((w, h, d)))
   crd2idx(fleet, (x, y, z))
 
