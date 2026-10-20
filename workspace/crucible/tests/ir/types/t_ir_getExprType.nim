@@ -14,6 +14,7 @@
 ##     workspace/crucible/tests/ir/types/t_ir_getExprType.nim
 
 import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/codegen/ir/gpu_type_constructors
 import workspace/crucible/src/codegen/ir/gpu_ast_type_resolvers
 import workspace/crucible/src/codegen/gpu_compiler
 
@@ -89,6 +90,54 @@ static:
     doAssert t != nil and t.kind == gtInt32,
       "gpuIndex(gpuDeref(p: ptr array)) must return the ELEMENT type, got " & $t.kind
     echo "  OK — gpuIndex(gpuDeref(ptr array)) returns element type (gtInt32)"
+
+block: # 6. getPointeeKind peels a ptr UncheckedArray[T] chain to T
+  let f32 = GpuType(kind: gtFloat32)
+  let ua = initGpuUAType(f32)
+  let ptrUa = initGpuPtrType(ua, false)
+  doAssert getPointeeKind(ptrUa) == gtFloat32,
+    "ptr UncheckedArray[float32] must peel to gtFloat32, got " & $getPointeeKind(ptrUa)
+  echo "  OK — getPointeeKind(ptr UncheckedArray[float32]) == gtFloat32"
+
+block: # 7. getPointeeKind on nil and on an unknown type is gtInvalid, not a defect
+  doAssert getPointeeKind(nil) == gtInvalid
+  doAssert getPointeeKind(GpuType(kind: gtInvalid)) == gtInvalid
+  echo "  OK — getPointeeKind(nil) and getPointeeKind(invalid) are gtInvalid"
+
+block: # 8. getOperandType(addr field) is a pointer to the field type
+  let f32 = GpuType(kind: gtFloat32)
+  let field = GpuTypeField(name: "counter", typ: f32)
+  let structT = initGpuObjectType("Params", @[field])
+  let parentSym = newSymbol("s", iSym = "s_addr", typ = structT)
+  let parent = GpuAst(kind: gpuIdent, symbol: parentSym)
+  let fieldSym = newSymbol("counter", iSym = "counter_addr", typ = f32)
+  let fieldIdent = GpuAst(kind: gpuIdent, symbol: fieldSym)
+  let dot = GpuAst(kind: gpuDot, dParent: parent, dField: fieldIdent)
+  let addrNode = GpuAst(kind: gpuAddr, aOf: dot)
+
+  let t = getOperandType(addrNode)
+
+  doAssert t != nil and t.kind == gtPtr and t.to.kind == gtFloat32,
+    "addr of a struct field must be ptr to the field type, got " &
+    (if t.isNil: "nil" else: $t.kind)
+  doAssert getPointeeKind(t) == gtFloat32
+  echo "  OK — getOperandType(addr s.counter) == ptr float32, pointee gtFloat32"
+
+block: # 9. getOperandType of a struct-field pointer passes the atomic pointee check
+  let f32 = GpuType(kind: gtFloat32)
+  let field = GpuTypeField(name: "counter", typ: initGpuPtrType(f32, false))
+  let structT = initGpuObjectType("Params", @[field])
+  let parentSym = newSymbol("s", iSym = "s_dot", typ = structT)
+  let parent = GpuAst(kind: gpuIdent, symbol: parentSym)
+  let fieldSym = newSymbol("counter", iSym = "counter_dot", typ = initGpuPtrType(f32, false))
+  let fieldIdent = GpuAst(kind: gpuIdent, symbol: fieldSym)
+  let dot = GpuAst(kind: gpuDot, dParent: parent, dField: fieldIdent)
+
+  let t = getOperandType(dot)
+
+  doAssert t != nil and t.kind == gtPtr and getPointeeKind(t) == gtFloat32,
+    "a ptr-typed struct field must resolve to its pointer type for the atomic check"
+  echo "  OK — getOperandType(s.counter: ptr float32) resolves, pointee gtFloat32"
 
 
 echo "  ALL PASS — getExprType gpuDeref unwrap pinned (compile-time)"

@@ -192,7 +192,7 @@ proc usesFloatAtomic(n: GpuAst): bool =
   ## GL_EXT_shader_atomic_float at module scope. int atomicAdd is core.
   if n.kind == gpuCall and n.cName.symbol != nil and
      n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
-     getPointeeKind(getAstType(n.cArgs[0])) == gtFloat32:
+     getPointeeKind(getOperandType(n.cArgs[0])) == gtFloat32:
     return true
   for ch in n:
     if usesFloatAtomic(ch):

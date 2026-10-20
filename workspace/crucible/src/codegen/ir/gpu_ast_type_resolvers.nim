@@ -12,24 +12,17 @@ import ./gpu_ast_datatypes
 import ./gpu_type_constructors
 
 proc getPointeeKind*(t: GpuType): GpuTypeKind =
-  ## Scalar kind at the end of a pointer/array/UA chain.
-  result = t.kind
-  while result in {gtPtr, gtArray, gtUA}:
-    let inner = case result
-                of gtPtr: t.to
-                of gtArray: t.aTyp
-                else: t.uaTo
-    result = inner.kind
-
-proc getAstType*(n: GpuAst): GpuType =
-  ## Best-effort static type of an expression node
-  ##
-  ## - idents carry symbol type, literals carry their literal type
-  ## - other nodes are unknown (gtInvalid)
-  case n.kind
-  of gpuIdent: n.symbol.typ
-  of gpuLit: n.lType
-  else: GpuType(kind: gtInvalid)
+  ## Scalar kind at the end of a pointer/array/UA chain,
+  ## gtInvalid when the type is unknown.
+  if t.isNil:
+    return gtInvalid
+  var cur = t
+  while cur.kind in {gtPtr, gtArray, gtUA}:
+    cur = case cur.kind
+          of gtPtr: cur.to
+          of gtArray: cur.aTyp
+          else: cur.uaTo
+  result = cur.kind
 
 proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
   ## Look up the parameters of a function by its identifier.
@@ -228,6 +221,10 @@ proc getOperandType*(n: GpuAst): GpuType =
   of gpuCast: n.cTo
   of gpuConv: n.convTo
   of gpuObjConstr: n.ocType
+  of gpuAddr:
+    let inner = getOperandType(n.aOf)
+    if inner.isNil or inner.kind == gtInvalid: nil
+    else: initGpuPtrType(inner, false)
   of gpuDeref:
     let d = getOperandType(n.dOf)
     if not d.isNil and d.kind == gtPtr: d.to else: d
