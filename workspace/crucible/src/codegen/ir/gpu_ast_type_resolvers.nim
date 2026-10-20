@@ -145,21 +145,20 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
   else:
     error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
-proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Best-effort type of an expression node, nil when unknown
-  ##
-  ## - printers use it to detect array-typed operands of `addr`
-  ## - array-typed `addr` operands need pointer decay, not `&`
+proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Lenient type of an expression node, nil when unknown.
+  ## Private helper of getDotParentType, which must tolerate
+  ## partially-typed preprocessing ASTs where getExprType would error.
   case n.kind
   of gpuIdent: n.symbol.typ
   of gpuLit: n.lType
   of gpuBinOp: n.bType
-  of gpuPrefix: ctx.exprType(n.pVal)
+  of gpuPrefix: ctx.getDotParentTypeImpl(n.pVal)
   of gpuCall: ctx.getFnReturnType(n.cName)
-  of gpuAddr: ctx.exprType(n.aOf)
-  of gpuDeref: ctx.exprType(n.dOf)
+  of gpuAddr: ctx.getDotParentTypeImpl(n.aOf)
+  of gpuDeref: ctx.getDotParentTypeImpl(n.dOf)
   of gpuIndex:
-    let arrT = ctx.exprType(n.iArr)
+    let arrT = ctx.getDotParentTypeImpl(n.iArr)
     if arrT.isNil:
       nil
     elif arrT.kind == gtArray: arrT.aTyp
@@ -169,13 +168,12 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuObjConstr: n.ocType
   of gpuConv: n.convTo
   of gpuCast: n.cTo
-  of gpuMaterialize: ctx.exprType(n.mExpr)
+  of gpuMaterialize: ctx.getDotParentTypeImpl(n.mExpr)
   of gpuDot:
     # Field type on the parent struct type (ptr/UA layers stripped),
-    # generic field-type inference for field-access chains, consumed by
-    # the value address-space resolution for nested pointer-field chains.
+    # for field-access chains.
     block:
-      var pT = ctx.exprType(n.dParent)
+      var pT = ctx.getDotParentTypeImpl(n.dParent)
       if pT != nil and pT.kind == gtPtr: pT = pT.to
       if pT != nil and pT.kind == gtUA: pT = pT.uaTo
       if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
@@ -192,7 +190,7 @@ proc exprType*(ctx: GpuContext, n: GpuAst): GpuType =
 
 proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Struct type of a field-access base, with the pointer/UA layer stripped.
-  var t = ctx.exprType(n)
+  var t = ctx.getDotParentTypeImpl(n)
   if t != nil and t.kind == gtPtr:
     t = t.to
   if t != nil and t.kind == gtUA:
