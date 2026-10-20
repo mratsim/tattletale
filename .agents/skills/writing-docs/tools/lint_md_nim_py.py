@@ -3617,6 +3617,8 @@ GETLAYOUT_CHAIN_RE = re.compile(
 CEILDIV_RE = re.compile(
     r"\(\s*([\w.()\[\]]+)\s*\+\s*([\w.()\[\]]+)\s*-\s*1\s*\)"
     r"\s*div\s*\2(?!\w)")
+FLOORDIV_RE = re.compile(
+    r"\(?\s*([\w.()\[\]]+)\s*div\s*([\w.()\[\]]+)\s*\)?\s*\*\s*\2(?!\w)")
 TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
 BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
                       "int_tuples_unsanctioned_helpers.nim")
@@ -3751,7 +3753,12 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             findings.append(Finding(
                 path, i + 1, "ceil-div-pattern",
                 "the (n + step - 1) div step spelling is banned, "
-                "write n.ceil_div(step) or round_step_up(n, step)"))
+                "write n.ceil_div(step) or round_multiple_up(n, step)"))
+        if FLOORDIV_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "floor-div-pattern",
+                "the X div step * step spelling is banned, "
+                "write x.round_multiple_down(step)"))
         if CEILDIV_CALL_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "ceil-div-method",

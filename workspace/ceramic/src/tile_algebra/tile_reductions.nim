@@ -10,7 +10,6 @@
 ## `sum(src)`: the full tile, every lane holds the total.
 
 import workspace/crucible
-import workspace/ceramic/src/layout_algebra
 import ./tiles
 
 proc sum*[T, Sh, St](src: Tile[T, Sh, St]): T {.inline.} =

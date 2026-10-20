@@ -13,7 +13,6 @@
 
 {.experimental: "codeReordering".}
 
-import std/typetraits
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -31,8 +30,8 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
   var reg: tile(src.T)
   let tiled = make_layout(src.size()).logical_divide(reg.getLayout())
   let axisTiles = tiled.getTileGrid().size()
-  let gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
-  const owned = reg.size() div getThreadCount()
+  let gridStride = getGridSize()
+  const owned = reg.size() div getLaneWidth()
   var acc = zero(src.T)
   # 1. Partial sums
   #    Each threadgroup folds its grid-stride strip of the tile grid,
@@ -49,31 +48,80 @@ proc sum*(dst, src: distinct TensorView) {.inline.} =
     discard atomicFetchAdd(dst.data[0].addr, total)
 
 proc sum*(dst, src: distinct TensorView, axis: static int) {.inline.} =
-  ## Sum reduction over the input axis
+  ## Sums src over `axis` into dst, one total per output.
   ##
   ## Args:
-  ## - dst: shaped like src with the axis size 1, every slot receives its total
+  ## - dst: shaped like src with the axis size 1, every output written once
   ## - src: the source tensor
-  ## - axis: the input axis summed over
-  let thrID = thread_index_in_threadgroup
+  ## - axis: the summed input axis
+  const
+    depthOwn = 32   # loads in flight per lane over the serial reduced walk
+    depthShare = 4  # per-lane unroll, the warp holds laneW * depthShare partials
   let
-    reduced = src.getLayout().diceAxes(axis)
-    gridStride = threadgroups_per_grid.x * threadgroups_per_grid.y * threadgroups_per_grid.z
-  # Consecutive threads own consecutive strips, 32 reduced elements staged per step
-  let threadStride = gridStride * getThreadCount()
-  for g in countup(getLocalTileID(dst.shape) * getThreadCount() + thrID, dst.size() - 1, threadStride):
-    var crd = idx2crd(dst.shape, g)
-    var acc = zero(src.T)
-    var batch: tile(src.T, (32, 32))
-    let fullEnd = (reduced.size() div 32) * 32
-    for i0 in countup(0, fullEnd - 1, 32):
-      for e in 0 ..< 32:
-        crd[axis] = i0 + e
-        batch((thrID, e)) = src[crd]
-      for e in 0 ..< 32:
-        acc += batch((thrID, e))
-    for i in fullEnd ..< reduced.size():
-      crd[axis] = i
-      acc += src[crd]
-    crd[axis] = 0
-    dst[crd] = acc
+    laneW = getLaneWidth()
+    thrID = thread_index_in_threadgroup
+    gridN = getGridSize()
+    axisSize = src.shape[axis]
+    lanesShareOutput = src.diceAxes(axis).maxCommonVector() >= laneW
+    outStep = if lanesShareOutput: gridN else: gridN * laneW
+    out0 = if lanesShareOutput: getLocalTileID(dst.shape)
+           else: getLocalTileID(dst.shape) * laneW + thrID
+  for k in countup(out0, dst.size() - 1, outStep):
+    let outCrd = idx2crd(dst.shape, k)
+    var crd = outCrd
+    # The two configurations:
+    #
+    #   the lanes share one output element, the reduced axis's elements are consecutive:
+    #
+    #     reduced i : 0     1    ...  31    32   ...  127  128  ...
+    #     lane/acc  : l0a0  l1a0 ...  l31a0 l0a1 ...  l31a1 l0a0 ...
+    #
+    #     lane l rounds robin its depthShare accumulators over
+    #     i = l + j*laneW for j = 0..depthShare-1, then i jumps laneW*depthShare
+    #     per-lane sum -- cross-lane reduce --> total -- lane 0 --> dst[out]
+    #
+    #   each lane owns one output element, the reduced axis's elements are stride apart:
+    #
+    #     reduced i : i0   i0+1  i0+2  i0+3   i0+4  ...
+    #     accs      : a0   a1    a2    a3     a0    ...  `depthOwn` in flight
+    #
+    #     lane l owns output k, the lanes take consecutive k, the next
+    #     chunk of outputs lands one launch-grid step later
+    #     accs -- sum --> total -- lane l --> dst[k]
+    if lanesShareOutput:
+      var accs: array[depthShare, src.T]
+      for j in 0 ..< depthShare:
+        accs[j] = zero(src.T)
+      let step = laneW * depthShare
+      let fullEnd = axisSize.round_multiple_down(step)
+      for i in countup(thrID, fullEnd - 1, step):
+        for j in 0 ..< depthShare:
+          crd[axis] = i + j * laneW
+          accs[j] += src[crd]
+      for i in countup(fullEnd + thrID, axisSize - 1, laneW):
+        crd[axis] = i
+        accs[0] += src[crd]
+      var laneTotal = zero(src.T)
+      for j in 0 ..< depthShare:
+        laneTotal += accs[j]
+
+      let total = reduceAdd(laneTotal)
+      if thrID == 0:
+        dst[outCrd] = total
+
+    else:
+      var accs: array[depthOwn, src.T]
+      for j in 0 ..< depthOwn:
+        accs[j] = zero(src.T)
+      let fullEnd = axisSize.round_multiple_down(depthOwn)
+      for i0 in countup(0, fullEnd - 1, depthOwn):
+        for j in 0 ..< depthOwn:
+          crd[axis] = i0 + j
+          accs[j] += src[crd]
+      for i in fullEnd ..< axisSize:
+        crd[axis] = i
+        accs[0] += src[crd]
+      var total = zero(src.T)
+      for j in 0 ..< depthOwn:
+        total += accs[j]
+      dst[outCrd] = total

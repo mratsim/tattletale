@@ -75,6 +75,8 @@ export layout_indexing_slicedice.`*`
 export layout_indexing_slicedice.`*`
 export layout_indexing_slicedice.slice
 export layout_indexing_slicedice.dice
+export layout_indexing_slicedice.sliceAxes
+export layout_indexing_slicedice.diceAxes
 
 # ═══════════════════════════════════════════════════════════════
 #  Algebra

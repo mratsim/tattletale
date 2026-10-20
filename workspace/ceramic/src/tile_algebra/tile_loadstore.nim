@@ -7,8 +7,10 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layouts
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tensors
 import ./tile_matmul
 import ./tiles
@@ -170,3 +172,41 @@ proc load*[T, Sh, St, ShS, StS](
     threadIdx: int, tileID: int, padWith: T = zero(T)): Tile[T, Sh, St] {.inline.} =
   load(result, src, threadIdx, tileID, padWith)
 
+# ═══════════════════════════════════════════════════════════════
+#  Vectorization width
+# ═══════════════════════════════════════════════════════════════
+
+func collectLeaves[Sh, St, N](shapes, strides: var array[N, int], idx: var int, s: Sh, d: St) =
+  ## Appends the flat leaf modes as (shape, stride) int pairs, size-1
+  ## modes dropped: their strides are junk and would break the sequence.
+  when Sh is tuple:
+    staticFor i, 0, Sh.rank():
+      collectLeaves(shapes, strides, idx, s[i], d[i])
+  else:
+    if s.toInt() > 1:
+      shapes[idx] = s.toInt()
+      strides[idx] = d.toInt()
+      idx += 1
+
+proc maxCommonVector*[Sh, St](layout: Layout[Sh, St]): int =
+  ## Vectorization width: the longest sequence of consecutive addresses among the layout's modes.
+  const nLeaves: int = default(Sh).flatten().rank().toInt()  # toint-allow
+  var shapes: array[nLeaves, int]
+  var strides: array[nLeaves, int]
+  var idx = 0
+  collectLeaves(shapes, strides, idx, layout.shape, layout.stride)
+  var used: array[nLeaves, bool]
+  var seqLen = 1
+  var expect = 1
+  var alive = true
+  for round in 0 ..< idx:
+    var best = -1
+    for i in 0 ..< idx:
+      if (not used[i]) and (best == -1 or strides[i] < strides[best]):
+        best = i
+    used[best] = true
+    let step = alive and (strides[best] == expect)
+    seqLen = if step: seqLen * shapes[best] else: seqLen
+    expect = if step: seqLen else: expect
+    alive = step
+  return seqLen

@@ -68,16 +68,16 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
       let a = t[1].intVal.int
       let b = t[2].intVal.int
       if b == 0: DynamicSentinel else: a.ceil_div(b)
-    elif t[0].eqIdent("round_step_up") and t.len == 3 and
+    elif t[0].eqIdent("round_multiple_up") and t.len == 3 and
         t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
       let a = t[1].intVal.int
       let b = t[2].intVal.int
-      if b == 0: DynamicSentinel else: a.round_step_up(b)
-    elif t[0].eqIdent("round_step_down") and t.len == 3 and
+      if b == 0: DynamicSentinel else: a.round_multiple_up(b)
+    elif t[0].eqIdent("round_multiple_down") and t.len == 3 and
         t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
       let a = t[1].intVal.int
       let b = t[2].intVal.int
-      if b == 0: DynamicSentinel else: a.round_step_down(b)
+      if b == 0: DynamicSentinel else: a.round_multiple_down(b)
     else:
       DynamicSentinel
   of nnkObjConstr:
@@ -223,8 +223,8 @@ func max*(a, b: NimNode): NimNode {.compileTime.} =
 func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
   bindSym"ceil_div".newCall(a, b)
 
-func round_step_up*(a, b: NimNode): NimNode {.compileTime.} =
-  bindSym"round_step_up".newCall(a, b)
+func round_multiple_up*(a, b: NimNode): NimNode {.compileTime.} =
+  bindSym"round_multiple_up".newCall(a, b)
 
 func sign*(a: NimNode): NimNode {.compileTime.} =
   bindSym"sign".newCall(a)
