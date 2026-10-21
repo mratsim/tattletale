@@ -35,6 +35,11 @@ proc insertResult(ctx: var GpuContext; fn: GpuAst) =
     for i in countdown(fn.pBody.statements.high, 0):
       let stmt = fn.pBody.statements[i]
       if stmt.kind notin {gpuVar, gpuComment, gpuDiscard, gpuReturn, gpuIf, gpuFor, gpuWhile, gpuEmit}:
+        if stmt.kind == gpuCall and stmt.cName in ctx.allFnTab and
+            ctx.allFnTab[stmt.cName].pRetType.kind == gtVoid:
+          # A void call mutates its var params in place, there is no
+          # value to harvest, keep scanning for the return expression.
+          continue
         if stmt.kind == gpuBlock and stmt.isExpr:
           if stmt.statements.len == 1:
             fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt.statements[0])

@@ -7,7 +7,11 @@
 ## - what survives rationalization is re-exported through the family module
 import std/macros, std/typetraits
 import ./int_tuples_compiletime
+import ./int_tuples_datatypes
 import ./int_tuples_streams
+
+template toInt*(x: int): int = x
+template toInt*[V: static int](x: Int[V]): int = V
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.

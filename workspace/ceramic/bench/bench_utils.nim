@@ -2,6 +2,7 @@
 
 import std/[math, strformat, strutils, typetraits]
 import workspace/ceramic/src/macros/static_for
+import workspace/ceramic/src/int_tuples
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  XOR hash — exact bit-level fingerprint

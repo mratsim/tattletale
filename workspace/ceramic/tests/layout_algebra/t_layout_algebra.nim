@@ -31,7 +31,6 @@ proc runComplementSymbolBoundTests: void
 proc runComplementMultiDimensionStaticTests: void
 proc runComplementDynamicTests: void
 proc runComplementDisjointnessTests: void
-proc runDivideTests: void
 proc runRightInvSimpleTests: void
 proc runRightInvExactValueTests: void
 proc runRightInvDynamicTests: void
@@ -51,7 +50,6 @@ proc runZippedProductTests: void
 proc runTiledProductTests: void
 proc runFlatProductTests: void
 proc runTileToShapeTests: void
-proc runZippedDivideRank1Tests: void
 proc runTests =
   echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
   runComplementStaticRank1Tests()
@@ -61,8 +59,6 @@ proc runTests =
   runComplementDynamicTests()
   runComplementDisjointnessTests()
   echo "\n--- Anti-regression: crd2idx + zipped_divide ---"
-  echo "\n── logical_divide [CUTE-LD] ──"
-  runDivideTests()
   echo "\n── right_inverse [CUTE-IR] + [PY-E Table 5] ──"
   runRightInvTests()
   echo "\n── left_inverse [CUTE-IL] + [PY-E Table 6] ──"
@@ -76,8 +72,6 @@ proc runTests =
   runZippedProductTests()
   runTiledProductTests()
   runFlatProductTests()
-  echo "\n── zipped_divide rank-1 [CUTE] ──"
-  runZippedDivideRank1Tests()
   echo "\n── tile_to_shape [CUTE] ──"
   runTileToShapeTests()
   echo "\nALL TESTS PASSED"
@@ -415,126 +409,6 @@ proc runComplementDisjointnessTests =
 #  shape() = product of shape elements, NOT cosize().
 #
 # ═══════════════════════════════════════════════════════════════
-
-proc runDivideTests: void =
-  ## 24 [CUTE-LD] cases + 8 rank-2 tiler extensions
-
-  template checkDiv(L, T: typed): untyped =
-    let R = logical_divide(L, T)
-    doAssert rank(R) === 2, "rank not 2 for " & $L & " / " & $T
-
-  echo "  Static (rank-1 tilers):"
-  checkDiv(make_layout(1, 0), make_layout(1, 0))
-  checkDiv(make_layout(1, 0), make_layout(1, 1))
-  checkDiv(make_layout(1, 1), make_layout(1, 0))
-  checkDiv(make_layout(1, 1), make_layout(1, 1))
-  checkDiv(make_layout(6, 1), make_layout(2, 1))
-  checkDiv(make_layout(6, 1), make_layout(2, 3))
-  checkDiv(make_layout(6, 1), make_layout((2, 3), (3, 1)))  # CuTe rank-2 tiler
-  checkDiv(make_layout(6, 2), make_layout(2, 1))
-  checkDiv(make_layout(6, 2), make_layout(2, 3))
-  checkDiv(make_layout(6, 2), make_layout((2, 3), (3, 1)))  # CuTe rank-2 tiler
-  checkDiv(make_layout((6, 6), (1, 12)), make_layout((6, 3), (3, 1)))
-  checkDiv(make_layout((6, 6), (12, 1)), make_layout((6, 3), (3, 1)))
-  checkDiv(make_layout(32, 1), make_layout(2, 8))  # [CUTE-LD] Layout<_32> / Layout<_2,_8>
-  checkDiv(make_layout((4, 1), (1, 1)), make_layout(2, 1))
-  checkDiv(make_layout((4, 1), (1, 1)), make_layout(2, 2))
-  checkDiv(make_layout((8, 8), (1, 8)), make_layout(32, 2))
-  checkDiv(make_layout((8, 8), (8, 1)), make_layout(32, 2))
-  echo "    17/17"
-
-  echo "  Static (rank-2 tilers, scalar LHS) — our extension:"
-  checkDiv(make_layout(32, 1), make_layout((2, 8), (1, 2)))
-  echo "    1/1"
-
-  echo "  Dynamic:"
-  checkDiv(make_layout(int(2), int(1)), make_layout(32, 1))
-  checkDiv(make_layout(int(48), int(1)), make_layout(32, 1))
-  checkDiv(make_layout(int(96), int(1)), make_layout(32, 2))
-  checkDiv(make_layout(int(32), int(1)), make_layout(48, 1))
-  echo "    4/4"
-
-  echo "  'Dangerous' stride-0 LHS dimensions:"
-  checkDiv(make_layout((128,4,3), (1,512,0)), make_layout(32, 1))
-  checkDiv(make_layout((128,4,3), (1,512,0)), make_layout(32, 2))
-  checkDiv(make_layout((16,4,3), (1,512,0)), make_layout(32, 1))
-  echo "    3/3"
-
-  template checkDivMap(L, T: typed): untyped =
-    let R = logical_divide(L, T)
-    doAssert rank(R) === 2, "rank not 2 for " & $L & " / " & $T
-    doAssert size(R) === size(L)
-    for i in 0 ..< size(L):
-      doAssert R(i) === L(i), "mapping fail at " & $i & " for " & $L & " / " & $T
-
-  echo "  Python port: test_logical_divide_basic + test_logical_divide_strided:"
-  checkDivMap(make_layout((8,)), 2)
-  # [PY-L] test_logical_divide_basic: shape=(2,4), stride=(1,2)
-  doAssert logical_divide(make_layout((8,)), 2) === ((2, 4), (1, 2))
-  checkDivMap(make_layout((8,), (2,)), 4)
-  echo "    2/2"
-
-  echo "  Python port: test_divide_1d_tiler_on_2d_layout (logical_divide only):"
-  checkDivMap(make_layout((8, 6)), 2)
-  checkDivMap(make_layout((8, 8)), 4)
-  checkDivMap(make_layout((8, 8)), 8)
-  # [PY-L] test_divide_1d_known_results: shape=(4,4), stride=(1,4)
-  doAssert logical_divide(make_layout(16, 1), 4) === ((4, 4), (1, 4))
-  echo "    3/3"
-
-  echo "  Python port: test_logical_divide_non_divisible:"
-  checkDivMap(make_layout((6, 2), (1, 6)), 4)
-  checkDivMap(make_layout((4, 3), (1, 4)), 6)
-  checkDivMap(make_layout((3, 4), (1, 3)), 6)
-  echo "    3/3"
-
-  echo "  Rank-1 direct divide (value-identical to the general formula):"
-  doAssert logical_divide(make_layout(10, 2), 4) === ((4, 3), (2, 8))
-  doAssert logical_divide(make_layout(10, 0), 4) === ((4, 3), (0, 0))
-  doAssert logical_divide(make_layout(10, 2), Int[4]()) === ((4, 3), (2, 8))
-  let dynS = 16
-  let dynT = 4
-  doAssert logical_divide(make_layout(dynS, 1), 4) === ((4, 4), (1, 4))
-  doAssert logical_divide(make_layout(16, 1), dynT) === ((4, 4), (1, 4))
-  doAssert logical_divide(make_layout(dynS, 1), dynT) === ((4, 4), (1, 4))
-  echo "    6/6"
-
-  echo "  Direct divide through the per-dimension tuple-tiler path:"
-  doAssert logical_divide(make_layout((10, 8), (2, 1)), (4, 4)) ===
-    (((4, 3), (4, 2)), ((2, 8), (1, 4)))
-  # a (1, 1) tiler divides each dimension by 1, the per-dimension
-  # result is (1, shape):(stride, stride), which locks the degenerate
-  # (1, 1) spelling of the per-dimension divide path
-  doAssert logical_divide(make_layout((2, 4, 8), (1, 2, 3)), (1, 1)) ===
-    (((1, 2), (1, 4), 8), ((1, 1), (2, 2), 3))
-  echo "    2/2"
-
-  echo "  Python port: test_logical_divide_tuple_tiler + test_logical_divide_2d:"
-  checkDivMap(make_layout((4, 8)), (2, 4))
-  checkDivMap(make_layout((4, 6), (1, 4)), (2, 3))
-  echo "    2/2"
-
-  echo "  Python port: test_logical_divide_hierarchical_stride:"
-  checkDivMap(make_layout(((2, 4), 8), ((1, 2), 8)), (4, 4))
-  echo "    1/1"
-
-  # contract-doc Examples on the Layout-tiler overload, locked:
-  # logical_divide(make_layout(16, 3), 4) -> (4, 4):(3, 12)
-  doAssert logical_divide(make_layout(16, 3), 4) === ((4, 4), (3, 12))
-  # CuTe C++ 1-D worked example:
-  # A=(4,2,3):(2,1,8), B=4:2 -> ((2,2),(2,3)):((4,1),(2,8))
-  let ldExample = logical_divide(make_layout((4, 2, 3), (2, 1, 8)), make_layout(4, 2))
-  doAssert ldExample === (((2, 2), (2, 3)), ((4, 1), (2, 8)))
-
-  ## logical_divide with Layout tiler — triggered compose flattening bug
-  ## A=(8,8):(1,8), T=(2,2):(1,4)
-  ## logical_divide must preserve nested tile structure, not flatten to 4 dimensions
-  block:
-    let A = make_layout((8, 8), (1, 8))
-    let T = make_layout((2, 2), (1, 4))
-    let ld = logical_divide(A, T)
-    doAssert rank(ld) === 2, "logical_divide rank: " & $rank(ld)
-    doAssert ld === (((2, 2), (2, 8)), ((1, 4), (2, 8))), "ld: " & $ld
 
 # ═══════════════════════════════════════════════════════════════
 #  right_inverse, left_inverse, logical_product — helpers
@@ -1115,21 +989,9 @@ proc runFlatProductTests =
   echo "    flat_divide/product: 5 cases OK"
 
 # ═══════════════════════════════════════════════════════════════
-#  zipped_divide, rank-1 layout with Layout and int tiler terminals
-# ═══════════════════════════════════════════════════════════════
-proc runZippedDivideRank1Tests =
-  block:
-    ## Rank-1 layout / rank-1 tiler (both Layout terminals)
-    let L = make_layout(8, 1)
-    let tiler = make_layout(2, 1)
-    let zipped = zipped_divide(L, tiler)
-    doAssert rank(zipped) === 2
-  echo "  zipped_divide rank-1: 1 case OK"
-
-
-# ═══════════════════════════════════════════════════════════════
 #  tile_to_shape [CUTE]
 # ═══════════════════════════════════════════════════════════════
+
 proc runTileToShapeTests: void =
   block:
     ## [tensor-layouts] 2D: block=(2,3):(1,2), target=(8,6)

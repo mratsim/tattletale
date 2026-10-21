@@ -302,13 +302,6 @@ proc runProductScanTests =
   echo "  Nested tuple scan: 8 cases OK"
   echo "  Product scan: 13 cases OK"
 
-# ═══════════════════════════════════════════════════════════════
-#  Mixed static/dynamic scans
-#  (N, C, H, W) — N dynamic, C/H/W are Int[N] (static)
-#  Since suffix folds from the right and all inner dims are
-#  Int[N], the starting accumulator (int literal 1) stays
-#  compile-time throughout, making ALL outputs Int[N].
-# ═══════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
 #  IntOrIntTuple type class checks

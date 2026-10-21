@@ -137,9 +137,6 @@ DEEP_EXAMPLE_INDENT = 4
 # split it into bullets or a diagram.
 TABLE_CELL_MAX_WORDS = 30
 MODULE_HEADER_MAX_LINES = 8
-TEST_THAT_ABSTRACT_MAX_LINES = 2
-TEST_THAT_BULLET_MAX = 3
-TEST_THAT_BULLET_ONE_LINE_COLS = 100
 # Bullet-shape caps. A bullet list holds at most 4 items and one item
 # spans at most 3 lines, a 5-item list is banned, longer bullet walls
 # belong in a table or diagram.
@@ -346,10 +343,6 @@ BANNED = [
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
     (r"\bmutations?\b", None, "use change or variation"),
-    (r"\bspelled\b|\bspell\b|\bspells\b|\bspelling\b|\bspelt\b",
-     None, "state the value or the syntax directly, do not narrate how it is written"),
-    (r"\w+\(\s*rng\b",
-     None, "use method call syntax: rng.rand(...), rng.seed(...)"),
     (r"\bspelled\b|\bspell\b|\bspells\b|\bspelling\b|\bspellings\b|\bspelt\b",
      None, "state the value or the syntax directly, do not narrate how it is written"),
     (r"\w+\(\s*rng\b",
@@ -503,7 +496,7 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a Test that abstract past 2 lines, more than 3 bullets, or a wrapped bullet, the shape is title, Test that (2 lines), up to 3 one-liner bullets, run command"),
+                                 "a test file header with the \"Test that\" line after the run command, the shape is title, Test that, blank, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1493,53 +1486,13 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
     # The run command may wrap, so its first line anchors it.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
     run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
+    # A bare Run header (title, blank, run command) is also valid;
+    # "Test that" is only required when present to sit before the run command.
     if is_test and test_that and (run_cmd and min(test_that) > min(run_cmd)):
         findings.append(Finding(
             path, first_line, "test-header-testthat",
             "the \"Test that\" line sits after the run command, "
             "the shape is title, Test that, blank, run command"))
-    if is_test and test_that:
-        # Shape: title, Test that abstract (2 lines max), then up to 3
-        # one-liner bullets, then the run command.
-        start = min(test_that)
-        run_min = min(run_cmd) if run_cmd else None
-        # the cap includes the Test that line itself
-        abstract = [next(c for n, c in header_lines if n == start)]
-        bullets = []
-        in_bullets, closed = False, False
-        for n, c in header_lines:
-            if n <= start or (run_min and n >= run_min):
-                continue
-            if not c.strip():
-                if abstract:
-                    closed = True
-                continue
-            if TEST_THAT_RE.search(c) or structural(c):
-                continue
-            if BULLET_RE.match(c):
-                in_bullets = True
-                bullets.append((n, c))
-            elif in_bullets:
-                bullets[-1] = (bullets[-1][0], bullets[-1][1] + ' ' + c.strip())
-            elif not in_bullets and not closed:
-                abstract.append((n, c))
-        if len(abstract) > TEST_THAT_ABSTRACT_MAX_LINES:
-            findings.append(Finding(
-                path, first_line, "test-header-testthat",
-                "the Test that abstract runs %d lines, cap is %d"
-                % (len(abstract), TEST_THAT_ABSTRACT_MAX_LINES)))
-        if len(bullets) > TEST_THAT_BULLET_MAX:
-            findings.append(Finding(
-                path, first_line, "test-header-testthat",
-                "the Test that section runs %d bullets, cap is %d one-liners"
-                % (len(bullets), TEST_THAT_BULLET_MAX)))
-        for n, c in bullets:
-            if len(c.strip()) > TEST_THAT_BULLET_ONE_LINE_COLS:
-                findings.append(Finding(
-                    path, n, "test-header-testthat",
-                    "Test that bullets are one-liners, cap is %d columns"
-                    % TEST_THAT_BULLET_ONE_LINE_COLS))
-                break
 
 
 def _type_decl_and_field_lines(lines):
@@ -3655,9 +3608,20 @@ RANK_TYPEOF_RE = re.compile(r"rank\s*\(\s*typeof\s*\(")
 TYPEOF_RANK_RE = re.compile(r"typeof\s*\([^()]*\)\s*\.\s*rank\b")
 RANK_BARE_RE = re.compile(r"\.\s*rank\b(?!\s*\()")
 TOINT_CALL_RE = re.compile(r"(?<![\w.\"'`])toInt\s*\(")
+GRIDSTRIDE_RE = re.compile(r"threadgroups_per_grid\.")
+GRIDSIZE_PRODUCT_RE = re.compile(
+    r"threadgroups_per_grid\.\w+\s*\*\s*threadgroups_per_grid\.\w+")
+CEILDIV_CALL_RE = re.compile(r"(?<![\w.\"'`])ceil_div\s*\(")
+GETLAYOUT_CHAIN_RE = re.compile(
+    r"\.getLayout\(\)\s*\.\s*(stride|shape|sliceAxes|diceAxes)\b")
+CEILDIV_RE = re.compile(
+    r"\(\s*([\w.()\[\]]+)\s*\+\s*([\w.()\[\]]+)\s*-\s*1\s*\)"
+    r"\s*div\s*\2(?!\w)")
+FLOORDIV_RE = re.compile(
+    r"\(?\s*([\w.()\[\]]+)\s*div\s*([\w.()\[\]]+)\s*\)?\s*\*\s*\2(?!\w)")
 TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
 BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
-                      "int_tuples_datatypes.nim")
+                      "int_tuples_unsanctioned_helpers.nim")
 BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
                      "int_tuples_datatypes.nim")
 
@@ -3760,20 +3724,64 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             continue
         prev = lines[i - 1] if i > 0 else ""
         allowed = "rank-allow" in raw or "rank-allow" in prev
-        if TOINT_CALL_RE.search(code) and _rel(path).endswith(BLESSED_TOINT_FILE):
+        if TOINT_ANY_RE.search(code) and _rel(path).endswith(BLESSED_TOINT_FILE):
             continue
-        if TOINT_CALL_RE.search(code):
+        if TOINT_ANY_RE.search(code):
             findings.append(Finding(
-                path, i + 1, "toint-call-syntax",
-                "toInt reads as a prefix call here, write x.toInt() or "
-                "mark # toint-allow"))
-        if (TOINT_ANY_RE.search(code)
-                and "toint-allow" not in raw and "toint-allow" not in prev
-                and re.search(r"(?<![<>!=])={2,}", code)):
+                path, i + 1, "toint-ban",
+                "toInt is banned outright, keep values as Int, the "
+                "selectors and crd2idx take Int directly"))
+        if re.search(r"int\s*\(\s*threadgroups", code):
             findings.append(Finding(
-                path, i + 1, "toint-comparison",
-                "toInt beside ==/=== bypasses the Int comparison "
-                "overloads, compare the Int directly or mark # toint-allow"))
+                path, i + 1, "int-threadgroups-cast",
+                "int(...) casts on threadgroups_per_grid are banned, "
+                "use the components directly"))
+        if CEILDIV_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "ceil-div-pattern",
+                "the (n + step - 1) div step spelling is banned, "
+                "write n.ceil_div(step) or round_multiple_up(n, step)"))
+        if FLOORDIV_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "floor-div-pattern",
+                "the X div step * step spelling is banned, "
+                "write x.round_multiple_down(step)"))
+        if CEILDIV_CALL_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "ceil-div-method",
+                "ceil_div reads as a prefix call here, write a.ceil_div(b)"))
+        if GETLAYOUT_CHAIN_RE.search(code):
+            findings.append(Finding(
+                path, i + 1, "getlayout-chain",
+                ".getLayout().stride and .getLayout().shape chains are "
+                "banned, tensors expose shape and stride, call sliceAxes or "
+                "diceAxes on the tensor directly"))
+        if GRIDSTRIDE_RE.search(code):
+            joined, j = code, i + 1
+            while (j < len(lines) and GRIDSTRIDE_RE.search(
+                    _strip_comment(lines[j])[0])):
+                joined += " " + _strip_comment(lines[j])[0].strip()
+                j += 1
+            if not (".x" in joined and ".y" in joined and ".z" in joined):
+                findings.append(Finding(
+                    path, i + 1, "gridstride-one-line",
+                    "the threadgroups product goes on a single line"))
+        if ("thread_index_in_threadgroup" in code
+                and _rel(path).startswith(tuple(
+                    Path(r).as_posix() + os.sep for r in KERNEL_ROOTS))
+                and "threadindex-allow" not in raw
+                and "threadindex-allow" not in prev):
+            findings.append(Finding(
+                path, i + 1, "raw-thread-index",
+                "thread_index_in_threadgroup is raw launch plumbing, "
+                "call getLocalThreadID()"))
+        if (GRIDSIZE_PRODUCT_RE.search(code)
+                and "gridsize-allow" not in raw
+                and "gridsize-allow" not in prev):
+            findings.append(Finding(
+                path, i + 1, "threadgroups-product",
+                "the threadgroups_per_grid component product is banned, "
+                "call getGridSize()"))
         if TUPLELEN_RE.search(code) and not allowed:
             findings.append(Finding(
                 path, i + 1, "tuplelen-rank",

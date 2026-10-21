@@ -10,7 +10,7 @@
 ## - `matmul`: D = A·B
 ## - `gemm`: D = alpha·A·B + beta·C, beta = 0 skips the C read
 ## - per-lane operand register tiles load through the atom's thread->value map
-## - ragged edge tiles go through guardedLoad / guardedStore, interior tiles take the unchecked flat path
+## - ragged edge tiles go through paddedLoad / guardedStore, interior tiles take the unchecked flat path
 
 import workspace/crucible
 import workspace/ceramic/src/tensors
@@ -44,21 +44,21 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
 
   let cGrid = cGeom.getTileGrid()
   let (_, kTiles) = aGeom.getTileGrid()
-  let thrID = mma.getLocalThreadID()
+  let thrID = getLocalThreadID()
 
-  if thrID < mma.getThreadCount():
+  if thrID < getLaneWidth():
     let
       cSize = cGrid.size()
-      gridStride = int(threadgroups_per_grid.x) * int(threadgroups_per_grid.y) * int(threadgroups_per_grid.z)
+      gridStride = getGridSize()
     for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
-      var rD: rt(D.T, cLayout)
-      var rA: rt(A.T, mma.getMmaLayout(opA))
-      var rB: rt(B.T, mma.getMmaLayout(opB))
+      var rD: tile(D.T, cLayout)
+      var rA: tile(A.T, mma.getMmaLayout(opA))
+      var rB: tile(B.T, mma.getMmaLayout(opB))
       rD.fillWith(zero(D.T))
       for k in 0 ..< kTiles:
-        rA.loadTile(A, tvmA, thrID, (m, k))
-        rB.loadTile(B, tvmB, thrID, (n, k))
+        rA.load(A, tvmA, thrID, (m, k))
+        rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
       if alpha != 1.0'f32:
@@ -66,11 +66,10 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
           rD[i] = alpha * rD[i]
 
       if beta != 0.0'f32:
-        var rC: rt(C.T, cLayout)
-        rC.loadTile(C, tvmC, thrID, (m, n))
+        let rC = tile(C.T, cLayout).load(C, tvmC, thrID, (m, n))
         for i in 0 ..< cLayout.size():
           rD[i] += beta * rC[i]
-      D.storeTile(rD, tvmC, thrID, (m, n))
+      D.store(rD, tvmC, thrID, (m, n))
 
 proc matmul*(mma: static TiledMma, D, A, B: distinct TensorView) =
   ## D = A·B, same tile grid and launch mapping as gemm.

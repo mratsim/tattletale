@@ -77,8 +77,6 @@ import ./h_mma_configgen
 #  Reusable layout aliases
 # ═════════════════════════════════════════════════════════════════════════
 
-
-
 const Apple8x8_AC_Layout* = make_layout(((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
   ## (T32, V2) → (M8, K8) / (M8, N8), the A and C fragments of the Apple
   ## simdgroup atoms, col-major offset m + 8·n, V stepping along K (A) or N (C).

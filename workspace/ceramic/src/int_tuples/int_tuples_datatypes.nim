@@ -31,8 +31,6 @@ type
 
   IntOrIntTuple* = int | Int | tuple
 
-template toInt*(x: int): int = x
-template toInt*[V: static int](x: Int[V]): int = V
 
 template `$`*[V: static int](x: Int[V]): string = "_" & $V
 
@@ -136,6 +134,24 @@ func ceil_div*(a, b: static int): static int {.inline.} =
   ## Static overload, both arguments fold at compile time.
   (a + b - 1) div b
 
+func round_multiple_up*(a, b: int): int {.inline.} =
+  ## Rounds a up to the next multiple of b.
+  ceil_div(a, b) * b
+
+func round_multiple_up*(a, b: static int): static int {.inline.} =
+  ## Rounds a up to the next multiple of b.
+  ## Static overload, both arguments fold at compile time.
+  ceil_div(a, b) * b
+
+func round_multiple_down*(a, b: int): int {.inline.} =
+  ## Rounds a down to the previous multiple of b.
+  (a div b) * b
+
+func round_multiple_down*(a, b: static int): static int {.inline.} =
+  ## Rounds a down to the previous multiple of b.
+  ## Static overload, both arguments fold at compile time.
+  (a div b) * b
+
 func sign*(x: int): int {.inline.} =
   if x > 0: 1 elif x < 0: -1 else: 0
 
@@ -168,6 +184,8 @@ genBinOp(`mod`)
 genBinOp(`max`)
 genBinOp(`min`)
 genBinOp(`ceil_div`)
+genBinOp(`round_multiple_up`)
+genBinOp(`round_multiple_down`)
 genBinOp(`gcd`)
 
 template `+=`*[V: static int](a: var int; b: Int[V]) = a += V

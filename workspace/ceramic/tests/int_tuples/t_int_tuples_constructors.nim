@@ -8,9 +8,6 @@
 import workspace/ceramic/src/int_tuples {.all.}
 import std/unittest
 
-# ═══════════════════════════════════════════════════════════════
-#  makeIntTuple constructor tests
-# ═══════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
 #  Helper procs used in tests below

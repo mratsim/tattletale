@@ -74,7 +74,9 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       of kLeaf:
         if strideEvent.kind != shapeEvent.kind:
           error "crd2idx: `shape` and `stride` have different structures", stride
-        sum = if sum == nil: pending else: sum + pending
+
+        if pending != nil: # pending is nil before the subtree's first leaf
+          sum = if sum == nil: pending else: sum + pending
         let shapeLeaf = shapeEvent.leaf
         let strideLeaf = strideEvent.leaf
         let oldRemaining = remaining
@@ -262,9 +264,7 @@ macro inBounds*(coord: IntOrIntTuple, layout: Layout): auto =
 
 template `()`*(layout: Layout, args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
-  block:
-    evalOnceAs(coord, varargs_to_par(args))
-    when hasUnderscoreImpl(coord):
-      slice(layout, coord)
-    else:
-      crd2idx(layout, coord)
+  when hasUnderscore(varargs_to_par(args)):
+    slice(layout, args)
+  else:
+    crd2idx(layout, varargs_to_par(args))

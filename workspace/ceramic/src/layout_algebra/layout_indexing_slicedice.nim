@@ -10,6 +10,7 @@ import std/macros
 
 import workspace/ceramic/src/int_tuples
 import ./layouts
+import ./layout_compiletime
 import workspace/ceramic/src/macros/varargs_to_par
 
 # ═══════════════════════════════════════════════════════════════
@@ -179,32 +180,74 @@ template dice*(target: Layout, selectors: varargs[untyped]): untyped =
       dice(t.shape, varargs_to_par(selectors)),
       dice(t.stride, varargs_to_par(selectors)))
 
-template hasUnderscoreImpl*(coord: typed): bool =
-  when coord is tuple:
-    block:
-      var found = false
-      for c in fields(coord):
-        when c.hasUnderscore():
-          found = true
-      found
-  elif coord is int:
-    false
-  elif coord is Int:
-    false
-  elif coord is X:
-    true
-  else:
-    {.error: "[ttt] unsupported type: " & typeof(coord).}
-
-macro hasUnderscore*(Cs: varargs[untyped]): bool =
-  let r = ident"r"
-  result = newStmtList()
-  result.add quote do:
-    var `r` = false
+macro hasUnderscore*(Cs: varargs[typed]): bool =
+  proc walkImpl(t: NimNode): bool {.compileTime.} =
+    ## True if the type subtree contains the X marker
+    let ty = t.getTypeInst()
+    if ty.kind in [nnkTupleTy, nnkPar, nnkTupleConstr]:
+      for i in 0 ..< ty.len:
+        if walkImpl(ty[i]):
+          return true
+      return false
+    if ty.kind == nnkBracketExpr:
+      # Int[V] instances and friends: the marker never hides in them
+      if ty[0].kind == nnkSym and ty[0].strVal == "Int":
+        return false
+      error "[ttt] unsupported type: " & ty.repr
+    if ty.kind == nnkSym:
+      if ty.strVal == "X":
+        return true
+      if ty.strVal == "int" or ty.strVal == "Int":
+        return false
+      let impl = ty.getImpl()
+      if impl.kind == nnkTupleTy:
+        for i in 0 ..< impl.len:
+          if walkImpl(impl[i]):
+            return true
+        return false
+    error "[ttt] unsupported type: " & ty.repr
+  result = newLit(false)
   for i in 0 ..< Cs.len:
-    let Ci = Cs[i]
-    result.add quote do:
-      `r` = `r` or hasUnderscoreImpl(`Ci`)
-  result.add quote do:
-    `r`
-  result = newBlockStmt(result)
+    result = newLit(result.boolVal or walkImpl(Cs[i]))
+
+# ═══════════════════════════════════════════════════════════════
+#  sliceAxes and diceAxes, reduction-axis selection by axis number
+# ═══════════════════════════════════════════════════════════════
+
+proc axesSelector(n: int, axes: seq[int], rest, axis: string): NimNode =
+  ## Per-mode selector: `axis` marker at the axes, `rest` marker elsewhere
+  result = nnkPar.newTree()
+  for i in 0 ..< n:
+    var isAxis = false
+    for a in axes:
+      if a == i:
+        isAxis = true
+    if isAxis:
+      result.add ident(axis)
+    else:
+      result.add ident(rest)
+
+macro sliceAxes*(target: Layout, axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout keeping every mode except `axes`.
+  ##
+  ##   sliceAxes(make_layout((2, 3, 4), (6, 2, 1)), 1)  ==  (2, 4):(6, 1)
+  var ax: seq[int]
+  for a in axes:
+    ax.add a.intVal.int
+  let sel = axesSelector(target.rank(), ax, "X", "Y")
+  result = bindSym"slice".newCall(target)
+  for e in sel:
+    result.add e
+
+macro diceAxes*(target: Layout, axes: varargs[int]{lit|`const`}): untyped =
+  ## Layout of only the `axes` modes.
+  ##
+  ##   diceAxes(make_layout((2, 3, 4), (6, 2, 1)), 1)  ==  (3,):(2,)
+  var ax: seq[int]
+  for a in axes:
+    ax.add a.intVal.int
+  let sel = axesSelector(target.rank(), ax, "X", "Y")
+  result = bindSym"dice".newCall(target)
+  for e in sel:
+    result.add e
+
