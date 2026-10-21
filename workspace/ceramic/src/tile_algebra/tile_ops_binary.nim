@@ -29,10 +29,6 @@ func mul*(dst: var Tile, a, b: Tile) {.inline.} =
   forEach var d in dst, x in a, y in b:
     d = x * y
 
-func divide*(dst: var Tile, a, b: Tile) {.inline.} =
-  forEach var d in dst, x in a, y in b:
-    d = x / y
-
 # In-place accumulation
 # ---------------------
 
@@ -69,28 +65,26 @@ func `+`*(a, b: Tile): Tile {.inline.} =
 func `-`*(a, b: Tile): Tile {.inline.} =
   result.sub(a, b)
 
-func `*`*(a, b: Tile): Tile {.inline.} =
+func `*.`*(a, b: Tile): Tile {.inline.} =
+  ## Element-wise multiplication. Hadamard product.
   result.mul(a, b)
-
-func `/`*(a, b: Tile): Tile {.inline.} =
-  result.divide(a, b)
-
-func `*`*(a: Tile, s: a.T): Tile {.inline.} =
-  forEach var r in result, x in a:
-    r = x * s
-
-func `/`*(a: Tile, s: a.T): Tile {.inline.} =
-  forEach var r in result, x in a:
-    r = x / s
-
-template `*`*[T, Sh, St](s: T, a: Tile[T, Sh, St]): Tile[T, Sh, St] =
-  a * s
 
 # Broadcasts
 # ----------
 # https://github.com/mratsim/Arraymancer/issues/39
 # https://github.com/gchanan/pytorch/wiki/Broadcasting-Notes
 # https://github.com/mratsim/Arraymancer/pull/410
+
+func `*`*(a: Tile, s: a.T): Tile {.inline.} =
+  forEach var r in result, x in a:
+    r = x * s
+
+template `*`*[T, Sh, St](s: T, a: Tile[T, Sh, St]): Tile[T, Sh, St] =
+  a * s
+
+func `/`*(a: Tile, s: a.T): Tile {.inline.} =
+  forEach var r in result, x in a:
+    r = x / s
 
 func `+.`*(a: Tile, s: a.T): Tile {.inline.} =
   forEach var r in result, x in a:
