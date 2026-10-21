@@ -42,10 +42,8 @@ func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
   else: result = false
 
 func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
-  ## True when every non-leaf field of `T` is trivially copyable, meaning
-  ## the whole-argument blob path may pack the value: the backend store
-  ## flattens each leaf (DeviceMem, handle, pointer) individually and never
-  ## copyMem's the owning wrapper as a whole.
+  ## True when every non-leaf field of `T` is trivially copyable: the backend
+  ## store flattens leaves individually, the wrapper is never copyMem'd whole.
   when T is object|tuple:
     for f in fields(default(T)):
       when typeof(f) is H or typeof(f) is DeviceMem or typeof(f) is ptr or typeof(f) is pointer:
@@ -159,11 +157,7 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
           for f in fields(`v`):
             serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
         else:
-          # Whole-argument blob: the backend store flattens DeviceMem leaves
-          # to their device address, so owning wrappers with destructors
-          # serialize without a whole-object copyMem.
-          # Genuinely non-copyable args still fail loudly, any destructor
-          # on a non-leaf field keeps the error active.
+          # leaves flatten to device addresses, non-leaf fields must stay copyable
           when not supportsCopyMem(typeof(`v`)) and
               not blobPackable(typeof(`v`), `H`):
             {.error: "kernel args are trivially copyable types only, " &
