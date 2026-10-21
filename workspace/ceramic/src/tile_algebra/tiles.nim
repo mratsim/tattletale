@@ -5,21 +5,17 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Register tiles on the layout algebra.
-##
-## - `tile`: the unified register tile, an owned n-d tensor with a compile-time layout
-## - `zero`: the per-type zero for register cells and pad values
-## - `getLocalTileID` / `getLocalThreadID`: launch mapping, the squadron's tile
-##   and the thread's lane inside it
-
 import std/macros
 import std/typetraits
 import workspace/crucible
-import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/layouts_datatypes
 import workspace/ceramic/src/tensors
-import ./tile_matmul
+
+# ############################################################
+#
+#                      Tiles
+#
+# ############################################################
 
 # ═══════════════════════════════════════════════════════════════
 #  Backend magic functions

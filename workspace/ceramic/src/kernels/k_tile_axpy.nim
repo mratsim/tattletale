@@ -12,10 +12,6 @@
 ## - x and y may carry different layouts of the same shape, elements
 ##   pair by coordinate
 
-import workspace/crucible
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
 
 proc axpy*(y, x: distinct TensorView, alpha: float32) {.inline.} =

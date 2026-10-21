@@ -5,15 +5,18 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/macros
-import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tensors
 import ./tile_matmul
 import ./tiles
+
+# ############################################################
+#
+#                    Data movement
+#
+# ############################################################
 
 # ═══════════════════════════════════════════════════════════════
 #  Guarded access

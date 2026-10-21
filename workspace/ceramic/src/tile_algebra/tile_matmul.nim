@@ -5,26 +5,17 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tile-shaped MMA atoms and the per-operand thread->value maps
-## addressing register tiles.
-##
-## - `tiledMma`: the atom resolved for the backend, repeated over
-##   (MT, NT, KT) tiles
-## - `getMmaLayout`: one thread's register tile shape for one operand
-## - `getThreadValueMap`: the thread->value map over one tile, the tile
-##   shape composed with the atom's thread map
-##
-## Must run inside a cuda:/metal:/opencl: block, the backend picks the atom.
-
 import workspace/crucible
-import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/ism_coord_strides
-import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/hardware/h_mma_configgen
 import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/src/hardware/h_mma_properties
-import workspace/ceramic/src/hardware/h_mma_dispatch
+
+# ############################################################
+#
+#            Matrix Multiply Accumulate (MMA)
+#
+# ############################################################
 
 # ═══════════════════════════════════════════════════════════════
 #  MMA atom resolution, tile descriptor
@@ -115,7 +106,7 @@ proc toThreadValueMap*[Sh, St, TSh](l: Layout[Sh, St], tileShape: TSh):
   ThreadValueMap[Sh, St, TSh](layout: l, tileShape: tileShape)
 
 template getThreadPartitioning*(tv: ThreadValueMap): untyped =
-  tv.layout.selectDimensions(0).selectDimensions(0).shape
+  tv.layout.shape[0][0]
 
 template getThreadValueMap*(mma: static TiledMma, op: static MmaOperand): untyped =
   const threadMap = mma.getMatmulThreadmap(op)

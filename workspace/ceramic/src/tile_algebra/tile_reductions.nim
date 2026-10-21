@@ -5,12 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tile-level reductions.
-##
-## `sum(src)`: the full tile, every lane holds the total.
-
-import workspace/crucible
+import workspace/crucible/src/codegen/builtins/builtins_warp_sync_reductions
 import ./tiles
+
+# ############################################################
+#
+#            Element-wise binary functions
+#
+# ############################################################
 
 proc sum*[T, Sh, St](src: Tile[T, Sh, St]): T {.inline.} =
   ## Full-tile sum, every lane holds the total.

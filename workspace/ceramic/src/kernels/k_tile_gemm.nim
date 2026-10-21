@@ -12,15 +12,7 @@
 ## - per-lane operand register tiles load through the atom's thread->value map
 ## - ragged edge tiles go through paddedLoad / guardedStore, interior tiles take the unchecked flat path
 
-import workspace/crucible
-import workspace/ceramic/src/tensors
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/tile_algebra
-import workspace/ceramic/src/hardware/h_mma_dispatch
-import workspace/ceramic/src/kernels/k_layout_gemm
-import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile-level matmul
