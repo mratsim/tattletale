@@ -8,11 +8,11 @@
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/runtime/engines/engines_api
-import workspace/crucible/src/runtime/engines/nvrtc
-import workspace/crucible/src/runtime/engines/cl
-import workspace/crucible/src/runtime/engines/vk
-import workspace/crucible/src/runtime/engines/wgpu
-import workspace/crucible/src/runtime/engines/metal
+import workspace/crucible/src/runtime/engines/cuda_api
+import workspace/crucible/src/runtime/engines/opencl_api
+import workspace/crucible/src/runtime/engines/vulkan_api
+import workspace/crucible/src/runtime/engines/webgpu_api
+import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_kernel {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
@@ -65,7 +65,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
     result = openclCg.newCall(node)
   elif sameType(t, bindSym"VulkanEngine"):
     result = vulkanCg.newCall(node)
-  elif sameType(t, bindSym"WgpuEngine"):
+  elif sameType(t, bindSym"WebgpuEngine"):
     result = webgpuCg.newCall(node)
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")

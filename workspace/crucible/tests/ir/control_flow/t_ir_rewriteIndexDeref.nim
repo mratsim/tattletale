@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_rewriteIndexDeref.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_preprocessing {.all.}
 
 # ═══════════════════════════════════════════════════════════════════════════

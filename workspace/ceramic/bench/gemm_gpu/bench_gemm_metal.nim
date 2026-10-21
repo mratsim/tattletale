@@ -11,8 +11,6 @@
 
 import std/[os, strutils]
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/metal
-import workspace/crucible/src/runtime/errors
 import workspace/ceramic/bench/gemm_gpu/bench_gemm_template
 import workspace/ceramic/bench/gemm_gpu/apple_nax_utils
 
@@ -82,7 +80,7 @@ proc benchAppleNax(engine: MetalEngine, M, N, K, iters: int): auto =
   # the hardcoded wrapper config covers exactly M, N multiples of 64,
   # K multiples of 256: anything else would silently drop K-elements.
   if M mod 64 != 0 or N mod 64 != 0 or K mod 256 != 0:
-    failLoud("NAX GEMM: unsupported shape " & $M & "x" & $N & "x" & $K & ", the wrapper config needs M and N multiples of 64, K a multiple of 256")
+    raise newException(ValueError, "NAX GEMM: unsupported shape " & $M & "x" & $N & "x" & $K & ", the wrapper config needs M and N multiples of 64, K a multiple of 256")
   if engine.getArtifact() != NaxGemmSrc:
     engine.ingest(NaxGemmSrc)
   let params = MlxGemmParams(

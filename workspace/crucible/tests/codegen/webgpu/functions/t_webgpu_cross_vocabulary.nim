@@ -37,7 +37,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - cross-vocabulary coordinates + barrier":
 
     test "CUDA idiom + native flat local + barrier execute with correct values":
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernel2d)
       let src = engine.getArtifact()
       check "@builtin(workgroup_size)" notin src

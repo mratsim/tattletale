@@ -18,7 +18,7 @@ GPU kernel compiler framework for Nim. Transpiles Nim code to multiple GPU backe
 │  cuda:{ ... }│     │  gpu_types    │     │ cuda_lang.nim     │
 │  webgpu:{...}│     │  nim_to_gpu   │     │ wgsl_lang.nim     │
 │  opencl:{...}│     │              │     │ opencl_lang.nim    │
-│  vulkan:{...}│     │              │     │ vulkan_lang.nim    │
+│  vulkan:{...}│     │              │     │ glsl_lang.nim    │
 └─────────────┘     └──────────────┘     └───────────────────┘
 ```
 
@@ -27,7 +27,7 @@ GPU kernel compiler framework for Nim. Transpiles Nim code to multiple GPU backe
 | Module | Purpose |
 |--------|---------|
 | `src/codegen/ir/gpu_types.nim` | IR type system (`GpuType`, `GpuNodeKind`) |
-| `src/codegen/ir/nim_to_gpu.nim` | Nim → GPU AST transpiler |
+| `src/codegen/frontend/nim_to_gpu.nim` | Nim → GPU AST transpiler |
 | `src/codegen/targets/*.nim` | Backend-specific code generation |
 | `src/codegen/exec/*.nim` | Runtime execution helpers |
 | `src/codegen/nvrtc.nim` | NVRTC JIT compilation wrapper |

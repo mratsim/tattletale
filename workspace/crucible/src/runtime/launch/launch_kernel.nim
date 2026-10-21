@@ -7,11 +7,11 @@
 
 import std/macros
 import workspace/crucible/src/runtime/engines/engines_api
-import workspace/crucible/src/runtime/engines/nvrtc
-import workspace/crucible/src/runtime/engines/cl
-import workspace/crucible/src/runtime/engines/vk
-import workspace/crucible/src/runtime/engines/wgpu
-import workspace/crucible/src/runtime/engines/metal
+import workspace/crucible/src/runtime/engines/cuda_api
+import workspace/crucible/src/runtime/engines/opencl_api
+import workspace/crucible/src/runtime/engines/vulkan_api
+import workspace/crucible/src/runtime/engines/webgpu_api
+import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
 # ═════════════════════════════════════════════════════════════════════════

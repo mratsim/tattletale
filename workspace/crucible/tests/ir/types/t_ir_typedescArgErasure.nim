@@ -16,7 +16,7 @@ import std/macros
 import std/sequtils
 import std/strutils
 import std/tables
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────
 type

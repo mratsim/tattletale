@@ -11,7 +11,7 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 type
   Kilometers = distinct int32

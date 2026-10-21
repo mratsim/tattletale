@@ -14,7 +14,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/ir/types/t_ir_binop_btype.nim
 
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible
 
 # ── Fold do-block (ceramic foldZipWith style, primitive int32) ──

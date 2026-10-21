@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_patchBoolToI32.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Bool global ident gets gpuConv(expr, gtBool)

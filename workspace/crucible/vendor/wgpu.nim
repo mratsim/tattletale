@@ -12,7 +12,7 @@
 ##   - Low-level WGPU types, enums, descriptor structs
 ##   - Function imports from `libwgpu_native.so`
 ##
-## Public re-exports are consumed by `engines/wgpu.nim`.
+## Public re-exports are consumed by `engines/webgpu_api.nim`.
 ##
 ## Vendor directory layout:
 ##   vendor/wgpu/

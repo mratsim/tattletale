@@ -24,7 +24,7 @@ const kernelCode2 = webgpu:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "WebGPU - dummy-field initializers":
     test "single dummy struct const":
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernelCode)
       echo kernelCode
       var res: array[1, uint32]
@@ -35,7 +35,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
 
     test "tuple of dummy structs const":
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernelCode2)
       echo kernelCode2
       var res: array[1, uint32]

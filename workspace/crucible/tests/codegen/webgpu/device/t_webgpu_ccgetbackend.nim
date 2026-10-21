@@ -28,7 +28,7 @@ proc runTest() =
     "WGSL missing the ctWebGPU dispatch constant (5):\n" & kernelCode
   for other in ["(&output)[0] = 1;", "(&output)[0] = 2;", "(&output)[0] = 3;", "(&output)[0] = 4;"]:
     doAssert other notin kernelCode,
-      "a non-WebGPU dispatch branch survived sem:\n" & kernelCode
+      "a non-WebGPU dispatch branch survived semantic analysis:\n" & kernelCode
   doAssert "when" notin kernelCode,
     "a when construct survived into the emitted source:\n" & kernelCode
   doAssert "ccGetBackend" notin kernelCode,

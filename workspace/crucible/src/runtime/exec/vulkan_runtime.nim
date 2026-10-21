@@ -75,14 +75,12 @@ proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer 
   ](ctx.getProcAddr)
   if fn == nil: return nil
   fn(instance, name)
+
 # ═══════════════════════════════════════════════════════════════════════
-# Vulkan loader — dlopen libvulkan.so.1 (like ash does)
+# Vulkan loader
 # ═══════════════════════════════════════════════════════════════════════
-# We load the Vulkan loader (libvulkan.so.1), get vkGetInstanceProcAddr,
-# and use that to load all other Vulkan functions. The loader handles
-# ICD discovery, interface negotiation, and dispatch internally.
-# This matches the approach used by ash, vulkano, and all standard
-# Vulkan applications.
+# vkGetInstanceProcAddr suffices for every other function:
+# the loader handles ICD discovery, interface negotiation, and dispatch internally.
 
 proc `=copy`(dst: var VulkanContextObj, src: VulkanContextObj) {.error:
     "VulkanContext is ref-only, copy the ref not the object".}
@@ -199,7 +197,7 @@ proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
 # Vulkan initialization
 # ═══════════════════════════════════════════════════════════════════════
 
-proc initVulkan*(): VulkanContext =
+proc newVulkanContext*(): VulkanContext =
   result = VulkanContext()
   let (lib, gpaRaw) = loadVulkanLoader()
   result.vkLib = lib
@@ -209,7 +207,7 @@ proc initVulkan*(): VulkanContext =
     proc(instance: VkInstance, pName: cstring): pointer {.cdecl.}
   ](gpaRaw)
 
-  # Load vkCreateInstance via GPA(NULL, name) — pre-instance, same as ash
+  # Load vkCreateInstance via GPA(NULL, name), pre-instance
   let vkCreateInstance = cast[
     proc(pCreateInfo: ptr VkInstanceCreateInfo,
          pAllocator: pointer,

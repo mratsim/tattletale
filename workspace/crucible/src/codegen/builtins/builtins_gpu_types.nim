@@ -92,9 +92,9 @@ let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), 
    (bkCuda,   "toFp32"): "__half2float",
    (bkCuda,   "asFp16"): "__ushort_as_half",
    (bkCuda,   "asU16"):  "__half_as_ushort",
-   (bkWGSL,   "toFp16"): "f16",
-   (bkWGSL,   "toFp32"): "f32",
-   (bkWGSL,   "asFp16"): "bitcast<f16>"}.toTable()
+   (bkWebGPU,   "toFp16"): "f16",
+   (bkWebGPU,   "toFp32"): "f32",
+   (bkWebGPU,   "asFp16"): "bitcast<f16>"}.toTable()
 
 proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   ## Maps a builtin GPU type symbol to its GpuTypeKind, or gtVoid otherwise.

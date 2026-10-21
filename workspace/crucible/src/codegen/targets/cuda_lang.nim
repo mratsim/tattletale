@@ -341,7 +341,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
     of gbkThreadgroupBarrier:
-      # Every backend spelling of the barrier is an alias template that sem
+      # Every backend name of the barrier is an alias template that semantic analysis
       # expands to the canonical call, so only this kind reaches the IR.
       # CUDA spells it `__syncthreads()`.
       result = indentStr & "__syncthreads()"

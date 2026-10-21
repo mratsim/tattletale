@@ -16,7 +16,6 @@
 
 import std/[monotimes, strformat, os, strutils]
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/metal
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors

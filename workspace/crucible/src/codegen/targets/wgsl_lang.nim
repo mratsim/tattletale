@@ -603,7 +603,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
       of gbkNone:
         ctx.withoutSemicolon:
-          result = indentStr & ctx.getFnName(bkWGSL, ast) & '(' &
+          result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
                    ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
 

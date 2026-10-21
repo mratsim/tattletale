@@ -1,4 +1,4 @@
-## Phase 5: Backend Pass Extraction
+## Backend Pass Extraction
 ##
 ## Passes that eliminate "smart" logic from backends, making codegen
 ## purely about string emission. Each pass pre-computes analysis or
@@ -7,7 +7,7 @@
 
 import std / [sequtils, tables, sets, strutils, strformat, options]
 import ../ir/gpu_ast_datatypes
-import ../ir/nim_to_gpu_type_resolvers
+import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./passes_legalizations
@@ -323,7 +323,7 @@ proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
     result = TypeDesc(kind: tdkUnresolved)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Pass 5: mangleNames (with base58)
+# Pass 5: mangleNames
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc mangleNamesImpl*(ctx: var GpuContext) =
@@ -397,7 +397,6 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
 # Phase 6: WGSL-specific passes
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Forward declarations for Phase 6 helper functions
 proc determineIdent*(arg: GpuAst): GpuAst
 proc determineMutability*(arg: GpuAst): bool
 proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace
@@ -617,7 +616,7 @@ proc collectValueAddressSpaces*(ctx: var GpuContext) =
     ctx.collectValueAddressSpacesImpl(blk)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 6: patchBoolToI32 pass
+# Phase 7: patchBoolToI32 pass
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc patchBoolToI32Impl*(ctx: var GpuContext; n: var GpuAst) =

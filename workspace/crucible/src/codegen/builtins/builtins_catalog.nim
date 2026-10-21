@@ -17,7 +17,7 @@ import ./builtins_pragmas
 ## These are the MSL attribute names, so the Metal printer emits them verbatim.
 ## Every other backend spelling, such as CUDA `blockIdx`, OpenCL `get_global_id`,
 ## GLSL `gl_GlobalInvocationID`, or WGSL `global_id`, is a template alias.
-## Nim's sem expands each alias to the canonical name before the typed GPU macro sees the body.
+## Nim's semantic analysis expands each alias to the canonical name before the typed GPU macro sees the body.
 ## The IR therefore only ever contains canonical names.
 ##
 ## The canonical coordinate type is the `ivec3` tuple, which supports `.x` and `[idx]` access and free destructuring.

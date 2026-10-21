@@ -4,9 +4,9 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-## Regression: gpuBlock(isExpr) in getType — OpenCL target
+## Regression: gpuBlock(isExpr) in getType, OpenCL target
 ##
-## Same pattern as CUDA test_nvrtc_block_in_type.nim — a device function
+## Same pattern as CUDA test_cuda_block_in_type.nim: a device function
 ## using an inline `()` operator with `block:` body, then `.data[0]` on the
 ## result triggers getType's missing `of gpuBlock:` arm.
 ##

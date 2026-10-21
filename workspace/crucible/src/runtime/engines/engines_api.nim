@@ -8,11 +8,11 @@
 ## Engine API surface: the HwEngine concept, the backend dispatch, the engines' API re-exports.
 
 import workspace/crucible/src/runtime/engines/engines_common
-import workspace/crucible/src/runtime/engines/nvrtc
-import workspace/crucible/src/runtime/engines/cl
-import workspace/crucible/src/runtime/engines/vk
-import workspace/crucible/src/runtime/engines/wgpu
-import workspace/crucible/src/runtime/engines/metal
+import workspace/crucible/src/runtime/engines/cuda_api
+import workspace/crucible/src/runtime/engines/opencl_api
+import workspace/crucible/src/runtime/engines/vulkan_api
+import workspace/crucible/src/runtime/engines/webgpu_api
+import workspace/crucible/src/runtime/engines/metal_api
 
 type
   HwEngine* = concept engine, type E
@@ -30,8 +30,8 @@ proc newEngine*(backend: static BackendKind): auto {.inline.} =
     newOpenCLEngine()
   elif backend == bkVulkan:
     newVulkanEngine()
-  elif backend == bkWGSL:
-    newWgpuEngine()
+  elif backend == bkWebGPU:
+    newWebgpuEngine()
   elif backend == bkMetal:
     newMetalEngine()
   else:
@@ -39,13 +39,15 @@ proc newEngine*(backend: static BackendKind): auto {.inline.} =
 
 export engines_common.BackendKind, engines_common.Dim3, engines_common.LaunchConfig,
        engines_common.dim3, engines_common.DeviceMem
-export nvrtc.newCudaEngine,   nvrtc.ingest, nvrtc.getArtifact, nvrtc.deviceName,
-       nvrtc.allocDevice, nvrtc.copyToDeviceFromHost, nvrtc.copyToHostFromDevice
-export cl.newOpenCLEngine,   cl.ingest,     cl.getArtifact,    cl.deviceName,
-       cl.allocDevice, cl.copyToDeviceFromHost, cl.copyToHostFromDevice
-export vk.newVulkanEngine,   vk.ingest,     vk.getArtifact,    vk.deviceName,
-       vk.allocDevice, vk.copyToDeviceFromHost, vk.copyToHostFromDevice
-export wgpu.newWgpuEngine,   wgpu.ingest,   wgpu.getArtifact,  wgpu.deviceName,
-       wgpu.allocDevice, wgpu.copyToDeviceFromHost, wgpu.copyToHostFromDevice
-export metal.newMetalEngine, metal.ingest,  metal.getArtifact, metal.deviceName,
-       metal.allocDevice, metal.copyToDeviceFromHost, metal.copyToHostFromDevice
+export cuda_api.CudaEngine, opencl_api.OpenCLEngine, vulkan_api.VulkanEngine,
+       webgpu_api.WebgpuEngine, metal_api.MetalEngine
+export cuda_api.newCudaEngine,   cuda_api.ingest, cuda_api.getArtifact, cuda_api.deviceName,
+       cuda_api.allocDevice, cuda_api.copyToDeviceFromHost, cuda_api.copyToHostFromDevice
+export opencl_api.newOpenCLEngine,   opencl_api.ingest,     opencl_api.getArtifact,    opencl_api.deviceName,
+       opencl_api.allocDevice, opencl_api.copyToDeviceFromHost, opencl_api.copyToHostFromDevice
+export vulkan_api.newVulkanEngine,   vulkan_api.ingest,     vulkan_api.getArtifact,    vulkan_api.deviceName,
+       vulkan_api.allocDevice, vulkan_api.copyToDeviceFromHost, vulkan_api.copyToHostFromDevice
+export webgpu_api.newWebgpuEngine,   webgpu_api.ingest,   webgpu_api.getArtifact,  webgpu_api.deviceName,
+       webgpu_api.allocDevice, webgpu_api.copyToDeviceFromHost, webgpu_api.copyToHostFromDevice
+export metal_api.newMetalEngine, metal_api.ingest,  metal_api.getArtifact, metal_api.deviceName,
+       metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice
