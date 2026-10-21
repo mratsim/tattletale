@@ -5,10 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Nim-to-GPU type resolvers — Nim AST → GpuType.
-##
-## These functions need access to Nim compiler APIs (getTypeInst, getTypeImpl, etc.)
-## but do NOT call `toGpuAst`. They are called from the construction switch in `nim_to_gpu.nim`.
+## Nim AST → GpuType resolvers
 
 import std / [macros, strutils, sequtils, tables, sets]
 import ../ir/gpu_ast_datatypes
@@ -41,14 +38,11 @@ proc toGpuTypeKind*(t: NimNode): GpuTypeKind =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc evalConstInt(n: NimNode): int =
-  ## Evaluates a compile-time integer expression (the array-length forms
-  ## `getTypeInst` produces: literals, const syms, and infix arithmetic
-  ## like `32 * 16` or the `0 .. 15` range).
+  ## Handles the array-length forms `getTypeInst` produces, incl. infix `32 * 16` and `0 .. 15` ranges.
   case n.kind
   of nnkIntLit, nnkUIntLit:
     result = n.intVal
   of nnkSym:
-    # const symbol — value from its implementation
     result = n.getImpl.intVal
   of nnkInfix:
     let a = evalConstInt(n[1])
@@ -70,12 +64,11 @@ proc evalConstInt(n: NimNode): int =
     error "Unsupported node in array length: " & n.treerepr
 
 proc resolveArrayLength*(n: NimNode): int =
-  ## Returns the length of a static array type.
-  ## Callers must pass `getTypeInst()` output — idents are never expected.
+  ## `n` must be `getTypeInst()` output, idents are unsupported.
   result = evalConstInt(n[1])
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Forward declarations (defined below)
+#  Forward declarations
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveGpuArrayType*(reg: var TypeRegistry, aTyp: NimNode, len: int): GpuType
@@ -92,9 +85,7 @@ type
     typeNode: NimNode
 
 proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
-  ## Shared traversal of the anonymous tuple type in any of its AST spellings:
-  ## nnkTupleTy / nnkTupleConstr and the nnkBracketExpr `tuple[...]` full form.
-  ## Called by both resolveRecordFields and assignTypeName.
+  ## Handles nnkTupleTy, nnkTupleConstr and the nnkBracketExpr `tuple[...]` form.
   case node.kind
   of nnkTupleTy, nnkTupleConstr:
     for i, ch in node:
@@ -123,9 +114,7 @@ proc resolveTupleFields(node: NimNode): seq[FieldInfo] =
     error "Unsupported node kind for tuple fields: " & $node.kind
 
 proc tupleTypeName(fields: seq[FieldInfo]): string =
-  ## Canonical struct name for an anonymous tuple type: `Tuple_` + one
-  ## `Name_TypeName` segment per field. Every AST spelling of the same tuple
-  ## type names through this single function.
+  ## `Tuple_` + one `Name_TypeName` segment per field, shared by every AST form.
   result = "Tuple_"
   for i, fi in fields:
     if i > 0:
@@ -138,7 +127,6 @@ proc tupleTypeName(fields: seq[FieldInfo]): string =
 
 
 proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType =
-  ## Given a type implementation (ObjectTy, DistinctTy, etc.), parse it as a generic instance.
   case impl.kind
   of nnkDistinctTy:
     ## XXX: assumes distinct of inbuilt type, not object!
@@ -149,7 +137,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
     result = GpuType(kind: gtGenericInst, gName: t.repr)
     result.fields = resolveRecordFields(reg, impl)
   of nnkStaticTy:
-    # Static int — preserve the value for struct naming.
+    # Static int, its value is preserved for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
   else:
     error "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
@@ -157,27 +145,10 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
 # ═══════════════════════════════════════════════════════════════════════
 #  Type-alias canonicalization
 # ═══════════════════════════════════════════════════════════════════════
-#
-# A generic alias over a type application
-# (`type RTileF32[R, C] = RtLeft[float32, R, C, APPLE_8x8x8_F32]`) keeps
-# the alias's base name in the typed AST, since `getGenericTypeName`
-# returns `RTileF32` for `RTileF32[32, 32]`. The emitted struct name
-# would then differ from the canonical instantiation's
-# (`RtLeft` plus its args), and a declaration and its use would disagree.
-# The alias's own args also differ from the canonical ones, since the RHS
-# fixes the element type and the atom. This resolution expands the alias,
-# substituting the application args into the definition RHS, resolving
-# that RHS as the canonical type application.
 
 proc isAliasBase(n: NimNode): bool =
-  ## True when the symbol is a type alias: its definition RHS is an expression
-  ## (a type application, a template call, a named type), not a direct
-  ## object/enum/distinct/tuple/ref definition and not a magic builtin
-  ## (an empty RHS, e.g. `array`). Generic aliases over type applications
-  ## canonicalize at resolve time. The alias name never reaches the emitted
-  ## type name. A template-call RHS cannot be expanded without Nim's semantic
-  ## analysis, so it
-  ## errors loudly instead.
+  ## True when the type-def RHS is a type application or template call,
+  ## never a direct object/enum/distinct/tuple/ref definition.
   if n.kind != nnkSym: return false
   let impl = n.getImpl()
   if impl.kind != nnkTypeDef: return false
@@ -188,8 +159,6 @@ proc isAliasBase(n: NimNode): bool =
     true
 
 proc substituteTypeSyms(n, fromN, toN: NimNode): NimNode =
-  ## Returns a copy of `n` with every occurrence of the `fromN` sym
-  ## replaced by `toN` (the alias's args substituting its params).
   if n.kind == nnkSym:
     return if n.eqIdent(fromN): toN else: n
   result = n.copyNimTree()
@@ -197,12 +166,7 @@ proc substituteTypeSyms(n, fromN, toN: NimNode): NimNode =
     result[i] = substituteTypeSyms(result[i], fromN, toN)
 
 proc substituteAliasArgs(typeDef, app: NimNode): NimNode =
-  ## Returns the alias's RHS with the generic param syms replaced
-  ## by the application's args, or by the param's declared default
-  ## when the application omits the arg. A param with neither stays
-  ## unbound, and the RHS resolution fails loudly below.
-  ## Typed generic params arrive as syms. The untyped IdentDefs shape
-  ## never reaches this proc.
+  ## Missing application args fall back to the param's declared default.
   result = typeDef[2].copyNimTree()
   if app.kind != nnkBracketExpr: return
   var argIdx = 1
@@ -213,14 +177,8 @@ proc substituteAliasArgs(typeDef, app: NimNode): NimNode =
         result = substituteTypeSyms(result, gp, app[argIdx])
         inc argIdx
       else:
-        # The application omits this arg: substitute the param's
-        # declared default (its impl in the typed AST). A param
-        # with no default stays unbound, and the RHS resolution
-        # fails loudly below. An integer literal default (an int length)
-        # substitutes as its value. A bool or enum default substitutes
-        # as its declared type, matching the explicit form (bool, u32).
-        # An object default substitutes as its type (an atom const).
-        # The resolver cannot take an ObjConstr value as a type argument.
+        # the default substitutes as its value (int literal) or declared
+        # type (bool, enum, object), an ObjConstr value is not a type
         let defaultNode = gp.getImpl()
         if defaultNode.kind != nnkNilLit:
           let defaultTy = defaultNode.getTypeInst()
@@ -239,41 +197,31 @@ proc substituteAliasArgs(typeDef, app: NimNode): NimNode =
       discard
 
 proc resolveAliasExpansion(reg: var TypeRegistry, app, rhs: NimNode): GpuType =
-  ## Resolves an alias's RHS (args substituted) as a type expression.
-  ## `app` is the alias application or alias sym the RHS came from.
-  ## `app.getTypeImpl` is the fully expanded object, the same object
-  ## the canonical instantiation resolves its fields from.
+  ## `app.getTypeImpl` supplies the expanded object for the fields.
   case rhs.kind
   of nnkBracketExpr:
     if isAliasBase(rhs[0]):
-      # Nested alias: substitute its own args and recurse.
       let nested = substituteAliasArgs(rhs[0].getImpl(), rhs)
       return resolveAliasExpansion(reg, app, nested)
     let impl = app.getTypeImpl()
     if impl.kind notin {nnkObjectTy, nnkTupleTy, nnkTupleConstr}:
-      # A non-object RHS (an array, a template call, a bare named type)
-      # cannot be canonicalized to a named struct: error loudly instead
-      # of emitting a fieldless generic instantiation.
+      # A non-object RHS would emit a fieldless generic instantiation.
       error "Alias RHS '" & $rhs.repr &
-        "' does not expand to an object or tuple type. Spell the alias with the canonical type application"
+        "' does not expand to an object or tuple type. Use the canonical type application"
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(rhs))
     for i in 1 ..< rhs.len:
       result.gArgs.add resolveType(reg, rhs[i])
     result.fields = resolveRecordFields(reg, impl)
   of nnkSym:
     if isAliasBase(rhs):
-      # Nested alias through a named type: substitute its own args and recurse.
       let nested = substituteAliasArgs(rhs.getImpl(), rhs)
       return resolveAliasExpansion(reg, app, nested)
     # Alias to a named type: resolve the sym in the alias's own scope.
     result = resolveType(reg, rhs)
   of nnkCall, nnkCommand:
-    # A template call cannot be expanded at resolve time: the expansion
-    # needs the compiler's semantic analysis. Spell the alias with the canonical type
-    # application instead, e.g. `RtLeft[float32, R, C, TileConfigFor(float32)]`
-    # rather than `rt_l(float32, R, C)`.
+    # Expansion needs Nim's semantic analysis, unavailable at resolve time.
     error "Alias RHS is a template call '" & $rhs[0].repr &
-      "': spell the alias with the canonical type application, " &
+      "': use the canonical type application, " &
       "e.g. RtLeft[float32, R, C, TileConfigFor(float32)]"
   else:
     result = resolveType(reg, rhs)
@@ -284,14 +232,11 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
       return resolveType(reg, t.getTypeInst())
     else:
       return GpuType(kind: gtGenericInst, gName: t.repr)
-  # Note: nnkCall and nnkObjConstr branches were removed —
-  # value expressions are now canonicalized at the resolveType entry.
+  # Value expressions are canonicalized at the resolveType entry.
   case t.kind
   of nnkBracketExpr:
     if isAliasBase(t[0]):
-      # An alias application spells the type under the alias's own name
-      # and args. Resolve the alias's RHS with the args substituted.
-      # The emitted type name then matches the canonical instantiation's.
+      # keeps the emitted type name equal to the canonical instantiation's
       return resolveAliasExpansion(reg, t, substituteAliasArgs(t[0].getImpl(), t))
     result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
     for i in 1 ..< t.len:
@@ -301,12 +246,8 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
   of nnkObjectTy:
     result = resolveStructuralType(reg, t, t)
   of nnkSym:
-    # All callers have already verified typeKind == ntyGenericInst.
-    # Use getTypeInst() to resolve the full generic type (BracketExpr).
-    # Avoid getImpl() which can return local variable IdentDefs from template expansions.
+    # getImpl() can return local variable IdentDefs from template expansions.
     if isAliasBase(t):
-      # An alias sym spells the type with the alias's own name. Resolve
-      # the alias's RHS (no args to substitute) for the canonical name.
       return resolveAliasExpansion(reg, t, substituteAliasArgs(t.getImpl(), t))
     let inst = t.getTypeInst()
     if inst.kind == nnkBracketExpr:
@@ -349,7 +290,6 @@ proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType =
 
 
 proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
-  ## Returns the name of the type
   case n.kind
   of nnkIdent: result = n.strVal
   of nnkSym:
@@ -363,23 +303,18 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
     else:
       result = n[0].strVal # type is the first node
   of nnkObjectTy:
-    # Anonymous object type — use its repr as a fallback name.
+    # Anonymous object type, use its repr as a fallback name.
     result = n.repr
   of nnkTupleTy, nnkTupleConstr:
     result = tupleTypeName(resolveTupleFields(n))
   of nnkBracketExpr:
-    # `tuple[Int[1], Int[2]]` is the full AST form of an anonymous tuple type
-    # (getTypeInst output, e.g. generic args of an object construction).
-    # It must name identically to the nnkTupleConstr form.
+    # must name identically to the nnkTupleConstr form
     if n.len >= 2 and n[0].kind in {nnkSym, nnkIdent} and n[0].strVal == "tuple":
       result = tupleTypeName(resolveTupleFields(n))
     elif n[0].kind == nnkSym and n[0].strVal == "array":
-      # `array[N, T]`: name from the length and the element type. Never
-      # recurse through the `array` symbol — its type inst is the array
-      # itself, which would loop.
+      # never recurse through the `array` symbol, its type inst loops
       result = "Array_" & $resolveArrayLength(n) & "_" & n[2].assignTypeName()
     else:
-      # construct a type name `Foo_Bar_Baz`
       for i, ch in n:
         result.add ch.assignTypeName()
   of nnkIntLit:
@@ -393,13 +328,11 @@ proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
-  ## Maps a Nim type to a type on the GPU
-
   case n.kind
   of nnkIdentDefs: # extract type for let / var based on explicit or implicit type
-    if n[n.len - 2].kind != nnkEmpty: # explicit type
+    if n[n.len - 2].kind != nnkEmpty:
       result = resolveType(reg, n[n.len - 2])
-    else: # take from last element
+    else:
       result = resolveType(reg, n[n.len - 1].getTypeInst())
   of nnkConstDef:
     if n[1].kind != nnkEmpty: # has an explicit type
@@ -411,42 +344,27 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     reg.registerObjectType(result)
     return result
   of nnkStmtListExpr:
-    # A template expansion left in a type-bracket arg
-    # (e.g. the tile layer's `TileConfigFor(T)` defaulted atom) arrives
-    # as a single expression wrapped in a StmtListExpr. The expression IS the arg.
+    # a template expansion left in a type-bracket arg, the expression is the arg
     if n.len == 2 and n[0].kind == nnkEmpty:
       result = resolveType(reg, n[1])
     else:
       error "Unsupported StmtListExpr in type resolution: " & $n.treerepr
   else:
     if n.kind == nnkEmpty: return initGpuType(gtVoid)
-    # ── Type canonicalization ──
-    # If n is a value expression (not a type node) that has a recognizable type,
-    # resolve it to its actual type node. This prevents crashes when e.g.
-    # w.layout.stride[0] (BracketExpr with DotExpr base) leaks into type resolution;
-    # getTypeInst() returns Int[1], a clean type node.
+    # a value expression like `w.layout.stride[0]` leaked in, canonicalize it to its type node via getTypeInst()
     let n = block:
-      # Canonicalize value expressions to their actual type nodes.
-      # nnkBracketExpr with a Sym/BracketExpr base (e.g. Int[8], tuple types)
-      # are legitimate type expressions — only DotExpr-base bracket expressions
-      # are value expressions that need resolution.
       if n.kind notin {nnkSym, nnkIdent, nnkTupleTy, nnkObjectTy, nnkPtrTy, nnkTupleConstr} and
          (n.kind != nnkBracketExpr or n[0].kind notin {nnkSym, nnkBracketExpr}) and
          n.typeKind != ntyNone:
         n.getTypeInst()
       else:
         n
-    # ── end canonicalization ──
-    # Builtin GPU types (float16, bfloat16): distinct uint16 tagged `{.builtin.}`,
-    # resolved by name before the typeKind switch, since distinct types
-    # have no nty* GPU mapping of their own.
+    # builtin GPU types (float16, bfloat16): distinct uint16, no nty* mapping
     if n.kind == nnkSym and builtinGpuTypeKind(n) != gtVoid:
       return initGpuType(builtinGpuTypeKind(n))
     case n.typeKind
     of ntyDistinct:
-      # A distinct's getTypeImpl is an nnkDistinctTy wrapper over the base type.
-      # The wrapper's typeKind is ntyDistinct again: recursion on the wrapper
-      # re-enters this branch forever. Peel the wrapper.
+      # peel the nnkDistinctTy wrapper, recursing on it loops forever
       result = resolveType(reg, n.getTypeImpl()[0])
     of ntyBool, ntyInt .. ntyUint64: # includes all float types
       result = initGpuType(toGpuTypeKind n.typeKind)
@@ -459,8 +377,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     of ntyPointer:
       result = initGpuVoidPtr()
     of ntyUncheckedArray:
-      ## Note: this is just the internal type of the array. It is only a pointer due to
-      ## `ptr UncheckedArray[T]`. We simply remove the `UncheckedArray` part.
+      # only a pointer through `ptr UncheckedArray[T]`, resolve the element type
       result = initGpuUAType(resolveInnerPointerType(reg, n))
     of ntyOpenArray:
       ## openArray[T] → gtSpan(T)
@@ -479,30 +396,19 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       let typName = assignTypeName(n) # might be an object construction
       result = initGpuObjectType(typName, flds)
     of ntyEnum:
-      # Enum types resolve to their underlying integer storage. The atom
-      # records carry enum fields (MmaDType) that never reach the emitted
-      # C++ (the record only flows as a dropped static arg), but the const's
-      # type must still resolve for the codegen to fold it.
+      # atom records only flow as dropped static args, but the const type must resolve
       result = initGpuType(gtUint32)
     of ntyArray:
-      # For a generic, static array type, e.g.:
       if n.kind == nnkSym:
         let typ = resolveType(reg, getTypeImpl(n))
         reg.registerObjectType(typ)
         return typ
       if n.len == 3:
-        # BracketExpr
-        #   Sym "array"
-        #   Ident "N"
-        #   Sym "uint32"
         doAssert n.len == 3, "Length was not 3, but: " & $n.len & " for node: " & n.treerepr
         doAssert n[0].strVal == "array"
         let len = resolveArrayLength(n)
         result = resolveGpuArrayType(reg, n[2], len)
-      else:
-        # just an array literal
-        # Bracket
-        #   UIntLit 2013265921
+      else: # an array literal
         let len = n.len
         result = resolveGpuArrayType(reg, n[0], len)
     of ntyGenericInvocation:
@@ -510,29 +416,20 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     of ntyGenericInst:
       result = resolveInstantiatedType(reg, n)
     of ntyTypeDesc:
-      # `getType` returns a `BracketExpr` of eg:
-      # BracketExpr
-      #   Sym "typeDesc"
-      #   Sym "float32"
-      result = resolveType(reg, n.getType[1]) # for a type desc we need to recurse using the type of it
-    of ntyUnused2:
-      # BracketExpr
-      #   Sym "lent"
-      #   Sym "BigInt"
+      # `getType` returns a BracketExpr(Sym "typeDesc", Sym "float32")
+      result = resolveType(reg, n.getType[1])
+    of ntyUnused2: # lent[T]
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "lent", "ntyUnused2: " & $n.treerepr
       result = initGpuPtrType(resolveType(reg, n[1]), implicitPtr = false)
     of ntyProc:
-      # Procedure types can't be translated to CUDA C directly.
-      # They appear when Crucible encounters a proc definition-symbol
-      # being processed as a type. Fall back to the type instance.
+      # a proc symbol processed as a type, fall back to the type instance
       let inst = n.getTypeInst()
       if inst.typeKind == ntyGenericInst:
         result = resolveInstantiatedType(reg, inst)
       else:
         result = GpuType(kind: gtGenericInst, gName: n.repr)
     of ntyStatic:
-      # Static types — might be compile-time int values or type descriptors.
-      # Fall back to type instance to resolve.
+      # compile-time int values or type descriptors
       let inst = n.getTypeInst()
       if inst.typeKind == ntyGenericInst:
         result = resolveInstantiatedType(reg, inst)
@@ -554,13 +451,11 @@ proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeFiel
   node.expectKind({nnkObjectTy, nnkTupleTy, nnkTupleConstr})
   case node.kind
   of nnkObjectTy:
-    # Empty objects (e.g., `type Int[V] = object`) have no recList.
+    # empty objects (e.g. `type Int[V] = object`) have no recList
     if node.len > 2 and node[2].kind == nnkRecList:
       for ch in node[2]:
         if ch.kind == nnkRecCase:
-          # A variant section (`case kind: ... of ...`): resolve the branch
-          # fields, skip the discriminator plumbing. The atom records carry
-          # variants but only flow as dropped static args.
+          # variant section: branch fields only, the records flow as dropped static args
           for branch in ch[1 .. ^1]:
             if branch.kind == nnkOfBranch:
               for f in branch[1 .. ^1]:
@@ -583,22 +478,17 @@ proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeFiel
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveProcReturnType*(reg: var TypeRegistry, params: NimNode): GpuType =
-  ## Returns the return type of the given procedure from the `params` node
-  ## of type `nnkFormalParams`.
   params.expectKind(nnkFormalParams)
-  let retType = params[0] # arg 0 is return type
+  let retType = params[0]
   if retType.kind == nnkEmpty:
-    result = GpuType(kind: gtVoid) # actual void return
+    result = GpuType(kind: gtVoid)
   else:
-    # attempt to get type. If fails, we need to wait for a caller to this function to get types
-    # (e.g. returns something like `array[FOO, BigInt]` where `FOO` is a constant defined outside
-    # the macro. We then rely on our generics logic to later look this up when called
+    # may reference constants outside the macro, the generics logic resolves at call time
     result = resolveType(reg, retType)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Array type constructor (needs resolveType, stays here)
+#  Array type constructor
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveGpuArrayType*(reg: var TypeRegistry, aTyp: NimNode, len: int): GpuType =
-  ## Construct an statically sized array type
   result = GpuType(kind: gtArray, aTyp: resolveType(reg, aTyp), aLen: len)
