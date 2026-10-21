@@ -18,8 +18,11 @@
 ## and the target's format spec, so adding a format is a spec, not an algorithm.
 
 import std/math
-import workspace/crucible/src/codegen/builtins/builtins_gpu_types
-export builtins_gpu_types
+import workspace/crucible/src/crucible_gpu_builtins
+export crucible_gpu_builtins.float16, crucible_gpu_builtins.bfloat16,
+       crucible_gpu_builtins.fp8e4m3, crucible_gpu_builtins.fp8e5m2,
+       crucible_gpu_builtins.toFp16, crucible_gpu_builtins.toFp32,
+       crucible_gpu_builtins.asFp16, crucible_gpu_builtins.asU16
 
 {.push checks: off, raises: [].}
 

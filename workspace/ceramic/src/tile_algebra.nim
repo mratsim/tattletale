@@ -9,9 +9,7 @@
 ## thread->value maps, all on the layout algebra.
 
 import
-  workspace/crucible/src/codegen/builtins/builtins_gpu_types,
-  workspace/crucible/src/codegen/builtins/builtins_atomics,
-  workspace/crucible/src/codegen/builtins/builtins_warp_sync_reductions,
+  workspace/crucible/src/crucible_gpu_builtins,
   workspace/ceramic/src/tensors,
   workspace/ceramic/src/int_tuples,
   workspace/ceramic/src/layout_algebra,
@@ -45,5 +43,5 @@ export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
 export tensors.diceAxes, tensors.sliceAxes,
        tensors.getLayout
 export h_mma_configgen, h_mma_properties
-export builtins_atomics.atomicFetchAdd
-export builtins_warp_sync_reductions.reduceAdd
+export crucible_gpu_builtins.atomicFetchAdd
+export crucible_gpu_builtins.reduceAdd

@@ -8,8 +8,8 @@
 import std / tables
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
-import ../builtins/builtins_functions
-import ../builtins/builtins_gpu_types
+import ../../builtins/builtins_functions
+import ../../builtins/builtins_gpu_types
 import ../passes/passes_optimizations
 
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =

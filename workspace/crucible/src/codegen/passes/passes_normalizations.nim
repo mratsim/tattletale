@@ -11,7 +11,7 @@
 import std / [sequtils, tables, sets, strutils]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_type_constructors
-import ../builtins/builtins_functions
+import ../../builtins/builtins_functions
 import ./pass_datatypes
 import ./passes_preprocessing
 

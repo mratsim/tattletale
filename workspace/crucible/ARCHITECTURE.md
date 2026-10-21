@@ -109,6 +109,17 @@ src/
   crucible_gpu_builtins.nim         Builtin vocabulary hub.
   crucible_internal_compiler.nim    IR/compiler test surface.
   macros/ast_rebuilder.nim          Nim AST rebuilding helpers.
+  builtins/
+    builtins.nim                  Aggregator for the builtin vocabulary.
+    builtins_catalog.nim          Canonical thread geometry and the
+                                  per-backend idiom matrix, barriers.
+    builtins_functions.nim        Scalar math builtins (exp2, rsqrt).
+    builtins_gpu_types.nim        float16, bfloat16, fp8e4m3, fp8e5m2 and
+                                  their conversion primitives.
+    builtins_warp_sync_reductions.nim  reduceAdd, reduceMax.
+    builtins_atomics.nim          atomicFetchAdd.
+    builtins_pragmas.nim          global, workgroup, device, smem, ...
+    builtins_compilermagic.nim    CompileTarget, ccGetBackend.
   codegen/
     gpu_compiler.nim                Entry point. The `cuda:`/`opencl:`/`vulkan:`/
                                     `webgpu:`/`metal:` macros build a GpuContext +
@@ -158,17 +169,6 @@ src/
       wgsl_lang.nim
       cuda_lang.nim
       lang_utils.nim                Shared printer helpers.
-    builtins/
-      builtins.nim                  Aggregator for the builtin vocabulary.
-      builtins_catalog.nim          Canonical thread geometry and the
-                                    per-backend idiom matrix, barriers.
-      builtins_functions.nim        Scalar math builtins (exp2, rsqrt).
-      builtins_gpu_types.nim        float16, bfloat16, fp8e4m3, fp8e5m2 and
-                                    their conversion primitives.
-      builtins_warp_sync_reductions.nim  reduceAdd, reduceMax.
-      builtins_atomics.nim          atomicFetchAdd.
-      builtins_pragmas.nim          global, workgroup, device, smem, ...
-      builtins_compilermagic.nim    CompileTarget, ccGetBackend.
   runtime/
     errors.nim                      failLoud: stacktrace + stderr + quit(1).
     engines/

@@ -26,9 +26,9 @@ import ./passes/passes_lowering
 import ./passes/passes_normalizations
 import ./passes/passes_preprocessing
 
-import ./builtins/builtins # all the builtins for the backend to make the Nim compiler happy
+import ../builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
-import ./builtins/builtins_compilermagic
+import ../builtins/builtins_compilermagic
 export builtins_compilermagic
 
 template registerCommonPasses*(reg: var PassRegistry) =

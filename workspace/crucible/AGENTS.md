@@ -199,7 +199,7 @@ Kernel bodies write coordinates and barriers in the canonical MSL vocabulary:
 Every other backend name is a template alias expanding to the canonical name during Nim semantic analysis,
 so the IR only ever contains canonical names.
 
-- [`src/codegen/builtins/builtins_catalog.nim`](src/codegen/builtins/builtins_catalog.nim)
+- [`src/builtins/builtins_catalog.nim`](src/builtins/builtins_catalog.nim)
   is the source of truth for the alias set.
 - The printers under `src/codegen/targets/` emit the native names below.
 

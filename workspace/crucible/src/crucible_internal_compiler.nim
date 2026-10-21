@@ -27,8 +27,8 @@ import
   ./codegen/passes/passes_opencl,
   ./codegen/passes/passes_wgsl,
   ./codegen/gpu_compiler,
-  ./codegen/builtins/builtins_pragmas,
-  ./codegen/builtins/builtins_functions
+  ./builtins/builtins_pragmas,
+  ./builtins/builtins_functions
 
 export gpu_compiler, gpu_ast_datatypes, gpu_type_constructors, gpu_ast_type_resolvers,
        nim_to_gpu, nim_to_gpu_type_resolvers,

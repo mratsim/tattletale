@@ -7,7 +7,7 @@
 
 import std/macros
 import std/tables
-import ../ir/gpu_ast_datatypes
+import ../codegen/ir/gpu_ast_datatypes
 import ./builtins_pragmas
 
 type

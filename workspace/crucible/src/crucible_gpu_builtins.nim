@@ -32,13 +32,13 @@
 
 
 import
-  ./codegen/builtins/builtins_catalog,
-  ./codegen/builtins/builtins_functions,
-  ./codegen/builtins/builtins_gpu_types,
-  ./codegen/builtins/builtins_warp_sync_reductions,
-  ./codegen/builtins/builtins_atomics,
-  ./codegen/builtins/builtins_pragmas,
-  ./codegen/builtins/builtins_compilermagic
+  ./builtins/builtins_catalog,
+  ./builtins/builtins_functions,
+  ./builtins/builtins_gpu_types,
+  ./builtins/builtins_warp_sync_reductions,
+  ./builtins/builtins_atomics,
+  ./builtins/builtins_pragmas,
+  ./builtins/builtins_compilermagic
 
 export builtins_catalog
 

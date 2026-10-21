@@ -54,7 +54,7 @@ so the IR only ever contains canonical names, with no alias tables or name-to-ki
 
 - Any backend's idiom works in any backend's kernel: a `cuda:` kernel may write `get_global_id(0)`,
   a `metal:` kernel may write `blockIdx.x`.
-- The catalog, [`src/codegen/builtins/builtins_catalog.nim`](src/codegen/builtins/builtins_catalog.nim),
+- The catalog, [`src/builtins/builtins_catalog.nim`](src/builtins/builtins_catalog.nim),
   defines the canonical dummies and the alias set.
 - The printers, [`src/codegen/targets/`](src/codegen/targets/), emit the native names below.
 
@@ -97,7 +97,7 @@ Notes:
   `workgroup_barrier(flags)` and `workgroupBarrier()` are one declaration with a defaulted flag.
   `get_global_size` is excluded from the vocabulary, it is OpenCL-only native.
 - **No OpenCL `get_*` registration.**
-  [`NimGpuFnBuiltins`](src/codegen/builtins/builtins_functions.nim) registers only the Nim
+  [`NimGpuFnBuiltins`](src/builtins/builtins_functions.nim) registers only the Nim
   function-style magic builtins (`toOpenArray`, `len`).
 - The OpenCL work-item names are template aliases in `builtins_catalog.nim`,
   they expand to canonical names during Nim semantic analysis. The name-only registration path never consults the list,
@@ -124,6 +124,15 @@ workspace/crucible/
     crucible_public_api.nim       Curated surface: engines, device memory, launch sugar, macros
     crucible_gpu_builtins.nim     Builtin vocabulary hub, callable from kernel bodies
     crucible_internal_compiler.nim  IR/compiler internals, the test surface for tests/ir
+    builtins/
+      builtins.nim              Re-exports the catalog and pragmas to the entry macros
+      builtins_catalog.nim      Canonical coordinate/sync builtins + per-backend idiom aliases
+      builtins_functions.nim    Device math builtins (exp2/rsqrt) + Nim function name tables
+      builtins_gpu_types.nim    float16, bfloat16, fp8e4m3, fp8e5m2
+      builtins_warp_sync_reductions.nim  reduceAdd, reduceMax
+      builtins_atomics.nim      atomicFetchAdd
+      builtins_pragmas.nim      Backend pragmas: cudaName, workgroup, builtin, smem, ...
+      builtins_compilermagic.nim  CompileTarget, ccGetBackend
     codegen/
       gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:` macros
       frontend/
@@ -155,15 +164,6 @@ workspace/crucible/
         wgsl_lang.nim
         msl_lang.nim
         lang_utils.nim            Shared printer helpers
-      builtins/
-        builtins.nim              Re-exports the catalog and pragmas to the entry macros
-        builtins_catalog.nim      Canonical coordinate/sync builtins + per-backend idiom aliases
-        builtins_functions.nim    Device math builtins (exp2/rsqrt) + Nim function name tables
-        builtins_gpu_types.nim    float16, bfloat16, fp8e4m3, fp8e5m2
-        builtins_warp_sync_reductions.nim  reduceAdd, reduceMax
-        builtins_atomics.nim      atomicFetchAdd
-        builtins_pragmas.nim      Backend pragmas: cudaName, workgroup, builtin, smem, ...
-        builtins_compilermagic.nim  CompileTarget, ccGetBackend
     runtime/
       engines_api.nim is under engines/: the HwEngine concept, newEngine, re-exports
       engines/
