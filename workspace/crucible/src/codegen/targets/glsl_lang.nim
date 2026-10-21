@@ -118,8 +118,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "uint"
-  of gtPtr: raiseAssert "Vulkan GLSL does not support raw pointers — lower to SSBO/indexing first"
-  of gtVoidPtr: raiseAssert "Vulkan GLSL does not support void* pointers — lower to SSBO/indexing first"
+  of gtPtr: raiseAssert "Vulkan GLSL renders pointers as buffer references (buffer device addresses) — render the full type, not the bare kind"
+  of gtVoidPtr: raiseAssert "Vulkan GLSL renders void* as a void buffer reference — render the full type, not the bare kind"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
@@ -563,7 +563,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result = gpuTypeToString(ast.cTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.cExpr) & ')'
 
   of gpuAddr:
-    raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
+    # No address-of in GLSL: buffer device addressing covers buffer memory only,
+    # not function-storage locals. Promote upstream (SROA or inline the callee).
+    raiseAssert "Vulkan GLSL cannot take the address of a local: buffer device addressing covers buffer memory only, not function storage. Promote the local (SROA) or inline the callee"
 
   of gpuDeref:
     # the ref block member is a runtime-sized array, a value read takes
