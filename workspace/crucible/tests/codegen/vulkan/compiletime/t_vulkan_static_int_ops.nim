@@ -42,7 +42,7 @@ const kernelCode = vulkan:
     # both-Int template — folded to Int[V op U]() at Nim level
     let e = Int[2]() + Int[3]()  # Int[5]
     let f = Int[2]() * Int[3]()  # Int[6]
-    # runtime templates — plain int arithmetic (value substituted at Nim sem)
+    # runtime templates — plain int arithmetic (value substituted at Nim semantic analysisantic analysis)
     let g = Int[10]() + h        # 10 + h
     let i = h + Int[10]()        # h + 10
     let j = Int[10]() * h        # 10 * h

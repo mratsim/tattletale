@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - pipeline cache":
 
     test "same kernel, different input arrays (cache reuse)":
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
@@ -59,7 +59,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[3] == 80
 
     test "re-ingest invalidates cached pipelines":
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernelDouble)
       echo kernelDouble
       var res: array[4, uint32]
@@ -83,7 +83,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "first pipeline creation is a cache miss and must not hang the error-scope callback":
       # Pipeline creation pops a validation error scope around
       # wgpuDeviceCreateComputePipeline, so a fresh engine exercises the miss path.
-      var engine = bkWGSL.newEngine()
+      var engine = bkWebGPU.newEngine()
       engine.ingest(kernelDouble)
       var res: array[4, uint32]
       let oDev = engine.allocDevice(uint32, res.len)

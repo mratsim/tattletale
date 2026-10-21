@@ -15,12 +15,78 @@ import ../ir/gpu_ast_type_resolvers
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
 
+{.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════
+
+proc registerTypeSystemPasses*(reg: var PassRegistry) =
+  ## Passes that lower the Nim type system onto the target: compile-time
+  ## parameters have no representation there. Run before the legalizations.
+  reg.register(
+    name = "pruneCompileTimeParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
+    run = pruneCompileTimeParams
+  )
+
+proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:
+  ##
+  ## - array indexing over a pointer to an array
+  ## - field access over a pointer
+  ## - deref over a pointer
+  ##
+  ## Address-of subtrees are untouched, the reference itself is the value there.
+  ## Backends that cannot index pointers render the deref as a block-member access, C-family backends collapse it.
+  case n.kind
+  of gpuAddr:
+    discard
+  of gpuIndex:
+    insertPointerDerefImpl(ctx, n.iArr)
+    insertPointerDerefImpl(ctx, n.iIndex)
+    if n.iArr.kind != gpuDeref:
+      let t = ctx.getOperandType(n.iArr)
+      if not t.isNil and t.kind == gtPtr and not t.to.isNil:
+        n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
+  of gpuDot:
+    insertPointerDerefImpl(ctx, n.dParent)
+    insertPointerDerefImpl(ctx, n.dField)
+    if n.dParent.kind != gpuDeref:
+      let t = ctx.getOperandType(n.dParent)
+      if t != nil and t.kind == gtPtr:
+        n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
+  of gpuDeref:
+    # Recurse into the deref'd subtree only: this node is already the wrap
+    # for its operand. A re-wrap chains derefs and adds one extra `.x[0]`
+    # per visit in the backends that render them
+    insertPointerDerefImpl(ctx, n.dOf)
+  else:
+    for ch in mitems(n):
+      insertPointerDerefImpl(ctx, ch)
+
+proc insertPointerDeref*(ctx: var GpuContext) =
+  for _, fn in ctx.allFnTab.mpairs:
+    insertPointerDerefImpl(ctx, fn.pBody)
+
+proc registerLoweringPasses*(reg: var PassRegistry) =
+  reg.register(
+    name = "lowerSpans",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Materialize openArray/varargs spans into ptr + len parameters",
+    run = lowerSpans
+  )
+
+
 type
   SpanParam = object
     paramIdx: int        # index in the param list
     ptrName: string      # name for the ptr param
     lenName: string      # name for the len param
-    ptrTyp: GpuType      # ptr to element type
+    ptrTyp: GpuType
     lenTyp: GpuType      # int32
 
   SpanSigMap = TableRef[string, seq[SpanParam]]
@@ -65,7 +131,7 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   scan(ctx.genericInsts)
   scan(ctx.fnTab)
 
-proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
+proc rewriteFnSig(fn: var GpuAst, sigMap: SpanSigMap) =
   ## Split gtSpan params in a function definition
   if fn.isNil or fn.kind != gpuProc:
     return
@@ -104,7 +170,7 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
       newParams.add p
   fn.pParams = newParams
 
-proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
+proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
   ## Walk AST, rewriting span idents and adjusting call sites
 
   case n.kind
@@ -268,7 +334,6 @@ proc lowerSpans*(ctx: var GpuContext) =
   rewriteTab(ctx.fnTab)
 
 
-# ═══════════════════════════════════════════════════════════════════
 # Compile-time parameter pruning
 # ═══════════════════════════════════════════════════════════════════
 
@@ -309,62 +374,3 @@ proc pruneCompileTimeParams*(ctx: var GpuContext) =
         if i notin dropped:
           kept.add p
       fn.pParams = kept
-
-proc registerTypeSystemPasses*(reg: var PassRegistry) =
-  ## Passes that lower the Nim type system onto the target: compile-time
-  ## parameters have no representation there. Run before the legalizations.
-  reg.register(
-    name = "pruneCompileTimeParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
-    run = pruneCompileTimeParams
-  )
-
-proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
-  ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:
-  ##
-  ## - array indexing over a pointer to an array
-  ## - field access over a pointer
-  ## - deref over a pointer
-  ##
-  ## Address-of subtrees are untouched, the reference itself is the value there.
-  ## Backends that cannot index pointers render the deref as a block-member access, C-family backends collapse it.
-  case n.kind
-  of gpuAddr:
-    discard
-  of gpuIndex:
-    insertPointerDerefImpl(ctx, n.iArr)
-    insertPointerDerefImpl(ctx, n.iIndex)
-    if n.iArr.kind != gpuDeref:
-      let t = ctx.getOperandType(n.iArr)
-      if not t.isNil and t.kind == gtPtr and not t.to.isNil:
-        n.iArr = GpuAst(kind: gpuDeref, dOf: n.iArr)
-  of gpuDot:
-    insertPointerDerefImpl(ctx, n.dParent)
-    insertPointerDerefImpl(ctx, n.dField)
-    if n.dParent.kind != gpuDeref:
-      let t = ctx.getOperandType(n.dParent)
-      if t != nil and t.kind == gtPtr:
-        n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
-  of gpuDeref:
-    # Recurse into the deref'd subtree only: this node is already the wrap
-    # for its operand. A re-wrap chains derefs and adds one extra `.x[0]`
-    # per visit in the backends that render them
-    insertPointerDerefImpl(ctx, n.dOf)
-  else:
-    for ch in mitems(n):
-      insertPointerDerefImpl(ctx, ch)
-
-proc insertPointerDeref*(ctx: var GpuContext) =
-  for _, fn in ctx.allFnTab.mpairs:
-    insertPointerDerefImpl(ctx, fn.pBody)
-
-proc registerLoweringPasses*(reg: var PassRegistry) =
-  reg.register(
-    name = "lowerSpans",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Materialize openArray/varargs spans into ptr + len parameters",
-    run = lowerSpans
-  )

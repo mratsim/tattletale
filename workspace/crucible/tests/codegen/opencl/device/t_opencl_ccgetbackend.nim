@@ -28,7 +28,7 @@ proc runTest() =
     "OpenCL missing the ctOpenCL dispatch constant (1):\n" & kernelCode
   for other in ["output[0] = 2;", "output[0] = 3;", "output[0] = 4;", "output[0] = 5;"]:
     doAssert other notin kernelCode,
-      "a non-OpenCL dispatch branch survived sem:\n" & kernelCode
+      "a non-OpenCL dispatch branch survived semantic analysis:\n" & kernelCode
   echo "  OK — OpenCL ccGetBackend emission (dispatch = 1, no when)"
 
 when isMainModule:

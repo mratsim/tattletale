@@ -13,9 +13,9 @@ import ./targets/targets_lang
 import ./passes/passes_cuda
 import ./passes/passes_wgsl
 import ./passes/passes_opencl
-import ./passes/passes_vulkan
-import ./passes/passes_metal
-import ./ir/nim_to_gpu
+import ./passes/passes_glsl
+import ./passes/passes_msl
+import ./frontend/nim_to_gpu
 import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
 import ./passes/pass_registry

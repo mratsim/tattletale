@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerIfExpr.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. gpuIf(isExpr: true) → gpuTernary

@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/crucible/src/abis/cl_abi
+import workspace/crucible/src/abis/opencl_abi
 import ../errors
 
 type
@@ -100,7 +100,7 @@ proc isGpu(device: OpenCLDevice): bool =
   check getDeviceInfo(device.id, DEVICE_TYPE, cl_size_t(sizeof(deviceType)), deviceType.addr, nil)
   result = (deviceType.int64 and DEVICE_TYPE_GPU.int64) != 0
 
-proc initOpenCL(device: OpenCLDevice): OpenCLContext =
+proc newOpenCLContext(device: OpenCLDevice): OpenCLContext =
   result = OpenCLContext()
   var
     id = device.id
@@ -111,7 +111,7 @@ proc initOpenCL(device: OpenCLDevice): OpenCLContext =
   result.commands = createCommandQueue(result.context, id, 0, status.addr)
   check status
 
-proc initOpenCL*(): OpenCLContext =
+proc newOpenCLContext*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
     failLoud("OpenCL: no devices found")
@@ -121,7 +121,7 @@ proc initOpenCL*(): OpenCLContext =
     if d.isGpu():
       dev = d
       break
-  result = initOpenCL(dev)
+  result = newOpenCLContext(dev)
 
 proc allocBuffer*(ctx: OpenCLContext, size: int): OpenCLBuffer =
   var status: TClResult

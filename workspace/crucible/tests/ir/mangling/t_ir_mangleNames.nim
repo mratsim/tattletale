@@ -13,7 +13,7 @@
 ##     workspace/crucible/tests/ir/mangling/t_ir_mangleNames.nim
 
 import std / [tables, sequtils, strutils]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. npClean — plain name unchanged

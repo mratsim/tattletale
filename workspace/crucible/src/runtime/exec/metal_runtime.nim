@@ -31,15 +31,16 @@ const
 # ═════════════════════════════════════════════════
 
 type
-  MetalCtx* = object
+  MetalContext* = ref MetalContextObj
+  MetalContextObj = object
     ## Live Metal device and command queue, +1 objects owned by the caller.
     device*: objc.ID
     queue*: objc.ID
 
-proc `=copy`(dst: var MetalCtx, src: MetalCtx) {.error:
-    "MetalCtx owns its device and queue handles, copy the MetalEngine ref not the ctx".}
+proc `=copy`(dst: var MetalContextObj, src: MetalContextObj) {.error:
+    "MetalContext owns its device and queue handles, copy the MetalEngine ref not the ctx".}
 
-proc `=destroy`(ctx: var MetalCtx) =
+proc `=destroy`(ctx: var MetalContextObj) =
     objc.withMemPool:
       objc.release(ctx.queue)
       objc.release(ctx.device)

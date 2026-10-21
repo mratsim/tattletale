@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_normalizeArraySpan.nim
 
 import std/[tables]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
   ## A `p: ptr array[4, int32]` ident + its gpuDeref — the IR shape of a

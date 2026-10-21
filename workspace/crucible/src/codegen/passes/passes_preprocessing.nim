@@ -1,37 +1,83 @@
-## Phase 5: Backend Pass Extraction
+## Backend Pass Extraction
 ##
-## Passes that eliminate "smart" logic from backends, making codegen
-## purely about string emission. Each pass pre-computes analysis or
-## decomposes complex IR patterns into simpler ones so backends
-## only need to render straightforward IR to target-language strings.
+## Passes that eliminate smart logic from backends, codegen renders
+## straightforward IR to target-language strings only.
 
 import std / [sequtils, tables, sets, strutils, strformat, options]
 import ../ir/gpu_ast_datatypes
-import ../ir/nim_to_gpu_type_resolvers
+import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./passes_legalizations
+
+{.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc registerPreprocessingPasses*(reg: var PassRegistry) =
+  reg.register("rewriteIndexDeref", pkTransform, phaseMain,
+    "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+  )
+
+  reg.register("decomposeMemcpyVars", pkTransform, phaseMain,
+    "Splits gpuVar/gpuAssign with RequiresMemcpy into decl + memcpy call",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          decomposeMemcpyVarsImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          decomposeMemcpyVarsImpl(ctx, fn.pBody)
+  )
+
+  reg.register("annotateTypesForCodegen", pkTransform, phaseMain,
+    "Pre-computes backend-neutral type descriptors on all IR nodes",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      discard
+      # descriptors are computed on-demand via getTypeDesc(), the pass only
+      # registers the mechanism
+  )
+
+  reg.register("mangleNames", pkTransform, phaseMain,
+    "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      mangleNamesImpl(ctx)
+  )
+
+
+
 
 proc isGlobalFn*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc
   result = attGlobal in fn.pAttributes
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Pass 1: rewriteIndexDeref
+# rewriteIndexDeref
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
-  ## Transform `gpuIndex(gpuDeref(ident))` into `gpuIndex(iArr=dOf(ident))`
-  ## when the deref'd ident is a pointer (not array) type.
-  ##
-  ## This is a pure IR normalization: `arr[idx]` where `arr` is a pointer
-  ## is syntactically `(*arr)[idx]` which is equivalent to `arr[idx]` in C.
-  ## The pass rewrites the IR to the simpler form.
+  ## `(*arr)[idx]` ≡ `arr[idx]` in C, the IR keeps the simpler form.
   case n.kind
   of gpuIndex:
     if n.iArr.kind == gpuDeref:
-      # Check if the deref'd node is a pointer to a statically-sized array.
-      # If it's a plain ptr (not ptr-to-array), rewrite gpuIndex(gpuDeref(x)) -> gpuIndex(x).
+      # ptr-to-array keeps the deref (C array decay), plain ptr rewrites
       let isPtrToArray = (block:
         let derefOf = n.iArr.dOf
         if derefOf.kind == gpuIdent and derefOf.symbol != nil:
@@ -50,12 +96,10 @@ proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
       rewriteIndexDerefImpl(ctx, ch)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Pass 2: decomposeMemcpyVars
+# decomposeMemcpyVars
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc genMemcpyCall(lhs, rhs: GpuAst; sizeExpr: GpuAst): GpuAst =
-  ## Create a gpuCall node for `__builtin_memcpy(dst, src, size)`.
+proc genMemcpyCall(lhs, rhs: GpuAst, sizeExpr: GpuAst): GpuAst =
   let memcpySym = newSymbol("__builtin_memcpy", iSym = "__builtin_memcpy", symKind = gsProc)
   let memcpyIdent = GpuAst(kind: gpuIdent, symbol: memcpySym)
   var call = GpuAst(kind: gpuCall)
@@ -63,8 +107,7 @@ proc genMemcpyCall(lhs, rhs: GpuAst; sizeExpr: GpuAst): GpuAst =
   call.cArgs = @[lhs, rhs, sizeExpr]
   result = call
 
-proc genMemcpySizeOf*(ctx: var GpuContext; expr: GpuAst): GpuAst =
-  ## Create a `sizeof(T)` gpuCall equivalent for the type of the expression.
+proc genSizeofCall*(ctx: var GpuContext, expr: GpuAst): GpuAst =
   let sizeSym = newSymbol("__builtin_sizeof", iSym = "__builtin_sizeof", symKind = gsProc)
   let sizeIdent = GpuAst(kind: gpuIdent, symbol: sizeSym)
   var call = GpuAst(kind: gpuCall)
@@ -72,25 +115,16 @@ proc genMemcpySizeOf*(ctx: var GpuContext; expr: GpuAst): GpuAst =
   call.cArgs = @[expr]
   result = call
 
-proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
-  ## Walk gpuVar and gpuAssign nodes. For those requiring memcpy:
-  ## 1. For gpuVar: split into declaration (no init) + memcpy call
-  ## 2. For gpuAssign: replace with memcpy call
-  ##
-  ## After this pass, no backend needs to handle `vRequiresMemcpy` or
-  ## `aRequiresMemcpy` — they only emit `=` for simple assignments.
+proc decomposeMemcpyVarsImpl*(ctx: var GpuContext, n: var GpuAst) =
+  ## After this pass, backends only emit `=` for simple assignments
   case n.kind
   of gpuVar:
     if n.vRequiresMemcpy and n.vInit.kind != gpuDiscard:
-      # Split into:
-      #   1. The same gpuVar but with gpuDiscard init (no RequiresMemcpy)
-      #   2. memcpy(&vName, &vInit, sizeof(vType))
       let addrOfVar = GpuAst(kind: gpuAddr, aOf: n.vName)
       let addrOfInit = GpuAst(kind: gpuAddr, aOf: n.vInit)
-      let sizeCall = genMemcpySizeOf(ctx, n.vName)
+      let sizeCall = genSizeofCall(ctx, n.vName)
       let memcpyNode = genMemcpyCall(addrOfVar, addrOfInit, sizeCall)
 
-      # Replace n with a gpuBlock containing var decl + memcpy call
       n.vRequiresMemcpy = false
       n.vInit = GpuAst(kind: gpuDiscard)
       n = GpuAst(kind: gpuBlock, blockLabel: "_memcpy", statements: @[n, memcpyNode])
@@ -100,10 +134,9 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
 
   of gpuAssign:
     if n.aRequiresMemcpy:
-      # Replace with memcpy(&aLeft, &aRight, sizeof(aLeft))
       let addrOfLeft = GpuAst(kind: gpuAddr, aOf: n.aLeft)
       let addrOfRight = GpuAst(kind: gpuAddr, aOf: n.aRight)
-      let sizeCall = genMemcpySizeOf(ctx, n.aLeft)
+      let sizeCall = genSizeofCall(ctx, n.aLeft)
       n = genMemcpyCall(addrOfLeft, addrOfRight, sizeCall)
     else:
       for ch in mitems(n):
@@ -130,17 +163,13 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
       var stmt = n.statements[i]
       decomposeMemcpyVarsImpl(ctx, stmt)
       if stmt.kind == gpuBlock and stmt.blockLabel == "_memcpy":
-        # Inline anonymous blocks only (created by memcpy decomposition).
-        # Labeled blocks (scope blocks from blitting) must be preserved
-        # to maintain C++ scope isolation and prevent duplicate var declarations.
+        # only anonymous _memcpy blocks inline, labeled blocks keep C++ scope isolation
         for s in stmt.statements:
           newStmts.add s
       else:
         newStmts.add stmt
     n.statements = newStmts
-    # Rename duplicate {.inject.} var declarations across sibling blocks.
-    # Template expansions can produce the same var names in anonymous blocks
-    # that will be flattened by codegen. Rename to avoid collisions.
+    # template expansions duplicate var names across blocks flattened by codegen
     dedupVarNames(n.statements)
 
   of gpuProc:
@@ -151,16 +180,15 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext; n: var GpuAst) =
       decomposeMemcpyVarsImpl(ctx, ch)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Pass 3: annotateTypesForCodegen
+# Type descriptors
 # ═══════════════════════════════════════════════════════════════════════════
 
 type
   TypeDescKind* = enum
     tdkVoid
     tdkBool
-    tdkInt8      # signed 8-bit
-    tdkUint8     # unsigned 8-bit
+    tdkInt8
+    tdkUint8
     tdkInt16
     tdkUint16
     tdkInt32
@@ -174,11 +202,11 @@ type
     tdkF8E4M3
     tdkF8E5M2
     tdkSize
-    tdkPtr       # pointer to another type descriptor
-    tdkArray     # fixed-size array
+    tdkPtr       # pointer to a type descriptor
+    tdkArray
     tdkStruct    # named struct with fields
-    tdkString    # const char*
-    tdkVoidPtr   # void*
+    tdkString    # const char star
+    tdkVoidPtr
     tdkGeneric   # generic instantiation name
     tdkUnresolved
 
@@ -201,9 +229,8 @@ type
       tdFields*: seq[tuple[name: string, typ: TypeDesc]]
     of tdkGeneric:
       tdGenericName*: string         # base name
-      tdArgs*: seq[TypeDesc]  # generic args
+      tdArgs*: seq[TypeDesc]
 proc gpuTypeToDesc*(t: GpuType): TypeDesc =
-  ## Convert a GpuType to a backend-neutral TypeDescriptor.
   if t.isNil:
     return TypeDesc(kind: tdkUnresolved)
 
@@ -257,9 +284,8 @@ proc gpuTypeToDesc*(t: GpuType): TypeDesc =
     # the type slot holds the compile-time argument, there is no descriptor
     TypeDesc(kind: tdkUnresolved)
 
-proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
-  ## Pre-compute the type descriptor for a given IR node.
-  ## This replaces the recursive getType/getFieldType calls during codegen.
+proc getTypeDesc*(ctx: var GpuContext, arg: GpuAst): TypeDesc =
+  ## Replaces the recursive getType/getFieldType calls during codegen
   case arg.kind
   of gpuIdent:
     if arg.symbol != nil:
@@ -323,7 +349,7 @@ proc getTypeDesc*(ctx: var GpuContext; arg: GpuAst): TypeDesc =
     result = TypeDesc(kind: tdkUnresolved)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Pass 5: mangleNames (with base58)
+# mangleNames
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc mangleNamesImpl*(ctx: var GpuContext) =
@@ -377,7 +403,6 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
       ident.symbol.name = name & "_" & suffix
 
     of npPatch:
-      # Operator rename
       let newName = case name
         of "+": "add"
         of "-": "sub"
@@ -393,28 +418,12 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
     seenNames.incl ident.symbol.name
 
 
+# Shared helpers
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 6: WGSL-specific passes
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Forward declarations for Phase 6 helper functions
-proc determineIdent*(arg: GpuAst): GpuAst
-proc determineMutability*(arg: GpuAst): bool
-proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace
-proc shortAddrSpace*(addrSpace: AddressSpace): string
 
 proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
-  ## Rewrites `x += y` → `x = x + y`.
-  ##
-  ## The LHS of a compound assignment can arrive from the frontend wrapped in a
-  ## `gpuAddr` (Nim's `HiddenAddr` read-modify-write sugar for non-simple
-  ## lvalues, e.g. macro-expanded statement-list expressions like ceramic's
-  ## `tv[m,n]`). After the rewrite the lvalue must be used directly on both
-  ## sides: an `&`-wrapped LHS is not a modifiable lvalue on any backend and
-  ## `(&x) + y` is not a valid read. The RHS operand is a CLONE of the LHS
-  ## because legalization mutates the assignment LHS in place (hoisting
-  ## block-expression intermediates) — the two sides must not alias the same
-  ## node.
+  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
+  ## clones the LHS (legalization mutates it in place, the sides must not alias)
   doAssert n.kind == gpuBinOp
   if n.bOp.ident() in ["<=", "==", ">=", "!="]: return n
   template genAssign(left, rnode, op: typed): untyped =
@@ -432,56 +441,9 @@ proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
   else:
     result = n
 
-proc shortAddrSpace*(addrSpace: AddressSpace): string =
-  case addrSpace
-  of asDevice: "s"
-  of asConstant: "u"
-  of asSMEM: "w"
-  of asRMEM: "l"
-
-proc determineMutability*(arg: GpuAst): bool =
-  case arg.kind
-  of gpuIdent: (not arg.symbol.isNil) and arg.symbol.typ != nil and arg.symbol.typ.kind == gtPtr
-  of gpuAddr: true
-  of gpuDeref: true
-  of gpuCall: false
-  of gpuIndex: arg.iArr.determineMutability()
-  of gpuDot: arg.dParent.determineMutability()
-  of gpuLit: false
-  of gpuBinOp: false
-  of gpuBlock: arg.statements[^1].determineMutability()
-  of gpuPrefix: false
-  of gpuConv: false
-  of gpuCast: arg.cExpr.determineMutability()
-  else:
-    raiseAssert "Cannot determine mutability from: " & $arg
-
-proc determineIdent*(arg: GpuAst): GpuAst =
-  template dfl(): untyped = GpuAst(kind: gpuDiscard)
-  case arg.kind
-  of gpuIdent: arg
-  of gpuAddr: arg.aOf.determineIdent()
-  of gpuDeref: arg.dOf.determineIdent()
-  of gpuCall: dfl()
-  of gpuIndex: arg.iArr.determineIdent()
-  of gpuDot: arg.dParent.determineIdent()
-  of gpuLit: dfl()
-  of gpuBinOp: dfl()
-  of gpuBlock: arg.statements[^1].determineIdent()
-  of gpuPrefix: dfl()
-  of gpuConv: dfl()
-  of gpuCast: arg.cExpr.determineIdent()
-  of gpuObjConstr: dfl()
-  of gpuMaterialize: arg.mExpr.determineIdent()
-  else:
-    raiseAssert "Cannot determine ident from: " & $arg
-
-# ─── Value address-space resolution ────────────────────────────────────────────
-# MSL requires an explicit address space on pointer struct fields and casts.
-# The IR carries none on `gtPtr`, so the printers resolve it from the value's
-# dataflow with an asRMEM fallback. The collection pass below precomputes the
-# var spaces (`varAddressSpaces`) for every backend; the pointer-field variant
-# table (`ptrFieldVariants`) is Metal-only.
+# ─── Value address-space resolution (Metal, WebGPU) ────────────────────────────
+# gtPtr carries no address space, the Metal and WebGPU printers resolve it
+# via value dataflow with an asRMEM fallback.
 
 proc ptrFieldNames*(t: GpuType): seq[string] =
   ## Pointer field names of a struct type, in declaration order.
@@ -493,8 +455,7 @@ proc ptrFieldNames*(t: GpuType): seq[string] =
   else: discard
 
 proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
-  ## Address space of a pointer-typed value, resolved from the value's
-  ## dataflow with an `asRMEM` fallback.
+  ## AsRMEM fallback
   if n == nil:
     return asRMEM
   case n.kind
@@ -504,8 +465,7 @@ proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
     elif n.symbol.iSym in ctx.varAddressSpaces:
       ctx.varAddressSpaces[n.symbol.iSym]
     elif n.symbol.symKind in {gsDeviceKernelParam, gsGlobalKernelParam}:
-      # Explicit `ptr T` params are device pointers. Implicit `var T`
-      # params are thread.
+      # explicit `ptr T` is a device pointer, implicit `var T` is thread
       if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
          not n.symbol.typ.implicit:
         asDevice
@@ -532,10 +492,8 @@ proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   else: asRMEM
 
 proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
-  ## Authoritative address space of a symbol reference: the recorded var or
-  ## param space, else `asRMEM`. Non-ident expressions (`addr`, `deref`,
-  ## `index`, `dot`, `cast`, `block`, `materialize`) resolve through their
-  ## base ident; other expressions are `asRMEM`.
+  ## Returns the address space recorded for the base ident's var or param,
+  ## asRMEM when nothing is recorded.
   var base = n
   while base != nil and base.kind != gpuIdent:
     case base.kind
@@ -551,19 +509,8 @@ proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
     return asRMEM
   ctx.varAddressSpaces.getOrDefault(base.symbol.iSym, asRMEM)
 
-proc variantSuffix*(spaces: seq[AddressSpace]): string =
-  ## `_`-prefixed suffix of a space tuple, e.g. `_smem`, `_devicesmem`.
-  result = "_"
-  for space in spaces:
-    case space
-    of asDevice: result.add "device"
-    of asConstant: result.add "const"
-    of asSMEM: result.add "smem"
-    of asRMEM: result.add "rmem"
-
 proc siteSpaceTuple*(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
-  ## Resolved pointer-field space tuple of an object construction site, in
-  ## field declaration order.
+  ## Pointer-field spaces of an objconstr site, in declaration order
   for fname in ptrFieldNames(n.ocType):
     var space = asRMEM
     for f in n.ocFields:
@@ -591,10 +538,8 @@ proc collectValueAddressSpacesImpl*(ctx: var GpuContext, n: GpuAst) =
     ctx.collectValueAddressSpacesImpl(ch)
 
 proc paramAddressSpace(p: GpuParam): AddressSpace =
-  ## Space of a parameter: the recorded space when one is set (generic
-  ## instantiation records arg spaces at clone sites), otherwise derived
-  ## from the type — `device` for explicit `ptr T` params, `thread` for
-  ## implicit `var T` params and scalars.
+  ## Returns the param's recorded space when one is set, else derives it
+  ## from the type: device for explicit `ptr T`, thread otherwise.
   if p.addressSpace != asRMEM:
     p.addressSpace
   elif p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
@@ -603,9 +548,7 @@ proc paramAddressSpace(p: GpuParam): AddressSpace =
     asRMEM
 
 proc collectValueAddressSpaces*(ctx: var GpuContext) =
-  ## Precomputes the value-space tables for every function body and global.
-  ## Params of generic fns get authoritative entries at their clone sites
-  ## (`makeFnGeneric`), which run after this pass.
+  ## Generic-fn params get authoritative entries at their clone sites (makeFnGeneric)
   for (_, fn) in ctx.fnTab.pairs:
     for p in fn.pParams:
       if p.ident.symbol != nil:
@@ -615,94 +558,5 @@ proc collectValueAddressSpaces*(ctx: var GpuContext) =
     ctx.varAddressSpaces[iSym] = asDevice
   for blk in ctx.globalBlocks:
     ctx.collectValueAddressSpacesImpl(blk)
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Phase 6: patchBoolToI32 pass
-# ═══════════════════════════════════════════════════════════════════════════
-
-proc patchBoolToI32Impl*(ctx: var GpuContext; n: var GpuAst) =
-  ## Inserts `i32()` cast for idents referencing patched-bool storage types.
-  ## In WGSL, `bool` cannot be a storage variable; the type is patched to `i32`.
-  ## Any use of such a variable in an expression context needs an explicit
-  ## i32() cast or, inversely, a bool() conversion back to bool.
-  ##
-  ## This pass: For idents with globals of ptr-to-bool or bool, wraps them
-  ## appropriately so the emitted code remains valid.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in ctx.globals:
-      let g = ctx.globals[n.symbol.iSym]
-      if g.typ.kind == gtBool:
-        # Bool global — type was patched to i32 in storage,
-        # but expression context expects bool. Insert conv.
-        n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
-      elif g.typ.kind == gtPtr and g.typ.to.kind == gtBool:
-        # ptr-to-bool global — pointer type stays but inner was patched to i32.
-        # No conversion needed at pointer level.
-        discard
-  else:
-    for ch in n.mitems:
-      ctx.patchBoolToI32Impl(ch)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-
-proc registerPreprocessingPasses*(reg: var PassRegistry) =
-  ## Register preprocessing passes in the correct order.
-  ## Order:
-  ## 1. rewriteIndexDeref (early — normalizes pointer/index patterns)
-  ## 2. decomposeMemcpyVars (after rewriteIndexDeref, before lowering)
-  ## 3. annotateTypesForCodegen (after decomposition, IR is stable)
-  ## 5. mangleNames (last — runs just before codegen)
-  ## (Phase 6 passes are registered separately per backend)
-
-  # ── Pass 1: rewriteIndexDeref ──
-  reg.register("rewriteIndexDeref", pkTransform, phaseMain,
-    "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          rewriteIndexDerefImpl(ctx, fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          rewriteIndexDerefImpl(ctx, fn.pBody)
-  )
-
-  # ── Pass 2: decomposeMemcpyVars ──
-  reg.register("decomposeMemcpyVars", pkTransform, phaseMain,
-    "Splits gpuVar/gpuAssign with RequiresMemcpy into decl + memcpy call",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          decomposeMemcpyVarsImpl(ctx, fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          decomposeMemcpyVarsImpl(ctx, fn.pBody)
-  )
-
-  # ── Pass 3: annotateTypesForCodegen ──
-  reg.register("annotateTypesForCodegen", pkTransform, phaseMain,
-    "Pre-computes backend-neutral type descriptors on all IR nodes",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      discard
-      # Type descriptors are computed on-demand via getTypeDesc().
-      # This pass registers the mechanism — actual computation is lazy.
-  )
-
-  # ── Pass 5: mangleNames ──
-  reg.register("mangleNames", pkTransform, phaseMain,
-    "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      mangleNamesImpl(ctx)
-  )
-
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -10,9 +10,6 @@ import std/tables
 import ../ir/gpu_ast_datatypes
 import ./builtins_pragmas
 
-## Builtin GPU scalar types: distinct integer storage tagged as float formats.
-## Resolver maps them by name plus the `{.builtin.}` pragma.
-
 type
   float16* {.builtin.} = distinct uint16
     ## IEEE 754 binary16: 1 sign, 5 exponent, 10 mantissa bits.
@@ -22,11 +19,6 @@ type
     ## OCP FP8 E4M3fn, finite, no infinity, 1 sign, 4 exponent, 3 mantissa.
   fp8e5m2* {.builtin.} = distinct uint8
     ## OCP FP8 E5M2, IEEE-like, 1 sign, 5 exponent, 2 mantissa.
-
-# Arithmetic operators: the DSL lowers them to the target's native ops.
-# Compile-time guards (error pragma, static assert) fire at DSL resolution
-# too — the typed macro must resolve these calls. Bodies raise instead:
-# codegen never reaches them, host use fails with a clear error.
 
 template fp16Op(op: untyped): untyped =
   func op*(a, b: float16): float16 {.inline.} =
@@ -51,11 +43,6 @@ func `-`*(a: bfloat16): bfloat16 {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 #  The fp16 ↔ fp32 conversion primitives
 # ═══════════════════════════════════════════════════════════════════════
-#  Convention: `to` converts numerically, `as` reinterprets the bit pattern.
-#  The narrowing rounds to nearest even (RNE). fp16 tiles store their bits as u16.
-#  Declared `{.builtin.}` so crucible forwards the call name-only
-#  to the per-backend spelling (the table below).
-#  Host-side calls raise as the conversions are GPU-side only.
 
 func toFp16*(x: float32): float16 {.builtin.} =
   ## Numeric fp32 → fp16 conversion (RNE).
@@ -75,11 +62,6 @@ func asU16*(x: float16): uint16 {.builtin.} =
   raise newException(ValueError, "fp16 reinterpret is GPU-side only")
 
 let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), string] =
-  # The per-backend spellings of the conversion builtins above, consulted
-  # by lang_utils.getFnName. The value is emitted as `name(args)`, so MSL's
-  # `as_type<half>` (a template call) is reachable. The CUDA and WGSL
-  # type printers lack the half (CUDA) and u16 (WGSL) scalar types, so
-  # those spellings cannot be emitted until the types land.
   {(bkMetal,  "toFp16"): "half",
    (bkMetal,  "toFp32"): "float",
    (bkMetal,  "asFp16"): "as_type<half>",
@@ -92,15 +74,11 @@ let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), 
    (bkCuda,   "toFp32"): "__half2float",
    (bkCuda,   "asFp16"): "__ushort_as_half",
    (bkCuda,   "asU16"):  "__half_as_ushort",
-   (bkWGSL,   "toFp16"): "f16",
-   (bkWGSL,   "toFp32"): "f32",
-   (bkWGSL,   "asFp16"): "bitcast<f16>"}.toTable()
+   (bkWebGPU,   "toFp16"): "f16",
+   (bkWebGPU,   "toFp32"): "f32",
+   (bkWebGPU,   "asFp16"): "bitcast<f16>"}.toTable()
 
 proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
-  ## Maps a builtin GPU type symbol to its GpuTypeKind, or gtVoid otherwise.
-  ## Recognized by name plus the `{.builtin.}` pragma.
-  ## Consulted by the type resolver before the typeKind switch.
-  ## Distinct types have no nty* GPU mapping of their own.
   if n.kind != nnkSym:
     return gtVoid
   let impl = n.getImpl()

@@ -12,7 +12,7 @@ import std/macros
 type
   BackendKind* = enum
     bkCuda,   ## CUDA backend
-    bkWGSL,   ## WebGPU WGSL backend
+    bkWebGPU,   ## WebGPU WGSL backend
     bkOpenCL, ## OpenCL backend
     bkVulkan, ## Vulkan (SPIR-V) backend
     bkMetal   ## Metal (MSL) backend

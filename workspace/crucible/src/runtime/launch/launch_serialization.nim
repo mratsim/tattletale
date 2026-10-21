@@ -42,7 +42,7 @@ func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
   else: result = false
 
 func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
-  backend in {bkMetal, bkWGSL, bkOpenCL}
+  backend in {bkMetal, bkWebGPU, bkOpenCL}
 
 func roundStepUp*(x, step: int): int {.inline.} =
   ((x + step - 1) div step) * step

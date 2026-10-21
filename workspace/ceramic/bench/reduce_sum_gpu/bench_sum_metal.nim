@@ -14,7 +14,6 @@
 
 import std/[os, strformat, strutils]
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/metal
 import workspace/ceramic/bench/reduce_sum_gpu/bench_sum_template
 
 const ProblemSizes = [1_000, 16_000, 100_000, 200_000, 1_000_000, 4_000_000, 16_000_000]

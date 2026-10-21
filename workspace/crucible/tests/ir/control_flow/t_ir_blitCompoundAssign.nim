@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_blitCompoundAssign.nim
 
 import std/[strutils, tables]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 proc countExprBlocks(n: GpuAst): int =
   ## Count gpuBlock(isExpr: true) nodes in a subtree.

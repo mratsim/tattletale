@@ -14,7 +14,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_mapOperators.nim
 
 import std / [tables, sequtils]
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Operator function names (gsProc) are patched

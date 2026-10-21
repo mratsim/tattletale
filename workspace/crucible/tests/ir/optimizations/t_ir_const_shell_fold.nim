@@ -12,7 +12,7 @@
 
 import std/[macros, sequtils, strutils, tables]
 
-import workspace/crucible/src/crucible_ir
+import workspace/crucible/src/crucible_internal_compiler
 
 func constFolded[S: static int](): int32 = S
 func dynShift(x: int32): int32 = x + 1

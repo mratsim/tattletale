@@ -13,12 +13,8 @@ import ../ir/gpu_ast_datatypes
 import ./builtins_pragmas
 
 # ═════════════════════════════════════════════════════════════════════════
-#  The scalar math builtins: the element ops of the tile/col-vec maps
+#  The scalar math builtins
 # ═════════════════════════════════════════════════════════════════════════
-#
-#  Declared here so they resolve before the tile_ops map templates (which
-#  pass their own names as map ops): a same-named tile template declared
-#  earlier would capture the reference.
 
 proc exp2*(x: float32): float32 {.builtin.} = pow(2'f32, x)
   ## Returns 2ˣ

@@ -1,0 +1,202 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+import std/monotimes
+import ../errors
+import std/times
+import std/os
+import workspace/crucible/vendor/wgpu
+
+# ###########################################################
+#
+#    High-level: WebgpuContext
+#
+# ###########################################################
+
+type
+  AdapterCallbackData = object
+    adapter: WGPUAdapter
+    done: bool
+  DeviceCallbackData = object
+    device: WGPUDevice
+    done: bool
+  MapDoneData* = object
+    ## Map-callback state, captured by `bufferMapCb` for the engine's poll loop.
+    done*: bool
+    resultBytes*: int
+    status*: WGPUBufferMapAsyncStatus
+  PopErrorScopeData* = object
+    ## Pop-error-scope callback state, captured by `popErrorScopeCb`.
+    done*: bool
+    errType*: WGPUErrorType
+    message*: string
+  UncapturedErrorData = object
+    ## Uncaptured device error, recorded by `uncapturedErrorCb`.
+    ## `errType` is `wgpuErrorTypeNoError` when nothing was recorded.
+    errType*: WGPUErrorType
+    message*: string
+  WebgpuContext* = ref WebgpuContextObj
+  WebgpuContextObj = object
+    ## Live wgpu handles, instance → adapter → device → queue.
+    instance*: WGPUInstance
+    adapter*: WGPUAdapter
+    device*: WGPUDevice
+    queue*: WGPUQueue
+
+proc `=copy`(dst: var WebgpuContextObj, src: WebgpuContextObj) {.error:
+    "WebgpuContext is ref-only, copy the ref not the object".}
+
+proc `=destroy`(c: var WebgpuContextObj) =
+  if c.instance != nil:
+    wgpuDeviceRelease(c.device)
+    wgpuAdapterRelease(c.adapter)
+    wgpuInstanceRelease(c.instance)
+    c.device = nil
+    c.adapter = nil
+    c.instance = nil
+
+proc deviceName*(ctx: WebgpuContext): string =
+  ## Returns the WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
+  var info: WGPUAdapterInfo
+  wgpuAdapterGetInfo(ctx.adapter, addr info)
+  if info.device.data != nil and info.device.length > 0:
+    result = newString(info.device.length.int)
+    copyMem(result[0].addr, info.device.data, info.device.length)
+
+{.push stackTrace: off.}
+
+var gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
+
+proc adapterCb(status: WGPURequestAdapterStatus,
+               adapter: WGPUAdapter,
+               message: WGPUStringView,
+               userdata1: pointer,
+               userdata2: pointer) {.cdecl.} =
+  if status == wgpuRequestAdapterStatusSuccess:
+    cast[ptr AdapterCallbackData](userdata1).adapter = adapter
+  cast[ptr AdapterCallbackData](userdata1).done = true
+
+proc deviceCb(status: WGPURequestDeviceStatus,
+              device: WGPUDevice,
+              message: WGPUStringView,
+              userdata1: pointer,
+              userdata2: pointer) {.cdecl.} =
+  if status == wgpuRequestDeviceStatusSuccess:
+    cast[ptr DeviceCallbackData](userdata1).device = device
+  cast[ptr DeviceCallbackData](userdata1).done = true
+
+proc bufferMapCb*(status: WGPUBufferMapAsyncStatus, message: WGPUStringView, userdata1, userdata2: pointer) {.cdecl.} =
+  ## Records the map result into the caller's MapDoneData (userdata1).
+  cast[ptr MapDoneData](userdata1).status = status
+  cast[ptr MapDoneData](userdata1).done = true
+
+proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
+                      errType: WGPUErrorType,
+                      message: WGPUStringView,
+                      userdata1: pointer,
+                      userdata2: pointer) {.cdecl.} =
+  ## Records the popped error scope result into the caller's PopErrorScopeData.
+  let data = cast[ptr PopErrorScopeData](userdata1)
+  data.errType = errType
+  if message.data != nil and message.length > 0:
+    data.message = newString(message.length.int)
+    copyMem(data.message[0].addr, message.data, message.length)
+  data.done = true
+
+proc uncapturedErrorCb(device: ptr WGPUDevice, errType: WGPUErrorType,
+                        message: WGPUStringView,
+                        userdata1: pointer,
+                        userdata2: pointer) {.cdecl.} =
+  ## Records an uncaptured device error (fires outside any error scope).
+  gUncapturedError.errType = errType
+  gUncapturedError.message.setLen(0)
+  if message.data != nil and message.length > 0:
+    gUncapturedError.message = newString(message.length.int)
+    copyMem(gUncapturedError.message[0].addr, message.data, message.length)
+
+{.pop.}
+
+proc takeUncapturedError*(): UncapturedErrorData =
+  ## Returns and clears the recorded uncaptured device error.
+  ## `errType` is `wgpuErrorTypeNoError` when none was recorded.
+  result = gUncapturedError
+  gUncapturedError = UncapturedErrorData(errType: wgpuErrorTypeNoError)
+
+# Waits for an instance-level request callback to fire.
+# wgpu-native stubs WGPUFuture/WaitAnyOnly, wgpuInstanceWaitAny is missing.
+# wgpuDevicePoll needs a device handle that only appears after the callback.
+# Poll the non-blocking wgpuInstanceProcessEvents on a deadline, with a short
+# sleep between polls.
+
+proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
+  let deadline = getMonoTime() + initDuration(seconds = 5)
+  while not done:
+    wgpuInstanceProcessEvents(instance)
+    if deadline <= getMonoTime():
+      failLoud("WebGPU: timed out waiting for " & what & " request")
+    sleep(2)
+
+proc newWebgpuContext*(): WebgpuContext =
+  ## Initializes wgpu-native: creates instance, picks adapter, opens device.
+  doAssert fileExists(WgpuLibPath / (
+    when defined(windows): "wgpu_native.dll"
+    elif defined(macosx):  "libwgpu_native.dylib"
+    else:                  "libwgpu_native.so"
+  )), "wgpu-native shared library not found in '" & WgpuLibPath & "'.\n" &
+    "Run: nim c -r workspace/crucible/vendor/wgpu_installer.nim"
+  let instance = wgpuCreateInstance(nil)
+  doAssert instance != nil, "wgpuCreateInstance failed"
+  var ad = AdapterCallbackData(done: false)
+  var cbInfo = WGPURequestAdapterCallbackInfo(
+    mode: wgpuCallbackModeAllowProcessEvents,
+    callback: adapterCb,
+    userdata1: ad.addr,
+    userdata2: nil
+  )
+  discard wgpuInstanceRequestAdapter(instance, nil, cbInfo)
+  waitForRequest(instance, ad.done, "adapter")
+  doAssert ad.adapter != nil, "No suitable WebGPU adapter found"
+  var dd = DeviceCallbackData(done: false)
+  var devCbInfo = WGPURequestDeviceCallbackInfo(
+    mode: wgpuCallbackModeAllowProcessEvents,
+    callback: deviceCb,
+    userdata1: dd.addr,
+    userdata2: nil
+  )
+  # The uncaptured-error callback receives errors outside any pushed error scope,
+  # e.g. dispatch validation reported at submit time.
+  # - the WGSL `enable f16` extension requires the shader-f16 device feature
+  # - the subgroup builtins are native-only in wgpu: no WGSL directive,
+  #   the feature must be requested on the device (gfx-rs/wgpu#8202)
+  var reqFeatures: array[2, uint32]
+  var reqFeatureCount = 0
+  if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_ShaderF16) != 0:
+    reqFeatures[reqFeatureCount] = WGPUFeatureName_ShaderF16
+    inc reqFeatureCount
+  if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_Subgroups) != 0:
+    reqFeatures[reqFeatureCount] = WGPUFeatureName_Subgroups
+    inc reqFeatureCount
+  var deviceDesc = WGPUDeviceDescriptor(
+    requiredFeatures: if reqFeatureCount > 0: reqFeatures[0].addr else: nil,
+    requiredFeatureCount: reqFeatureCount.csize_t,
+    uncapturedErrorCallbackInfo: WGPUUncapturedErrorCallbackInfo(
+      callback: uncapturedErrorCb,
+      userdata1: nil,
+      userdata2: nil
+    )
+  )
+  discard wgpuAdapterRequestDevice(ad.adapter, addr deviceDesc, devCbInfo)
+  waitForRequest(instance, dd.done, "device")
+  doAssert dd.device != nil, "Failed to get WebGPU device"
+  let queue = wgpuDeviceGetQueue(dd.device)
+  doAssert queue != nil, "wgpuDeviceGetQueue failed"
+  result = WebgpuContext(
+    instance: instance,
+    adapter: ad.adapter,
+    device: dd.device,
+    queue: queue
+  )

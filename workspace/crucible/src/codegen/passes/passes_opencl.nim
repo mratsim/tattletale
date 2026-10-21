@@ -8,7 +8,7 @@
 import std / [tables]
 
 import ../ir/gpu_ast_datatypes
-import ../ir/nim_to_gpu_type_resolvers
+import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
@@ -17,8 +17,11 @@ import ./passes_validations
 import ./passes_optimizations
 import ./passes_preprocessing
 
-proc lowerByrefParamsImpl*(ctx: var GpuContext; n: var GpuAst)
-proc insertByrefAddrsImpl*(ctx: var GpuContext; n: var GpuAst)
+{.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════
+# By-ref parameter lowering
+# ═══════════════════════════════════════════════════════════════════════
 
 proc registerOpenclPasses*(reg: var PassRegistry) =
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
