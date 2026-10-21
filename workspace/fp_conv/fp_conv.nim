@@ -7,10 +7,10 @@
 
 ## Floating point conversions, one generic core over the format spec.
 ##
-## - `F16`, `BF16`, `F8E4M3`, `F8E5M2`: low-precision floats as raw bit patterns
-## - `from`: converts into the target, `F16.from(1.0'f32)`, `float32.from(f16value)`
+## - `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`: low-precision floats as raw bit patterns
+## - `to`: converts into the target, `1.0'f32.to(float16)`, `f16value.to(float32)`
 ## - conversions are round-to-nearest-even, NaN preserving, sign preserving
-## - `F8E4M3` is the OCP finite format: no infinity, overflow saturates
+## - `fp8e4m3` is the OCP finite format: no infinity, overflow saturates
 ##
 ## The other formats are IEEE, overflow goes to infinity.
 ##
@@ -18,6 +18,8 @@
 ## and the target's format spec, so adding a format is a spec, not an algorithm.
 
 import std/math
+import workspace/crucible/src/codegen/builtins/builtins_gpu_types
+export builtins_gpu_types
 
 {.push checks: off, raises: [].}
 
@@ -25,47 +27,42 @@ import std/math
 #  Formats
 # ═══════════════════════════════════════════════════════════════
 
-type
-  F16* = distinct uint16    ## IEEE binary16, E5 M10
-  BF16* = distinct uint16   ## Brain float, E8 M7, binary32 truncated
-  F8E4M3* = distinct uint8  ## OCP FP8 E4M3fn, finite, no infinity
-  F8E5M2* = distinct uint8  ## OCP FP8 E5M2, IEEE-like
 
-template expBits*(T: typedesc[F16]): int = 5
-template expBits*(T: typedesc[BF16]): int = 8
-template expBits*(T: typedesc[F8E4M3]): int = 4
-template expBits*(T: typedesc[F8E5M2]): int = 5
+template expBits(T: typedesc[float16]): int = 5
+template expBits(T: typedesc[bfloat16]): int = 8
+template expBits(T: typedesc[fp8e4m3]): int = 4
+template expBits(T: typedesc[fp8e5m2]): int = 5
 
-template manBits*(T: typedesc[F16]): int = 10
-template manBits*(T: typedesc[BF16]): int = 7
-template manBits*(T: typedesc[F8E4M3]): int = 3
-template manBits*(T: typedesc[F8E5M2]): int = 2
+template manBits(T: typedesc[float16]): int = 10
+template manBits(T: typedesc[bfloat16]): int = 7
+template manBits(T: typedesc[fp8e4m3]): int = 3
+template manBits(T: typedesc[fp8e5m2]): int = 2
 
-template bias*(T: typedesc[F16]): int = 15
-template bias*(T: typedesc[BF16]): int = 127
-template bias*(T: typedesc[F8E4M3]): int = 7
-template bias*(T: typedesc[F8E5M2]): int = 15
+template bias(T: typedesc[float16]): int = 15
+template bias(T: typedesc[bfloat16]): int = 127
+template bias(T: typedesc[fp8e4m3]): int = 7
+template bias(T: typedesc[fp8e5m2]): int = 15
 
-template hasInf*(T: typedesc[F16]): bool = true
-template hasInf*(T: typedesc[BF16]): bool = true
-template hasInf*(T: typedesc[F8E4M3]): bool = false
-template hasInf*(T: typedesc[F8E5M2]): bool = true
+template hasInf(T: typedesc[float16]): bool = true
+template hasInf(T: typedesc[bfloat16]): bool = true
+template hasInf(T: typedesc[fp8e4m3]): bool = false
+template hasInf(T: typedesc[fp8e5m2]): bool = true
 
-template bits*(x: F16): uint16 = uint16(x)
-template bits*(x: BF16): uint16 = uint16(x)
-template bits*(x: F8E4M3): uint8 = uint8(x)
-template bits*(x: F8E5M2): uint8 = uint8(x)
+template bits(x: float16): uint16 = uint16(x)
+template bits(x: bfloat16): uint16 = uint16(x)
+template bits(x: fp8e4m3): uint8 = uint8(x)
+template bits(x: fp8e5m2): uint8 = uint8(x)
 
-template fromBits*(T: typedesc[F16], b: uint16): F16 = F16(b)
-template fromBits*(T: typedesc[BF16], b: uint16): BF16 = BF16(b)
-template fromBits*(T: typedesc[F8E4M3], b: uint8): F8E4M3 = F8E4M3(b)
-template fromBits*(T: typedesc[F8E5M2], b: uint8): F8E5M2 = F8E5M2(b)
+template fromBits(T: typedesc[float16], b: uint16): float16 = float16(b)
+template fromBits(T: typedesc[bfloat16], b: uint16): bfloat16 = bfloat16(b)
+template fromBits(T: typedesc[fp8e4m3], b: uint8): fp8e4m3 = fp8e4m3(b)
+template fromBits(T: typedesc[fp8e5m2], b: uint8): fp8e5m2 = fp8e5m2(b)
 
 # ═══════════════════════════════════════════════════════════════
 #  Format constants
 # ═══════════════════════════════════════════════════════════════
 
-template wrap[T: F16 or BF16 or F8E4M3 or F8E5M2](v: uint32): T =
+template wrap[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](_: typedesc[T], v: uint32): T =
   when sizeof(T) == 1: T(v.uint8)
   else: T(v.uint16)
 
@@ -83,41 +80,41 @@ template nanBits(T: typedesc): uint32 =
 template infBits(T: typedesc): uint32 =
   uint32((1 shl T.expBits) - 1) shl T.manBits
 
-template maxFinite*(T: typedesc[F16]): F16 = wrap[F16](maxFiniteBits(T))
-template maxFinite*(T: typedesc[BF16]): BF16 = wrap[BF16](maxFiniteBits(T))
-template maxFinite*(T: typedesc[F8E4M3]): F8E4M3 = wrap[F8E4M3](maxFiniteBits(T))
-template maxFinite*(T: typedesc[F8E5M2]): F8E5M2 = wrap[F8E5M2](maxFiniteBits(T))
+template maxFinite*(T: typedesc[float16]): float16 = wrap(T, maxFiniteBits(T))
+template maxFinite*(T: typedesc[bfloat16]): bfloat16 = wrap(T, maxFiniteBits(T))
+template maxFinite*(T: typedesc[fp8e4m3]): fp8e4m3 = wrap(T, maxFiniteBits(T))
+template maxFinite*(T: typedesc[fp8e5m2]): fp8e5m2 = wrap(T, maxFiniteBits(T))
 
-template inf*(T: typedesc[F16]): F16 = wrap[F16](infBits(T))
-template inf*(T: typedesc[BF16]): BF16 = wrap[BF16](infBits(T))
-template inf*(T: typedesc[F8E5M2]): F8E5M2 = wrap[F8E5M2](infBits(T))
+template inf*(T: typedesc[float16]): float16 = wrap(T, infBits(T))
+template inf*(T: typedesc[bfloat16]): bfloat16 = wrap(T, infBits(T))
+template inf*(T: typedesc[fp8e5m2]): fp8e5m2 = wrap(T, infBits(T))
 
-template nan*(T: typedesc[F16]): F16 = wrap[F16](nanBits(T))
-template nan*(T: typedesc[BF16]): BF16 = wrap[BF16](nanBits(T))
-template nan*(T: typedesc[F8E4M3]): F8E4M3 = wrap[F8E4M3](nanBits(T))
-template nan*(T: typedesc[F8E5M2]): F8E5M2 = wrap[F8E5M2](nanBits(T))
+template nan*(T: typedesc[float16]): float16 = wrap(T, nanBits(T))
+template nan*(T: typedesc[bfloat16]): bfloat16 = wrap(T, nanBits(T))
+template nan*(T: typedesc[fp8e4m3]): fp8e4m3 = wrap(T, nanBits(T))
+template nan*(T: typedesc[fp8e5m2]): fp8e5m2 = wrap(T, nanBits(T))
 
-template minNormal*(T: typedesc[F16]): F16 = wrap[F16](uint32(1) shl T.manBits)
-template minNormal*(T: typedesc[BF16]): BF16 = wrap[BF16](uint32(1) shl T.manBits)
-template minNormal*(T: typedesc[F8E4M3]): F8E4M3 = wrap[F8E4M3](uint32(1) shl T.manBits)
-template minNormal*(T: typedesc[F8E5M2]): F8E5M2 = wrap[F8E5M2](uint32(1) shl T.manBits)
+template minNormal*(T: typedesc[float16]): float16 = wrap(T, uint32(1) shl T.manBits)
+template minNormal*(T: typedesc[bfloat16]): bfloat16 = wrap(T, uint32(1) shl T.manBits)
+template minNormal*(T: typedesc[fp8e4m3]): fp8e4m3 = wrap(T, uint32(1) shl T.manBits)
+template minNormal*(T: typedesc[fp8e5m2]): fp8e5m2 = wrap(T, uint32(1) shl T.manBits)
 
-template eps*(T: typedesc[F16]): F16 = wrap[F16](uint32(T.bias + 1 - T.manBits) shl T.manBits)
-template eps*(T: typedesc[BF16]): BF16 = wrap[BF16](uint32(T.bias + 1 - T.manBits) shl T.manBits)
-template eps*(T: typedesc[F8E4M3]): F8E4M3 = wrap[F8E4M3](uint32(T.bias + 1 - T.manBits) shl T.manBits)
-template eps*(T: typedesc[F8E5M2]): F8E5M2 = wrap[F8E5M2](uint32(T.bias + 1 - T.manBits) shl T.manBits)
+template eps*(T: typedesc[float16]): float16 = wrap(T, uint32(T.bias + 1 - T.manBits) shl T.manBits)
+template eps*(T: typedesc[bfloat16]): bfloat16 = wrap(T, uint32(T.bias + 1 - T.manBits) shl T.manBits)
+template eps*(T: typedesc[fp8e4m3]): fp8e4m3 = wrap(T, uint32(T.bias + 1 - T.manBits) shl T.manBits)
+template eps*(T: typedesc[fp8e5m2]): fp8e5m2 = wrap(T, uint32(T.bias + 1 - T.manBits) shl T.manBits)
 
 # ═══════════════════════════════════════════════════════════════
 #  Generic core, IEEE source bits -> small format
 # ═══════════════════════════════════════════════════════════════
 
-func toSmall*[T: F16 or BF16 or F8E4M3 or F8E5M2, SE, SM: static int](
-    srcBits: uint64): T {.inline.} =
+func toSmall[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](
+    srcBits: uint64, SE, SM: static int): T {.inline.} =
   ## Round-to-nearest-even conversion from an IEEE source's raw bits.
   ##
   ## Args:
   ##   - srcBits: the source raw bits in a uint64 container
-  ##   - the source has SE exponent bits, SM mantissa bits
+  ##   - SE, SM: the source's exponent and mantissa bit counts
   ##   - SE+SM+1 <= 64 so the shifts stay in range
   const
     TE = T.expBits
@@ -141,11 +138,11 @@ func toSmall*[T: F16 or BF16 or F8E4M3 or F8E5M2, SE, SM: static int](
   # source NaN and infinity
   if exp == srcEmax:
     if man != 0:
-      return wrap[T](sign or nanB)
+      return wrap(T, sign or nanB)
     when saturating:
-      return wrap[T](sign or nanB)
+      return wrap(T, sign or nanB)
     else:
-      return wrap[T](sign or infB)
+      return wrap(T, sign or infB)
 
   # unbiased source exponent and implicit-one mantissa
   var e: int
@@ -172,17 +169,17 @@ func toSmall*[T: F16 or BF16 or F8E4M3 or F8E5M2, SE, SM: static int](
       eT.inc
     when saturating:
       if eT > maxE or (eT == maxE and mT > maxMT):
-        return wrap[T](sign or maxFiniteB)
+        return wrap(T, sign or maxFiniteB)
     else:
       if eT >= tEmax:
-        return wrap[T](sign or infB)
-    return wrap[T](sign or (uint32(eT) shl TM) or uint32(mT - (1'u64 shl TM)))
+        return wrap(T, sign or infB)
+    return wrap(T, sign or (uint32(eT) shl TM) or uint32(mT - (1'u64 shl TM)))
   else:
     # subnormal target
     let shift = SM - TM + 1 - tBias - e
     if shift > SM + 1:
       # everything rounds away, the round bit is 0
-      return wrap[T](sign)
+      return wrap(T, sign)
     var mT = m shr shift
     let roundBit = (m shr (shift - 1)) and 1
     let sticky = (m and ((1'u64 shl (shift - 1)) - 1)) != 0
@@ -190,8 +187,8 @@ func toSmall*[T: F16 or BF16 or F8E4M3 or F8E5M2, SE, SM: static int](
       mT.inc
     if mT == 1'u64 shl TM:
       # rounds up into the smallest normal
-      return wrap[T](sign or (uint32(1) shl TM))
-    return wrap[T](sign or uint32(mT))
+      return wrap(T, sign or (uint32(1) shl TM))
+    return wrap(T, sign or uint32(mT))
 
 # ═══════════════════════════════════════════════════════════════
 #  Small format -> IEEE, exact through binary64
@@ -201,7 +198,7 @@ template pow2f64*(k: int): float64 =
   ## 2^k as a binary64, k in [-1074, 1023]
   cast[float64](uint64(k + 1023) shl 52)
 
-func toF64*[T: F16 or BF16 or F8E4M3 or F8E5M2](x: T): float64 {.inline.} =
+func toF64*[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](x: T): float64 {.inline.} =
   ## Exact value of x as a binary64, every small format value
   ## is representable there.
   const
@@ -230,30 +227,45 @@ func toF64*[T: F16 or BF16 or F8E4M3 or F8E5M2](x: T): float64 {.inline.} =
 #  Public API
 # ═══════════════════════════════════════════════════════════════
 
-template `from`*[T: F16 or BF16 or F8E4M3 or F8E5M2](
-    _: typedesc[T], src: float32): T =
+template to*[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](src: float32, _: typedesc[T]): T =
   ## Round-to-nearest-even conversion of a binary32
-  toSmall[T, 8, 23](uint64(cast[uint32](src)))
+  toSmall[T](uint64(cast[uint32](src)), 8, 23)
 
-template `from`*[T: F16 or BF16 or F8E4M3 or F8E5M2](
-    _: typedesc[T], src: float64): T =
+template to*[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](src: float64, _: typedesc[T]): T =
   ## Round-to-nearest-even conversion of a binary64
-  toSmall[T, 11, 52](cast[uint64](src))
+  toSmall[T](cast[uint64](src), 11, 52)
 
-template `from`*[T: F16 or BF16 or F8E4M3 or F8E5M2](
-    _: typedesc[T], src: F16 or BF16 or F8E4M3 or F8E5M2): T =
-  ## Format to format, exact widening to binary32 then one rounding
-  T.from(float32.from(src))
+template to*[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](src: int | int32 | int64, _: typedesc[T]): T =
+  to(float32(src), T)
 
-template `from`*(T: typedesc[float32], x: F16 or BF16 or F8E4M3 or F8E5M2): float32 =
-  ## Binary32 nearest x, exact
-  float32(x.toF64)
+template to*[S: float16 or bfloat16 or fp8e4m3 or fp8e5m2, T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](src: S, _: typedesc[T]): T =
+  to(float32(src.toF64), T)
 
-template `from`*(T: typedesc[float64], x: F16 or BF16 or F8E4M3 or F8E5M2): float64 =
-  ## Exact value of x
-  x.toF64
+template to*(src: float16 or bfloat16 or fp8e4m3 or fp8e5m2, T: typedesc[float32]): float32 =
+  float32(src.toF64)
 
-template `$`*[T: F16 or BF16 or F8E4M3 or F8E5M2](x: T): string =
-  $(float32.from(x))
+template to*(src: float16 or bfloat16 or fp8e4m3 or fp8e5m2, T: typedesc[float64]): float64 =
+  src.toF64
+
+template to*(src: int | int32 | int64, T: typedesc[float32]): float32 =
+  float32(src)
+
+template to*(src: int | int32 | int64, T: typedesc[float64]): float64 =
+  float64(src)
+
+template to*(src: float64, T: typedesc[float32]): float32 =
+  float32(src)
+
+template to*(src: float32, T: typedesc[float64]): float64 =
+  float64(src)
+
+template to*(src: float32, T: typedesc[float32]): float32 =
+  src
+
+template to*(src: float64, T: typedesc[float64]): float64 =
+  src
+
+template `$`*[T: float16 or bfloat16 or fp8e4m3 or fp8e5m2](x: T): string =
+  $(to(x, float32))
 
 {.pop.}

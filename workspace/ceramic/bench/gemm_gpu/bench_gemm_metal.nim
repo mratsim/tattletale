@@ -35,8 +35,8 @@ type MlxGemmParams = object
 proc benchAppleMlxSteel(engine: MetalEngine, M, N, K, iters: int): auto =
   let one = 1  # runtime int, the layouts stay dynamic
   var
-    aHost = makeHostTensor(F16, (M, K), (K, one))
-    bHost = makeHostTensor(F16, (N, K), (one, N))
+    aHost = makeHostTensor(float16, (M, K), (K, one))
+    bHost = makeHostTensor(float16, (N, K), (one, N))
     dHost = makeHostTensor(float32, (M, N), (N, one))
   fillGemmInputs(aHost.view(), bHost.view(), M, N, K)
   if engine.getArtifact() != MlxSteelGemmSrc:
@@ -75,8 +75,8 @@ proc benchAppleMlxSteel(engine: MetalEngine, M, N, K, iters: int): auto =
 proc benchAppleNax(engine: MetalEngine, M, N, K, iters: int): auto =
   let one = 1  # runtime int, the layouts stay dynamic
   var
-    aHost = makeHostTensor(F16, (M, K), (K, one))
-    bHost = makeHostTensor(F16, (N, K), (one, N))
+    aHost = makeHostTensor(float16, (M, K), (K, one))
+    bHost = makeHostTensor(float16, (N, K), (one, N))
     dHost = makeHostTensor(float32, (M, N), (N, one))
   fillGemmInputs(aHost.view(), bHost.view(), M, N, K)
   # the hardcoded wrapper config covers exactly M, N multiples of 64,

@@ -52,7 +52,7 @@ type
   GpuTypeKind* = enum
     gtVoid,
     gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64,
-    gtFloat16, gtBf16, gtSize_t,
+    gtFloat16, gtBf16, gtF8E4M3, gtF8E5M2, gtSize_t,
     gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
