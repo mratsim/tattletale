@@ -155,10 +155,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, a
     skipIdent = true
   of gtGenericInst:
     result = t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add '_' & shortHash(int64(hash(t)))
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"

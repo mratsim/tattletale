@@ -129,10 +129,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
     # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
     checkReservedIdent(t.gName, "type")
     result = t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add '_' & shortHash(int64(hash(t)))
   of gtObject:
     checkReservedIdent(t.name, "type")
     result = t.name
