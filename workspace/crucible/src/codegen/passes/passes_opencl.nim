@@ -17,8 +17,11 @@ import ./passes_validations
 import ./passes_optimizations
 import ./passes_preprocessing
 
-proc lowerByrefParamsImpl*(ctx: var GpuContext; n: var GpuAst)
-proc insertByrefAddrsImpl*(ctx: var GpuContext; n: var GpuAst)
+{.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════
+# By-ref parameter lowering
+# ═══════════════════════════════════════════════════════════════════════
 
 proc registerOpenclPasses*(reg: var PassRegistry) =
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,

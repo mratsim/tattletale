@@ -42,6 +42,20 @@ proc registerMetalPasses*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════
+#  Metal printer helpers
+# ═══════════════════════════════════════════════════════════
+
+proc variantSuffix*(spaces: seq[AddressSpace]): string =
+  ## suffix of a space tuple, e.g. `_smem`, `_devicesmem`
+  result = "_"
+  for space in spaces:
+    case space
+    of asDevice: result.add "device"
+    of asConstant: result.add "const"
+    of asSMEM: result.add "smem"
+    of asRMEM: result.add "rmem"
+
+# ═══════════════════════════════════════════════════════════
 #  `{.smem.}` promotion to overseeing kernel
 # ═══════════════════════════════════════════════════════════
 
@@ -207,7 +221,6 @@ proc smemArenaImpl(ctx: var GpuContext) =
       ctx.genericInsts[fnKey] = fn
 
 
-# ═════════════════════════════════════════════════════════
 #  Coordinate-builtin param materialization
 # ═════════════════════════════════════════════════════════
 

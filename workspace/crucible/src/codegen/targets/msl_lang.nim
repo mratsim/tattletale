@@ -13,6 +13,7 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
+import ../passes/passes_msl
 
 const MetalReservedKeywords = [
   # C++/MSL keyword table (MSL is C++14-based)
@@ -282,7 +283,7 @@ proc structVariantName(ctx: GpuContext, t: GpuType, spaces: seq[AddressSpace]): 
   ## otherwise the base name suffixed with the tuple's space tags.
   result = gpuTypeToString(t, allowEmptyIdent = true)
   if ctx.ptrFieldVariants.getOrDefault(t, @[]).find(spaces) > 0:
-    result.add pp.variantSuffix(spaces)
+    result.add variantSuffix(spaces)
 
 proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   ## MSL-specific IR preprocessing before codegen:
@@ -522,7 +523,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       # Never constructed: one struct with per-thread pointer fields.
       tuples = @[newSeqWith(ptrNames.len, asRMEM)]
     for i, spaces in tuples:
-      let suffix = if i == 0: "" else: pp.variantSuffix(spaces)
+      let suffix = if i == 0: "" else: variantSuffix(spaces)
       result.add "struct " & gpuTypeToString(ast.tTyp) & suffix & "{\n"
       if ast.tFields.len == 0:
         # MSL requires at least one field in a struct.

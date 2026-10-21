@@ -10,6 +10,30 @@ import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 
+{.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════
+
+proc registerOptimizationPasses*(reg: var PassRegistry) =
+  ## After mangleNames, so constructed builtin calls keep their plain name
+  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
+    "Folds ternary max/min idioms to backend-native max/min builtins",
+    dependsOn = @["mangleNames"],
+    run = foldMaxMinToBuiltins
+  )
+  # turn off with -d:TTT_CrucibleDisableConstFolding, e.g. for size sweeps
+  when not defined(TTT_CrucibleDisableConstFolding):
+    reg.register("foldConstantShells", pkTransform, phaseMain,
+      "Dissolves calls to zero-arg constant-returning functions into the constant, deletes the dead definitions",
+      dependsOn = @["mangleNames", "foldMaxMinToBuiltins"],
+      run = foldConstantShells
+    )
+
+
+# Pass-by-ref materialization
+# ═══════════════════════════════════════════════════════════════════
 
 proc isLvalue*(n: GpuAst): bool =
   case n.kind
@@ -39,7 +63,6 @@ proc materializePassByRefArgs*(ctx: var GpuContext) =
     walkNonLvalueArgs(ctx, fn.pBody)
 
 
-# ═══════════════════════════════════════════════════════════════════
 # Fold max/min idioms to backend-native builtins
 # ═══════════════════════════════════════════════════════════════════
 
@@ -77,27 +100,13 @@ proc sameExpr(a, b: GpuAst): bool =
              a.cArgs.zip(b.cArgs).allIt(sameExpr(it[0], it[1]))
   else: discard
 
-proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
-  ## If `n` is a gpuTernary matching the max/min idiom, replaces the node
-  ## with a call to the backend-native max/min builtin.
+proc foldMinMaxPattern(ctx: GpuContext, n: var GpuAst): bool =
+  ## Replaces a max/min-idiom gpuTernary with the backend-native builtin.
   ##
-  ## The builtin is spelled with the plain ambiguous-builtin name that every
-  ## backend supports for basic types.
-  ##
-  ## Matched shapes, operands A = tThen and B = tElse.
-  ##
-  ## Max folds `(B <= A) ? A : B`, or on floats
-  ## `((B <= A) || !(B == B)) ? A : B` with the NaN guard.
-  ##
-  ## Min folds `(A <= B) ? A : B`, or on floats
-  ## `((A <= B) || !(B == B)) ? A : B` with the NaN guard.
-  ##
-  ## Known semantic trade-off:
-  ## - the ternary is Nim's exact semantics
-  ## - IEEE fmax returns +0.0 for fmax(+0.0, -0.0)
-  ## - Nim's guard form returns -0.0 for that input, accepted
-  ##
-  ## The hardware instruction is the point of the pass.
+  ## - max folds `(B <= A) ? A : B`, min folds `(A <= B) ? A : B`
+  ## - floats require the NaN-guard form `((P <= Q) || !(B == B)) ? ...`
+  ## - IEEE fmax returns +0.0 for fmax(+0.0, -0.0), Nim's guard form
+  ##   returns -0.0. Accepted, the hardware instruction is the point.
   if n.isNil: return false
   if n.kind != gpuTernary: return false
   if n.tCond.isNil: return false
@@ -105,7 +114,6 @@ proc foldMinMaxPattern(ctx: GpuContext; n: var GpuAst): bool =
   let tThen = n.tThen
   let tElse = n.tElse
 
-  # The condition is Le(P, Q), optionally OR'd with a NaN guard !(X == X).
   var le: GpuAst = nil
   var hasGuard = false
   proc isLe(x: GpuAst): bool =
@@ -163,30 +171,14 @@ proc foldMaxMinInBody(ctx: var GpuContext, n: var GpuAst) =
     ctx.foldMaxMinInBody(ch)
 
 proc foldMaxMinToBuiltins*(ctx: var GpuContext) =
-  ## Rewrites ternary max/min idioms to the backend-native max/min builtins,
-  ## so they lower to the PTX `max.f32` / `max.u32` / `max.s32` hardware instructions.
+  ## Lowers max/min ternaries to the backend-native max/min builtins,
+  ## each printer emits its hardware instruction (CUDA: PTX max.*).
+  ## Handles both direct and blitted `_blit_N = ternary` forms.
   ##
-  ## Returns true when a rewrite happened, false otherwise.
-  ##
-  ## The fold is a pure expression rewrite.
-  ## It replaces the ternary subtree in place, handling both forms:
-  ## - direct, `result = ternary`
-  ## - blitted, `_blit_N = ternary`, afterwards `result = _blit_N`
-  ##
-  ## The rewritten device functions stay contained.
-  ## The backends inline them.
-  ##
-  ## TODO(abs):
-  ## - fold `(x < 0) ? -x : x` to the backend abs builtin too
-  ##
-  ## Float abs is blocked:
-  ## - Nim's float abs body contains `when nimvm:`,
-  ##   which crashes translation before any pass sees it
-  ## - a per-backend name table is needed
-  ##   (CUDA fabsf/fabs, OpenCL fabs, GLSL/Vulkan abs, WGSL abs)
-  ##
-  ## Int abs is uniform (abs), already native (magic AbsI),
-  ## so the table is floats-only.
+  ## TODO(abs): fold `(x < 0) ? -x : x`.
+  ## - blocked on Nim's float abs body containing `when nimvm:`
+  ## - needs a per-backend name table (CUDA fabsf/fabs, OpenCL fabs, GLSL/Vulkan abs, WGSL abs)
+  ## - Int abs is already native (magic AbsI)
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
     ctx.foldMaxMinInBody(fn.pBody)
@@ -278,18 +270,9 @@ proc resolveConstant(n: GpuAst, binding: Table[string, GpuAst]): GpuAst =
     result = nil
 
 proc foldedConstant(fn: GpuAst): GpuAst =
-  ## Returns the constant a function computes when its body is a single
-  ## constant expression, or nil otherwise.
-  ##
-  ## Candidate shape:
-  ## - no parameters at all, or parameters the body never reads
-  ## - a non-void return type
-  ##
-  ## Nim's semcheck drops the static parameters of a fully-static instantiation, leaving a zero-arg shell.
-  ## In both candidate shapes the returned value cannot depend on the arguments.
-  ##
-  ## The body must reduce to exactly one constant along
-  ## the single-assignment chain feeding `return`.
+  ## Returns the constant a function computes when its body is
+  ## a single constant expression, nil otherwise. Nim's semcheck drops the static
+  ## params of fully-static instantiations and leaves a zero-arg shell.
   doAssert fn.kind == gpuProc, "Expected a gpuProc, got " & $fn.kind
   if attGlobal in fn.pAttributes:
     return nil
@@ -310,12 +293,10 @@ proc foldedConstant(fn: GpuAst): GpuAst =
       return nil
   result = resolveConstant(returns[0], binding)
 
-proc calleeParams(ctx: GpuContext; callee: GpuAst): seq[GpuParam] =
-  ## Parameters of `callee`.
-  ##
-  ## Returns an empty seq when the callee is unknown to the tables.
-  ## Unknown callees are builtins and operators, whose parameters
-  ## are always by value.
+proc calleeParams(ctx: GpuContext, callee: GpuAst): seq[GpuParam] =
+  ## Returns the params of `callee`.
+  ## Empty when the callee is absent from the tables (builtins, operators),
+  ## their params always pass by value.
   if callee in ctx.allFnTab:
     result = ctx.allFnTab[callee].pParams
   elif callee in ctx.genericInsts:
@@ -411,18 +392,3 @@ proc foldConstantShells*(ctx: var GpuContext) =
   for k in dead:
     ctx.allFnTab.del k
     ctx.genericInsts.del k
-
-proc registerOptimizationPasses*(reg: var PassRegistry) =
-  ## After mangleNames, so constructed builtin calls keep their plain name
-  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
-    "Folds ternary max/min idioms to backend-native max/min builtins",
-    dependsOn = @["mangleNames"],
-    run = foldMaxMinToBuiltins
-  )
-  # turn off with -d:TTT_CrucibleDisableConstFolding, e.g. for size sweeps
-  when not defined(TTT_CrucibleDisableConstFolding):
-    reg.register("foldConstantShells", pkTransform, phaseMain,
-      "Dissolves calls to zero-arg constant-returning functions into the constant, deletes the dead definitions",
-      dependsOn = @["mangleNames", "foldMaxMinToBuiltins"],
-      run = foldConstantShells
-    )
