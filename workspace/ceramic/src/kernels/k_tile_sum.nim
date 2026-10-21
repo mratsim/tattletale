@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Tensor sums as device functions over the default register tile.
@@ -11,12 +11,6 @@
 ## - `sum(dst, src, axis)`: sums over the input axis, dst shaped as
 ##   src with the axis size 1
 
-{.experimental: "codeReordering".}
-
-import workspace/crucible
-import workspace/ceramic/src/int_tuples
-import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
 
 proc sum*(dst, src: distinct TensorView) {.inline.} =

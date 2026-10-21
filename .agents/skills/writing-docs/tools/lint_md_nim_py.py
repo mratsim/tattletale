@@ -51,6 +51,7 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -513,6 +514,8 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "license-driveby": Rule("license-driveby", True,
+                            "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
 }
 
 
@@ -1906,6 +1909,97 @@ def py_structure_checks(path, tree, func_docs, findings):
                 "(add Args, Returns, Precondition, or bullet the contract)"))
 
 
+# The canonical Tattletale license block, comment markers stripped and
+# whitespace runs collapsed. Two URL variants are accepted: the repo's
+# dominant block links Apache at www.apache.org, the #145-normalized
+# files link both licenses at opensource.org.
+# The canonical Tattletale license block, comment markers stripped and
+# whitespace runs collapsed. The Apache link stays at apache.org, the
+# opensource.org spellings in older files are not templates for new files.
+_LICENSE_CANON = [
+    [
+        "Tattletale",
+        "Copyright (c) 2026 Mamy André-Ratsimbazafy",
+        "Licensed and distributed under either of",
+        "* MIT license (license terms in the root directory or at "
+        "http://opensource.org/licenses/MIT).",
+        "* Apache v2 license (license terms in the root directory or at "
+        "http://www.apache.org/licenses/LICENSE-2.0).",
+        "at your option. This file may not be copied, modified, or "
+        "distributed except according to those terms.",
+    ],
+]
+
+_LICENSE_HEAD_CACHE = {}
+
+
+def _license_block(text):
+    """Returns the file's leading license block, comment markers stripped
+    and whitespace runs collapsed, with the 1-based line numbers of its
+    lines. Returns ([], []) when the file opens on no license block."""
+    block, nos = [], []
+    for n, raw in enumerate(text.splitlines(), 1):
+        s = raw.strip()
+        if not s:
+            if n == 1:
+                continue
+            break
+        if not s.startswith("#"):
+            break
+        core = s.lstrip("#").strip()
+        if not core or not LICENSE_SHAPE.match(core):
+            break
+        block.append(re.sub(r"\s+", " ", core))
+        nos.append(n)
+    return block, nos
+
+
+def _head_license_block(rel):
+    """Returns the HEAD version of the file's license block, or None when
+    the file is not tracked at HEAD or git fails."""
+    if rel in _LICENSE_HEAD_CACHE:
+        return _LICENSE_HEAD_CACHE[rel]
+    out = subprocess.run(["git", "show", "HEAD:" + rel],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        _LICENSE_HEAD_CACHE[rel] = None
+        return None
+    block, _ = _license_block(out.stdout)
+    _LICENSE_HEAD_CACHE[rel] = block
+    return block
+
+
+def check_license_driveby(path, text, findings):
+    """Flags license-header edits riding in a functional change.
+
+    A tracked file's license block must match its HEAD block, any
+    deviation (URL, year, name, reordered or dropped lines) is a drive-by
+    license change. A new file's block must be one of the canonical
+    Tattletale blocks."""
+    block, nos = _license_block(text)
+    if not block:
+        return
+    repo = _repo_root()
+    if repo is None:
+        return
+    rel = os.path.relpath(path.resolve(), repo)
+    if rel.startswith(".."):
+        return
+    head = _head_license_block(rel)
+    if head is None:
+        if block not in _LICENSE_CANON:
+            findings.append(Finding(
+                path, nos[0], "license-driveby",
+                "new file carries a non-canonical license header, use the "
+                "Tattletale block (MIT opensource.org + Apache www.apache.org)"))
+        return
+    if block != head:
+        findings.append(Finding(
+            path, nos[0], "license-driveby",
+            "drive-by license change: the header differs from HEAD, revert "
+            "the header or split the change"))
+
+
 def scan(path, text, findings):
     """Runs every rule over one file's prose, appending to findings."""
     entries, meta = extract(path, text)
@@ -1956,6 +2050,7 @@ def scan(path, text, findings):
             nim_design_narration_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
+            check_license_driveby(path, text, findings)
         if is_py and meta is not None:
             tree = None
             try:
@@ -4070,6 +4165,7 @@ def scan_newcall_method(path, lines, blocked, findings):
       call sites, neither reads
     """
 
+    in_export = False
     for i, line in enumerate(lines):
         if (i + 1) in blocked:
             continue
@@ -4078,6 +4174,15 @@ def scan_newcall_method(path, lines, blocked, findings):
             continue
         stripped = line.lstrip()
         if stripped.startswith("#"):
+            continue
+        # an export statement names symbols, it calls nothing; a
+        # trailing comma opens a wrapped list, the indented
+        # continuation lines stay inside the statement
+        if re.match(r"export\b", stripped):
+            in_export = code.rstrip().endswith(",")
+            continue
+        if in_export:
+            in_export = code.rstrip().endswith(",")
             continue
         # string literals blank before the matchers, a quoted method
         # call form is text, not a call site

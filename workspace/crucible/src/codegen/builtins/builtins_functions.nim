@@ -8,7 +8,7 @@
 ## Built-in device functions (exp2/rsqrt) and the Nim-operator/function
 ## name tables the codegen consults.
 
-import std/tables
+import std/[tables, math]
 import ../ir/gpu_ast_datatypes
 import ./builtins_pragmas
 
@@ -20,13 +20,17 @@ import ./builtins_pragmas
 #  pass their own names as map ops): a same-named tile template declared
 #  earlier would capture the reference.
 
-proc exp2*(x: float32): float32 {.builtin.} = discard
-  ## Returns `2^x`, declared `{.builtin.}` so the DSL forwards
-  ## the backend's native `exp2` (used by the online-softmax maps,
-  ## exact for integer exponents).
+proc exp2*(x: float32): float32 {.builtin.} = pow(2'f32, x)
+  ## Returns 2ˣ
+  ##
+  ## Declared {.builtin.} so lowers to the backen native function
+  ## or the body on host
 
-proc rsqrt*(x: float32): float32 {.builtin.} = discard
-  ## Returns `1/sqrt(x)`: the DSL forwards the backend's native `rsqrt`.
+proc rsqrt*(x: float32): float32 {.builtin.} = 1 / sqrt(x)
+  ## Returns 1/√x
+  ##
+  ## Declared {.builtin.} so lowers the backen native function
+  ## or the body on host
 
 
 # ═══════════════════════════════════════════════════════════════════════

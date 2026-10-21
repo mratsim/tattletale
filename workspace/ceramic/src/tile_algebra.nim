@@ -8,41 +8,42 @@
 ## Tile algebra: register tiles, tile load/store and the matmul
 ## thread->value maps, all on the layout algebra.
 
-import workspace/crucible/src/codegen/builtins/builtins_gpu_types
-export builtins_gpu_types.float16, builtins_gpu_types.bfloat16
+import
+  workspace/crucible/src/codegen/builtins/builtins_gpu_types,
+  workspace/crucible/src/codegen/builtins/builtins_atomics,
+  workspace/crucible/src/codegen/builtins/builtins_warp_sync_reductions,
+  workspace/ceramic/src/tensors,
+  workspace/ceramic/src/int_tuples,
+  workspace/ceramic/src/layout_algebra,
+  workspace/ceramic/src/hardware/h_mma_configgen,
+  workspace/ceramic/src/hardware/h_mma_properties,
+  workspace/ceramic/src/tile_algebra/tiles,
+  workspace/ceramic/src/tile_algebra/tile_foreach,
+  workspace/ceramic/src/tile_algebra/tile_ops_unary,
+  workspace/ceramic/src/tile_algebra/tile_ops_binary,
+  workspace/ceramic/src/tile_algebra/tile_ops_ternary,
+  workspace/ceramic/src/tile_algebra/tile_loadstore,
+  workspace/ceramic/src/tile_algebra/tile_reductions,
+  workspace/ceramic/src/tile_algebra/tile_matmul
 
-import workspace/ceramic/src/tensors
-import workspace/ceramic/src/int_tuples/int_tuples_datatypes
-import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
-import workspace/ceramic/src/int_tuples/int_tuples_streams
-import workspace/ceramic/src/int_tuples/int_tuples_transforms
-import workspace/ceramic/src/layout_algebra/layout_constructors
-import workspace/ceramic/src/layout_algebra/layouts_datatypes
-import workspace/ceramic/src/layout_algebra/ism_coord_strides
-import workspace/ceramic/src/hardware/h_mma_configgen
-import workspace/ceramic/src/hardware/h_mma_properties
-import workspace/ceramic/src/tile_algebra/tiles
-import workspace/ceramic/src/tile_algebra/tile_loadstore
-import workspace/ceramic/src/tile_algebra/tile_reductions
-import workspace/ceramic/src/tile_algebra/tile_matmul
+export tiles, tile_foreach, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
+       tile_loadstore, tile_reductions, tile_matmul
 
-export tensors.TensorOwned, tensors.TensorView
-export layouts_datatypes.size
-export tiles, tile_loadstore, tile_reductions, tile_matmul
-
-# Whitelist: the symbols the tile templates' macro emissions resolve at the caller's scope
-export int_tuples_datatypes.Int
-export int_tuples_streams.tupleStream, int_tuples_streams.items
-export int_tuples_transforms.flatten
-export int_tuples_datatypes.`+`, int_tuples_datatypes.`-`, int_tuples_datatypes.`*`
-export int_tuples_datatypes.`div`, int_tuples_datatypes.`mod`
-export int_tuples_datatypes.`==`
-export int_tuples_unsanctioned_helpers.toInt
-export ism_coord_strides.CoordStride
-export ism_coord_strides.`*`, ism_coord_strides.`+`
-export layout_constructors.make_layout
-export layouts_datatypes.cosize
-export h_mma_configgen.MmaOperand
-export h_mma_properties.getLayoutA, h_mma_properties.getLayoutB, h_mma_properties.getLayoutC
-export h_mma_properties.getThreadCount, h_mma_properties.getM, h_mma_properties.getN
-export h_mma_properties.getK, h_mma_properties.valuesPerThread, h_mma_properties.getLayout
+# Symbols outside tile_algebra's jurisdiction, re-exported per symbol
+# for the single-import surface of the kernels and the macro emissions:
+export tensors.TensorOwned, tensors.TensorView, tensors.size,
+       tensors.`[]`, tensors.`[]=`
+export int_tuples.Int, int_tuples.`+`, int_tuples.`-`, int_tuples.`*`,
+       int_tuples.`div`, int_tuples.`mod`, int_tuples.`==`,
+       int_tuples.round_multiple_down, int_tuples.round_multiple_up,
+       int_tuples.toInt, int_tuples.flatten, int_tuples.tupleStream,
+       int_tuples.items
+export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
+       layout_algebra.crd2idx, layout_algebra.idx2crd,
+       layout_algebra.logical_divide, layout_algebra.diceAxes,
+       layout_algebra.sliceAxes
+export tensors.diceAxes, tensors.sliceAxes,
+       tensors.getLayout
+export h_mma_configgen, h_mma_properties
+export builtins_atomics.atomicFetchAdd
+export builtins_warp_sync_reductions.reduceAdd
