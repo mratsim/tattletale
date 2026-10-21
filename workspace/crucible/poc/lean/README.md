@@ -57,6 +57,12 @@ beside the module, and fails the warningAsError elaboration.
 Out-of-scope payloads are refused loudly: unparseable payload, unknown identifier,
 wrong precondition shape, buffer-touching invariant, unknown pragma name.
 
+Verification pragmas are captured at proc level only: a statement-level
+`{.invariant: ...}.` inside the kernel body is refused loudly.
+
+Crucible's frontend discards statement pragmas, so capturing statement-level
+attachment would need a re-emission layer outside the tracer's scope.
+
 A precondition is an assumption, so it carries no Lean declaration.
 It is emitted as a comment and appears as the hypothesis `h` in the scaffolds.
 

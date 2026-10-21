@@ -20,21 +20,15 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     -o:build/wip/t_p3_pragmas --nimcache:nimcache/wip poc/lean/t_p3_pragmas.nim
 
-import std/[assertions, json, os, osproc, strutils]
+import std/[assertions, json, os, osproc, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import lean_pragmas
 import nim_to_lean
+import poc_common
 
-const leanPocDir = "poc/lean"
 const genSpecRelPath = leanPocDir & "/generated/add_spec.lean"
 const genWrongPostRelPath = leanPocDir & "/generated/add_spec_wrong_post.lean"
 const genWrongInvRelPath = leanPocDir & "/generated/add_spec_wrong_inv.lean"
-
-proc elaborate(relPath: string): tuple[output: string, exitCode: int] =
-  ## Elaborates one emitted Lean module through the lake environment,
-  ## warnings escalated to errors so a sorry fails
-  execCmdEx("lake env lean -DwarningAsError=true " & relPath,
-    workingDir = leanPocDir)
 
 proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
   ## Manifest scaffold entry of the given kind
@@ -112,6 +106,40 @@ proc runTest() =
     doAssert code != 0, "the sorry-backed module must fail under warningAsError"
     echo "  wrong invariant: unproven manifest + warningAsError rejection: ok"
 
+  block: # the `≠` comparator round-trips through the payload grammar
+    let e = parseSpecPayload("output tid ≠ a tid + b tid")
+    doAssert e.kind == seBin and e.op == "≠", "`≠` is recognized as the comparator"
+    doAssert e.left.kind == seApp and e.left.fn == "output"
+    doAssert e.right.kind == seBin and e.right.op == "+"
+    doAssert specRefs(e) == @["output", "a", "b"]
+    var nameMap: Table[string, string]
+    nameMap["output"] = "addBody tid n a b out"
+    nameMap["a"] = "a"
+    nameMap["b"] = "b"
+    doAssert renderSpec(e, nameMap) == "addBody tid n a b out tid ≠ a tid + b tid"
+    echo "  `≠` comparator round-trip through the payload grammar: ok"
+
+  block: # proof settling refuses loudly when lean fails without attributable errors
+    # a broken toolchain makes `lake env lean` exit nonzero, printing a lake-level error with no `file:line:col: error:` line
+    # no error is attributable to a scaffold, so the proofs were never checked
+    # and no manifest may record a `proven` verdict
+    let negDir = leanPocDir & "/generated/negativelake"
+    createDir(negDir)
+    writeFile(negDir & "/lakefile.lean", readFile(leanPocDir & "/lakefile.lean"))
+    writeFile(negDir & "/lean-toolchain", "leanprover/lean4:v0.0.0-notinstalled")
+    let negOutPath = negDir & "/generated/add_spec_neg.lean"
+    removeFile(negOutPath.changeFileExt("manifest.json")) # stale runs
+    let k = irVulkanLean:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid < n".} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath)
+    doAssert not fileExists(negOutPath.changeFileExt("manifest.json")),
+      "no manifest may record a proven verdict for unchecked proofs"
+    echo "  proof settling refusal on an unattributable lean failure: ok"
+
   block: # loud refusals on out-of-scope payloads
     let unparseable = irVulkanLean:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "output tid =".} =
@@ -154,6 +182,51 @@ proc runTest() =
       discard emitLeanModuleWithSpecs(plain.gpu.statements[0],
         @[RawSpec(name: "sidecondition", payload: "tid < n")], genSpecRelPath)
     echo "  refusals on out-of-scope payloads: ok"
+
+  block: # a pragma-less proc (no `{.global.}`) is refused loudly
+    # a proc without `{.global.}` is outside the tracer's scope: the macro
+    # hands crucible an empty pragma node, and `analyzeKernel` refuses
+    # through the documented channel
+    let plain = irVulkanLean:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModuleWithSpecs(plain.gpu.statements[0], plain.specs, genSpecRelPath)
+    echo "  refusal on a pragma-less (not `{.global.}`) kernel proc: ok"
+
+  block: # a multi-kernel block is refused loudly at expansion time
+    # only the first proc of a statement list would be converted, silently
+    # dropping the others and their verification pragmas
+    static:
+      doAssert not compiles(block:
+        let k = irVulkanLean:
+          proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+            let i = thread_position_in_grid.x
+            if i < 2:
+              output[i] = a[i] + b[i]
+          proc mulKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+            let i = thread_position_in_grid.x
+            if i < 2:
+              output[i] = a[i] + b[i]
+      )
+    echo "  refusal on a multi-kernel block: ok"
+
+  block: # a statement-level verification pragma is refused loudly at expansion time
+    # crucible's frontend discards statement pragmas, so without the refusal
+    # the payload would silently vanish from the emitted module.
+    # `compiles` cannot check the refusal message, only that expansion fails.
+    static:
+      doAssert not compiles(block:
+        let k = irVulkanLean:
+          proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+            let i = thread_position_in_grid.x
+            {.invariant: "tid < n".}
+            if i < 2:
+              output[i] = a[i] + b[i]
+      )
+    echo "  refusal on a statement-level verification pragma: ok"
 
 when isMainModule:
   runTest()

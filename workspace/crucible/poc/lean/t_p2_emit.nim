@@ -11,7 +11,7 @@
 ## and asserts:
 ## - the emitted module elaborates via `lake env lean -DwarningAsError=true` (a sorry fails)
 ## - the emitted def plus spec theorems are byte-identical to the hand-written P1 statements
-## - kernels outside the emitter's scope are refused loudly (for-loop, non-add-shape buffer set, non-positive guard literal)
+## - kernels outside the emitter's scope are refused loudly (for-loop, non-add-shape buffer set, non-positive guard literal, nested indexing)
 ##
 ## Run:
 ##   cd workspace/crucible
@@ -21,15 +21,9 @@
 import std/[assertions, os, osproc, strutils]
 import workspace/crucible/src/crucible_internal_compiler
 import nim_to_lean
+import poc_common
 
-const leanPocDir = "poc/lean"
 const genRelPath = leanPocDir & "/generated/add.lean"
-
-proc elaborate(relPath: string): tuple[output: string, exitCode: int] =
-  ## Elaborates one emitted Lean module through the lake environment,
-  ## warnings escalated to errors so a sorry fails
-  execCmdEx("lake env lean -DwarningAsError=true " & relPath,
-    workingDir = leanPocDir)
 
 proc statementTail(path: string): string =
   ## Everything from the per-thread def doc comment onward: the def, the spec
@@ -120,6 +114,18 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(negativeBound.statements[0], genRelPath)
     echo "  refusal on non-positive guard literals: ok"
+
+  block: # loud refusal on nested indexing
+    # the model covers reads at the thread's own index only. A nested index
+    # (`a[a[i]]`) would otherwise render an unelaboratable Lean term
+    let nested = irVulkan:
+      proc nestedKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[a[i]] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(nested.statements[0], genRelPath)
+    echo "  refusal on nested indexing: ok"
 
 when isMainModule:
   runTest()

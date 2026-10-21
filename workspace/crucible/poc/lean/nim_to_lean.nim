@@ -15,8 +15,8 @@
 ## - buffer params exactly `a`, `b` (read) plus `output` (written), the emitted `(a b out : Nat → UInt32)` binders
 ## - let-binding of `thread_position_in_grid.x` (emitted as the Lean `tid`)
 ## - one `if` without elif/else, guard `tidVar < literal` with a positive literal (the buffer length `n`)
-## - uint32 `+`, comparisons `<` and `==`, uint32 literals, indexed reads,
-##   indexed writes at the thread's own index
+## - uint32 `+`, comparisons `<` and `==`, uint32 literals,
+##   indexed reads and writes at the thread's own index
 ##
 ## Spec theorems come from a write-set analysis of the guarded branch:
 ## - one write at the thread's own index yields the writes-own-index, preserves-others, composed-post and only-writes-tid theorems
@@ -100,6 +100,11 @@ proc emitExpr(n: GpuAst, tidName: string, bufNames: HashSet[string]): string =
   of gpuIndex:
     if n.iArr.kind == gpuDeref and n.iArr.dOf.kind == gpuIdent and
         n.iArr.dOf.symbol.name in bufNames:
+      if n.iIndex.kind != gpuIdent or n.iIndex.symbol.name != tidName:
+        # a nested index like `a[a[i]]` would render a bogus Lean application
+        raise unsupported(n.kind,
+          "index expression is not the thread id (the model covers reads at" &
+          " the thread's own index only)")
       return n.iArr.dOf.symbol.name & " " & emitExpr(n.iIndex, tidName, bufNames)
     raise unsupported(n.kind, "indexing into anything but a kernel buffer parameter")
   else:
@@ -391,6 +396,29 @@ proc specKindByName(name: string): SpecKind =
     raise newException(ValueError,
       "nim_to_lean: unsupported spec pragma '" & name & "'")
 
+proc statementSpecPragma(node: NimNode): string =
+  ## Name of the first verification pragma at statement level inside `node`,
+  ## or "" when none.
+  ##
+  ## Only proc-level pragmas are captured:
+  ## - crucible's frontend maps a statement pragma to a discarded statement
+  ## - a misplaced `.invariant.` would vanish from the emitted module
+  case node.kind
+  of nnkPragma, nnkPragmaExpr:
+    let pragma = if node.kind == nnkPragmaExpr: node[0] else: node
+    for item in pragma:
+      let nameNode = if item.kind in {nnkExprColonExpr, nnkCall}: item[0] else: item
+      if nameNode.kind in {nnkIdent, nnkSym} and
+          nameNode.strVal in ["precondition", "invariant", "postcondition"]:
+        return nameNode.strVal
+    if node.kind == nnkPragmaExpr:
+      result = statementSpecPragma(node[1])
+  else:
+    for child in node:
+      let found = statementSpecPragma(child)
+      if found != "":
+        return found
+
 macro irVulkanLean*(body: typed): untyped =
   ## Like `irVulkan`, plus capture of the verification pragmas on the kernel proc.
   ## Evaluates to the tuple `(specs, gpu)`.
@@ -406,10 +434,18 @@ macro irVulkanLean*(body: typed): untyped =
   ##
   ## Payloads that are not string literals, or the same pragma twice, are
   ## refused loudly at expansion time.
+  if body.kind == nnkStmtList and body.len != 1:
+    raise newException(ValueError, "nim_to_lean: expected exactly one kernel proc" &
+      " in the guarded block, got " & $body.len & " statements")
   let procNode = if body.kind == nnkStmtList: body[0] else: body
   if procNode.kind != nnkProcDef:
     raise newException(ValueError,
       "nim_to_lean: expected a kernel proc, got node kind " & $procNode.kind)
+  let misplaced = statementSpecPragma(procNode.body)
+  if misplaced != "":
+    raise newException(ValueError, "nim_to_lean: unsupported statement-level '" &
+      misplaced & "' pragma inside the kernel body - verification pragmas" &
+      " are captured at proc level only")
   var specs: seq[RawSpec]
   var kept = newNimNode(nnkPragma, procNode.pragma)
   for item in procNode.pragma:
@@ -427,7 +463,9 @@ macro irVulkanLean*(body: typed): untyped =
     else:
       kept.add item
   let stripped = copyNimTree(procNode)
-  stripped.pragma = kept
+  # an empty nnkPragma trips crucible's `pragma.len > 0` assert at expansion.
+  # The empty node also keeps `analyzeKernel`'s own `{.global.}` refusal loud
+  stripped.pragma = if kept.len == 0: newEmptyNode() else: kept
   let astIn = if body.kind == nnkStmtList: newStmtList(stripped) else: stripped
   let gpuAst = toGpuAstVulkan(astIn)
   result = nnkPar.newTree(
@@ -591,7 +629,7 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
   # settle the proof attempts by elaboration (a failed proof errors, a `sorry` only warns)
   let lakeDir = findLakeDir(outPath)
   let relFile = outPath.relativePath(lakeDir)
-  let (outp, _) = execCmdEx("lake env lean " & relFile, workingDir = lakeDir)
+  let (outp, exitCode) = execCmdEx("lake env lean " & relFile, workingDir = lakeDir)
   var failed: Table[int, string] ## scaffold index -> error excerpt
   let lastLine = text.count('\n') + 1
   for (line, excerpt) in leanErrorExcerpts(outp):
@@ -605,6 +643,16 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
       raise newException(ValueError, "nim_to_lean: proof attempt failed " &
         "outside the pragma scaffolds (line " & $line & "): " & excerpt)
     failed[owner] = excerpt
+  if exitCode != 0 and failed.len == 0:
+    # no error line was attributable to a scaffold, so no proof was settled:
+    # a `proven` verdict would be a guess, e.g. a missing toolchain, a Lean
+    # crash or a diagnostic format change
+    var excerpt = outp
+    if excerpt.len > 800:
+      excerpt = excerpt[0 ..< 797] & "..."
+    raise newException(ValueError, "nim_to_lean: proof settling failed - " &
+      "lean exited with " & $exitCode & " but no error was attributable" &
+      " to a scaffold: " & excerpt)
 
   if failed.len > 0:
     # second pass: downgrade every failing proof to a sorry-backed scaffold
