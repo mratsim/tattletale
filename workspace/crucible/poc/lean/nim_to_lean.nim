@@ -11,11 +11,12 @@
 ## derived spec theorems, in the exact shape of the hand-written `AddKernel.lean` (P1).
 ## Tracer POC scope: anything else raises a loud `nim_to_lean: unsupported ...` ValueError.
 ##
-## Supported constructs (everything else is refused):
+## Supported kernel shape (everything else is refused):
+## - buffer params exactly `a`, `b` (read) plus `output` (written), the emitted `(a b out : Nat → UInt32)` binders
 ## - let-binding of `thread_position_in_grid.x` (emitted as the Lean `tid`)
-## - one `if` without elif/else, guard `tidVar < literal` (the literal becomes `n`)
-## - uint32 `+`, comparisons `<` and `==`, uint32 literals, indexed reads
-## - indexed writes on `ptr UncheckedArray[uint32]` params, at the thread's own index
+## - one `if` without elif/else, guard `tidVar < literal` with a positive literal (the buffer length `n`)
+## - uint32 `+`, comparisons `<` and `==`, uint32 literals, indexed reads,
+##   indexed writes at the thread's own index
 ##
 ## Spec theorems come from a write-set analysis of the guarded branch:
 ## - one write at the thread's own index yields the writes-own-index, preserves-others, composed-post and only-writes-tid theorems
@@ -106,18 +107,22 @@ proc emitExpr(n: GpuAst, tidName: string, bufNames: HashSet[string]): string =
 
 proc emitGuard(cond: GpuAst, tidName: string): int =
   ## Recognizes the tracer guard `tidVar < literal` and returns the literal,
-  ## which becomes the buffer length parameter `n` of the emitted def
+  ## which becomes the buffer length parameter `n` of the emitted def.
+  ## The literal must be positive: the worked examples run thread 0 of a non-empty buffer of length `n`
   if cond.kind == gpuBinOp and cond.bOp.symbol.name == "<" and
       cond.bLeft.kind == gpuIdent and cond.bLeft.symbol.name == tidName and
       cond.bRight.kind == gpuLit and
       cond.bRight.lType.kind in {gtInt32, gtUint32, gtSize_t}:
-    return parseInt(cond.bRight.lValue)
+    let n = parseInt(cond.bRight.lValue)
+    if n <= 0:
+      raise unsupported(gpuIf, "guard literal must be positive (got " &
+        cond.bRight.lValue & ")")
+    return n
   raise unsupported(gpuIf, "guard is not of the shape `tidVar < literal`")
 
 proc isUint32Buffer(p: GpuParam): bool =
-  ## A kernel buffer: `ptr UncheckedArray[uint32]` (or the UA directly)
-  (p.typ.kind == gtUA and p.typ.uaTo.kind == gtUint32) or
-    (p.typ.kind == gtPtr and p.typ.to.kind == gtUA and p.typ.to.uaTo.kind == gtUint32)
+  ## A kernel buffer: `ptr UncheckedArray[uint32]`
+  p.typ.kind == gtPtr and p.typ.to.kind == gtUA and p.typ.to.uaTo.kind == gtUint32
 
 proc isAddOfTidReads(v: GpuAst, tidName: string, readBufs: seq[string]): bool =
   ## Whether the stored value is `<buf1> tid + <buf2> tid` over two distinct buffers,
@@ -131,6 +136,20 @@ proc isAddOfTidReads(v: GpuAst, tidName: string, readBufs: seq[string]): bool =
       return false
   result = v.bLeft.iArr.dOf.symbol.name != v.bRight.iArr.dOf.symbol.name
 
+proc indexedReadBufs(n: GpuAst, bufNames: HashSet[string], found: var HashSet[string]) =
+  ## Collects the kernel buffer parameters the expression reads by indexing
+  case n.kind
+  of gpuIndex:
+    if n.iArr.kind == gpuDeref and n.iArr.dOf.kind == gpuIdent and
+        n.iArr.dOf.symbol.name in bufNames:
+      found.incl n.iArr.dOf.symbol.name
+      indexedReadBufs(n.iIndex, bufNames, found)
+  of gpuBinOp:
+    indexedReadBufs(n.bLeft, bufNames, found)
+    indexedReadBufs(n.bRight, bufNames, found)
+  else:
+    discard
+
 proc leanBodyName(kernelName: string): string =
   ## `addKernel` -> `addBody`, the naming of the hand-written P1 module
   if kernelName.endsWith("Kernel"):
@@ -140,18 +159,26 @@ proc leanBodyName(kernelName: string): string =
 
 proc analyzeKernel(kernel: GpuAst): KernelModel =
   ## Walks one post-pass global kernel and derives the per-thread model:
-  ## thread id, guard bound, write set, and the stored value
+  ## thread id, guard bound, write set, and the stored value.
+  ## Enforces the demonstrated shape: buffer parameters exactly `a` and `b`
+  ## (both read) plus `output` (written), the binders of the emitted Lean def
   if kernel.kind != gpuProc:
     raise unsupported(kernel.kind, "expected a gpuProc kernel")
   if attGlobal notin kernel.pAttributes:
     raise unsupported(gpuProc, "kernel is not `{.global.}`")
 
+  var paramNames: seq[string]
   var bufNames: HashSet[string]
   for p in kernel.pParams:
     if not isUint32Buffer(p):
       raise unsupported(gpuProc, "parameter '" & p.ident.symbol.name &
         "' is not a ptr UncheckedArray[uint32] buffer")
+    paramNames.add p.ident.symbol.name
     bufNames.incl p.ident.symbol.name
+  if kernel.pParams.len != 3 or bufNames != ["a", "b", "output"].toHashSet():
+    raise unsupported(gpuProc, "buffer parameters must be exactly `a` and `b`" &
+      " (read) plus `output` (written), the binders of the emitted Lean def - got '" &
+      paramNames.join(", ") & "'")
 
   if kernel.pBody.kind != gpuBlock:
     raise unsupported(kernel.pBody.kind, "kernel body is not a statement block")
@@ -206,6 +233,18 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
     raise unsupported(gpuVar, "no `thread_position_in_grid.x` binding found")
   if result.writeBuf == "":
     raise unsupported(gpuAssign, "no buffer write found in the guarded branch")
+  if result.writeBuf != "output":
+    raise unsupported(gpuAssign, "the written buffer must be `output` - got '" &
+      result.writeBuf & "'")
+  var readBufSet: HashSet[string]
+  indexedReadBufs(valueAst, bufNames, readBufSet)
+  if readBufSet != ["a", "b"].toHashSet():
+    var readNames: seq[string]
+    for r in readBufSet.items:
+      readNames.add r
+    raise unsupported(gpuProc, "the guarded branch must read both input buffers" &
+      " `a` and `b`, the read binders of the emitted Lean def - got '" &
+      (if readNames.len == 0: "none" else: readNames.join(", ")) & "'")
 
   result.kernelName = kernel.pName.symbol.name
   result.bodyName = leanBodyName(result.kernelName)

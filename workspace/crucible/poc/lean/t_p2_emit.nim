@@ -11,14 +11,14 @@
 ## and asserts:
 ## - the emitted module elaborates via `lake env lean -DwarningAsError=true` (a sorry fails)
 ## - the emitted def plus spec theorems are byte-identical to the hand-written P1 statements
-## - a for-loop kernel, outside the emitter's scope, is refused loudly
+## - kernels outside the emitter's scope are refused loudly (for-loop, non-add-shape buffer set, non-positive guard literal)
 ##
 ## Run:
 ##   cd workspace/crucible
 ##   nim c -r --hints:off --warnings:off \
 ##     -o:build/wip/t_p2_emit --nimcache:nimcache/wip poc/lean/t_p2_emit.nim
 
-import std/[assertions, macros, os, osproc, strutils]
+import std/[assertions, os, osproc, strutils]
 import workspace/crucible/src/crucible_internal_compiler
 import nim_to_lean
 
@@ -76,6 +76,50 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(ir.statements[0], genRelPath)
     echo "  refusal on out-of-scope construct: ok"
+
+  block: # loud refusal on a buffer-parameter set other than the add shape
+    let copy = irVulkan:
+      proc copyKernel(dst, src: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          dst[i] = src[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(copy.statements[0], genRelPath)
+
+    let renamed = irVulkan:
+      proc renamedKernel(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          dst[i] = x[i] + y[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(renamed.statements[0], genRelPath)
+
+    let unreadInput = irVulkan:
+      proc copyA(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(unreadInput.statements[0], genRelPath)
+    echo "  refusal on kernels outside the add-shape buffer parameters: ok"
+
+  block: # loud refusal on a non-positive guard literal
+    let zeroBound = irVulkan:
+      proc zeroBoundKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 0:
+          output[i] = a[i] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(zeroBound.statements[0], genRelPath)
+
+    let negativeBound = irVulkan:
+      proc negativeBoundKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < -1:
+          output[i] = a[i] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(negativeBound.statements[0], genRelPath)
+    echo "  refusal on non-positive guard literals: ok"
 
 when isMainModule:
   runTest()
