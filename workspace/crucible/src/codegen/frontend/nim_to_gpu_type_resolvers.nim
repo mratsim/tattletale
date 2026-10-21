@@ -137,7 +137,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
     result = GpuType(kind: gtGenericInst, gName: t.repr)
     result.fields = resolveRecordFields(reg, impl)
   of nnkStaticTy:
-    # Static int, its value is preserved for struct naming.
+    # Static int, the resolver preserves its value for struct naming.
     result = GpuType(kind: gtStatic, builtin: true, sValue: int(impl[0].intVal))
   else:
     error "Unexpected node kind in for genericInst: " & $impl.treerepr & " kind=" & $impl.kind
@@ -380,7 +380,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       # only a pointer through `ptr UncheckedArray[T]`, resolve the element type
       result = initGpuUAType(resolveInnerPointerType(reg, n))
     of ntyOpenArray:
-      ## openArray[T] → gtSpan(T)
+      ## OpenArray[T] → gtSpan(T)
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "openArray",
         "ntyOpenArray: expected BracketExpr(openArray, T), got " & $n.treerepr
       let innerTyp = resolveType(reg, n[1])

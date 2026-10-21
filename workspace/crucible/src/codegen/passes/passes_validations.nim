@@ -1,15 +1,15 @@
-## Tattletale
-## Copyright (c) 2026 Mamy André-Ratsimbazafy
-## Licensed and distributed under either of
-##   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-## at your option. This file may not be copied, modified, or distributed except according to those terms.
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / [macros, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 
-proc warnUnassigned(n: GpuAst; fnName: string): void =
+proc warnUnassigned(n: GpuAst, fnName: string): void =
   ## Emit a warning if `result` is read before being assigned in any branch.
   case n.kind
   of gpuBlock:
@@ -41,7 +41,7 @@ proc warnUnassigned(n: GpuAst; fnName: string): void =
   else:
     discard
 
-proc checkReservedKeywords*(ctx: var GpuContext; reserved: openArray[string]; backendName: string) =
+proc checkReservedKeywords*(ctx: var GpuContext, reserved: openArray[string], backendName: string) =
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.pName.ident() in reserved:

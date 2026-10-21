@@ -38,7 +38,7 @@ let thread_index_in_threadgroup* {.builtin.}: int = 0
 proc threadgroup_barrier*() {.builtin.} = discard
   ## Orders threadgroup-address-space accesses.
   ## Device-address-space exchanges need `threadgroup_barrier_device`:
-  ## the backend's threadgroup flag does not order device stores.
+  ## The backend's threadgroup flag does not order device stores.
 
 proc threadgroup_barrier_device*()
     {.builtin.} =

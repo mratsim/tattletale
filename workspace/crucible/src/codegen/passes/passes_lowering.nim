@@ -20,7 +20,7 @@ type
     paramIdx: int        # index in the param list
     ptrName: string      # name for the ptr param
     lenName: string      # name for the len param
-    ptrTyp: GpuType      # ptr to element type
+    ptrTyp: GpuType
     lenTyp: GpuType      # int32
 
   SpanSigMap = TableRef[string, seq[SpanParam]]
@@ -65,7 +65,7 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
   scan(ctx.genericInsts)
   scan(ctx.fnTab)
 
-proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
+proc rewriteFnSig(fn: var GpuAst, sigMap: SpanSigMap) =
   ## Split gtSpan params in a function definition
   if fn.isNil or fn.kind != gpuProc:
     return
@@ -104,7 +104,7 @@ proc rewriteFnSig(fn: var GpuAst; sigMap: SpanSigMap) =
       newParams.add p
   fn.pParams = newParams
 
-proc rewriteNode(n: var GpuAst; sigMap: SpanSigMap) =
+proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
   ## Walk AST, rewriting span idents and adjusting call sites
 
   case n.kind
