@@ -52,7 +52,7 @@ type
   GpuTypeKind* = enum
     gtVoid,
     gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64,
-    gtFloat16, gtBf16, gtSize_t,
+    gtFloat16, gtBf16, gtF8E4M3, gtF8E5M2, gtSize_t,
     gtStatic       # Static integer value (used for generic params)
     gtArray,       # Static array `array[N, dtype]` -> `dtype[N]`
     gtString,
@@ -459,7 +459,8 @@ proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
-                         gtFloat32, gtFloat64, gtFloat16, gtBf16, gtSize_t}
+                         gtFloat32, gtFloat64, gtFloat16, gtBf16,
+                         gtF8E4M3, gtF8E5M2, gtSize_t}
   ## Set of numeric (scalar) GpuTypeKind variants.
 
 const TAG_IDENT_IN_ASM* = "\x01"
@@ -1134,7 +1135,7 @@ func size*(t: GpuType): int =
   case t.kind
   of gtVoid:
     result = 0
-  of gtBool, gtUint8:
+  of gtBool, gtUint8, gtF8E4M3, gtF8E5M2:
     result = 1
   of gtUint16, gtInt16, gtFloat16, gtBf16:
     result = 2
@@ -1234,6 +1235,8 @@ proc gpuTypeToShortString*(t: GpuType): string =
   of gtFloat64: result = "f64"
   of gtFloat16: result = "f16"
   of gtBf16:    result = "bf16"
+  of gtF8E4M3:  result = "f8e4m3"
+  of gtF8E5M2:  result = "f8e5m2"
   of gtBool:    result = "bool"
   of gtObject:
     if t.name.startsWith("Tuple_"):

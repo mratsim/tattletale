@@ -25,7 +25,7 @@ Rule table (rule | trigger | severity):
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
-| doc-above-type       | a ## block sits directly above a type declaration                                                 | counted  |
+| doc-above-type       | a type's ## doc sits directly above its declaration, outside the body                             | counted  |
 | bullet-list-length   | a bullet list with 5 or more items                                                                | counted  |
 | bullet-item-length   | a single bullet item spanning 5 or more lines                                                     | counted  |
 | table-separator      | a table with no |---| separator row after the header                                              | counted  |
@@ -209,7 +209,9 @@ NIM_EXPORTED_TYPE_RE = re.compile(
 # its body, above the fields it describes (the placement object fields
 # use), a ## block directly above the declaration does not attach that way.
 #
-# The bare single-line form after a ## block is flagged too.
+# The bare single-line form after a ## block is flagged too. A ## block
+# directly above the `type` keyword itself documents the whole section
+# group, Nimdoc attaches it to nothing, so it is not flagged.
 TYPE_KEYWORD_RE = re.compile(r"^\s*type\b")
 TYPE_DECL_RE = re.compile(
     r"^\s*[A-Za-z_]\w*\*?\s*(?:\[[^\]]*\])?\s*=\s*(?:ref\s+)?"
@@ -348,6 +350,8 @@ BANNED = [
      None, "state the value or the syntax directly, do not narrate how it is written"),
     (r"\w+\(\s*rng\b",
      None, "use method call syntax: rng.rand(...), rng.seed(...)"),
+    (r"\.view\(\)\[",
+     None, "index the tensor directly, A[m, k], the .view() indirection is noise"),
     (r"\bconvict[s]?\b|\bacquit[s]?\b", None,
      "state what the comparison shows, use localizes or rules out"),
     (r"\breceipts?\b", None,
@@ -460,7 +464,7 @@ RULES = {
     "single-word-eol": Rule("single-word-eol", True,
                             "a 1-2 word stub line with reflow room on the previous line"),
     "doc-above-type": Rule("doc-above-type", True,
-                           "a ## block sits directly above a type declaration"),
+                           "a type's ## doc sits directly above its declaration, outside the body"),
     "bullet-list-length": Rule("bullet-list-length", True,
                                "a bullet list with 4 or more items"),
     "bullet-item-length": Rule("bullet-item-length", True,
@@ -1572,14 +1576,13 @@ def check_doc_above_type(path, text, findings):
 
     Flagged when the line immediately after the ## block is one of:
 
-    - the `type` keyword, section header or single-line declaration
     - a type-section member declaration (object, ref object, distinct, enum, tuple)
     - the bare `X* = object` single-line form outside a section
-    - a module doc block directly above a leading type declaration, Nimdoc
-      attaches it to the type, never the intended attachment
 
     Not flagged:
 
+    - the `type` keyword itself, a ## block there documents the whole
+      section group and Nimdoc attaches it to nothing
     - ## field docs inside a type body
     - ## above procs, funcs, consts, lets, and vars
     - a ## block with any line between it and the declaration, a blank line
@@ -1603,9 +1606,22 @@ def check_doc_above_type(path, text, findings):
         if code.strip() == "":
             # a blank line breaks the adjacency, the stray-comment case
             continue
-        if (TYPE_KEYWORD_RE.match(code)
-                or (k + 1) in decls
+        if ((k + 1) in decls
                 or (TYPE_DECL_RE.match(code) and (k + 1) not in fields)):
+            # a block indented inside the nearest member's body is a field
+            # doc, whatever follows it
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            d = start - 1
+            while d >= 0 and (d + 1) not in decls:
+                d -= 1
+            if d >= 0:
+                decl_indent = len(lines[d]) - len(lines[d].lstrip())
+                in_body = all(
+                    not lines[t].strip()
+                    or len(lines[t]) - len(lines[t].lstrip()) > decl_indent
+                    for t in range(d + 1, start))
+                if in_body and indent > decl_indent:
+                    continue
             findings.append(Finding(
                 path, start + 1, "doc-above-type",
                 "## above the type declaration: the doc comment belongs "
@@ -1766,9 +1782,10 @@ def nim_structure_checks(path, text, header_nos, findings):
     stay conservative single-line forms.
     - doc-above-proc bans the ## block above a proc or func declaration
     - the house doc comment of a proc or func is the first body line
-    - exported types are documented by a doc block above them or by the
-      ## field docs inside the body, a ## block directly above the
-      declaration is banned (doc-above-type)
+    - exported types are documented by the ## field docs inside the body,
+      a ## block directly above the declaration is banned (doc-above-type),
+      a ## block directly above the `type` keyword documents the whole
+      section group and is fine
     - inbounds-call-syntax bans the plain call of inBounds, the house
       convention is the method call coord.inBounds(shape)"""
     lines = text.splitlines()

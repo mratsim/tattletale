@@ -13,6 +13,8 @@
 ## - ragged edge tiles go through paddedLoad / guardedStore, interior tiles take the unchecked flat path
 
 import workspace/ceramic/src/tile_algebra
+import workspace/ceramic/src/kernels/k_layout_gemm
+import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 # ═══════════════════════════════════════════════════════════════
 #  Tile-level matmul

@@ -132,8 +132,8 @@ template constStr*(atom: untyped, suffix: untyped): string =
 proc assertStagedDtype(name: string, node: NimNode, dtype, operand: string) =
   let expected = case dtype
     of "float": bindSym"float32"
-    of "half": bindSym"F16"
-    of "bfloat": bindSym"BF16"
+    of "half": bindSym"float16"
+    of "bfloat": bindSym"bfloat16"
     else:
       error("gemm_mma: atom registry " & operand & " dtype `" & dtype &
             "` is not a staging dtype (\"float\"/\"half\"/\"bfloat\")")

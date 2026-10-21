@@ -36,10 +36,10 @@ export fp_conv
 proc fillGemmInputs*[TVa, TVb](aTV: TVa, bTV: TVb, M, N, K: int) =
   for m in 0 ..< M:
     for k in 0 ..< K:
-      aTV[m, k] = F16.from(float32(1 + (2 * m + 7 * k) mod 13))
+      aTV[m, k] = to(1 + (2 * m + 7 * k) mod 13, float16)
   for n in 0 ..< N:
     for k in 0 ..< K:
-      bTV[n, k] = F16.from(float32(1 + (3 * k + 11 * n) mod 17))
+      bTV[n, k] = to(1 + (3 * k + 11 * n) mod 17, float16)
 
 proc gemmLoop*(mma: static TiledMma, C, A, B: distinct TensorView, iters: int) =
   for _ in 0 ..< iters:
@@ -57,8 +57,8 @@ template benchGemm*(op: string, M, N, K, iters: int, body: untyped) =
 proc benchCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
   let one = 1  # runtime int, the layouts stay dynamic
   var
-    aHost = makeHostTensor(F16, (M, K), (K, one))
-    bHost = makeHostTensor(F16, (N, K), (one, N))
+    aHost = makeHostTensor(float16, (M, K), (K, one))
+    bHost = makeHostTensor(float16, (N, K), (one, N))
     dHost = makeHostTensor(float32, (M, N), (N, one))
   fillGemmInputs(aHost.view(), bHost.view(), M, N, K)
   # warmup, the kernel loops 5 times inside one launch

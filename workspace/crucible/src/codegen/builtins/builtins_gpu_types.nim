@@ -18,6 +18,10 @@ type
     ## IEEE 754 binary16: 1 sign, 5 exponent, 10 mantissa bits.
   bfloat16* {.builtin.} = distinct uint16
     ## bfloat16: the top 16 bits of an f32, 1 sign, 8 exponent, 7 mantissa.
+  fp8e4m3* {.builtin.} = distinct uint8
+    ## OCP FP8 E4M3fn, finite, no infinity, 1 sign, 4 exponent, 3 mantissa.
+  fp8e5m2* {.builtin.} = distinct uint8
+    ## OCP FP8 E5M2, IEEE-like, 1 sign, 5 exponent, 2 mantissa.
 
 # Arithmetic operators: the DSL lowers them to the target's native ops.
 # Compile-time guards (error pragma, static assert) fire at DSL resolution
@@ -114,4 +118,6 @@ proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   case n.strVal
   of "float16":   gtFloat16
   of "bfloat16":  gtBf16
+  of "fp8e4m3":   gtF8E4M3
+  of "fp8e5m2":   gtF8E5M2
   else:           gtVoid

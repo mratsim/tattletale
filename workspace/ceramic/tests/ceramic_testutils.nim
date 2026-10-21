@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Common utilities for tests over ceramic tensors.
@@ -13,8 +13,12 @@
 
 import std/[macros, math, random]
 import workspace/crucible
+import workspace/ceramic/src/ptr_arithmetic
+import workspace/ceramic/src/macros/varargs_to_par
+import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_indexing_slicedice
 import workspace/fp_conv/fp_conv
 
 # ═══════════════════════════════════════════════════════════════
@@ -32,6 +36,7 @@ proc seed*(rng: var Rand, x: SomeInteger) =
 type
   HostTensor*[T, Sh, St] = object
     data*: ptr UncheckedArray[T]
+    offset*: int
     layout*: Layout[Sh, St]
 
   BridgeTensor*[DevMem, Sh, St] = object
@@ -45,49 +50,72 @@ proc `=destroy`*[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
 
 proc `=copy`*[T, Sh, St](dst: var HostTensor[T, Sh, St], src: HostTensor[T, Sh, St]) {.error: "HostTensor is move-only".}
 
+proc popNode(tree: var NimNode): NimNode {.compileTime.} =
+  result = tree[tree.len - 1]
+  tree.del(tree.len - 1)
+
+template `[]`*(ht: HostTensor, args: varargs[untyped]): untyped =
+  ht.data[ht.offset + toInt crd2idx(ht.layout, varargs_to_par(args))]
+
+macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
+  var a = args
+  let val = popNode(a)
+  let coord = getAst(varargs_to_par(a))
+  result = quote do:
+    `ht`.data[`ht`.offset + toInt crd2idx(`ht`.layout, `coord`)] = `val`
+
+func originOffset[Sh, St](layout: Layout[Sh, St]): int =
+  ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
+  let sh = layout.shape.flatten()
+  let st = layout.stride.flatten()
+  var strides: seq[int]
+  for f in fields(st):
+    strides.add(toInt(f))
+  var i = 0
+  for f in fields(sh):
+    if strides[i] < 0:
+      result += (toInt(f) - 1) * (-strides[i])
+    i.inc
+
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
-  let bytes = toInt(layout.cosize()) * sizeof(T)
   HostTensor[T, typeof(shape), typeof(strides)](
-    data: cast[ptr UncheckedArray[T]](allocShared(bytes)),
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
     layout: layout)
 
 template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
   # Workaround `..` or Slice[T](...) not resolving T as a default value
   Slice[T](a: T(start), b: T(stopIncl))
 
-proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[T](1, 2)): auto =
+proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[float32](1, 2)): auto =
   let layout = make_layout(shape, strides)
   result = HostTensor[T, typeof(shape), typeof(strides)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
     layout: layout)
-  for i in 0 ..< toInt(layout.cosize()):
+  for i in 0 ..< toInt(layout.size()):
+    let crd = idx2crd(layout.shape, i)
     when T is float32 or T is float64:
-      result.data[i] = rng.rand(bounds)
+      result.data[result.offset + toInt crd2idx(layout, crd)] = rng.rand(bounds)
     else:
-      result.data[i] = T.from(rng.rand(float32.from(bounds.a) .. float32.from(bounds.b)))
+      result.data[result.offset + toInt crd2idx(layout, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
 
 func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
   toInt(ht.layout.cosize())
 
 func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: ht.data, layout: ht.layout)
+  TensorView[T, Sh, St](data: ht.data +% ht.offset, layout: ht.layout)
 
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
   let n = ht.layout.cosize()
   let dev = engine.allocDevice(T, n)
-  engine.copyToDeviceFromHost(dev, ht.data, n)
+  engine.copyToDeviceFromHost(dev, ht.data +% ht.offset, n)
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
 
 # ═══════════════════════════════════════════════════════════════
 #  Tensor assertions
 # ═══════════════════════════════════════════════════════════════
-
-func toF64(x: float32 | float64 | int | int32 | int64): float64 {.inline.} =
-  float64(x)
-
-func toF64(x: F16): float64 {.inline.} =
-  float64(float32.from(x))
 
 func flatSize[L](l: L): int =
   ## Size as a runtime int, static `Int[N]` layouts included
@@ -114,8 +142,8 @@ proc allClose*[T, ShA, StA, ShB, StB](
   let expectedL = expected.getLayout()
   for i in 0 ..< n:
     let crd = idx2crd(actual.shape, i)
-    let a = toF64(actual.data[toInt crd2idx(actualL, crd)])
-    let e = toF64(expected.data[toInt crd2idx(expectedL, idx2crd(expected.shape, i))])
+    let a = to(actual.data[toInt crd2idx(actualL, crd)], float64)
+    let e = to(expected.data[toInt crd2idx(expectedL, idx2crd(expected.shape, i))], float64)
     # NaN never matches, a NaN difference is not greater than any bound,
     # an infinite expected value must not inflate the relative bound
     var d = abs(a - e)
