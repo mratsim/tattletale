@@ -173,6 +173,25 @@ proc leanLoopName(kernelName: string): string =
   else:
     body & "Loop"
 
+proc checkWriteTarget(lhs: GpuAst, bufNames: HashSet[string]): string =
+  ## Validates an assignment target as a kernel buffer element write.
+  ##
+  ## Returns the written buffer's name, refusing loudly when the target is
+  ## not a buffer element or names a non-parameter buffer.
+  ##
+  ## Shared by the loop path and the guarded-thread path, so both shapes
+  ## refuse a malformed target with the same message.
+  ##
+  ## The index-variable check and the write-count policy stay at the call sites.
+  if lhs.kind != gpuIndex or lhs.iArr.kind != gpuDeref or
+      lhs.iArr.dOf.kind != gpuIdent:
+    raise unsupported(gpuAssign, "assignment target is not a buffer element")
+  let buf = lhs.iArr.dOf.symbol.name
+  if buf notin bufNames:
+    raise unsupported(gpuAssign,
+      "assignment to '" & buf & "' which is not a kernel parameter")
+  result = buf
+
 proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], model: var KernelModel): GpuAst =
   ## Walks the single `gpuFor` of the loop shape: a compile-time constant
   ## exclusive range `[0, n)` with step 1, one indexed write of a supported
@@ -211,13 +230,7 @@ proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], model: var Kerne
   if w.kind != gpuAssign:
     raise unsupported(w.kind, "statement inside the loop body")
   let lhs = w.aLeft
-  if lhs.kind != gpuIndex or lhs.iArr.kind != gpuDeref or
-      lhs.iArr.dOf.kind != gpuIdent:
-    raise unsupported(gpuAssign, "assignment target is not a buffer element")
-  let buf = lhs.iArr.dOf.symbol.name
-  if buf notin bufNames:
-    raise unsupported(gpuAssign,
-      "assignment to '" & buf & "' which is not a kernel parameter")
+  let buf = checkWriteTarget(lhs, bufNames)
   if lhs.iIndex.kind != gpuIdent or lhs.iIndex.symbol.name != loopVar:
     raise unsupported(gpuAssign,
       "write index is not the loop variable (write-set analysis covers the" &
@@ -295,13 +308,7 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
           if w.kind != gpuAssign:
             raise unsupported(w.kind, "statement inside the guarded branch")
           let lhs = w.aLeft
-          if lhs.kind != gpuIndex or lhs.iArr.kind != gpuDeref or
-              lhs.iArr.dOf.kind != gpuIdent:
-            raise unsupported(gpuAssign, "assignment target is not a buffer element")
-          let buf = lhs.iArr.dOf.symbol.name
-          if buf notin bufNames:
-            raise unsupported(gpuAssign,
-              "assignment to '" & buf & "' which is not a kernel parameter")
+          let buf = checkWriteTarget(lhs, bufNames)
           if lhs.iIndex.kind != gpuIdent or lhs.iIndex.symbol.name != tidName:
             raise unsupported(gpuAssign,
               "write index is not the thread id (write-set analysis covers the own-index shape only)")
@@ -381,6 +388,11 @@ Divergence note: the Lean loop counter is a `Nat`, unbounded, while the GPU
 counter is 32-bit and Nim wraps it at 2^32. The bound `@N@` is a compile-time
 literal, so the counter provably stays in `[0, @N@)` and the two encodings
 agree; a data-dependent bound would need an overflow side condition here.
+
+Proof note: the loop-shape theorems may depend on the classical axioms
+`[propext, Classical.choice, Quot.sound]` (the `by_cases` case splits and
+`omega` fallbacks in the proofs), unlike the add-shape theorems, which stay
+constructive with `[propext]` alone.
 -/
 """
   let doc = case model.kind

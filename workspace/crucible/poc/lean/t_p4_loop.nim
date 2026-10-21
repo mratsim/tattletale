@@ -13,7 +13,7 @@
 ##
 ## - the loop module elaborates under warningAsError, sorry-free
 ## - loop kernels outside the supported shape are refused loudly
-## - a loop-guard invariant is proved, a wrong one is downgraded to `sorry`
+## - a loop-guard invariant is proved, an unprovable-by-the-scaffold one downgrades to `sorry`
 ## - precondition/postcondition pragmas on the loop shape are refused loudly
 ##
 ## Run:
@@ -21,7 +21,7 @@
 ##   nim c -r --hints:off --warnings:off \
 ##     -o:build/wip/t_p4_loop --nimcache:nimcache/wip poc/lean/t_p4_loop.nim
 
-import std/[assertions, json, os, osproc, strutils, tables]
+import std/[assertions, json, os, strutils]
 import workspace/crucible/src/crucible_internal_compiler
 import lean_pragmas
 import nim_to_lean
@@ -185,7 +185,11 @@ proc runTest() =
     doAssert "sorry" notin outp, "no sorry under warningAsError"
     echo "  right loop invariant: proven manifest + warningAsError elaboration: ok"
 
-  block: # wrong loop invariant: sorry downgrade, unproven manifest, warningAsError rejection
+  block: # unprovable-by-the-scaffold loop invariant: sorry downgrade, unproven manifest, warningAsError rejection
+    # the payload `i ≤ 4` is true over the loop counter, but the fixed proof
+    # attempt `exact h` of the scaffold cannot close it, so the proof downgrades
+    # to `sorry` and the manifest records unproven, a proof-status verdict
+    # that never judges the truth of the payload
     let k = irVulkanLean:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i ≤ 4".} =
         for i in 0 ..< 4:
@@ -194,15 +198,15 @@ proc runTest() =
     discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genLoopInvWrongRelPath)
     let manifest = parseJson(readFile(genLoopInvWrongRelPath.changeFileExt("manifest.json")))
     let inv = scaffoldEntry(manifest, "invariant")
-    doAssert inv["proven"].getBool() == false, "wrong loop invariant recorded unproven"
+    doAssert inv["proven"].getBool() == false, "unprovable-by-the-scaffold loop invariant recorded unproven"
     doAssert inv["error"].getStr().len > 0, "Lean error excerpt recorded"
-    echo "  wrong loop invariant manifest entry: ", inv.pretty
+    echo "  unprovable-by-the-scaffold loop invariant manifest entry: ", inv.pretty
 
     let emitted = readFile(genLoopInvWrongRelPath)
     doAssert "sorry" in emitted, "proof downgraded to a sorry-backed scaffold"
     let (_, code) = elaborate("generated/loop_inv_wrong.lean")
     doAssert code != 0, "the sorry-backed module must fail under warningAsError"
-    echo "  wrong loop invariant: unproven manifest + warningAsError rejection: ok"
+    echo "  unprovable-by-the-scaffold loop invariant: unproven manifest + warningAsError rejection: ok"
 
   block: # loud refusals on loop-shape pragma payloads
     let withPrecondition = irVulkanLean:

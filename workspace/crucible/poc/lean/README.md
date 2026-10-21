@@ -121,8 +121,13 @@ Refused on the loop shape:
   range and its postcondition is the composed `∀ j` contract, both outside
   the payload grammar
 
-A wrong invariant (`i ≤ 4`) is downgraded to a `sorry`-backed scaffold,
-recorded unproven in the manifest, and fails the warningAsError elaboration.
+An unprovable-by-the-scaffold invariant is downgraded to a `sorry`-backed
+scaffold and fails the warningAsError elaboration:
+
+- the payload `i ≤ 4` is true over the loop counter, but the scaffold's fixed
+  `exact h` proof attempt cannot close it
+- the manifest records the downgrade as unproven, a proof-status verdict,
+  never a judgment of the payload's truth
 
 ## Files
 
