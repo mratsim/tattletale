@@ -62,11 +62,15 @@ proc runTest() =
       doAssert false, "emitted statements differ from the hand-written P1 module"
     echo "  emission + elaboration (warningAsError) + P1 statement match: ok"
 
-  block: # loud refusal on an out-of-scope construct (for-loop)
+  block: # loud refusal on an out-of-scope construct (while loop)
+    # a `for` over a compile-time constant range is the P4 loop shape, tested
+    # by t_p4_loop.nim. A while loop stays out of scope
     let ir = irVulkan:
-      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-        for i in 0 ..< 4:
+      proc whileAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        var i = 0
+        while i < 4:
           output[i] = a[i] + b[i]
+          i = i + 1
     doAssertRaises(ValueError):
       discard emitLeanModule(ir.statements[0], genRelPath)
     echo "  refusal on out-of-scope construct: ok"

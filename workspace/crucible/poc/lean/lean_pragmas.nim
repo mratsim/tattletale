@@ -193,17 +193,23 @@ proc specRefs*(e: SpecExpr): seq[string] =
     for r in specRefs(e.right):
       if r notin result: result.add r
 
-proc renderSpec*(e: SpecExpr, nameMap: Table[string, string]): string =
+proc renderSpec*(e: SpecExpr, nameMap: Table[string, string], bareMap: Table[string, string] = initTable[string, string]()): string =
   ## Renders the payload as Lean text over the model's names.
   ##
-  ## `nameMap` maps every kernel buffer parameter to its Lean name in the emitted module.
-  ## The written buffer maps to the post-state application `addBody tid n a b out` of the per-thread body.
-  ##
-  ## - bare binders render as themselves (`tid`, `n`)
+  ## - `nameMap` maps each kernel buffer parameter to its emitted Lean name,
+  ##   the written buffer to the post-state application `addBody tid n a b out`
+  ##   of the per-thread body
+  ## - `bareMap` maps a bare binder to its rendered Lean text. The loop shape
+  ##   renders the loop counter through `bareMap` over the recursion's
+  ##   remaining-count parameter: `i` -> `4 - k`. Any other bare binder renders
+  ##   as itself (`tid`, `n`)
   ## - a buffer read renders as `<mapped name> tid`
-  ## - everything else is refused loudly: neither a bare buffer name nor an unknown identifier is a Lean Prop over the model
+  ## - everything else is refused loudly: a bare buffer name or an unknown
+  ##   identifier is not a Lean Prop over the model
   case e.kind
   of seIdent:
+    if e.name in bareMap:
+      return bareMap[e.name]
     if e.name in ["tid", "n"]:
       return e.name
     if e.name in nameMap:
@@ -219,5 +225,5 @@ proc renderSpec*(e: SpecExpr, nameMap: Table[string, string]): string =
   of seUint:
     result = e.value
   of seBin:
-    result = renderSpec(e.left, nameMap) & " " & e.op & " " &
-      renderSpec(e.right, nameMap)
+    result = renderSpec(e.left, nameMap, bareMap) & " " & e.op & " " &
+      renderSpec(e.right, nameMap, bareMap)
