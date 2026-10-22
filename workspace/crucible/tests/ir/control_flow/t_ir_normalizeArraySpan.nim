@@ -8,27 +8,17 @@
 ## - gpuAddr(gpuIndex(gpuDeref(p), i)) keeps the addr and folds the index
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_normalizeArraySpan.nim
 
 import std/[tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/tests/ir/ir_testutils
 
-proc runOne(node: GpuAst): GpuAst =
-  ## Runs the array/span normalization pass over one fn holding `node`
-  var ctx = GpuContext()
-  let fn = GpuAst(kind: gpuProc, pName: newGpuIdent("anon"),
-                  pRetType: GpuType(kind: gtVoid),
-                  pBody: GpuAst(kind: gpuBlock, statements: @[node]),
-                  pParams: @[])
-  ctx.allFnTab[fn.pName] = fn
-  var reg = PassRegistry.new()
+proc registerNormalizeArraySpanDecay(reg: var PassRegistry) {.nimcall.} =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
-  ctx.runPasses(reg)
-  fn.pBody.statements[0]
-
 
 proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
   ## A `p: ptr array[4, int32]` ident + its gpuDeref — the IR shape of a
@@ -42,45 +32,45 @@ proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
 
 let emptyKinds = initTable[string, seq[ArraySpanParamKind]]()
 
-block: # 1. index context still folds: gpuIndex(gpuDeref(p), i) -> gpuIndex(p, i)
+static: # 1. index context still folds: gpuIndex(gpuDeref(p), i) -> gpuIndex(p, i)
   let (_, deref) = makePtrToArray("A")
   let lit0 = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
   var idx = GpuAst(kind: gpuIndex, iArr: deref, iIndex: lit0)
 
-  idx = runOne(idx)
+  idx = registerNormalizeArraySpanDecay.runPassOnNode(idx)[0]
 
   doAssert idx.iArr.kind == gpuIdent,
     "index-context deref must fold to the bare ident ((*p)[i] == p[i])"
   echo "  OK — index context: (*p)[i] folded to p[i]"
 
-block: # 2. deref under gpuAddr survives: &(*p) is T*, NOT &p (T**)
+static: # 2. deref under gpuAddr survives: &(*p) is T*, NOT &p (T**)
   let (_, deref) = makePtrToArray("A")
   var addrNode = GpuAst(kind: gpuAddr, aOf: deref)
 
-  addrNode = runOne(addrNode)
+  addrNode = registerNormalizeArraySpanDecay.runPassOnNode(addrNode)[0]
 
   doAssert addrNode.aOf.kind == gpuDeref,
     "deref under gpuAddr must NOT be stripped (&(*p) is the array address T*," &
     " stripping to &p would be the pointer variable's address T**)"
   echo "  OK — gpuAddr(gpuDeref(p)) preserved (array address T*, not T**)"
 
-block: # 3. bare non-index deref survives (element semantics unchanged)
+static: # 3. bare non-index deref survives (element semantics unchanged)
   let (_, deref) = makePtrToArray("A")
   var d = deref
 
-  d = runOne(d)
+  d = registerNormalizeArraySpanDecay.runPassOnNode(d)[0]
 
   doAssert d.kind == gpuDeref,
     "non-index deref must keep its element semantics"
   echo "  OK — bare deref preserved"
 
-block: # 4. index inside gpuAddr still folds: &p[i] (element address), deref survives only outside index
+static: # 4. index inside gpuAddr still folds: &p[i] (element address), deref survives only outside index
   let (_, deref) = makePtrToArray("A")
   let lit0 = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
   let idx = GpuAst(kind: gpuIndex, iArr: deref, iIndex: lit0)
   var addrNode = GpuAst(kind: gpuAddr, aOf: idx)
 
-  addrNode = runOne(addrNode)
+  addrNode = registerNormalizeArraySpanDecay.runPassOnNode(addrNode)[0]
 
   doAssert addrNode.aOf.kind == gpuIndex,
     "gpuAddr(gpuIndex(...)) shape must survive"

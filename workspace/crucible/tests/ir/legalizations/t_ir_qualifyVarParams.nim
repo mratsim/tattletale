@@ -10,24 +10,19 @@
 ## - kernel functions (attGlobal) have no kVar params by construction
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_qualifyVarParams.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering_glsl {.all.}
+import workspace/crucible/tests/ir/ir_testutils
 import workspace/crucible/src/codegen/passes/pass_registry
-
-proc runOne(ctx: var GpuContext) =
-  ## Runs the single pass under test through the public registry.
-  var reg = PassRegistry.new()
-  reg.registerQualifyVarParams()
-  ctx.runPasses(reg)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. kVar param retyped to its pointee
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let pointee = GpuType(kind: gtInt32)
   let ptrTy = initGpuPtrType(pointee, implicitPtr = true)
   let sym = newSymbol("out", iSym = "out_var", typ = ptrTy)
@@ -37,10 +32,7 @@ block:
                         pName: GpuAst(kind: gpuIdent, symbol: newSymbol("fn")),
                         pParams: @[param],
                         pBody: GpuAst(kind: gpuBlock))
-  var ctx = GpuContext()
-  ctx.allFnTab[procNode.pName] = procNode
-
-  runOne(ctx)
+  discard registerQualifyVarParams.runPass(procNode)
 
   doAssert procNode.pParams[0].typ.kind == gtInt32,
     "kVar param should be retyped to its pointee, got: " & $procNode.pParams[0].typ.kind
@@ -50,7 +42,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. body derefs of kVar params unwrap to the plain ident
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let pointee = GpuType(kind: gtInt32)
   let ptrTy = initGpuPtrType(pointee, implicitPtr = true)
   let sym = newSymbol("out", iSym = "out_var2", typ = ptrTy)
@@ -64,10 +56,7 @@ block:
   var procNode = GpuAst(kind: gpuProc,
                         pName: GpuAst(kind: gpuIdent, symbol: newSymbol("fn")),
                         pParams: @[param], pBody: body)
-  var ctx = GpuContext()
-  ctx.allFnTab[procNode.pName] = procNode
-
-  runOne(ctx)
+  discard registerQualifyVarParams.runPass(procNode)
 
   let stmt = procNode.pBody.statements[0]
   doAssert stmt.aLeft.kind == gpuIdent,
@@ -77,7 +66,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. call-site gpuAddr args to kVar params unwrap to the plain lvalue
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let pointee = GpuType(kind: gtInt32)
   let ptrTy = initGpuPtrType(pointee, implicitPtr = true)
   let calleeSym = newSymbol("bump", iSym = "bump_fn", typ = nil)
@@ -104,7 +93,7 @@ block:
   ctx.allFnTab[callee.pName] = callee
   ctx.allFnTab[caller.pName] = caller
 
-  runOne(ctx)
+  registerQualifyVarParams.runPassPrepared(ctx)
 
   doAssert caller.pBody.statements[0].cArgs[0].kind == gpuIdent,
     "gpuAddr arg to a kVar param should unwrap to the plain lvalue, got: " &
@@ -114,7 +103,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. in-flavored params and derefs of non-kVar idents stay untouched
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let devicePtr = initGpuPtrType(GpuType(kind: gtFloat32), implicitPtr = false)
   let bufSym = newSymbol("buf", iSym = "buf_dev", typ = devicePtr)
   let param = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: bufSym), typ: devicePtr,
@@ -128,10 +117,7 @@ block:
   var procNode = GpuAst(kind: gpuProc,
                         pName: GpuAst(kind: gpuIdent, symbol: newSymbol("fn")),
                         pParams: @[param], pBody: body)
-  var ctx = GpuContext()
-  ctx.allFnTab[procNode.pName] = procNode
-
-  runOne(ctx)
+  discard registerQualifyVarParams.runPass(procNode)
 
   doAssert procNode.pParams[0].typ.kind == gtPtr,
     "kIn param type must stay a pointer"

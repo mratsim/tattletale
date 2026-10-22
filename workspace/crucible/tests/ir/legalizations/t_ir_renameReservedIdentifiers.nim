@@ -1,23 +1,21 @@
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_renameReservedIdentifiers.nim
 
 import std/[sets, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering
-
-proc runRename(ctx: var GpuContext, reserved: static HashSet[string]) =
-  var reg = PassRegistry.new()
-  reg.registerRenameReservedIdentifiers(name = "renameReserved", reserved = reserved)
-  ctx.runPasses(reg)
-
+import workspace/crucible/tests/ir/ir_testutils
 
 const Reserved = ["layout", "buffer"].toHashSet()
+
+proc registerRenameReserved(reg: var PassRegistry) {.nimcall.} =
+  reg.registerRenameReservedIdentifiers(name = "renameReserved", reserved = Reserved)
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. fn param renamed in the decl and in body refs
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let intTy = GpuType(kind: gtInt32)
   let sym = newSymbol("layout", iSym = "layout_param", typ = intTy)
   let param = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: intTy,
@@ -33,7 +31,7 @@ block:
   var ctx = GpuContext()
   ctx.fnTab[procNode.pName] = procNode
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   doAssert procNode.pParams[0].ident.ident() == "layout_nim",
     "reserved param name should rename, got: " & procNode.pParams[0].ident.ident()
@@ -44,7 +42,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 # 2. struct field renamed in the decl, including block-wrapped type defs
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   var field = GpuTypeField(name: "buffer", typ: GpuType(kind: gtInt32))
   var typeDef = GpuAst(kind: gpuTypeDef,
                        tTyp: GpuType(kind: gtObject, name: "S"),
@@ -55,7 +53,7 @@ block:
   var ctx = GpuContext()
   ctx.globalBlocks.add typBlock
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   doAssert ctx.globalBlocks[0].statements[0].tFields[0].name == "buffer_nim",
     "reserved field name in a block-wrapped type def should rename, got: " &
@@ -65,7 +63,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 # 2.b globals table (WGSL lifts kernel params there) renamed
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let intTy = GpuType(kind: gtInt32)
   let sym = newSymbol("layout", iSym = "layout_global", typ = intTy)
   let g = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: intTy,
@@ -73,7 +71,7 @@ block:
   var ctx = GpuContext()
   ctx.globals["layout_global"] = g
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   doAssert ctx.globals["layout_global"].ident.ident() == "layout_nim",
     "global symbol with reserved name should rename, got: " &
@@ -83,7 +81,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 # 3. field access renamed
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let intTy = GpuType(kind: gtInt32)
   let fieldSym = newSymbol("layout", iSym = "s_layout", typ = intTy)
   let parentSym = newSymbol("s", iSym = "s_var", typ = GpuType(kind: gtObject, name: "S"))
@@ -98,7 +96,7 @@ block:
   var ctx = GpuContext()
   ctx.fnTab[procNode.pName] = procNode
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   let acc = procNode.pBody.statements[0]
   doAssert acc.dField.ident() == "layout_nim",
@@ -110,7 +108,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 # 4. negative control: non-colliding names untouched
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let intTy = GpuType(kind: gtInt32)
   let sym = newSymbol("count", iSym = "count_var", typ = intTy)
   let param = GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym), typ: intTy,
@@ -121,7 +119,7 @@ block:
   var ctx = GpuContext()
   ctx.fnTab[procNode.pName] = procNode
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   doAssert procNode.pParams[0].ident.ident() == "count",
     "non-colliding param must stay untouched, got: " & procNode.pParams[0].ident.ident()
@@ -131,7 +129,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 # 2.c fn name renamed in the decl and at call sites
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let intTy = GpuType(kind: gtInt32)
   # callee: proc layout_fn() with body `discard`
   var callee = GpuAst(kind: gpuProc,
@@ -151,7 +149,7 @@ block:
   ctx.fnTab[callee.pName] = callee
   ctx.fnTab[caller.pName] = caller
 
-  ctx.runRename(Reserved)
+  registerRenameReserved.runPassPrepared(ctx)
 
   doAssert callee.pName.ident() == "buffer_nim",
     "reserved fn name should rename, got: " & callee.pName.ident()

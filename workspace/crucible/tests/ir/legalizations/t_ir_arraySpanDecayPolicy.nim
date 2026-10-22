@@ -1,11 +1,12 @@
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_arraySpanDecayPolicy.nim
 
 import std / [tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/pass_registry
+import workspace/crucible/tests/ir/ir_testutils
 
 proc boolParamFn(iSym: string): GpuAst =
   ## A kernel fn with one `var array[4, int32]` param, indexed once in the body
@@ -22,19 +23,24 @@ proc boolParamFn(iSym: string): GpuAst =
                                  iIndex: GpuAst(kind: gpuLit, lValue: "0", lType: initGpuType(gtInt32)))
   result = fn
 
+proc registerDecayTrue(reg: var PassRegistry) {.nimcall.} =
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
+
+proc registerDecayFalse(reg: var PassRegistry) {.nimcall.} =
+  reg.registerNormalizeArraySpanParams(decayArrays = false)
+
 proc runPolicy(decay: static bool): GpuAst =
-  var ctx = GpuContext()
   let fn = boolParamFn("f" & $int(decay))
-  ctx.allFnTab[fn.pName] = fn
-  var reg = PassRegistry.new()
-  reg.registerNormalizeArraySpanParams(decayArrays = decay)
-  ctx.runPasses(reg)
-  ctx.allFnTab[fn.pName]
+  when decay:
+    discard registerDecayTrue.runPass(fn)
+  else:
+    discard registerDecayFalse.runPass(fn)
+  fn
 
 # ═══════════════════════════════════════════════════════════════════════════
 # decay = true (C model): the param becomes an element pointer
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let fn = runPolicy(true)
   let p = fn.pParams[0]
   doAssert p.typ.kind == gtPtr and p.typ.to.kind == gtInt32,
@@ -44,7 +50,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # decay = false (array first-class): the param keeps its array-ness
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let fn = runPolicy(false)
   let p = fn.pParams[0]
   doAssert p.typ.kind == gtPtr and p.typ.to.kind == gtArray,

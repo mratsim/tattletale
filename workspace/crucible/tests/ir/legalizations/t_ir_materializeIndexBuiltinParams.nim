@@ -8,19 +8,14 @@
 ## - shadowing locals, barrier calls, and already-rewritten fns are skipped
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_materializeIndexBuiltinParams.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering_msl {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
-
-proc runOne(ctx: var GpuContext) =
-  ## Runs the single pass under test through the public registry.
-  var reg = PassRegistry.new()
-  reg.registerMaterializeIndexBuiltinParams()
-  ctx.runPasses(reg)
+import workspace/crucible/tests/ir/ir_testutils
 
 # ── IR builders ─────────────────────────────────────────────────────────────
 
@@ -84,7 +79,7 @@ proc paramKinds(fn: GpuAst): seq[GpuCoordBuiltinKind] =
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Device fn gains the builtin params: canonical name + coordBuiltin kind + type
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let body = blockStmts(
     builtinIdent("thread_position_in_threadgroup", gbkThreadPositionInThreadgroup),
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup)
@@ -93,7 +88,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   doAssert fn.pParams.len == 2,
     "device fn must gain one builtin param per need, got " & $fn.pParams.len
@@ -115,7 +110,7 @@ block:
 # 2. Kernel gains the builtin params: own ref AND transitive callee need,
 #    declared params keep positions and types (binding-order invariant)
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var callee = makeProc("callee",
     blockStmts(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var kernel = makeProc("kern",
@@ -132,7 +127,7 @@ block:
   ctx.allFnTab[callee.pName] = callee
   ctx.allFnTab[kernel.pName] = kernel
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   # Declared params keep their positions, types, and unmarked symbols.
   doAssert kernel.pParams.len == 4,
@@ -157,7 +152,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Call site forwards the args in the callee's needs order
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var d1 = makeProc("d1",
     blockStmts(builtinIdent("thread_position_in_grid", gbkThreadPositionInGrid)))
   var d2 = makeProc("d2",
@@ -172,7 +167,7 @@ block:
   ctx.allFnTab[d2.pName] = d2
   ctx.allFnTab[kernel.pName] = kernel
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   # Kernel params: first-seen over own refs (none) then callee subtrees.
   doAssert paramNames(kernel) == @[
@@ -200,7 +195,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Shadowing local (coordBuiltin == gbkNone) is NOT collected
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let shadow = plainIdent("thread_position_in_grid")
   doAssert shadow.symbol.coordBuiltin == gbkNone,
     "a plain local must carry no coordinate kind"
@@ -208,7 +203,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   doAssert fn.pParams.len == 0,
     "a local shadowing a canonical name must not produce a builtin param"
@@ -217,7 +212,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. Recursion (a device fn calling itself) terminates
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var fn = makeProc("rec", GpuAst(kind: gpuBlock))
   fn.pBody = blockStmts(
     builtinIdent("thread_index_in_threadgroup", gbkThreadIndexInThreadgroup),
@@ -226,7 +221,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   doAssert fn.pParams.len == 1,
     "recursive fn must gain only its own body's need"
@@ -239,7 +234,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. A fn registered in both tables is rewritten once
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   # Pulled-in module-level device fns land in `allFnTab` AND `genericInsts`
   # under the same symbol, the rewrite must not double-append.
   var fn = makeProc("both",
@@ -248,7 +243,7 @@ block:
   ctx.allFnTab[fn.pName] = fn
   ctx.genericInsts[fn.pName] = fn
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   doAssert fn.pParams.len == 1,
     "builtin param must be appended once despite two table entries"
@@ -257,7 +252,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. Barrier call is not a callee
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   let barrierSym = newSymbol("threadgroup_barrier", iSym = "barrier_isym",
                              symKind = gsBuiltin)
   barrierSym.synchroBuiltin = gbkThreadgroupBarrier
@@ -270,7 +265,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  runOne(ctx)
+  registerMaterializeIndexBuiltinParams.runPassPrepared(ctx)
 
   doAssert fn.pParams.len == 1,
     "the barrier must not count as a callee need"

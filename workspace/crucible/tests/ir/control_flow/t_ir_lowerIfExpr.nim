@@ -8,7 +8,7 @@
 ## - gpuIf(ifIsExpr: false) nodes remain statements, never ternaries
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerIfExpr.nim
 
@@ -16,65 +16,48 @@ import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
-
-proc runOnNode(regProc: proc(reg: var PassRegistry) {.nimcall.}, n: var GpuAst) =
-  ## Runs one registered pass over `n` as a fn body, the public-API path.
-  var ctx = GpuContext()
-  var fn = GpuAst(kind: gpuProc,
-                  pName: GpuAst(kind: gpuIdent, symbol: newSymbol("f", iSym = "f")),
-                  pRetType: GpuType(kind: gtVoid),
-                  pBody: GpuAst(kind: gpuBlock, statements: @[n]))
-  ctx.allFnTab[fn.pName] = fn
-  var reg = PassRegistry.new()
-  regProc(reg)
-  ctx.runPasses(reg)
-  n = fn.pBody.statements[0]
+import workspace/crucible/tests/ir/ir_testutils
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. gpuIf(isExpr: true) → gpuTernary
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let cond = GpuAst(kind: gpuLit, lValue: "true", lType: GpuType(kind: gtBool))
   let thenVal = GpuAst(kind: gpuLit, lValue: "42", lType: GpuType(kind: gtInt32))
   let elseVal = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
-  var ifExpr = GpuAst(kind: gpuIf, ifIsExpr: true,
+  let ifExpr = GpuAst(kind: gpuIf, ifIsExpr: true,
                       ifCond: cond, ifThen: thenVal, ifElse: elseVal,
                       ifElifs: @[])
 
-  var fnBody = GpuAst(kind: gpuBlock, statements: @[ifExpr])
-  runOnNode(registerLowerIfExpr, fnBody)
+  let lowered = registerLowerIfExpr.runPassOnNode(ifExpr)[0]
 
-  doAssert fnBody.statements.len == 1
-  let tern = fnBody.statements[0]
-  doAssert tern.kind == gpuTernary, "gpuIf(isExpr:true) should become gpuTernary, got " & $tern.kind
-  doAssert tern.tCond.lValue == "true"
-  doAssert tern.tThen.lValue == "42"
-  doAssert tern.tElse.kind != gpuDiscard
-  doAssert tern.tElse.lValue == "0"
+  doAssert lowered.kind == gpuTernary, "gpuIf(isExpr:true) should become gpuTernary, got " & $lowered.kind
+  doAssert lowered.tCond.lValue == "true"
+  doAssert lowered.tThen.lValue == "42"
+  doAssert lowered.tElse.kind != gpuDiscard
+  doAssert lowered.tElse.lValue == "0"
   echo "  OK — gpuIf(isExpr: true) lowered to gpuTernary"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 2. gpuIf(ifIsExpr: false) is NOT converted
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let cond = GpuAst(kind: gpuLit, lValue: "true", lType: GpuType(kind: gtBool))
   let thenVal = GpuAst(kind: gpuLit, lValue: "42", lType: GpuType(kind: gtInt32))
-  var stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
+  let stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
                       ifCond: cond, ifThen: thenVal, ifElse: GpuAst(kind: gpuDiscard),
                       ifElifs: @[])
 
-  var fnBody = GpuAst(kind: gpuBlock, statements: @[stmtIf])
-  runOnNode(registerLowerIfExpr, fnBody)
+  let lowered = registerLowerIfExpr.runPassOnNode(stmtIf)[0]
 
-  let stmt = fnBody.statements[0]
-  doAssert stmt.kind == gpuIf, "gpuIf(ifIsExpr:false) should remain gpuIf, got " & $stmt.kind
-  doAssert stmt.ifIsExpr == false
+  doAssert lowered.kind == gpuIf, "gpuIf(ifIsExpr:false) should remain gpuIf, got " & $lowered.kind
+  doAssert lowered.ifIsExpr == false
   echo "  OK — gpuIf(ifIsExpr: false) is NOT converted"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 3. Nested gpuIf(isExpr: true) (elif chains)
 # ═══════════════════════════════════════════════════════════════════════
-block:
+static:
   let cond1 = GpuAst(kind: gpuLit, lValue: "true", lType: GpuType(kind: gtBool))
   let v1 = GpuAst(kind: gpuLit, lValue: "10", lType: GpuType(kind: gtInt32))
   let cond2 = GpuAst(kind: gpuLit, lValue: "false", lType: GpuType(kind: gtBool))
@@ -84,22 +67,16 @@ block:
   let innerIf = GpuAst(kind: gpuIf, ifIsExpr: true,
                        ifCond: cond2, ifThen: v2, ifElse: v3,
                        ifElifs: @[])
-  var outerIf = GpuAst(kind: gpuIf, ifIsExpr: true,
+  let outerIf = GpuAst(kind: gpuIf, ifIsExpr: true,
                        ifCond: cond1, ifThen: v1, ifElse: innerIf,
                        ifElifs: @[])
 
-  var fnBody = GpuAst(kind: gpuBlock, statements: @[outerIf])
-  runOnNode(registerLowerIfExpr, fnBody)
+  let lowered = registerLowerIfExpr.runPassOnNode(outerIf)[0]
 
-  let outer = fnBody.statements[0]
-  doAssert outer.kind == gpuTernary, "Outer should be ternary"
-  doAssert outer.tThen.lValue == "10"
-  doAssert outer.tElse.kind == gpuTernary, "Inner should also be ternary"
-  doAssert outer.tElse.tCond.lValue == "false"
-  doAssert outer.tElse.tThen.lValue == "20"
-  doAssert outer.tElse.tElse.lValue == "30"
+  doAssert lowered.kind == gpuTernary, "Outer should be ternary"
+  doAssert lowered.tThen.lValue == "10"
+  doAssert lowered.tElse.kind == gpuTernary, "Inner should also be ternary"
+  doAssert lowered.tElse.tCond.lValue == "false"
+  doAssert lowered.tElse.tThen.lValue == "20"
+  doAssert lowered.tElse.tElse.lValue == "30"
   echo "  OK — nested gpuIf(isExpr: true) lowered to nested gpuTernary"
-
-# ═══════════════════════════════════════════════════════════════════════
-echo ""
-echo "  All lowerIfExpr tests passed."
