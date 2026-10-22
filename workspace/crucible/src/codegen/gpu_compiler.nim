@@ -17,7 +17,7 @@ import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_msl
-import ./frontend/nim_to_gpu
+import ./frontend/nim_to_crucible
 import ./targets/lang_utils
 import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
@@ -79,11 +79,11 @@ func registerCommonPasses*(reg: var PassRegistry) =
   reg.registerOptimizationPasses()
   reg.registerValidationPostPasses()
 
-macro toGpuAst*(body: typed): GpuAst =
+macro toCrucibleAst*(body: typed): GpuAst =
   ## Converts GPU code to IR (GpuAst) without running any passes.
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
-  var gpuAst = ctx.toGpuAst(typeReg, body)
+  var gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   # Clear scope tables before newLit (can't serialize seq/Symbol refs)
   # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
@@ -96,7 +96,7 @@ macro codegenCuda(body: typed): string =
   reg.registerCommonPasses()
   reg.registerCudaLoweringPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
@@ -117,7 +117,7 @@ macro codegenOpenCL(body: typed): string =
   reg.registerCommonPasses()
   reg.registerOpenclLoweringPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
@@ -139,7 +139,7 @@ macro codegenGLSL(body: typed): string =
   reg.registerGlslLoweringPasses()
   reg.registerGlslValidationPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
@@ -161,7 +161,7 @@ macro codegenWebGpu(body: typed): string =
   reg.registerCommonPasses()
   reg.registerWgslLoweringPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = false)
   runPasses(ctx, reg)
@@ -182,7 +182,7 @@ macro codegenMetal(body: typed): string =
   reg.registerCommonPasses()
   reg.registerMetalLoweringPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)

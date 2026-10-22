@@ -58,7 +58,7 @@ flowchart LR
     end
 
     subgraph Frontend
-        F["frontend/nim_to_gpu.nim<br/>pure 1:1 AST to IR translator"]
+        F["frontend/nim_to_crucible.nim<br/>pure 1:1 AST to IR translator"]
     end
 
     subgraph IR
@@ -127,10 +127,10 @@ src/
                                     backend codegen macro. `toGpuAst` emits the IR
                                     without running passes.
     frontend/
-      nim_to_gpu.nim                Frontend: walks the typed Nim AST, emits
+      nim_to_crucible.nim                Frontend: walks the typed Nim AST, emits
                                     GpuAst 1:1. Pure translator, no semantic
                                     rewriting.
-      nim_to_gpu_type_resolvers.nim Type and overload resolution during IR
+      nim_type_resolvers.nim Type and overload resolution during IR
                                     construction.
     ir/
       gpu_ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
@@ -203,7 +203,7 @@ src/
 
 ## Data-flow walkthrough
 
-1. **Frontend (`frontend/nim_to_gpu.nim`).** The user writes a `cuda:`, `opencl:`, `vulkan:`, `webgpu:`, or `metal:` block.
+1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `vulkan:`, `webgpu:`, or `metal:` block.
    The corresponding macro in `gpu_compiler.nim` calls `ctx.toGpuAst(typeReg, body)`.
 It walks the typed Nim AST and emits a `GpuAst` 1:1, one IR node per AST construct, no semantic rewriting.
 Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `gpu_ast_datatypes.nim`).

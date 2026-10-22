@@ -9,6 +9,7 @@
 
 import std/[strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/tests/ir/ir_testutils
 
 proc countExprBlocks(n: GpuAst): int =
   if n == nil:
@@ -38,7 +39,7 @@ proc isBareIndexLhs(n: GpuAst): bool =
 
 # ── 1. Frontend emission: compound assignments enter as gpuAssign(aOp) ──
 static:
-  let ir = toGpuAst:
+  let ir = toCrucibleAst:
     proc compoundKernel(C: ptr UncheckedArray[int32]) {.global.} =
       C[0] += 5
       C[0] *= 2
@@ -58,7 +59,7 @@ static:
 
 # ── 2. Hazard negatives: plain assigns and comparisons pass through untouched ──
 static:
-  let ir = toGpuAst:
+  let ir = toCrucibleAst:
     proc negativeKernel(C: ptr UncheckedArray[int32]) {.global.} =
       C[0] = 3
       let y = C[1] + 2
@@ -78,20 +79,16 @@ static:
 
 # ── 3. Full common pipeline: aOp survives to the codegen boundary ──
 static:
-  let ir = toGpuAst:
+  let ir = toCrucibleAst:
     proc compoundKernel(C: ptr UncheckedArray[int32]) {.global.} =
       for i in 0 ..< 4:
         C[i] += 5
         C[i] *= 2
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
   let fn = ir.statements[0]
   doAssert fn.kind == gpuProc, "expected gpuProc, got " & $fn.kind
-  ctx.allFnTab[fn.pName] = fn
-  runPasses(ctx, reg)
+  let lowered = registerCommonPasses.runPass(fn)
   var assigns: seq[GpuAst]
-  fn.pBody.collectAssigns(assigns)
+  lowered.pBody.collectAssigns(assigns)
   doAssert assigns.len == 2,
     "the two compound assignments must reach the codegen boundary, got: " & $assigns.len
   doAssert assigns[0].aOp == "+=", "aOp must survive the pipeline, got: " & assigns[0].aOp
@@ -126,15 +123,11 @@ static:
                   pRetType: GpuType(kind: gtVoid),
                   pParams: @[],
                   pBody: body)
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  ctx.allFnTab[fn.pName] = fn
-  runPasses(ctx, reg)
-  doAssert countExprBlocks(fn.pBody) == 0,
-    "the block-expression LHS must be fully blitted, leftover: " & $countExprBlocks(fn.pBody)
+  let lowered = registerCommonPasses.runPass(fn)
+  doAssert countExprBlocks(lowered.pBody) == 0,
+    "the block-expression LHS must be fully blitted, leftover: " & $countExprBlocks(lowered.pBody)
   var assigns: seq[GpuAst]
-  fn.pBody.collectAssigns(assigns)
+  lowered.pBody.collectAssigns(assigns)
   var compound: GpuAst = nil
   for a in assigns:
     if a.aOp == "+=":
@@ -147,4 +140,4 @@ static:
   echo "  OK — block-expression LHS: tail kept as lvalue, aOp preserved"
 
 echo ""
-echo "  All compound-assign pipeline tests passed."
+echo "  All compound assignment pipeline tests passed."

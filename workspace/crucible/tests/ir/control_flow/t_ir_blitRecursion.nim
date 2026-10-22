@@ -35,7 +35,7 @@ static:
   # Two levels of nested 2-statement expression blocks: blitting the outer
   # block creates a scope block that CONTAINS the inner block, so PASS 3 must
   # descend into the newly created preamble to blit it (and the inner one).
-  let ir = toGpuAst:
+  let ir = toCrucibleAst:
     proc nestedKernel(x: int32): int32 {.device.} =
       let a = block:
         let b = block:

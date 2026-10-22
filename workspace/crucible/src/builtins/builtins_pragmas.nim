@@ -6,17 +6,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-#import std / [macros, strutils, sequtils, options, sugar, tables, strformat, hashes, sets]
-#
-#import ./gpu_ast_datatypes
-#import ./backends/backends
-#import ./nim_to_gpu
-#
-#export gpu_ast_datatypes
-
-## Pragma templates for the GPU DSL. The address-space pragmas (`smem`,
-## `const_mem`) set a var declaration's address space.
-## Unannotated vars default to per-thread register memory (`asRMEM`).
 template cudaName*(s: string): untyped {.pragma.}
 
 template global*() {.pragma.}

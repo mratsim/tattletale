@@ -7,7 +7,6 @@
 
 import std / [macros, sequtils, sets, strutils, tables]
 import ../ir/gpu_ast_datatypes
-import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 

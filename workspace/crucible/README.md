@@ -28,7 +28,7 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 ## Architecture in brief
 
-- **One IR, five backends.** [`src/codegen/frontend/nim_to_gpu.nim`](src/codegen/frontend/nim_to_gpu.nim)
+- **One IR, five backends.** [`src/codegen/frontend/nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim)
   lowers Nim AST to a backend-neutral IR.
   Each target under [`src/codegen/targets/`](src/codegen/targets/) prints it:
   `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
@@ -136,8 +136,8 @@ workspace/crucible/
     codegen/
       gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:` macros
       frontend/
-        nim_to_gpu.nim            Frontend: pure 1:1 Nim AST -> IR translator
-        nim_to_gpu_type_resolvers.nim  Type/overload resolution
+        nim_to_crucible.nim            Frontend: pure 1:1 Nim AST -> IR translator
+        nim_type_resolvers.nim  Type/overload resolution
       ir/
         gpu_ast_datatypes.nim     IR types: GpuAst, GpuType, GpuContext, Symbol, fnTable
         gpu_ast_type_resolvers.nim  IR type helpers

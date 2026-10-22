@@ -30,7 +30,7 @@ proc findBinOp(n: GpuAst): GpuAst =
       return found
 
 static:
-  let ir = toGpuAst:
+  let ir = toCrucibleAst:
     proc probeKernel(x: int32) {.device.} =
       let y = foldDo:
         acc * it_a

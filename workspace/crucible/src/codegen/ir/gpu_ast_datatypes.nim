@@ -328,7 +328,7 @@ type
     ## NOTE: `globals` stores params as written in the Nim source, WebGPU-local rewrites must not touch it
     globals*: OrderedTable[string, GpuParam] ## `{.smem.}`-lifted, manually defined and `storage` buffer globals, keys are symbol strings
     sigTab*: Table[string, GpuAst] ## Map the `nnkSym.signatureHash` to a `GpuAst` of kind `GpuIdent`
-    currentScope*: GpuAst  ## Current scope block for variable registration during toGpuAst
+    currentScope*: GpuAst  ## Current scope block for variable registration during toCrucibleAst
     currentScopeSyms*: seq[(string, Symbol)]  ## Current scope's symbol table (parallel to currentScope)
     scopeSymsStack*: seq[seq[(string, Symbol)]]  ## Stack of parent scope symbol tables for push/pop
     genSymCount*: int ## Counter for generated identifiers
