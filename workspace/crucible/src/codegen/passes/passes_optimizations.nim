@@ -32,19 +32,15 @@ func registerMaterializePassByRefArgs*(reg: var PassRegistry) =
   )
 
 func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
-  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
-    "Folds Nim max/min calls into backend builtin functions",
-    dependsOn = @[],
-    run = foldMaxMinToBuiltins
-  )
-
-func registerOptimizationPasses*(reg: var PassRegistry) =
   ## After mangleNames, so constructed builtin calls keep their plain name
   reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
     "Folds ternary max/min idioms to backend-native max/min builtins",
     dependsOn = @["mangleNames"],
     run = foldMaxMinToBuiltins
   )
+
+func registerOptimizationPasses*(reg: var PassRegistry) =
+  reg.registerFoldMaxMinToBuiltins()
   # turn off with -d:TTT_CrucibleDisableConstFolding, e.g. for size sweeps
   when not defined(TTT_CrucibleDisableConstFolding):
     reg.register("foldConstantShells", pkTransform, phaseMain,

@@ -718,9 +718,9 @@ func containsPtrDeep(t: GpuType): bool =
 
 type KernelParamLeaf = object
   ## One signature entry of an expanded struct kernel param
-  name*: string
-  typ*: GpuType
-  isBuffer*: bool
+  name: string
+  typ: GpuType
+  isBuffer: bool
 
 proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
   ## Metal/WebGPU cannot take struct-with-pointer kernel args, the signature
@@ -799,7 +799,7 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
 # any array-typed field passed by addr rewrites identically
 
 type
-  ArraySpanParamKind* = enum
+  ArraySpanParamKind = enum
     aspNone       ## not an array/span param
     aspArrayPtr   ## `var array[N, T]`, element pointer after normalization
     aspSpan       ## `var openArray[T]`, span (ptr + len) after normalization
