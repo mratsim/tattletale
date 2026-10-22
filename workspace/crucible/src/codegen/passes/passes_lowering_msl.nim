@@ -27,7 +27,7 @@ import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
-proc registerMetalLoweringPasses*(reg: var PassRegistry) =
+func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerExpandStructKernelParams()
   reg.register("smemArena", pkTransform, phaseMain,
@@ -47,7 +47,7 @@ proc registerMetalLoweringPasses*(reg: var PassRegistry) =
 # Metal printer helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-proc variantSuffix*(spaces: seq[AddressSpace]): string =
+func variantSuffix*(spaces: seq[AddressSpace]): string =
   ## suffix of a space tuple, e.g. `_smem`, `_devicesmem`
   result = "_"
   for space in spaces:

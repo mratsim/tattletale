@@ -37,7 +37,7 @@ proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
 # Raw statement rendering
 # ═══════════════════════════════════════════════════════════════════════
 
-proc genAsmStmt*(ast: GpuAst): string =
+func genAsmStmt*(ast: GpuAst): string =
   ## Substitute the TAG_IDENT_IN_ASM<n> placeholders with the operand
   ## symbols' display names.
   ## Backtick identifiers in `asm` resolve to Nim symbols.
@@ -73,12 +73,12 @@ proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
 # IR predicates and farming
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isSelfTerminating*(el: GpuAst): bool =
+func isSelfTerminating*(el: GpuAst): bool =
   ## True when the statement renders its own terminator and the gpuBlock loop
   ## must not append `;` (nested blocks and `gpuEmit` raw text).
   result = el.kind in {gpuBlock, gpuEmit}
 
-proc isGlobal*(fn: GpuAst): bool =
+func isGlobal*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
   result = attGlobal in fn.pAttributes
 

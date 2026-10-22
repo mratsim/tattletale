@@ -26,7 +26,7 @@ import ./passes_legalizations
 # Registration
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc registerPreprocessingPasses*(reg: var PassRegistry) =
+func registerPreprocessingPasses*(reg: var PassRegistry) =
   reg.register("rewriteIndexDeref", pkTransform, phaseMain,
     "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
     dependsOn = @[],
@@ -74,7 +74,7 @@ proc registerPreprocessingPasses*(reg: var PassRegistry) =
 
 
 
-proc isGlobalFn*(fn: GpuAst): bool =
+func isGlobalFn*(fn: GpuAst): bool =
   doAssert fn.kind == gpuProc
   result = attGlobal in fn.pAttributes
 
@@ -118,7 +118,7 @@ proc genMemcpyCall(lhs, rhs: GpuAst, sizeExpr: GpuAst): GpuAst =
   call.cArgs = @[lhs, rhs, sizeExpr]
   result = call
 
-proc genSizeofCall*(ctx: var GpuContext, expr: GpuAst): GpuAst =
+func genSizeofCall*(ctx: var GpuContext, expr: GpuAst): GpuAst =
   let sizeSym = newSymbol("__builtin_sizeof", iSym = "__builtin_sizeof", symKind = gsProc)
   let sizeIdent = GpuAst(kind: gpuIdent, symbol: sizeSym)
   var call = GpuAst(kind: gpuCall)
@@ -242,7 +242,7 @@ type
     of tdkGeneric:
       tdGenericName*: string         # base name
       tdArgs*: seq[TypeDesc]
-proc gpuTypeToDesc*(t: GpuType): TypeDesc =
+func gpuTypeToDesc*(t: GpuType): TypeDesc =
   if t.isNil:
     return TypeDesc(kind: tdkUnresolved)
 
@@ -364,7 +364,7 @@ proc getTypeDesc*(ctx: var GpuContext, arg: GpuAst): TypeDesc =
 # mangleNames
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc mangleNamesImpl*(ctx: var GpuContext) =
+func mangleNamesImpl*(ctx: var GpuContext) =
   ## Walk all functions in fnTable and apply NamePolicy per function:
   ## - fkGenericInst → npHashSuffix (append 7-char base58 of hash)
   ## - fkDefined + non-overloaded → npClean (no suffix — C++ mangling handles it)
@@ -428,7 +428,7 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
 # Shared helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
+func rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
   ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
   ## clones the LHS (legalization mutates it in place, the sides must not alias)
   doAssert n.kind == gpuBinOp
@@ -452,7 +452,7 @@ proc rewriteCompoundAssignmentImpl*(n: GpuAst): GpuAst =
 # gtPtr carries no address space, the Metal and WebGPU printers resolve it
 # via value dataflow with an asRMEM fallback.
 
-proc ptrFieldNames*(t: GpuType): seq[string] =
+func ptrFieldNames*(t: GpuType): seq[string] =
   ## Pointer field names of a struct type, in declaration order.
   case t.kind
   of gtObject, gtGenericInst:

@@ -42,7 +42,7 @@ proc walk*(body: var GpuAst, pre: proc(n: var GpuAst): void): void =
 
 # ─── Registration ──
 
-proc register*(reg: var PassRegistry, name: string, kind: PassKind,
+func register*(reg: var PassRegistry, name: string, kind: PassKind,
                phase: PassPhase, description: string,
                run: proc(ctx: var GpuContext): void {.nimcall.},
                dependsOn: seq[string] = @[]) =

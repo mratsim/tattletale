@@ -474,35 +474,35 @@ const TAG_IDENT_IN_ASM* = "\x01"
   ## The printers substitute the symbol's (mangled) display name at codegen time.
   ## A control byte is used so the marker can never collide with valid asm text.
 
-proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
+func newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
   new(result)
   result.name = name
   result.iSym = if iSym == "": name else: iSym
   result.typ = typ
   result.symKind = symKind
 
-proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
+func newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   var sym = newSymbol(ident, symKind = symKind)
   result = GpuAst(kind: gpuIdent, symbol: sym)
 
-proc scopeAdd*(scope: var seq[(string, Symbol)]; name: string; sym: Symbol) =
+func scopeAdd*(scope: var seq[(string, Symbol)], name: string, sym: Symbol) =
   ## Add a name->Symbol mapping to a scope table (seq-based for newLit compat).
   scope.add((name, sym))
 
-proc scopeHas*(scope: seq[(string, Symbol)]; name: string): bool =
+func scopeHas*(scope: seq[(string, Symbol)], name: string): bool =
   ## Check if a name exists in a scope table.
   for (n, _) in scope:
     if n == name:
       return true
 
-proc scopeGet*(scope: seq[(string, Symbol)]; name: string): Symbol =
+func scopeGet*(scope: seq[(string, Symbol)], name: string): Symbol =
   ## Look up a name in a scope table. Raises if not found.
   for (n, s) in scope:
     if n == name:
       return s
   raiseAssert "Scope lookup failed: '" & name & "' not found"
 
-proc clone*(typ: GpuType): GpuType =
+func clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
   result = GpuType(kind: typ.kind)
   case result.kind
@@ -529,7 +529,7 @@ proc clone*(typ: GpuType): GpuType =
       result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   else: discard
 
-proc clone*(ast: GpuAst): GpuAst =
+func clone*(ast: GpuAst): GpuAst =
   if ast.isNil: return nil
   case ast.kind
   of gpuDiscard: result = GpuAst(kind: gpuDiscard)
@@ -693,7 +693,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuComment)
     result.comment = ast.comment
 
-proc hash*(t: GpuType): Hash =
+func hash*(t: GpuType): Hash =
   var h = 0
   h = h !& hash(t.kind)
   case t.kind
@@ -722,7 +722,7 @@ proc hash*(t: GpuType): Hash =
   else: discard
   result = !$ h
 
-proc hash*(n: GpuAst): Hash =
+func hash*(n: GpuAst): Hash =
   doAssert n.kind == gpuIdent, "Cannot hash a value other than `gpuIdents`! Input is: " & $n.kind
   var h = 0
   if n.symbol != nil:
@@ -807,7 +807,7 @@ proc `==`*(a, b: GpuProcSignature): bool =
       let bp = b.params[i]
       result = result and (ap == bp)
 
-proc len*(ast: GpuAst): int =
+func len*(ast: GpuAst): int =
   case ast.kind
   of gpuProc:      1
   of gpuCall:      1 + ast.cArgs.len
@@ -1179,7 +1179,7 @@ func isLargeStruct*(t: GpuType): bool =
   else:
     result = false
 
-proc ident*(n: GpuAst): string =
+func ident*(n: GpuAst): string =
   ## Returns the associated identifier (string) of the given symbol. The input
   ## must be a `gpuIdent`
   doAssert n.kind == gpuIdent, "The input is not a `gpuIdent`, but a " & $n.kind
@@ -1194,7 +1194,7 @@ template withoutSemicolon*(ctx: var GpuContext, body: untyped): untyped =
   else:
     body
 
-proc getInnerArrayLengths*(t: GpuType): string =
+func getInnerArrayLengths*(t: GpuType): string =
   ## Returns the lengths of the inner array types for a nested array.
   case t.kind
   of gtArray:
@@ -1235,7 +1235,7 @@ func mangledHashName*(name, iSym: string): string =
     hashVal = 1
   result = name & "_" & shortHash(hashVal)
 
-proc gpuTypeToShortString*(t: GpuType): string =
+func gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.
   case t.kind
   of gtUint8:   result = "u8"

@@ -30,7 +30,7 @@ import ./passes_preprocessing
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerNormalizationPasses*(reg: var PassRegistry) =
+func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.register("lowerIfExpr", pkTransform, phaseEarly,
     "Converts gpuIf(isExpr:true) to gpuTernary",
     run = proc(ctx: var GpuContext): void =
@@ -130,7 +130,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
 # lowerIfExpr
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerIfExprImpl*(n: var GpuAst) =
+func lowerIfExprImpl*(n: var GpuAst) =
   ## Backends emit `cond ? then : else` from the lowered gpuTernary
   case n.kind
   of gpuIf:
@@ -230,7 +230,7 @@ proc maybePatchFnName(n: var GpuAst) =
   of "..": patch(n, "range")
   else: discard
 
-proc mapOperatorsImpl*(n: var GpuAst) =
+func mapOperatorsImpl*(n: var GpuAst) =
   ## Only gsProc idents, gpuBinOp operator symbols are valid C++ as-is
   case n.kind
   of gpuIdent:
@@ -316,7 +316,7 @@ proc mapOperatorsImpl*(n: var GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 
-proc filterPragmasImpl*(n: var GpuAst) =
+func filterPragmasImpl*(n: var GpuAst) =
   ## Nim-specific pragmas drop, GPU-meaningful ones populate pAttributes
   if n.kind != gpuProc:
     for child in n.mitems:
@@ -448,7 +448,7 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
 # deEmbedForRangeAdjustment
 # ═══════════════════════════════════════════════════════════════════════
 
-proc deEmbedForRangeAdjustmentImpl*(n: var GpuAst) =
+func deEmbedForRangeAdjustmentImpl*(n: var GpuAst) =
   ## Resolves embedded +1 adjustments left by Slice/HSlice object ranges
   case n.kind
   of gpuFor:

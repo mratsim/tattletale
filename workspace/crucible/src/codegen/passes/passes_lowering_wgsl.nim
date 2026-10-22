@@ -36,7 +36,7 @@ const WgslReserved* = [
   "fragment", "type"
 ].toHashSet()
 
-proc registerWgslLoweringPasses*(reg: var PassRegistry) =
+func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = false)
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
@@ -105,7 +105,7 @@ proc registerWgslLoweringPasses*(reg: var PassRegistry) =
 # WGSL printer helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-proc shortAddrSpace*(addrSpace: AddressSpace): string =
+func shortAddrSpace*(addrSpace: AddressSpace): string =
   case addrSpace
   of asDevice: "s"
   of asConstant: "u"
@@ -154,7 +154,7 @@ proc determineIdent*(arg: GpuAst): GpuAst =
 # Bool globals to i32 storage
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerPatchBoolToI32*(reg: var PassRegistry) =
+func registerPatchBoolToI32*(reg: var PassRegistry) =
   reg.register("patchBoolToI32", pkTransform, phaseMain,
     "Patches bool globals to i32 storage, conv nodes translate loads and stores",
     dependsOn = @["makeCodeValid"],
@@ -201,7 +201,7 @@ proc patchBoolToI32(ctx: var GpuContext) =
 # Forward declarations consumed by wgsl_lang.preprocess
 # ═══════════════════════════════════════════════════════════════════════
 
-proc patchTypeImpl*(t: GpuType): GpuType
+func patchTypeImpl*(t: GpuType): GpuType
 proc patchSymbolImpl*(n: GpuAst): GpuAst
 proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
 proc makeFnGeneric*(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst
@@ -211,7 +211,7 @@ proc getGenericArguments*(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuPar
 # Address-of injection
 # ═══════════════════════════════════════════════════════════════════════
 
-proc injectAddressOfImpl*(ctx: var GpuContext, n: var GpuAst) =
+func injectAddressOfImpl*(ctx: var GpuContext, n: var GpuAst) =
   ## Replaces storage-buffer idents with `gpuAddr(ident)` in global fns.
   ## Also handles bool patching: bool globals are wrapped in gpuConv(expr, gtBool).
   case n.kind
@@ -232,7 +232,7 @@ proc injectAddressOfImpl*(ctx: var GpuContext, n: var GpuAst) =
 # Constant-var pulling
 # ═══════════════════════════════════════════════════════════════════════
 
-proc pullConstantPragmaVarsImpl*(ctx: var GpuContext, blk: var GpuAst) =
+func pullConstantPragmaVarsImpl*(ctx: var GpuContext, blk: var GpuAst) =
   ## Filters out `var foo {.const_mem.}: dtype` from global blocks and adds to globals.
   doAssert blk.kind == gpuBlock
   var i = 0
@@ -250,7 +250,7 @@ proc pullConstantPragmaVarsImpl*(ctx: var GpuContext, blk: var GpuAst) =
 # Struct pointer-field stripping
 # ═══════════════════════════════════════════════════════════════════════
 
-proc removeStructPointerFieldsImpl*(blk: var GpuAst) =
+func removeStructPointerFieldsImpl*(blk: var GpuAst) =
   ## Removes ptr fields from struct definitions (WGSL limitation).
   doAssert blk.kind == gpuBlock
   for typ in blk.mitems:
@@ -351,7 +351,7 @@ proc makeCodeValidImpl*(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
 
-proc checkCodeValidImpl*(ctx: var GpuContext, n: GpuAst) =
+func checkCodeValidImpl*(ctx: var GpuContext, n: GpuAst) =
   ## Checks WGSL validity constraints.
   case n.kind
   of gpuVar:
@@ -362,7 +362,7 @@ proc checkCodeValidImpl*(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.checkCodeValidImpl(ch)
 
-proc updateSymsInGlobalsImpl*(ctx: var GpuContext, n: GpuAst) =
+func updateSymsInGlobalsImpl*(ctx: var GpuContext, n: GpuAst) =
   ## Update symbols in global functions to reflect symbol kind/mutability.
   case n.kind
   of gpuIdent:
@@ -488,7 +488,7 @@ proc patchSymbolImpl*(n: GpuAst): GpuAst =
   if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
     result.symbol.typ = patchTypeImpl(result.symbol.typ)
 
-proc patchTypeImpl*(t: GpuType): GpuType =
+func patchTypeImpl*(t: GpuType): GpuType =
   result = t
   if result.kind == gtBool:
     result.kind = gtInt32

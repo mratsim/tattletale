@@ -15,5 +15,5 @@ export pass_datatypes
 # Default pipeline factory
 # ═══════════════════════════════════════════════════════════════════
 
-proc new*(_: typedesc[PassRegistry]): PassRegistry =
+func new*(_: typedesc[PassRegistry]): PassRegistry =
   PassRegistry(passes: @[], donePasses: initHashSet[string]())

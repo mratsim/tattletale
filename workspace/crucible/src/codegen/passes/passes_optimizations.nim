@@ -25,7 +25,7 @@ import ./pass_datatypes
 # Registration
 # ═══════════════════════════════════════════════════════════════════
 
-proc registerOptimizationPasses*(reg: var PassRegistry) =
+func registerOptimizationPasses*(reg: var PassRegistry) =
   ## After mangleNames, so constructed builtin calls keep their plain name
   reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
     "Folds ternary max/min idioms to backend-native max/min builtins",
@@ -45,7 +45,7 @@ proc registerOptimizationPasses*(reg: var PassRegistry) =
 # Pass-by-ref materialization
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isLvalue*(n: GpuAst): bool =
+func isLvalue*(n: GpuAst): bool =
   case n.kind
   of gpuIdent: true
   of gpuIndex: true
@@ -82,7 +82,7 @@ const
                         gtUint64, gtInt64, gtFloat32, gtFloat64, gtFloat16,
                         gtBf16, gtSize_t}
 
-proc isBasicNumeric*(t: GpuType): bool =
+func isBasicNumeric*(t: GpuType): bool =
   not t.isNil and t.kind in BasicNumericKinds
 
 proc sameExpr(a, b: GpuAst): bool =

@@ -11,7 +11,7 @@ import std/[macros, tables]
 import ./gpu_ast_datatypes
 import ./gpu_type_constructors
 
-proc getPointeeKind*(t: GpuType): GpuTypeKind =
+func getPointeeKind*(t: GpuType): GpuTypeKind =
   ## Scalar kind at the end of a pointer/array/UA chain,
   ## gtInvalid when the type is unknown.
   if t.isNil:
@@ -268,7 +268,7 @@ proc getLoweringExprType*(n: GpuAst): GpuType =
     stderr.writeLine "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
       "; assuming gtInt32 for span index/pointer arithmetic"
 
-proc getStructType*(n: GpuAst): GpuType =
+func getStructType*(n: GpuAst): GpuType =
   ## Given an ident, return the struct type or void if not a struct.
   doAssert n.kind in [gpuIdent, gpuDeref]
   var p = n
@@ -280,7 +280,7 @@ proc getStructType*(n: GpuAst): GpuType =
              p.symbol.typ
            else: GpuType(kind: gtVoid)
 
-proc containsKind*(t: GpuType, kind: GpuTypeKind): bool =
+func containsKind*(t: GpuType, kind: GpuTypeKind): bool =
   ## True if the type tree contains `kind` somewhere.
   case t.kind
   of gtPtr:

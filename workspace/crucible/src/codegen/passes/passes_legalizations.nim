@@ -28,7 +28,7 @@ import ./pass_datatypes
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerLegalizationPasses*(reg: var PassRegistry) =
+func registerLegalizationPasses*(reg: var PassRegistry) =
   reg.register("ensureBlock", pkTransform, phaseEarly,
     "Wraps non-block bodies in gpuBlock",
     proc(ctx: var GpuContext): void =

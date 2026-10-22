@@ -16,7 +16,7 @@ import ../../builtins/builtins_gpu_types
 #  Generic type name utilities
 # ═══════════════════════════════════════════════════════════════════════
 
-proc unpackGenericInst*(t: NimNode): NimNode =
+func unpackGenericInst*(t: NimNode): NimNode =
   let tKind = t.typeKind
   if tKind == ntyGenericInst:
     let impl = t.getTypeImpl()
@@ -30,7 +30,7 @@ proc unpackGenericInst*(t: NimNode): NimNode =
   else:
     result = t
 
-proc toGpuTypeKind*(t: NimNode): GpuTypeKind =
+func toGpuTypeKind*(t: NimNode): GpuTypeKind =
   result = t.unpackGenericInst().typeKind.toGpuTypeKind()
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -63,7 +63,7 @@ proc evalConstInt(n: NimNode): int =
   else:
     error "Unsupported node in array length: " & n.treerepr
 
-proc resolveArrayLength*(n: NimNode): int =
+func resolveArrayLength*(n: NimNode): int =
   ## `n` must be `getTypeInst()` output, idents are unsupported.
   result = evalConstInt(n[1])
 
@@ -77,7 +77,7 @@ proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType
 proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): GpuType
 proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType
 proc resolveRecordFields*(reg: var TypeRegistry, node: NimNode): seq[GpuTypeField]
-proc assignTypeName*(n: NimNode, recursedSym: bool = false): string
+func assignTypeName*(n: NimNode, recursedSym: bool = false): string
 
 type
   FieldInfo = object
@@ -289,7 +289,7 @@ proc resolveInnerPointerType*(reg: var TypeRegistry, n: NimNode): GpuType =
 # ═══════════════════════════════════════════════════════════════════════
 
 
-proc assignTypeName*(n: NimNode, recursedSym: bool = false): string =
+func assignTypeName*(n: NimNode, recursedSym: bool = false): string =
   case n.kind
   of nnkIdent: result = n.strVal
   of nnkSym:

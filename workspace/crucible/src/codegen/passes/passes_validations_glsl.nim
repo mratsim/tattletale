@@ -23,7 +23,7 @@ import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
-proc registerGlslValidationPasses*(reg: var PassRegistry) =
+func registerGlslValidationPasses*(reg: var PassRegistry) =
   reg.register("validateSharedPushConstLayout", pkValidation, phaseMain,
     "Rejects multi-kernel sources whose push-constant layouts differ",
     proc(ctx: var GpuContext): void =

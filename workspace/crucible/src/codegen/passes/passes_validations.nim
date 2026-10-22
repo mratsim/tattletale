@@ -50,7 +50,7 @@ proc warnUnassigned(n: GpuAst, fnName: string): void =
   else:
     discard
 
-proc registerValidationPrePasses*(reg: var PassRegistry) =
+func registerValidationPrePasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants.
 
   reg.register("ensureNoCustomResult", pkValidation, phaseMain,
@@ -110,7 +110,7 @@ proc registerValidationPrePasses*(reg: var PassRegistry) =
             raiseAssert "fnTable entry '" & key & "' builtin should not have namePolicy assigned"
     )
 
-proc registerValidationPostPasses*(reg: var PassRegistry) =
+func registerValidationPostPasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants AFTER all transforms.
   ## Runs just before codegen.
   reg.register("ensureNoExprBlocks", pkValidation, phaseMain,

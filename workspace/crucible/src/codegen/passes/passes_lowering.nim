@@ -27,7 +27,7 @@ import ./pass_registry
 
 {.experimental: "codeReordering".}
 
-proc registerSharedLoweringPasses*(reg: var PassRegistry) =
+func registerSharedLoweringPasses*(reg: var PassRegistry) =
   ## Registers the lowering passes common to every backend
   reg.register("pruneCompileTimeParams", pkTransform, phaseMain,
     "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
@@ -557,7 +557,7 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
         params.add p
     fn.pParams = params
 
-proc registerExpandStructKernelParams*(reg: var PassRegistry) =
+func registerExpandStructKernelParams*(reg: var PassRegistry) =
   ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
   ## (GLSL pointer fields cross as 64-bit buffer device addresses)
   reg.register(
@@ -658,7 +658,7 @@ proc normalizeArraySpanBody*(body: var GpuAst, calleeKinds: Table[string, seq[Ar
     else: discard
   )
 
-proc normalizeArraySpanFn*(fn: var GpuAst, decayArrays: bool) =
+func normalizeArraySpanFn*(fn: var GpuAst, decayArrays: bool) =
   for p in fn.pParams.mitems:
     if p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
       if decayArrays:
@@ -670,7 +670,7 @@ proc normalizeArraySpanFn*(fn: var GpuAst, decayArrays: bool) =
 
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: static bool) =
+func registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: static bool) =
   ## Registers array/span param normalization.
   ##
   ## - decayArrays true: the C model, element pointers T*

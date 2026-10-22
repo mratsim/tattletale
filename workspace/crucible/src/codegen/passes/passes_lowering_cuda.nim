@@ -25,7 +25,7 @@ const CudaReserved = [
   "__global__", "__device__", "__shared__", "__constant__"
 ].toHashSet()
 
-proc registerCudaLoweringPasses*(reg: var PassRegistry) =
+func registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
