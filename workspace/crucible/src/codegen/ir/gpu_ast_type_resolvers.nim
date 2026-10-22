@@ -68,13 +68,13 @@ proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
 
 proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Type of an expression node, erroring when no type is derivable.
-  if n == nil: error "Cannot get type of nil node"
+  if n == nil: raiseAssert "Cannot get type of nil node"
   case n.kind
   of gpuIdent:
     result = n.symbol.typ
     # nil/void symbol type is a construction defect, error at the read site.
     if result.isNil or result.kind == gtVoid:
-      error "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
+      raiseAssert "gpuIdent with nil or void symbol type: Cannot determine type for blit temp in " &
         "block expression (nil/void symbol.typ on a gpuIdent is a defect — idents reaching getExprType must carry a type)"
   of gpuLit: result = n.lType
   of gpuCall: result = ctx.getFnReturnType(n.cName)
@@ -82,7 +82,7 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuBinOp:
     result = n.bType
     if result.isNil or result.kind == gtVoid:
-      error "gpuBinOp with nil or void bType: Cannot determine type for blit temp in " &
+      raiseAssert "gpuBinOp with nil or void bType: Cannot determine type for blit temp in " &
         "block expression (nil/void bType on a gpuBinOp is a defect — all construction sites must populate bType)"
   of gpuConstexpr: result = n.cType
   of gpuMaterialize: result = n.mType
@@ -92,7 +92,7 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
     if n.statements.len > 0:
       result = ctx.getExprType(n.statements[^1])
     else:
-      error "Empty block expression"
+      raiseAssert "Empty block expression"
   of gpuIndex:
     # `iArr` may be `gpuDeref(p)`, a by-ref var-array access `(*p)[i]`,
     # or a pointer-to-scalar `p[i]`. getExprType(gpuDeref) unwraps gtPtr
@@ -117,7 +117,7 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
         of gtArray: result = arrType.aTyp
         of gtUA: result = arrType.uaTo
         else:
-          error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
+          raiseAssert "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
     let dType = ctx.getExprType(n.dOf)
     if dType != nil and dType.kind == gtPtr:
@@ -133,17 +133,17 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
           result = f.typ
           break
     if result.isNil:
-      error "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
+      raiseAssert "getExprType(gpuDot): field '" & n.dField.symbol.name & "' not found in " & $n.dParent.kind
   of gpuAddr:
     result = ctx.getExprType(n.aOf)
   of gpuTernary:
     result = ctx.getExprType(n.tThen)
     if result.isNil or result.kind == gtVoid:
-      error "gpuTernary with nil or void type: Cannot determine type for blit temp in " &
+      raiseAssert "gpuTernary with nil or void type: Cannot determine type for blit temp in " &
         "block expression (gpuTernary with an untyped then-branch is a defect — " &
         "if-expr branches are single typed expressions)"
   else:
-    error "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
+    raiseAssert "getExprType: unhandled node kind " & $n.kind & ". Caller must provide type from context."
 
 proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
   ## Type of an expression node, nil when unknown.
@@ -265,7 +265,7 @@ proc getLoweringExprType*(n: GpuAst): GpuType =
     # Span ptr/len args are ints in practice, a wrong-width fallback
     # must surface when it fires.
     result = initGpuType(gtInt32)
-    warning "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
+    stderr.writeLine "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
       "; assuming gtInt32 for span index/pointer arithmetic"
 
 proc getStructType*(n: GpuAst): GpuType =

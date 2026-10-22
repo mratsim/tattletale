@@ -279,7 +279,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
           " (tail kind: " & $slot.statements[^1].kind & ")"
         if slot.statements[^1].kind == gpuBinOp:
           msg.add ", nil bType: " & $slot.statements[^1].bType.isNil
-        error msg
+        raiseAssert msg
       let blitName = "_blit_" & $ctx.genSymCount
       inc ctx.genSymCount
       let blitSym = newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal)
@@ -297,7 +297,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
       slot = blitRef
       result = @[blitDecl, scopeBlock]
     else:
-      error "Empty block expression"
+      raiseAssert "Empty block expression"
     return
   result = @[]
   case slot.kind
@@ -348,7 +348,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
         if slot.aLeft.kind == gpuIdent:
           lhsType = slot.aLeft.symbol.typ
       else:
-        error "Empty block expression as lvalue"
+        raiseAssert "Empty block expression as lvalue"
       result.add ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
       return
     result.add ctx.blitExprSlot(slot.aLeft, GpuType(kind: gtVoid), fnRetType)

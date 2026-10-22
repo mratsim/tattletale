@@ -91,6 +91,7 @@ proc registerWgslLoweringPasses*(reg: var PassRegistry) =
       for (fnIdent, fn) in ctx.fnTab.mpairs:
         ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobalFn())
   )
+  reg.registerPatchBoolToI32()
   reg.register("checkCodeValidWgsl", pkTransform, phaseMain,
     "Validates WGSL constraints after transformations",
     dependsOn = @["makeCodeValid"],
@@ -147,22 +148,53 @@ proc determineIdent*(arg: GpuAst): GpuAst =
   else:
     raiseAssert "Cannot determine ident from: " & $arg
 
-proc patchBoolToI32Impl*(ctx: var GpuContext, n: var GpuAst) =
-  ## WGSL cannot store bool, the type is patched to i32, expression uses
-  ## of patched globals get conv wrappers
+# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# Bool globals to i32 storage
+# ═══════════════════════════════════════════════════════════════════════
+
+proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
+  ## Symbols keep their bool type, storage is i32: loads wrap in conv(gtBool),
+  ## assignment right-hand sides in conv(gtInt32), the target stays bare.
   case n.kind
   of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in ctx.globals:
-      let g = ctx.globals[n.symbol.iSym]
-      if g.typ.kind == gtBool:
-        # storage is i32, expression context expects bool
-        n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
-      elif g.typ.kind == gtPtr and g.typ.to.kind == gtBool:
-        # the pointer type stays, no conversion at pointer level
-        discard
+    if n.symbol != nil and n.symbol.iSym in boolVals:
+      n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
+  of gpuDeref:
+    if n.dOf.kind == gpuIdent and n.dOf.symbol != nil and n.dOf.symbol.iSym in boolPtrs:
+      n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
+  of gpuAssign:
+    let lhs = n.aLeft.determineIdent()
+    if lhs.kind == gpuIdent and lhs.symbol != nil and
+       (lhs.symbol.iSym in boolVals or lhs.symbol.iSym in boolPtrs):
+      n.aRight = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtInt32), convExpr: n.aRight)
+    for ch in n.aRight.mitems:
+      ch.patchBoolToI32Impl(boolVals, boolPtrs)
   else:
     for ch in n.mitems:
-      ctx.patchBoolToI32Impl(ch)
+      ch.patchBoolToI32Impl(boolVals, boolPtrs)
+
+proc registerPatchBoolToI32*(reg: var PassRegistry) =
+  reg.register("patchBoolToI32", pkTransform, phaseMain,
+    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
+    dependsOn = @["makeCodeValid"],
+    run = proc(ctx: var GpuContext): void =
+      ctx.patchBoolToI32()
+  )
+
+proc patchBoolToI32(ctx: var GpuContext) =
+  var boolVals, boolPtrs: HashSet[string]
+  for iSym, g in ctx.globals.mpairs:
+    if g.typ.kind == gtBool:
+      ctx.globals[iSym].typ = GpuType(kind: gtInt32)
+      boolVals.incl iSym
+    elif g.typ.kind == gtPtr and g.typ.to.kind == gtBool:
+      ctx.globals[iSym].typ = GpuType(kind: gtPtr, to: GpuType(kind: gtInt32))
+      boolPtrs.incl iSym
+  for _, fn in ctx.fnTab.mpairs:
+    fn.patchBoolToI32Impl(boolVals, boolPtrs)
+  for blk in ctx.globalBlocks.mitems:
+    blk.patchBoolToI32Impl(boolVals, boolPtrs)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Forward declarations consumed by wgsl_lang.preprocess

@@ -57,7 +57,7 @@ proc runPasses*(ctx: var GpuContext, reg: var PassRegistry) =
   for p in reg.passes:
     for dep in p.dependsOn:
       if dep notin reg.donePasses:
-        error "\"" & p.name & "\" requires \"" & dep & "\" to run first"
+        raiseAssert "\"" & p.name & "\" requires \"" & dep & "\" to run first"
     when defined(debugPasses):
       echo "[pass] ", p.name, " (", p.phase, ")"
     p.run(ctx)

@@ -43,7 +43,7 @@ proc warnUnassigned(n: GpuAst, fnName: string): void =
               readsResult = true
           )
           if readsResult:
-            warning "result may be used before being initialized in " & fnName & ". " &
+            echo "result may be used before being initialized in " & fnName & ". " &
               "Assign to `result = ...` before reading it."
   of gpuAssign:
     discard  # nothing to warn about
@@ -60,7 +60,7 @@ proc registerValidationPrePasses*(reg: var PassRegistry) =
         var fn = ctx.allFnTab[fnKey]
         fn.pBody.walk(proc(n: var GpuAst): void =
           if n.kind == gpuVar and n.vName.ident() == "result":
-            error fn.pName.ident() & " has a custom `result` variable which shadows the implicit `result` (not allowed in GPU code)"
+            raiseAssert fn.pName.ident() & " has a custom `result` variable which shadows the implicit `result` (not allowed in GPU code)"
         )
     )
 
@@ -82,13 +82,13 @@ proc registerValidationPrePasses*(reg: var PassRegistry) =
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuIdent and n.symbol.isNil:
-              error "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+              raiseAssert "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
       for fnKey in ctx.genericInsts.keys:
         let fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuIdent and n.symbol.isNil:
-              error "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+              raiseAssert "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
     )
 
   reg.register("validateFnTable", pkValidation, phaseMain,
@@ -97,17 +97,17 @@ proc registerValidationPrePasses*(reg: var PassRegistry) =
     run = proc(ctx: var GpuContext): void =
       for key, entry in ctx.fnTable:
         if entry.ident.isNil:
-          error "fnTable entry '" & key & "' has nil ident"
+          raiseAssert "fnTable entry '" & key & "' has nil ident"
         if entry.ident.kind != gpuIdent:
-          error "fnTable entry '" & key & "' ident is not a gpuIdent, got " & $entry.ident.kind
+          raiseAssert "fnTable entry '" & key & "' ident is not a gpuIdent, got " & $entry.ident.kind
         if card(entry.kind) == 0:
-          error "fnTable entry '" & key & "' has empty kind set"
+          raiseAssert "fnTable entry '" & key & "' has empty kind set"
         if fkDefined in entry.kind or fkGenericInst in entry.kind:
           if entry.body.isNil:
-            error "fnTable entry '" & key & "' marked as defined/generic but has nil body"
+            raiseAssert "fnTable entry '" & key & "' marked as defined/generic but has nil body"
         if fkBuiltin in entry.kind:
           if entry.namePolicy != npUnassigned:
-            error "fnTable entry '" & key & "' builtin should not have namePolicy assigned"
+            raiseAssert "fnTable entry '" & key & "' builtin should not have namePolicy assigned"
     )
 
 proc registerValidationPostPasses*(reg: var PassRegistry) =
@@ -122,11 +122,11 @@ proc registerValidationPostPasses*(reg: var PassRegistry) =
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuBlock and n.isExpr:
-              error "Block expression survived to codegen in " & fn.pName.ident() & ": " & $n)
+              raiseAssert "Block expression survived to codegen in " & fn.pName.ident() & ": " & $n)
       for fnKey in ctx.genericInsts.keys:
         let fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuBlock and n.isExpr:
-              error "Block expression survived to codegen in " & fn.pName.ident() & ": " & $n)
+              raiseAssert "Block expression survived to codegen in " & fn.pName.ident() & ": " & $n)
     )
