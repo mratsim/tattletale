@@ -358,10 +358,14 @@ type
     ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]]
       ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
       ## One tuple per distinct space combination observed at a construction site, in first-seen order.
-    varAddressSpaces*: Table[string, AddressSpace]
-      ## Maps a variable symbol's iSym to its resolved address space, recorded
-      ## by the shared collection pass (Metal and WGSL). Unannotated locals are
-      ## recorded as asRMEM.
+    objFieldAddressSpaces*: Table[string, seq[AddressSpace]]
+      ## Per pointer-field address space of a variable's object instance,
+      ## keyed by variable iSym and recorded at construction sites, source
+      ## for a dot access's instance variant resolution
+    symAddressSpaces*: Table[string, AddressSpace]
+      ## Maps a symbol's iSym to its resolved storage address space, recorded
+      ## by the shared collection pass (Metal and WGSL) for params and vars.
+      ## Unannotated locals are recorded as asRMEM.
 
     generics*: HashSet[string]
       ## Set of all generic proc names we have encountered in Nim -> GpuAst. When

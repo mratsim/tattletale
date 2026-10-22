@@ -375,7 +375,7 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
           let argSpace = ctx.resolveIdentAddressSpace(argId)
           if p.addressSpace != argSpace:
             p.addressSpace = argSpace
-            ctx.varAddressSpaces[p.ident.symbol.iSym] = argSpace
+            ctx.symAddressSpaces[p.ident.symbol.iSym] = argSpace
             fn.pParams[i] = p
   of gpuVar:
     for ch in n.mitems:
@@ -383,7 +383,7 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
       let space = ctx.resolveIdentAddressSpace(rightId)
-      ctx.varAddressSpaces[n.vName.symbol.iSym] = space
+      ctx.symAddressSpaces[n.vName.symbol.iSym] = space
       # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS carries a mutability flag.
       let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
       let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
@@ -502,7 +502,7 @@ proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst =
   for i, p in result.pParams.mpairs:
     let arg = gi.args[i]
     p.addressSpace = arg.addrSpace
-    ctx.varAddressSpaces[p.ident.symbol.iSym] = arg.addrSpace
+    ctx.symAddressSpaces[p.ident.symbol.iSym] = arg.addrSpace
     if p.ident.symbol.typ.kind == gtPtr:
       p.ident.symbol.typ.mutable = arg.mutable
     p.ident = patchSymbolImpl(p.ident)
@@ -650,7 +650,7 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
       let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
       let binding = GpuAst(kind: gpuIdent, symbol: sym)
       subst[p.ident.symbol.iSym] = binding
-      ctx.varAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
+      ctx.symAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
       result.add GpuAst(kind: gpuVar, vMutable: false, vName: binding,
                         vType: typ, vInit: arg, vRequiresMemcpy: false,
                         addressSpace: asRMEM)

@@ -321,6 +321,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     if ast.addressSpace != asRMEM:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
+    if ast.vType.kind == gtPtr and ast.addressSpace == asRMEM:
+      typ = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.vInit)) & ' ' & typ
     if ast.vInit.kind == gpuObjConstr:
       # The var's decl type must match the objconstr's variant name, or MSL
       # rejects the type mismatch.
@@ -382,8 +384,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                ctx.genMetalImpl(ast.dField, 0)
 
   of gpuIndex:
-    result = ctx.genMetalImpl(ast.iArr, 0) & '[' &
-             ctx.genMetalImpl(ast.iIndex, 0) & ']'
+    let base = ctx.genMetalImpl(ast.iArr, 0)
+    let wrapped = if ast.iArr.kind in {gpuCast, gpuConv}: '(' & base & ')' else: base
+    result = wrapped & '[' & ctx.genMetalImpl(ast.iIndex, 0) & ']'
 
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
