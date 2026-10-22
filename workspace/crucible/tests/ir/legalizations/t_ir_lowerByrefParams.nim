@@ -11,6 +11,7 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering_opencl {.all.}
 
 proc runLowerByref(ctx: var GpuContext, fn: GpuAst) =
   ctx.allFnTab[fn.pName] = fn

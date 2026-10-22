@@ -103,7 +103,7 @@ func registerBlitBlockExprs*(reg: var PassRegistry) =
     )
 
 
-func registerRewriteIndexDeref*(reg: var PassRegistry) =
+func registerRewriteIndexDeref(reg: var PassRegistry) =
   reg.register("rewriteIndexDeref", pkTransform, phaseMain,
     "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
     dependsOn = @[],
@@ -138,9 +138,8 @@ proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
           false)
       if not isPtrToArray:
         n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
-      else:
-        for ch in mitems(n):
-          rewriteIndexDerefImpl(ctx, ch)
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
   else:
     for ch in mitems(n):
       rewriteIndexDerefImpl(ctx, ch)

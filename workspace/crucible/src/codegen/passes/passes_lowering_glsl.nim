@@ -54,14 +54,7 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
   # explicit in the IR for the renderer to compose `.x`.
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
   reg.registerInsertPointerDeref()
-  reg.register(
-    name = "qualifyVarParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Retypes kVar params to their pointee, unwraps their body derefs and call-site gpuAddr args",
-    dependsOn = @[],
-    run = qualifyVarParams
-  )
+  reg.registerQualifyVarParams()
 
 # ═══════════════════════════════════════════════════════════════════════
 # kVar parameter qualification

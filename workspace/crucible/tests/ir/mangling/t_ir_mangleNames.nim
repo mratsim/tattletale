@@ -13,6 +13,7 @@
 
 import std / [tables, sequtils, strutils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
 
 proc runMangle(ctx: var GpuContext) =
   var reg = PassRegistry.new()

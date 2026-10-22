@@ -32,6 +32,13 @@ import ./passes_legalizations
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
+func registerSharedLoweringPasses*(reg: var PassRegistry) =
+  ## Registers the lowering passes common to every backend
+  reg.registerPruneCompileTimeParams()
+  reg.registerLowerSpans()
+  reg.registerBlitBlockExprs()
+  reg.registerDecomposeMemcpyVars()
+
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =
   reg.register(name, pkTransform, phaseMain,
     "Renames identifiers colliding with backend reserved words: fn names, call sites, params, globals, struct fields, field accesses",
@@ -47,13 +54,20 @@ func registerInsertPointerDeref*(reg: var PassRegistry) =
     run = insertPointerDeref
   )
 
-func registerPruneCompileTimeParams*(reg: var PassRegistry) =
+func registerCollectValueAddressSpaces*(reg: var PassRegistry) =
+  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
+    "Records var and objconstr pointer-field address spaces for resolution",
+    dependsOn = @[],
+    run = collectValueAddressSpaces
+  )
+
+func registerPruneCompileTimeParams(reg: var PassRegistry) =
   reg.register("pruneCompileTimeParams", pkTransform, phaseMain,
     "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
     run = pruneCompileTimeParams
   )
 
-func registerLowerSpans*(reg: var PassRegistry) =
+func registerLowerSpans(reg: var PassRegistry) =
   reg.register("lowerSpans", pkTransform, phaseMain,
     "Materialize openArray/varargs spans into ptr + len parameters",
     run = lowerSpans
@@ -92,14 +106,7 @@ func registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: stati
 
   )
 
-func registerSharedLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the lowering passes common to every backend
-  reg.registerPruneCompileTimeParams()
-  reg.registerLowerSpans()
-  reg.registerBlitBlockExprs()
-  reg.registerDecomposeMemcpyVars()
-
-func registerDecomposeMemcpyVars*(reg: var PassRegistry) =
+func registerDecomposeMemcpyVars(reg: var PassRegistry) =
   reg.register("decomposeMemcpyVars", pkTransform, phaseMain,
     "Splits gpuVar/gpuAssign with RequiresMemcpy into decl + memcpy call",
     dependsOn = @[],

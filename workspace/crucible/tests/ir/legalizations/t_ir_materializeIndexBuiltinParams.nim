@@ -13,7 +13,7 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_lowering_msl
+import workspace/crucible/src/codegen/passes/passes_lowering_msl {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
 
 proc runOne(ctx: var GpuContext) =

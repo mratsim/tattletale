@@ -16,6 +16,7 @@ import std/sequtils
 import std/strutils
 import std/tables
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────

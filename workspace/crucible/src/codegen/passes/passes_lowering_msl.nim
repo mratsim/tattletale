@@ -30,33 +30,27 @@ import ./passes_validations
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerMaterializeIndexBuiltinParams*(reg: var PassRegistry) =
-  reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
-    "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      materializeIndexBuiltinParamsImpl(ctx)
-  )
-
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerExpandStructKernelParams()
+  reg.registerSmemArena()
+  reg.registerMaterializeIndexBuiltinParams()
+  reg.registerCollectValueAddressSpaces()
+
+func registerSmemArena(reg: var PassRegistry) =
   reg.register("smemArena", pkTransform, phaseMain,
     "Hoists device functions' {.smem.} vars to threadgroup params as Metal doesn't support threadgroup allocation in device functions",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       smemArenaImpl(ctx)
   )
+
+func registerMaterializeIndexBuiltinParams(reg: var PassRegistry) =
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
     "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       materializeIndexBuiltinParamsImpl(ctx)
-  )
-  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
-    "Records var and objconstr pointer-field address spaces for resolution",
-    dependsOn = @[],
-    run = collectValueAddressSpaces
   )
 
 # ═══════════════════════════════════════════════════════════════════════

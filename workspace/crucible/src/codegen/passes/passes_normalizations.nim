@@ -29,80 +29,6 @@ import ./pass_datatypes
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerLowerIfExpr*(reg: var PassRegistry) =
-  reg.register("lowerIfExpr", pkTransform, phaseEarly,
-    "Converts gpuIf(isExpr:true) to gpuTernary",
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          lowerIfExprImpl(fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          lowerIfExprImpl(fn.pBody)
-  )
-
-func registerMapOperators*(reg: var PassRegistry) =
-  reg.register("mapOperators", pkTransform, phaseEarly,
-    "Patches operator function names (+,*,/,-) to valid C++ identifiers",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          mapOperatorsImpl(fn)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          mapOperatorsImpl(fn)
-  )
-
-func registerFilterPragmas*(reg: var PassRegistry) =
-  reg.register("filterPragmas", pkTransform, phaseEarly,
-    "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          filterPragmasImpl(fn)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          filterPragmasImpl(fn)
-  )
-
-func registerResolveOverloadedOperators*(reg: var PassRegistry) =
-  reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
-    "Converts gpuBinOp with non-primitive types to gpuCall",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
-  )
-
-func registerDeEmbedForRangeAdjustment*(reg: var PassRegistry) =
-  reg.register("deEmbedForRangeAdjustment", pkTransform, phaseEarly,
-    "Normalizes gpuFor range expressions, removing embedded +1 adjustments",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          deEmbedForRangeAdjustmentImpl(fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          deEmbedForRangeAdjustmentImpl(fn.pBody)
-  )
-
 func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerLowerIfExpr()
   reg.registerMapOperators()
@@ -126,7 +52,81 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
 
   reg.registerMangleNames()
 
-func registerRewriteCompoundAssignment*(reg: var PassRegistry) =
+func registerLowerIfExpr(reg: var PassRegistry) =
+  reg.register("lowerIfExpr", pkTransform, phaseEarly,
+    "Converts gpuIf(isExpr:true) to gpuTernary",
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          lowerIfExprImpl(fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          lowerIfExprImpl(fn.pBody)
+  )
+
+func registerMapOperators(reg: var PassRegistry) =
+  reg.register("mapOperators", pkTransform, phaseEarly,
+    "Patches operator function names (+,*,/,-) to valid C++ identifiers",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          mapOperatorsImpl(fn)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          mapOperatorsImpl(fn)
+  )
+
+func registerFilterPragmas(reg: var PassRegistry) =
+  reg.register("filterPragmas", pkTransform, phaseEarly,
+    "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          filterPragmasImpl(fn)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          filterPragmasImpl(fn)
+  )
+
+func registerResolveOverloadedOperators(reg: var PassRegistry) =
+  reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
+    "Converts gpuBinOp with non-primitive types to gpuCall",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
+  )
+
+func registerDeEmbedForRangeAdjustment(reg: var PassRegistry) =
+  reg.register("deEmbedForRangeAdjustment", pkTransform, phaseEarly,
+    "Normalizes gpuFor range expressions, removing embedded +1 adjustments",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          deEmbedForRangeAdjustmentImpl(fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          deEmbedForRangeAdjustmentImpl(fn.pBody)
+  )
+
+func registerRewriteCompoundAssignment(reg: var PassRegistry) =
   reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
     "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
       "so the LHS is a real modifiable lvalue on all backends",
@@ -148,7 +148,7 @@ func registerRewriteCompoundAssignment*(reg: var PassRegistry) =
           )
   )
 
-func registerMangleNames*(reg: var PassRegistry) =
+func registerMangleNames(reg: var PassRegistry) =
   reg.register("mangleNames", pkTransform, phaseMain,
     "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
     dependsOn = @[],

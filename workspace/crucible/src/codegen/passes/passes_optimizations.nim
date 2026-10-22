@@ -24,21 +24,6 @@ import ./pass_datatypes
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerMaterializePassByRefArgs*(reg: var PassRegistry) =
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-
-func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
-  ## After mangleNames, so constructed builtin calls keep their plain name
-  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
-    "Folds ternary max/min idioms to backend-native max/min builtins",
-    dependsOn = @["mangleNames"],
-    run = foldMaxMinToBuiltins
-  )
-
 func registerOptimizationPasses*(reg: var PassRegistry) =
   reg.registerFoldMaxMinToBuiltins()
   # turn off with -d:TTT_CrucibleDisableConstFolding, e.g. for size sweeps
@@ -48,6 +33,21 @@ func registerOptimizationPasses*(reg: var PassRegistry) =
       dependsOn = @["mangleNames", "foldMaxMinToBuiltins"],
       run = foldConstantShells
     )
+
+func registerMaterializePassByRefArgs*(reg: var PassRegistry) =
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
+
+func registerFoldMaxMinToBuiltins(reg: var PassRegistry) =
+  ## After mangleNames, so constructed builtin calls keep their plain name
+  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
+    "Folds ternary max/min idioms to backend-native max/min builtins",
+    dependsOn = @["mangleNames"],
+    run = foldMaxMinToBuiltins
+  )
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pass-by-ref materialization

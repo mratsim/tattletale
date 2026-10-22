@@ -14,6 +14,7 @@
 
 import std/[tables]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
 
 proc runOne(node: GpuAst): GpuAst =
   ## Runs the array/span normalization pass over one fn holding `node`

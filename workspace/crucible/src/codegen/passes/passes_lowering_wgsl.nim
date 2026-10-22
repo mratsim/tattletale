@@ -39,7 +39,26 @@ const WgslReserved = [
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerPullConstantPragmaVars*(reg: var PassRegistry) =
+func registerWgslLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
+  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
+  reg.registerExpandStructKernelParams()
+  # Reads original params: runs before liftKernelParamsToGlobals empties them.
+  reg.registerScanGenerics()
+  # WGSL functions take no parameters: global fns' params move to ctx.globals.
+  reg.registerLiftKernelParamsToGlobals()
+  reg.registerPullConstantPragmaVars()
+  reg.registerRemoveStructPointerFields()
+  # Before scanGenerics derives generic argument spaces from the authoritative map.
+  reg.registerCollectValueAddressSpaces()
+  reg.registerAddressOfInjection()
+  reg.registerInlinePointerParamCalls()
+  reg.registerMakeCodeValid()
+  reg.registerPatchBoolToI32()
+  reg.registerCheckCodeValidWgsl()
+
+func registerPullConstantPragmaVars(reg: var PassRegistry) =
   reg.register("pullConstantPragmaVars", pkTransform, phaseMain,
     "Hoists {.const.} pragma vars out of the top-level var block",
     dependsOn = @[],
@@ -48,7 +67,7 @@ func registerPullConstantPragmaVars*(reg: var PassRegistry) =
         pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
   )
 
-func registerRemoveStructPointerFields*(reg: var PassRegistry) =
+func registerRemoveStructPointerFields(reg: var PassRegistry) =
   reg.register("removeStructPointerFields", pkTransform, phaseMain,
     "Drops pointer fields from struct types: WGSL has no pointer struct fields",
     dependsOn = @[],
@@ -57,7 +76,7 @@ func registerRemoveStructPointerFields*(reg: var PassRegistry) =
         removeStructPointerFieldsImpl(ctx.globalBlocks[1])
   )
 
-func registerAddressOfInjection*(reg: var PassRegistry) =
+func registerAddressOfInjection(reg: var PassRegistry) =
   reg.register("injectAddressOf", pkTransform, phaseMain,
     "Replaces storage-buffer idents with &ident in global fns",
     dependsOn = @[],
@@ -67,12 +86,7 @@ func registerAddressOfInjection*(reg: var PassRegistry) =
           ctx.injectAddressOfImpl(fn)
   )
 
-func registerWgslLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
-  # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
-  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
-  reg.registerExpandStructKernelParams()
-  # Reads original params: runs before liftKernelParamsToGlobals empties them.
+func registerScanGenerics(reg: var PassRegistry) =
   reg.register("scanGenerics", pkTransform, phaseMain,
     "Derives generic instantiation argument spaces from original params",
     dependsOn = @[],
@@ -85,7 +99,8 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
           callParams[p.ident.symbol.iSym] = p
         ctx.scanGenericsImpl(fn, callParams)
   )
-  # WGSL functions take no parameters: global fns' params move to ctx.globals.
+
+func registerLiftKernelParamsToGlobals(reg: var PassRegistry) =
   reg.register("liftKernelParamsToGlobals", pkTransform, phaseMain,
     "Moves global fns' params to ctx.globals and rewrites their uses",
     dependsOn = @[],
@@ -97,40 +112,16 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
           fn.pParams.setLen(0)
           updateSymsInGlobalsImpl(ctx, fn)
   )
-  reg.register("pullConstantPragmaVars", pkTransform, phaseMain,
-    "Hoists {.const.} pragma vars out of the top-level var block",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      if ctx.globalBlocks.len > 0:
-        pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
-  )
-  reg.register("removeStructPointerFields", pkTransform, phaseMain,
-    "Drops pointer fields from struct types: WGSL has no pointer struct fields",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      if ctx.globalBlocks.len > 1:
-        removeStructPointerFieldsImpl(ctx.globalBlocks[1])
-  )
-  # Before scanGenerics derives generic argument spaces from the authoritative map.
-  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
-    "Records var and objconstr pointer-field address spaces for resolution",
-    dependsOn = @[],
-    run = collectValueAddressSpaces
-  )
-  reg.register("injectAddressOf", pkTransform, phaseMain,
-    "Replaces storage-buffer idents with &ident in global fns",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for (fnIdent, fn) in ctx.fnTab.mpairs:
-        if fn.isGlobal():
-          ctx.injectAddressOfImpl(fn)
-  )
+
+func registerInlinePointerParamCalls(reg: var PassRegistry) =
   reg.register("inlinePointerParamCalls", pkTransform, phaseMain,
     "Inlines calls whose pointer arguments cannot cross a WGSL function signature",
     dependsOn = @["injectAddressOf"],
     run = proc(ctx: var GpuContext): void =
       ctx.inlinePointerParamCalls()
   )
+
+func registerMakeCodeValid(reg: var PassRegistry) =
   reg.register("makeCodeValid", pkTransform, phaseMain,
     "Addresses WGSL AST patterns (compound assign, struct ptr fields)",
     dependsOn = @["inlinePointerParamCalls"],
@@ -138,7 +129,8 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
       for (fnIdent, fn) in ctx.fnTab.mpairs:
         ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobal())
   )
-  reg.registerPatchBoolToI32()
+
+func registerCheckCodeValidWgsl(reg: var PassRegistry) =
   reg.register("checkCodeValidWgsl", pkTransform, phaseMain,
     "Validates WGSL constraints after transformations",
     dependsOn = @["makeCodeValid"],
@@ -147,7 +139,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
         ctx.checkCodeValidImpl(fn)
   )
 
-func registerPatchBoolToI32*(reg: var PassRegistry) =
+func registerPatchBoolToI32(reg: var PassRegistry) =
   reg.register("patchBoolToI32", pkTransform, phaseMain,
     "Patches bool globals to i32 storage, conv nodes translate loads and stores",
     dependsOn = @["makeCodeValid"],

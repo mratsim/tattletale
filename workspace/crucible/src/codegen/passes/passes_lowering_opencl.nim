@@ -55,7 +55,7 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
           ctx.insertByrefAddrsImpl(fn)
   )
 
-func registerLowerByrefParams*(reg: var PassRegistry) =
+func registerLowerByrefParams(reg: var PassRegistry) =
   reg.register("lowerByrefParams", pkTransform, phaseMain,
     "Rewrites passByRef params into const Type* ptr params",
     dependsOn = @[],
