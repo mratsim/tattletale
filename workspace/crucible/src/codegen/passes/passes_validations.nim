@@ -9,6 +9,8 @@ import std / [macros, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 
+{.experimental: "codeReordering".}
+
 # ############################################################
 #
 # Validations
@@ -17,38 +19,9 @@ import ./pass_datatypes
 #
 # Invariant checks over the IR, a violated invariant is a compile-time error.
 
-
-proc warnUnassigned(n: GpuAst, fnName: string): void =
-  ## Emit a warning if `result` is read before being assigned in any branch.
-  case n.kind
-  of gpuBlock:
-    var assigned = false
-    for ch in n:
-      if ch.kind == gpuAssign and ch.aLeft.kind == gpuIdent and ch.aLeft.ident() == "result":
-        assigned = true
-      elif ch.kind == gpuIf:
-        ch.ifThen.warnUnassigned(fnName)
-        for el in ch.ifElifs:
-          el.body.warnUnassigned(fnName)
-        if ch.ifElse.kind != gpuDiscard:
-          ch.ifElse.warnUnassigned(fnName)
-      elif ch.kind in {gpuFor, gpuWhile}:
-        discard
-      else:
-        if not assigned:
-          var readsResult = false
-          var tmp = ch.clone()
-          tmp.walk(proc(m: var GpuAst): void =
-            if m.kind == gpuIdent and m.ident() == "result":
-              readsResult = true
-          )
-          if readsResult:
-            warning "result may be used before being initialized in " & fnName & ". " &
-              "Assign to `result = ...` before reading it."
-  of gpuAssign:
-    discard  # nothing to warn about
-  else:
-    discard
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPrePasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants.
@@ -82,13 +55,13 @@ func registerValidationPrePasses*(reg: var PassRegistry) =
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuIdent and n.symbol.isNil:
-              raiseAssert "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+              raiseAssert("gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n))
       for fnKey in ctx.genericInsts.keys:
         let fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           fn.pBody.walk(proc(n: var GpuAst): void =
             if n.kind == gpuIdent and n.symbol.isNil:
-              raiseAssert "gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n)
+              raiseAssert("gpuIdent without Symbol in " & fn.pName.ident() & ": " & $n))
     )
 
   reg.register("validateFnTable", pkValidation, phaseMain,
@@ -130,3 +103,35 @@ func registerValidationPostPasses*(reg: var PassRegistry) =
             if n.kind == gpuBlock and n.isExpr:
               raiseAssert "Block expression survived to codegen in " & fn.pName.ident() & ": " & $n)
     )
+
+proc warnUnassigned(n: GpuAst, fnName: string): void =
+  ## Emit a warning if `result` is read before being assigned in any branch.
+  case n.kind
+  of gpuBlock:
+    var assigned = false
+    for ch in n:
+      if ch.kind == gpuAssign and ch.aLeft.kind == gpuIdent and ch.aLeft.ident() == "result":
+        assigned = true
+      elif ch.kind == gpuIf:
+        ch.ifThen.warnUnassigned(fnName)
+        for el in ch.ifElifs:
+          el.body.warnUnassigned(fnName)
+        if ch.ifElse.kind != gpuDiscard:
+          ch.ifElse.warnUnassigned(fnName)
+      elif ch.kind in {gpuFor, gpuWhile}:
+        discard
+      else:
+        if not assigned:
+          var readsResult = false
+          var tmp = ch.clone()
+          tmp.walk(proc(m: var GpuAst): void =
+            if m.kind == gpuIdent and m.ident() == "result":
+              readsResult = true
+          )
+          if readsResult:
+            warning "result may be used before being initialized in " & fnName & ". " &
+              "Assign to `result = ...` before reading it."
+  of gpuAssign:
+    discard  # nothing to warn about
+  else:
+    discard

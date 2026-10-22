@@ -21,7 +21,6 @@ import ./pass_datatypes
 # every statement is a block, result is assigned, constexprs are lifted.
 # Target-independent, every backend registers them identically.
 
-
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -65,7 +64,6 @@ func registerLegalizationPasses*(reg: var PassRegistry) =
         insertResult(ctx, fn)
     )
 
-
   reg.register("liftConstexpr", pkTransform, phaseMain,
     "Extracts gpuConstexpr from expression slots into preceding statements",
     dependsOn = @["ensureBlock"],
@@ -75,6 +73,21 @@ func registerLegalizationPasses*(reg: var PassRegistry) =
         liftConstexpr(fn.pBody)
     )
 
+  reg.register("unwrapBlockInDot", pkTransform, phaseMain,
+    "Unwraps single-stmt gpuBlock(isExpr) inside gpuDot dParent chains",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        fn.pBody.walk(proc(n: var GpuAst): void =
+          unwrapBlockInDot(n)
+        )
+    )
+
+  reg.registerRewriteIndexDeref()
+
+func registerBlitBlockExprs*(reg: var PassRegistry) =
+  ## Registered after lowerIfExpr: the ternary branches carry its block exprs
   reg.register("blitBlockExprs", pkTransform, phaseMain,
     "Converts gpuBlock(isExpr:true) into scope blocks + blit temps",
     dependsOn = @["ensureBlock", "liftConstexpr"],
@@ -90,17 +103,47 @@ func registerLegalizationPasses*(reg: var PassRegistry) =
     )
 
 
-
-  reg.register("unwrapBlockInDot", pkTransform, phaseMain,
-    "Unwraps single-stmt gpuBlock(isExpr) inside gpuDot dParent chains",
-    dependsOn = @["ensureBlock"],
+func registerRewriteIndexDeref*(reg: var PassRegistry) =
+  reg.register("rewriteIndexDeref", pkTransform, phaseMain,
+    "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
+    dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
-        fn.pBody.walk(proc(n: var GpuAst): void =
-          unwrapBlockInDot(n)
-        )
-    )
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+  )
+
+# ═══════════════════════════════════════════════════════════════════════
+# Index deref normalization
+# ═══════════════════════════════════════════════════════════════════════
+
+proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## `(*arr)[idx]` ≡ `arr[idx]` in C, the IR keeps the simpler form.
+  case n.kind
+  of gpuIndex:
+    if n.iArr.kind == gpuDeref:
+      # ptr-to-array keeps the deref (C array decay), plain ptr rewrites
+      let isPtrToArray = (block:
+        let derefOf = n.iArr.dOf
+        if derefOf.kind == gpuIdent and derefOf.symbol != nil:
+          let symTyp = derefOf.symbol.typ
+          symTyp != nil and symTyp.kind == gtPtr and
+          symTyp.to != nil and symTyp.to.kind == gtArray
+        else:
+          false)
+      if not isPtrToArray:
+        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
+      else:
+        for ch in mitems(n):
+          rewriteIndexDerefImpl(ctx, ch)
+  else:
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Result insertion
@@ -260,6 +303,8 @@ proc liftConstexpr(pbody: var GpuAst) =
 # Block-expression blitting
 # ═══════════════════════════════════════════════════════════════════════
 
+proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType)
+
 proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRetType: GpuType): seq[GpuAst] =
   ## Process an expression slot. If `slot` is a gpuBlock(isExpr: true),
   ## replace it with a blit temp reference and return preamble statements.
@@ -398,13 +443,15 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
     result = ctx.blitExprSlot(slot.mExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuConstexpr:
     result = ctx.blitExprSlot(slot.cValue, GpuType(kind: gtVoid), fnRetType)
+  of gpuBlock:
+    # statement-shaped block in an expr slot: descend, inner expr blocks blit in place
+    ctx.blitFnBody(slot, fnRetType)
   else:
     discard
 
 # ═══════════════════════════════════════════════════════════════════════
 # Duplicate var renaming
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.

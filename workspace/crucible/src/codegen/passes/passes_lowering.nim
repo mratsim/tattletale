@@ -13,6 +13,7 @@ import ../ir/gpu_ast_type_resolvers
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_legalizations
 
 # ############################################################
 #
@@ -26,6 +27,10 @@ import ./pass_registry
 # cherry-pick the rest. A policy that differs per target takes a flag.
 
 {.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =
   reg.register(name, pkTransform, phaseMain,
@@ -54,10 +59,72 @@ func registerLowerSpans*(reg: var PassRegistry) =
     run = lowerSpans
   )
 
+func registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: static bool) =
+  ## Registers array/span param normalization.
+  ##
+  ## - decayArrays true: the C model, element pointers T*
+  ## - decayArrays false: arrays stay first-class, array params emit as arrays
+  reg.register("normalizeArraySpanParams", pkTransform, phaseEarly,
+    "var array/openArray params become element pointers: fold HiddenDeref on " &
+      "access, bare arrays (or toOpenArray) at call sites, gtPtr(gtArray)->gtPtr(T) per decayArrays",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      # callee param kinds from the ORIGINAL types, before this pass rewrites them
+      var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
+      for fnKey in ctx.allFnTab.keys:
+        let fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
+      for fnKey in ctx.genericInsts.keys:
+        let fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
+          normalizeArraySpanFn(fn, decayArrays)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
+          normalizeArraySpanFn(fn, decayArrays)
+
+  )
+
 func registerSharedLoweringPasses*(reg: var PassRegistry) =
   ## Registers the lowering passes common to every backend
   reg.registerPruneCompileTimeParams()
   reg.registerLowerSpans()
+  reg.registerBlitBlockExprs()
+  reg.registerDecomposeMemcpyVars()
+
+func registerDecomposeMemcpyVars*(reg: var PassRegistry) =
+  reg.register("decomposeMemcpyVars", pkTransform, phaseMain,
+    "Splits gpuVar/gpuAssign with RequiresMemcpy into decl + memcpy call",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          decomposeMemcpyVarsImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          decomposeMemcpyVarsImpl(ctx, fn.pBody)
+  )
+
+func registerExpandStructKernelParams*(reg: var PassRegistry) =
+  ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
+  ## (GLSL pointer fields cross as 64-bit buffer device addresses)
+  reg.register(
+    name = "expandStructKernelParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
+    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
+    run = expandStructKernelParamsImpl
+  )
 
 # ═══════════════════════════════════════════════════════════════════════
 # Reserved keyword renaming
@@ -425,6 +492,135 @@ proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
       child.rewriteNode(sigMap)
 
 # ═══════════════════════════════════════════════════════════════════════
+# Memcpy decomposition
+# ═══════════════════════════════════════════════════════════════════════
+
+proc renameSymsInTree(n: var GpuAst, oldName, newName: string) =
+  if n == nil:
+    return
+  case n.kind
+  of gpuIdent:
+    if n.symbol.name == oldName:
+      n.symbol.name = newName
+      n.symbol.iSym = newName
+  of gpuVar:
+    # mitems does not yield vName
+    if n.vName.symbol.name == oldName:
+      n.vName.symbol.name = newName
+      n.vName.symbol.iSym = newName
+    renameSymsInTree(n.vInit, oldName, newName)
+  else:
+    for child in n.mitems:
+      renameSymsInTree(child, oldName, newName)
+
+proc dedupVarNames(stmts: var seq[GpuAst]) =
+  ## Renames duplicate gpuVar declarations across sibling blocks,
+  ## template expansions collide without C++ scope isolation
+  var seenNames: Table[string, int]
+  for i in 0 ..< stmts.len:
+    if stmts[i].kind == gpuBlock:
+      var localRenames: seq[(string, string)]
+      for s in stmts[i].statements:
+        if s.kind == gpuVar:
+          let name = s.vName.symbol.name
+          if name in seenNames:
+            seenNames[name] += 1
+            let newName = name & "_" & $seenNames[name]
+            localRenames.add (name, newName)
+          else:
+            seenNames[name] = 0
+      for (oldName, newName) in localRenames:
+        renameSymsInTree(stmts[i], oldName, newName)
+    elif stmts[i].kind == gpuVar:
+      let name = stmts[i].vName.symbol.name
+      if name in seenNames:
+        seenNames[name] += 1
+        let newName = name & "_" & $seenNames[name]
+        renameSymsInTree(stmts[i], name, newName)
+      else:
+        seenNames[name] = 0
+
+proc genMemcpyCall(lhs, rhs: GpuAst, sizeExpr: GpuAst): GpuAst =
+  let memcpySym = newSymbol("__builtin_memcpy", iSym = "__builtin_memcpy", symKind = gsProc)
+  let memcpyIdent = GpuAst(kind: gpuIdent, symbol: memcpySym)
+  var call = GpuAst(kind: gpuCall)
+  call.cName = memcpyIdent
+  call.cArgs = @[lhs, rhs, sizeExpr]
+  result = call
+
+func genSizeofCall(ctx: var GpuContext, expr: GpuAst): GpuAst =
+  let sizeSym = newSymbol("__builtin_sizeof", iSym = "__builtin_sizeof", symKind = gsProc)
+  let sizeIdent = GpuAst(kind: gpuIdent, symbol: sizeSym)
+  var call = GpuAst(kind: gpuCall)
+  call.cName = sizeIdent
+  call.cArgs = @[expr]
+  result = call
+
+proc decomposeMemcpyVarsImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## After this pass, backends only emit `=` for simple assignments
+  case n.kind
+  of gpuVar:
+    if n.vRequiresMemcpy and n.vInit.kind != gpuDiscard:
+      let addrOfVar = GpuAst(kind: gpuAddr, aOf: n.vName)
+      let addrOfInit = GpuAst(kind: gpuAddr, aOf: n.vInit)
+      let sizeCall = genSizeofCall(ctx, n.vName)
+      let memcpyNode = genMemcpyCall(addrOfVar, addrOfInit, sizeCall)
+
+      n.vRequiresMemcpy = false
+      n.vInit = GpuAst(kind: gpuDiscard)
+      n = GpuAst(kind: gpuBlock, blockLabel: "_memcpy", statements: @[n, memcpyNode])
+    else:
+      for ch in mitems(n):
+        decomposeMemcpyVarsImpl(ctx, ch)
+
+  of gpuAssign:
+    if n.aRequiresMemcpy:
+      let addrOfLeft = GpuAst(kind: gpuAddr, aOf: n.aLeft)
+      let addrOfRight = GpuAst(kind: gpuAddr, aOf: n.aRight)
+      let sizeCall = genSizeofCall(ctx, n.aLeft)
+      n = genMemcpyCall(addrOfLeft, addrOfRight, sizeCall)
+    else:
+      for ch in mitems(n):
+        decomposeMemcpyVarsImpl(ctx, ch)
+
+  of gpuIf:
+    decomposeMemcpyVarsImpl(ctx, n.ifCond)
+    decomposeMemcpyVarsImpl(ctx, n.ifThen)
+    for el in n.ifElifs.mitems:
+      decomposeMemcpyVarsImpl(ctx, el.cond)
+      decomposeMemcpyVarsImpl(ctx, el.body)
+    if n.ifElse.kind != gpuDiscard:
+      decomposeMemcpyVarsImpl(ctx, n.ifElse)
+
+  of gpuFor:
+    decomposeMemcpyVarsImpl(ctx, n.fBody)
+
+  of gpuWhile:
+    decomposeMemcpyVarsImpl(ctx, n.wBody)
+
+  of gpuBlock:
+    var newStmts: seq[GpuAst]
+    for i in 0 ..< n.statements.len:
+      var stmt = n.statements[i]
+      decomposeMemcpyVarsImpl(ctx, stmt)
+      if stmt.kind == gpuBlock and stmt.blockLabel == "_memcpy":
+        # only anonymous _memcpy blocks inline, labeled blocks keep C++ scope isolation
+        for s in stmt.statements:
+          newStmts.add s
+      else:
+        newStmts.add stmt
+    n.statements = newStmts
+    # template expansions duplicate var names across blocks flattened by codegen
+    dedupVarNames(n.statements)
+
+  of gpuProc:
+    decomposeMemcpyVarsImpl(ctx, n.pBody)
+
+  else:
+    for ch in mitems(n):
+      decomposeMemcpyVarsImpl(ctx, ch)
+
+# ═══════════════════════════════════════════════════════════════════════
 # Span materialization
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -587,19 +783,6 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
         params.add p
     fn.pParams = params
 
-
-func registerExpandStructKernelParams*(reg: var PassRegistry) =
-  ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
-  ## (GLSL pointer fields cross as 64-bit buffer device addresses)
-  reg.register(
-    name = "expandStructKernelParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
-    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
-    run = expandStructKernelParamsImpl
-  )
-
 # ═══════════════════════════════════════════════════════════════════════
 # Array/span parameter normalization (cherry-pickable)
 # ═══════════════════════════════════════════════════════════════════════
@@ -705,37 +888,3 @@ func normalizeArraySpanFn(fn: var GpuAst, decayArrays: bool) =
       p.typ = p.typ.to
       p.ident.symbol.typ = p.typ
 
-# ═══════════════════════════════════════════════════════════════════════
-
-func registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: static bool) =
-  ## Registers array/span param normalization.
-  ##
-  ## - decayArrays true: the C model, element pointers T*
-  ## - decayArrays false: arrays stay first-class, array params emit as arrays
-  reg.register("normalizeArraySpanParams", pkTransform, phaseEarly,
-    "var array/openArray params become element pointers: fold HiddenDeref on " &
-      "access, bare arrays (or toOpenArray) at call sites, gtPtr(gtArray)->gtPtr(T) per decayArrays",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      # callee param kinds from the ORIGINAL types, before this pass rewrites them
-      var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
-      for fnKey in ctx.allFnTab.keys:
-        let fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.genericInsts.keys:
-        let fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
-          normalizeArraySpanFn(fn, decayArrays)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
-          normalizeArraySpanFn(fn, decayArrays)
-
-  )

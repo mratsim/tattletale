@@ -23,9 +23,12 @@ import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
 import ./passes_validations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerMaterializeIndexBuiltinParams*(reg: var PassRegistry) =
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,

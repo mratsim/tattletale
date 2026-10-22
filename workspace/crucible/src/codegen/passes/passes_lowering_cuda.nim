@@ -21,12 +21,17 @@ import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
 import ./passes_optimizations
+
+{.experimental: "codeReordering".}
 const CudaReserved = [
   "__global__", "__device__", "__shared__", "__constant__"
 ].toHashSet()
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerMaterializePassByRefArgs()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
-

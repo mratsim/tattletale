@@ -13,7 +13,6 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_type_constructors
 import ../../builtins/builtins_functions
 import ./pass_datatypes
-import ./passes_preprocessing
 
 # ############################################################
 #
@@ -29,50 +28,6 @@ import ./passes_preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
-
-func rewriteCompoundAssignmentImpl(n: GpuAst): GpuAst =
-  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
-  ## clones the LHS (legalization mutates it in place, the sides must not alias)
-  doAssert n.kind == gpuBinOp
-  if n.bOp.ident() in ["<=", "==", ">=", "!="]:
-    return n
-  template genAssign(left, rnode, op: typed): untyped =
-    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
-                       bLeft: left.clone(), bRight: rnode)
-    GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
-  let op = n.bOp.ident()
-  if op.len >= 2 and op[^1] == '=':
-    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
-    opAst.symbol.iSym = opAst.symbol.name
-    var lhs = n.bLeft
-    if lhs.kind == gpuAddr:
-      lhs = lhs.aOf
-    result = genAssign(lhs, n.bRight, opAst)
-  else:
-    result = n
-
-proc dceCalleesFrom(ctx: var GpuContext, n: GpuAst): void =
-  ## Adds every fn called in `n` (transitively) to `fnTab`:
-  ## the printing world is the called subset, the rest is dead and dropped.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab and fn notin ctx.fnTab:
-      let fnCalled = ctx.allFnTab[fn]
-      ctx.fnTab[fn] = fnCalled
-      for ch in fnCalled:
-        ctx.dceCalleesFrom(ch)
-    for arg in n.cArgs:
-      ctx.dceCalleesFrom(arg)
-  else:
-    for ch in n:
-      ctx.dceCalleesFrom(ch)
-
-proc deadCodeElimination(ctx: var GpuContext) =
-  ## fnTab closure over call edges: the printers emit the called subset,
-  ## unreferenced fns are dead.
-  for fnKey in toSeq(ctx.fnTab.keys):
-    dceCalleesFrom(ctx, ctx.fnTab[fnKey])
 
 func registerLowerIfExpr*(reg: var PassRegistry) =
   reg.register("lowerIfExpr", pkTransform, phaseEarly,
@@ -154,9 +109,6 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerFilterPragmas()
   reg.registerResolveOverloadedOperators()
 
-
-
-
   # After resolveOverloadedOperators: it turns binops into calls, the fnTab
   # closure over call edges must run after it.
   reg.register("deadCodeElimination", pkTransform, phaseEarly,
@@ -170,6 +122,11 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
   # The resolveOverloadedOperators position keeps non-primitive `+=`
   # outside this pass.
   reg.registerDeEmbedForRangeAdjustment()
+  reg.registerRewriteCompoundAssignment()
+
+  reg.registerMangleNames()
+
+func registerRewriteCompoundAssignment*(reg: var PassRegistry) =
   reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
     "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
       "so the LHS is a real modifiable lvalue on all backends",
@@ -190,6 +147,121 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
               n = rewriteCompoundAssignmentImpl(n)
           )
   )
+
+func registerMangleNames*(reg: var PassRegistry) =
+  reg.register("mangleNames", pkTransform, phaseMain,
+    "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      mangleNamesImpl(ctx)
+  )
+
+func rewriteCompoundAssignmentImpl(n: GpuAst): GpuAst =
+  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
+  ## clones the LHS (legalization mutates it in place, the sides must not alias)
+  doAssert n.kind == gpuBinOp
+  if n.bOp.ident() in ["<=", "==", ">=", "!="]:
+    return n
+  template genAssign(left, rnode, op: typed): untyped =
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
+                       bLeft: left.clone(), bRight: rnode)
+    GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
+  let op = n.bOp.ident()
+  if op.len >= 2 and op[^1] == '=':
+    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
+    opAst.symbol.iSym = opAst.symbol.name
+    var lhs = n.bLeft
+    if lhs.kind == gpuAddr:
+      lhs = lhs.aOf
+    result = genAssign(lhs, n.bRight, opAst)
+  else:
+    result = n
+
+proc dceCalleesFrom(ctx: var GpuContext, n: GpuAst): void =
+  ## Adds every fn called in `n` (transitively) to `fnTab`:
+  ## the printing world is the called subset, the rest is dead and dropped.
+  case n.kind
+  of gpuCall:
+    let fn = n.cName
+    if fn in ctx.allFnTab and fn notin ctx.fnTab:
+      let fnCalled = ctx.allFnTab[fn]
+      ctx.fnTab[fn] = fnCalled
+      for ch in fnCalled:
+        ctx.dceCalleesFrom(ch)
+    for arg in n.cArgs:
+      ctx.dceCalleesFrom(arg)
+  else:
+    for ch in n:
+      ctx.dceCalleesFrom(ch)
+
+proc deadCodeElimination(ctx: var GpuContext) =
+  ## fnTab closure over call edges: the printers emit the called subset,
+  ## unreferenced fns are dead.
+  for fnKey in toSeq(ctx.fnTab.keys):
+    dceCalleesFrom(ctx, ctx.fnTab[fnKey])
+
+# ═══════════════════════════════════════════════════════════════════════
+# Name mangling
+# ═══════════════════════════════════════════════════════════════════════
+
+func mangleNamesImpl(ctx: var GpuContext) =
+  ## Walk all functions in fnTable and apply NamePolicy per function:
+  ## - fkGenericInst → npHashSuffix (append 7-char base58 of hash)
+  ## - fkDefined + non-overloaded → npClean (no suffix — C++ mangling handles it)
+  ## - Operator functions → npPatch (+ → add, etc.)
+  ## For variables: apply npHashSuffix when dedup would cause collision.
+  ##
+  ## Updates symbol.name accordingly.
+  var seenNames = initHashSet[string]()
+
+  for key, entry in ctx.fnTable.mpairs:
+    let ident = entry.ident
+    if ident.isNil or ident.symbol.isNil:
+      continue
+
+    let name = ident.symbol.name
+    let iSym = ident.symbol.iSym
+
+    var effectivePolicy = entry.namePolicy
+    if effectivePolicy == npUnassigned:
+      # Determine policy if not already assigned
+      if fkGenericInst in entry.kind:
+        effectivePolicy = npHashSuffix
+      elif fkDefined in entry.kind:
+        if name in ["+", "-", "*", "/", ".."]:
+          effectivePolicy = npPatch
+        elif name in seenNames or name.len == 0:
+          effectivePolicy = npHashSuffix
+        else:
+          effectivePolicy = npClean
+      else:
+        # builtin/external: keep as-is
+        effectivePolicy = npClean
+      entry.namePolicy = effectivePolicy
+
+    case effectivePolicy
+
+    of npClean:
+      discard
+
+    of npHashSuffix:
+      # Use the iSym as the hash source (stable across compilation units)
+      ident.symbol.name = mangledHashName(name, iSym)
+
+    of npPatch:
+      let newName = case name
+        of "+": "add"
+        of "-": "sub"
+        of "*": "mul"
+        of "/": "div"
+        of "..": "range"
+        else: name
+      ident.symbol.name = newName
+      ident.symbol.iSym = ident.symbol.iSym.replace(name, newName)
+    else:
+      discard
+
+    seenNames.incl ident.symbol.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # lowerIfExpr

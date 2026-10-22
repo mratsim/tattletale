@@ -26,7 +26,6 @@ import ./passes_lowering
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
@@ -35,21 +34,17 @@ const OclReserved = [
   "constant", "__constant", "read_only", "write_only", "read_write"
 ].toHashSet()
 
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
+
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerMaterializePassByRefArgs()
   reg.registerExpandStructKernelParams()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
   # By-ref lowering: params become `const Type*`, call sites materialize addrs.
-  reg.register("lowerByrefParams", pkTransform, phaseMain,
-    "Rewrites passByRef params into const Type* ptr params",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          ctx.lowerByrefParamsImpl(fn)
-  )
+  reg.registerLowerByrefParams()
   reg.register("insertByrefAddrs", pkTransform, phaseMain,
     "Wraps by-ref call args in gpuAddr",
     dependsOn = @["lowerByrefParams"],
@@ -58,6 +53,17 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
         var fn = ctx.allFnTab[fnKey]
         if fn.kind == gpuProc:
           ctx.insertByrefAddrsImpl(fn)
+  )
+
+func registerLowerByrefParams*(reg: var PassRegistry) =
+  reg.register("lowerByrefParams", pkTransform, phaseMain,
+    "Rewrites passByRef params into const Type* ptr params",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          ctx.lowerByrefParamsImpl(fn)
   )
 
 # ═══════════════════════════════════════════════════════════════════════

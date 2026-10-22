@@ -48,6 +48,8 @@ Rule table (rule | trigger | severity):
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
+| registration-top     | a register proc defined below the first implementation in a passes file, registration lives at the top | counted  |
+| section-banner       | a malformed section banner: orphan bar, title without top bar, or bar width off 71                | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -523,6 +525,10 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
+    "registration-top": Rule("registration-top", True,
+                             "a register proc defined below the first implementation in a passes file, registration lives at the top"),
+    "section-banner": Rule("section-banner", True,
+                           "a malformed section banner: orphan bar, title without top bar, or bar width off 71"),
 }
 
 
@@ -2397,6 +2403,8 @@ def lint(paths, base=None):
             passes_export_hygiene(f, text, findings, added)
         if f.suffix == ".nim":
             stmt_inline(f, text, findings, added)
+            registration_top(f, text, findings, added)
+            section_banner(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -4641,6 +4649,57 @@ def stmt_inline(path, text, findings, added):
             path, no, "stmt-inline",
             "a statement keyword carries its body on the same line, put the "
             "body on the next line"))
+
+
+BANNER_BAR_RE = re.compile(r"^# ═+$")
+
+
+def section_banner(path, text, findings, added):
+    """Flags malformed section banners in Nim files: a bar with no title
+    above or below, a title sitting directly on a bar with no top bar, a
+    bar whose width is not 71."""
+    lines = text.splitlines()
+    for no, ln in enumerate(lines, 1):
+        if BANNER_BAR_RE.match(ln) and len(ln) != 73:
+            findings.append(Finding(path, no, "section-banner",
+                                    "a banner bar of " + str(len(ln) - 2) + " columns, the house bar is 71"))
+            continue
+        is_bar = BANNER_BAR_RE.match(ln) is not None
+        is_title = ln.startswith("# ") and not is_bar
+        if not (is_bar or is_title):
+            continue
+        prev = lines[no - 2] if no > 1 else ""
+        nxt = lines[no] if no < len(lines) else ""
+        prev_is_title = prev.startswith("# ") and not BANNER_BAR_RE.match(prev)
+        nxt_is_title = nxt.startswith("# ") and not BANNER_BAR_RE.match(nxt)
+        if is_bar and not prev_is_title and not nxt_is_title:
+            findings.append(Finding(path, no, "section-banner",
+                                    "an orphan bar, every banner is bar, title, bar"))
+        if is_title and BANNER_BAR_RE.match(nxt) and not BANNER_BAR_RE.match(prev):
+            findings.append(Finding(path, no, "section-banner",
+                                    "a title without its top bar"))
+
+
+def registration_top(path, text, findings, added):
+    """Flags register procs defined below the first implementation in a
+    passes file: the Registration section sits at the top, impls below."""
+    if not path.name.startswith("passes_"):
+        return
+    first_impl = None
+    for no, raw in enumerate(text.splitlines(), 1):
+        if re.match(r'^(?:proc|func|template|iterator)\b', raw) is None:
+            continue
+        if re.match(r'^func register\w+\*', raw) is not None:
+            if first_impl is not None:
+                if added is not None and no not in added:
+                    continue
+                findings.append(Finding(
+                    path, no, "registration-top",
+                    "a register proc sits below the first implementation, "
+                    "move it under the Registration banner at the top"))
+            continue
+        if first_impl is None:
+            first_impl = no
 
 
 def tile_phase(path, text, findings, added):

@@ -18,12 +18,11 @@ import ./pass_datatypes
 #
 # Semantics-preserving IR reductions, registered for every backend.
 
-
 {.experimental: "codeReordering".}
 
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Registration
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerMaterializePassByRefArgs*(reg: var PassRegistry) =
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
@@ -53,7 +52,6 @@ func registerOptimizationPasses*(reg: var PassRegistry) =
       dependsOn = @["mangleNames", "foldMaxMinToBuiltins"],
       run = foldConstantShells
     )
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pass-by-ref materialization
@@ -85,7 +83,6 @@ proc materializePassByRefArgs(ctx: var GpuContext) =
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
     walkNonLvalueArgs(ctx, fn.pBody)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Fold max/min idioms to backend-native builtins
@@ -208,9 +205,9 @@ proc foldMaxMinToBuiltins(ctx: var GpuContext) =
     var fn = ctx.allFnTab[fnKey]
     ctx.foldMaxMinInBody(fn.pBody)
 
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Constant-shell elimination
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc scanConstBindings(stmts: seq[GpuAst], bodyLocals: var HashSet[string], binding: var Table[string, GpuAst], returns: var seq[GpuAst]): bool =
   ## Collects the single-assignment local bindings of a candidate body.
@@ -355,7 +352,6 @@ proc substituteConstShells(ctx: GpuContext, n: var GpuAst, folds: Table[string, 
   else:
     for ch in n.mitems:
       ctx.substituteConstShells(ch, folds)
-
 
 proc collectCallTargets(n: GpuAst, targets: var HashSet[string]) =
   if n.isNil:

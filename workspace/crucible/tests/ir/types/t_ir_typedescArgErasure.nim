@@ -17,6 +17,7 @@ import std/sequtils
 import std/strutils
 import std/tables
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/pass_registry
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────
 type
@@ -44,7 +45,9 @@ macro toGpuAstWithInstsPruned(body: typed): untyped =
   var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
     gen.add v
-  pruneCompileTimeParams(ctx)
+  var reg = PassRegistry.new()
+  reg.registerPruneCompileTimeParams()
+  ctx.runPasses(reg)
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 

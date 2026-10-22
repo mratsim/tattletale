@@ -16,6 +16,20 @@
 import std/[tables]
 import workspace/crucible/src/crucible_internal_compiler
 
+proc runOne(node: GpuAst): GpuAst =
+  ## Runs the array/span normalization pass over one fn holding `node`
+  var ctx = GpuContext()
+  let fn = GpuAst(kind: gpuProc, pName: newGpuIdent("anon"),
+                  pRetType: GpuType(kind: gtVoid),
+                  pBody: GpuAst(kind: gpuBlock, statements: @[node]),
+                  pParams: @[])
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  ctx.runPasses(reg)
+  fn.pBody.statements[0]
+
+
 proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
   ## A `p: ptr array[4, int32]` ident + its gpuDeref — the IR shape of a
   ## var-array param access BEFORE normalization (gtPtr(gtArray)).
@@ -33,7 +47,7 @@ block: # 1. index context still folds: gpuIndex(gpuDeref(p), i) -> gpuIndex(p, i
   let lit0 = GpuAst(kind: gpuLit, lValue: "0", lType: GpuType(kind: gtInt32))
   var idx = GpuAst(kind: gpuIndex, iArr: deref, iIndex: lit0)
 
-  normalizeArraySpanBody(idx, emptyKinds)
+  idx = runOne(idx)
 
   doAssert idx.iArr.kind == gpuIdent,
     "index-context deref must fold to the bare ident ((*p)[i] == p[i])"
@@ -43,7 +57,7 @@ block: # 2. deref under gpuAddr survives: &(*p) is T*, NOT &p (T**)
   let (_, deref) = makePtrToArray("A")
   var addrNode = GpuAst(kind: gpuAddr, aOf: deref)
 
-  normalizeArraySpanBody(addrNode, emptyKinds)
+  addrNode = runOne(addrNode)
 
   doAssert addrNode.aOf.kind == gpuDeref,
     "deref under gpuAddr must NOT be stripped (&(*p) is the array address T*," &
@@ -54,7 +68,7 @@ block: # 3. bare non-index deref survives (element semantics unchanged)
   let (_, deref) = makePtrToArray("A")
   var d = deref
 
-  normalizeArraySpanBody(d, emptyKinds)
+  d = runOne(d)
 
   doAssert d.kind == gpuDeref,
     "non-index deref must keep its element semantics"
@@ -66,7 +80,7 @@ block: # 4. index inside gpuAddr still folds: &p[i] (element address), deref sur
   let idx = GpuAst(kind: gpuIndex, iArr: deref, iIndex: lit0)
   var addrNode = GpuAst(kind: gpuAddr, aOf: idx)
 
-  normalizeArraySpanBody(addrNode, emptyKinds)
+  addrNode = runOne(addrNode)
 
   doAssert addrNode.aOf.kind == gpuIndex,
     "gpuAddr(gpuIndex(...)) shape must survive"

@@ -25,7 +25,6 @@ import ./pass_registry
 import ./passes_lowering
 import ./passes_legalizations
 import ./passes_validations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
@@ -37,6 +36,10 @@ const GlslReserved = [
   "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
   "sampler", "texture", "image", "subroutine", "discard", "precise"
 ].toHashSet()
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerQualifyVarParams*(reg: var PassRegistry) =
   reg.register("qualifyVarParams", pkTransform, phaseMain,

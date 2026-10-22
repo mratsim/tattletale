@@ -27,7 +27,6 @@ import ./passes/passes_validations
 import ./passes/passes_optimizations
 import ./passes/passes_lowering
 import ./passes/passes_normalizations
-import ./passes/passes_preprocessing
 
 import ../builtins/builtins # all the builtins for the backend to make the Nim compiler happy
 export builtins
@@ -74,10 +73,9 @@ proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
 func registerCommonPasses*(reg: var PassRegistry) =
   ## Registers passes common to all backends.
   reg.registerValidationPrePasses()
+  reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
   reg.registerSharedLoweringPasses()
-  reg.registerLegalizationPasses()
-  reg.registerPreprocessingPasses()
   reg.registerOptimizationPasses()
   reg.registerValidationPostPasses()
 

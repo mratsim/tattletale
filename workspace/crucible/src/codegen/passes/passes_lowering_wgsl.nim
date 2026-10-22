@@ -35,6 +35,10 @@ const WgslReserved = [
   "fragment", "type"
 ].toHashSet()
 
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
+
 func registerPullConstantPragmaVars*(reg: var PassRegistry) =
   reg.register("pullConstantPragmaVars", pkTransform, phaseMain,
     "Hoists {.const.} pragma vars out of the top-level var block",
@@ -143,6 +147,14 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
         ctx.checkCodeValidImpl(fn)
   )
 
+func registerPatchBoolToI32*(reg: var PassRegistry) =
+  reg.register("patchBoolToI32", pkTransform, phaseMain,
+    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
+    dependsOn = @["makeCodeValid"],
+    run = proc(ctx: var GpuContext): void =
+      ctx.patchBoolToI32()
+  )
+
 # ═══════════════════════════════════════════════════════════════════════
 # WGSL printer helpers
 # ═══════════════════════════════════════════════════════════════════════
@@ -192,17 +204,8 @@ proc determineIdent(arg: GpuAst): GpuAst =
     raiseAssert "Cannot determine ident from: " & $arg
 
 # ═══════════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════════
 # Bool globals to i32 storage
 # ═══════════════════════════════════════════════════════════════════════
-
-func registerPatchBoolToI32*(reg: var PassRegistry) =
-  reg.register("patchBoolToI32", pkTransform, phaseMain,
-    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
-    dependsOn = @["makeCodeValid"],
-    run = proc(ctx: var GpuContext): void =
-      ctx.patchBoolToI32()
-  )
 
 proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
   ## Symbols keep their bool type, storage is i32: loads wrap in conv(gtBool),
@@ -244,9 +247,13 @@ proc patchBoolToI32(ctx: var GpuContext) =
 # ═══════════════════════════════════════════════════════════════════════
 
 func patchTypeImpl(t: GpuType): GpuType
+
 proc patchSymbolImpl(n: GpuAst): GpuAst
+
 proc genGenericName(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
+
 proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst
+
 proc getGenericArguments(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -706,4 +713,3 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
     let fn = ctx.fnTab[key]
     if not fn.isGlobal() and (fn.hasNonFnPtrParam() or fn.hasPtrStructParam(ctx)):
       ctx.fnTab.del(key)
-

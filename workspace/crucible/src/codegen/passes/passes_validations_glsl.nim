@@ -19,9 +19,12 @@ import std / [macros, sequtils, strutils, tables]
 import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 func registerGlslValidationPasses*(reg: var PassRegistry) =
   reg.register("validateSharedPushConstLayout", pkValidation, phaseMain,
