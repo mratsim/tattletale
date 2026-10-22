@@ -14,6 +14,13 @@ import ./lang_utils
 import ../passes/passes_preprocessing as pp
 import ../passes/passes_wgsl as pw
 
+const WgslReserved = [
+  "layout", "storage", "uniform", "workgroup", "override", "diagnostic",
+  "enable", "requires", "alias", "bitcast", "discard", "push_constant",
+  "readonly", "read_write", "function", "private", "compute", "vertex",
+  "fragment", "type"
+].toHashSet()
+
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
@@ -154,13 +161,6 @@ proc determineIdent(arg: GpuAst): GpuAst =
   of gpuMaterialize: arg.mExpr.determineIdent()
   else:
     raiseAssert "Not implemented to determine ident from node: " & $arg
-
-const WgslReservedMembers = [
-  "layout", "storage", "uniform", "workgroup", "override", "diagnostic",
-  "enable", "requires", "alias", "bitcast", "discard", "push_constant",
-  "readonly", "read_write", "function", "private", "compute", "vertex",
-  "fragment", "type"
-]
 
 proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
   ## Rewrites idents onto their call-site bindings.
@@ -373,6 +373,8 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     pw.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
 
+  ctx.renameReservedIdentifiers(WgslReserved)
+
   for (fnIdent, fn) in pairs(ctx.fnTab):
     pw.checkCodeValidImpl(ctx, fn)
 
@@ -572,7 +574,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = "i32(" & wgslBuiltinParamName(ast.dParent.ident()) & '.' &
                ctx.genWebGpu(ast.dField) & ')'
     else:
-      let fieldName = if ast.dField.kind == gpuIdent: renameReservedKeywords(ast.dField.ident(), WgslReservedMembers)
+      let fieldName = if ast.dField.kind == gpuIdent: ast.dField.ident()
                       else: ctx.genWebGpu(ast.dField)
       result = ctx.genWebGpu(ast.dParent) & '.' & fieldName
 
@@ -655,7 +657,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add "  _padding: u32,\n"
     else:
       for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, renameReservedKeywords(el.name, WgslReservedMembers)) & ",\n"
+        result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
     result.add '}'
 
   of gpuAlias:

@@ -5,11 +5,20 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, strformat, strutils, sugar, sequtils, tables]
+import std / [macros, strformat, strutils, sugar, sequtils, tables, sets]
 
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
+
+const GlslReserved* = [
+  "output", "input", "in", "out", "attribute", "uniform", "varying",
+  "buffer", "shared", "layout", "main", "void", "return",
+  "if", "else", "for", "while", "break", "continue", "struct",
+  "const", "true", "false", "bool", "int", "uint", "float", "double",
+  "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
+  "sampler", "texture", "image", "subroutine", "discard", "precise"
+].toHashSet()
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -200,15 +209,6 @@ proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
       return true
 
 
-const glslReserved*: array[40, string] = [
-  "output", "input", "in", "out", "attribute", "uniform", "varying",
-  "buffer", "shared", "layout", "main", "void", "return",
-  "if", "else", "for", "while", "break", "continue", "struct",
-  "const", "true", "false", "bool", "int", "uint", "float", "double",
-  "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
-  "sampler", "texture", "image", "subroutine", "discard", "precise"
-]
-
 # Preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -259,28 +259,7 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
 
   # 5. (No SSBO counter reset needed — handled in codegen())
 
-  # 5. Rename kernel parameters that clash with GLSL reserved words
-  proc renameGlslReserved(n: var GpuAst, symToRename: Table[string, string]) =
-    case n.kind
-    of gpuIdent:
-      if n.symbol != nil and n.symbol.iSym in symToRename:
-        n.symbol.name = symToRename[n.symbol.iSym]
-    else:
-      for ch in mitems(n):
-        renameGlslReserved(ch, symToRename)
-
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    var renames = initTable[string, string]()
-    for p in mitems(fn.pParams):
-      let oldName = p.ident.ident()
-      let safeName = renameReservedKeywords(oldName, glslReserved)
-      if oldName != safeName:
-        renames[p.ident.symbol.iSym] = safeName
-        p.ident.symbol.name = safeName
-    if renames.len > 0:
-      renameGlslReserved(fn.pBody, renames)
-
-  ctx.renameReservedIdentifiers(glslReserved)
+  ctx.renameReservedIdentifiers(GlslReserved)
 
 # ── genGLSL ─────────────────────────────────────────────────────────
 
