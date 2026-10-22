@@ -37,6 +37,7 @@ const WgslReserved* = [
 ].toHashSet()
 
 proc registerWgslLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = false)
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
     "Renames identifiers colliding with WGSL reserved words: fn names, call sites, params, globals, struct fields, field accesses",
@@ -153,6 +154,14 @@ proc determineIdent*(arg: GpuAst): GpuAst =
 # Bool globals to i32 storage
 # ═══════════════════════════════════════════════════════════════════════
 
+proc registerPatchBoolToI32*(reg: var PassRegistry) =
+  reg.register("patchBoolToI32", pkTransform, phaseMain,
+    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
+    dependsOn = @["makeCodeValid"],
+    run = proc(ctx: var GpuContext): void =
+      ctx.patchBoolToI32()
+  )
+
 proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
   ## Symbols keep their bool type, storage is i32: loads wrap in conv(gtBool),
   ## assignment right-hand sides in conv(gtInt32), the target stays bare.
@@ -173,14 +182,6 @@ proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
   else:
     for ch in n.mitems:
       ch.patchBoolToI32Impl(boolVals, boolPtrs)
-
-proc registerPatchBoolToI32*(reg: var PassRegistry) =
-  reg.register("patchBoolToI32", pkTransform, phaseMain,
-    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
-    dependsOn = @["makeCodeValid"],
-    run = proc(ctx: var GpuContext): void =
-      ctx.patchBoolToI32()
-  )
 
 proc patchBoolToI32(ctx: var GpuContext) =
   var boolVals, boolPtrs: HashSet[string]

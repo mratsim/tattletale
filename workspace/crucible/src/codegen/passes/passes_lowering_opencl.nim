@@ -36,6 +36,7 @@ const OclReserved = [
 ].toHashSet()
 
 proc registerOpenclLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
     dependsOn = @["ensureBlock"],

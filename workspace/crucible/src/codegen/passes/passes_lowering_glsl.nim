@@ -39,6 +39,7 @@ const GlslReserved* = [
 ].toHashSet()
 
 proc registerGlslLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = false)
   # GLSL buffer references cannot be indexed directly, the deref must be
   # explicit in the IR for the renderer to compose `.x`.
   reg.register("renameReservedIdentifiers", pkTransform, phaseMain,

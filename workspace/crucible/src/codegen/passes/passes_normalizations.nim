@@ -31,33 +31,6 @@ import ./passes_preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerNormalizationPasses*(reg: var PassRegistry) =
-  reg.register("normalizeArraySpanParams", pkTransform, phaseEarly,
-    "var array/openArray params become element pointers: fold HiddenDeref on " &
-      "access, bare arrays (or toOpenArray) at call sites, gtPtr(gtArray)->gtPtr(T)",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      # callee param kinds from the ORIGINAL types, before this pass rewrites them
-      var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
-      for fnKey in ctx.allFnTab.keys:
-        let fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.genericInsts.keys:
-        let fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds)
-          normalizeArraySpanFn(fn)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds)
-          normalizeArraySpanFn(fn)
-  )
-
   reg.register("lowerIfExpr", pkTransform, phaseEarly,
     "Converts gpuIf(isExpr:true) to gpuTernary",
     run = proc(ctx: var GpuContext): void =
@@ -152,101 +125,6 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
               n = rewriteCompoundAssignmentImpl(n)
           )
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-# normalizeArraySpanParams
-# ═══════════════════════════════════════════════════════════════════════
-#
-# `var array[N, T]` / `var openArray[T]` params are element pointers (T*), matching Nim's C backend.
-# The IR is gtPtr(gtArray) / gtPtr(gtSpan), HiddenDeref on access and HiddenAddr on call args, normalized to:
-# - gtPtr(gtArray[N, T]) -> gtPtr(T), gtPtr(gtSpan) -> gtSpan
-# - index-context derefs fold into the index (`(*p)[i]` ≡ `p[i]`),
-#    the pass keeps derefs under gpuAddr, `&(*p)` is the array address not `T**`
-# - gpuAddr(array) call args become the bare array (C decay) for array-ptr params
-# - gpuAddr(array) on a span param becomes toOpenArray(array, 0, len-1), lowerSpans inlines
-#
-# The gpuAddr(gpuDot) case keys on the TYPE (gtArray), not the field name:
-# any array-typed field passed by addr rewrites identically
-
-type
-  ArraySpanParamKind* = enum
-    aspNone       ## not an array/span param
-    aspArrayPtr   ## `var array[N, T]`, element pointer after normalization
-    aspSpan       ## `var openArray[T]`, span (ptr + len) after normalization
-
-proc collectArraySpanParamKinds(fn: GpuAst): seq[ArraySpanParamKind] =
-  ## Original param kinds (before type normalization), by param position.
-  result = newSeq[ArraySpanParamKind](fn.pParams.len)
-  for i, p in fn.pParams:
-    if p.typ.kind == gtSpan or (p.typ.kind == gtPtr and p.typ.to.kind == gtSpan):
-      result[i] = aspSpan
-    elif p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
-      result[i] = aspArrayPtr
-
-proc isArrayOrSpanPtr(t: GpuType): bool =
-  if t == nil: return false
-  t.kind == gtSpan or
-    (t.kind == gtPtr and (t.to.kind == gtArray or t.to.kind == gtSpan))
-
-proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
-  ## LowerSpans inlines this to ptr + len.
-  let idxTyp = initGpuType(gtInt32)
-  GpuAst(
-    kind: gpuCall,
-    cName: GpuAst(kind: gpuIdent, symbol: newSymbol("toOpenArray")),
-    cArgs: @[
-      arr,
-      GpuAst(kind: gpuLit, lValue: "0", lType: idxTyp),
-      GpuAst(kind: gpuLit, lValue: $(aLen - 1), lType: idxTyp)
-    ]
-  )
-
-proc normalizeArraySpanBody*(body: var GpuAst, calleeKinds: Table[string, seq[ArraySpanParamKind]]) =
-  ## Folds index-context derefs on array/span pointers into the index,
-  ## rewrites gpuAddr(array) call args per the callee's param kind
-  body.walk(proc(n: var GpuAst): void =
-    case n.kind
-    of gpuIndex:
-      # index context: (*p)[i] ≡ p[i] when p is an array/span pointer
-      if n.iArr.kind == gpuDeref and
-         n.iArr.dOf.kind == gpuIdent and
-         isArrayOrSpanPtr(n.iArr.dOf.symbol.typ):
-        n.iArr = n.iArr.dOf
-    of gpuCall:
-      if n.cName.kind == gpuIdent:
-        let kinds = calleeKinds.getOrDefault(n.cName.symbol.name)
-        if kinds.len > 0:
-          for i, arg in n.cArgs.mpairs:
-            if i >= kinds.len: break
-            if kinds[i] == aspNone: continue
-            if arg.kind == gpuAddr:
-              if arg.aOf.kind == gpuIdent:
-                let t = arg.aOf.symbol.typ
-                if t != nil and t.kind == gtArray:
-                  if kinds[i] == aspArrayPtr:
-                    arg = arg.aOf                # bare array, C decays to T*
-                  elif kinds[i] == aspSpan:
-                    arg = makeToOpenArray(arg.aOf, t.aLen)
-              elif arg.aOf.kind == gpuDot:
-                # var-array param passed a tensor's data field, same rewrite,
-                # the bare field access C-decays to T*
-                let t = arg.aOf.dField.symbol.typ
-                if t != nil and t.kind == gtArray:
-                  if kinds[i] == aspArrayPtr:
-                    arg = arg.aOf
-                  elif kinds[i] == aspSpan:
-                    arg = makeToOpenArray(arg.aOf, t.aLen)
-    else: discard
-  )
-
-proc normalizeArraySpanFn(fn: var GpuAst) =
-  for p in fn.pParams.mitems:
-    if p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
-      p.typ = initGpuPtrType(p.typ.to.aTyp, implicitPtr = p.typ.implicit)
-      p.ident.symbol.typ = p.typ
-    elif p.typ.kind == gtPtr and p.typ.to.kind == gtSpan:
-      p.typ = p.typ.to
-      p.ident.symbol.typ = p.typ
 
 # ═══════════════════════════════════════════════════════════════════════
 # lowerIfExpr

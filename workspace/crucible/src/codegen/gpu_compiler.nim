@@ -33,8 +33,8 @@ export builtins
 import ../builtins/builtins_compilermagic
 export builtins_compilermagic
 
-template registerCommonPasses*(reg: var PassRegistry) =
-  ## Register passes common to all backends.
+proc registerCommonPasses*(reg: var PassRegistry) =
+  ## Registers passes common to all backends.
   reg.registerValidationPrePasses()
   reg.registerNormalizationPasses()
   reg.registerSharedLoweringPasses()

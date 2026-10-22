@@ -43,7 +43,7 @@ proc warnUnassigned(n: GpuAst, fnName: string): void =
               readsResult = true
           )
           if readsResult:
-            echo "result may be used before being initialized in " & fnName & ". " &
+            warning "result may be used before being initialized in " & fnName & ". " &
               "Assign to `result = ...` before reading it."
   of gpuAssign:
     discard  # nothing to warn about

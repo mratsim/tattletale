@@ -28,6 +28,7 @@ import ./passes_preprocessing
 {.experimental: "codeReordering".}
 
 proc registerMetalLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerExpandStructKernelParams()
   reg.register("smemArena", pkTransform, phaseMain,
     "Hoists device functions' {.smem.} vars to threadgroup params as Metal doesn't support threadgroup allocation in device functions",
