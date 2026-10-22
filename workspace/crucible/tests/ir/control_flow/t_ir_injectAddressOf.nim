@@ -8,7 +8,6 @@
 ## - Struct type defs drop pointer fields while plain fields keep their order
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_injectAddressOf.nim

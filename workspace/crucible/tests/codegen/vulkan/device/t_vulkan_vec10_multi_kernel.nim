@@ -2,7 +2,6 @@
 ##
 ## Test that one ingest compiles both kernels and both launch on the same engine against the shared push-constant block
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_vec10_multi_kernel.nim

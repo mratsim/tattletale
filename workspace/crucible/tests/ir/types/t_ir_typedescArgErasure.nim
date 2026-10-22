@@ -7,7 +7,6 @@
 ## - CUDA emission shows no `T` arg and no typedesc param
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/types/t_ir_typedescArgErasure.nim

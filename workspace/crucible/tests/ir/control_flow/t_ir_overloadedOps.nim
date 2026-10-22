@@ -8,7 +8,6 @@
 ## - the rewritten gpuCall carries the two operands as cArgs
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_overloadedOps.nim

@@ -3,7 +3,6 @@
 ## let RHS, arithmetic, template block, tuple bracket and field access.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/compiletime/t_vulkan_constexpr_temp.nim

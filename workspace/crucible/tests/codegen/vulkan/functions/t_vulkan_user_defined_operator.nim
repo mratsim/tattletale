@@ -3,7 +3,6 @@
 ## Wrapper2 exercises sanitized operator-name collision handling.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/functions/t_vulkan_user_defined_operator.nim

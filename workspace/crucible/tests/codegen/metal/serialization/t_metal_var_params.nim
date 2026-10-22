@@ -4,7 +4,6 @@
 ## emission for implicit `var T` params.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/serialization/t_metal_var_params.nim

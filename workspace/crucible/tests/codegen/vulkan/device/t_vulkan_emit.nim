@@ -1,7 +1,6 @@
 ## Vulkan {.emit.} raw GLSL injection: argument forms, payload byte-exactness, non-emit pragma discard, result exclusion.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_emit.nim

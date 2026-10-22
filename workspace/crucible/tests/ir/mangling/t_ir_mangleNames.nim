@@ -7,7 +7,6 @@
 ## - npUnassigned maps `fkGenericInst` entries to npHashSuffix
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/mangling/t_ir_mangleNames.nim

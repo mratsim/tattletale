@@ -3,7 +3,6 @@
 ## run `barrier()`, then each work-item reads a slot written by a different work-item.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/functions/t_vulkan_cross_vocabulary_shared.nim

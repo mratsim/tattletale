@@ -4,7 +4,6 @@
 ## pointer surface still gets its reference block and int8 extensions declared
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_nested_ptr_array.nim

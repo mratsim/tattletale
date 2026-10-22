@@ -2,7 +2,6 @@
 ## Unannotated locals emit no qualifier, `{.smem.}` keeps `shared` (module scope, GLSL allows `shared` only there).
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/serialization/t_vulkan_address_space.nim

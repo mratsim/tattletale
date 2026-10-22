@@ -12,7 +12,6 @@
 ## accessing `.data[0]` on the inline result.
 ##
 ## Run:
-##   cd tattletale
 ##   nim cpp -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cuda/repro_block_in_type.nim 2>&1

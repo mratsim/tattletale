@@ -2,7 +2,6 @@
 ## exercised on the device (A-F): constexpr tuple RHS, arithmetic, template block, bracket access, block temp and tuple field access.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/compiletime/t_metal_constexpr_temp.nim

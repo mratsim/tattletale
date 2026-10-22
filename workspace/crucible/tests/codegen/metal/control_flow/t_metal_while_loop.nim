@@ -2,7 +2,6 @@
 ## `output[i] = i` for `i in 0 ..< 4` via a `while` loop with a manually incremented counter.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_while_loop.nim

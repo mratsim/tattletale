@@ -1,6 +1,6 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/ir/validations/t_ir_validateSharedPushConstLayout.nim (from tattletale)
+##     workspace/crucible/tests/ir/validations/t_ir_validateSharedPushConstLayout.nim
 
 import std/[tables, strutils]
 import workspace/crucible/src/crucible_internal_compiler

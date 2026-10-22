@@ -1,9 +1,3 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
 ## Regression: gpuBlock(isExpr) in getType, OpenCL target
 ##
 ## Same pattern as CUDA test_cuda_block_in_type.nim: a device function
@@ -11,7 +5,6 @@
 ## result triggers getType's missing `of gpuBlock:` arm.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/codegen/opencl/types/t_opencl_block_in_type.nim
 

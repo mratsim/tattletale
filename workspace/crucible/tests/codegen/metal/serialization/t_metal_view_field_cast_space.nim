@@ -3,7 +3,6 @@
 ## This ensures that the buffer's address space (`device`) is propagated through casts.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/serialization/t_metal_view_field_cast_space.nim

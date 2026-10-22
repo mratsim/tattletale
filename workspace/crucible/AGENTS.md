@@ -11,11 +11,15 @@ Enforcement: the `passes-export` linter rule in the writing-docs linter.
 ## Testing discipline
 
 This is a compile-time compiler. The deliverable is shader source produced
-during semantic analysis. Kernel tests verify compilation, never execution:
+during semantic analysis. Kernel tests verify compilation, never execution
+*during a refactoring session*, compilation alone can hide wrong runtime
+results:
 
-- check kernel tests with `nim check`, measured in seconds
-- pick the minimal tests exercising the code paths the diff touches, never a fixed set, never the whole suite
-- a rarely used feature still gets its test when modified
+- iterate on representative minimal tests and `nim check` checks, in seconds
+- run the full test suite at the end of the session, it launches kernels
+- pick the minimal tests exercising the code paths the diff touches, never
+  a fixed set, never the whole suite, a rarely used modified feature still
+  gets a test
 - verify a failure reproduces at pre-change HEAD before calling it a regression
 
 Examples: dead-code-elimination touched means the transitive-callee test runs.

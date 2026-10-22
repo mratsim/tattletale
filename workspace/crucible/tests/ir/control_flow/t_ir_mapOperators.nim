@@ -8,7 +8,6 @@
 ## - gsNone operator symbols inside gpuBinOp.bOp stay unpatched
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_mapOperators.nim

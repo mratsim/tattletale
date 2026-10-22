@@ -1,6 +1,6 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/ir/legalizations/t_ir_renameReservedIdentifiers.nim (from tattletale)
+##     workspace/crucible/tests/ir/legalizations/t_ir_renameReservedIdentifiers.nim
 
 import std/[sets, tables]
 import workspace/crucible/src/crucible_internal_compiler

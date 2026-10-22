@@ -2,7 +2,6 @@
 ## one reference per block buffer (`array[4, ptr UncheckedArray[uint32]]`).
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_array_of_ptrs.nim

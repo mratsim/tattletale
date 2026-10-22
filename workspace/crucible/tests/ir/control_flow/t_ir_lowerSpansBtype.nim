@@ -8,7 +8,6 @@
 ## - the fallback warns via the `warning` builtin, suppressible with --warnings:off
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerSpansBtype.nim

@@ -2,7 +2,6 @@
 ##
 ## Test that one ingest compiles both kernels and both launch on the same engine
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/device/t_opencl_vec10_multi_kernel.nim

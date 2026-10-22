@@ -7,7 +7,6 @@
 ## - empty `pRawPragmas` yields empty `pAttributes`
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/functions/t_ir_filterPragmas.nim

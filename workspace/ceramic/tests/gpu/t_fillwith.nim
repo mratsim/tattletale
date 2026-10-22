@@ -1,10 +1,6 @@
 ## fillWith on TensorView inside cuda: — for-loop expansion with `[]` access
 ##
-## Issue 4: gemm/fillWith expand to for-loops with `[]` on TensorView.
-## Still blocked after issue 2/3 fixes — investigating remaining blockers.
-##
 ## Run:
-##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
 ##     workspace/ceramic/tests/gpu/t_fillwith.nim
 

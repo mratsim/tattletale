@@ -1,16 +1,9 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
 ## Vulkan: by-value (scalar) kernel params as push constants, anti-regression.
 ## By-value scalars pack into the push-constant range, only pointer args
 ## bind as SSBOs, the output stays at binding 0.
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/serialization/t_vulkan_scalar_args.nim

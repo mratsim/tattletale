@@ -4,7 +4,6 @@
 ## A device fn reads `.idx` off the block value.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/types/t_metal_block_in_type.nim

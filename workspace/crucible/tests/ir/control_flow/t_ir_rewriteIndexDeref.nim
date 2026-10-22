@@ -8,7 +8,6 @@
 ## - a gpuIndex with no gpuDeref base passes through unchanged
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_rewriteIndexDeref.nim

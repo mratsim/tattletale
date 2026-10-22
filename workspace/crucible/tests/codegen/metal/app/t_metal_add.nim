@@ -10,7 +10,6 @@
 ## Nim 2.2.10, MSL 4.0.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/app/t_metal_add.nim

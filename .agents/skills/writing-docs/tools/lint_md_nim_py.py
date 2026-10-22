@@ -4578,7 +4578,7 @@ def passes_export_hygiene(path, text, findings, added):
     added-line set.
     """
     for no, line in enumerate(text.splitlines(), 1):
-        m = re.match(r'^(?:proc|func)\s+(\w+)\*', line)
+        m = re.match(r'^(?:proc|func|template|macro|iterator|converter)\s+(\w+)\*', line)
         if m is None or m.group(1).startswith('register'):
             continue
         if added is not None and no not in added:
@@ -4608,12 +4608,34 @@ def _top_level_tail(code):
     return tail
 
 
+def _nim_triple_quote_mask(lines):
+    """The 1-based line numbers inside triple-quoted string literals,
+    interior lines only; the delimiters stay visible. Statement checks
+    blank these lines: their content is string text, not Nim code."""
+    mask = set()
+    in_str = False
+    for no, raw in enumerate(lines, 1):
+        if in_str:
+            if '"""' in raw:
+                in_str = False
+            else:
+                mask.add(no)
+        elif raw.count('"""') % 2 == 1:
+            in_str = True
+    return mask
+
+
 def _nim_statement_frames(lines):
     """Yields (line no, code, depth at line start, expression continuation)
-    per line, strings blanked, comments stripped, depth across the file."""
+    per line, strings blanked, comments stripped, depth across the file.
+    Lines inside triple-quoted strings come out blank."""
     depth = 0
     prev_tail_opener = False
+    mask = _nim_triple_quote_mask(lines)
     for no, raw in enumerate(lines, 1):
+        if no in mask:
+            yield no, "", depth, False
+            continue
         code, _comment = _strip_comment(raw)
         code = _blank_nim_strings(code).rstrip()
         yield no, code, depth, prev_tail_opener
@@ -4660,6 +4682,8 @@ def section_banner(path, text, findings, added):
     bar whose width is not 71."""
     lines = text.splitlines()
     for no, ln in enumerate(lines, 1):
+        if added is not None and no not in added:
+            continue
         if BANNER_BAR_RE.match(ln) and len(ln) != 73:
             findings.append(Finding(path, no, "section-banner",
                                     "a banner bar of " + str(len(ln) - 2) + " columns, the house bar is 71"))

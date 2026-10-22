@@ -8,7 +8,6 @@
 ## - folded shapes cover float32/64, int32, and uint32 operands
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/optimizations/ir_foldMaxMin.nim

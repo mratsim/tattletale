@@ -7,7 +7,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/ir/legalizations/t_ir_lowerByrefParams.nim (from tattletale)
+##     workspace/crucible/tests/ir/legalizations/t_ir_lowerByrefParams.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler

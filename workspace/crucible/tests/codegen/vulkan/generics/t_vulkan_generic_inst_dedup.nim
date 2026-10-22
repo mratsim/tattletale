@@ -7,7 +7,6 @@
 ## - kernels carry `{.workgroup: (32, 1, 1).}` to match the launch `blk`
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/generics/t_vulkan_generic_inst_dedup.nim

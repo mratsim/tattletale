@@ -9,7 +9,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/ir/legalizations/t_ir_materializeIndexBuiltinParams.nim (from tattletale)
+##     workspace/crucible/tests/ir/legalizations/t_ir_materializeIndexBuiltinParams.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
