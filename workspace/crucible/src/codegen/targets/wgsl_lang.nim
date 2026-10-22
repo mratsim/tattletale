@@ -503,21 +503,10 @@ proc codegen*(ctx: var GpuContext): string =
   # and would fail shader-module creation.
 
   var bindingCounter = 0
-  proc mutateToAllowedTypes(p: GpuType): GpuType =
-    ## We strip pointer types `ptr T` to only emit `T`. This is because all global parameters
-    ## must be global storage buffers. These cannot be of `ptr` type. If an implicit, runtime
-    ## sized array is desired, use `ptr UncheckedArray[T]`, which will emit `array<T>`.
-    ##
-    ## Bool globals patch to `i32` storage in the patchBoolToI32 pass.
-    case p.kind
-    of gtPtr: mutateToAllowedTypes(p.to)
-    else: p
   proc genGlobal(p: GpuParam): string =
-    ## XXX: deduce read or read_write based on argument type!
-    let rw = if p.typ.kind == gtPtr: "read_write" else: "read"
+    let rw = if p.flavor == kVar: "read_write" else: "read"
     result = &"@group(0) @binding({bindingCounter}) var<storage, " & rw & "> "
-    let typ = mutateToAllowedTypes(p.typ)
-    result.add gpuTypeToString(typ, p.ident.ident(), allowEmptyIdent = false, addrSpace = p.addressSpace) & ";\n"
+    result.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, addrSpace = p.addressSpace) & ";\n"
     inc bindingCounter
 
   # deduped by param name

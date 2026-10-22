@@ -101,7 +101,7 @@ static:
   echo "  OK — store site wraps the RHS in conv(gtInt32)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 3. ptr bool global: deref load wraps in conv(gtBool), storage becomes ptr i32
+# 3. ptr bool global: deref load wraps in conv(gtBool), storage becomes i32
 # ═══════════════════════════════════════════════════════════════════════════
 static:
   var ctx = GpuContext()
@@ -116,9 +116,9 @@ static:
   doAssert use != nil and use.convTo.kind == gtBool,
     "deref load should wrap in conv(gtBool)"
   doAssert use.convExpr.kind == gpuDeref, "the deref itself stays"
-  doAssert ctx.globals["pflag_h0"].typ.kind == gtPtr
-  doAssert ctx.globals["pflag_h0"].typ.to.kind == gtInt32
-  echo "  OK — ptr bool deref wraps in conv(gtBool), storage becomes ptr i32"
+  doAssert ctx.globals["pflag_h0"].typ.kind == gtInt32,
+    "storage type is final after the bundle, the pointer is stripped"
+  echo "  OK — ptr bool deref wraps in conv(gtBool), storage becomes i32"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. i32 global untouched
@@ -156,7 +156,7 @@ static:
   echo "  OK - bare bool RHS wraps in conv(gtBool)"
 
 static:
-  # M8: mutable and implicit survive the ptr bool to ptr i32 conversion
+  # M8: the storage type strips to i32, the symbol keeps mutable and implicit
   var ctx = GpuContext()
   let ptrBool = initGpuPtrType(boolTyp(), implicitPtr = true)
   ptrBool.mutable = true
@@ -166,9 +166,10 @@ static:
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
   registerWgslChain.runPassPrepared(ctx)
-  doAssert ctx.globals["pflag_h0"].typ.to.kind == gtInt32
-  doAssert ctx.globals["pflag_h0"].typ.mutable, "mutable must survive the conversion"
-  doAssert ctx.globals["pflag_h0"].typ.implicit, "implicit must survive the conversion"
-  echo "  OK - ptr bool to ptr i32 keeps mutable and implicit"
+  doAssert ctx.globals["pflag_h0"].typ.kind == gtInt32,
+    "storage type is final after the bundle, the pointer is stripped"
+  doAssert sym.typ.mutable, "mutable stays on the symbol type"
+  doAssert sym.typ.implicit, "implicit stays on the symbol type"
+  echo "  OK - storage strips to i32, the symbol keeps mutable and implicit"
 
 echo "  OK - t_ir_patchBoolToI32"
