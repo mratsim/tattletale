@@ -201,54 +201,10 @@ proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
       return true
 
 
-# Preprocessing
-# ═══════════════════════════════════════════════════════════════════════
-
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and adds every called function to `fnTab`,
-  ## a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      if fn notin ctx.fnTab:
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Code generation
+# Printing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-
-# ── Preprocess ────────────────────────────────────────────────────────
-
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  # 1. Add all data from `genericInsts` and `types` tables
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill table with all *global* functions or *only* the specific `kernel`
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Traverse global functions for any `gpuCall` node and record in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnOrig = ctx.allFnTab[fnIdent]
-    ctx.scanFunctions(fn)
-
 
 # ── genGLSL ─────────────────────────────────────────────────────────
 

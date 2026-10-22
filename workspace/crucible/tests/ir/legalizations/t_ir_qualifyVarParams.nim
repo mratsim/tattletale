@@ -15,6 +15,14 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering_glsl
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOne(ctx: var GpuContext) =
+  ## Runs the single pass under test through the public registry.
+  var reg = PassRegistry.new()
+  reg.registerQualifyVarParams()
+  ctx.runPasses(reg)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. kVar param retyped to its pointee
@@ -32,7 +40,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[procNode.pName] = procNode
 
-  ctx.qualifyVarParams()
+  runOne(ctx)
 
   doAssert procNode.pParams[0].typ.kind == gtInt32,
     "kVar param should be retyped to its pointee, got: " & $procNode.pParams[0].typ.kind
@@ -59,7 +67,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[procNode.pName] = procNode
 
-  ctx.qualifyVarParams()
+  runOne(ctx)
 
   let stmt = procNode.pBody.statements[0]
   doAssert stmt.aLeft.kind == gpuIdent,
@@ -96,7 +104,7 @@ block:
   ctx.allFnTab[callee.pName] = callee
   ctx.allFnTab[caller.pName] = caller
 
-  ctx.qualifyVarParams()
+  runOne(ctx)
 
   doAssert caller.pBody.statements[0].cArgs[0].kind == gpuIdent,
     "gpuAddr arg to a kVar param should unwrap to the plain lvalue, got: " &
@@ -123,7 +131,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[procNode.pName] = procNode
 
-  ctx.qualifyVarParams()
+  runOne(ctx)
 
   doAssert procNode.pParams[0].typ.kind == gtPtr,
     "kIn param type must stay a pointer"

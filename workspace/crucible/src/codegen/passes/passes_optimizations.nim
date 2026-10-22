@@ -25,6 +25,20 @@ import ./pass_datatypes
 # Registration
 # ═══════════════════════════════════════════════════════════════════
 
+func registerMaterializePassByRefArgs*(reg: var PassRegistry) =
+  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
+    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
+    dependsOn = @["ensureBlock"],
+    run = materializePassByRefArgs
+  )
+
+func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
+  reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
+    "Folds Nim max/min calls into backend builtin functions",
+    dependsOn = @[],
+    run = foldMaxMinToBuiltins
+  )
+
 func registerOptimizationPasses*(reg: var PassRegistry) =
   ## After mangleNames, so constructed builtin calls keep their plain name
   reg.register("foldMaxMinToBuiltins", pkTransform, phaseMain,
@@ -45,7 +59,7 @@ func registerOptimizationPasses*(reg: var PassRegistry) =
 # Pass-by-ref materialization
 # ═══════════════════════════════════════════════════════════════════════
 
-func isLvalue*(n: GpuAst): bool =
+func isLvalue(n: GpuAst): bool =
   case n.kind
   of gpuIdent: true
   of gpuIndex: true
@@ -67,7 +81,7 @@ proc walkNonLvalueArgs(ctx: var GpuContext, n: var GpuAst) =
     for ch in n.mitems:
       walkNonLvalueArgs(ctx, ch)
 
-proc materializePassByRefArgs*(ctx: var GpuContext) =
+proc materializePassByRefArgs(ctx: var GpuContext) =
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
     walkNonLvalueArgs(ctx, fn.pBody)
@@ -82,7 +96,7 @@ const
                         gtUint64, gtInt64, gtFloat32, gtFloat64, gtFloat16,
                         gtBf16, gtSize_t}
 
-func isBasicNumeric*(t: GpuType): bool =
+func isBasicNumeric(t: GpuType): bool =
   not t.isNil and t.kind in BasicNumericKinds
 
 proc sameExpr(a, b: GpuAst): bool =
@@ -181,7 +195,7 @@ proc foldMaxMinInBody(ctx: var GpuContext, n: var GpuAst) =
   for ch in n.mitems:
     ctx.foldMaxMinInBody(ch)
 
-proc foldMaxMinToBuiltins*(ctx: var GpuContext) =
+proc foldMaxMinToBuiltins(ctx: var GpuContext) =
   ## Lowers max/min ternaries to the backend-native max/min builtins,
   ## each printer emits its hardware instruction (CUDA: PTX max.*).
   ## Handles both direct and blitted `_blit_N = ternary` forms.
@@ -351,7 +365,7 @@ proc collectCallTargets(n: GpuAst, targets: var HashSet[string]) =
   for ch in n.items:
     collectCallTargets(ch, targets)
 
-proc foldConstantShells*(ctx: var GpuContext) =
+proc foldConstantShells(ctx: var GpuContext) =
   ## Dissolves calls to functions whose body is a single constant expression,
   ## deletes the now-dead definitions. Nim's semcheck turns a static-param
   ## function instantiated with static args into a zero-arg shell:

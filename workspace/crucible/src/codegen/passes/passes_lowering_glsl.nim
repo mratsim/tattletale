@@ -29,7 +29,7 @@ import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
-const GlslReserved* = [
+const GlslReserved = [
   "output", "input", "in", "out", "attribute", "uniform", "varying",
   "buffer", "shared", "layout", "main", "void", "return",
   "if", "else", "for", "while", "break", "continue", "struct",
@@ -38,25 +38,19 @@ const GlslReserved* = [
   "sampler", "texture", "image", "subroutine", "discard", "precise"
 ].toHashSet()
 
+func registerQualifyVarParams*(reg: var PassRegistry) =
+  reg.register("qualifyVarParams", pkTransform, phaseMain,
+    "Retypes kVar params to their pointee, unwraps their body derefs and call-site gpuAddr args",
+    dependsOn = @[],
+    run = qualifyVarParams
+  )
+
 func registerGlslLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = false)
   # GLSL buffer references cannot be indexed directly, the deref must be
   # explicit in the IR for the renderer to compose `.x`.
-  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
-    "Renames identifiers colliding with GLSL reserved words: fn names, call sites, params, globals, struct fields, field accesses",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      ctx.renameReservedIdentifiers(GlslReserved)
-  )
-  reg.register(
-    name = "insertPointerDeref",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Wraps pointer-typed index and field parents in explicit gpuDeref",
-    dependsOn = @[
-      "rewriteIndexDeref"],
-    run = insertPointerDeref
-  )
+  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+  reg.registerInsertPointerDeref()
   reg.register(
     name = "qualifyVarParams",
     kind = pkTransform,
@@ -98,7 +92,8 @@ proc qualifyVarParamsImpl(ctx: var GpuContext, n: var GpuAst) =
         if p.typ.kind == gtPtr and p.typ.implicit:
           p.typ = p.typ.to
         else:
-          raiseAssert "kVar param without an implicit pointer type: " & p.ident.ident()
+          raiseAssert "kVar param without an implicit pointer type: " & p.ident.ident() &
+            " in " & (if n.pName != nil and n.pName.kind == gpuIdent: n.pName.ident() else: "?")
         kvarSyms.incl p.ident.symbol.iSym
         kvarNames.incl p.ident.symbol.name
     ctx.unwrapVarDerefs(n.pBody, kvarSyms, kvarNames)
@@ -118,8 +113,6 @@ proc qualifyVarParamsImpl(ctx: var GpuContext, n: var GpuAst) =
     for ch in n.mitems:
       ctx.qualifyVarParamsImpl(ch)
 
-proc qualifyVarParams*(ctx: var GpuContext) =
+proc qualifyVarParams(ctx: var GpuContext) =
   for fn in ctx.allFnTab.mvalues():
-    ctx.qualifyVarParamsImpl(fn)
-  for fn in ctx.fnTab.mvalues():
     ctx.qualifyVarParamsImpl(fn)

@@ -13,6 +13,14 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering_msl
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOne(ctx: var GpuContext) =
+  ## Runs the single pass under test through the public registry.
+  var reg = PassRegistry.new()
+  reg.registerMaterializeIndexBuiltinParams()
+  ctx.runPasses(reg)
 
 # ── IR builders ─────────────────────────────────────────────────────────────
 
@@ -85,7 +93,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   doAssert fn.pParams.len == 2,
     "device fn must gain one builtin param per need, got " & $fn.pParams.len
@@ -124,7 +132,7 @@ block:
   ctx.allFnTab[callee.pName] = callee
   ctx.allFnTab[kernel.pName] = kernel
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   # Declared params keep their positions, types, and unmarked symbols.
   doAssert kernel.pParams.len == 4,
@@ -164,7 +172,7 @@ block:
   ctx.allFnTab[d2.pName] = d2
   ctx.allFnTab[kernel.pName] = kernel
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   # Kernel params: first-seen over own refs (none) then callee subtrees.
   doAssert paramNames(kernel) == @[
@@ -200,7 +208,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   doAssert fn.pParams.len == 0,
     "a local shadowing a canonical name must not produce a builtin param"
@@ -218,7 +226,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   doAssert fn.pParams.len == 1,
     "recursive fn must gain only its own body's need"
@@ -240,7 +248,7 @@ block:
   ctx.allFnTab[fn.pName] = fn
   ctx.genericInsts[fn.pName] = fn
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   doAssert fn.pParams.len == 1,
     "builtin param must be appended once despite two table entries"
@@ -262,7 +270,7 @@ block:
   var ctx = GpuContext()
   ctx.allFnTab[fn.pName] = fn
 
-  materializeIndexBuiltinParamsImpl(ctx)
+  runOne(ctx)
 
   doAssert fn.pParams.len == 1,
     "the barrier must not count as a callee need"

@@ -10,8 +10,6 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
-import ../passes/passes_lowering_opencl
-import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -143,74 +141,10 @@ proc containsFloat16(t: GpuType): bool =
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Preprocessing
-# ═══════════════════════════════════════════════════════════════════════
-
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and checks for all `gpuCall` nodes. Any function
-  ## called in the scope is added to `fnTab`. This is a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      if fn notin ctx.fnTab:
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Code generation
+# Printing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-
-# ── Preprocess ────────────────────────────────────────────────────────
-
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  # 1. Add all data from `genericInsts` and `types` tables
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill table with all *global* functions or *only* the specific `kernel`
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Traverse global functions for any `gpuCall` node and record in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnOrig = ctx.allFnTab[fnIdent]
-    ctx.scanFunctions(fn)
-
-  # 4. Apply Phase 6 byref lowering passes
-  # NOTE: genericInsts entries were already copied to allFnTab in step 1,
-  # so we only iterate allFnTab (not genericInsts separately) to avoid
-  # double-processing the same ref object.
-  # lowerByrefParamsImpl: process allFnTab.
-  # fnTab shares references with allFnTab for called functions (scanFunctions),
-  # and kernels are skipped, so no separate fnTab loop needed.
-  for fnKey in ctx.allFnTab.keys:
-    var fn = ctx.allFnTab[fnKey]
-    if fn.kind == gpuProc:
-      lowerByrefParamsImpl(ctx, fn)
-  # insertByrefAddrsImpl: needs to visit call sites in fnTab entries too,
-  # because fnTab has clones of top-level kernels from farmTopLevel.
-  for fnKey in ctx.allFnTab.keys:
-    var fn = ctx.allFnTab[fnKey]
-    if fn.kind == gpuProc:
-      insertByrefAddrsImpl(ctx, fn)
-  for fnIdent, fn in ctx.fnTab.mpairs:
-    if fn.kind == gpuProc:
-      insertByrefAddrsImpl(ctx, fn)
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 

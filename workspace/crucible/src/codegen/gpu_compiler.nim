@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, tables]
+import std/[macros, sequtils, tables]
 
 import ./ir/gpu_ast_datatypes
 import ./targets/targets_lang
@@ -18,6 +18,7 @@ import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_gpu
+import ./targets/lang_utils
 import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
 import ./passes/pass_registry
@@ -32,6 +33,43 @@ import ../builtins/builtins # all the builtins for the backend to make the Nim c
 export builtins
 import ../builtins/builtins_compilermagic
 export builtins_compilermagic
+
+proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: var GpuAst) =
+  ## Registers top-level procs in allFnTab, global fns in fnTab, top-level
+  ## vars in `varBlock`. A non-empty `kernel` narrows fnTab to that kernel.
+  case ast.kind
+  of gpuProc:
+    ctx.allFnTab[ast.pName] = ast
+    if ast.isGlobal() and (kernel.len == 0 or ast.pName.ident() == kernel):
+      ctx.fnTab[ast.pName] = ast
+  of gpuBlock:
+    for ch in ast:
+      ctx.farmTopLevel(ch, kernel, varBlock)
+  of gpuVar, gpuConstexpr:
+    varBlock.statements.add ast
+  of gpuTypeDef, gpuAlias:
+    raiseAssert "Unexpected type def / alias def found. These should be in `ctx.types` now: " & $ast
+  else:
+    discard
+
+proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
+  ## Farms the AST into ctx (fnTab, allFnTab, globalBlocks) ahead of runPasses.
+  ## typesFirst: C-family block layout plus callee harvest, WGSL the reverse
+  ## and no harvest (its callees inline).
+  for k, v in pairs(ctx.genericInsts):
+    ctx.allFnTab[k] = v
+  var varBlock = GpuAst(kind: gpuBlock)
+  ctx.farmTopLevel(ast, "", varBlock)
+  when typesFirst:
+    for k, typ in ctx.types:
+      ctx.globalBlocks.add typ
+    ctx.globalBlocks.add varBlock
+  else:
+    ctx.globalBlocks.add varBlock
+    var typBlock = GpuAst(kind: gpuBlock)
+    for k, typ in ctx.types:
+      typBlock.statements.add typ
+    ctx.globalBlocks.add typBlock
 
 func registerCommonPasses*(reg: var PassRegistry) =
   ## Registers passes common to all backends.
@@ -62,8 +100,9 @@ macro codegenCuda(body: typed): string =
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenCuda(gpuAst))
+  result = newLit(ctx.codegenCuda())
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.
@@ -82,8 +121,9 @@ macro codegenOpenCL(body: typed): string =
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenOpenCL(gpuAst))
+  result = newLit(ctx.codegenOpenCL())
 
 macro opencl*(body: untyped): string =
   ## Converts the body of this macro into OpenCL C code.
@@ -103,8 +143,9 @@ macro codegenGLSL(body: typed): string =
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  let src = ctx.codegenGLSL(gpuAst)
+  let src = ctx.codegenGLSL()
   result = newLit(src)
 
 macro vulkan*(body: untyped): string =
@@ -124,8 +165,9 @@ macro codegenWebGpu(body: typed): string =
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = false)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenWebGpu(gpuAst))
+  result = newLit(ctx.codegenWebGpu())
 
 macro webgpu*(body: untyped): string =
   ## Converts the body of this macro into WebGPU WGSL code.
@@ -144,8 +186,9 @@ macro codegenMetal(body: typed): string =
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenMetal(gpuAst))
+  result = newLit(ctx.codegenMetal())
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.

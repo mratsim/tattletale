@@ -47,6 +47,7 @@ Rule table (rule | trigger | severity):
 | test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
+| stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -520,6 +521,8 @@ RULES = {
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
+    "stmt-inline": Rule("stmt-inline", True,
+                        "a statement keyword carries its body on the same line, one statement per line"),
 }
 
 
@@ -2390,6 +2393,10 @@ def lint(paths, base=None):
             # the closed-test-directory rule reads any Nim change under
             # tests/codegen/ir, the path sits outside KERNEL_ROOTS
             tile_phase(f, text, findings, added)
+        if f.suffix == ".nim" and "src/codegen/passes/passes_" in _rel(f):
+            passes_export_hygiene(f, text, findings, added)
+        if f.suffix == ".nim":
+            stmt_inline(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -4552,6 +4559,88 @@ def _tile_support(files):
         _TILE_SUPPORT.update(consts=consts, builtins=builtins,
                              support_lines=support_lines)
     return _TILE_SUPPORT["consts"], _TILE_SUPPORT["builtins"], _TILE_SUPPORT["support_lines"]
+
+
+def passes_export_hygiene(path, text, findings, added):
+    """Flags exported non-registration callables in passes_* files.
+
+    Only `register*` procs are public in the passes layer: implementations
+    stay private, cross-file wiring goes through registrations. Base scoping
+    follows the doc rules: `added` is None for a full run, otherwise the
+    added-line set.
+    """
+    for no, line in enumerate(text.splitlines(), 1):
+        m = re.match(r'^(?:proc|func)\s+(\w+)\*', line)
+        if m is None or m.group(1).startswith('register'):
+            continue
+        if added is not None and no not in added:
+            continue
+        findings.append(Finding(
+            path, no, "passes-export",
+            "exported non-registration in a passes file, only `register*` "
+            "routines are public"))
+
+
+STMT_KEYWORD_RE = re.compile(r"^\s*(?:if|elif|for|while|when)\b")
+CONTINUATION_TAIL_RE = re.compile(r"(?:=|\(|\[|\{|,|and|or|in|\+|-|\*|/|not)$")
+
+
+def _top_level_tail(code):
+    """Returns the text after the last bracket-depth-zero colon, empty when
+    the line ends on its colon or carries no top-level colon."""
+    d = 0
+    tail = ""
+    for i, ch in enumerate(code):
+        if ch in "([{":
+            d += 1
+        elif ch in ")]}":
+            d -= 1
+        elif ch == ":" and d == 0:
+            tail = code[i + 1:].strip()
+    return tail
+
+
+def _nim_statement_frames(lines):
+    """Yields (line no, code, depth at line start, expression continuation)
+    per line, strings blanked, comments stripped, depth across the file."""
+    depth = 0
+    prev_tail_opener = False
+    for no, raw in enumerate(lines, 1):
+        code, _comment = _strip_comment(raw)
+        code = _blank_nim_strings(code).rstrip()
+        yield no, code, depth, prev_tail_opener
+        # a definition header closing on `=` opens a statement body, not an
+        # expression continuation
+        is_definition = bool(re.match(r"^\s*(?:proc|func|template|iterator|converter|macro)\b", code))
+        prev_tail_opener = (bool(code) and not is_definition
+                            and bool(CONTINUATION_TAIL_RE.search(code)))
+        for ch in code:
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+
+
+def stmt_inline(path, text, findings, added):
+    """Flags if/elif/for/while/when in statement position carrying a body
+    on the same line.
+
+    One statement per line. Value-producing if/when expressions are exempt,
+    detected through bracket depth and a continuation opener on the previous
+    line; else and of branches stay unflagged, the textual form cannot tell
+    an expression branch from a statement branch.
+    """
+    for no, code, depth, prev_opener in _nim_statement_frames(text.splitlines()):
+        if depth > 0 or prev_opener or not STMT_KEYWORD_RE.match(code):
+            continue
+        if not _top_level_tail(code):
+            continue
+        if added is not None and no not in added:
+            continue
+        findings.append(Finding(
+            path, no, "stmt-inline",
+            "a statement keyword carries its body on the same line, put the "
+            "body on the next line"))
 
 
 def tile_phase(path, text, findings, added):

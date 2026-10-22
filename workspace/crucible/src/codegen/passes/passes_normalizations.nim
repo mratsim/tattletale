@@ -30,7 +30,51 @@ import ./passes_preprocessing
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerNormalizationPasses*(reg: var PassRegistry) =
+func rewriteCompoundAssignmentImpl(n: GpuAst): GpuAst =
+  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
+  ## clones the LHS (legalization mutates it in place, the sides must not alias)
+  doAssert n.kind == gpuBinOp
+  if n.bOp.ident() in ["<=", "==", ">=", "!="]:
+    return n
+  template genAssign(left, rnode, op: typed): untyped =
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
+                       bLeft: left.clone(), bRight: rnode)
+    GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
+  let op = n.bOp.ident()
+  if op.len >= 2 and op[^1] == '=':
+    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
+    opAst.symbol.iSym = opAst.symbol.name
+    var lhs = n.bLeft
+    if lhs.kind == gpuAddr:
+      lhs = lhs.aOf
+    result = genAssign(lhs, n.bRight, opAst)
+  else:
+    result = n
+
+proc dceCalleesFrom(ctx: var GpuContext, n: GpuAst): void =
+  ## Adds every fn called in `n` (transitively) to `fnTab`:
+  ## the printing world is the called subset, the rest is dead and dropped.
+  case n.kind
+  of gpuCall:
+    let fn = n.cName
+    if fn in ctx.allFnTab and fn notin ctx.fnTab:
+      let fnCalled = ctx.allFnTab[fn]
+      ctx.fnTab[fn] = fnCalled
+      for ch in fnCalled:
+        ctx.dceCalleesFrom(ch)
+    for arg in n.cArgs:
+      ctx.dceCalleesFrom(arg)
+  else:
+    for ch in n:
+      ctx.dceCalleesFrom(ch)
+
+proc deadCodeElimination(ctx: var GpuContext) =
+  ## fnTab closure over call edges: the printers emit the called subset,
+  ## unreferenced fns are dead.
+  for fnKey in toSeq(ctx.fnTab.keys):
+    dceCalleesFrom(ctx, ctx.fnTab[fnKey])
+
+func registerLowerIfExpr*(reg: var PassRegistry) =
   reg.register("lowerIfExpr", pkTransform, phaseEarly,
     "Converts gpuIf(isExpr:true) to gpuTernary",
     run = proc(ctx: var GpuContext): void =
@@ -44,6 +88,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
           lowerIfExprImpl(fn.pBody)
   )
 
+func registerMapOperators*(reg: var PassRegistry) =
   reg.register("mapOperators", pkTransform, phaseEarly,
     "Patches operator function names (+,*,/,-) to valid C++ identifiers",
     dependsOn = @[],
@@ -58,6 +103,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
           mapOperatorsImpl(fn)
   )
 
+func registerFilterPragmas*(reg: var PassRegistry) =
   reg.register("filterPragmas", pkTransform, phaseEarly,
     "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
     dependsOn = @[],
@@ -72,6 +118,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
           filterPragmasImpl(fn)
   )
 
+func registerResolveOverloadedOperators*(reg: var PassRegistry) =
   reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
     "Converts gpuBinOp with non-primitive types to gpuCall",
     dependsOn = @[],
@@ -86,6 +133,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
           resolveOverloadedOperatorsImpl(ctx, fn.pBody)
   )
 
+func registerDeEmbedForRangeAdjustment*(reg: var PassRegistry) =
   reg.register("deEmbedForRangeAdjustment", pkTransform, phaseEarly,
     "Normalizes gpuFor range expressions, removing embedded +1 adjustments",
     dependsOn = @[],
@@ -100,11 +148,28 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
           deEmbedForRangeAdjustmentImpl(fn.pBody)
   )
 
-  # registered here, not in registerPreprocessingPasses: runPasses runs
-  # passes in registration order, legalization (blitBlockExprs) must see
-  # the desugared gpuAssign, blitting a compound-assign LHS would lose
-  # the accumulation. After resolveOverloadedOperators so non-primitive
-  # `+=` is never touched.
+func registerNormalizationPasses*(reg: var PassRegistry) =
+  reg.registerLowerIfExpr()
+  reg.registerMapOperators()
+  reg.registerFilterPragmas()
+  reg.registerResolveOverloadedOperators()
+
+
+
+
+  # After resolveOverloadedOperators: it turns binops into calls, the fnTab
+  # closure over call edges must run after it.
+  reg.register("deadCodeElimination", pkTransform, phaseEarly,
+    "Fills fnTab with the transitively called subset of allFnTab, the printers emit only that",
+    dependsOn = @[],
+    run = deadCodeElimination
+  )
+
+  # Position matters: legalization (blitBlockExprs) must see the desugared
+  # gpuAssign, blitting a compound-assign LHS would lose the accumulation.
+  # The resolveOverloadedOperators position keeps non-primitive `+=`
+  # outside this pass.
+  reg.registerDeEmbedForRangeAdjustment()
   reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
     "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
       "so the LHS is a real modifiable lvalue on all backends",
@@ -130,7 +195,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
 # lowerIfExpr
 # ═══════════════════════════════════════════════════════════════════════
 
-func lowerIfExprImpl*(n: var GpuAst) =
+func lowerIfExprImpl(n: var GpuAst) =
   ## Backends emit `cond ? then : else` from the lowered gpuTernary
   case n.kind
   of gpuIf:
@@ -230,7 +295,7 @@ proc maybePatchFnName(n: var GpuAst) =
   of "..": patch(n, "range")
   else: discard
 
-func mapOperatorsImpl*(n: var GpuAst) =
+func mapOperatorsImpl(n: var GpuAst) =
   ## Only gsProc idents, gpuBinOp operator symbols are valid C++ as-is
   case n.kind
   of gpuIdent:
@@ -314,9 +379,8 @@ func mapOperatorsImpl*(n: var GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 # filterPragmas
 # ═══════════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════════
 
-func filterPragmasImpl*(n: var GpuAst) =
+func filterPragmasImpl(n: var GpuAst) =
   ## Nim-specific pragmas drop, GPU-meaningful ones populate pAttributes
   if n.kind != gpuProc:
     for child in n.mitems:
@@ -345,9 +409,8 @@ func filterPragmasImpl*(n: var GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 # resolveOverloadedOperators
 # ═══════════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════════
 
-proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc resolveOverloadedOperatorsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## An overloaded gpuBinOp becomes a gpuCall, the ident found by iSym lookup
   case n.kind
   of gpuBinOp:
@@ -448,7 +511,7 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
 # deEmbedForRangeAdjustment
 # ═══════════════════════════════════════════════════════════════════════
 
-func deEmbedForRangeAdjustmentImpl*(n: var GpuAst) =
+func deEmbedForRangeAdjustmentImpl(n: var GpuAst) =
   ## Resolves embedded +1 adjustments left by Slice/HSlice object ranges
   case n.kind
   of gpuFor:

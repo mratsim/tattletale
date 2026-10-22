@@ -1268,3 +1268,6 @@ func gpuTypeToShortString*(t: GpuType): string =
   else:
     result = $t.kind # fallback M-bM-^@M-^T safe but verbose
 
+func isGlobal*(fn: GpuAst): bool =
+  doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
+  result = attGlobal in fn.pAttributes

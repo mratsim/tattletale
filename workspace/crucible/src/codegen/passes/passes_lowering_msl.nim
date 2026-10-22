@@ -27,6 +27,14 @@ import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
+func registerMaterializeIndexBuiltinParams*(reg: var PassRegistry) =
+  reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
+    "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      materializeIndexBuiltinParamsImpl(ctx)
+  )
+
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerExpandStructKernelParams()
@@ -42,20 +50,11 @@ func registerMetalLoweringPasses*(reg: var PassRegistry) =
     run = proc(ctx: var GpuContext): void =
       materializeIndexBuiltinParamsImpl(ctx)
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-# Metal printer helpers
-# ═══════════════════════════════════════════════════════════════════════
-
-func variantSuffix*(spaces: seq[AddressSpace]): string =
-  ## suffix of a space tuple, e.g. `_smem`, `_devicesmem`
-  result = "_"
-  for space in spaces:
-    case space
-    of asDevice: result.add "device"
-    of asConstant: result.add "const"
-    of asSMEM: result.add "smem"
-    of asRMEM: result.add "rmem"
+  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
+    "Records var and objconstr pointer-field address spaces for resolution",
+    dependsOn = @[],
+    run = collectValueAddressSpaces
+  )
 
 # ═══════════════════════════════════════════════════════════════════════
 # `{.smem.}` promotion to overseeing kernel
@@ -189,7 +188,7 @@ proc bindSmemCallSites(ctx: var GpuContext, fn: var GpuAst) =
           "' to a threadgroup param, the caller '" & $fn.pName.symbol.iSym &
           "' must declare a matching {.smem.} var"
 
-proc smemArenaImpl*(ctx: var GpuContext) =
+proc smemArenaImpl(ctx: var GpuContext) =
   # Sweep 1: the tables share GpuAst refs, hoisting is idempotent.
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]
@@ -303,7 +302,7 @@ proc materializeCallArgsImpl(ctx: GpuContext, n: var GpuAst, needs: Table[string
     for ch in mitems(n):
       materializeCallArgsImpl(ctx, ch, needs)
 
-proc materializeIndexBuiltinParamsImpl*(ctx: var GpuContext) =
+proc materializeIndexBuiltinParamsImpl(ctx: var GpuContext) =
   var needs = initTable[string, seq[(string, GpuCoordBuiltinKind)]]()
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]

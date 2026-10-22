@@ -405,8 +405,6 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
 # Duplicate var renaming
 # ═══════════════════════════════════════════════════════════════════════
 
-proc renameSymsInTree(n: var GpuAst, oldName, newName: string)
-proc dedupVarNames*(stmts: var seq[GpuAst])
 
 proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
@@ -507,50 +505,6 @@ proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
     blitFnBody(ctx, body.wBody, fnRetType)
   else:
     discard
-
-proc renameSymsInTree(n: var GpuAst, oldName, newName: string) =
-  if n == nil: return
-  case n.kind
-  of gpuIdent:
-    if n.symbol.name == oldName:
-      n.symbol.name = newName
-      n.symbol.iSym = newName
-  of gpuVar:
-    # mitems does not yield vName
-    if n.vName.symbol.name == oldName:
-      n.vName.symbol.name = newName
-      n.vName.symbol.iSym = newName
-    renameSymsInTree(n.vInit, oldName, newName)
-  else:
-    for child in n.mitems:
-      renameSymsInTree(child, oldName, newName)
-
-proc dedupVarNames*(stmts: var seq[GpuAst]) =
-  ## Renames duplicate gpuVar declarations across sibling blocks,
-  ## template expansions collide without C++ scope isolation
-  var seenNames: Table[string, int]
-  for i in 0 ..< stmts.len:
-    if stmts[i].kind == gpuBlock:
-      var localRenames: seq[(string, string)]
-      for s in stmts[i].statements:
-        if s.kind == gpuVar:
-          let name = s.vName.symbol.name
-          if name in seenNames:
-            seenNames[name] += 1
-            let newName = name & "_" & $seenNames[name]
-            localRenames.add (name, newName)
-          else:
-            seenNames[name] = 0
-      for (oldName, newName) in localRenames:
-        renameSymsInTree(stmts[i], oldName, newName)
-    elif stmts[i].kind == gpuVar:
-      let name = stmts[i].vName.symbol.name
-      if name in seenNames:
-        seenNames[name] += 1
-        let newName = name & "_" & $seenNames[name]
-        renameSymsInTree(stmts[i], name, newName)
-      else:
-        seenNames[name] = 0
 
 proc unwrapBlockInDot(n: var GpuAst) =
   ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.

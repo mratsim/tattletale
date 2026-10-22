@@ -27,14 +27,6 @@ const CudaReserved = [
 
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
-    "Renames identifiers colliding with CUDA reserved words",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      ctx.renameReservedIdentifiers(CudaReserved)
-  )
+  reg.registerMaterializePassByRefArgs()
+  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+

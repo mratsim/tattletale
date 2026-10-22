@@ -37,24 +37,34 @@ const OclReserved = [
 
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.registerNormalizeArraySpanParams(decayArrays = true)
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
+  reg.registerMaterializePassByRefArgs()
   reg.registerExpandStructKernelParams()
-  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
-    "Renames identifiers colliding with OpenCL C reserved words",
+  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
+  # By-ref lowering: params become `const Type*`, call sites materialize addrs.
+  reg.register("lowerByrefParams", pkTransform, phaseMain,
+    "Rewrites passByRef params into const Type* ptr params",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
-      ctx.renameReservedIdentifiers(OclReserved)
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          ctx.lowerByrefParamsImpl(fn)
+  )
+  reg.register("insertByrefAddrs", pkTransform, phaseMain,
+    "Wraps by-ref call args in gpuAddr",
+    dependsOn = @["lowerByrefParams"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          ctx.insertByrefAddrsImpl(fn)
   )
 
 # ═══════════════════════════════════════════════════════════════════════
 # By-ref parameter lowering
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerByrefParamsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc lowerByrefParamsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Rewrites passByRef params into `const Type*` ptr params for OpenCL.
   ## CUDA keeps `const Type&` natively, no body changes there.
   ##
@@ -96,7 +106,7 @@ proc lowerByrefParamsImpl*(ctx: var GpuContext, n: var GpuAst) =
     for ch in n.mitems:
       ctx.lowerByrefParamsImpl(ch)
 
-proc insertByrefAddrsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc insertByrefAddrsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Wraps byref args in `gpuAddr` nodes at call sites.
   case n.kind
   of gpuCall:

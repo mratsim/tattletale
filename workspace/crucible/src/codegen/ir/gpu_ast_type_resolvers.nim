@@ -291,3 +291,113 @@ func containsKind*(t: GpuType, kind: GpuTypeKind): bool =
     result = t.uaTo.containsKind(kind)
   else:
     result = t.kind == kind
+
+# ═══════════════════════════════════════════════════════════════════════
+# Value address spaces
+# ═══════════════════════════════════════════════════════════════════════
+
+func getPtrFieldNames*(t: GpuType): seq[string] =
+  case t.kind
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      if f.typ.kind == gtPtr:
+        result.add f.name
+  else: discard
+
+proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  if n == nil:
+    return asRMEM
+  case n.kind
+  of gpuIdent:
+    if n.symbol == nil:
+      asRMEM
+    elif n.symbol.iSym in ctx.varAddressSpaces:
+      ctx.varAddressSpaces[n.symbol.iSym]
+    elif n.symbol.symKind in {gsDeviceKernelParam, gsGlobalKernelParam}:
+      # explicit `ptr T` is a device pointer, implicit `var T` is thread
+      if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
+         not n.symbol.typ.implicit:
+        asDevice
+      else:
+        asRMEM
+    else:
+      asRMEM
+  of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
+  of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
+  of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
+  of gpuBinOp: ctx.resolveValueAddressSpace(n.bLeft)
+  of gpuDot:
+    let ptype = ctx.getDotParentType(n.dParent)
+    if ptype != nil and ptype in ctx.ptrFieldVariants:
+      let base = ctx.ptrFieldVariants[ptype][0]
+      let fieldIdx = getPtrFieldNames(ptype).find(n.dField.ident())
+      if fieldIdx >= 0 and fieldIdx < base.len:
+        return base[fieldIdx] # base variant space of the field
+    ctx.resolveValueAddressSpace(n.dParent)
+  of gpuIndex: ctx.resolveValueAddressSpace(n.iArr)
+  of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
+  of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
+  of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
+  else: asRMEM
+
+proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  var base = n
+  while base != nil and base.kind != gpuIdent:
+    case base.kind
+    of gpuAddr: base = base.aOf
+    of gpuDeref: base = base.dOf
+    of gpuIndex: base = base.iArr
+    of gpuDot: base = base.dParent
+    of gpuCast: base = base.cExpr
+    of gpuBlock: base = base.statements[^1]
+    of gpuMaterialize: base = base.mExpr
+    else: return asRMEM
+  if base == nil or base.symbol == nil:
+    return asRMEM
+  ctx.varAddressSpaces.getOrDefault(base.symbol.iSym, asRMEM)
+
+proc resolvePtrFieldAddressSpaces*(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
+  for fname in getPtrFieldNames(n.ocType):
+    var space = asRMEM
+    for f in n.ocFields:
+      if f.name == fname and f.value.kind != gpuDiscard:
+        space = ctx.resolveValueAddressSpace(f.value)
+        break
+    result.add space
+
+proc getParamAddressSpace(p: GpuParam): AddressSpace =
+  if p.addressSpace != asRMEM:
+    p.addressSpace
+  elif p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
+    asDevice
+  else:
+    asRMEM
+
+proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
+  if n == nil:
+    return
+  case n.kind
+  of gpuVar:
+    if n.vName.symbol != nil:
+      ctx.varAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
+  of gpuObjConstr:
+    let spaces = ctx.resolvePtrFieldAddressSpaces(n)
+    var variants = ctx.ptrFieldVariants.getOrDefault(n.ocType, @[])
+    if spaces notin variants:
+      variants.add spaces
+    ctx.ptrFieldVariants[n.ocType] = variants
+  else: discard
+  for ch in n:
+    ctx.collectValueAddressSpacesImpl(ch)
+
+proc collectValueAddressSpaces*(ctx: var GpuContext) =
+  ## Generic-fn params get authoritative entries at their clone sites (makeFnGeneric)
+  for (_, fn) in ctx.fnTab.pairs:
+    for p in fn.pParams:
+      if p.ident.symbol != nil:
+        ctx.varAddressSpaces[p.ident.symbol.iSym] = getParamAddressSpace(p)
+    ctx.collectValueAddressSpacesImpl(fn)
+  for (iSym, g) in ctx.globals.pairs:
+    ctx.varAddressSpaces[iSym] = asDevice
+  for blk in ctx.globalBlocks:
+    ctx.collectValueAddressSpacesImpl(blk)

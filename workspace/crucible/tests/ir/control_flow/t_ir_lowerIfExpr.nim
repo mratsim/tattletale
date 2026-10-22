@@ -15,6 +15,20 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOnNode(regProc: proc(reg: var PassRegistry) {.nimcall.}, n: var GpuAst) =
+  ## Runs one registered pass over `n` as a fn body, the public-API path.
+  var ctx = GpuContext()
+  var fn = GpuAst(kind: gpuProc,
+                  pName: GpuAst(kind: gpuIdent, symbol: newSymbol("f", iSym = "f")),
+                  pRetType: GpuType(kind: gtVoid),
+                  pBody: GpuAst(kind: gpuBlock, statements: @[n]))
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  regProc(reg)
+  ctx.runPasses(reg)
+  n = fn.pBody.statements[0]
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. gpuIf(isExpr: true) → gpuTernary
@@ -28,7 +42,7 @@ block:
                       ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[ifExpr])
-  lowerIfExprImpl(fnBody)
+  runOnNode(registerLowerIfExpr, fnBody)
 
   doAssert fnBody.statements.len == 1
   let tern = fnBody.statements[0]
@@ -50,7 +64,7 @@ block:
                       ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[stmtIf])
-  lowerIfExprImpl(fnBody)
+  runOnNode(registerLowerIfExpr, fnBody)
 
   let stmt = fnBody.statements[0]
   doAssert stmt.kind == gpuIf, "gpuIf(ifIsExpr:false) should remain gpuIf, got " & $stmt.kind
@@ -75,7 +89,7 @@ block:
                        ifElifs: @[])
 
   var fnBody = GpuAst(kind: gpuBlock, statements: @[outerIf])
-  lowerIfExprImpl(fnBody)
+  runOnNode(registerLowerIfExpr, fnBody)
 
   let outer = fnBody.statements[0]
   doAssert outer.kind == gpuTernary, "Outer should be ternary"

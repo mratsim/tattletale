@@ -11,8 +11,6 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 
 import ./lang_utils
-import ../passes/passes_preprocessing as pp
-import ../passes/passes_lowering_wgsl as pw
 
 
 proc gpuTypeToString*(t: GpuType,
@@ -156,220 +154,8 @@ proc determineIdent(arg: GpuAst): GpuAst =
   else:
     raiseAssert "Not implemented to determine ident from node: " & $arg
 
-proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
-  ## Rewrites idents onto their call-site bindings.
-  ## The substitution step of call inlining.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in subst:
-      n = subst[n.symbol.iSym]
-  else:
-    for ch in mitems(n):
-      substituteIdents(ch, subst)
-
-proc containsReturnStmt(n: GpuAst): bool =
-  if n.kind == gpuReturn:
-    return true
-  for ch in n:
-    if ch.containsReturnStmt():
-      return true
-
-proc collectIdentNames(n: GpuAst, names: var HashSet[string]) =
-  if n.kind == gpuIdent and n.symbol != nil:
-    names.incl n.symbol.name
-  else:
-    for ch in n:
-      ch.collectIdentNames(names)
-
-proc hasNonFnPtrParam(fn: GpuAst): bool =
-  ## True when a pointer parameter sits outside the `function` address space.
-  ## WGSL rejects storage, uniform and workgroup pointers as user-function parameter types.
-  for p in fn.pParams:
-    if p.typ != nil and p.typ.kind == gtPtr and p.addressSpace != asRMEM:
-      return true
-
-proc hasPtrStructParam(fn: GpuAst, ctx: GpuContext): bool =
-  for p in fn.pParams:
-    if p.typ != nil and p.typ.kind == gtObject:
-      for f in p.typ.fields:
-        if f.typ.kind == gtPtr and (p.typ, f.name) in ctx.structsWithPtrs:
-          return true
-
-proc inlinePointerParamCalls(ctx: var GpuContext) =
-  ## Inlines device-proc calls whose pointer parameters have no WGSL
-  ## parameter type. WGSL rejects storage, uniform and workgroup pointers
-  ## as user-function parameter types. Runtime-sized arrays cannot cross a call by value.
-  ##
-  ## Per call:
-  ## - every argument binds to a fresh `let` alias holding the pointer at function scope
-  ## - the callee body substitutes onto the aliases and splices over the call
-  ## - the inlined callee drops from the function table
-  ##
-  ## Calls whose pointer arguments all live in `function` space keep real calls.
-  ##
-  ## Contracts:
-  ## - callees return void, an inlined call carries no expression value
-  ## - callee bodies hold no `return`, a spliced `return` exits the caller
-  var inlCount = 0
-  var usedNames = initHashSet[string]()
-  for fn in ctx.fnTab.values:
-    fn.pBody.collectIdentNames(usedNames)
-    for p in fn.pParams:
-      usedNames.incl p.ident.ident()
-  for g in ctx.globals.values:
-    g.ident.collectIdentNames(usedNames)
-
-  proc inlineCall(ctx: var GpuContext, call: GpuAst, usedNames: HashSet[string]): seq[GpuAst] =
-    ## Expands one call into parameter `let` bindings plus the substituted callee body.
-    let callee = ctx.allFnTab[call.cName]
-    doAssert callee.pRetType.kind == gtVoid,
-      "WGSL: device proc `" & call.cName.ident() &
-      "` takes a non-function-space pointer parameter, only void procs inline"
-    doAssert not callee.pBody.containsReturnStmt(),
-      "WGSL: device proc `" & call.cName.ident() &
-      "` takes a non-function-space pointer parameter, its body must not `return`"
-    var subst = initTable[string, GpuAst]()
-    for i, p in callee.pParams:
-      let arg = call.cArgs[i]
-      var fresh: string
-      while true:
-        fresh = "inl" & $inlCount & '_' & p.ident.ident()
-        inc inlCount
-        if fresh notin usedNames:
-          break
-      var typ = p.typ
-      if typ.kind == gtPtr:
-        # `mutable` selects `read_write` in the WGSL pointer type.
-        typ.mutable = arg.determineMutability()
-      if typ.kind == gtObject and arg.kind == gpuIdent:
-        # A struct value does not carry its pointer field: the pointer lives
-        # in a global binding. Without rebinding, the callee body reads
-        # whatever same-named buffer it finds.
-        for f in typ.fields:
-          if f.typ.kind == gtPtr and (arg.ident(), f.name) in ctx.ptrFieldBindings:
-            ctx.ptrFieldBindings[(fresh, f.name)] = ctx.ptrFieldBindings[(arg.ident(), f.name)]
-      let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
-      let binding = GpuAst(kind: gpuIdent, symbol: sym)
-      subst[p.ident.symbol.iSym] = binding
-      ctx.varAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
-      result.add GpuAst(kind: gpuVar, vMutable: false, vName: binding,
-                        vType: typ, vInit: arg, vRequiresMemcpy: false,
-                        addressSpace: asRMEM)
-    var body = callee.pBody.clone()
-    body.substituteIdents(subst)
-    result.add body.statements
-
-  proc inlineCandidate(ctx: GpuContext, call: GpuAst): bool =
-    ## True when a call must inline.
-    ## The callee takes a pointer outside `function` space, or a struct
-    ## holding one: neither crosses a WGSL function signature.
-    if call.cName.symbol == nil:
-      return false
-    if call.cName notin ctx.allFnTab:
-      return false
-    let callee = ctx.allFnTab[call.cName]
-    if callee.kind != gpuProc or callee.isGlobal():
-      return false
-    result = callee.hasNonFnPtrParam() or callee.hasPtrStructParam(ctx)
-
-  proc inlineIn(ctx: var GpuContext, n: var GpuAst): bool =
-    ## Splices inlinable calls in `n`, depth-first. Returns true when `n` changed.
-    case n.kind
-    of gpuBlock:
-      var changed = false
-      var i = 0
-      while i < n.statements.len:
-        var s = n.statements[i]
-        if s.kind == gpuCall and ctx.inlineCandidate(s):
-          let repl = ctx.inlineCall(s, usedNames)
-          n.statements = n.statements[0 ..< i] & repl & n.statements[i + 1 .. ^1]
-          changed = true
-          # the spliced statements are visited in place, `i` stays
-        else:
-          changed = ctx.inlineIn(s) or changed
-          n.statements[i] = s
-          inc i
-      result = changed
-    else:
-      var changed = false
-      for ch in mitems(n):
-        changed = ctx.inlineIn(ch) or changed
-      result = changed
-
-  for key in toSeq(ctx.fnTab.keys):
-    var body = ctx.fnTab[key].pBody
-    var changed = true
-    while changed:
-      changed = ctx.inlineIn(body)
-    ctx.fnTab[key].pBody = body
-
-  # Drop the inlined callees: their parameters cannot cross a WGSL function signature.
-  for key in toSeq(ctx.fnTab.keys):
-    let fn = ctx.fnTab[key]
-    if not fn.isGlobal() and (fn.hasNonFnPtrParam() or fn.hasPtrStructParam(ctx)):
-      ctx.fnTab.del(key)
-
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  ## If `kernel` is a global function, we *only* generate code for that kernel.
-  ## This is useful if your GPU code contains multiple kernels with differing
-  ## parameters to avoid having to fill dummy buffers for all the unused parameters
-  ## or to work around conflicting paremeters.
-  # 1. Fill table with all *global* functions or *only* the specific `kernel`
-  #    if any given
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  var typBlock = GpuAst(kind: gpuBlock)
-  for k, typ in pairs(ctx.types):
-    typBlock.statements.add typ
-  ctx.globalBlocks.add typBlock
-
-  # 2. Remove all arguments from global functions, as none are allowed in WGSL
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    if (fn.isGlobal() and kernel.len > 0 and fn.pName.ident() == kernel) or
-        (kernel.len == 0 and fn.isGlobal()):
-      for p in fn.pParams:
-        ctx.globals[p.ident.symbol.iSym] = p
-      fn.pParams.setLen(0)
-      pw.updateSymsInGlobalsImpl(ctx, fn)
-    else:
-      discard
-
-  if ctx.globalBlocks.len > 0:
-    pw.pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
-  if ctx.globalBlocks.len > 1:
-    pw.removeStructPointerFieldsImpl(ctx.globalBlocks[1])
-
-  # 3. Collect value address spaces before scanGenerics derives generic
-  # argument spaces from the authoritative map.
-  pp.collectValueAddressSpaces(ctx)
-
-  # 3.b Scan generics
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnOrig = ctx.allFnTab[fnIdent]
-    var callParams = initTable[string, GpuParam]()
-    for p in fnOrig.pParams:
-      callParams[p.ident.symbol.iSym] = p
-    pw.scanGenericsImpl(ctx, fn, callParams)
-
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    if fn.isGlobal():
-      pw.injectAddressOfImpl(ctx, fn)
-
-  ctx.inlinePointerParamCalls()
-
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    pw.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
-
-
-  for (fnIdent, fn) in pairs(ctx.fnTab):
-    pw.checkCodeValidImpl(ctx, fn)
 
 
 proc genLit*(ast: GpuAst): string =
@@ -474,6 +260,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
+      when defined(debugPasses):
+        echo "[print] stmt kind=", el.kind, " selfTerm=", el.isSelfTerminating(), " skipSem=", ctx.skipSemicolon
       result.add ctx.genWebGpu(el, indent)
       if not el.isSelfTerminating() and not ctx.skipSemicolon: # nested blocks and emits carry their own terminators
         result.add ';'
@@ -507,14 +295,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       else:
         raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
     else:
-      let leftId = ast.aLeft.determineIdent()
-      if leftId.kind != gpuDiscard and leftId.symbol.typ.kind == gtPtr and leftId.symbol.typ.to.kind == gtInt32:
-        # If the LHS is `i32` then a conversion to `i32` is either a no-op, if the left always was
-        # `i32` (and the Nim compiler type checked it for us) *OR* the RHS is a boolean expression and
-        # we patched the `bool -> i32` and thus need to convert it.
-        result = indentStr & ctx.genWebGpu(ast.aLeft) & " = i32(" & ctx.genWebGpu(ast.aRight) & ')'
-      else:
-        result = indentStr & ctx.genWebGpu(ast.aLeft) & " = " & ctx.genWebGpu(ast.aRight)
+      result = indentStr & ctx.genWebGpu(ast.aLeft) & " = " & ctx.genWebGpu(ast.aRight)
 
   of gpuIf:
     template genCond(c: GpuAst): untyped =
@@ -726,12 +507,9 @@ proc codegen*(ctx: var GpuContext): string =
     ## must be global storage buffers. These cannot be of `ptr` type. If an implicit, runtime
     ## sized array is desired, use `ptr UncheckedArray[T]`, which will emit `array<T>`.
     ##
-    ## Bool globals patch to `i32` here (also `ptr bool`).
-    ## The registered patchBoolToI32 pass is dormant while WGSL
-    ## preprocessing drives the pipeline directly.
+    ## Bool globals patch to `i32` storage in the patchBoolToI32 pass.
     case p.kind
     of gtPtr: mutateToAllowedTypes(p.to)
-    of gtBool: GpuType(kind: gtInt32)
     else: p
   proc genGlobal(p: GpuParam): string =
     ## XXX: deduce read or read_write based on argument type!

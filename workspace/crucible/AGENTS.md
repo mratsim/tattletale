@@ -2,6 +2,26 @@
 
 AI coding tool guidelines for the Crucible codegen backend.
 
+## Passes layer publicity
+
+`src/codegen/passes/passes_*` files export only `register*` routines.
+Implementations are file-local, cross-file wiring goes through registrations.
+Enforcement: the `passes-export` linter rule in the writing-docs linter.
+
+## Testing discipline
+
+This is a compile-time compiler. The deliverable is shader source produced
+during semantic analysis. Kernel tests verify compilation, never execution:
+
+- check kernel tests with `nim check`, measured in seconds
+- pick the minimal tests exercising the code paths the diff touches, never a fixed set, never the whole suite
+- a rarely used feature still gets its test when modified
+- verify a failure reproduces at pre-change HEAD before calling it a regression
+
+Examples: dead-code-elimination touched means the transitive-callee test runs.
+WGSL pass registry touched means the WGSL macro-path test runs.
+MSL address-space map touched means the Metal kernel test compiles.
+
 ## Modifying Crucible
 
 **Always check what exists before adding a new helper.**

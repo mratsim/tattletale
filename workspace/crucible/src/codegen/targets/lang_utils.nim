@@ -5,16 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / tables
+import std / [tables, sequtils]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ../../builtins/builtins_functions
 import ../../builtins/builtins_gpu_types
-import ../passes/passes_optimizations
-
-# ═══════════════════════════════════════════════════════════════════════
-# Reserved keyword renaming
-# ═══════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════
 # Builtin function names
@@ -70,6 +65,20 @@ proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
       result.add renderExpr(ctx, part.expr)
 
 # ═══════════════════════════════════════════════════════════════════════
+# Metal printer helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+func variantSuffix*(spaces: seq[AddressSpace]): string =
+  ## suffix of a space tuple, e.g. `_smem`, `_devicesmem`
+  result = "_"
+  for space in spaces:
+    case space
+    of asDevice: result.add "device"
+    of asConstant: result.add "const"
+    of asSMEM: result.add "smem"
+    of asRMEM: result.add "rmem"
+
+# ═══════════════════════════════════════════════════════════════════════
 # IR predicates and farming
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -78,24 +87,5 @@ func isSelfTerminating*(el: GpuAst): bool =
   ## must not append `;` (nested blocks and `gpuEmit` raw text).
   result = el.kind in {gpuBlock, gpuEmit}
 
-func isGlobal*(fn: GpuAst): bool =
-  doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
-  result = attGlobal in fn.pAttributes
 
-proc farmTopLevel*(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: var GpuAst) =
-  case ast.kind
-  of gpuProc:
-    ctx.allFnTab[ast.pName] = ast
-    if kernel.len > 0 and ast.pName.ident() == kernel and ast.isGlobal():
-      ctx.fnTab[ast.pName] = ast.clone()
-    elif kernel.len == 0 and ast.isGlobal():
-      ctx.fnTab[ast.pName] = ast.clone()
-  of gpuBlock:
-    for ch in ast:
-      ctx.farmTopLevel(ch, kernel, varBlock)
-  of gpuVar, gpuConstexpr:
-    varBlock.statements.add ast
-  of gpuTypeDef, gpuAlias:
-    raiseAssert "Unexpected type def / alias def found. These should be in `ctx.types` now: " & $ast
-  else:
-    discard
+

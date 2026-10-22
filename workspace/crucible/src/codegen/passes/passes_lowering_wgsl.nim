@@ -25,47 +25,54 @@ import ./passes_lowering
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
-const WgslReserved* = [
+const WgslReserved = [
   "layout", "storage", "uniform", "workgroup", "override", "diagnostic",
   "enable", "requires", "alias", "bitcast", "discard", "push_constant",
   "readonly", "read_write", "function", "private", "compute", "vertex",
   "fragment", "type"
 ].toHashSet()
 
-func registerWgslLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
-  # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
-  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
-    "Renames identifiers colliding with WGSL reserved words: fn names, call sites, params, globals, struct fields, field accesses",
+func registerPullConstantPragmaVars*(reg: var PassRegistry) =
+  reg.register("pullConstantPragmaVars", pkTransform, phaseMain,
+    "Hoists {.const.} pragma vars out of the top-level var block",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
-      ctx.renameReservedIdentifiers(WgslReserved)
+      if ctx.globalBlocks.len > 0:
+        pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
   )
-  reg.registerExpandStructKernelParams()
-  # Explode before the passes below reshape code carrying pointers.
+
+func registerRemoveStructPointerFields*(reg: var PassRegistry) =
+  reg.register("removeStructPointerFields", pkTransform, phaseMain,
+    "Drops pointer fields from struct types: WGSL has no pointer struct fields",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      if ctx.globalBlocks.len > 1:
+        removeStructPointerFieldsImpl(ctx.globalBlocks[1])
+  )
+
+func registerAddressOfInjection*(reg: var PassRegistry) =
   reg.register("injectAddressOf", pkTransform, phaseMain,
     "Replaces storage-buffer idents with &ident in global fns",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
-      # Apply pre-WGSL-standard preprocessing
-      # 1. pullConstantPragmaVars on globalBlocks[0]
-      if ctx.globalBlocks.len > 0:
-        pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
-      # 2. removeStructPointerFields on globalBlocks[1]
-      if ctx.globalBlocks.len > 1:
-        removeStructPointerFieldsImpl(ctx.globalBlocks[1])
-      # 3. Remove args from global functions, update syms
       for (fnIdent, fn) in ctx.fnTab.mpairs:
-        if fn.isGlobalFn():
-          for p in fn.pParams:
-            ctx.globals[p.ident.symbol.iSym] = p
-          fn.pParams.setLen(0)
-          updateSymsInGlobalsImpl(ctx, fn)
-      # 4. Scan generics
+        if fn.isGlobal():
+          ctx.injectAddressOfImpl(fn)
+  )
+
+func registerWgslLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
+  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
+  reg.registerExpandStructKernelParams()
+  # Reads original params: runs before liftKernelParamsToGlobals empties them.
+  reg.register("scanGenerics", pkTransform, phaseMain,
+    "Derives generic instantiation argument spaces from original params",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
       let fns = toSeq(ctx.fnTab.pairs)
       for (fnIdent, fn) in fns:
         let fnOrig = ctx.allFnTab[fnIdent]
@@ -74,23 +81,58 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
           callParams[p.ident.symbol.iSym] = p
         ctx.scanGenericsImpl(fn, callParams)
   )
-  reg.register("injectAddressOfApply", pkTransform, phaseMain,
-    "Applies gpuAddr wrapping on global fn idents",
-    dependsOn = @["injectAddressOf"],
+  # WGSL functions take no parameters: global fns' params move to ctx.globals.
+  reg.register("liftKernelParamsToGlobals", pkTransform, phaseMain,
+    "Moves global fns' params to ctx.globals and rewrites their uses",
+    dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for (fnIdent, fn) in ctx.fnTab.mpairs:
-        if fn.isGlobalFn():
+        if fn.isGlobal():
+          for p in fn.pParams:
+            ctx.globals[p.ident.symbol.iSym] = p
+          fn.pParams.setLen(0)
+          updateSymsInGlobalsImpl(ctx, fn)
+  )
+  reg.register("pullConstantPragmaVars", pkTransform, phaseMain,
+    "Hoists {.const.} pragma vars out of the top-level var block",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      if ctx.globalBlocks.len > 0:
+        pullConstantPragmaVarsImpl(ctx, ctx.globalBlocks[0])
+  )
+  reg.register("removeStructPointerFields", pkTransform, phaseMain,
+    "Drops pointer fields from struct types: WGSL has no pointer struct fields",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      if ctx.globalBlocks.len > 1:
+        removeStructPointerFieldsImpl(ctx.globalBlocks[1])
+  )
+  # Before scanGenerics derives generic argument spaces from the authoritative map.
+  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
+    "Records var and objconstr pointer-field address spaces for resolution",
+    dependsOn = @[],
+    run = collectValueAddressSpaces
+  )
+  reg.register("injectAddressOf", pkTransform, phaseMain,
+    "Replaces storage-buffer idents with &ident in global fns",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for (fnIdent, fn) in ctx.fnTab.mpairs:
+        if fn.isGlobal():
           ctx.injectAddressOfImpl(fn)
+  )
+  reg.register("inlinePointerParamCalls", pkTransform, phaseMain,
+    "Inlines calls whose pointer arguments cannot cross a WGSL function signature",
+    dependsOn = @["injectAddressOf"],
+    run = proc(ctx: var GpuContext): void =
+      ctx.inlinePointerParamCalls()
   )
   reg.register("makeCodeValid", pkTransform, phaseMain,
     "Addresses WGSL AST patterns (compound assign, struct ptr fields)",
-    dependsOn = @["injectAddressOf"],
+    dependsOn = @["inlinePointerParamCalls"],
     run = proc(ctx: var GpuContext): void =
-      # Collect value address spaces before call args and pointer aliases
-      # are resolved from the authoritative map.
-      ctx.collectValueAddressSpaces()
       for (fnIdent, fn) in ctx.fnTab.mpairs:
-        ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobalFn())
+        ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobal())
   )
   reg.registerPatchBoolToI32()
   reg.register("checkCodeValidWgsl", pkTransform, phaseMain,
@@ -105,14 +147,14 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
 # WGSL printer helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-func shortAddrSpace*(addrSpace: AddressSpace): string =
+func shortAddrSpace(addrSpace: AddressSpace): string =
   case addrSpace
   of asDevice: "s"
   of asConstant: "u"
   of asSMEM: "w"
   of asRMEM: "l"
 
-proc determineMutability*(arg: GpuAst): bool =
+proc determineMutability(arg: GpuAst): bool =
   case arg.kind
   of gpuIdent: (not arg.symbol.isNil) and arg.symbol.typ != nil and arg.symbol.typ.kind == gtPtr
   of gpuAddr: true
@@ -129,7 +171,7 @@ proc determineMutability*(arg: GpuAst): bool =
   else:
     raiseAssert "Cannot determine mutability from: " & $arg
 
-proc determineIdent*(arg: GpuAst): GpuAst =
+proc determineIdent(arg: GpuAst): GpuAst =
   template dfl(): untyped = GpuAst(kind: gpuDiscard)
   case arg.kind
   of gpuIdent: arg
@@ -201,25 +243,24 @@ proc patchBoolToI32(ctx: var GpuContext) =
 # Forward declarations consumed by wgsl_lang.preprocess
 # ═══════════════════════════════════════════════════════════════════════
 
-func patchTypeImpl*(t: GpuType): GpuType
-proc patchSymbolImpl*(n: GpuAst): GpuAst
-proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
-proc makeFnGeneric*(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst
-proc getGenericArguments*(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg]
+func patchTypeImpl(t: GpuType): GpuType
+proc patchSymbolImpl(n: GpuAst): GpuAst
+proc genGenericName(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
+proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst
+proc getGenericArguments(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg]
 
 # ═══════════════════════════════════════════════════════════════════════
 # Address-of injection
 # ═══════════════════════════════════════════════════════════════════════
 
-func injectAddressOfImpl*(ctx: var GpuContext, n: var GpuAst) =
+func injectAddressOfImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Replaces storage-buffer idents with `gpuAddr(ident)` in global fns.
   ## Also handles bool patching: bool globals are wrapped in gpuConv(expr, gtBool).
   case n.kind
   of gpuIdent:
     if n.symbol.iSym in ctx.globals and (let p = ctx.globals[n.symbol.iSym]; p.typ.kind == gtPtr):
       n = GpuAst(kind: gpuAddr, aOf: n)
-    elif n.symbol.iSym in ctx.globals and (let p = ctx.globals[n.symbol.iSym]; p.typ.kind == gtBool):
-      n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
+    # bool load convs are patchBoolToI32's job
   of gpuDeref:
     if n.dOf.kind == gpuIdent and n.dOf.symbol.iSym in ctx.globals and
        (let p = ctx.globals[n.dOf.symbol.iSym]; p.typ.kind == gtPtr):
@@ -232,7 +273,7 @@ func injectAddressOfImpl*(ctx: var GpuContext, n: var GpuAst) =
 # Constant-var pulling
 # ═══════════════════════════════════════════════════════════════════════
 
-func pullConstantPragmaVarsImpl*(ctx: var GpuContext, blk: var GpuAst) =
+func pullConstantPragmaVarsImpl(ctx: var GpuContext, blk: var GpuAst) =
   ## Filters out `var foo {.const_mem.}: dtype` from global blocks and adds to globals.
   doAssert blk.kind == gpuBlock
   var i = 0
@@ -250,7 +291,7 @@ func pullConstantPragmaVarsImpl*(ctx: var GpuContext, blk: var GpuAst) =
 # Struct pointer-field stripping
 # ═══════════════════════════════════════════════════════════════════════
 
-func removeStructPointerFieldsImpl*(blk: var GpuAst) =
+func removeStructPointerFieldsImpl(blk: var GpuAst) =
   ## Removes ptr fields from struct definitions (WGSL limitation).
   doAssert blk.kind == gpuBlock
   for typ in blk.mitems:
@@ -268,12 +309,12 @@ func removeStructPointerFieldsImpl*(blk: var GpuAst) =
 # Code validation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc makeCodeValidImpl*(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
+proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
   ## Rewrites WGSL-invalid AST patterns: struct pointer field replacement,
   ## object constructor stripping, call signature updates, var type updates.
   case n.kind
   of gpuBinOp:
-    n = rewriteCompoundAssignmentImpl(n)
+    # compound-assign rewriting is the rewriteCompoundAssignment pass's home
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
   of gpuObjConstr:
@@ -351,7 +392,7 @@ proc makeCodeValidImpl*(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
 
-func checkCodeValidImpl*(ctx: var GpuContext, n: GpuAst) =
+func checkCodeValidImpl(ctx: var GpuContext, n: GpuAst) =
   ## Checks WGSL validity constraints.
   case n.kind
   of gpuVar:
@@ -362,7 +403,7 @@ func checkCodeValidImpl*(ctx: var GpuContext, n: GpuAst) =
     for ch in n:
       ctx.checkCodeValidImpl(ch)
 
-func updateSymsInGlobalsImpl*(ctx: var GpuContext, n: GpuAst) =
+func updateSymsInGlobalsImpl(ctx: var GpuContext, n: GpuAst) =
   ## Update symbols in global functions to reflect symbol kind/mutability.
   case n.kind
   of gpuIdent:
@@ -379,7 +420,7 @@ func updateSymsInGlobalsImpl*(ctx: var GpuContext, n: GpuAst) =
 # Generic instantiation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, GpuParam], owner = "") =
+proc scanGenericsImpl(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, GpuParam], owner = "") =
   ## Scans for gpuCall nodes, generates generic instantiations for pointer args, records pointer-field bindings under the scanned variable name.
   case n.kind
   of gpuCall:
@@ -430,7 +471,7 @@ proc scanGenericsImpl*(ctx: var GpuContext, n: GpuAst, callerParams: Table[strin
     for ch in n:
       ctx.scanGenericsImpl(ch, callerParams, owner)
 
-proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string =
+proc genGenericName(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string =
   ## Generates unique name for a generic WGSL function instantiation.
   doAssert n.kind == gpuCall
   result = n.cName.ident() & '_'
@@ -452,7 +493,7 @@ proc genGenericName*(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerPa
     if i < n.cArgs.high:
       result.add '_'
 
-proc makeFnGeneric*(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst =
+proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst =
   ## Returns a cloned function with params updated for the generic instantiation.
   result = fn
   let pnSym = newSymbol(gi.name, symKind = gsProc)
@@ -482,20 +523,20 @@ proc makeFnGeneric*(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst =
         updateSyms(ch, params)
   updateSyms(result.pBody, result.pParams)
 
-proc patchSymbolImpl*(n: GpuAst): GpuAst =
+proc patchSymbolImpl(n: GpuAst): GpuAst =
   doAssert n.kind == gpuIdent
   result = n
   if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
     result.symbol.typ = patchTypeImpl(result.symbol.typ)
 
-func patchTypeImpl*(t: GpuType): GpuType =
+func patchTypeImpl(t: GpuType): GpuType =
   result = t
   if result.kind == gtBool:
     result.kind = gtInt32
   elif result.kind == gtPtr and result.to.kind == gtBool:
     result.to.kind = gtInt32
 
-proc getGenericArguments*(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg] =
+proc getGenericArguments(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg] =
   for i, arg in args:
     let p = params[i]
     if p.typ.kind != gtPtr:
@@ -508,3 +549,161 @@ proc getGenericArguments*(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuPar
       let addrSpace = ctx.resolveIdentAddressSpace(lArg)
       let mutable = lArg.determineMutability()
       result.add GenericArg(addrSpace: addrSpace, mutable: mutable)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pointer-param call inlining
+# ═══════════════════════════════════════════════════════════════════════
+
+proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
+  ## Rewrites idents onto their call-site bindings.
+  ## The substitution step of call inlining.
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.iSym in subst:
+      n = subst[n.symbol.iSym]
+  else:
+    for ch in mitems(n):
+      substituteIdents(ch, subst)
+
+proc containsReturnStmt(n: GpuAst): bool =
+  if n.kind == gpuReturn:
+    return true
+  for ch in n:
+    if ch.containsReturnStmt():
+      return true
+
+proc collectIdentNames(n: GpuAst, names: var HashSet[string]) =
+  if n.kind == gpuIdent and n.symbol != nil:
+    names.incl n.symbol.name
+  else:
+    for ch in n:
+      ch.collectIdentNames(names)
+
+proc hasNonFnPtrParam(fn: GpuAst): bool =
+  ## True when a pointer parameter sits outside the `function` address space.
+  ## WGSL rejects storage, uniform and workgroup pointers as user-function parameter types.
+  for p in fn.pParams:
+    if p.typ != nil and p.typ.kind == gtPtr and p.addressSpace != asRMEM:
+      return true
+
+proc hasPtrStructParam(fn: GpuAst, ctx: GpuContext): bool =
+  for p in fn.pParams:
+    if p.typ != nil and p.typ.kind == gtObject:
+      for f in p.typ.fields:
+        if f.typ.kind == gtPtr and (p.typ, f.name) in ctx.structsWithPtrs:
+          return true
+
+proc inlinePointerParamCalls(ctx: var GpuContext) =
+  ## Inlines device-proc calls whose pointer parameters have no WGSL
+  ## parameter type. WGSL rejects storage, uniform and workgroup pointers
+  ## as user-function parameter types. Runtime-sized arrays cannot cross a call by value.
+  ##
+  ## Per call:
+  ## - every argument binds to a fresh `let` alias holding the pointer at function scope
+  ## - the callee body substitutes onto the aliases and splices over the call
+  ## - the inlined callee drops from the function table
+  ##
+  ## Calls whose pointer arguments all live in `function` space keep real calls.
+  ##
+  ## Contracts:
+  ## - callees return void, an inlined call carries no expression value
+  ## - callee bodies hold no `return`, a spliced `return` exits the caller
+  var inlCount = 0
+  var usedNames = initHashSet[string]()
+  for fn in ctx.fnTab.values:
+    fn.pBody.collectIdentNames(usedNames)
+    for p in fn.pParams:
+      usedNames.incl p.ident.ident()
+  for g in ctx.globals.values:
+    g.ident.collectIdentNames(usedNames)
+
+  proc inlineCall(ctx: var GpuContext, call: GpuAst, usedNames: HashSet[string]): seq[GpuAst] =
+    ## Expands one call into parameter `let` bindings plus the substituted callee body.
+    let callee = ctx.allFnTab[call.cName]
+    doAssert callee.pRetType.kind == gtVoid,
+      "WGSL: device proc `" & call.cName.ident() &
+      "` takes a non-function-space pointer parameter, only void procs inline"
+    doAssert not callee.pBody.containsReturnStmt(),
+      "WGSL: device proc `" & call.cName.ident() &
+      "` takes a non-function-space pointer parameter, its body must not `return`"
+    var subst = initTable[string, GpuAst]()
+    for i, p in callee.pParams:
+      let arg = call.cArgs[i]
+      var fresh: string
+      while true:
+        fresh = "inl" & $inlCount & '_' & p.ident.ident()
+        inc inlCount
+        if fresh notin usedNames:
+          break
+      var typ = p.typ
+      if typ.kind == gtPtr:
+        # `mutable` selects `read_write` in the WGSL pointer type.
+        typ.mutable = arg.determineMutability()
+      if typ.kind == gtObject and arg.kind == gpuIdent:
+        # A struct value does not carry its pointer field: the pointer lives
+        # in a global binding. Without rebinding, the callee body reads
+        # whatever same-named buffer it finds.
+        for f in typ.fields:
+          if f.typ.kind == gtPtr and (arg.ident(), f.name) in ctx.ptrFieldBindings:
+            ctx.ptrFieldBindings[(fresh, f.name)] = ctx.ptrFieldBindings[(arg.ident(), f.name)]
+      let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
+      let binding = GpuAst(kind: gpuIdent, symbol: sym)
+      subst[p.ident.symbol.iSym] = binding
+      ctx.varAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
+      result.add GpuAst(kind: gpuVar, vMutable: false, vName: binding,
+                        vType: typ, vInit: arg, vRequiresMemcpy: false,
+                        addressSpace: asRMEM)
+    var body = callee.pBody.clone()
+    body.substituteIdents(subst)
+    result.add body.statements
+
+  proc inlineCandidate(ctx: GpuContext, call: GpuAst): bool =
+    ## True when a call must inline.
+    ## The callee takes a pointer outside `function` space, or a struct
+    ## holding one: neither crosses a WGSL function signature.
+    if call.cName.symbol == nil:
+      return false
+    if call.cName notin ctx.allFnTab:
+      return false
+    let callee = ctx.allFnTab[call.cName]
+    if callee.kind != gpuProc or callee.isGlobal():
+      return false
+    result = callee.hasNonFnPtrParam() or callee.hasPtrStructParam(ctx)
+
+  proc inlineIn(ctx: var GpuContext, n: var GpuAst): bool =
+    ## Splices inlinable calls in `n`, depth-first. Returns true when `n` changed.
+    case n.kind
+    of gpuBlock:
+      var changed = false
+      var i = 0
+      while i < n.statements.len:
+        var s = n.statements[i]
+        if s.kind == gpuCall and ctx.inlineCandidate(s):
+          let repl = ctx.inlineCall(s, usedNames)
+          n.statements = n.statements[0 ..< i] & repl & n.statements[i + 1 .. ^1]
+          changed = true
+          # the spliced statements are visited in place, `i` stays
+        else:
+          changed = ctx.inlineIn(s) or changed
+          n.statements[i] = s
+          inc i
+      result = changed
+    else:
+      var changed = false
+      for ch in mitems(n):
+        changed = ctx.inlineIn(ch) or changed
+      result = changed
+
+  for key in toSeq(ctx.fnTab.keys):
+    var body = ctx.fnTab[key].pBody
+    var changed = true
+    while changed:
+      changed = ctx.inlineIn(body)
+    ctx.fnTab[key].pBody = body
+
+  # Drop the inlined callees: their parameters cannot cross a WGSL function signature.
+  for key in toSeq(ctx.fnTab.keys):
+    let fn = ctx.fnTab[key]
+    if not fn.isGlobal() and (fn.hasNonFnPtrParam() or fn.hasPtrStructParam(ctx)):
+      ctx.fnTab.del(key)
+

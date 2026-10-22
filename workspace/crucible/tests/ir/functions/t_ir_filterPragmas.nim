@@ -14,13 +14,24 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOnFn(regProc: proc(reg: var PassRegistry) {.nimcall.}, fn: GpuAst) =
+  ## Runs one registered pass over a fixture fn, the public-API path.
+  var ctx = GpuContext()
+  if fn.pName.isNil:
+    fn.pName = GpuAst(kind: gpuIdent, symbol: newSymbol("f", iSym = "f"))
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  regProc(reg)
+  ctx.runPasses(reg)
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Device pragma is preserved
 # ═══════════════════════════════════════════════════════════════════════
 block:
   var fn = GpuAst(kind: gpuProc, pRawPragmas: @["device"])
-  filterPragmasImpl(fn)
+  runOnFn(registerFilterPragmas, fn)
   doAssert attDevice in fn.pAttributes, "device pragma should be in pAttributes"
   echo "  OK — device pragma preserved"
 
@@ -29,7 +40,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 block:
   var fn = GpuAst(kind: gpuProc, pRawPragmas: @["global"])
-  filterPragmasImpl(fn)
+  runOnFn(registerFilterPragmas, fn)
   doAssert attGlobal in fn.pAttributes, "global pragma should be in pAttributes"
   echo "  OK — global pragma preserved"
 
@@ -38,7 +49,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 block:
   var fn = GpuAst(kind: gpuProc, pRawPragmas: @["nimcall", "noSideEffect", "inline"])
-  filterPragmasImpl(fn)
+  runOnFn(registerFilterPragmas, fn)
   doAssert attForceInline in fn.pAttributes, "inline pragma should be preserved"
   doAssert attDevice notin fn.pAttributes, "nimcall should NOT produce device attribute"
   echo "  OK — Nim-specific pragmas dropped, inline preserved"
@@ -48,7 +59,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 block:
   var fn = GpuAst(kind: gpuProc, pRawPragmas: @["device", "forceinline", "nimcall", "closure"])
-  filterPragmasImpl(fn)
+  runOnFn(registerFilterPragmas, fn)
   doAssert attDevice in fn.pAttributes, "device should be in pAttributes"
   doAssert attForceInline in fn.pAttributes, "forceinline should be in pAttributes"
   doAssert fn.pAttributes.len == 2,
@@ -60,7 +71,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════
 block:
   var fn = GpuAst(kind: gpuProc, pRawPragmas: @[])
-  filterPragmasImpl(fn)
+  runOnFn(registerFilterPragmas, fn)
   doAssert fn.pAttributes.len == 0, "Empty raw pragmas should produce empty pAttributes"
   echo "  OK — empty pRawPragmas produces empty pAttributes"
 

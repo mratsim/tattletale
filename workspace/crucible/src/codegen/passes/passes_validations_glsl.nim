@@ -40,13 +40,13 @@ proc sameLayout(a, b: seq[(string, GpuType, AddressSpace)]): bool =
       return false
   result = true
 
-proc validateSharedPushConstLayout*(ctx: var GpuContext) =
+proc validateSharedPushConstLayout(ctx: var GpuContext) =
   ## GLSL kernels in one source share one push-constant block: every
   ## kernel's ordered non-smem params must agree, else a launch serializes
   ## its args at offsets another kernel reads as different members
   var reference: seq[(string, GpuType, AddressSpace)]
   for _, fn in ctx.allFnTab:
-    if not fn.isGlobalFn():
+    if not fn.isGlobal():
       continue
     var layout: seq[(string, GpuType, AddressSpace)]
     for p in fn.pParams:
