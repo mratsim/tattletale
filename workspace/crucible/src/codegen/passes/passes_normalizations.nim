@@ -13,7 +13,15 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_type_constructors
 import ../../builtins/builtins_functions
 import ./pass_datatypes
-import ./passes_preprocessing
+
+# ############################################################
+#
+# Normalizations
+#
+# ############################################################
+#
+# Canonical reshaping right after IR construction establishes the forms
+# every later stage assumes. Every backend registers them identically.
 
 {.experimental: "codeReordering".}
 
@@ -21,34 +29,30 @@ import ./passes_preprocessing
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerNormalizationPasses*(reg: var PassRegistry) =
-  reg.register("normalizeArraySpanParams", pkTransform, phaseEarly,
-    "var array/openArray params become element pointers: fold HiddenDeref on " &
-      "access, bare arrays (or toOpenArray) at call sites, gtPtr(gtArray)->gtPtr(T)",
+func registerNormalizationPasses*(reg: var PassRegistry) =
+  reg.registerLowerIfExpr()
+  reg.registerMapOperators()
+  reg.registerFilterPragmas()
+  reg.registerResolveOverloadedOperators()
+
+  # After resolveOverloadedOperators: it turns binops into calls, the fnTab
+  # closure over call edges must run after it.
+  reg.register("deadCodeElimination", pkTransform, phaseEarly,
+    "Fills fnTab with the transitively called subset of allFnTab, the printers emit only that",
     dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      # callee param kinds from the ORIGINAL types, before this pass rewrites them
-      var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
-      for fnKey in ctx.allFnTab.keys:
-        let fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.genericInsts.keys:
-        let fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds)
-          normalizeArraySpanFn(fn)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds)
-          normalizeArraySpanFn(fn)
+    run = deadCodeElimination
   )
 
+  # Position matters: legalization (blitBlockExprs) must see the desugared
+  # gpuAssign, blitting a compound-assign LHS would lose the accumulation.
+  # The resolveOverloadedOperators position keeps non-primitive `+=`
+  # outside this pass.
+  reg.registerDeEmbedForRangeAdjustment()
+  reg.registerRewriteCompoundAssignment()
+
+  reg.registerMangleNames()
+
+func registerLowerIfExpr(reg: var PassRegistry) =
   reg.register("lowerIfExpr", pkTransform, phaseEarly,
     "Converts gpuIf(isExpr:true) to gpuTernary",
     run = proc(ctx: var GpuContext): void =
@@ -62,20 +66,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           lowerIfExprImpl(fn.pBody)
   )
 
-  reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
-    "Converts gpuBinOp with non-primitive types to gpuCall",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
-  )
-
+func registerMapOperators(reg: var PassRegistry) =
   reg.register("mapOperators", pkTransform, phaseEarly,
     "Patches operator function names (+,*,/,-) to valid C++ identifiers",
     dependsOn = @[],
@@ -90,6 +81,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           mapOperatorsImpl(fn)
   )
 
+func registerFilterPragmas(reg: var PassRegistry) =
   reg.register("filterPragmas", pkTransform, phaseEarly,
     "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
     dependsOn = @[],
@@ -104,6 +96,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           filterPragmasImpl(fn)
   )
 
+func registerResolveOverloadedOperators(reg: var PassRegistry) =
   reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
     "Converts gpuBinOp with non-primitive types to gpuCall",
     dependsOn = @[],
@@ -118,6 +111,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           resolveOverloadedOperatorsImpl(ctx, fn.pBody)
   )
 
+func registerDeEmbedForRangeAdjustment(reg: var PassRegistry) =
   reg.register("deEmbedForRangeAdjustment", pkTransform, phaseEarly,
     "Normalizes gpuFor range expressions, removing embedded +1 adjustments",
     dependsOn = @[],
@@ -132,11 +126,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           deEmbedForRangeAdjustmentImpl(fn.pBody)
   )
 
-  # registered here, not in registerPreprocessingPasses: runPasses runs
-  # passes in registration order, legalization (blitBlockExprs) must see
-  # the desugared gpuAssign, blitting a compound-assign LHS would lose
-  # the accumulation. After resolveOverloadedOperators so non-primitive
-  # `+=` is never touched.
+func registerRewriteCompoundAssignment(reg: var PassRegistry) =
   reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
     "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
       "so the LHS is a real modifiable lvalue on all backends",
@@ -158,107 +148,126 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           )
   )
 
+func registerMangleNames(reg: var PassRegistry) =
+  reg.register("mangleNames", pkTransform, phaseMain,
+    "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      mangleNamesImpl(ctx)
+  )
 
+func rewriteCompoundAssignmentImpl(n: GpuAst): GpuAst =
+  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
+  ## clones the LHS (legalization mutates it in place, the sides must not alias)
+  doAssert n.kind == gpuBinOp
+  if n.bOp.ident() in ["<=", "==", ">=", "!="]:
+    return n
+  template genAssign(left, rnode, op: typed): untyped =
+    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
+                       bLeft: left.clone(), bRight: rnode)
+    GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
+  let op = n.bOp.ident()
+  if op.len >= 2 and op[^1] == '=':
+    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
+    opAst.symbol.iSym = opAst.symbol.name
+    var lhs = n.bLeft
+    if lhs.kind == gpuAddr:
+      lhs = lhs.aOf
+    result = genAssign(lhs, n.bRight, opAst)
+  else:
+    result = n
 
-# normalizeArraySpanParams
+proc dceCalleesFrom(ctx: var GpuContext, n: GpuAst): void =
+  ## Adds every fn called in `n` (transitively) to `fnTab`:
+  ## the printing world is the called subset, the rest is dead and dropped.
+  case n.kind
+  of gpuCall:
+    let fn = n.cName
+    if fn in ctx.allFnTab and fn notin ctx.fnTab:
+      let fnCalled = ctx.allFnTab[fn]
+      ctx.fnTab[fn] = fnCalled
+      for ch in fnCalled:
+        ctx.dceCalleesFrom(ch)
+    for arg in n.cArgs:
+      ctx.dceCalleesFrom(arg)
+  else:
+    for ch in n:
+      ctx.dceCalleesFrom(ch)
+
+proc deadCodeElimination(ctx: var GpuContext) =
+  ## fnTab closure over call edges: the printers emit the called subset,
+  ## unreferenced fns are dead.
+  for fnKey in toSeq(ctx.fnTab.keys):
+    dceCalleesFrom(ctx, ctx.fnTab[fnKey])
+
 # ═══════════════════════════════════════════════════════════════════════
-#
-# `var array[N, T]` / `var openArray[T]` params are element pointers (T*), matching Nim's C backend.
-# The IR is gtPtr(gtArray) / gtPtr(gtSpan), HiddenDeref on access and HiddenAddr on call args, normalized to:
-# - gtPtr(gtArray[N, T]) -> gtPtr(T), gtPtr(gtSpan) -> gtSpan
-# - index-context derefs fold into the index (`(*p)[i]` ≡ `p[i]`),
-#    the pass keeps derefs under gpuAddr, `&(*p)` is the array address not `T**`
-# - gpuAddr(array) call args become the bare array (C decay) for array-ptr params
-# - gpuAddr(array) on a span param becomes toOpenArray(array, 0, len-1), lowerSpans inlines
-#
-# The gpuAddr(gpuDot) case keys on the TYPE (gtArray), not the field name:
-# any array-typed field passed by addr rewrites identically
+# Name mangling
+# ═══════════════════════════════════════════════════════════════════════
 
-type
-  ArraySpanParamKind* = enum
-    aspNone       ## not an array/span param
-    aspArrayPtr   ## `var array[N, T]`, element pointer after normalization
-    aspSpan       ## `var openArray[T]`, span (ptr + len) after normalization
+func mangleNamesImpl(ctx: var GpuContext) =
+  ## Walk all functions in fnTable and apply NamePolicy per function:
+  ## - fkGenericInst → npHashSuffix (append 7-char base58 of hash)
+  ## - fkDefined + non-overloaded → npClean (no suffix — C++ mangling handles it)
+  ## - Operator functions → npPatch (+ → add, etc.)
+  ## For variables: apply npHashSuffix when dedup would cause collision.
+  ##
+  ## Updates symbol.name accordingly.
+  var seenNames = initHashSet[string]()
 
-proc collectArraySpanParamKinds(fn: GpuAst): seq[ArraySpanParamKind] =
-  ## Original param kinds (before type normalization), by param position.
-  result = newSeq[ArraySpanParamKind](fn.pParams.len)
-  for i, p in fn.pParams:
-    if p.typ.kind == gtSpan or (p.typ.kind == gtPtr and p.typ.to.kind == gtSpan):
-      result[i] = aspSpan
-    elif p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
-      result[i] = aspArrayPtr
+  for key, entry in ctx.fnTable.mpairs:
+    let ident = entry.ident
+    if ident.isNil or ident.symbol.isNil:
+      continue
 
-proc isArrayOrSpanPtr(t: GpuType): bool =
-  if t == nil: return false
-  t.kind == gtSpan or
-    (t.kind == gtPtr and (t.to.kind == gtArray or t.to.kind == gtSpan))
+    let name = ident.symbol.name
+    let iSym = ident.symbol.iSym
 
-proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
-  ## LowerSpans inlines this to ptr + len.
-  let idxTyp = initGpuType(gtInt32)
-  GpuAst(
-    kind: gpuCall,
-    cName: GpuAst(kind: gpuIdent, symbol: newSymbol("toOpenArray")),
-    cArgs: @[
-      arr,
-      GpuAst(kind: gpuLit, lValue: "0", lType: idxTyp),
-      GpuAst(kind: gpuLit, lValue: $(aLen - 1), lType: idxTyp)
-    ]
-  )
+    var effectivePolicy = entry.namePolicy
+    if effectivePolicy == npUnassigned:
+      # Determine policy if not already assigned
+      if fkGenericInst in entry.kind:
+        effectivePolicy = npHashSuffix
+      elif fkDefined in entry.kind:
+        if name in ["+", "-", "*", "/", ".."]:
+          effectivePolicy = npPatch
+        elif name in seenNames or name.len == 0:
+          effectivePolicy = npHashSuffix
+        else:
+          effectivePolicy = npClean
+      else:
+        # builtin/external: keep as-is
+        effectivePolicy = npClean
+      entry.namePolicy = effectivePolicy
 
-proc normalizeArraySpanBody*(body: var GpuAst, calleeKinds: Table[string, seq[ArraySpanParamKind]]) =
-  ## Folds index-context derefs on array/span pointers into the index,
-  ## rewrites gpuAddr(array) call args per the callee's param kind
-  body.walk(proc(n: var GpuAst): void =
-    case n.kind
-    of gpuIndex:
-      # index context: (*p)[i] ≡ p[i] when p is an array/span pointer
-      if n.iArr.kind == gpuDeref and
-         n.iArr.dOf.kind == gpuIdent and
-         isArrayOrSpanPtr(n.iArr.dOf.symbol.typ):
-        n.iArr = n.iArr.dOf
-    of gpuCall:
-      if n.cName.kind == gpuIdent:
-        let kinds = calleeKinds.getOrDefault(n.cName.symbol.name)
-        if kinds.len > 0:
-          for i, arg in n.cArgs.mpairs:
-            if i >= kinds.len: break
-            if kinds[i] == aspNone: continue
-            if arg.kind == gpuAddr:
-              if arg.aOf.kind == gpuIdent:
-                let t = arg.aOf.symbol.typ
-                if t != nil and t.kind == gtArray:
-                  if kinds[i] == aspArrayPtr:
-                    arg = arg.aOf                # bare array, C decays to T*
-                  elif kinds[i] == aspSpan:
-                    arg = makeToOpenArray(arg.aOf, t.aLen)
-              elif arg.aOf.kind == gpuDot:
-                # var-array param passed a tensor's data field, same rewrite,
-                # the bare field access C-decays to T*
-                let t = arg.aOf.dField.symbol.typ
-                if t != nil and t.kind == gtArray:
-                  if kinds[i] == aspArrayPtr:
-                    arg = arg.aOf
-                  elif kinds[i] == aspSpan:
-                    arg = makeToOpenArray(arg.aOf, t.aLen)
-    else: discard
-  )
+    case effectivePolicy
 
-proc normalizeArraySpanFn(fn: var GpuAst) =
-  for p in fn.pParams.mitems:
-    if p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
-      p.typ = initGpuPtrType(p.typ.to.aTyp, implicitPtr = p.typ.implicit)
-      p.ident.symbol.typ = p.typ
-    elif p.typ.kind == gtPtr and p.typ.to.kind == gtSpan:
-      p.typ = p.typ.to
-      p.ident.symbol.typ = p.typ
+    of npClean:
+      discard
+
+    of npHashSuffix:
+      # Use the iSym as the hash source (stable across compilation units)
+      ident.symbol.name = mangledHashName(name, iSym)
+
+    of npPatch:
+      let newName = case name
+        of "+": "add"
+        of "-": "sub"
+        of "*": "mul"
+        of "/": "div"
+        of "..": "range"
+        else: name
+      ident.symbol.name = newName
+      ident.symbol.iSym = ident.symbol.iSym.replace(name, newName)
+    else:
+      discard
+
+    seenNames.incl ident.symbol.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # lowerIfExpr
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerIfExprImpl*(n: var GpuAst) =
+func lowerIfExprImpl(n: var GpuAst) =
   ## Backends emit `cond ? then : else` from the lowered gpuTernary
   case n.kind
   of gpuIf:
@@ -339,7 +348,7 @@ proc lowerIfExprImpl*(n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # mapOperators
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -358,7 +367,7 @@ proc maybePatchFnName(n: var GpuAst) =
   of "..": patch(n, "range")
   else: discard
 
-proc mapOperatorsImpl*(n: var GpuAst) =
+func mapOperatorsImpl(n: var GpuAst) =
   ## Only gsProc idents, gpuBinOp operator symbols are valid C++ as-is
   case n.kind
   of gpuIdent:
@@ -439,11 +448,11 @@ proc mapOperatorsImpl*(n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # filterPragmas
 # ═══════════════════════════════════════════════════════════════════════
 
-proc filterPragmasImpl*(n: var GpuAst) =
+func filterPragmasImpl(n: var GpuAst) =
   ## Nim-specific pragmas drop, GPU-meaningful ones populate pAttributes
   if n.kind != gpuProc:
     for child in n.mitems:
@@ -469,11 +478,11 @@ proc filterPragmasImpl*(n: var GpuAst) =
       discard
   n.pAttributes = attrs
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # resolveOverloadedOperators
 # ═══════════════════════════════════════════════════════════════════════
 
-proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc resolveOverloadedOperatorsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## An overloaded gpuBinOp becomes a gpuCall, the ident found by iSym lookup
   case n.kind
   of gpuBinOp:
@@ -570,11 +579,11 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # deEmbedForRangeAdjustment
 # ═══════════════════════════════════════════════════════════════════════
 
-proc deEmbedForRangeAdjustmentImpl*(n: var GpuAst) =
+func deEmbedForRangeAdjustmentImpl(n: var GpuAst) =
   ## Resolves embedded +1 adjustments left by Slice/HSlice object ranges
   case n.kind
   of gpuFor:

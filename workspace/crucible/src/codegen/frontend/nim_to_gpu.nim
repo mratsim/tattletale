@@ -53,7 +53,8 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
         if paramType.kind == gtPtr and not paramType.implicit: asDevice
         else: asRMEM
       result.add(GpuParam(ident: p, typ: paramType,
-                          addressSpace: paramAddrSpace, passByRef: byref))
+                          addressSpace: paramAddrSpace, passByRef: byref,
+                          flavor: (if paramType.kind == gtPtr and paramType.implicit: kVar else: kIn)))
     curIdx += numParams
 
 proc toInstantiatedProcSignature(ctx: var GpuContext, reg: var TypeRegistry,
@@ -192,9 +193,10 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     return
   fn.pAttributes.incl attDevice
   fn.pName = name
-  # one distinct iSym per generic instantiation
-  fn.pName.symbol.name = fn.pName.symbol.iSym
-  name.symbol.name = fn.pName.symbol.iSym
+  # Display name gets the 7-char hash suffix (npHashSuffix shape), one
+  # distinct iSym per generic instantiation
+  fn.pName.symbol.name = mangledHashName(fn.pName.symbol.name, fn.pName.symbol.iSym)
+  name.symbol.name = fn.pName.symbol.name
   ctx.genericInsts[fn.pName] = fn
   # Iterating passes like `ensureBlock` only see instantiations in `allFnTab`.
   ctx.allFnTab[fn.pName] = fn
@@ -807,9 +809,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, static
         s.add node[i].strVal
       of nnkSym:
         # Nim resolves backtick identifiers to Syms, the printer substitutes
-        # the mangled name at the TAG_IDENT_IN_ASM placeholder
+        # the mangled name at the TAG_IDENT_INLINE_ASM placeholder
         ops.add ctx.toGpuAst(reg, node[i])
-        s.add TAG_IDENT_IN_ASM & $(ops.len - 1)
+        s.add TAG_IDENT_INLINE_ASM & $(ops.len - 1)
       else:
         doAssert false, "unexpected asm node: " & $node[i].kind & " in " & node.repr
     result.stmt = s

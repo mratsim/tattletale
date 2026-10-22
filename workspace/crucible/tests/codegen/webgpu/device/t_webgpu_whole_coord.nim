@@ -4,7 +4,6 @@
 ## tuple type from the u32 builtin components.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/device/t_webgpu_whole_coord.nim

@@ -3,7 +3,6 @@
 ## Differing ordered layouts would read args at wrong offsets.
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/manual_vulkan_multikernel_layout_mismatch.nim

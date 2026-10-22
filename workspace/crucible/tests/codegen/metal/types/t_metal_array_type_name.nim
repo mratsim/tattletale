@@ -1,7 +1,6 @@
 ## Array types inside pulled-in proc signatures name without recursing.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/types/t_metal_array_type_name.nim

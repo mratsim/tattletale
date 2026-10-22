@@ -22,6 +22,7 @@ Rule table (rule | trigger | severity):
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
+| severed-tail         | a continuing sentence ends its line on a 1-2 word tail after the last clause boundary              | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
@@ -47,6 +48,9 @@ Rule table (rule | trigger | severity):
 | test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
+| stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
+| registration-top     | a register proc defined below the first implementation in a passes file, registration lives at the top | counted  |
+| section-banner       | a malformed section banner: orphan bar, title without top bar, or bar width off 71                | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
@@ -104,6 +108,7 @@ writing the fixed text back.
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
+| severed-tail                | rewrap so a continuing sentence's line ends 3+ words past its last clause boundary                               |
 | quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
@@ -459,6 +464,8 @@ RULES = {
                         "a colon orphaned at line start or split from its lead phrase"),
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
+    "severed-tail": Rule("severed-tail", True,
+                         "a continuing sentence ends its line on a 1-2 word tail after the last clause boundary"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
@@ -520,6 +527,12 @@ RULES = {
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
+    "stmt-inline": Rule("stmt-inline", True,
+                        "a statement keyword carries its body on the same line, one statement per line"),
+    "registration-top": Rule("registration-top", True,
+                             "a register proc defined below the first implementation in a passes file, registration lives at the top"),
+    "section-banner": Rule("section-banner", True,
+                           "a malformed section banner: orphan bar, title without top bar, or bar width off 71"),
 }
 
 
@@ -2179,7 +2192,21 @@ def scan(path, text, findings):
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
-            prev_prose = (n, c, kind)
+            # a continuing sentence must not end its line on a 1-2 word
+            # orphan after the last clause boundary, the semantic unit
+            # continues on the next line
+            if (prev_prose is not None and prev_prose[2] == kind
+                    and prev_prose[0] + 1 == n and c[:1].islower()
+                    and not trailing and not prev_prose[3]):
+                prev_txt = re.sub(r"`[^`]*`", " XcodeX ", prev_prose[1].rstrip())
+                tail = re.split(r"[,;:.]", prev_txt)[-1].strip()
+                wc = len(tail.split())
+                if 0 < wc < 3:
+                    findings.append(Finding(
+                        path, prev_prose[0], "severed-tail",
+                        "line ends on a %d-word tail after the last clause "
+                        "boundary, the sentence continues" % wc))
+            prev_prose = (n, c, kind, trailing)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 
@@ -2390,6 +2417,12 @@ def lint(paths, base=None):
             # the closed-test-directory rule reads any Nim change under
             # tests/codegen/ir, the path sits outside KERNEL_ROOTS
             tile_phase(f, text, findings, added)
+        if f.suffix == ".nim" and "src/codegen/passes/passes_" in _rel(f):
+            passes_export_hygiene(f, text, findings, added)
+        if f.suffix == ".nim":
+            stmt_inline(f, text, findings, added)
+            registration_top(f, text, findings, added)
+            section_banner(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -4552,6 +4585,163 @@ def _tile_support(files):
         _TILE_SUPPORT.update(consts=consts, builtins=builtins,
                              support_lines=support_lines)
     return _TILE_SUPPORT["consts"], _TILE_SUPPORT["builtins"], _TILE_SUPPORT["support_lines"]
+
+
+def passes_export_hygiene(path, text, findings, added):
+    """Flags exported non-registration callables in passes_* files.
+
+    Only `register*` procs are public in the passes layer: implementations
+    stay private, cross-file wiring goes through registrations. Base scoping
+    follows the doc rules: `added` is None for a full run, otherwise the
+    added-line set.
+    """
+    for no, line in enumerate(text.splitlines(), 1):
+        m = re.match(r'^(?:proc|func|template|macro|iterator|converter)\s+(\w+)\*', line)
+        if m is None or m.group(1).startswith('register'):
+            continue
+        if added is not None and no not in added:
+            continue
+        findings.append(Finding(
+            path, no, "passes-export",
+            "exported non-registration in a passes file, only `register*` "
+            "routines are public"))
+
+
+STMT_KEYWORD_RE = re.compile(r"^\s*(?:if|elif|for|while|when)\b")
+CONTINUATION_TAIL_RE = re.compile(r"(?:=|\(|\[|\{|,|and|or|in|\+|-|\*|/|not)$")
+
+
+def _top_level_tail(code):
+    """Returns the text after the last bracket-depth-zero colon, empty when
+    the line ends on its colon or carries no top-level colon."""
+    d = 0
+    tail = ""
+    for i, ch in enumerate(code):
+        if ch in "([{":
+            d += 1
+        elif ch in ")]}":
+            d -= 1
+        elif ch == ":" and d == 0:
+            tail = code[i + 1:].strip()
+    return tail
+
+
+def _nim_triple_quote_mask(lines):
+    """The 1-based line numbers inside triple-quoted string literals,
+    interior lines only; the delimiters stay visible. Statement checks
+    blank these lines: their content is string text, not Nim code."""
+    mask = set()
+    in_str = False
+    for no, raw in enumerate(lines, 1):
+        if in_str:
+            if '"""' in raw:
+                in_str = False
+            else:
+                mask.add(no)
+        elif raw.count('"""') % 2 == 1:
+            in_str = True
+    return mask
+
+
+def _nim_statement_frames(lines):
+    """Yields (line no, code, depth at line start, expression continuation)
+    per line, strings blanked, comments stripped, depth across the file.
+    Lines inside triple-quoted strings come out blank."""
+    depth = 0
+    prev_tail_opener = False
+    mask = _nim_triple_quote_mask(lines)
+    for no, raw in enumerate(lines, 1):
+        if no in mask:
+            yield no, "", depth, False
+            continue
+        code, _comment = _strip_comment(raw)
+        code = _blank_nim_strings(code).rstrip()
+        yield no, code, depth, prev_tail_opener
+        # a definition header closing on `=` opens a statement body, not an
+        # expression continuation
+        is_definition = bool(re.match(r"^\s*(?:proc|func|template|iterator|converter|macro)\b", code))
+        prev_tail_opener = (bool(code) and not is_definition
+                            and bool(CONTINUATION_TAIL_RE.search(code)))
+        for ch in code:
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+
+
+def stmt_inline(path, text, findings, added):
+    """Flags if/elif/for/while/when in statement position carrying a body
+    on the same line.
+
+    One statement per line. Value-producing if/when expressions are exempt,
+    detected through bracket depth and a continuation opener on the previous
+    line; else and of branches stay unflagged, the textual form cannot tell
+    an expression branch from a statement branch.
+    """
+    for no, code, depth, prev_opener in _nim_statement_frames(text.splitlines()):
+        if depth > 0 or prev_opener or not STMT_KEYWORD_RE.match(code):
+            continue
+        if not _top_level_tail(code):
+            continue
+        if added is not None and no not in added:
+            continue
+        findings.append(Finding(
+            path, no, "stmt-inline",
+            "a statement keyword carries its body on the same line, put the "
+            "body on the next line"))
+
+
+BANNER_BAR_RE = re.compile(r"^# ═+$")
+
+
+def section_banner(path, text, findings, added):
+    """Flags malformed section banners in Nim files: a bar with no title
+    above or below, a title sitting directly on a bar with no top bar, a
+    bar whose width is not 71."""
+    lines = text.splitlines()
+    for no, ln in enumerate(lines, 1):
+        if added is not None and no not in added:
+            continue
+        if BANNER_BAR_RE.match(ln) and len(ln) != 73:
+            findings.append(Finding(path, no, "section-banner",
+                                    "a banner bar of " + str(len(ln) - 2) + " columns, the house bar is 71"))
+            continue
+        is_bar = BANNER_BAR_RE.match(ln) is not None
+        is_title = ln.startswith("# ") and not is_bar
+        if not (is_bar or is_title):
+            continue
+        prev = lines[no - 2] if no > 1 else ""
+        nxt = lines[no] if no < len(lines) else ""
+        prev_is_title = prev.startswith("# ") and not BANNER_BAR_RE.match(prev)
+        nxt_is_title = nxt.startswith("# ") and not BANNER_BAR_RE.match(nxt)
+        if is_bar and not prev_is_title and not nxt_is_title:
+            findings.append(Finding(path, no, "section-banner",
+                                    "an orphan bar, every banner is bar, title, bar"))
+        if is_title and BANNER_BAR_RE.match(nxt) and not BANNER_BAR_RE.match(prev):
+            findings.append(Finding(path, no, "section-banner",
+                                    "a title without its top bar"))
+
+
+def registration_top(path, text, findings, added):
+    """Flags register procs defined below the first implementation in a
+    passes file: the Registration section sits at the top, impls below."""
+    if not path.name.startswith("passes_"):
+        return
+    first_impl = None
+    for no, raw in enumerate(text.splitlines(), 1):
+        if re.match(r'^(?:proc|func|template|iterator)\b', raw) is None:
+            continue
+        if re.match(r'^func register\w+\*', raw) is not None:
+            if first_impl is not None:
+                if added is not None and no not in added:
+                    continue
+                findings.append(Finding(
+                    path, no, "registration-top",
+                    "a register proc sits below the first implementation, "
+                    "move it under the Registration banner at the top"))
+            continue
+        if first_impl is None:
+            first_impl = no
 
 
 def tile_phase(path, text, findings, added):

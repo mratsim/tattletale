@@ -4,7 +4,6 @@
 ## dynamic results are plain ints from the input buffer.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/compiletime/t_metal_static_int_ops.nim

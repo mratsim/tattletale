@@ -1,7 +1,6 @@
 ## Metal: if/elif/else statement lowering, branch selection on the device.
 ##
 ## Run:
-##   cd tattletale
 ##   nim cpp -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_if_elif.nim

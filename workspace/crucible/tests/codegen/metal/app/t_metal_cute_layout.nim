@@ -5,7 +5,6 @@
 ## Slot 3 is never written, so it reads back 0.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/app/t_metal_cute_layout.nim

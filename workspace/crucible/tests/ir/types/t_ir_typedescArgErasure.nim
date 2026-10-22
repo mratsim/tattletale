@@ -7,7 +7,6 @@
 ## - CUDA emission shows no `T` arg and no typedesc param
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/types/t_ir_typedescArgErasure.nim
@@ -17,6 +16,8 @@ import std/sequtils
 import std/strutils
 import std/tables
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/src/codegen/passes/pass_registry
 
 # ── Minimal stand-ins for the ceramic shapes under test ──────────────────
 type
@@ -44,7 +45,9 @@ macro toGpuAstWithInstsPruned(body: typed): untyped =
   var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
     gen.add v
-  pruneCompileTimeParams(ctx)
+  var reg = PassRegistry.new()
+  reg.registerPruneCompileTimeParams()
+  ctx.runPasses(reg)
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 

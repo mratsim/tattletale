@@ -4,7 +4,6 @@
 ## nothing to point at, view the bytes through ptr UncheckedArray[uint8]
 ##
 ## Run:
-##   cd tattletale
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/manual_vulkan_void_pointee_rejected.nim

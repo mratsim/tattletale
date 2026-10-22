@@ -4,7 +4,6 @@
 ## `gl_LocalInvocationIndex`, `syncthreads()` lowers to GLSL `barrier()`.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/functions/t_vulkan_cross_vocabulary.nim

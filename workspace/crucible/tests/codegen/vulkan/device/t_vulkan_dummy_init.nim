@@ -2,7 +2,6 @@
 ## Object constructors of field-less structs (padded with `char _`) must emit a valid initializer.
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_dummy_init.nim

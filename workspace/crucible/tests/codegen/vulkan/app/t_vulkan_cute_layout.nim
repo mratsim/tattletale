@@ -1,7 +1,6 @@
 ## Vulkan (GLSL): CuTe Layout + Tile dot products.
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/app/t_vulkan_cute_layout.nim

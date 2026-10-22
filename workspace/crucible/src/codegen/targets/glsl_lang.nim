@@ -11,6 +11,7 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 
+
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
                       allowArrayToPtr = false,
@@ -118,8 +119,8 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "uint"
-  of gtPtr: raiseAssert "Vulkan GLSL does not support raw pointers — lower to SSBO/indexing first"
-  of gtVoidPtr: raiseAssert "Vulkan GLSL does not support void* pointers — lower to SSBO/indexing first"
+  of gtPtr: raiseAssert "Vulkan GLSL renders pointers as buffer references (buffer device addresses) — render the full type, not the bare kind"
+  of gtVoidPtr: raiseAssert "Vulkan GLSL renders void* as a void buffer reference — render the full type, not the bare kind"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
@@ -155,10 +156,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, a
     skipIdent = true
   of gtGenericInst:
     result = t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add mangledHashName("", $hash(t))
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
@@ -199,95 +201,13 @@ proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
       return true
 
 
-const glslReserved*: array[40, string] = [
-  "output", "input", "in", "out", "attribute", "uniform", "varying",
-  "buffer", "shared", "layout", "main", "void", "return",
-  "if", "else", "for", "while", "break", "continue", "struct",
-  "const", "true", "false", "bool", "int", "uint", "float", "double",
-  "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
-  "sampler", "texture", "image", "subroutine", "discard", "precise"
-]
-
-proc glslSafeName*(name: string): string =
-  ## Returns a GLSL-safe version of the name (appends _vk if reserved).
-  if name in glslReserved:
-    result = name & "_vk"
-  else:
-    result = name
-
-# Preprocessing
+# ═══════════════════════════════════════════════════════════════════════
+# Printing
 # ═══════════════════════════════════════════════════════════════════════
 
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and adds every called function to `fnTab`,
-  ## a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      if fn notin ctx.fnTab:
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
+proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# Code generation
-# ═══════════════════════════════════════════════════════════════════════
-
-proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-
-# ── Preprocess ────────────────────────────────────────────────────────
-
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  # 1. Add all data from `genericInsts` and `types` tables
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill table with all *global* functions or *only* the specific `kernel`
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Traverse global functions for any `gpuCall` node and record in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnOrig = ctx.allFnTab[fnIdent]
-    ctx.scanFunctions(fn)
-
-  # 5. (No SSBO counter reset needed — handled in codegen())
-
-  # 5. Rename kernel parameters that clash with GLSL reserved words
-  proc renameGlslReserved(n: var GpuAst, symToRename: Table[string, string]) =
-    case n.kind
-    of gpuIdent:
-      if n.symbol != nil and n.symbol.iSym in symToRename:
-        n.symbol.name = symToRename[n.symbol.iSym]
-    else:
-      for ch in mitems(n):
-        renameGlslReserved(ch, symToRename)
-
-  for (fnIdent, fn) in mpairs(ctx.fnTab):
-    if fn.isGlobal():
-      var renames = initTable[string, string]()
-      for p in mitems(fn.pParams):
-        let oldName = p.ident.ident()
-        let safeName = glslSafeName(oldName)
-        if oldName != safeName:
-          renames[p.ident.symbol.iSym] = safeName
-          p.ident.symbol.name = safeName
-      if renames.len > 0:
-        renameGlslReserved(fn.pBody, renames)
-
-# ── genVulkan ─────────────────────────────────────────────────────────
+# ── genGLSL ─────────────────────────────────────────────────────────
 
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the Vulkan (GLSL) backend.
@@ -322,7 +242,7 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
     raiseAssert "coordinate site with no coordinate builtin kind"
 
-proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
+proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual GLSL compute shader code generator.
   let indentStr = "  ".repeat(indent)
   case ast.kind
@@ -341,7 +261,8 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"shared {inner} {p.ident.ident()}[]"
       else:
-        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
+        let binding = if p.flavor == kVar: "inout " else: ""
+        params.add binding & gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
     let fnArgs = params.join(", ")
 
     if isKernel:
@@ -355,7 +276,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add ';'
     else:
       result.add " {\n"
-      result &= ctx.genVulkan(ast.pBody, indent + 1)
+      result &= ctx.genGLSL(ast.pBody, indent + 1)
       result &= '\n' & indentStr & '}'
 
   of gpuBlock:
@@ -363,7 +284,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      result.add ctx.genVulkan(el, indent)
+      result.add ctx.genGLSL(el, indent)
       if not el.isSelfTerminating() and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
@@ -383,61 +304,61 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
     result = indentStr & typeStr
     if ast.vInit.kind != gpuDiscard:
-      result &= " = " & ctx.genVulkan(ast.vInit)
+      result &= " = " & ctx.genGLSL(ast.vInit)
 
   of gpuAssign:
-    result = indentStr & ctx.genVulkan(ast.aLeft) & " = " & ctx.genVulkan(ast.aRight)
+    result = indentStr & ctx.genGLSL(ast.aLeft) & " = " & ctx.genGLSL(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
-      result = indentStr & "if (" & ctx.genVulkan(ast.ifCond) & ") {\n"
-    result &= ctx.genVulkan(ast.ifThen, indent + 1) & '\n'
+      result = indentStr & "if (" & ctx.genGLSL(ast.ifCond) & ") {\n"
+    result &= ctx.genGLSL(ast.ifThen, indent + 1) & '\n'
     result &= indentStr & '}'
     for el in ast.ifElifs:
       ctx.withoutSemicolon:
-        result &= " else if (" & ctx.genVulkan(el.cond) & ") {\n"
-      result &= ctx.genVulkan(el.body, indent + 1) & '\n'
+        result &= " else if (" & ctx.genGLSL(el.cond) & ") {\n"
+      result &= ctx.genGLSL(el.body, indent + 1) & '\n'
       result &= indentStr & '}'
     if ast.ifElse.kind != gpuDiscard:
       result &= " else {\n"
-      result &= ctx.genVulkan(ast.ifElse, indent + 1) & '\n'
+      result &= ctx.genGLSL(ast.ifElse, indent + 1) & '\n'
       result &= indentStr & '}'
 
   of gpuTernary:
     ctx.withoutSemicolon:
-      result = '(' & ctx.genVulkan(ast.tCond) & " ? " &
-               ctx.genVulkan(ast.tThen) & " : " &
-               ctx.genVulkan(ast.tElse) & ')'
+      result = '(' & ctx.genGLSL(ast.tCond) & " ? " &
+               ctx.genGLSL(ast.tThen) & " : " &
+               ctx.genGLSL(ast.tElse) & ')'
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
-             ctx.genVulkan(ast.fStart) & "; " &
-             ast.fVar.ident() & cmp & ctx.genVulkan(ast.fEnd) & "; " &
-             ast.fVar.ident() & " += " & ctx.genVulkan(ast.fStep) & ") {\n"
-    result &= ctx.genVulkan(ast.fBody, indent + 1) & '\n'
+             ctx.genGLSL(ast.fStart) & "; " &
+             ast.fVar.ident() & cmp & ctx.genGLSL(ast.fEnd) & "; " &
+             ast.fVar.ident() & " += " & ctx.genGLSL(ast.fStep) & ") {\n"
+    result &= ctx.genGLSL(ast.fBody, indent + 1) & '\n'
     result &= indentStr & '}'
 
   of gpuWhile:
     ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genVulkan(ast.wCond) & "){\n"
-    result &= ctx.genVulkan(ast.wBody, indent + 1) & '\n'
+      result = indentStr & "while (" & ctx.genGLSL(ast.wCond) & "){\n"
+    result &= ctx.genGLSL(ast.wBody, indent + 1) & '\n'
     result &= indentStr & '}'
 
   of gpuDot:
     if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
        ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
       # Component of an unsigned GLSL builtin, cast to standard Nim `int` from default uint.
-      result = "int(" & ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField) & ")"
+      result = "int(" & ctx.genGLSL(ast.dParent) & '.' & ctx.genGLSL(ast.dField) & ")"
     else:
-      result = ctx.genVulkan(ast.dParent) & '.' & ctx.genVulkan(ast.dField)
+      result = ctx.genGLSL(ast.dParent) & '.' & ctx.genGLSL(ast.dField)
 
   of gpuIndex:
     if ast.iArr.kind == gpuDeref:
       # the ref block member is runtime-sized, the index applies to it directly.
       # Routing through the gpuDeref rendering would give `.x[0][i]`
-      result = ctx.genVulkan(ast.iArr.dOf) & ".x[" & ctx.genVulkan(ast.iIndex) & ']'
+      result = ctx.genGLSL(ast.iArr.dOf) & ".x[" & ctx.genGLSL(ast.iIndex) & ']'
     else:
-      result = ctx.genVulkan(ast.iArr) & '[' & ctx.genVulkan(ast.iIndex) & ']'
+      result = ctx.genGLSL(ast.iArr) & '[' & ctx.genGLSL(ast.iIndex) & ']'
 
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
@@ -454,9 +375,9 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     of gbkNone:
       case ast.cName.symbol.reductionBuiltin
       of gbkReduceAdd:
-        result = indentStr & "subgroupAdd(" & ctx.genVulkan(ast.cArgs[0]) & ')'
+        result = indentStr & "subgroupAdd(" & ctx.genGLSL(ast.cArgs[0]) & ')'
       of gbkReduceMax:
-        result = indentStr & "subgroupMax(" & ctx.genVulkan(ast.cArgs[0]) & ')'
+        result = indentStr & "subgroupMax(" & ctx.genGLSL(ast.cArgs[0]) & ')'
       of gbkNone:
         case ast.cName.symbol.atomicsBuiltin
         of gbkAtomicFetchAdd:
@@ -464,21 +385,21 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           # when the AST contains an fp atomicFetchAdd, int is core.
           # Pointers are GL_EXT_buffer_reference handles, dereference
           # the first element of the reference's member array.
-          result = indentStr & "atomicAdd(" & ctx.genVulkan(ast.cArgs[0]) &
-                   ".x[0], " & ctx.genVulkan(ast.cArgs[1]) & ')'
+          result = indentStr & "atomicAdd(" & ctx.genGLSL(ast.cArgs[0]) &
+                   ".x[0], " & ctx.genGLSL(ast.cArgs[1]) & ')'
         of gbkNone:
           var vkArgs: seq[string]
           for arg in ast.cArgs:
-            vkArgs.add ctx.genVulkan(arg)
+            vkArgs.add ctx.genGLSL(arg)
           result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
 
 
   of gpuBinOp:
     ctx.withoutSemicolon:
-      let l = ctx.genVulkan(ast.bLeft)
-      let r = ctx.genVulkan(ast.bRight)
+      let l = ctx.genGLSL(ast.bLeft)
+      let r = ctx.genGLSL(ast.bRight)
       result = indentStr & '(' & l & ' ' &
-               ctx.genVulkan(ast.bOp) & ' ' &
+               ctx.genGLSL(ast.bOp) & ' ' &
                r & ')'
 
   of gpuIdent:
@@ -505,16 +426,16 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Explicit size required for proper struct field initialization in GLSL
     result = gpuTypeToString(ast.aLitType) & "[" & $ast.aValues.len & "]("
     for i, el in ast.aValues:
-      result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genVulkan(el) & ')'
+      result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genGLSL(el) & ')'
       if i < ast.aValues.high:
         result.add ", "
     result.add ')'
 
   of gpuReturn:
-    result = indentStr & "return " & ctx.genVulkan(ast.rValue)
+    result = indentStr & "return " & ctx.genGLSL(ast.rValue)
 
   of gpuPrefix:
-    result = ast.pOp & ctx.genVulkan(ast.pVal)
+    result = ast.pOp & ctx.genGLSL(ast.pVal)
 
   of gpuTypeDef:
     result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
@@ -539,7 +460,7 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         elif el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
           result.add gpuTypeToString(el.typ, allowEmptyIdent = true) & "(0)"
         else:
-          result.add ctx.genVulkan(el.value)
+          result.add ctx.genGLSL(el.value)
         if i < ast.ocFields.len - 1:
           result.add ", "
       result.add ')'
@@ -551,36 +472,43 @@ proc genVulkan*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Self-terminating raw text: the gpuBlock loop appends no `;`
     # (the emitted text owns its own terminators).
     result = genEmitStmt(ctx, ast,
-      proc(c: var GpuContext; n: GpuAst): string = c.genVulkan(n, 0))
+      proc(c: var GpuContext, n: GpuAst): string = c.genGLSL(n, 0))
 
   of gpuComment:
     result = indentStr & "/* " & ast.comment & " */"
 
   of gpuConv:
-    result = gpuTypeToString(ast.convTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.convExpr) & ')'
+    result = gpuTypeToString(ast.convTo, allowEmptyIdent = true) & '(' & ctx.genGLSL(ast.convExpr) & ')'
 
   of gpuCast:
-    result = gpuTypeToString(ast.cTo, allowEmptyIdent = true) & '(' & ctx.genVulkan(ast.cExpr) & ')'
+    result = gpuTypeToString(ast.cTo, allowEmptyIdent = true) & '(' & ctx.genGLSL(ast.cExpr) & ')'
 
   of gpuAddr:
-    raiseAssert "Vulkan GLSL does not support addr — lower to SSBO/indexing first"
+    # Address-of element 0 of a pointer renders as the buffer-reference handle.
+    # Locals have no address in GLSL, fail loudly.
+    if ast.aOf.kind == gpuIndex and ast.aOf.iArr.kind != gpuDeref and
+       ast.aOf.iIndex.kind == gpuLit and ast.aOf.iIndex.lValue == "0":
+      result = ctx.genGLSL(ast.aOf.iArr)
+    else:
+      raiseAssert "Vulkan GLSL cannot take the address of a local: buffer device addressing covers buffer memory only, not function storage. Promote the local (SROA) or inline the callee. Site: " &
+        ast.repr
 
   of gpuDeref:
     # the ref block member is a runtime-sized array, a value read takes
     # element 0. Indexed and field-accessed uses route around this branch
-    result = ctx.genVulkan(ast.dOf) & ".x[0]"
+    result = ctx.genGLSL(ast.dOf) & ".x[0]"
 
   of gpuConstexpr:
     if ast.cType.kind == gtArray:
-      result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genVulkan(ast.cIdent)) & " = " & ctx.genVulkan(ast.cValue)
+      result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genGLSL(ast.cIdent)) & " = " & ctx.genGLSL(ast.cValue)
     else:
-      result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genVulkan(ast.cIdent) & " = " & ctx.genVulkan(ast.cValue)
+      result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genGLSL(ast.cIdent) & " = " & ctx.genGLSL(ast.cValue)
   of gpuMaterialize:
     raiseAssert "gpuMaterialize should not reach Vulkan backend — passByRef is not used"
 
   else:
-    echo "Unhandled node kind in genVulkan: ", ast.kind
-    raiseAssert "Unhandled node kind in genVulkan: " & ast.repr
+    echo "Unhandled node kind in genGLSL: ", ast.kind
+    raiseAssert "Unhandled node kind in genGLSL: " & ast.repr
 
 # ═══════════════════════════════════════════════════════════════════════
 # Top-level codegen
@@ -711,7 +639,7 @@ proc codegen*(ctx: var GpuContext): string =
   # struct members need the typedef text above them.
   for blk in ctx.globalBlocks:
     if blk.kind in {gpuTypeDef, gpuAlias}:
-      let blkStr = ctx.genVulkan(blk)
+      let blkStr = ctx.genGLSL(blk)
       if blkStr.len > 0:
         result.add blkStr
         if blk.kind in {gpuTypeDef, gpuAlias}:
@@ -729,16 +657,10 @@ proc codegen*(ctx: var GpuContext): string =
   for blk in ctx.globalBlocks:
     if blk.kind in {gpuTypeDef, gpuAlias}:
       continue
-    let blkStr = ctx.genVulkan(blk)
+    let blkStr = ctx.genGLSL(blk)
     if blkStr.len > 0:
       result.add blkStr
       result.add "\n"
-
-  # 3. Workgroup layout for kernel entry points
-  # Each kernel function gets the layout qualifier.
-  for fnIdent, fn in ctx.fnTab:
-    if fn.isGlobal():
-      discard
 
   # 4. Forward declarations (only for device functions, not kernels)
   let fns = toSeq(ctx.fnTab.pairs)
@@ -746,11 +668,16 @@ proc codegen*(ctx: var GpuContext): string =
     if not fn.isGlobal():
       let fnC = fn.clone()
       fnC.forwardDeclare = true
-      result.add ctx.genVulkan(fnC) & '\n'
+      result.add ctx.genGLSL(fnC) & '\n'
   if fns.anyIt(not it[1].isGlobal()):
     result.add "\n"
 
-  # 5. Full function definitions
+  # 5. Device function definitions, before the kernels calling them
+  for fnIdent, fn in ctx.fnTab:
+    if not fn.isGlobal():
+      result.add ctx.genGLSL(fn) & "\n\n"
+
+  # 6. Full kernel definitions
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
       # Kernel functions: place layout qualifier before entry point.
@@ -762,4 +689,4 @@ proc codegen*(ctx: var GpuContext): string =
       let wz = if wg.z > 0: wg.z else: 1
       result.add "layout(local_size_x = " & $wx & ", local_size_y = " & $wy &
                  ", local_size_z = " & $wz & ") in;\n"
-    result.add ctx.genVulkan(fn) & "\n\n"
+      result.add ctx.genGLSL(fn) & "\n\n"

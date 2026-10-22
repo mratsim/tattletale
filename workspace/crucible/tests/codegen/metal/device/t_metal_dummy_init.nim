@@ -3,7 +3,6 @@
 ## const and for a tuple of two dummy struct consts.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/device/t_metal_dummy_init.nim

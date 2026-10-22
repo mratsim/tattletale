@@ -42,7 +42,7 @@ proc walk*(body: var GpuAst, pre: proc(n: var GpuAst): void): void =
 
 # ─── Registration ──
 
-proc register*(reg: var PassRegistry, name: string, kind: PassKind,
+func register*(reg: var PassRegistry, name: string, kind: PassKind,
                phase: PassPhase, description: string,
                run: proc(ctx: var GpuContext): void {.nimcall.},
                dependsOn: seq[string] = @[]) =
@@ -57,7 +57,7 @@ proc runPasses*(ctx: var GpuContext, reg: var PassRegistry) =
   for p in reg.passes:
     for dep in p.dependsOn:
       if dep notin reg.donePasses:
-        error "\"" & p.name & "\" requires \"" & dep & "\" to run first"
+        raiseAssert "\"" & p.name & "\" requires \"" & dep & "\" to run first"
     when defined(debugPasses):
       echo "[pass] ", p.name, " (", p.phase, ")"
     p.run(ctx)

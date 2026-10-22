@@ -2,7 +2,6 @@
 ## Needs a driver with VK_KHR_shader_float16_int8 + 16-bit storage (MoltenVK on Apple Silicon qualifies).
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/serialization/t_vulkan_f16.nim

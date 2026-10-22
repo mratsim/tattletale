@@ -8,7 +8,6 @@
 ## - the fallback warns via the `warning` builtin, suppressible with --warnings:off
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_lowerSpansBtype.nim
@@ -16,6 +15,14 @@
 
 import std/tables
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOne(ctx: var GpuContext) =
+  ## Runs the single pass under test through the public registry.
+  var reg = PassRegistry.new()
+  reg.registerLowerSpans()
+  ctx.runPasses(reg)
 
 proc assertLenExprShape(n: GpuAst; expectTyp: GpuType) =
   ## Assert a lowered lenExpr `(last - first) + 1`: the `+` binop, the inner
@@ -63,7 +70,7 @@ proc runLower(n: GpuAst): GpuAst =
   ## Run the lowerSpans pass on a proc and return the rewritten proc.
   var ctx = GpuContext()
   ctx.allFnTab[n.pName] = n
-  lowerSpans(ctx)
+  runOne(ctx)
   result = ctx.allFnTab[n.pName]
 
 # ── Part (a): len(toOpenArray(...)) — ident index typed gtInt64 ──

@@ -96,10 +96,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
     # use short names (uint32, int64) for generic args, not C names (unsigned int, long long)
     result = t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add mangledHashName("", $hash(t))
   of gtObject: result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## XXX: unchecked array just T?
   of gtStatic: result = "int"
@@ -122,56 +123,8 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
   else:
     # normal stuff
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and checks for all `gpuCall` nodes. Any function
-  ## called in the scope is added to `fnTab`. This is a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      # Check if any of the parameters are pointers (otherwise non generic)
-      if fn notin ctx.fnTab: # function not known, add to `fnTab` (i.e. avoid code elimination)
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        # still "scan for functions", i.e. fill `fnTab` from inner calls
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-      # else we don't do anything for this function
-    # Harvest functions from arguments to this call!
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
-
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-
-  # 1. Add all data from `genericInsts` and `types` tables
-  #    In CUDA the types have to be before any possible global variables using
-  #    them!
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  # And all the known types
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill table with all *global* functions or *only* the specific `kernel`
-  #    if any given
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Using all global functions, we traverse their AST for any `gpuCall` node. We inspect
-  #    the functions called and record them in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns: # everything in `fnTab` at this point is a global function
-    # Get the original arguments (before lifting them) of this function. Needed in scan
-    # to check if `gpuCall` argument is a parameter.
-    let fnOrig = ctx.allFnTab[fnIdent]
-    ctx.scanFunctions(fn)
 
 
 proc genLit*(ast: GpuAst): string =

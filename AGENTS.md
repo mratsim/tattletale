@@ -253,9 +253,11 @@ when isMainModule:
 ### General
 
 - Nim 2.2.0+. C++ backend (`nim cpp`).
-- **Comments are welcome.** Do not delete comments unless wrong or outdated. Technical explanations, algorithmic
-  rationale, and edge case reasoning stay preserved. For tensor-heavy code, include expected
-  shapes in comments to ease debugging.
+- **Comments scale with need.** Short internal procs get no comment.
+  Comments carry usage contracts for public procs, background context,
+  non-trivial control flow.
+  Doctrine: `.agents/skills/engineering-discipline/SKILL.md`.
+- For tensor-heavy code, include expected shapes in comments to ease debugging.
 
 ### File Org
 

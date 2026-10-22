@@ -7,7 +7,7 @@
 ## - builtin distincts (`float16`, `bfloat16`) resolve by name
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/legalizations/t_ir_resolve_distinct.nim (from tattletale)
+##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/legalizations/t_ir_resolve_distinct.nim
 
 import std/[macros, strutils]
 import workspace/crucible

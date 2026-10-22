@@ -3,7 +3,6 @@
 ## param as `thread const T&`. Two call-arg shapes run on the device.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/serialization/t_metal_large_struct.nim

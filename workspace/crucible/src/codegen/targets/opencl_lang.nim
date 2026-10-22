@@ -10,8 +10,6 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
-import ../passes/passes_opencl
-import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -93,10 +91,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     skipIdent = true
   of gtGenericInst:
     result = "struct " & t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add mangledHashName("", $hash(t))
   of gtObject: result = "struct " & t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
@@ -142,74 +141,10 @@ proc containsFloat16(t: GpuType): bool =
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Preprocessing
-# ═══════════════════════════════════════════════════════════════════════
-
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and checks for all `gpuCall` nodes. Any function
-  ## called in the scope is added to `fnTab`. This is a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      if fn notin ctx.fnTab:
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Code generation
+# Printing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-
-# ── Preprocess ────────────────────────────────────────────────────────
-
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  # 1. Add all data from `genericInsts` and `types` tables
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill table with all *global* functions or *only* the specific `kernel`
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Traverse global functions for any `gpuCall` node and record in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnOrig = ctx.allFnTab[fnIdent]
-    ctx.scanFunctions(fn)
-
-  # 4. Apply Phase 6 byref lowering passes
-  # NOTE: genericInsts entries were already copied to allFnTab in step 1,
-  # so we only iterate allFnTab (not genericInsts separately) to avoid
-  # double-processing the same ref object.
-  # lowerByrefParamsImpl: process allFnTab.
-  # fnTab shares references with allFnTab for called functions (scanFunctions),
-  # and kernels are skipped, so no separate fnTab loop needed.
-  for fnKey in ctx.allFnTab.keys:
-    var fn = ctx.allFnTab[fnKey]
-    if fn.kind == gpuProc:
-      lowerByrefParamsImpl(ctx, fn)
-  # insertByrefAddrsImpl: needs to visit call sites in fnTab entries too,
-  # because fnTab has clones of top-level kernels from farmTopLevel.
-  for fnKey in ctx.allFnTab.keys:
-    var fn = ctx.allFnTab[fnKey]
-    if fn.kind == gpuProc:
-      insertByrefAddrsImpl(ctx, fn)
-  for fnIdent, fn in ctx.fnTab.mpairs:
-    if fn.kind == gpuProc:
-      insertByrefAddrsImpl(ctx, fn)
 
 # ── genOpenCL ─────────────────────────────────────────────────────────
 
@@ -584,12 +519,21 @@ proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
     if ctx.usesFloatAtomic(ch):
       return true
 
+proc usesSubgroupReduce(ctx: GpuContext, n: GpuAst): bool =
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.reductionBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if ctx.usesSubgroupReduce(ch):
+      return true
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
   # Check if we need fp64/fp16 extensions
   var needsFp64 = false
   var needsFp16 = false
   var needsFloatAtomic = false
+  var needsSubgroup = false
   for blk in ctx.globalBlocks:
     # We could scan types here, but for now we check in the generated code
     discard
@@ -606,6 +550,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp16 = true
     if ctx.usesFloatAtomic(fn.pBody):
       needsFloatAtomic = true
+    if ctx.usesSubgroupReduce(fn.pBody):
+      needsSubgroup = true
 
   if needsFp64:
     result = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n\n"
@@ -613,6 +559,8 @@ proc codegen*(ctx: var GpuContext): string =
     result = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n\n"
   if needsFloatAtomic:
     result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n\n"
+  if needsSubgroup:
+    result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n\n"
 
   # 1. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:

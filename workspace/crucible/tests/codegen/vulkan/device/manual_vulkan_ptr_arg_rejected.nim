@@ -2,7 +2,6 @@
 ## API passes DeviceMem handles, never raw pointers.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/manual_vulkan_ptr_arg_rejected.nim

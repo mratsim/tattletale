@@ -3,7 +3,6 @@
 ## dynamic operands materialize `Int[V]()` as the literal V in plain int arithmetic.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/compiletime/t_vulkan_static_int_ops.nim

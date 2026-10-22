@@ -8,13 +8,27 @@
 ## - gsNone operator symbols inside gpuBinOp.bOp stay unpatched
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_mapOperators.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOnNode(regProc: proc(reg: var PassRegistry) {.nimcall.}, n: var GpuAst) =
+  ## Runs one registered pass over `n` as a fn body, the public-API path.
+  var ctx = GpuContext()
+  var fn = GpuAst(kind: gpuProc,
+                  pName: GpuAst(kind: gpuIdent, symbol: newSymbol("f", iSym = "f")),
+                  pRetType: GpuType(kind: gtVoid),
+                  pBody: GpuAst(kind: gpuBlock, statements: @[n]))
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  regProc(reg)
+  ctx.runPasses(reg)
+  n = fn.pBody.statements[0]
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. Operator function names (gsProc) are patched
@@ -23,7 +37,7 @@ block:
   let plusSym = newSymbol("+", iSym = "+_h1", symKind = gsProc)
   var plusIdent = GpuAst(kind: gpuIdent, symbol: plusSym)
 
-  mapOperatorsImpl(plusIdent)
+  runOnNode(registerMapOperators, plusIdent)
   doAssert plusIdent.symbol.name == "add",
     "Operator + with gsProc should be patched to 'add', got '" & plusIdent.symbol.name & "'"
   doAssert plusIdent.symbol.iSym == "add_h1",
@@ -37,7 +51,7 @@ block:
   let mySym = newSymbol("myVar", iSym = "myVar_h2", symKind = gsProc)
   var myVar = GpuAst(kind: gpuIdent, symbol: mySym)
 
-  mapOperatorsImpl(myVar)
+  runOnNode(registerMapOperators, myVar)
   doAssert myVar.symbol.name == "myVar",
     "Plain identifier should be unchanged, got '" & myVar.symbol.name & "'"
   echo "  OK — plain identifiers are NOT affected"
@@ -53,7 +67,7 @@ block:
                      bLeft: GpuAst(kind: gpuLit, lValue: "1"),
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 
-  mapOperatorsImpl(binOp)
+  runOnNode(registerMapOperators, binOp)
   doAssert binOp.bOp.symbol.name == "+",
     "Operator symbol with gsNone should NOT be patched, got '" & binOp.bOp.symbol.name & "'"
   echo "  OK — binOp operator symbols (gsNone) are NOT patched"

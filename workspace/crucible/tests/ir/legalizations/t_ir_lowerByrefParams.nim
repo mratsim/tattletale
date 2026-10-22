@@ -7,14 +7,22 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     workspace/crucible/tests/ir/legalizations/t_ir_lowerByrefParams.nim (from tattletale)
+##     workspace/crucible/tests/ir/legalizations/t_ir_lowerByrefParams.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering_opencl {.all.}
 
-# ═══════════════════════════════════════════════════════════════════════════
+proc runLowerByref(ctx: var GpuContext, fn: GpuAst) =
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  reg.registerLowerByrefParams()
+  ctx.runPasses(reg)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 1. lowerByrefParamsImpl renames passByRef params to _p_ prefix
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("data", iSym = "data_byref", typ = int32)
@@ -25,15 +33,15 @@ block:
   var procNode = GpuAst(kind: gpuProc, pName: ident, pParams: @[param], pBody: body)
   var ctx = GpuContext()
 
-  ctx.lowerByrefParamsImpl(procNode)
+  ctx.runLowerByref(procNode)
 
   doAssert procNode.pParams[0].ident.ident() == "_p_data",
     "Byref param should be renamed to '_p_data', got: '" & procNode.pParams[0].ident.ident() & "'"
   echo "  OK: passByRef param renamed to _p_data"
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 2. lowerByrefParamsImpl deref-wraps body idents (no deref-init prepend)
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("val", iSym = "val_byref2", typ = int32)
@@ -49,7 +57,7 @@ block:
                         pParams: @[param], pBody: body)
   var ctx = GpuContext()
 
-  ctx.lowerByrefParamsImpl(procNode)
+  ctx.runLowerByref(procNode)
 
   # the body keeps its original statements, NO deref-init is prepended
   doAssert procNode.pBody.statements.len == 1,
@@ -65,9 +73,9 @@ block:
     "RHS ident must be deref-wrapped (t → (*_p_t)), got: " & $stmt.aRight.kind
   echo "  OK: body idents deref-wrapped (no deref-init prepend)"
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 3. Kernel functions are not modified by lowerByrefParamsImpl
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 block:
   let int32 = GpuType(kind: gtInt32)
   let sym = newSymbol("kernel_data", iSym = "kd_h3", typ = int32)
@@ -79,7 +87,7 @@ block:
   procNode.pAttributes = {attGlobal}
   var ctx = GpuContext()
 
-  ctx.lowerByrefParamsImpl(procNode)
+  ctx.runLowerByref(procNode)
 
   doAssert procNode.pParams[0].ident.ident() == "kernel_data",
     "Kernel byref param should NOT be renamed, got: '" & procNode.pParams[0].ident.ident() & "'"

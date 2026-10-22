@@ -8,7 +8,6 @@
 ## - `get_global_id(d)` with a runtime `d` is rejected loudly at Nim semantic analysis
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/functions/t_ir_builtin_catalog_expansion.nim

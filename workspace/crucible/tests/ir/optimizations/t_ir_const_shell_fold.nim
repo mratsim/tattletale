@@ -8,7 +8,7 @@
 ## - folded calls keep their side-effecting arguments
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/optimizations/t_ir_const_shell_fold.nim (from tattletale)
+##   nim c -r --hints:off --warnings:off workspace/crucible/tests/ir/optimizations/t_ir_const_shell_fold.nim
 
 import std/[macros, sequtils, strutils, tables]
 

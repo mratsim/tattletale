@@ -5,35 +5,47 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [sequtils, sets, tables, strutils]
+# ############################################################
+#
+#            MSL lowering passes
+#
+# ############################################################
+#
+# Project the crucible IR onto Metal's calling convention:
+# device-function `{.smem.}` vars hoist to threadgroup params,
+# coordinate builtins materialize as appended params,
+# pointer-carrying structs expand to ptr/scalar leaves
 
+import std / [sequtils, sets, tables, strutils]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
-import ./passes_legalizations
+import ./passes_lowering
 import ./passes_validations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
 
-# ═══════════════════════════════════════════════════════
-#  Pass registration
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
 
-proc registerMetalPasses*(reg: var PassRegistry) =
-  reg.register("rejectMetalKeywords", pkValidation, phaseMain,
-    "Rejects identifiers that are reserved MSL keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
-  )
+func registerMetalLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
   reg.registerExpandStructKernelParams()
+  reg.registerSmemArena()
+  reg.registerMaterializeIndexBuiltinParams()
+  reg.registerCollectValueAddressSpaces()
+
+func registerSmemArena(reg: var PassRegistry) =
   reg.register("smemArena", pkTransform, phaseMain,
     "Hoists device functions' {.smem.} vars to threadgroup params as Metal doesn't support threadgroup allocation in device functions",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       smemArenaImpl(ctx)
   )
+
+func registerMaterializeIndexBuiltinParams(reg: var PassRegistry) =
   reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
     "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
     dependsOn = @[],
@@ -41,23 +53,9 @@ proc registerMetalPasses*(reg: var PassRegistry) =
       materializeIndexBuiltinParamsImpl(ctx)
   )
 
-# ═══════════════════════════════════════════════════════════
-#  Metal printer helpers
-# ═══════════════════════════════════════════════════════════
-
-proc variantSuffix*(spaces: seq[AddressSpace]): string =
-  ## suffix of a space tuple, e.g. `_smem`, `_devicesmem`
-  result = "_"
-  for space in spaces:
-    case space
-    of asDevice: result.add "device"
-    of asConstant: result.add "const"
-    of asSMEM: result.add "smem"
-    of asRMEM: result.add "rmem"
-
-# ═══════════════════════════════════════════════════════════
-#  `{.smem.}` promotion to overseeing kernel
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# `{.smem.}` promotion to overseeing kernel
+# ═══════════════════════════════════════════════════════════════════════
 
 proc hoistSmemVar(fn: var GpuAst, stmt: GpuAst) =
   doAssert stmt.vType.kind in {gtArray, gtObject, gtGenericInst},
@@ -220,9 +218,9 @@ proc smemArenaImpl(ctx: var GpuContext) =
         bindSmemCallSites(ctx, fn)
       ctx.genericInsts[fnKey] = fn
 
-
-#  Coordinate-builtin param materialization
-# ═════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# Coordinate-builtin param materialization
+# ═══════════════════════════════════════════════════════════════════════
 
 proc collectCoordBuiltinIdents(n: GpuAst, acc: var seq[(string, GpuCoordBuiltinKind)]) =
   case n.kind
@@ -301,7 +299,7 @@ proc materializeCallArgsImpl(ctx: GpuContext, n: var GpuAst, needs: Table[string
     for ch in mitems(n):
       materializeCallArgsImpl(ctx, ch, needs)
 
-proc materializeIndexBuiltinParamsImpl*(ctx: var GpuContext) =
+proc materializeIndexBuiltinParamsImpl(ctx: var GpuContext) =
   var needs = initTable[string, seq[(string, GpuCoordBuiltinKind)]]()
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]

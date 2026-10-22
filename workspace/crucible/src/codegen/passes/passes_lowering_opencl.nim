@@ -5,40 +5,72 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [tables]
+# ############################################################
+#
+#            OpenCL lowering passes
+#
+# ############################################################
+#
+# Project the crucible IR onto OpenCL C's calling convention:
+# passByRef structs pass as hidden const pointers and structs
+# carrying pointers expand to ptr/scalar leaves, since OpenCL
+# params cross by value
 
+import std / [tables, sets]
 import ../ir/gpu_ast_datatypes
 import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_lowering
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
-import ./passes_preprocessing
 
 {.experimental: "codeReordering".}
+
+const OclReserved = [
+  "kernel", "__kernel", "global", "__global", "local", "__local",
+  "constant", "__constant", "read_only", "write_only", "read_write"
+].toHashSet()
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+func registerOpenclLoweringPasses*(reg: var PassRegistry) =
+  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerMaterializePassByRefArgs()
+  reg.registerExpandStructKernelParams()
+  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
+  # By-ref lowering: params become `const Type*`, call sites materialize addrs.
+  reg.registerLowerByrefParams()
+  reg.register("insertByrefAddrs", pkTransform, phaseMain,
+    "Wraps by-ref call args in gpuAddr",
+    dependsOn = @["lowerByrefParams"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          ctx.insertByrefAddrsImpl(fn)
+  )
+
+func registerLowerByrefParams(reg: var PassRegistry) =
+  reg.register("lowerByrefParams", pkTransform, phaseMain,
+    "Rewrites passByRef params into const Type* ptr params",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          ctx.lowerByrefParamsImpl(fn)
+  )
 
 # ═══════════════════════════════════════════════════════════════════════
 # By-ref parameter lowering
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerOpenclPasses*(reg: var PassRegistry) =
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  reg.registerExpandStructKernelParams()
-  reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
-    "Rejects identifiers that are reserved OpenCL C keywords",
-    proc(ctx: var GpuContext): void =
-      ctx.checkReservedKeywords(["kernel", "__kernel", "global", "__global",
-        "local", "__local", "constant", "__constant",
-        "read_only", "write_only", "read_write"], "OpenCL C")
-  )
-
-proc lowerByrefParamsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc lowerByrefParamsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Rewrites passByRef params into `const Type*` ptr params for OpenCL.
   ## CUDA keeps `const Type&` natively, no body changes there.
   ##
@@ -80,7 +112,7 @@ proc lowerByrefParamsImpl*(ctx: var GpuContext, n: var GpuAst) =
     for ch in n.mitems:
       ctx.lowerByrefParamsImpl(ch)
 
-proc insertByrefAddrsImpl*(ctx: var GpuContext, n: var GpuAst) =
+proc insertByrefAddrsImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Wraps byref args in `gpuAddr` nodes at call sites.
   case n.kind
   of gpuCall:
@@ -94,4 +126,3 @@ proc insertByrefAddrsImpl*(ctx: var GpuContext, n: var GpuAst) =
   else:
     for ch in n.mitems:
       ctx.insertByrefAddrsImpl(ch)
-# ═══════════════════════════════════════════════════════════════════════════

@@ -2,7 +2,6 @@
 ## params bind as cl_mem, only OpenCLBuffer values cross the serializer.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/device/manual_opencl_ptr_arg_rejected.nim

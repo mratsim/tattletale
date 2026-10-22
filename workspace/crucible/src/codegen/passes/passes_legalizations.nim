@@ -11,13 +11,23 @@ import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 
+# ############################################################
+#
+# Legalizations
+#
+# ############################################################
+#
+# Legalizations conform the IR to the crucible IR model itself:
+# every statement is a block, result is assigned, constexprs are lifted.
+# Target-independent, every backend registers them identically.
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc registerLegalizationPasses*(reg: var PassRegistry) =
+func registerLegalizationPasses*(reg: var PassRegistry) =
   reg.register("ensureBlock", pkTransform, phaseEarly,
     "Wraps non-block bodies in gpuBlock",
     proc(ctx: var GpuContext): void =
@@ -54,7 +64,6 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         insertResult(ctx, fn)
     )
 
-
   reg.register("liftConstexpr", pkTransform, phaseMain,
     "Extracts gpuConstexpr from expression slots into preceding statements",
     dependsOn = @["ensureBlock"],
@@ -64,6 +73,21 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
         liftConstexpr(fn.pBody)
     )
 
+  reg.register("unwrapBlockInDot", pkTransform, phaseMain,
+    "Unwraps single-stmt gpuBlock(isExpr) inside gpuDot dParent chains",
+    dependsOn = @["ensureBlock"],
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        fn.pBody.walk(proc(n: var GpuAst): void =
+          unwrapBlockInDot(n)
+        )
+    )
+
+  reg.registerRewriteIndexDeref()
+
+func registerBlitBlockExprs*(reg: var PassRegistry) =
+  ## Registered after lowerIfExpr: the ternary branches carry its block exprs
   reg.register("blitBlockExprs", pkTransform, phaseMain,
     "Converts gpuBlock(isExpr:true) into scope blocks + blit temps",
     dependsOn = @["ensureBlock", "liftConstexpr"],
@@ -79,17 +103,46 @@ proc registerLegalizationPasses*(reg: var PassRegistry) =
     )
 
 
-
-  reg.register("unwrapBlockInDot", pkTransform, phaseMain,
-    "Unwraps single-stmt gpuBlock(isExpr) inside gpuDot dParent chains",
-    dependsOn = @["ensureBlock"],
+func registerRewriteIndexDeref(reg: var PassRegistry) =
+  reg.register("rewriteIndexDeref", pkTransform, phaseMain,
+    "Normalizes gpuIndex(gpuDeref(...)) to gpuIndex(dOf(...)) for pointer types",
+    dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
-        fn.pBody.walk(proc(n: var GpuAst): void =
-          unwrapBlockInDot(n)
-        )
-    )
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          rewriteIndexDerefImpl(ctx, fn.pBody)
+  )
+
+# ═══════════════════════════════════════════════════════════════════════
+# Index deref normalization
+# ═══════════════════════════════════════════════════════════════════════
+
+proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## `(*arr)[idx]` ≡ `arr[idx]` in C, the IR keeps the simpler form.
+  case n.kind
+  of gpuIndex:
+    if n.iArr.kind == gpuDeref:
+      # ptr-to-array keeps the deref (C array decay), plain ptr rewrites
+      let isPtrToArray = (block:
+        let derefOf = n.iArr.dOf
+        if derefOf.kind == gpuIdent and derefOf.symbol != nil:
+          let symTyp = derefOf.symbol.typ
+          symTyp != nil and symTyp.kind == gtPtr and
+          symTyp.to != nil and symTyp.to.kind == gtArray
+        else:
+          false)
+      if not isPtrToArray:
+        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
+  else:
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Result insertion
@@ -249,6 +302,8 @@ proc liftConstexpr(pbody: var GpuAst) =
 # Block-expression blitting
 # ═══════════════════════════════════════════════════════════════════════
 
+proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType)
+
 proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRetType: GpuType): seq[GpuAst] =
   ## Process an expression slot. If `slot` is a gpuBlock(isExpr: true),
   ## replace it with a blit temp reference and return preamble statements.
@@ -268,7 +323,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
           " (tail kind: " & $slot.statements[^1].kind & ")"
         if slot.statements[^1].kind == gpuBinOp:
           msg.add ", nil bType: " & $slot.statements[^1].bType.isNil
-        error msg
+        raiseAssert msg
       let blitName = "_blit_" & $ctx.genSymCount
       inc ctx.genSymCount
       let blitSym = newSymbol(blitName, iSym = blitName, typ = t, symKind = gsLocal)
@@ -286,7 +341,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
       slot = blitRef
       result = @[blitDecl, scopeBlock]
     else:
-      error "Empty block expression"
+      raiseAssert "Empty block expression"
     return
   result = @[]
   case slot.kind
@@ -337,7 +392,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
         if slot.aLeft.kind == gpuIdent:
           lhsType = slot.aLeft.symbol.typ
       else:
-        error "Empty block expression as lvalue"
+        raiseAssert "Empty block expression as lvalue"
       result.add ctx.blitExprSlot(slot.aRight, lhsType, fnRetType)
       return
     result.add ctx.blitExprSlot(slot.aLeft, GpuType(kind: gtVoid), fnRetType)
@@ -387,15 +442,15 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
     result = ctx.blitExprSlot(slot.mExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuConstexpr:
     result = ctx.blitExprSlot(slot.cValue, GpuType(kind: gtVoid), fnRetType)
+  of gpuBlock:
+    # statement-shaped block in an expr slot: descend, inner expr blocks blit in place
+    ctx.blitFnBody(slot, fnRetType)
   else:
     discard
 
 # ═══════════════════════════════════════════════════════════════════════
 # Duplicate var renaming
 # ═══════════════════════════════════════════════════════════════════════
-
-proc renameSymsInTree(n: var GpuAst, oldName, newName: string)
-proc dedupVarNames*(stmts: var seq[GpuAst])
 
 proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
   ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
@@ -497,50 +552,6 @@ proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
   else:
     discard
 
-proc renameSymsInTree(n: var GpuAst, oldName, newName: string) =
-  if n == nil: return
-  case n.kind
-  of gpuIdent:
-    if n.symbol.name == oldName:
-      n.symbol.name = newName
-      n.symbol.iSym = newName
-  of gpuVar:
-    # mitems does not yield vName
-    if n.vName.symbol.name == oldName:
-      n.vName.symbol.name = newName
-      n.vName.symbol.iSym = newName
-    renameSymsInTree(n.vInit, oldName, newName)
-  else:
-    for child in n.mitems:
-      renameSymsInTree(child, oldName, newName)
-
-proc dedupVarNames*(stmts: var seq[GpuAst]) =
-  ## Renames duplicate gpuVar declarations across sibling blocks,
-  ## template expansions collide without C++ scope isolation
-  var seenNames: Table[string, int]
-  for i in 0 ..< stmts.len:
-    if stmts[i].kind == gpuBlock:
-      var localRenames: seq[(string, string)]
-      for s in stmts[i].statements:
-        if s.kind == gpuVar:
-          let name = s.vName.symbol.name
-          if name in seenNames:
-            seenNames[name] += 1
-            let newName = name & "_" & $seenNames[name]
-            localRenames.add (name, newName)
-          else:
-            seenNames[name] = 0
-      for (oldName, newName) in localRenames:
-        renameSymsInTree(stmts[i], oldName, newName)
-    elif stmts[i].kind == gpuVar:
-      let name = stmts[i].vName.symbol.name
-      if name in seenNames:
-        seenNames[name] += 1
-        let newName = name & "_" & $seenNames[name]
-        renameSymsInTree(stmts[i], name, newName)
-      else:
-        seenNames[name] = 0
-
 proc unwrapBlockInDot(n: var GpuAst) =
   ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.
   case n.kind
@@ -575,97 +586,3 @@ proc unwrapBlockInDot(n: var GpuAst) =
     unwrapBlockInDot(n.vInit)
   else:
     discard
-
-# ═══════════════════════════════════════════════════════════════════════
-# Struct kernel-param expansion (Metal, WebGPU, OpenCL)
-# ═══════════════════════════════════════════════════════════════════════
-
-func containsPtrDeep(t: GpuType): bool =
-  ## True when a pointer is reachable through the type's fields
-  case t.kind
-  of gtPtr: true
-  of gtObject, gtGenericInst:
-    for f in t.fields:
-      if f.typ.containsPtrDeep: return true
-    false
-  of gtArray: t.aTyp.containsPtrDeep
-  else: false
-
-
-type KernelParamLeaf = object
-  ## One signature entry of an expanded struct kernel param
-  name*: string
-  typ*: GpuType
-  isBuffer*: bool
-
-proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
-  ## Metal/WebGPU cannot take struct-with-pointer kernel args, the signature
-  ## expands depth-first in field order, matching the serializer binding order
-  result = newSeq[KernelParamLeaf]()
-  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
-    case t.kind
-    of gtPtr:
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
-    of gtObject, gtGenericInst:
-      if t.containsPtrDeep:
-        for f in t.fields:
-          if size(f.typ) > 0:
-            walk(f.typ, name & "_" & f.name, leaves)
-      else:
-        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-    of gtArray:
-      doAssert not t.containsPtrDeep,
-        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-    else:
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-  walk(t, name, result)
-
-proc buildLeafConstr(t: GpuType, name: string): GpuAst =
-  result = GpuAst(kind: gpuObjConstr, ocType: t)
-  for f in t.fields:
-    if size(f.typ) == 0:
-      result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
-    elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:
-      result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name), typ: f.typ)
-    else:
-      result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
-
-proc expandStructKernelParamsImpl(ctx: var GpuContext) =
-  for _, fn in ctx.allFnTab.mpairs:
-    if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
-    var taken: seq[string]
-    for p in fn.pParams:
-      taken.add p.ident.ident()
-    var params: seq[GpuParam]
-    for p in fn.pParams:
-      if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
-        let leaves = p.typ.kernelParamLeaves(p.ident.ident())
-        for leaf in leaves:
-          doAssert leaf.name notin taken,
-            "expandStructKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
-          let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
-          let space = if leaf.isBuffer: asDevice else: asRMEM
-          params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
-                              typ: leaf.typ, addressSpace: space)
-        let constr = buildLeafConstr(p.typ, p.ident.ident())
-        let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
-                           vType: p.typ, vInit: constr, vMutable: false,
-                           addressSpace: asRMEM)
-        doAssert fn.pBody.kind == gpuBlock, "expandStructKernelParams: kernel body is not a block"
-        fn.pBody.statements.insert(local, 0)
-      else:
-        params.add p
-    fn.pParams = params
-
-proc registerExpandStructKernelParams*(reg: var PassRegistry) =
-  ## Metal/WebGPU expand, CUDA/OpenCL/Vulkan cross structs natively
-  ## (Vulkan pointer fields cross as 64-bit buffer device addresses)
-  reg.register(
-    name = "expandStructKernelParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
-    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
-    run = expandStructKernelParamsImpl
-  )

@@ -8,13 +8,26 @@
 ## - the rewritten gpuCall carries the two operands as cArgs
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_overloadedOps.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOnCtxBody(ctx: var GpuContext, n: var GpuAst) =
+  ## Runs one registered pass over `n` as a fn body in `ctx`, the public-API path.
+  var fn = GpuAst(kind: gpuProc,
+                  pName: GpuAst(kind: gpuIdent, symbol: newSymbol("f", iSym = "f")),
+                  pRetType: GpuType(kind: gtVoid),
+                  pBody: GpuAst(kind: gpuBlock, statements: @[n]))
+  ctx.allFnTab[fn.pName] = fn
+  var reg = PassRegistry.new()
+  reg.registerResolveOverloadedOperators()
+  ctx.runPasses(reg)
+  n = fn.pBody.statements[0]
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. bIsOverloaded=false remains gpuBinOp
@@ -25,7 +38,7 @@ block:
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 
   var ctx = GpuContext()
-  resolveOverloadedOperatorsImpl(ctx, binOp)
+  runOnCtxBody(ctx, binOp)
   doAssert binOp.kind == gpuBinOp,
     "bIsOverloaded=false should remain gpuBinOp, got " & $binOp.kind
   echo "  OK — bIsOverloaded=false remains gpuBinOp"
@@ -41,7 +54,7 @@ block:
                      bRight: GpuAst(kind: gpuLit, lValue: "2"))
 
   var ctx = GpuContext()
-  resolveOverloadedOperatorsImpl(ctx, binOp)
+  runOnCtxBody(ctx, binOp)
   doAssert binOp.kind == gpuCall,
     "bIsOverloaded=true should be converted to gpuCall, got " & $binOp.kind
   doAssert binOp.cName.symbol.name == "+",

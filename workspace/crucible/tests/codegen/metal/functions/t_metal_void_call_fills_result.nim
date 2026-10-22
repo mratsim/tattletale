@@ -1,16 +1,8 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/Apache-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Metal: value-returning device fn whose last statement is a void call
 ## filling `result` through a var param. The result legalization pass must
 ## not wrap the void call in `result = ...`.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/functions/t_metal_void_call_fills_result.nim

@@ -8,13 +8,22 @@
 ## - folded shapes cover float32/64, int32, and uint32 operands
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/optimizations/ir_foldMaxMin.nim
 
 import std/[tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_optimizations {.all.}
+import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
+import workspace/crucible/src/codegen/passes/pass_registry
+
+proc runOne(ctx: var GpuContext) =
+  ## Runs the single pass under test through the public registry.
+  var reg = PassRegistry.new()
+  reg.registerMangleNames()
+  reg.registerFoldMaxMinToBuiltins()
+  ctx.runPasses(reg)
 
 # ─── IR construction helpers (mirror the shapes nim_to_gpu produces) ───
 
@@ -43,7 +52,7 @@ proc foldInCtx(body: GpuAst; retType: GpuType): GpuAst =
                            aLeft: ident("result", retType),
                            aRight: body)]))
   ctx.allFnTab[fnName] = fn
-  ctx.foldMaxMinToBuiltins()
+  runOne(ctx)
   ctx.allFnTab[fnName].pBody
 
 proc assignRhs(body: GpuAst): GpuAst =

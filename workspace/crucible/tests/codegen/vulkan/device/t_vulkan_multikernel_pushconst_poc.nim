@@ -1,9 +1,3 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
 ##
 ## Vulkan: multi-kernel push-constant guard.
 ## A multi-kernel source unions every kernel's by-value scalars into one file-scope
@@ -12,7 +6,6 @@
 ## Single-kernel by-value scalars are emitted as push constants (no function params).
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_multikernel_pushconst_poc.nim

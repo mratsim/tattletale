@@ -72,23 +72,22 @@ type
 
   GpuType* = ref object
     builtin*: bool ## Whether the type refers to a builtin type or not
+    isTuple*: bool ## Object or generic inst stands for a Nim tuple
     fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
     case kind*: GpuTypeKind
     of gtPtr:
       to*: GpuType # `ptr T` points to `to`
       implicit*: bool # Whether the type was implicitly a pointer, i.e. `var T`.
       mutable*: bool # WebGPU "Generics" only: Mutable (read write) or immutable pointer (read only)?
-                    # If a function is called with a raw pointer as an argument or `implicit == true / var T` argument,
-                    # `mutable` will be true. If on the other hand we have a non pointer type and take its address
-                    # via `foo.addr`, mutable will be false.
+                    # True for raw pointer and `var T` arguments, false for `foo.addr` of a non pointer type.
     of gtUA: uaTo*: GpuType # `UncheckedArray[T]`
     of gtObject:
       name*: string
     of gtArray:
       aTyp*: GpuType # the inner type
-      aLen*: int     # The length of the array. If `aLen == -1` we look at a generic (static) array. Will be given at instantiation time
-                    # On both CUDA and WebGPU a length of `0` is also used to generate `int foo[]` (CUDA)
-                    # `array<foo>` (WebGPU) (runtime sized arrays), which are generated from `ptr UncheckedArray[float32]` for example.
+      aLen*: int     # The length of the array, `-1` for a generic (static) array resolved at instantiation time
+                    # `0` generates runtime-sized arrays on CUDA (`int foo[]`) and WebGPU (`array<foo>`),
+                    # produced from `ptr UncheckedArray[float32]` for example.
     of gtStatic:
       sValue*: int  # The actual static integer value
     of gtSpan:
@@ -181,8 +180,7 @@ type
       vRequiresMemcpy*: bool
       vMutable*: bool # `true == var`, `false == let`
       addressSpace*: AddressSpace
-        ## Resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma.
-        ## Unannotated locals default to asRMEM (per-thread registers).
+        ## Resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma, unannotated locals default to asRMEM
     of gpuAssign:
       aLeft*, aRight*: GpuAst
       aRequiresMemcpy*: bool
@@ -223,9 +221,9 @@ type
       aTyp*: GpuType ## Name of the type alias
       aTo*: GpuAst ## Type the alias maps to
     of gpuObjConstr:
-      ocType*: GpuType  # type we construct
-      ## XXX: it would be better if we already fill the fields with default values here
-      ocFields*: seq[GpuFieldInit] # the fields we initialize
+      ocType*: GpuType  # the constructed type
+      ## XXX: fields could be pre-filled with default values here
+      ocFields*: seq[GpuFieldInit] # the initialized fields
     of gpuInlineAsm:
       stmt*: string
       ops*: seq[GpuAst] ## Operand symbols (gpuIdent) for backtick names
@@ -235,10 +233,10 @@ type
       comment*: string
     of gpuConv:
       convTo*: GpuType # type to cast to
-      convExpr*: GpuAst # expression we convert
+      convExpr*: GpuAst # the converted expression
     of gpuCast:
       cTo*: GpuType # type to cast to
-      cExpr*: GpuAst # expression we cast
+      cExpr*: GpuAst # the cast expression
     of gpuAddr:
       aOf*: GpuAst
     of gpuDeref:
@@ -296,12 +294,16 @@ type
     asConstant
     asDevice
 
-  ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
+  ParamFlavor* = enum
+    kIn
+    kVar
+
   GpuParam* = object
     ident*: GpuAst ## The actual parameter symbol, `GpuIdent`
     typ*: GpuType
     addressSpace*: AddressSpace
     passByRef*: bool   ## Pass by hidden const reference (large structs > 24 bytes)
+    flavor*: ParamFlavor
 
   GpuFieldInit* = object
     name*: string
@@ -311,105 +313,56 @@ type
   GpuProcSignature* = object
     params*: seq[GpuParam]
     retType*: GpuType
-    staticParamPositions*: seq[int] = @[] ## original arg-order positions of dropped
-                                        ## static VALUE params (compile-time only,
-                                        ## no CUDA value — see parseProcParameters)
+    staticParamPositions*: seq[int] = @[] ## original arg-order positions of dropped static VALUE params (compile-time only, no CUDA value)
 
   GpuContext* = object
-    ## XXX: need table for generic invocations. Then when we encounter a type, need to map to
-    ## the specific version
-    ## However, also need to keep every *generic procedure*. In their bodies the types are
-    ## only defined once they are called after all.
-    skipSemicolon*: bool # whether we *currently* add semicolons at the end of a block or not
-    allFnTab*: OrderedTable[GpuAst, GpuAst] ## map of all function definitions. For easy lookup by identifier
-                                 ## Key is the `GpuAst` of the functions identifier / symbol
-    fnTab*: OrderedTable[GpuAst, GpuAst] ## Map only of those function we generate code for. Includes
-                                        ## generically instantiated functions.
-    globalBlocks*: seq[GpuAst] ## Blocks in the global space. E.g. type defs or global variables.
-    ## XXX: for now globals only store parameters, but we need to store `GpuAst` so that we can
-    ## also add manually added globals or lifted `{.smem.}` variables!
-    ## NOTE: The `globals` must store the type *AS IT WAS WRITTEN* in the Nim code. Any potential
-    ## modifications we make locally for WebGPU (e.g. convert `bool` to `i32` for a global
-    ## argument), must not be made to them. `globals` is used precisely to handle the *result* of
-    ## that kind of transformation.
-    ## As a result, the `globals` also *ONLY* contains the unique symbol as a key and not a `GpuAst`.
-    globals*: OrderedTable[string, GpuParam] #Table[GpuAst, GpuAst] ## Maps global symbols (`{.smem.}` lifted to global, manually defined in global,
-                         ## or `storage` buffer identifiers to the type? XXX to what?
+    ## XXX: generic invocation table missing, call-site types must map to the instantiated version.
+    skipSemicolon*: bool # when true, block statements emit without trailing semicolons
+    allFnTab*: OrderedTable[GpuAst, GpuAst] ## All function definitions, keyed by identifier `GpuAst`
+    fnTab*: OrderedTable[GpuAst, GpuAst] ## Functions codegen generates, generic instantiations included
+    globalBlocks*: seq[GpuAst] ## Blocks in the global space, e.g. type defs or global variables
+      ## Vulkan push-constant param info: type and name strings stored as comments in globalBlocks for codegen to read
+    ## XXX: globals hold only parameters, the `GpuAst` storage exists for manually added globals and lifted `{.smem.}` variables
+    ## NOTE: `globals` stores params as written in the Nim source, WebGPU-local rewrites must not touch it
+    globals*: OrderedTable[string, GpuParam] ## `{.smem.}`-lifted, manually defined and `storage` buffer globals, keys are symbol strings
     sigTab*: Table[string, GpuAst] ## Map the `nnkSym.signatureHash` to a `GpuAst` of kind `GpuIdent`
     currentScope*: GpuAst  ## Current scope block for variable registration during toGpuAst
     currentScopeSyms*: seq[(string, Symbol)]  ## Current scope's symbol table (parallel to currentScope)
     scopeSymsStack*: seq[seq[(string, Symbol)]]  ## Stack of parent scope symbol tables for push/pop
-    genSymCount*: int ## increases for every generated identifier (currently only underscore `_`), hence the basic solution
+    genSymCount*: int ## Counter for generated identifiers
 
-    structsWithPtrs*: Table[(GpuType, string), GpuAst]
-      ## WGSL: maps (struct type, pointer field name) to the kernel-param ident assigned to the field at its object construction.
-      ## WGSL structs cannot hold pointer fields, so the printer deletes them
-      ## from constructors and rewrites `foo.field` accesses to the recorded
-      ## ident, with `&` in global scope and the bare ident in device functions.
-    ptrFieldBindings*: Table[(string, string), GpuAst]
-      ## WGSL: pointer-field binding per variable, keyed (variable name, field name).
-      ## Two variables of one struct type carry different buffers, so the type-keyed
-      ## structsWithPtrs table alone would alias them.
-    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]]
-      ## Observed address-space tuples of pointer-typed struct fields, keyed by struct type.
-      ## One tuple per distinct space combination observed at a construction site, in first-seen order.
-    varAddressSpaces*: Table[string, AddressSpace]
-      ## Maps a variable symbol's iSym to its resolved address space, recorded
-      ## by the shared collection pass (Metal and WGSL). Unannotated locals are
-      ## recorded as asRMEM.
+    structsWithPtrs*: Table[(GpuType, string), GpuAst] ## WGSL: (type, field) -> kernel-param ident at construction, printer rewrites `foo.field` to it
+    ptrFieldBindings*: Table[(string, string), GpuAst] ## WGSL: per-variable (variable, field) binding, the type-keyed table would alias same-struct variables
+    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]] ## Address-space tuples of pointer-typed struct fields, one per distinct construction-site combination
+    objFieldAddressSpaces*: Table[string, seq[AddressSpace]] ## Per pointer-field address space of a variable's instance, keyed by iSym
+    symAddressSpaces*: Table[string, AddressSpace] ## Symbol iSym -> storage address space, unannotated locals as asRMEM
 
-    generics*: HashSet[string]
-      ## Set of all generic proc names we have encountered in Nim -> GpuAst. When
-      ## we see an `nnkCall` we check if we call a generic function. If so, look up
-      ## the instantiated generic, parse it and store in `genericInsts` below.
-    ## Phase 3: Unified function table. Keyed by iSym string.
-    ## Contains ALL known functions (defined, generic-inst, external, builtin).
+    generics*: HashSet[string] ## Generic proc names seen in Nim -> GpuAst, triggers instantiation recording into `genericInsts`
+    ## All known functions (defined, generic-inst, external, builtin), keyed by iSym
     fnTable*: OrderedTable[string, FnTableEntry]
 
-    ## Stores the unique identifiers (keys) and the implementations of the
-    ## precise generic instantiations that are called.
-    genericInsts*: OrderedTable[GpuAst, GpuAst]
+    ## Called generic instantiations, key is the instantiation ident, value the implementation
+    genericInsts*: OrderedTable[GpuAst, GpuAst] ## Called generic instantiations, key the instantiation ident, value the implementation
+    processedProcs*: OrderedTable[GpuAst, GpuProcSignature] ## Recursion guard: procs already processed, value the instantiation signature
+    builtinFns*: OrderedTable[GpuAst, GpuAst] ## Builtin/importc functions encountered, consulted for value-return at `gpuCall` sites
+    types*: OrderedTable[GpuType, GpuAst] ## All known types from Nim -> GpuAst, key the raw type, value a full `gpuTypeDef`
+    symChoices*: HashSet[string] ## Produced function symbol names, a name collision switches the display name from `iName` to `iSym`
 
-    ## Table of procs and their signature to avoid looping infinitely for recursive procs
-    ## Arguments are:
-    ## - Key: ident of the proc
-    ## - Value: signature of the (possibly generic) instantiation
-    processedProcs*: OrderedTable[GpuAst, GpuProcSignature]
-
-    ## Stores all builtin / importc / ... functions we encounter so that we can
-    ## check if they return a value when we encounter them in a `gpuCall`
-    builtinFns*: OrderedTable[GpuAst, GpuAst]
-
-    ## Table of all known types. Filled during Nim -> GpuAst. Includes generic
-    ## instantiations, but also all other types.
-    ## Key: the raw type. Value: a full `gpuTypeDef`
-    types*: OrderedTable[GpuType, GpuAst]
-
-    ## This is _effectively_ just a set of all already produced function symbols.
-    ## We use it to determine if when encountering another function with the same
-    ## name, but different arguments to instead of using `iName` to use `iSym` as
-    ## the function name. This is to avoid overload issues in backends that don't
-    ## allow overloading by function signatures.
-    symChoices*: HashSet[string]
-
-    ## Phase 6: Vulkan push-constant param info (type, name strings stored as comments
-    ## in globalBlocks for codegen to read)
   GenericArg* = object
-    addrSpace*: AddressSpace ## We store the address space, because that's what matters
+    addrSpace*: AddressSpace ## Argument address space at the call site
     mutable*: bool # if the argument is mutable or not
   GenericInst* = object
     name*: string # unique name of this generic variant
-    args*: seq[GenericArg] # kind of symbols passed in at the call site. To determine ptr types, if args are ptrs
-    # types are not stored in the instantiation, because we look up the types from the original function when generating the code
+    args*: seq[GenericArg] # argument kinds at the call site, pointer args get pointer semantics
+    # types resolve from the original function at codegen time, not stored here
 
 
 type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
 
-## Canonical coordinate name -> IR kind. Resolved once at the `gsBuiltin` marking, then the printers case on the kind alone.
-## A static assertion below cross-checks the table with the catalog's canonical declarations: a catalog rename fails loudly
-## at compile time, never orphaning a kind.
+## Canonical coordinate name -> IR kind, the printers case on the kind alone.
+## A static assertion cross-checks the table against the catalog's canonical declarations, a catalog rename fails at compile time.
 let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKind] = {
   "thread_position_in_grid": gbkThreadPositionInGrid,
   "threadgroup_position_in_grid": gbkThreadgroupPositionInGrid,
@@ -419,86 +372,75 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
   "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
 }.toTable()
 
-## Canonical synchronization name -> IR kind, with the same catalog cross-check as the coordinate table.
+## Canonical synchronization name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
   "threadgroup_barrier_device": gbkThreadgroupBarrierDevice,
 }.toTable()
 
-## Canonical reduction intrinsic name -> IR kind, resolved once at the
-## builtin marking like the other canonical name tables.
+## Canonical reduction intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
   "reduceAdd": gbkReduceAdd,
   "reduceMax": gbkReduceMax,
 }.toTable()
 
-## Canonical atomics intrinsic name -> IR kind, resolved at the builtin marking like the other canonical name tables.
+## Canonical atomics intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuAtomicsBuiltinKindByName* {.compileTime.}: Table[string, GpuAtomicsBuiltinKind] = {
   "atomicFetchAdd": gbkAtomicFetchAdd,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
-  ## Returns the IR kind of a canonical coordinate name. Unmapped names
-  ## (printf, cvtaGenericToShared, shadowing locals) resolve to `gbkNone`.
+  ## Returns the IR kind of a canonical coordinate name, unmapped names (printf, cvtaGenericToShared, shadowing locals) resolve to `gbkNone`.
   GpuCoordBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc synchroBuiltinKind*(name: string): GpuSynchroBuiltinKind =
-  ## Returns the IR kind of a canonical synchronization name. Unmapped
-  ## names resolve to `gbkNone`.
+  ## Returns the IR kind of a canonical synchronization name, unmapped names resolve to `gbkNone`.
   GpuSynchroBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
-  ## Returns the IR kind of a canonical reduction intrinsic name.
-  ## Unmapped names resolve to `gbkNone`.
+  ## Returns the IR kind of a canonical reduction intrinsic name, unmapped names resolve to `gbkNone`.
   GpuReductionBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
-  ## Returns the IR kind of a canonical atomics intrinsic name.
-  ## Unmapped names resolve to `gbkNone`.
+  ## Returns the IR kind of a canonical atomics intrinsic name, unmapped names resolve to `gbkNone`.
   GpuAtomicsBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
                          gtFloat32, gtFloat64, gtFloat16, gtBf16,
                          gtF8E4M3, gtF8E5M2, gtSize_t}
-  ## Set of numeric (scalar) GpuTypeKind variants.
 
-const TAG_IDENT_IN_ASM* = "\x01"
-  ## Marker byte for a backtick identifier inside an inline-asm statement.
-  ## The frontend stores the operand symbol (gpuIdent) in `ops` and emits
-  ## this byte + index into `stmt`.
-  ## The printers substitute the symbol's (mangled) display name at codegen time.
-  ## A control byte is used so the marker can never collide with valid asm text.
+const TAG_IDENT_INLINE_ASM* = "\x01"
 
-proc newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
+func newSymbol*(name: string, iSym: string = "", typ: GpuType = GpuType(kind: gtVoid), symKind: GpuSymbolKind = gsNone): Symbol =
   new(result)
   result.name = name
   result.iSym = if iSym == "": name else: iSym
   result.typ = typ
   result.symKind = symKind
 
-proc newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
+func newGpuIdent*(ident: string = "", symKind: GpuSymbolKind = gsNone): GpuAst =
   var sym = newSymbol(ident, symKind = symKind)
   result = GpuAst(kind: gpuIdent, symbol: sym)
 
-proc scopeAdd*(scope: var seq[(string, Symbol)]; name: string; sym: Symbol) =
+func scopeAdd*(scope: var seq[(string, Symbol)], name: string, sym: Symbol) =
   ## Add a name->Symbol mapping to a scope table (seq-based for newLit compat).
   scope.add((name, sym))
 
-proc scopeHas*(scope: seq[(string, Symbol)]; name: string): bool =
+func scopeHas*(scope: seq[(string, Symbol)], name: string): bool =
   ## Check if a name exists in a scope table.
   for (n, _) in scope:
     if n == name:
       return true
 
-proc scopeGet*(scope: seq[(string, Symbol)]; name: string): Symbol =
+func scopeGet*(scope: seq[(string, Symbol)], name: string): Symbol =
   ## Look up a name in a scope table. Raises if not found.
   for (n, s) in scope:
     if n == name:
       return s
   raiseAssert "Scope lookup failed: '" & name & "' not found"
 
-proc clone*(typ: GpuType): GpuType =
+func clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
   result = GpuType(kind: typ.kind)
   case result.kind
@@ -525,7 +467,7 @@ proc clone*(typ: GpuType): GpuType =
       result.fields.add GpuTypeField(name: f.name, typ: f.typ.clone())
   else: discard
 
-proc clone*(ast: GpuAst): GpuAst =
+func clone*(ast: GpuAst): GpuAst =
   if ast.isNil: return nil
   case ast.kind
   of gpuDiscard: result = GpuAst(kind: gpuDiscard)
@@ -538,7 +480,8 @@ proc clone*(ast: GpuAst): GpuAst =
         ident: p.ident.clone(),
         typ: p.typ.clone(),
         addressSpace: p.addressSpace,
-        passByRef: p.passByRef
+        passByRef: p.passByRef,
+        flavor: p.flavor
       )
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
@@ -688,7 +631,7 @@ proc clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuComment)
     result.comment = ast.comment
 
-proc hash*(t: GpuType): Hash =
+func hash*(t: GpuType): Hash =
   var h = 0
   h = h !& hash(t.kind)
   case t.kind
@@ -717,12 +660,12 @@ proc hash*(t: GpuType): Hash =
   else: discard
   result = !$ h
 
-proc hash*(n: GpuAst): Hash =
+func hash*(n: GpuAst): Hash =
   doAssert n.kind == gpuIdent, "Cannot hash a value other than `gpuIdents`! Input is: " & $n.kind
   var h = 0
   if n.symbol != nil:
-    h = h !& hash(n.symbol.iSym) # In theory the only thing relevant is the `iSym`, as it is unique per Nim symbol
-                                 # but if we fail to update a type or symbolkind, we'd produce a different hash, which is good
+    h = h !& hash(n.symbol.iSym) # `iSym` is unique per Nim symbol, folding the type and symbol kind
+                                 # in keeps distinct symbols hashing differently
     if n.symbol.typ != nil: # can be nil, e.g. `gpuProc` symbols don't define it
       h = h !& hash(n.symbol.typ)
     h = h !& hash(n.symbol.symKind)
@@ -780,8 +723,7 @@ proc `==`*(a, b: GpuAst): bool =
     result = a.symbol == b.symbol and a.symbol.iSym == b.symbol.iSym
 
 proc `==`*(a, b: GpuParam): bool =
-  ## Value equality for GpuParam: compares ident (via Symbol ref),
-  ## typ (structural), addressSpace, and passByRef.
+  ## Value equality for GpuParam: ident (via Symbol ref), typ (structural), addressSpace, passByRef
   if a.ident.isNil or b.ident.isNil:
     result = a.ident.isNil and b.ident.isNil
   else:
@@ -802,7 +744,7 @@ proc `==`*(a, b: GpuProcSignature): bool =
       let bp = b.params[i]
       result = result and (ap == bp)
 
-proc len*(ast: GpuAst): int =
+func len*(ast: GpuAst): int =
   case ast.kind
   of gpuProc:      1
   of gpuCall:      1 + ast.cArgs.len
@@ -1174,22 +1116,21 @@ func isLargeStruct*(t: GpuType): bool =
   else:
     result = false
 
-proc ident*(n: GpuAst): string =
-  ## Returns the associated identifier (string) of the given symbol. The input
-  ## must be a `gpuIdent`
+func ident*(n: GpuAst): string =
+  ## Returns the associated identifier (string) of the given symbol, a `gpuIdent` input
   doAssert n.kind == gpuIdent, "The input is not a `gpuIdent`, but a " & $n.kind
   result = n.symbol.name
 
 
 template withoutSemicolon*(ctx: var GpuContext, body: untyped): untyped =
-  if not ctx.skipSemicolon: # if we are already skipping, leave true
+  if not ctx.skipSemicolon: # no-op when already skipping
     ctx.skipSemicolon = true
     body
     ctx.skipSemicolon = false
   else:
     body
 
-proc getInnerArrayLengths*(t: GpuType): string =
+func getInnerArrayLengths*(t: GpuType): string =
   ## Returns the lengths of the inner array types for a nested array.
   case t.kind
   of gtArray:
@@ -1221,7 +1162,21 @@ func shortHash*(sigHash: int64): string =
         result[j] = '1'
       break
 
-proc gpuTypeToShortString*(t: GpuType): string =
+func mangledHashName*(name, iSym: string): string =
+  ## npHashSuffix display name, `name` + the 7-char base58 hash of `iSym`
+  ## FNV-1a accumulation plus a splitmix64 finalizer: XOR into byte lanes
+  ## let chars 8 positions apart cancel out
+  var h: uint64 = 0xcbf29ce484222325'u64
+  for c in iSym:
+    h = (h xor uint64(ord(c))) * 0x100000001b3'u64
+  h = (h xor (h shr 30)) * 0xbf58476d1ce4e5b9'u64
+  h = (h xor (h shr 27)) * 0x94d049bb133111eb'u64
+  h = h xor (h shr 31)
+  if h == 0:
+    h = 1
+  result = name & "_" & shortHash(cast[int64](h))
+
+func gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.
   case t.kind
   of gtUint8:   result = "u8"
@@ -1239,13 +1194,13 @@ proc gpuTypeToShortString*(t: GpuType): string =
   of gtF8E5M2:  result = "f8e5m2"
   of gtBool:    result = "bool"
   of gtObject:
-    if t.name.startsWith("Tuple_"):
-      result = "Tuple_" & shortHash(int64(hash(t)))
+    if t.isTuple:
+      result = mangledHashName("Tuple", $hash(t))
     else:
       result = $t.name
   of gtGenericInst:
-    result = if t.gName.startsWith("Tuple_"): "Tuple_" else: t.gName
-    result.add shortHash(int64(hash(t)))
+    let base = if t.isTuple: "Tuple" else: t.gName
+    result = mangledHashName(base, $hash(t))
   of gtVoidPtr: result = "void_ptr"
   of gtPtr:
     result = "ptr_" & gpuTypeToShortString(t.to)
@@ -1254,3 +1209,6 @@ proc gpuTypeToShortString*(t: GpuType): string =
   else:
     result = $t.kind # fallback M-bM-^@M-^T safe but verbose
 
+func isGlobal*(fn: GpuAst): bool =
+  doAssert fn.kind == gpuProc, "Not a function, but: " & $fn.kind
+  result = attGlobal in fn.pAttributes

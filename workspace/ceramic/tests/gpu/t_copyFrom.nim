@@ -1,7 +1,6 @@
 ## copyFrom / size() inside cuda: — narrow down the AST pattern
 ##
 ## Run:
-##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
 ##     workspace/ceramic/tests/gpu/t_copyFrom.nim
 

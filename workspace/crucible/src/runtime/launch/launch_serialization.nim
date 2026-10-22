@@ -41,6 +41,18 @@ func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
   else: result = false
 
+func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
+  ## True when every non-leaf field of `T` is trivially copyable: the backend
+  ## store flattens leaves individually, the wrapper is never copyMem'd whole.
+  when T is object|tuple:
+    for f in fields(default(T)):
+      when typeof(f) is H or typeof(f) is DeviceMem or typeof(f) is ptr or typeof(f) is pointer:
+        discard
+      elif not supportsCopyMem(typeof(f)):
+        return false
+    result = true
+  else: result = false
+
 func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
@@ -140,9 +152,18 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
     elif typeof(`v`) is object|tuple:
       when isStaticArg(typeof(`v`)):
         discard
-      elif hasBufferLeaf(typeof(`v`), `H`) and explodesStructArgs(`backend`):
-        for f in fields(`v`):
-          serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
+      elif hasBufferLeaf(typeof(`v`), `H`):
+        when explodesStructArgs(`backend`):
+          for f in fields(`v`):
+            serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
+        else:
+          # leaves flatten to device addresses, non-leaf fields must stay copyable
+          when not supportsCopyMem(typeof(`v`)) and
+              not blobPackable(typeof(`v`), `H`):
+            {.error: "kernel args are trivially copyable types only, " &
+                $typeof(`v`) & " does not support copyMem".}
+          `store`(`ctx`, `v`, `pos`)
+          inc `pos`
       else:
         when not supportsCopyMem(typeof(`v`)):
           {.error: "kernel args are trivially copyable types only, " &

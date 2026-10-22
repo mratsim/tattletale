@@ -8,7 +8,6 @@
 ## - `cuda:` emission anchors the rewrite: three nested temps in inner-to-outer order
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_blitRecursion.nim

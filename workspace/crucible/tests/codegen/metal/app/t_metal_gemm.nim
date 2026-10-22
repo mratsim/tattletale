@@ -3,7 +3,6 @@
 ## A and B are tile constants in the body.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/app/t_metal_gemm.nim

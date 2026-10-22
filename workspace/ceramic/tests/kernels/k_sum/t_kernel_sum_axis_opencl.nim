@@ -1,0 +1,13 @@
+## Run:
+##   nim c -r --outdir:build/tests \
+##     workspace/ceramic/tests/kernels/k_sum/t_kernel_sum_axis_opencl.nim
+
+import workspace/crucible
+import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
+
+proc main =
+  var engine = bkOpenCL.newEngine()
+  run_sum_axis_tests(engine, moduleName = "test_k_sum_axis_opencl")
+
+when isMainModule:
+  main()

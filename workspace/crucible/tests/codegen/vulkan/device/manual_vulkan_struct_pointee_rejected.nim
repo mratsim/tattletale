@@ -4,7 +4,6 @@
 ## pointer arguments expose plain values: pass the object's fields separately
 ##
 ## Run:
-##   cd tattletale
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/manual_vulkan_struct_pointee_rejected.nim

@@ -3,7 +3,6 @@
 ## vkCmdDispatch group counts (blk must match the baked size, validated).
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_ndrange2d.nim

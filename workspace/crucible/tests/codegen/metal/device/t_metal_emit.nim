@@ -4,7 +4,6 @@
 ## byte-exactness, multi-item emits, and non-emit statement pragmas mapping to gpuDiscard.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/device/t_metal_emit.nim

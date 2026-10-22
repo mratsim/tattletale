@@ -2,7 +2,6 @@
 ## compiles and runs on GPU, verifying the computed linear index.
 ##
 ## Reproduce:
-##   cd tattletale
 ##   CUDA_HOME=... PATH=... nim cpp -r \
 ##     workspace/ceramic/tests/gpu/t_tensorview_paren.nim
 

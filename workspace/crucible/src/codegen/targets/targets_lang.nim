@@ -8,24 +8,17 @@
 import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang
 import ../ir/gpu_ast_datatypes
 
-proc codegenCuda*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
-  cuda_lang.preprocess(ctx, ast, kernel)
-  result = cuda_lang.codegen(ctx)
+proc codegenCuda*(ctx: var GpuContext): string =
+  cuda_lang.codegen(ctx)
 
-proc codegenWebGpu*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
-  wgsl_lang.preprocess(ctx, ast, kernel)
-  result = wgsl_lang.codegen(ctx)
+proc codegenWebGpu*(ctx: var GpuContext): string =
+  wgsl_lang.codegen(ctx)
 
-proc codegenOpenCL*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
-  opencl_lang.preprocess(ctx, ast, kernel)
-  result = opencl_lang.codegen(ctx)
+proc codegenOpenCL*(ctx: var GpuContext): string =
+  opencl_lang.codegen(ctx)
 
-proc codegenVulkan*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
-  glsl_lang.preprocess(ctx, ast, kernel)
-  result = glsl_lang.codegen(ctx)
+proc codegenGLSL*(ctx: var GpuContext): string =
+  glsl_lang.codegen(ctx)
 
-proc codegenMetal*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
-  ## Lowers `ast` to MSL. Runs the Metal preprocessing passes, then emits the shader source for `kernel`
-  ## (all kernels when empty).
-  msl_lang.preprocess(ctx, ast, kernel)
-  result = msl_lang.codegen(ctx)
+proc codegenMetal*(ctx: var GpuContext): string =
+  msl_lang.codegen(ctx)

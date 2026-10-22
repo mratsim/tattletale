@@ -242,6 +242,9 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
    inside `passes_<lang>.nim`.
 3. Set `dependsOn` to any passes it requires, `runPasses` enforces the dependency.
 4. Add an IR-level test under `tests/ir/` and, if it affects output, per-backend tests under `tests/codegen/<backend>/`.
+   The test drives the registered pass through its public entry: build a context via `crucible_internal_compiler`, call `ctx.<pass>()`.
+   Reach a private proc from a test with `import ... {.all.}` (module procs only, `privateAccess` is unused in Crucible).
+   Never export an implementation proc for a test.
 
 ### Adding a backend
 

@@ -3,7 +3,6 @@
 ## gets its own pipeline state from the engine's level-2 cache.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/device/t_metal_vec10_multi_kernel.nim

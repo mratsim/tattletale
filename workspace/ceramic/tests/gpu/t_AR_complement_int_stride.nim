@@ -27,7 +27,6 @@
 ## reaching CUDA as `max(1, <empty struct>)` (which fails NVRTC compilation).
 ##
 ## Run:
-##   cd tattletale
 ##   CUDA_HOME=/usr/local/cuda-12 LD_LIBRARY_PATH=/usr/local/cuda-12/lib64 \
 ##     nim cpp -r --hints:off --warnings:off \
 ##       --outdir:build/tests/gpu --nimcache:nimcache/tests/gpu \

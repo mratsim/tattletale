@@ -2,7 +2,6 @@
 ## API passes DeviceMem handles, never raw pointers.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/device/manual_metal_ptr_arg_rejected.nim

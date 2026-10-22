@@ -2,7 +2,6 @@
 ## buffer reference (`ptr UncheckedArray[array[32, byte]]`), the sha256 shape.
 ##
 ## Run:
-##   cd tattletale && \
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan/device/t_vulkan_ptr_array_of_arrays.nim

@@ -1,7 +1,6 @@
 ## Tuples: ensure anonymous tuples in generics generate the expected type name
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/generics/t_metal_generic_proc_tuple_args.nim

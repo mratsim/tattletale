@@ -12,8 +12,6 @@ import std / [macros, strformat, strutils, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
-import ../passes/passes_preprocessing as pp
-import ../passes/passes_msl
 
 const MetalReservedKeywords = [
   # C++/MSL keyword table (MSL is C++14-based)
@@ -129,10 +127,11 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
     # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
     checkReservedIdent(t.gName, "type")
     result = t.gName
-    for i, g in t.gArgs:
-      result.add gpuTypeToShortString(g)
-      if i < t.gArgs.high:
-        result.add 'x'
+    if t.gArgs.len == 1:
+      result.add gpuTypeToShortString(t.gArgs[0])
+    elif t.gArgs.len > 1:
+      # 2+ args collapse to a short hash
+      result.add mangledHashName("", $hash(t))
   of gtObject:
     checkReservedIdent(t.name, "type")
     result = t.name
@@ -157,31 +156,6 @@ proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
     result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
   else:
     result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
-
-proc scanFunctions(ctx: var GpuContext, n: GpuAst) =
-  ## Iterates over the given function and checks for all `gpuCall` nodes.
-  ## Any function called in the scope is added to `fnTab`.
-  ## This is a form of dead code elimination.
-  case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      # Check if any of the parameters are pointers (otherwise non generic)
-      if fn notin ctx.fnTab: # function not known, add to `fnTab` (i.e. avoid code elimination)
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        # still "scan for functions", i.e. fill `fnTab` from inner calls
-        for ch in fnCalled:
-          ctx.scanFunctions(ch)
-      # else we don't do anything for this function
-    # Harvest functions from arguments to this call!
-    for arg in n.cArgs:
-      ctx.scanFunctions(arg)
-  else:
-    for ch in n:
-      ctx.scanFunctions(ch)
-
-# ── Metal builtins ──────────────────────────────────────────────────────────
 
 proc genLit*(ast: GpuAst): string =
   ## Lower a literal node for the MSL backend.
@@ -285,29 +259,6 @@ proc structVariantName(ctx: GpuContext, t: GpuType, spaces: seq[AddressSpace]): 
   if ctx.ptrFieldVariants.getOrDefault(t, @[]).find(spaces) > 0:
     result.add variantSuffix(spaces)
 
-proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
-  ## MSL-specific IR preprocessing before codegen:
-  ## - type definitions land before any global that uses them, MSL is a C-family language, types come first
-  ## - global functions fill `fnTab`, reachable device functions are
-  ##   harvested via `scanFunctions`
-  # 1. Add all data from `genericInsts` and `types` tables.
-  #    In MSL the types have to appear before any global variables using them.
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  for k, typ in pairs(ctx.types):
-    ctx.globalBlocks.add typ
-
-  # 2. Fill the table with all *global* functions, or *only* the specific `kernel`
-  #    if one is given.
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, kernel, varBlock)
-  ctx.globalBlocks.add varBlock
-
-  # 3. Traverse every global function's AST for `gpuCall` nodes, and record the called functions in `fnTab`.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns: # everything in `fnTab` at this point is a global function
-    ctx.scanFunctions(fn)
-
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   ## Generates the MSL for one AST node.
   let indentStr = "  ".repeat(indent)
@@ -370,11 +321,13 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     if ast.addressSpace != asRMEM:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
+    if ast.vType.kind == gtPtr and ast.addressSpace == asRMEM:
+      typ = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.vInit)) & ' ' & typ
     if ast.vInit.kind == gpuObjConstr:
       # The var's decl type must match the objconstr's variant name, or MSL
       # rejects the type mismatch.
       let variantName = ctx.structVariantName(ast.vInit.ocType,
-                                              pp.siteSpaceTuple(ctx, ast.vInit))
+                                              resolvePtrFieldAddressSpaces(ctx, ast.vInit))
       let base = gpuTypeToString(ast.vInit.ocType, allowEmptyIdent = true)
       if variantName != base:
         typ = variantName & ' ' & vName
@@ -431,8 +384,9 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                ctx.genMetalImpl(ast.dField, 0)
 
   of gpuIndex:
-    result = ctx.genMetalImpl(ast.iArr, 0) & '[' &
-             ctx.genMetalImpl(ast.iIndex, 0) & ']'
+    let base = ctx.genMetalImpl(ast.iArr, 0)
+    let wrapped = if ast.iArr.kind in {gpuCast, gpuConv}: '(' & base & ')' else: base
+    result = wrapped & '[' & ctx.genMetalImpl(ast.iIndex, 0) & ']'
 
   of gpuCall:
     case ast.cName.symbol.synchroBuiltin
@@ -517,7 +471,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
 
   of gpuTypeDef:
-    let ptrNames = pp.ptrFieldNames(ast.tTyp)
+    let ptrNames = getPtrFieldNames(ast.tTyp)
     var tuples = ctx.ptrFieldVariants.getOrDefault(ast.tTyp, @[])
     if tuples.len == 0:
       # Never constructed: one struct with per-thread pointer fields.
@@ -557,7 +511,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # Braced init list: `TypeName{val1, val2, ...}` is a functional-style cast, a valid C++
     # expression usable with member access (gpuDot). A bare `{val}` braced-init-list
     # is not an expression.
-    result = ctx.structVariantName(ast.ocType, pp.siteSpaceTuple(ctx, ast)) & "{"
+    result = ctx.structVariantName(ast.ocType, resolvePtrFieldAddressSpaces(ctx, ast)) & "{"
     for i, el in ast.ocFields:
       if el.value.kind == gpuDiscard:
         result.add "{}"
@@ -587,12 +541,12 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # Pointer-typed casts need an explicit address-space qualifier, the space
     # is resolved from the cast operand's value (`asRMEM` default).
     if ast.convTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(pp.resolveValueAddressSpace(ctx, ast.convExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(resolveValueAddressSpace(ctx, ast.convExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
   of gpuCast:
     var castTyp = gpuTypeToString(ast.cTo, allowEmptyIdent = true)
     if ast.cTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(pp.resolveValueAddressSpace(ctx, ast.cExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(resolveValueAddressSpace(ctx, ast.cExpr)) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.cExpr, 0)
 
   of gpuAddr:
@@ -629,7 +583,6 @@ proc codegen*(ctx: var GpuContext): string =
   ## - forward declarations for device functions, then every function body.
   # Resolve the value-level address spaces from the var pragmas and struct
   # pointer fields before any emission needs them.
-  pp.collectValueAddressSpaces(ctx)
   result.add "#include <metal_stdlib>\n"
   result.add "#include <metal_atomic>\n"
   result.add "using namespace metal;\n\n"

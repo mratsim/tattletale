@@ -3,7 +3,6 @@
 ## operator syntax. Wrapper2 covers sanitized-operator name collisions.
 ##
 ## Run:
-##   cd tattletale
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/functions/t_metal_user_defined_operator.nim

@@ -16,34 +16,40 @@ import ./gpu_ast_datatypes
 #  GpuType constructors
 # ═══════════════════════════════════════════════════════════════════════
 
-proc initGpuType*(kind: GpuTypeKind): GpuType =
+func initGpuType*(kind: GpuTypeKind): GpuType =
   ## If `kind` is `gtPtr` `to` must be the type we point to
   if kind in [gtObject, gtPtr, gtArray, gtSpan]:
     raiseAssert "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
   result = GpuType(kind: kind)
 
-proc initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
+func initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
   ## If `kind` is `gtPtr` `to` must be the type we point to
   if to.kind == gtInvalid: # this is not a valid type
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtPtr, to: to, implicit: implicitPtr)
 
-proc initGpuUAType*(to: GpuType): GpuType =
+func initGpuUAType*(to: GpuType): GpuType =
   ## Initializes a GPU type for an unchecked array (ptr wraps this)
   if to.kind == gtInvalid: # this is not a valid type
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtUA, uaTo: to)
 
-proc initGpuVoidPtr*(): GpuType =
+func initGpuVoidPtr*(): GpuType =
   result = GpuType(kind: gtVoidPtr)
 
-proc initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
+func initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
   ## Initializes an object/struct type
   result = GpuType(kind: gtObject, name: name, fields: flds)
+  result.isTuple = name.startsWith("Tuple_")
 
-proc initGpuSpanType*(elemTyp: GpuType): GpuType =
+func initGpuGenericInstType*(gName: string): GpuType =
+  ## Initializes a generic instantiation, tuple-ness derived once here
+  result = GpuType(kind: gtGenericInst, gName: gName)
+  result.isTuple = gName.startsWith("Tuple_")
+
+func initGpuSpanType*(elemTyp: GpuType): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type
   if elemTyp.kind == gtInvalid:
     result = GpuType(kind: gtInvalid)
@@ -64,7 +70,7 @@ proc toTypeDef*(typ: GpuType): GpuAst =
 #  Type-kind mapping (Nim → GPU)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
+func toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
   case t
   of ntyBool: gtBool
   of ntyInt16: gtInt16
@@ -87,7 +93,7 @@ proc toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
 #  GpuType utilities
 # ═══════════════════════════════════════════════════════════════════════
 
-proc stripPtrOrArrayType*(t: GpuType): GpuType =
+func stripPtrOrArrayType*(t: GpuType): GpuType =
   ## Strips any pointer or array type to return any struct / generic instantiation
   ## it might contain
   case t.kind
@@ -112,7 +118,7 @@ proc registerObjectType*(reg: var TypeRegistry, typ: GpuType) =
 # ═══════════════════════════════════════════════════════════════════════
 
 
-proc getGenericTypeName*(t: NimNode): string =
+func getGenericTypeName*(t: NimNode): string =
   ## Returns the base name of the generic type, i.e. for
   ## `Foo[Bar, Baz]` returns `Foo`.
   # Recursion handles nested bracket expressions by peeling outer layers
@@ -129,11 +135,11 @@ proc getGenericTypeName*(t: NimNode): string =
   of nnkBracketExpr: result = t[0].getGenericTypeName()
   else: raiseAssert "Unexpected node kind for generic instantiation type: " & $t.treerepr
 
-proc requiresMemcpy*(n: NimNode): bool =
+func requiresMemcpy*(n: NimNode): bool =
   ## At the moment we only emit a `memcpy` statement for array types
   result = n.typeKind == ntyArray and n.kind != nnkBracket # need to emit a memcpy
 
-proc isBuiltIn*(n: NimNode): bool =
+func isBuiltIn*(n: NimNode): bool =
   ## Checks if the given proc is a `{.builtin.}` (or if it is a Nim "built in"
   ## proc that uses `importc`, as we cannot emit those. They _need_ to have a
   ## WGSL / CUDA equivalent built in)
@@ -144,7 +150,7 @@ proc isBuiltIn*(n: NimNode): bool =
     if pragma.strVal in ["builtin", "importc"]:
       return true
 
-proc collectRawPragmas*(n: NimNode): seq[string] =
+func collectRawPragmas*(n: NimNode): seq[string] =
   ## Collect ALL pragma names from a pragma node as raw strings.
   ## Preserves Nim-specific pragmas that are filtered out by `filterPragmas` pass.
   if n.kind == nnkEmpty: return
@@ -154,7 +160,7 @@ proc collectRawPragmas*(n: NimNode): seq[string] =
     result.add key.strVal
 
 
-proc parseWorkgroupSize*(n: NimNode): tuple[x, y, z: int] =
+func parseWorkgroupSize*(n: NimNode): tuple[x, y, z: int] =
   ## Extract the `{.workgroup: (X, Y, Z).}` / `{.workgroup: N.}` annotation
   ## from a proc pragma node. Returns (0, 0, 0) when absent — targets then
   ## fall back to their per-backend default workgroup size.
@@ -175,7 +181,7 @@ proc parseWorkgroupSize*(n: NimNode): tuple[x, y, z: int] =
         else: discard
     break
 
-proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
+func collectProcAttributes*(n: NimNode): set[GpuAttribute] =
   doAssert n.kind in [nnkPragma, nnkEmpty]
   if n.kind == nnkEmpty: return # no pragmas
   for pragma in n:
@@ -208,7 +214,7 @@ proc collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     else:
       raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr
 
-proc hasPragma*(n: NimNode, pragmaName: string): bool =
+func hasPragma*(n: NimNode, pragmaName: string): bool =
   ## True when `n` carries the pragma `pragmaName`.
   ## Covers procdefs and symbol references to procs (the magic
   ## system.abs/min/max/operators) and to `{.builtin.}`-tagged lets
@@ -240,7 +246,7 @@ proc hasPragma*(n: NimNode, pragmaName: string): bool =
       return true
   false
 
-proc collectAddressSpace*(n: NimNode): AddressSpace =
+func collectAddressSpace*(n: NimNode): AddressSpace =
   ## Address space of a var's pragma list: `smem`/`rmem`/`const_mem` set it,
   ## other pragmas are discarded.
   ## A pragma list without an address-space pragma resolves to asRMEM (per-thread registers).
