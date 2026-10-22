@@ -222,8 +222,9 @@ proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
     if lhs.kind == gpuIdent and lhs.symbol != nil and
        (lhs.symbol.iSym in boolVals or lhs.symbol.iSym in boolPtrs):
       n.aRight = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtInt32), convExpr: n.aRight)
-    for ch in n.aRight.mitems:
+    for ch in n.aLeft.mitems:
       ch.patchBoolToI32Impl(boolVals, boolPtrs)
+    n.aRight.patchBoolToI32Impl(boolVals, boolPtrs)
   else:
     for ch in n.mitems:
       ch.patchBoolToI32Impl(boolVals, boolPtrs)
@@ -235,7 +236,8 @@ proc patchBoolToI32(ctx: var GpuContext) =
       ctx.globals[iSym].typ = GpuType(kind: gtInt32)
       boolVals.incl iSym
     elif g.typ.kind == gtPtr and g.typ.to.kind == gtBool:
-      ctx.globals[iSym].typ = GpuType(kind: gtPtr, to: GpuType(kind: gtInt32))
+      # Mutate in place: a fresh gtPtr drops mutable and implicit
+      g.typ.to.kind = gtInt32
       boolPtrs.incl iSym
   for _, fn in ctx.fnTab.mpairs:
     fn.patchBoolToI32Impl(boolVals, boolPtrs)

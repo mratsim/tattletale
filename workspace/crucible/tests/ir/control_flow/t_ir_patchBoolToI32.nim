@@ -12,13 +12,35 @@ proc boolTyp(): GpuType = GpuType(kind: gtBool)
 proc body(stmts: varargs[GpuAst]): GpuAst =
   GpuAst(kind: gpuBlock, statements: @stmts)
 
+
 proc findKind(n: GpuAst, kind: GpuNodeKind): GpuAst =
-  ## First node of `kind` in the tree, nil when absent
-  if n.kind == kind: return n
-  for ch in n.items:
-    if ch.isNil: continue
-    let hit = ch.findKind(kind)
-    if hit != nil: return hit
+  ## First node of `kind` in the tree, nil when absent.
+  ## Iterates the known child fields directly, the items iterator segfaults
+  ## when it resumes on a node whose iterImpl variant is empty under recursion.
+  if n.kind == kind:
+    return n
+  template walk(ch: GpuAst): untyped =
+    if not ch.isNil:
+      let hit = ch.findKind(kind)
+      if hit != nil:
+        return hit
+  case n.kind
+  of gpuProc:
+    walk(n.pBody)
+  of gpuBlock:
+    for st in n.statements:
+      walk(st)
+  of gpuAssign:
+    walk(n.aLeft)
+    walk(n.aRight)
+  of gpuConv:
+    walk(n.convExpr)
+  of gpuDeref:
+    walk(n.dOf)
+  of gpuIndex:
+    walk(n.iArr)
+    walk(n.iIndex)
+  else: discard
 
 proc ident(sym: Symbol): GpuAst = GpuAst(kind: gpuIdent, symbol: sym)
 
@@ -118,5 +140,39 @@ block:
   doAssert k.pBody.findKind(gpuConv).isNil, "no conv nodes expected"
   doAssert ctx.globals["val_h0"].typ.kind == gtInt32
   echo "  OK — i32 global untouched"
+
+block:
+  # C8: bare bool RHS assigned to a bool local
+  var ctx = GpuContext()
+  let flag = ctx.boolGlobal("flag")
+  let ySym = newSymbol("y", iSym = "y_h0", typ = boolTyp())
+  let k = kernelFn(GpuAst(kind: gpuAssign, aLeft: ident(ySym), aRight: ident(flag)))
+  ctx.fnTab[k.pName] = k
+  ctx.allFnTab[k.pName] = k
+  ctx.runWgslChain()
+  let assign = k.pBody.statements[0]
+  doAssert assign.kind == gpuAssign
+  let loadWrap = assign.aRight
+  doAssert loadWrap.kind == gpuConv and loadWrap.convTo.kind == gtBool,
+    "bare bool RHS should wrap in conv(gtBool)"
+  doAssert loadWrap.convExpr.kind == gpuIdent
+  doAssert assign.aLeft.kind == gpuIdent, "target stays bare"
+  echo "  OK - bare bool RHS wraps in conv(gtBool)"
+
+block:
+  # M8: mutable and implicit survive the ptr bool to ptr i32 conversion
+  var ctx = GpuContext()
+  let ptrBool = initGpuPtrType(boolTyp(), implicitPtr = true)
+  ptrBool.mutable = true
+  let sym = newSymbol("pflag", iSym = "pflag_h0", typ = ptrBool)
+  ctx.globals["pflag_h0"] = GpuParam(ident: ident(sym), typ: ptrBool, addressSpace: asDevice)
+  let k = kernelFn(GpuAst(kind: gpuDeref, dOf: ident(sym)))
+  ctx.fnTab[k.pName] = k
+  ctx.allFnTab[k.pName] = k
+  ctx.runWgslChain()
+  doAssert ctx.globals["pflag_h0"].typ.to.kind == gtInt32
+  doAssert ctx.globals["pflag_h0"].typ.mutable, "mutable must survive the conversion"
+  doAssert ctx.globals["pflag_h0"].typ.implicit, "implicit must survive the conversion"
+  echo "  OK - ptr bool to ptr i32 keeps mutable and implicit"
 
 echo "  OK - t_ir_patchBoolToI32"
