@@ -24,7 +24,6 @@ import ./passes_preprocessing
 # Canonical reshaping right after IR construction establishes the forms
 # every later stage assumes. Every backend registers them identically.
 
-
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -70,20 +69,6 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
         var fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           lowerIfExprImpl(fn.pBody)
-  )
-
-  reg.register("resolveOverloadedOperators", pkTransform, phaseEarly,
-    "Converts gpuBinOp with non-primitive types to gpuCall",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          resolveOverloadedOperatorsImpl(ctx, fn.pBody)
   )
 
   reg.register("mapOperators", pkTransform, phaseEarly,
@@ -168,8 +153,7 @@ proc registerNormalizationPasses*(reg: var PassRegistry) =
           )
   )
 
-
-
+# ═══════════════════════════════════════════════════════════════════════
 # normalizeArraySpanParams
 # ═══════════════════════════════════════════════════════════════════════
 #
@@ -349,7 +333,7 @@ proc lowerIfExprImpl*(n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # mapOperators
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -449,8 +433,9 @@ proc mapOperatorsImpl*(n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # filterPragmas
+# ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 
 proc filterPragmasImpl*(n: var GpuAst) =
@@ -479,8 +464,9 @@ proc filterPragmasImpl*(n: var GpuAst) =
       discard
   n.pAttributes = attrs
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # resolveOverloadedOperators
+# ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
@@ -580,7 +566,7 @@ proc resolveOverloadedOperatorsImpl*(ctx: var GpuContext, n: var GpuAst) =
   else:
     discard
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # deEmbedForRangeAdjustment
 # ═══════════════════════════════════════════════════════════════════════
 

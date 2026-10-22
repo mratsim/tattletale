@@ -1,12 +1,10 @@
-## Lowering pass: materialize gtSpan into ptr + len
+## Shared lowering impls.
 ##
-## 1. Collect functions with gtSpan params → build replacement map
-## 2. Rewrite function signatures: split gtSpan params into ptr + len
-## 3. Rewrite all function bodies:
-##    - gpuIdent with gtSpan type → ptr ident
-##    - gpuDot(span, "len") → len ident
-##    - gpuCall("len", [span]) → len ident
-##    - Call sites: split gtSpan args into (ptr_arg, len_arg)
+## - registerSharedLoweringPasses registers the ones every backend wants
+## - backends cherry-pick the rest from passes_lowering_<backend>.nim
+## - each replaces an IR construct with its composition at the target
+##   calling convention
+## - a policy differing per target takes a flag
 
 import std / [tables, sequtils, sets, strutils]
 import std/macros # for the `warning` builtin (compile-time diagnostics)
@@ -14,6 +12,7 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
+import ./pass_registry
 
 # ############################################################
 #
@@ -23,26 +22,117 @@ import ./pass_datatypes
 #
 # Lowering replaces IR constructs with their composition at the target
 # calling convention: spans become ptr + len, compile-time params are erased.
-# Backends cherry-pick the impls they want. A policy that differs per target
-# takes a flag.
-
+# The universal ones register via registerSharedLoweringPasses, backends
+# cherry-pick the rest. A policy that differs per target takes a flag.
 
 {.experimental: "codeReordering".}
 
-# ═══════════════════════════════════════════════════════════════════
-# Registration
-# ═══════════════════════════════════════════════════════════════════
-
-proc registerTypeSystemPasses*(reg: var PassRegistry) =
-  ## Passes that lower the Nim type system onto the target: compile-time
-  ## parameters have no representation there. Run before the legalizations.
-  reg.register(
-    name = "pruneCompileTimeParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
+proc registerSharedLoweringPasses*(reg: var PassRegistry) =
+  ## Registers the lowering passes common to every backend
+  reg.register("pruneCompileTimeParams", pkTransform, phaseMain,
+    "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
     run = pruneCompileTimeParams
   )
+  reg.register("lowerSpans", pkTransform, phaseMain,
+    "Materialize openArray/varargs spans into ptr + len parameters",
+    run = lowerSpans
+  )
+
+# ═══════════════════════════════════════════════════════════════════════
+# Reserved keyword renaming
+# ═══════════════════════════════════════════════════════════════════════
+
+proc renameReservedKeywords(name: string, reserved: HashSet[string]): string =
+  if name in reserved: name & "_nim"
+  else: name
+
+proc renameIdents(n: var GpuAst, symToRename: Table[string, string]) =
+  ## Substitutes the names of identifiers whose iSym is in the table
+  case n.kind
+  of gpuIdent:
+    if n.symbol != nil and n.symbol.iSym in symToRename:
+      n.symbol.name = symToRename[n.symbol.iSym]
+  of gpuCall:
+    # the child iterator yields cArgs only, the callee ident is walked here
+    renameIdents(n.cName, symToRename)
+    for ch in mitems(n):
+      renameIdents(ch, symToRename)
+  else:
+    for ch in mitems(n):
+      renameIdents(ch, symToRename)
+
+proc renameFieldAccesses(n: var GpuAst, reserved: HashSet[string]) =
+  ## Renames field accesses whose name is a target keyword, to match `renameReservedIdentifiers`
+  case n.kind
+  of gpuDot:
+    if n.dField.kind == gpuIdent:
+      n.dField.symbol.name = renameReservedKeywords(n.dField.symbol.name, reserved)
+    renameFieldAccesses(n.dParent, reserved)
+  else:
+    for ch in mitems(n):
+      renameFieldAccesses(ch, reserved)
+
+proc renameReservedIdentifiers*(ctx: var GpuContext, reserved: HashSet[string]) =
+  ## Renames identifiers colliding with target keywords at every emitted site:
+  ## - fn names, call sites and fn params
+  ## - globals, where WGSL lifts kernel params
+  ## - struct fields, including block-wrapped type defs
+  ## - field accesses
+  var fnRenames = initTable[string, string]()
+  for fn in ctx.allFnTab.values:
+    let oldName = fn.pName.ident()
+    let safeName = renameReservedKeywords(oldName, reserved)
+    if oldName != safeName:
+      fnRenames[fn.pName.symbol.iSym] = safeName
+      fn.pName.symbol.name = safeName
+  for fn in ctx.genericInsts.values:
+    let oldName = fn.pName.ident()
+    let safeName = renameReservedKeywords(oldName, reserved)
+    if oldName != safeName:
+      fnRenames[fn.pName.symbol.iSym] = safeName
+      fn.pName.symbol.name = safeName
+  for g in mvalues(ctx.globals):
+    g.ident.symbol.name = renameReservedKeywords(g.ident.ident(), reserved)
+  for tab in [ctx.allFnTab, ctx.genericInsts, ctx.fnTab]:
+    for fn in tab.values:
+      var renames = initTable[string, string]()
+      for p in mitems(fn.pParams):
+        let oldName = p.ident.ident()
+        let safeName = renameReservedKeywords(oldName, reserved)
+        if oldName != safeName:
+          renames[p.ident.symbol.iSym] = safeName
+          p.ident.symbol.name = safeName
+      if renames.len > 0:
+        renameIdents(fn.pBody, renames)
+  for fn in ctx.allFnTab.values:
+    renameIdents(fn.pBody, fnRenames)
+  for fn in ctx.genericInsts.values:
+    renameIdents(fn.pBody, fnRenames)
+  for fn in ctx.fnTab.values:
+    renameIdents(fn.pBody, fnRenames)
+  proc renameFieldDecls(n: var GpuAst) =
+    case n.kind
+    of gpuTypeDef:
+      for f in mitems(n.tFields):
+        f.name = renameReservedKeywords(f.name, reserved)
+    else:
+      for ch in mitems(n):
+        renameFieldDecls(ch)
+  for blk in mitems(ctx.globalBlocks):
+    renameFieldDecls(blk)
+  # field decls live in the type registry before the target preprocess
+  # farms them into globalBlocks
+  for _, typ in mpairs(ctx.types):
+    renameFieldDecls(typ)
+  for tab in [ctx.allFnTab, ctx.genericInsts, ctx.fnTab]:
+    for fn in tab.values:
+      renameFieldAccesses(fn.pBody, reserved)
+  for blk in mitems(ctx.globalBlocks):
+    renameFieldAccesses(blk, reserved)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pointer deref insertion
+# ═══════════════════════════════════════════════════════════════════════
 
 proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
   ## Wraps pointer-typed expressions in explicit `gpuDeref` at value positions:
@@ -68,7 +158,7 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
     insertPointerDerefImpl(ctx, n.dField)
     if n.dParent.kind != gpuDeref:
       let t = ctx.getOperandType(n.dParent)
-      if t != nil and t.kind == gtPtr:
+      if not t.isNil and t.kind == gtPtr:
         n.dParent = GpuAst(kind: gpuDeref, dOf: n.dParent)
   of gpuDeref:
     # Recurse into the deref'd subtree only: this node is already the wrap
@@ -82,16 +172,6 @@ proc insertPointerDerefImpl(ctx: var GpuContext, n: var GpuAst) =
 proc insertPointerDeref*(ctx: var GpuContext) =
   for _, fn in ctx.allFnTab.mpairs:
     insertPointerDerefImpl(ctx, fn.pBody)
-
-proc registerLoweringPasses*(reg: var PassRegistry) =
-  reg.register(
-    name = "lowerSpans",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Materialize openArray/varargs spans into ptr + len parameters",
-    run = lowerSpans
-  )
-
 
 type
   SpanParam = object
@@ -318,6 +398,10 @@ proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
     for child in mitems(n):
       child.rewriteNode(sigMap)
 
+# ═══════════════════════════════════════════════════════════════════════
+# Span materialization
+# ═══════════════════════════════════════════════════════════════════════
+
 proc lowerSpans*(ctx: var GpuContext) =
   let sigMap = collectSpanSigs(ctx)
   if sigMap.len == 0: return
@@ -345,9 +429,9 @@ proc lowerSpans*(ctx: var GpuContext) =
   rewriteTab(ctx.genericInsts)
   rewriteTab(ctx.fnTab)
 
-
+# ═══════════════════════════════════════════════════════════════════════
 # Compile-time parameter pruning
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc eraseCallArgs(n: var GpuAst, callee: string, dropped: seq[int]) =
   ## Removes the arguments at `dropped` positions from every call to `callee`
@@ -386,3 +470,101 @@ proc pruneCompileTimeParams*(ctx: var GpuContext) =
         if i notin dropped:
           kept.add p
       fn.pParams = kept
+
+# ═══════════════════════════════════════════════════════════════════════
+# Struct kernel-param expansion (cherry-pickable)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Expands kernel params of structs carrying (nested) pointer fields
+# into ptr/scalar leaves and rebuilds the struct in the body.
+# Metal, WebGPU, OpenCL and MSL register it. CUDA and GLSL
+# cross structs natively.
+
+func containsPtrDeep(t: GpuType): bool =
+  ## True when a pointer is reachable through the type's fields
+  case t.kind
+  of gtPtr: true
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      if f.typ.containsPtrDeep: return true
+    false
+  of gtArray: t.aTyp.containsPtrDeep
+  else: false
+
+type KernelParamLeaf = object
+  ## One signature entry of an expanded struct kernel param
+  name*: string
+  typ*: GpuType
+  isBuffer*: bool
+
+proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
+  ## Metal/WebGPU cannot take struct-with-pointer kernel args, the signature
+  ## expands depth-first in field order, matching the serializer binding order
+  result = newSeq[KernelParamLeaf]()
+  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
+    case t.kind
+    of gtPtr:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
+    of gtObject, gtGenericInst:
+      if t.containsPtrDeep:
+        for f in t.fields:
+          if size(f.typ) > 0:
+            walk(f.typ, name & "_" & f.name, leaves)
+      else:
+        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    else:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+  walk(t, name, result)
+
+proc buildLeafConstr(t: GpuType, name: string): GpuAst =
+  result = GpuAst(kind: gpuObjConstr, ocType: t)
+  for f in t.fields:
+    if size(f.typ) == 0:
+      result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
+    elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:
+      result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name), typ: f.typ)
+    else:
+      result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
+
+proc expandStructKernelParamsImpl(ctx: var GpuContext) =
+  for _, fn in ctx.allFnTab.mpairs:
+    if fn.kind != gpuProc or attGlobal notin fn.pAttributes: continue
+    var taken: seq[string]
+    for p in fn.pParams:
+      taken.add p.ident.ident()
+    var params: seq[GpuParam]
+    for p in fn.pParams:
+      if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
+        let leaves = p.typ.kernelParamLeaves(p.ident.ident())
+        for leaf in leaves:
+          doAssert leaf.name notin taken,
+            "expandStructKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
+          let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
+          let space = if leaf.isBuffer: asDevice else: asRMEM
+          params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
+                              typ: leaf.typ, addressSpace: space)
+        let constr = buildLeafConstr(p.typ, p.ident.ident())
+        let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
+                           vType: p.typ, vInit: constr, vMutable: false,
+                           addressSpace: asRMEM)
+        doAssert fn.pBody.kind == gpuBlock, "expandStructKernelParams: kernel body is not a block"
+        fn.pBody.statements.insert(local, 0)
+      else:
+        params.add p
+    fn.pParams = params
+
+proc registerExpandStructKernelParams*(reg: var PassRegistry) =
+  ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
+  ## (GLSL pointer fields cross as 64-bit buffer device addresses)
+  reg.register(
+    name = "expandStructKernelParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
+    dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
+    run = expandStructKernelParamsImpl
+  )

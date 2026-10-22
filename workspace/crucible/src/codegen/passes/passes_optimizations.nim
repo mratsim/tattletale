@@ -41,8 +41,9 @@ proc registerOptimizationPasses*(reg: var PassRegistry) =
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════
 # Pass-by-ref materialization
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc isLvalue*(n: GpuAst): bool =
   case n.kind
@@ -72,8 +73,9 @@ proc materializePassByRefArgs*(ctx: var GpuContext) =
     walkNonLvalueArgs(ctx, fn.pBody)
 
 
+# ═══════════════════════════════════════════════════════════════════════
 # Fold max/min idioms to backend-native builtins
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 const
   BasicNumericKinds* = {gtUint8, gtUint16, gtInt16, gtUint32, gtInt32,
@@ -186,7 +188,7 @@ proc foldMaxMinToBuiltins*(ctx: var GpuContext) =
   ##
   ## TODO(abs): fold `(x < 0) ? -x : x`.
   ## - blocked on Nim's float abs body containing `when nimvm:`
-  ## - needs a per-backend name table (CUDA fabsf/fabs, OpenCL fabs, GLSL/Vulkan abs, WGSL abs)
+  ## - needs a per-backend name table (CUDA fabsf/fabs, OpenCL fabs, GLSL abs, WGSL abs)
   ## - Int abs is already native (magic AbsI)
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]

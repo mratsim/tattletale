@@ -13,7 +13,7 @@ import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
-import ../passes/passes_msl
+import ../passes/passes_lowering_msl
 
 const MetalReservedKeywords = [
   # C++/MSL keyword table (MSL is C++14-based)

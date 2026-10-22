@@ -15,13 +15,25 @@
 # non-lvalue passByRef args materialize at call sites, CUDA
 # keeps `const Type&` params natively.
 
+import std / [sets]
+import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_lowering
 import ./passes_optimizations
+const CudaReserved = [
+  "__global__", "__device__", "__shared__", "__constant__"
+].toHashSet()
 
 proc registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
     "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
     dependsOn = @["ensureBlock"],
     run = materializePassByRefArgs
+  )
+  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
+    "Renames identifiers colliding with CUDA reserved words",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      ctx.renameReservedIdentifiers(CudaReserved)
   )

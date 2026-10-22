@@ -12,14 +12,8 @@ import ../ir/gpu_ast_type_resolvers
 
 import ./lang_utils
 import ../passes/passes_preprocessing as pp
-import ../passes/passes_wgsl as pw
+import ../passes/passes_lowering_wgsl as pw
 
-const WgslReserved = [
-  "layout", "storage", "uniform", "workgroup", "override", "diagnostic",
-  "enable", "requires", "alias", "bitcast", "discard", "push_constant",
-  "readonly", "read_write", "function", "private", "compute", "vertex",
-  "fragment", "type"
-].toHashSet()
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -373,7 +367,6 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
   for (fnIdent, fn) in mpairs(ctx.fnTab):
     pw.makeCodeValidImpl(ctx, fn, inGlobal = fn.isGlobal())
 
-  ctx.renameReservedIdentifiers(WgslReserved)
 
   for (fnIdent, fn) in pairs(ctx.fnTab):
     pw.checkCodeValidImpl(ctx, fn)

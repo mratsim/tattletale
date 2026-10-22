@@ -10,7 +10,7 @@ import std / [macros, strformat, strutils, sugar, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
-import ../passes/passes_opencl
+import ../passes/passes_lowering_opencl
 import ../passes/passes_preprocessing as pp
 
 proc gpuTypeToString*(t: GpuType,

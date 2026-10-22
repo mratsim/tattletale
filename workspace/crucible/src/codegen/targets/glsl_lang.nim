@@ -5,20 +5,12 @@
 ##   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, strformat, strutils, sugar, sequtils, tables, sets]
+import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ./lang_utils
 
-const GlslReserved* = [
-  "output", "input", "in", "out", "attribute", "uniform", "varying",
-  "buffer", "shared", "layout", "main", "void", "return",
-  "if", "else", "for", "while", "break", "continue", "struct",
-  "const", "true", "false", "bool", "int", "uint", "float", "double",
-  "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
-  "sampler", "texture", "image", "subroutine", "discard", "precise"
-].toHashSet()
 
 proc gpuTypeToString*(t: GpuType,
                       ident: string = "",
@@ -257,9 +249,6 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
     let fnOrig = ctx.allFnTab[fnIdent]
     ctx.scanFunctions(fn)
 
-  # 5. (No SSBO counter reset needed — handled in codegen())
-
-  ctx.renameReservedIdentifiers(GlslReserved)
 
 # ── genGLSL ─────────────────────────────────────────────────────────
 

@@ -10,15 +10,12 @@ import std/[macros, tables]
 
 import ./ir/gpu_ast_datatypes
 import ./targets/targets_lang
-import ./passes/passes_cuda
-import ./passes/passes_wgsl
-import ./passes/passes_opencl
-import ./passes/passes_glsl
-import ./passes/passes_msl
+import ./passes/passes_lowering
 import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
+import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_gpu
 import workspace/crucible/vendor/wgpu
@@ -40,11 +37,10 @@ template registerCommonPasses*(reg: var PassRegistry) =
   ## Register passes common to all backends.
   reg.registerValidationPrePasses()
   reg.registerNormalizationPasses()
-  reg.registerTypeSystemPasses()
+  reg.registerSharedLoweringPasses()
   reg.registerLegalizationPasses()
   reg.registerPreprocessingPasses()
   reg.registerOptimizationPasses()
-  reg.registerLoweringPasses()
   reg.registerValidationPostPasses()
 
 macro toGpuAst*(body: typed): GpuAst =
@@ -63,7 +59,6 @@ macro codegenCuda(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerCudaLoweringPasses()
-  reg.registerCudaPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -84,7 +79,6 @@ macro codegenOpenCL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerOpenclLoweringPasses()
-  reg.registerOpenclPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -105,7 +99,7 @@ macro codegenGLSL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerGlslLoweringPasses()
-  reg.registerVulkanPasses()
+  reg.registerGlslValidationPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -127,7 +121,6 @@ macro codegenWebGpu(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerWgslLoweringPasses()
-  reg.registerWgslPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
@@ -148,7 +141,6 @@ macro codegenMetal(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerMetalLoweringPasses()
-  reg.registerMetalPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types

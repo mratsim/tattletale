@@ -106,6 +106,7 @@ proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
       rewriteIndexDerefImpl(ctx, ch)
 
 
+# ═══════════════════════════════════════════════════════════════════════
 # decomposeMemcpyVars
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -190,6 +191,7 @@ proc decomposeMemcpyVarsImpl*(ctx: var GpuContext, n: var GpuAst) =
       decomposeMemcpyVarsImpl(ctx, ch)
 
 
+# ═══════════════════════════════════════════════════════════════════════
 # Type descriptors
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -422,6 +424,7 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
     seenNames.incl ident.symbol.name
 
 
+# ═══════════════════════════════════════════════════════════════════════
 # Shared helpers
 # ═══════════════════════════════════════════════════════════════════════════
 

@@ -1,20 +1,10 @@
-## renameReservedIdentifiers pass
-##
-## Test that identifiers colliding with target reserved words rename
-## consistently at every site through the shared lang_utils helper:
-##
-## - fn params renamed in the decl and in body refs
-## - struct fields renamed in the decl, including block-wrapped type defs
-## - globals table entries renamed (WGSL lifts kernel params there)
-## - field accesses renamed, non-colliding names untouched
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     workspace/crucible/tests/ir/legalizations/t_ir_renameReservedIdentifiers.nim (from tattletale)
 
 import std/[sets, tables]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/targets/lang_utils
+import workspace/crucible/src/codegen/passes/passes_lowering
 
 const Reserved = ["layout", "buffer"].toHashSet()
 
@@ -130,5 +120,39 @@ block:
   doAssert procNode.pParams[0].ident.ident() == "count",
     "non-colliding param must stay untouched, got: " & procNode.pParams[0].ident.ident()
   echo "  OK: non-colliding names untouched"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2.c fn name renamed in the decl and at call sites
+# ═══════════════════════════════════════════════════════════════════════════
+block:
+  let intTy = GpuType(kind: gtInt32)
+  # callee: proc layout_fn() with body `discard`
+  var callee = GpuAst(kind: gpuProc,
+                      pName: GpuAst(kind: gpuIdent, symbol: newSymbol("buffer", iSym = "fn_buffer")),
+                      pBody: GpuAst(kind: gpuBlock))
+  # caller body: `buffer()` as a gpuCall whose cName carries the same iSym
+  let call = GpuAst(kind: gpuCall,
+                    cName: GpuAst(kind: gpuIdent, symbol: newSymbol("buffer", iSym = "fn_buffer")))
+  var callerBody = GpuAst(kind: gpuBlock)
+  callerBody.statements.add call
+  var caller = GpuAst(kind: gpuProc,
+                      pName: GpuAst(kind: gpuIdent, symbol: newSymbol("caller", iSym = "fn_caller")),
+                      pBody: callerBody)
+  var ctx = GpuContext()
+  ctx.allFnTab[callee.pName] = callee
+  ctx.allFnTab[caller.pName] = caller
+  ctx.fnTab[callee.pName] = callee
+  ctx.fnTab[caller.pName] = caller
+
+  ctx.renameReservedIdentifiers(Reserved)
+
+  doAssert callee.pName.ident() == "buffer_nim",
+    "reserved fn name should rename, got: " & callee.pName.ident()
+  doAssert caller.pBody.statements[0].cName.ident() == "buffer_nim",
+    "call sites of a renamed fn should follow, got: " & caller.pBody.statements[0].cName.ident()
+  doAssert caller.pName.ident() == "caller",
+    "non-colliding fn name must stay, got: " & caller.pName.ident()
+  echo "  OK: fn name renamed in decl and at call sites"
 
 echo "  OK - t_ir_renameReservedIdentifiers"

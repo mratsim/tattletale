@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [tables, sets]
+import std / tables
 import ../ir/gpu_ast_datatypes
 import ../ir/gpu_ast_type_resolvers
 import ../../builtins/builtins_functions
@@ -15,64 +15,6 @@ import ../passes/passes_optimizations
 # ═══════════════════════════════════════════════════════════════════════
 # Reserved keyword renaming
 # ═══════════════════════════════════════════════════════════════════════
-
-proc renameReservedKeywords(name: string, reserved: HashSet[string]): string =
-  if name in reserved: name & "_nim"
-  else: name
-
-proc renameIdents(n: var GpuAst, symToRename: Table[string, string]) =
-  ## Substitutes the names of identifiers whose iSym is in the table
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in symToRename:
-      n.symbol.name = symToRename[n.symbol.iSym]
-  else:
-    for ch in mitems(n):
-      renameIdents(ch, symToRename)
-
-proc renameFieldAccesses(n: var GpuAst, reserved: HashSet[string]) =
-  ## Renames field accesses whose name is a target keyword, to match `renameReservedIdentifiers`
-  case n.kind
-  of gpuDot:
-    if n.dField.kind == gpuIdent:
-      n.dField.symbol.name = renameReservedKeywords(n.dField.symbol.name, reserved)
-    renameFieldAccesses(n.dParent, reserved)
-  else:
-    for ch in mitems(n):
-      renameFieldAccesses(ch, reserved)
-
-proc renameReservedIdentifiers*(ctx: var GpuContext, reserved: HashSet[string]) =
-  ## Renames identifiers colliding with target keywords, consistently at every site:
-  ## - fn params, decl and body refs
-  ## - globals, where WGSL lifts kernel params
-  ## - struct fields, including block-wrapped type defs
-  ## - field accesses
-  for g in mvalues(ctx.globals):
-    g.ident.symbol.name = renameReservedKeywords(g.ident.ident(), reserved)
-  for fn in ctx.fnTab.values:
-    var renames = initTable[string, string]()
-    for p in mitems(fn.pParams):
-      let oldName = p.ident.ident()
-      let safeName = renameReservedKeywords(oldName, reserved)
-      if oldName != safeName:
-        renames[p.ident.symbol.iSym] = safeName
-        p.ident.symbol.name = safeName
-    if renames.len > 0:
-      renameIdents(fn.pBody, renames)
-  proc renameFieldDecls(n: var GpuAst) =
-    case n.kind
-    of gpuTypeDef:
-      for f in mitems(n.tFields):
-        f.name = renameReservedKeywords(f.name, reserved)
-    else:
-      for ch in mitems(n):
-        renameFieldDecls(ch)
-  for blk in mitems(ctx.globalBlocks):
-    renameFieldDecls(blk)
-  for fn in ctx.fnTab.values:
-    renameFieldAccesses(fn.pBody, reserved)
-  for blk in mitems(ctx.globalBlocks):
-    renameFieldAccesses(blk, reserved)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Builtin function names

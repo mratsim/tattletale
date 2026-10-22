@@ -14,12 +14,26 @@
 # Project the crucible IR onto OpenCL C's calling convention:
 # passByRef structs pass as hidden const pointers and structs
 # carrying pointers expand to ptr/scalar leaves, since OpenCL
-# params cross by value.
+# params cross by value
 
+import std / [tables, sets]
+import ../ir/gpu_ast_datatypes
+import ../frontend/nim_to_gpu_type_resolvers
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
-import ./passes_optimizations
+import ./passes_lowering
 import ./passes_legalizations
+import ./passes_validations
+import ./passes_optimizations
+import ./passes_preprocessing
+
+{.experimental: "codeReordering".}
+
+const OclReserved = [
+  "kernel", "__kernel", "global", "__global", "local", "__local",
+  "constant", "__constant", "read_only", "write_only", "read_write"
+].toHashSet()
 
 proc registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.register("materializePassByRefArgs", pkTransform, phaseMain,
@@ -28,3 +42,70 @@ proc registerOpenclLoweringPasses*(reg: var PassRegistry) =
     run = materializePassByRefArgs
   )
   reg.registerExpandStructKernelParams()
+  reg.register("renameReservedIdentifiers", pkTransform, phaseMain,
+    "Renames identifiers colliding with OpenCL C reserved words",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      ctx.renameReservedIdentifiers(OclReserved)
+  )
+
+# ═══════════════════════════════════════════════════════════════════════
+# By-ref parameter lowering
+# ═══════════════════════════════════════════════════════════════════════
+
+proc lowerByrefParamsImpl*(ctx: var GpuContext, n: var GpuAst) =
+  ## Rewrites passByRef params into `const Type*` ptr params for OpenCL.
+  ## CUDA keeps `const Type&` natively, no body changes there.
+  ##
+  ## Contract:
+  ## - structs of 24 bytes or more pass as hidden const reference
+  ##   (isLargeStruct), no call-site copy
+  ## - the param symbol renames from "t" to "_p_t", the symbol is shared with
+  ##   body idents so they rename too
+  ## - each renamed body ident wraps in gpuDeref, `t.data[...]` becomes
+  ##   `(*_p_t).data[...]`, valid C for pointer-to-struct member access
+  ## - no local copy is prepended, body refs resolve through the pointer,
+  ##   a `Type t = *_p_t;` init would be dead code
+  ##
+  # Rename and deref-wrap helper over the shared param symbol.
+  proc wrapInDeref(body: var GpuAst, renamedSym: Symbol) =
+    case body.kind
+    of gpuIdent:
+      if body.symbol == renamedSym:
+        body = GpuAst(kind: gpuDeref, dOf: body)
+    else:
+      for ch in body.mitems:
+        wrapInDeref(ch, renamedSym)
+  case n.kind
+  of gpuProc:
+    let isKernel = attGlobal in n.pAttributes
+    if not isKernel:
+      var renamedSyms: seq[Symbol]
+      for p in n.pParams:
+        if p.passByRef:
+          let oldSym = p.ident.symbol
+          p.ident.symbol.name = "_p_" & p.ident.ident()
+          renamedSyms.add oldSym
+      # Walk body: wrap renamed idents in gpuDeref (so t → (*_p_t))
+      for s in renamedSyms:
+        wrapInDeref(n.pBody, s)
+    for ch in n.mitems:
+      ctx.lowerByrefParamsImpl(ch)
+  else:
+    for ch in n.mitems:
+      ctx.lowerByrefParamsImpl(ch)
+
+proc insertByrefAddrsImpl*(ctx: var GpuContext, n: var GpuAst) =
+  ## Wraps byref args in `gpuAddr` nodes at call sites.
+  case n.kind
+  of gpuCall:
+    let fnParams = ctx.getFnParams(n.cName)
+    for i, arg in n.cArgs:
+      if i < fnParams.len and fnParams[i].passByRef:
+        if arg.kind != gpuMaterialize and arg.kind in {gpuIdent, gpuIndex, gpuDeref}:
+          n.cArgs[i] = GpuAst(kind: gpuAddr, aOf: arg)
+    for ch in n.mitems:
+      ctx.insertByrefAddrsImpl(ch)
+  else:
+    for ch in n.mitems:
+      ctx.insertByrefAddrsImpl(ch)
