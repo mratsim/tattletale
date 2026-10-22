@@ -71,13 +71,12 @@ proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
     ctx.globalBlocks.add typBlock
 
 func registerCommonPasses*(reg: var PassRegistry) =
-  ## Registers passes common to all backends.
+  ## Registers passes common to all backends, through optimization.
+  ## The backend bundles own lowering. Post-validation runs after them.
   reg.registerValidationPrePasses()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerSharedLoweringPasses()
   reg.registerOptimizationPasses()
-  reg.registerValidationPostPasses()
 
 macro toCrucibleAst*(body: typed): GpuAst =
   ## Converts GPU code to IR (GpuAst) without running any passes.
@@ -95,6 +94,7 @@ macro codegenCuda(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerCudaLoweringPasses()
+  reg.registerValidationPostPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
@@ -116,6 +116,7 @@ macro codegenOpenCL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerOpenclLoweringPasses()
+  reg.registerValidationPostPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
@@ -137,6 +138,7 @@ macro codegenGLSL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerGlslLoweringPasses()
+  reg.registerValidationPostPasses()
   reg.registerGlslValidationPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
@@ -160,6 +162,7 @@ macro codegenWebGpu(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerWgslLoweringPasses()
+  reg.registerValidationPostPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
@@ -181,6 +184,7 @@ macro codegenMetal(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerMetalLoweringPasses()
+  reg.registerValidationPostPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types

@@ -49,7 +49,8 @@ func registerQualifyVarParams*(reg: var PassRegistry) =
   )
 
 func registerGlslLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  reg.registerLowerArraysAndViews(decayArrays = false)
+  reg.registerSharedLoweringPasses()
   # GLSL buffer references cannot be indexed directly, the deref must be
   # explicit in the IR for the renderer to compose `.x`.
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)

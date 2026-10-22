@@ -1,7 +1,7 @@
 ## Shared lowering impls.
 ##
 ## - registerSharedLoweringPasses registers the ones every backend wants
-## - backends cherry-pick the rest from passes_lowering_<backend>.nim
+## - per-backend passes register in passes_lowering_<backend>.nim
 ## - each replaces an IR construct with its composition at the target
 ##   calling convention
 ## - a policy differing per target takes a flag
@@ -23,8 +23,6 @@ import ./passes_legalizations
 #
 # Lowering replaces IR constructs with their composition at the target
 # calling convention: spans become ptr + len, compile-time params are erased.
-# The universal ones register via registerSharedLoweringPasses, backends
-# cherry-pick the rest. A policy that differs per target takes a flag.
 
 {.experimental: "codeReordering".}
 
@@ -33,9 +31,7 @@ import ./passes_legalizations
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerSharedLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the lowering passes common to every backend
   reg.registerPruneCompileTimeParams()
-  reg.registerLowerSpans()
   reg.registerDecomposeMemcpyVars()
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =
@@ -60,49 +56,17 @@ func registerCollectValueAddressSpaces*(reg: var PassRegistry) =
     run = collectValueAddressSpaces
   )
 
+func registerLowerArraysAndViews*(reg: var PassRegistry, decayArrays: static bool) =
+  reg.register("lowerArraysAndViews", pkTransform, phaseMain,
+    "Arrays decay to element pointers per decayArrays, openArray views split into ptr + len",
+    run = proc(ctx: var GpuContext): void =
+      ctx.lowerArraysAndViews(decayArrays)
+  )
+
 func registerPruneCompileTimeParams(reg: var PassRegistry) =
   reg.register("pruneCompileTimeParams", pkTransform, phaseMain,
     "Drop compile-time-only parameters (static records, dead scalar statics, typedescs, phantom values) and erase their call arguments",
     run = pruneCompileTimeParams
-  )
-
-func registerLowerSpans(reg: var PassRegistry) =
-  reg.register("lowerSpans", pkTransform, phaseMain,
-    "Materialize openArray/varargs spans into ptr + len parameters",
-    run = lowerSpans
-  )
-
-func registerNormalizeArraySpanParams*(reg: var PassRegistry, decayArrays: static bool) =
-  ## Registers array/span param normalization.
-  ##
-  ## - decayArrays true: the C model, element pointers T*
-  ## - decayArrays false: arrays stay first-class, array params emit as arrays
-  reg.register("normalizeArraySpanParams", pkTransform, phaseEarly,
-    "var array/openArray params become element pointers: fold HiddenDeref on " &
-      "access, bare arrays (or toOpenArray) at call sites, gtPtr(gtArray)->gtPtr(T) per decayArrays",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      # callee param kinds from the ORIGINAL types, before this pass rewrites them
-      var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
-      for fnKey in ctx.allFnTab.keys:
-        let fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.genericInsts.keys:
-        let fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
-          normalizeArraySpanFn(fn, decayArrays)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
-          normalizeArraySpanFn(fn, decayArrays)
-
   )
 
 func registerDecomposeMemcpyVars(reg: var PassRegistry) =
@@ -124,12 +88,12 @@ func registerExpandStructKernelParams*(reg: var PassRegistry) =
   ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
   ## (GLSL pointer fields cross as 64-bit buffer device addresses)
   reg.register(
-    name = "expandStructKernelParams",
+    name = "explodeGlobalStructWithPtrFields",
     kind = pkTransform,
     phase = phaseMain,
     description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
     dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
-    run = expandStructKernelParamsImpl
+    run = explodeGlobalStructWithPtrFields
   )
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -361,24 +325,48 @@ proc rewriteFnSig(fn: var GpuAst, sigMap: SpanSigMap) =
       newParams.add p
   fn.pParams = newParams
 
-proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
-  ## Walk AST, rewriting span idents and adjusting call sites
+proc spanPtrLenParts(c: GpuAst): tuple[ptrPlus, lenExpr: GpuAst] =
+  ## toOpenArray(ptr, first, last) -> (ptr + first, last - first + 1)
+  let idxTyp = c.cArgs[1].getLoweringExprType()
+  # getLoweringExprType never returns nil so idxTyp is taken above,
+  # the gtInt32 variant guards genLit's nil-lType FieldDefect
+  let lenTyp = (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)
+  let ptrPlus = GpuAst(kind: gpuBinOp,
+                       bType: c.cArgs[0].getLoweringExprType(),
+                       bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
+                       bLeft: c.cArgs[0],
+                       bRight: c.cArgs[1])
+  let lenSub = GpuAst(kind: gpuBinOp,
+                      bType: idxTyp,
+                      bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
+                      bLeft: c.cArgs[2],
+                      bRight: c.cArgs[1])
+  let lenExpr = GpuAst(kind: gpuBinOp,
+                       bType: idxTyp,
+                       bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
+                       bLeft: lenSub,
+                       bRight: GpuAst(kind: gpuLit, lValue: "1", lType: lenTyp))
+  result = (ptrPlus, lenExpr)
 
+proc rewriteViewUses(n: var GpuAst, sigMap: SpanSigMap) =
+  ## Span-typed idents become pointer idents, `s.len` and `len(s)`
+  ## become `s_len`, view arguments at call sites split into ptr + len.
+  ## An unconsumed `toOpenArray` call is an error.
   case n.kind
   of gpuIdent:
     if n.symbol.typ != nil and n.symbol.typ.kind == gtSpan:
-      # Span-typed ident → ptr ident (same name, ptr type)
+      # Span-typed ident -> ptr ident (same name, ptr type)
       n = GpuAst(kind: gpuIdent, symbol: newSymbol(n.symbol.name, typ = initGpuPtrType(n.symbol.typ.sElemTyp, implicitPtr = false), symKind = n.symbol.symKind))
   of gpuDot:
     if n.dField.kind == gpuIdent and n.dField.symbol.name == "len" and
        n.dParent.symbol.typ != nil and n.dParent.symbol.typ.kind == gtSpan:
-      # span.len → len ident
+      # span.len -> len ident
       n = GpuAst(kind: gpuIdent,
                  symbol: newSymbol(n.dParent.symbol.name & "_len", typ = initGpuType(gtInt32)))
       return
     else:
       for child in mitems(n):
-        child.rewriteNode(sigMap)
+        child.rewriteViewUses(sigMap)
   of gpuCall:
     var fnName: string
     if n.cName.kind == gpuIdent:
@@ -388,79 +376,24 @@ proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
       if n.cArgs.len >= 1:
         if n.cArgs[0].kind == gpuIdent and
            n.cArgs[0].symbol.typ != nil and n.cArgs[0].symbol.typ.kind == gtSpan:
-          # Handle builtin calls: len(span) → span_len
+          # len(span) -> span_len
           n = GpuAst(kind: gpuIdent,
                      symbol: newSymbol(n.cArgs[0].symbol.name & "_len", typ = initGpuType(gtInt32)))
           return
-        if n.cArgs[0].kind == gpuBlock and n.cArgs[0].isExpr and
-           n.cArgs[0].statements.len >= 2:
-          # len(toOpenArray_lowered_block) → statements[1] (the len expr)
-          n = n.cArgs[0].statements[1].clone()
-          return
         if n.cArgs[0].kind == gpuCall and
            n.cArgs[0].cName.kind == gpuIdent and
-           (n.cArgs[0].cName.symbol.name == "toOpenArray" or n.cArgs[0].cName.symbol.name.startsWith("toOpenArray_")) and
+           n.cArgs[0].cName.symbol.name == "toOpenArray" and
            n.cArgs[0].cArgs.len >= 3:
-          # len(toOpenArray(ptr, first, last)) → last - first + 1
-          let tc = n.cArgs[0]
-          let idxTyp = tc.cArgs[1].getLoweringExprType()
-          let lenSub = GpuAst(kind: gpuBinOp,
-                              bType: idxTyp,
-                              bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
-                              bLeft: tc.cArgs[2],
-                              bRight: tc.cArgs[1])
-          n = GpuAst(kind: gpuBinOp,
-                     bType: idxTyp,
-                     bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
-                     bLeft: lenSub,
-                     bRight: GpuAst(kind: gpuLit, lValue: "1",
-                                    lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
-          # getLoweringExprType never returns nil so idxTyp is taken above,
-          # the gtInt32 variant guards genLit's nil-lType FieldDefect
+          # len(toOpenArray(ptr, first, last)) -> last - first + 1
+          let (_, lenExpr) = spanPtrLenParts(n.cArgs[0])
+          n = lenExpr
           return
       return
 
-    for child in mitems(n):
-      # Recurse into children before handling toOpenArray
-      child.rewriteNode(sigMap)
+    if fnName == "toOpenArray" and n.cArgs.len >= 3:
+      error "toOpenArray result used outside a span argument, a len call, or a view binding"
 
-    if (fnName == "toOpenArray" or fnName.startsWith("toOpenArray_")) and n.cArgs.len >= 3:
-      # Handle toOpenArray: inline as ptr + first
-      # toOpenArray(ptr, first, last) →
-      #   { ptr + first, last - first + 1 } as two separate values
-      # Inline: create a gpuBinOp for ptr+first
-      let dataExpr = if n.cArgs[0].kind == gpuBlock and n.cArgs[0].isExpr and n.cArgs[0].statements.len >= 2:
-                       n.cArgs[0].statements[0]
-                     else:
-                       n.cArgs[0]
-      let ptrPlus = GpuAst(kind: gpuBinOp,
-                           bType: dataExpr.getLoweringExprType(),
-                           bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
-                           bLeft: dataExpr,
-                           bRight: n.cArgs[1])
-      let idxTyp = n.cArgs[1].getLoweringExprType()
-      let lenSub = GpuAst(kind: gpuBinOp,
-                          bType: idxTyp,
-                          bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("-")),
-                          bLeft: n.cArgs[2],
-                          bRight: n.cArgs[1])
-      let lenExpr = GpuAst(kind: gpuBinOp,
-                           bType: idxTyp,
-                           bOp: GpuAst(kind: gpuIdent, symbol: newSymbol("+")),
-                           bLeft: lenSub,
-                           bRight: GpuAst(kind: gpuLit, lValue: "1",
-                                          lType: (if idxTyp.isNil: initGpuType(gtInt32) else: idxTyp)))
-      # getLoweringExprType never returns nil so idxTyp is taken above,
-      # the gtInt32 variant guards genLit's nil-lType FieldDefect
-      # Return as block containing both expressions
-      n = GpuAst(kind: gpuBlock, isExpr: true, statements: @[ptrPlus, lenExpr])
-      return
-
-    for child in mitems(n):
-      # Recurse into children first (so toOpenArray in args is transformed)
-      child.rewriteNode(sigMap)
-
-    # Then handle callee span params
+    # Split view arguments BEFORE recursing, the raw toOpenArray call stays visible
     var calleeSpans = sigMap.getOrDefault(fnName)
     if calleeSpans.len == 0:
       for k, v in sigMap:
@@ -476,9 +409,11 @@ proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
         let isSpan = spanIdx < calleeSpans.len and calleeSpans[spanIdx].paramIdx == argIdx
         if isSpan:
           let spanArg = n.cArgs[argIdx]
-          if spanArg.kind == gpuBlock and spanArg.isExpr and spanArg.statements.len >= 2:
-            newArgs.add spanArg.statements[0]
-            newArgs.add spanArg.statements[1]
+          if spanArg.kind == gpuCall and spanArg.cName.kind == gpuIdent and
+             spanArg.cName.symbol.name == "toOpenArray" and spanArg.cArgs.len >= 3:
+            let (ptrPlus, lenExpr) = spanPtrLenParts(spanArg)
+            newArgs.add ptrPlus
+            newArgs.add lenExpr
           elif spanArg.kind == gpuIdent and spanArg.symbol.typ != nil and spanArg.symbol.typ.kind == gtSpan:
             newArgs.add GpuAst(kind: gpuIdent, symbol: newSymbol(spanArg.symbol.name, typ = calleeSpans[spanIdx].ptrTyp))
             newArgs.add GpuAst(kind: gpuIdent, symbol: newSymbol(spanArg.symbol.name & "_len", typ = calleeSpans[spanIdx].lenTyp))
@@ -491,11 +426,10 @@ proc rewriteNode(n: var GpuAst, sigMap: SpanSigMap) =
       n.cArgs = newArgs
 
     for child in mitems(n):
-      # Recurse into args
-      child.rewriteNode(sigMap)
+      child.rewriteViewUses(sigMap)
   else:
     for child in mitems(n):
-      child.rewriteNode(sigMap)
+      child.rewriteViewUses(sigMap)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Memcpy decomposition
@@ -630,12 +564,108 @@ proc decomposeMemcpyVarsImpl(ctx: var GpuContext, n: var GpuAst) =
 # Span materialization
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerSpans(ctx: var GpuContext) =
+proc decomposePtrLen(n: var GpuAst): GpuAst =
+  ## Decomposes `let s = toOpenArray(p, a, b)` in place:
+  ## `s` holds `p + a`, the returned statement is `let s_len = b - a + 1`.
+  if n.kind != gpuVar or n.vInit.kind != gpuCall:
+    return nil
+  let c = n.vInit
+  if c.cName.kind != gpuIdent or c.cName.symbol.name != "toOpenArray" or c.cArgs.len < 3:
+    return nil
+  let (ptrPlus, lenExpr) = spanPtrLenParts(c)
+  let ptrTyp = initGpuPtrType(n.vType.sElemTyp, implicitPtr = false)
+  n.vType = ptrTyp
+  n.vInit = ptrPlus
+  n.vName.symbol.typ = ptrTyp
+  let lenSym = newSymbol(n.vName.symbol.name & "_len", iSym = n.vName.symbol.iSym & "_len",
+                         typ = initGpuType(gtInt32), symKind = n.vName.symbol.symKind)
+  result = GpuAst(kind: gpuVar,
+                  vName: GpuAst(kind: gpuIdent, symbol: lenSym),
+                  vType: initGpuType(gtInt32),
+                  vInit: lenExpr,
+                  vMutable: n.vMutable)
+
+proc rewriteStmts(stmts: var seq[GpuAst], sigMap: SpanSigMap) =
+  ## View bindings decompose at their own statement scope.
+  ## Nested statement lists recurse.
+  var outStmts: seq[GpuAst]
+  for stmt in stmts.mitems:
+    case stmt.kind
+    of gpuBlock:
+      rewriteStmts(stmt.statements, sigMap)
+    of gpuIf:
+      rewriteStmts(stmt.ifThen.statements, sigMap)
+      for el in stmt.ifElifs.mitems:
+        rewriteStmts(el.body.statements, sigMap)
+      if stmt.ifElse.kind != gpuDiscard:
+        rewriteStmts(stmt.ifElse.statements, sigMap)
+    of gpuFor:
+      rewriteStmts(stmt.fBody.statements, sigMap)
+    of gpuWhile:
+      rewriteStmts(stmt.wBody.statements, sigMap)
+    else:
+      discard
+    let lenDecl = decomposePtrLen(stmt)
+    if lenDecl.isNil:
+      outStmts.add stmt
+    else:
+      outStmts.add stmt
+      outStmts.add lenDecl
+  stmts = outStmts
+
+proc lowerArraysAndViews(ctx: var GpuContext, decayArrays: bool) =
+  ## Arrays decay and openArray views split into ptr + len pairs.
+  ## The pass emits no block expressions.
+  ##
+  ## | Before (IR)                    | After (IR)                                |
+  ## | ------------------------------ | ----------------------------------------- |
+  ## | `f(s: openArray[T])`           | `f(s: ptr T, s_len: int32)`               |
+  ## | `f(toOpenArray(p, a, b))`      | `f(p + a, b - a + 1)`                     |
+  ## | `let v = toOpenArray(p, a, b)` | `let v = p + a` + `let v_len = b - a + 1` |
+  ## | `s.len` / `len(s)`             | `s_len`                                   |
+  ## | `f(dst: var array[N, T])`      | `f(dst: ptr T)` (decayArrays = true)      |
+  ##
+  ## `var array[N, T]` / `var openArray[T]` params are element pointers (T*),
+  ## matching Nim's C backend. The IR is gtPtr(gtArray) / gtPtr(gtSpan),
+  ## HiddenDeref on access and HiddenAddr on call args, normalized to:
+  ## - gtPtr(gtArray[N, T]) -> gtPtr(T) when decayArrays, gtPtr(gtSpan) -> gtSpan
+  ## - index-context derefs fold into the index (`(*p)[i]` ≡ `p[i]`),
+  ##   the pass keeps derefs under gpuAddr, `&(*p)` is the array address not `T**`
+  ## - gpuAddr(array) call args become the bare array (C decay) for array-ptr params
+  ## - gpuAddr(array) on a span param becomes toOpenArray(array, 0, len-1), inlined here
+  ##
+  ## The gpuAddr(gpuDot) case keys on the TYPE (gtArray), not the field name:
+  ## any array-typed field passed by addr rewrites identically
+  # Phase 1+2: param shape prep, index deref folding, view argument creation,
+  # signature type normalization
+  var calleeKinds = initTable[string, seq[ArraySpanParamKind]]()
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
+  for fnKey in ctx.genericInsts.keys:
+    let fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      calleeKinds[fn.pName.symbol.name] = collectArraySpanParamKinds(fn)
+
+  template normalizeFn(fn: var GpuAst) =
+    normalizeArraySpanBody(fn.pBody, calleeKinds, decayArrays)
+    normalizeArraySpanFn(fn, decayArrays)
+  for fnKey in ctx.allFnTab.keys:
+    var fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      normalizeFn(fn)
+      ctx.allFnTab[fnKey] = fn
+  for fnKey in ctx.genericInsts.keys:
+    var fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      normalizeFn(fn)
+      ctx.genericInsts[fnKey] = fn
+
+  # Phase 3+4: split view signatures, rewrite bodies at statement scope
   let sigMap = collectSpanSigs(ctx)
   if sigMap.len == 0:
     return
-
-  # Rewrite function signatures (dedup by name)
   var rewritten = initHashSet[string]()
   template rewriteTab(tab: untyped) =
     var keys: seq[GpuAst]
@@ -651,9 +681,10 @@ proc lowerSpans(ctx: var GpuContext) =
       if nm notin rewritten:
         rewritten.incl nm
         rewriteFnSig(fn, sigMap)
-        fn.pBody.rewriteNode(sigMap)
+        rewriteStmts(fn.pBody.statements, sigMap)
+        for i in 0 ..< fn.pBody.statements.len:
+          fn.pBody.statements[i].rewriteViewUses(sigMap)
         tab[k] = fn
-
   rewriteTab(ctx.allFnTab)
   rewriteTab(ctx.genericInsts)
   rewriteTab(ctx.fnTab)
@@ -702,13 +733,8 @@ proc pruneCompileTimeParams(ctx: var GpuContext) =
       fn.pParams = kept
 
 # ═══════════════════════════════════════════════════════════════════════
-# Struct kernel-param expansion (cherry-pickable)
+# Struct kernel-param expansion
 # ═══════════════════════════════════════════════════════════════════════
-#
-# Expands kernel params of structs carrying (nested) pointer fields
-# into ptr/scalar leaves and rebuilds the struct in the body.
-# Metal, WebGPU, OpenCL and MSL register it. CUDA and GLSL
-# cross structs natively.
 
 func containsPtrDeep(t: GpuType): bool =
   ## True when a pointer is reachable through the type's fields
@@ -761,7 +787,7 @@ proc buildLeafConstr(t: GpuType, name: string): GpuAst =
     else:
       result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
 
-proc expandStructKernelParamsImpl(ctx: var GpuContext) =
+proc explodeGlobalStructWithPtrFields(ctx: var GpuContext) =
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
       continue
@@ -774,7 +800,7 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
         let leaves = p.typ.kernelParamLeaves(p.ident.ident())
         for leaf in leaves:
           doAssert leaf.name notin taken,
-            "expandStructKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
+            "explodeGlobalStructWithPtrFields: leaf '" & leaf.name & "' collides with an existing kernel parameter"
           let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
           let space = if leaf.isBuffer: asDevice else: asRMEM
           params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
@@ -783,26 +809,15 @@ proc expandStructKernelParamsImpl(ctx: var GpuContext) =
         let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
                            vType: p.typ, vInit: constr, vMutable: false,
                            addressSpace: asRMEM)
-        doAssert fn.pBody.kind == gpuBlock, "expandStructKernelParams: kernel body is not a block"
+        doAssert fn.pBody.kind == gpuBlock, "explodeGlobalStructWithPtrFields: kernel body is not a block"
         fn.pBody.statements.insert(local, 0)
       else:
         params.add p
     fn.pParams = params
 
 # ═══════════════════════════════════════════════════════════════════════
-# Array/span parameter normalization (cherry-pickable)
+# Array/span parameter normalization
 # ═══════════════════════════════════════════════════════════════════════
-#
-# `var array[N, T]` / `var openArray[T]` params are element pointers (T*), matching Nim's C backend.
-# The IR is gtPtr(gtArray) / gtPtr(gtSpan), HiddenDeref on access and HiddenAddr on call args, normalized to:
-# - gtPtr(gtArray[N, T]) -> gtPtr(T) when decayArrays, gtPtr(gtSpan) -> gtSpan
-# - index-context derefs fold into the index (`(*p)[i]` ≡ `p[i]`),
-#    the pass keeps derefs under gpuAddr, `&(*p)` is the array address not `T**`
-# - gpuAddr(array) call args become the bare array (C decay) for array-ptr params
-# - gpuAddr(array) on a span param becomes toOpenArray(array, 0, len-1), lowerSpans inlines
-#
-# The gpuAddr(gpuDot) case keys on the TYPE (gtArray), not the field name:
-# any array-typed field passed by addr rewrites identically
 
 type
   ArraySpanParamKind = enum
@@ -839,8 +854,11 @@ proc makeToOpenArray(arr: GpuAst, aLen: int): GpuAst =
   )
 
 proc normalizeArraySpanBody(body: var GpuAst, calleeKinds: Table[string, seq[ArraySpanParamKind]], decayArrays = true) =
-  ## Folds index-context derefs on array/span pointers into the index,
-  ## rewrites gpuAddr(array) call args per the callee's param kind
+  ## Body rewrites for calls whose callee takes array or span pointers:
+  ## - an index through a pointer folds into the index, `(*p)[i]` is `p[i]`
+  ## - an `addr(arr)` argument rewrites to the callee's parameter shape:
+  ##   pointer-to-array takes the bare array, openArray takes
+  ##   `toOpenArray(arr, 0, len-1)`
   body.walk(proc(n: var GpuAst): void =
     case n.kind
     of gpuIndex:

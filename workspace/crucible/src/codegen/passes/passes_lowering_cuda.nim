@@ -32,6 +32,7 @@ const CudaReserved = [
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
+  reg.registerSharedLoweringPasses()
   reg.registerMaterializePassByRefArgs()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)

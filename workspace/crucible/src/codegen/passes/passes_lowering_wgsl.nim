@@ -40,7 +40,8 @@ const WgslReserved = [
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  reg.registerLowerArraysAndViews(decayArrays = false)
+  reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
   reg.registerExpandStructKernelParams()

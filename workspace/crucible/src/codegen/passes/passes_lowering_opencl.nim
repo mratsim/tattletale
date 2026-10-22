@@ -38,7 +38,8 @@ const OclReserved = [
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
+  reg.registerSharedLoweringPasses()
   reg.registerMaterializePassByRefArgs()
   reg.registerExpandStructKernelParams()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)

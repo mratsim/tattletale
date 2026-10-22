@@ -31,7 +31,8 @@ import ./passes_validations
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
+  reg.registerSharedLoweringPasses()
   reg.registerExpandStructKernelParams()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()

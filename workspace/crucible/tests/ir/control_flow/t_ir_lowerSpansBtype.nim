@@ -21,7 +21,7 @@ import workspace/crucible/src/codegen/passes/pass_registry
 proc runOne(ctx: var GpuContext) =
   ## Runs the single pass under test through the public registry.
   var reg = PassRegistry.new()
-  reg.registerLowerSpans()
+  reg.registerLowerArraysAndViews(decayArrays = true)
   ctx.runPasses(reg)
 
 proc assertLenExprShape(n: GpuAst; expectTyp: GpuType) =
