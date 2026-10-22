@@ -8,8 +8,8 @@
 ## GPU-AST type resolution: expression and function type lookups and pointer/array peeling.
 
 import std/[macros, tables]
-import ./gpu_ast_datatypes
-import ./gpu_type_constructors
+import ./ast_datatypes
+import ./ast_type_constructors
 
 func getPointeeKind*(t: GpuType): GpuTypeKind =
   ## Scalar kind at the end of a pointer/array/UA chain,

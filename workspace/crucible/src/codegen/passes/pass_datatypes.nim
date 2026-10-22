@@ -6,9 +6,9 @@
 #  at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / [macros, sequtils, sets, tables]
-import ../ir/gpu_ast_datatypes
+import ../ir/ast_datatypes
 
-export gpu_ast_datatypes
+export ast_datatypes
 
 type
   PassKind* = enum

@@ -17,8 +17,8 @@
 # pointer-carrying structs expand to ptr/scalar leaves
 
 import std / [sequtils, sets, tables, strutils]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering

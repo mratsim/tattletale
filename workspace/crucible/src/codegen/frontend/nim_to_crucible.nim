@@ -7,12 +7,12 @@
 
 import std / [macros, strutils, sequtils, options, tables, sets]
 
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_type_constructors
+import ../ir/ast_datatypes
+import ../ir/ast_type_constructors
 import ../../builtins/builtins_functions
 import ./nim_ast_helpers
 import ./nim_type_resolvers
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_type_resolvers
 import ../passes/pass_registry
 
 # ############################################################

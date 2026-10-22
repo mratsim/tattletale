@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/exec/vulkan_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

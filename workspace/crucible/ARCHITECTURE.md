@@ -133,13 +133,13 @@ src/
       nim_type_resolvers.nim Type and overload resolution during IR
                                     construction.
     ir/
-      gpu_ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
+      ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
                                     GpuContext (unified fnTable, symbols with
                                     immutable iSym fingerprint), BackendKind,
                                     NamePolicy, base58 encoder.
-      gpu_ast_type_resolvers.nim    IR type helpers (pointee kinds, type
+      ast_type_resolvers.nim    IR type helpers (pointee kinds, type
                                     traversal).
-      gpu_type_constructors.nim     GpuType constructors and helpers.
+      ast_type_constructors.nim     GpuType constructors and helpers.
     passes/
       pass_datatypes.nim            GpuPass, PassKind, PassPhase, PassRegistry;
                                     `walk` traversal; `runPasses` (checks
@@ -206,7 +206,7 @@ src/
 1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `vulkan:`, `webgpu:`, or `metal:` block.
    The corresponding macro in `gpu_compiler.nim` calls `ctx.toGpuAst(typeReg, body)`.
 It walks the typed Nim AST and emits a `GpuAst` 1:1, one IR node per AST construct, no semantic rewriting.
-Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `gpu_ast_datatypes.nim`).
+Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `ast_datatypes.nim`).
 
 2. **IR construction.** The frontend populates the `GpuContext`: the unified `fnTable`, `types`,
    `globalBlocks`, and per-scope symbol tables. The `fnTable` holds all known functions keyed by `iSym`.
@@ -251,7 +251,7 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
 1. Add a printer file under `src/codegen/targets/` exposing `preprocess` and `codegen`.
 2. Wire it into `targets_lang.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
 3. Add the platform session under `src/runtime/exec/`, the engine facade under `src/runtime/engines/`,
-   the raw bindings under `src/abis/`, and the `BackendKind` value in `gpu_ast_datatypes.nim`.
+   the raw bindings under `src/abis/`, and the `BackendKind` value in `ast_datatypes.nim`.
 4. Add a `tests/codegen/<backend>/` suite obeying the naming convention of [`AGENTS.md`](AGENTS.md).
    Backends that cannot auto-run get a `manual_*` test.
 

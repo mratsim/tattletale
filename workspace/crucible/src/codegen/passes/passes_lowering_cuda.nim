@@ -16,7 +16,7 @@
 # keeps `const Type&` params natively.
 
 import std / [sets]
-import ../ir/gpu_ast_datatypes
+import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering

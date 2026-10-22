@@ -7,7 +7,7 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_ast_datatypes
+import ../ir/ast_datatypes
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,

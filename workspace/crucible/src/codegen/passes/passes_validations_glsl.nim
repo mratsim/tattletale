@@ -16,7 +16,7 @@
 # kernel's ordered non-smem params must agree.
 
 import std / [macros, sequtils, strutils, tables]
-import ../ir/gpu_ast_datatypes
+import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
 

@@ -8,9 +8,9 @@
 
 import std / [tables, sequtils, sets, strutils]
 import std/macros # for the `warning` builtin (compile-time diagnostics)
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
-import ../ir/gpu_type_constructors
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
+import ../ir/ast_type_constructors
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_legalizations

@@ -17,8 +17,8 @@
 # - structs carrying pointers expand to ptr/scalar leaves
 
 import std / [macros, strformat, strutils, sugar, sequtils, sets, tables, options]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
