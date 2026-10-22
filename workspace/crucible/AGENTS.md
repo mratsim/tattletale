@@ -57,6 +57,7 @@ helper before writing a new one.
 ```
 tests/
   ir/             : IR-level tests (INTERNAL codegen API, deep imports, no engine)
+    ir_testutils.nim : the one-pass runner every t_ir_ test goes through
     mangling/ types/ functions/ control_flow/
     legalizations/ optimizations/
   codegen/
@@ -72,6 +73,25 @@ tests/
 **IR tests are the exception to the public import:** they test compiler internals
 (passes, IR, type constructors) and keep deep `workspace/crucible/src/codegen/...` imports.
 Only engine/runtime tests use the public API (below).
+
+### IR test procedure
+
+`t_ir_` tests build hand-made input IR, run ONE registered pass through
+`tests/ir/ir_testutils.nim`, and assert the IR delta:
+
+- `register.runPass(fn)` takes a fresh context with `fn` as the sole
+  fnTab entry and returns the transformed fn. A nameless fixture fn gets
+  a fresh ident
+- `register.runPassOnNode(n)` is node-level sugar returning the body
+  statements (`[lowered]` when single, several on decomposition)
+- `register.runPassPrepared(ctx)` runs one pass over a caller-prepared
+  context in place (globals, fnTab, globalBlocks fixtures)
+
+- calls go inside `static:` blocks: pass bodies carry compile-time-only
+  diagnostics and a runtime call site sem-checks them in the wrong context
+- a failing `doAssert` is a compile error naming the check
+- a clean compile is the pass signal (no `-r`, nothing executes at runtime)
+- an expected compile failure is a `manual_` file, never auto-run
 
 ### Naming Convention
 
