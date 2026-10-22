@@ -5,8 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, sequtils, strutils, tables]
+import std/[macros, sequtils, sets, strutils, tables]
 import ../ir/gpu_ast_datatypes
+import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_legalizations
@@ -44,7 +45,72 @@ proc registerVulkanPasses*(reg: var PassRegistry) =
       "rewriteIndexDeref"],
     run = insertPointerDeref
   )
+  reg.register(
+    name = "qualifyVarParams",
+    kind = pkTransform,
+    phase = phaseMain,
+    description = "Retypes kVar params to their pointee, unwraps their body derefs and call-site gpuAddr args",
+    dependsOn = @[],
+    run = qualifyVarParams
+  )
 
+
+# kVar parameter legalization (GLSL inout)
+# ═══════════════════════════════════════════════════════════════════════
+
+proc unwrapVarDerefs(ctx: var GpuContext, n: var GpuAst, kvarSyms: HashSet[string], kvarNames: HashSet[string]) =
+  ## Replace `gpuDeref(gpuIdent(s))` with the plain ident when `s` is a kVar
+  ## param of the enclosing function. Symbols are per-body, match by iSym
+  ## then name. Other derefs (device pointers) survive.
+  case n.kind
+  of gpuDeref:
+    if n.dOf.kind == gpuIdent and n.dOf.symbol != nil and
+        (n.dOf.symbol.iSym in kvarSyms or n.dOf.symbol.name in kvarNames):
+      n = n.dOf
+    else:
+      ctx.unwrapVarDerefs(n.dOf, kvarSyms, kvarNames)
+  else:
+    for ch in n.mitems:
+      ctx.unwrapVarDerefs(ch, kvarSyms, kvarNames)
+
+proc qualifyVarParamsImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## Lower Nim `var T` params (kVar flavor) to GLSL inout bindings:
+  ## retype each param to its pointee, unwrap body derefs, unwrap
+  ## gpuAddr args at call sites.
+  case n.kind
+  of gpuProc:
+    var kvarSyms: HashSet[string]
+    var kvarNames: HashSet[string]
+    for p in mitems(n.pParams):
+      if p.flavor == kVar:
+        if p.typ.kind == gtPtr and p.typ.implicit:
+          p.typ = p.typ.to
+        else:
+          raiseAssert "kVar param without an implicit pointer type: " & p.ident.ident()
+        kvarSyms.incl p.ident.symbol.iSym
+        kvarNames.incl p.ident.symbol.name
+    ctx.unwrapVarDerefs(n.pBody, kvarSyms, kvarNames)
+    for ch in n.mitems:
+      ctx.qualifyVarParamsImpl(ch)
+  of gpuCall:
+    let fnParams = ctx.getFnParams(n.cName)
+    for i, arg in mpairs(n.cArgs):
+      if i < fnParams.len and fnParams[i].flavor == kVar:
+        if arg.kind == gpuAddr:
+          n.cArgs[i] = arg.aOf
+        elif arg.kind notin {gpuIdent, gpuIndex, gpuDot}:
+          raiseAssert "kVar call arg must be an lvalue, got " & $arg.kind
+    for ch in n.mitems:
+      ctx.qualifyVarParamsImpl(ch)
+  else:
+    for ch in n.mitems:
+      ctx.qualifyVarParamsImpl(ch)
+
+proc qualifyVarParams*(ctx: var GpuContext) =
+  for fn in ctx.allFnTab.mvalues():
+    ctx.qualifyVarParamsImpl(fn)
+  for fn in ctx.fnTab.mvalues():
+    ctx.qualifyVarParamsImpl(fn)
 
 # Shared push-constant layout validation
 # ═══════════════════════════════════════════════════════════════════════

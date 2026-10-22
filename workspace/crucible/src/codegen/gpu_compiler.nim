@@ -92,7 +92,7 @@ macro opencl*(body: untyped): string =
   crucibleCompileTarget = ctOpenCL
   result = newCall(bindSym"codegenOpenCL", body)
 
-macro codegenVulkan(body: typed): string =
+macro codegenGLSL(body: typed): string =
   ## Compiles a `vulkan:` block body into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -102,7 +102,8 @@ macro codegenVulkan(body: typed): string =
   let gpuAst = ctx.toGpuAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenVulkan(gpuAst))
+  let src = ctx.codegenGLSL(gpuAst)
+  result = newLit(src)
 
 macro vulkan*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
@@ -110,7 +111,7 @@ macro vulkan*(body: untyped): string =
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
   crucibleCompileTarget = ctVulkan
-  result = newCall(bindSym"codegenVulkan", body)
+  result = newCall(bindSym"codegenGLSL", body)
 
 macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code.

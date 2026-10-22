@@ -394,13 +394,7 @@ proc mangleNamesImpl*(ctx: var GpuContext) =
 
     of npHashSuffix:
       # Use the iSym as the hash source (stable across compilation units)
-      var hashVal: int64 = 0
-      for i, c in iSym:
-        hashVal = hashVal xor (int64(ord(c)) shl ((i and 7) * 8))
-      if hashVal == 0:
-        hashVal = 1
-      let suffix = shortHash(hashVal)
-      ident.symbol.name = name & "_" & suffix
+      ident.symbol.name = mangledHashName(name, iSym)
 
     of npPatch:
       let newName = case name

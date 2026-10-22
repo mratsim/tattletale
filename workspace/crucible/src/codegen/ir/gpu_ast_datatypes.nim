@@ -296,12 +296,16 @@ type
     asConstant
     asDevice
 
-  ## XXX: maybe merge into `GpuAst`, then can be kept in same table as `gpuVar` for locals
+  ParamFlavor* = enum
+    kIn
+    kVar
+
   GpuParam* = object
     ident*: GpuAst ## The actual parameter symbol, `GpuIdent`
     typ*: GpuType
     addressSpace*: AddressSpace
     passByRef*: bool   ## Pass by hidden const reference (large structs > 24 bytes)
+    flavor*: ParamFlavor
 
   GpuFieldInit* = object
     name*: string
@@ -538,7 +542,8 @@ proc clone*(ast: GpuAst): GpuAst =
         ident: p.ident.clone(),
         typ: p.typ.clone(),
         addressSpace: p.addressSpace,
-        passByRef: p.passByRef
+        passByRef: p.passByRef,
+        flavor: p.flavor
       )
       result.pParams.add(clonedParam)
     result.pBody = ast.pBody.clone()
@@ -1220,6 +1225,15 @@ func shortHash*(sigHash: int64): string =
       for j in 0 ..< i:
         result[j] = '1'
       break
+
+func mangledHashName*(name, iSym: string): string =
+  ## npHashSuffix display name, `name` + the 7-char base58 hash of `iSym`
+  var hashVal: int64 = 0
+  for i, c in iSym:
+    hashVal = hashVal xor (int64(ord(c)) shl ((i and 7) * 8))
+  if hashVal == 0:
+    hashVal = 1
+  result = name & "_" & shortHash(hashVal)
 
 proc gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.

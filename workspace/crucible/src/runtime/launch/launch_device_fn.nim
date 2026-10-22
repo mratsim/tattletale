@@ -220,10 +220,33 @@ func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
     nnkStmtList.newTree(kcall))
   return procdef
 
+func getWorkgroupPragma(blkN: NimNode): NimNode =
+  ## Workgroup pragma `(X, Y, Z)` for a compile-time literal block size, nil otherwise
+  var dims: array[3, int] = [1, 1, 1]
+  if blkN.kind == nnkIntLit:
+    dims[0] = blkN.intVal.int
+  elif blkN.kind in {nnkPar, nnkTupleConstr, nnkBracket} and
+      blkN.len in {2, 3}:
+    for i, e in blkN:
+      if e.kind != nnkIntLit:
+        return nil
+      dims[i] = e.intVal.int
+  else:
+    return nil
+  if dims[0] == 1 and dims[1] == 1 and dims[2] == 1:
+    return nil
+  var size = nnkTupleConstr.newTree()
+  for d in dims:
+    size.add newLit(d)
+  nnkExprColonExpr.newTree(ident"workgroup", size)
+
 macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, values: varargs[typed]): untyped =
   ## Builds the `{.global.}` proc for the kernel, ingests its lowered source
   ## when it differs and launches it: the first value is the output.
   let procdef = buildGlobalFn(kernel, statics, values)
+  let wg = getWorkgroupPragma(blkN)
+  if not wg.isNil:
+    procdef[4].add(wg)
   let kname = newLit($procdef.name)
   let bridgeN = bindSym"bridge"
   let bridgeSource = ident("crucibleBridgeSource" & $procdef.name)

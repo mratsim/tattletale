@@ -16,6 +16,29 @@ proc renameReservedKeywords*(name: string, reserved: openArray[string]): string 
   if name in reserved: name & "_nim"
   else: name
 
+proc renameFieldAccesses*(n: var GpuAst, reserved: openArray[string]) =
+  ## Renames field accesses whose name is a target keyword, to match `renameReservedIdentifiers`
+  case n.kind
+  of gpuDot:
+    if n.dField.kind == gpuIdent:
+      n.dField.symbol.name = renameReservedKeywords(n.dField.symbol.name, reserved)
+    renameFieldAccesses(n.dParent, reserved)
+  else:
+    for ch in mitems(n):
+      renameFieldAccesses(ch, reserved)
+
+proc renameReservedIdentifiers*(ctx: var GpuContext, reserved: openArray[string]) =
+  ## Struct fields named after target keywords cannot be declared nor accessed.
+  ## Rename the declaration and every field access consistently.
+  for blk in mitems(ctx.globalBlocks):
+    if blk.kind == gpuTypeDef:
+      for f in mitems(blk.tFields):
+        f.name = renameReservedKeywords(f.name, reserved)
+  for fn in ctx.fnTab.values:
+    renameFieldAccesses(fn.pBody, reserved)
+  for blk in mitems(ctx.globalBlocks):
+    renameFieldAccesses(blk, reserved)
+
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
   ## Backend function name of a call to a numeric builtin function
   ## (min/max/abs), resolved via the per-backend per-type map

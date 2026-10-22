@@ -20,7 +20,7 @@ proc codegenOpenCL*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): stri
   opencl_lang.preprocess(ctx, ast, kernel)
   result = opencl_lang.codegen(ctx)
 
-proc codegenVulkan*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
+proc codegenGLSL*(ctx: var GpuContext, ast: GpuAst, kernel: string = ""): string =
   glsl_lang.preprocess(ctx, ast, kernel)
   result = glsl_lang.codegen(ctx)
 
