@@ -12,6 +12,10 @@ import ../../builtins/builtins_functions
 import ../../builtins/builtins_gpu_types
 import ../passes/passes_optimizations
 
+proc renameReservedKeywords*(name: string, reserved: openArray[string]): string =
+  if name in reserved: name & "_nim"
+  else: name
+
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
   ## Backend function name of a call to a numeric builtin function
   ## (min/max/abs), resolved via the per-backend per-type map

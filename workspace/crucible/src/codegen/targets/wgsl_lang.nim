@@ -162,13 +162,6 @@ const WgslReservedMembers = [
   "fragment", "type"
 ]
 
-proc wgslSafeMember(name: string): string =
-  ## Naga rejects reserved words as struct members, surfacing only an invalid
-  ## shader module. Typedefs and dot accesses sanitize through this one proc
-  ## so both sides agree. Ceramic's TensorView field named `layout` hits it.
-  if name in WgslReservedMembers: result = name & "_wg"
-  else: result = name
-
 proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
   ## Rewrites idents onto their call-site bindings.
   ## The substitution step of call inlining.
@@ -579,7 +572,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result = "i32(" & wgslBuiltinParamName(ast.dParent.ident()) & '.' &
                ctx.genWebGpu(ast.dField) & ')'
     else:
-      let fieldName = if ast.dField.kind == gpuIdent: wgslSafeMember(ast.dField.ident())
+      let fieldName = if ast.dField.kind == gpuIdent: renameReservedKeywords(ast.dField.ident(), WgslReservedMembers)
                       else: ctx.genWebGpu(ast.dField)
       result = ctx.genWebGpu(ast.dParent) & '.' & fieldName
 
@@ -662,7 +655,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result.add "  _padding: u32,\n"
     else:
       for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, wgslSafeMember(el.name)) & ",\n"
+        result.add "  " & gpuTypeToString(el.typ, renameReservedKeywords(el.name, WgslReservedMembers)) & ",\n"
     result.add '}'
 
   of gpuAlias:

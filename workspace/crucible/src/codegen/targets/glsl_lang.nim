@@ -209,13 +209,6 @@ const glslReserved*: array[40, string] = [
   "sampler", "texture", "image", "subroutine", "discard", "precise"
 ]
 
-proc glslSafeName*(name: string): string =
-  ## Returns a GLSL-safe version of the name (appends _vk if reserved).
-  if name in glslReserved:
-    result = name & "_vk"
-  else:
-    result = name
-
 # Preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -281,7 +274,7 @@ proc preprocess*(ctx: var GpuContext, ast: GpuAst, kernel: string = "") =
       var renames = initTable[string, string]()
       for p in mitems(fn.pParams):
         let oldName = p.ident.ident()
-        let safeName = glslSafeName(oldName)
+        let safeName = renameReservedKeywords(oldName, glslReserved)
         if oldName != safeName:
           renames[p.ident.symbol.iSym] = safeName
           p.ident.symbol.name = safeName
