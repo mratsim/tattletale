@@ -19,7 +19,7 @@ import ./gpu_ast_datatypes
 func initGpuType*(kind: GpuTypeKind): GpuType =
   ## If `kind` is `gtPtr` `to` must be the type we point to
   if kind in [gtObject, gtPtr, gtArray, gtSpan]:
-    raiseAssert "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
+    error "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
   result = GpuType(kind: kind)
 
 func initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
@@ -64,7 +64,7 @@ proc toTypeDef*(typ: GpuType): GpuAst =
   case typ.kind
   of gtObject, gtGenericInst: result.tFields = typ.fields
   else:
-    raiseAssert "Type: " & $pretty(typ) & " is neither object type nor generic instantiation."
+    error "Type: " & $pretty(typ) & " is neither object type nor generic instantiation."
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Type-kind mapping (Nim → GPU)
@@ -87,7 +87,7 @@ func toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
   of ntyUInt64: gtUint64
   of ntyString: gtString
   else:
-    raiseAssert "Not supported yet: " & $t
+    error "Not supported yet: " & $t
 
 # ═══════════════════════════════════════════════════════════════════════
 #  GpuType utilities
@@ -133,7 +133,7 @@ func getGenericTypeName*(t: NimNode): string =
   case t.kind
   of nnkSym: result = t.strVal
   of nnkBracketExpr: result = t[0].getGenericTypeName()
-  else: raiseAssert "Unexpected node kind for generic instantiation type: " & $t.treerepr
+  else: error "Unexpected node kind for generic instantiation type: " & $t.treerepr
 
 func requiresMemcpy*(n: NimNode): bool =
   ## At the moment we only emit a `memcpy` statement for array types
@@ -212,7 +212,7 @@ func collectProcAttributes*(n: NimNode): set[GpuAttribute] =
     of "noSideEffect", "nimcall", "closure", "shallow":
       discard
     else:
-      raiseAssert "Unexpected pragma for procs: " & $pragma.treerepr
+      error "Unexpected pragma for procs: " & $pragma.treerepr
 
 func hasPragma*(n: NimNode, pragmaName: string): bool =
   ## True when `n` carries the pragma `pragmaName`.
@@ -268,7 +268,7 @@ func collectAddressSpace*(n: NimNode): AddressSpace =
     of "inject": discard # injected symbols from templates/macros
     of "gensym": discard # template-generated symbol
     else:
-      raiseAssert "Unexpected pragma: " & $pragma.treerepr
+      error "Unexpected pragma: " & $pragma.treerepr
 
 template findIdx*(col, el): untyped =
   var res = -1

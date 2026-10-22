@@ -88,7 +88,7 @@ proc qualifyVarParamsImpl(ctx: var GpuContext, n: var GpuAst) =
         if p.typ.kind == gtPtr and p.typ.implicit:
           p.typ = p.typ.to
         else:
-          raiseAssert "kVar param without an implicit pointer type: " & p.ident.ident() &
+          error "kVar param without an implicit pointer type: " & p.ident.ident() &
             " in " & (if n.pName != nil and n.pName.kind == gpuIdent: n.pName.ident() else: "?")
         kvarSyms.incl p.ident.symbol.iSym
         kvarNames.incl p.ident.symbol.name
@@ -102,7 +102,7 @@ proc qualifyVarParamsImpl(ctx: var GpuContext, n: var GpuAst) =
         if arg.kind == gpuAddr:
           n.cArgs[i] = arg.aOf
         elif arg.kind notin {gpuIdent, gpuIndex, gpuDot}:
-          raiseAssert "kVar call arg must be an lvalue, got " & $arg.kind
+          error "kVar call arg must be an lvalue, got " & $arg.kind
     for ch in n.mitems:
       ctx.qualifyVarParamsImpl(ch)
   else:

@@ -53,10 +53,10 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtUA: "array"
   of gtObject: "struct"
   of gtUint8, gtUint16, gtUint64, gtInt16, gtInt64, gtFloat64, gtVoidPtr, gtString:
-    raiseAssert "The type " & $t & " does not exist on the WebGPU target."
+    error "The type " & $t & " does not exist on the WebGPU target."
   of gtStatic: "i32"
   else:
-    raiseAssert "Invalid type : " & $t
+    error "Invalid type : " & $t
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                            allowEmptyIdent = false,
@@ -152,7 +152,7 @@ proc determineIdent(arg: GpuAst): GpuAst =
   of gpuObjConstr: dfl()  # constructor expressions have no single ident
   of gpuMaterialize: arg.mExpr.determineIdent()
   else:
-    raiseAssert "Not implemented to determine ident from node: " & $arg
+    error "Not implemented to determine ident from node: " & $arg
 
 proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 
@@ -394,7 +394,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # (printf, cvtaGenericToShared): emit verbatim.
         result = ast.ident()
       of gbkThreadsPerThreadgroup:
-        raiseAssert "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
+        error "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
           "only the `@workgroup_size` attribute, never a `workgroup_size` " &
           "builtin, so the threadgroup size is not addressable from WGSL."
       of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
@@ -452,7 +452,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     result.add ')'
 
   of gpuInlineAsm:
-    raiseAssert "Inline assembly not supported on the WebGPU target."
+    error "Inline assembly not supported on the WebGPU target."
 
   of gpuEmit:
     # Self-terminating raw text: the gpuBlock loop appends no `;`
@@ -478,7 +478,7 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuConstexpr:
     result = indentStr & "const " & ctx.genWebGpu(ast.cIdent) & ": " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & " = " & ctx.genWebGpu(ast.cValue)
   of gpuMaterialize:
-    raiseAssert "gpuMaterialize should not reach WGSL backend — passByRef is not used"
+    error "gpuMaterialize should not reach WGSL backend — passByRef is not used"
 
 proc codegen*(ctx: var GpuContext): string =
   # NOTE: WGSL does not require forward declarations / does not care about

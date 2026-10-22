@@ -42,9 +42,9 @@ const MetalReservedKeywords = [
 proc checkReservedIdent(name: string, what: string) =
   ## Raises when `name` is a reserved MSL keyword, so the shader source never contains a colliding identifier.
   if name == "metal":
-    raiseAssert "'" & name & "' collides with the MSL `metal::` namespace. Rename the " & what & "."
+    error "'" & name & "' collides with the MSL `metal::` namespace. Rename the " & what & "."
   elif name in MetalReservedKeywords:
-    raiseAssert "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
+    error "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string
 
@@ -71,7 +71,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat16: "half"
   of gtBf16: "bfloat"
   of gtFloat64:
-    raiseAssert "Metal has no fp64 kernel type, MSL rejects `double`, rework the kernel on fp32/fp16"
+    error "Metal has no fp64 kernel type, MSL rejects `double`, rework the kernel on fp32/fp16"
   of gtVoid: "void"
   of gtSize_t: "size_t"
   of gtPtr: "*"
@@ -81,7 +81,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtUA: "" # `UncheckedArray` by itself is nothing in MSL
   of gtStatic: "int"
   else:
-    raiseAssert "Invalid type : " & $t
+    error "Invalid type : " & $t
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string =
   ## MSL name of `t`, with `ident` appended for array types, which require an identifier in the emitted declaration.
@@ -176,7 +176,7 @@ proc genLit*(ast: GpuAst): string =
     of gtInt16, gtUint16, gtUint8, gtBool:
       result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
     of gtFloat64:
-      raiseAssert "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
+      error "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
     else:
       result = ast.lValue
 
@@ -414,7 +414,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                          of gtFloat32: "atomic_float"
                          of gtInt32: "atomic_int"
                          of gtUint32: "atomic_uint"
-                         else: raiseAssert "Metal atomicFetchAdd: unsupported pointee type"
+                         else: error "Metal atomicFetchAdd: unsupported pointee type"
           result = indentStr & "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
                    ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
                    ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
@@ -570,7 +570,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = ctx.genMetalImpl(ast.mExpr, 0) # C++ const& binds implicitly to temporaries
 
   else:
-    raiseAssert "Unhandled node kind in genMetal: " & ast.repr
+    error "Unhandled node kind in genMetal: " & ast.repr
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## MSL code for `ast`, used by `codegen` for top-level nodes.

@@ -47,7 +47,7 @@ proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: va
   of gpuVar, gpuConstexpr:
     varBlock.statements.add ast
   of gpuTypeDef, gpuAlias:
-    raiseAssert "Unexpected type def / alias def found. These should be in `ctx.types` now: " & $ast
+    error "Unexpected type def / alias def found. These should be in `ctx.types` now: " & $ast
   else:
     discard
 

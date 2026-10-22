@@ -119,14 +119,14 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtFloat64: "double"
   of gtVoid: "void"
   of gtSize_t: "uint"
-  of gtPtr: raiseAssert "Vulkan GLSL renders pointers as buffer references (buffer device addresses) — render the full type, not the bare kind"
-  of gtVoidPtr: raiseAssert "Vulkan GLSL renders void* as a void buffer reference — render the full type, not the bare kind"
+  of gtPtr: error "Vulkan GLSL renders pointers as buffer references (buffer device addresses) — render the full type, not the bare kind"
+  of gtVoidPtr: error "Vulkan GLSL renders void* as a void buffer reference — render the full type, not the bare kind"
   of gtString: "const char*"
   of gtUA: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
   of gtObject: "struct"
   else:
-    raiseAssert "Invalid type : " & $t
+    error "Invalid type : " & $t
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, allowEmptyIdent = false): string =
   ## Struct types render their own (mangled) name
@@ -240,7 +240,7 @@ proc glslCoordIdent(kind: GpuCoordBuiltinKind): string =
   of gbkThreadIndexInThreadgroup: "int(gl_LocalInvocationIndex)"
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
-    raiseAssert "coordinate site with no coordinate builtin kind"
+    error "coordinate site with no coordinate builtin kind"
 
 proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual GLSL compute shader code generator.
@@ -490,7 +490,7 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
        ast.aOf.iIndex.kind == gpuLit and ast.aOf.iIndex.lValue == "0":
       result = ctx.genGLSL(ast.aOf.iArr)
     else:
-      raiseAssert "Vulkan GLSL cannot take the address of a local: buffer device addressing covers buffer memory only, not function storage. Promote the local (SROA) or inline the callee. Site: " &
+      error "Vulkan GLSL cannot take the address of a local: buffer device addressing covers buffer memory only, not function storage. Promote the local (SROA) or inline the callee. Site: " &
         ast.repr
 
   of gpuDeref:
@@ -504,11 +504,11 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     else:
       result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genGLSL(ast.cIdent) & " = " & ctx.genGLSL(ast.cValue)
   of gpuMaterialize:
-    raiseAssert "gpuMaterialize should not reach Vulkan backend — passByRef is not used"
+    error "gpuMaterialize should not reach Vulkan backend — passByRef is not used"
 
   else:
     echo "Unhandled node kind in genGLSL: ", ast.kind
-    raiseAssert "Unhandled node kind in genGLSL: " & ast.repr
+    error "Unhandled node kind in genGLSL: " & ast.repr
 
 # ═══════════════════════════════════════════════════════════════════════
 # Top-level codegen

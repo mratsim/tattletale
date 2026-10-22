@@ -438,7 +438,7 @@ func scopeGet*(scope: seq[(string, Symbol)], name: string): Symbol =
   for (n, s) in scope:
     if n == name:
       return s
-  raiseAssert "Scope lookup failed: '" & name & "' not found"
+  error "Scope lookup failed: '" & name & "' not found"
 
 func clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
@@ -718,7 +718,7 @@ proc `==`*(a, b: GpuAst): bool =
   if a.isNil or b.isNil: return false
   if a.kind != b.kind: result = false
   elif a.kind != gpuIdent:
-    raiseAssert "Unsupported equality for GpuAst that are not idents"
+    error "Unsupported equality for GpuAst that are not idents"
   else:
     result = a.symbol == b.symbol and a.symbol.iSym == b.symbol.iSym
 

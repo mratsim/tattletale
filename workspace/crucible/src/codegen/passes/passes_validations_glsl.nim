@@ -59,5 +59,5 @@ proc validateSharedPushConstLayout(ctx: var GpuContext) =
       reference = layout
     elif not sameLayout(layout, reference):
       let names = layout.mapIt(it[0]).join(", ")
-      raiseAssert "Multi-kernel GLSL sources share one push-constant block, all kernels " &
+      error "Multi-kernel GLSL sources share one push-constant block, all kernels " &
                   "must declare the same ordered params, got: " & names

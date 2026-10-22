@@ -173,7 +173,7 @@ proc determineMutability(arg: GpuAst): bool =
   of gpuConv: false
   of gpuCast: arg.cExpr.determineMutability()
   else:
-    raiseAssert "Cannot determine mutability from: " & $arg
+    error "Cannot determine mutability from: " & $arg
 
 proc determineIdent(arg: GpuAst): GpuAst =
   template dfl(): untyped = GpuAst(kind: gpuDiscard)
@@ -193,7 +193,7 @@ proc determineIdent(arg: GpuAst): GpuAst =
   of gpuObjConstr: dfl()
   of gpuMaterialize: arg.mExpr.determineIdent()
   else:
-    raiseAssert "Cannot determine ident from: " & $arg
+    error "Cannot determine ident from: " & $arg
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bool globals to i32 storage
@@ -358,7 +358,7 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
         doAssert dot.dField.kind == gpuIdent
         let field = dot.dField.ident()
         if (id, field) in ctx.structsWithPtrs:
-          raiseAssert "Assignment of a struct pointer field is not supported"
+          error "Assignment of a struct pointer field is not supported"
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
   of gpuCall:
@@ -399,7 +399,7 @@ func checkCodeValidImpl(ctx: var GpuContext, n: GpuAst) =
   of gpuVar:
     if n.vType.kind == gtPtr and n.vMutable:
       let code = "<WGSL>"
-      raiseAssert "var to pointer type invalid in WGSL"
+      error "var to pointer type invalid in WGSL"
   else:
     for ch in n:
       ctx.checkCodeValidImpl(ch)

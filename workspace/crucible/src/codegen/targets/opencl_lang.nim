@@ -50,7 +50,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtUA: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
   else:
-    raiseAssert "Invalid type : " & $t
+    error "Invalid type : " & $t
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
@@ -205,7 +205,7 @@ proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     name
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
-    raiseAssert "coordinate site with no coordinate builtin kind: " & name
+    error "coordinate site with no coordinate builtin kind: " & name
 
 proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual OpenCL C code generator.
@@ -376,7 +376,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                          of gtFloat32: "atomic_float"
                          of gtInt32: "atomic_int"
                          of gtUint32: "atomic_uint"
-                         else: raiseAssert "OpenCL atomicFetchAdd: unsupported pointee type"
+                         else: error "OpenCL atomicFetchAdd: unsupported pointee type"
           result = indentStr & "atomic_fetch_add((volatile __global " & atomicTy & "*)" &
                    ctx.genOpenCL(ast.cArgs[0]) & ", " &
                    ctx.genOpenCL(ast.cArgs[1]) & ')'
@@ -500,7 +500,7 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   else:
     echo "Unhandled node kind in genOpenCL: ", ast.kind
-    raiseAssert "Unhandled node kind in genOpenCL: " & ast.repr
+    error "Unhandled node kind in genOpenCL: " & ast.repr
 
 # ═══════════════════════════════════════════════════════════════════════
 # Top-level codegen

@@ -44,7 +44,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtUA: "" # `UncheckedArray` by itself is nothing in CUDA
   of gtStatic: "int"
   else:
-    raiseAssert "Invalid type : " & $t
+    error "Invalid type : " & $t
 
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
                       allowEmptyIdent = false,
@@ -164,7 +164,7 @@ proc cudaCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
     name
   of gbkNone:
     # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
-    raiseAssert "coordinate site with no coordinate builtin kind: " & name
+    error "coordinate site with no coordinate builtin kind: " & name
 
 proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   ## The actual CUDA code generator.
@@ -428,7 +428,7 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   else:
     echo "Unhandled node kind in genCuda: ", ast.kind
-    raiseAssert "Unhandled node kind in genCuda: " & ast.repr
+    error "Unhandled node kind in genCuda: " & ast.repr
 
 proc usesWarpReduce(n: GpuAst, kind: GpuReductionBuiltinKind): bool =
   ## True when the AST contains a reduceAdd/reduceMax call of `kind`,

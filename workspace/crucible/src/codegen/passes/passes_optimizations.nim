@@ -97,7 +97,7 @@ proc sameExpr(a, b: GpuAst): bool =
   ## `iSym` is the immutable fingerprint, the name may be mangled.
   ##
   ## Caution:
-  ## - GpuAst has a custom `==`, structural, and it raiseAsserts on non-idents
+  ## - GpuAst has a custom `==`, structural, and it errors on non-idents
   ## - never apply `==` or `!=` against nil here, use isNil
   if a.isNil or b.isNil: return false
   if a.kind != b.kind: return false
