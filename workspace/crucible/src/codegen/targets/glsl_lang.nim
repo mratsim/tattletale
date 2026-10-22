@@ -307,7 +307,8 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= " = " & ctx.genGLSL(ast.vInit)
 
   of gpuAssign:
-    result = indentStr & ctx.genGLSL(ast.aLeft) & " = " & ctx.genGLSL(ast.aRight)
+    result = indentStr & ctx.genGLSL(ast.aLeft) & ' ' & ast.aOp & ' ' &
+             ctx.genGLSL(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
       result = indentStr & "if (" & ctx.genGLSL(ast.ifCond) & ") {\n"

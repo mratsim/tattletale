@@ -295,7 +295,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       else:
         raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
     else:
-      result = indentStr & ctx.genWebGpu(ast.aLeft) & " = " & ctx.genWebGpu(ast.aRight)
+      result = indentStr & ctx.genWebGpu(ast.aLeft) & ' ' & ast.aOp & ' ' &
+               ctx.genWebGpu(ast.aRight)
 
   of gpuIf:
     template genCond(c: GpuAst): untyped =

@@ -43,12 +43,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
     run = deadCodeElimination
   )
 
-  # Position matters: legalization (blitBlockExprs) must see the desugared
-  # gpuAssign, blitting a compound-assign LHS would lose the accumulation.
-  # The resolveOverloadedOperators position keeps non-primitive `+=`
-  # outside this pass.
   reg.registerDeEmbedForRangeAdjustment()
-  reg.registerRewriteCompoundAssignment()
 
   reg.registerMangleNames()
 
@@ -126,28 +121,6 @@ func registerDeEmbedForRangeAdjustment(reg: var PassRegistry) =
           deEmbedForRangeAdjustmentImpl(fn.pBody)
   )
 
-func registerRewriteCompoundAssignment(reg: var PassRegistry) =
-  reg.register("rewriteCompoundAssignment", pkTransform, phaseEarly,
-    "Rewrites compound-assign binops (x += y) into plain assignments (x = x + y) " &
-      "so the LHS is a real modifiable lvalue on all backends",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          fn.pBody.walk(proc(n: var GpuAst): void =
-            if n.kind == gpuBinOp:
-              n = rewriteCompoundAssignmentImpl(n)
-          )
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          fn.pBody.walk(proc(n: var GpuAst): void =
-            if n.kind == gpuBinOp:
-              n = rewriteCompoundAssignmentImpl(n)
-          )
-  )
-
 func registerMangleNames(reg: var PassRegistry) =
   reg.register("mangleNames", pkTransform, phaseMain,
     "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
@@ -155,27 +128,6 @@ func registerMangleNames(reg: var PassRegistry) =
     run = proc(ctx: var GpuContext): void =
       mangleNamesImpl(ctx)
   )
-
-func rewriteCompoundAssignmentImpl(n: GpuAst): GpuAst =
-  ## LHS may arrive gpuAddr-wrapped, both sides use a bare lvalue, the RHS
-  ## clones the LHS (legalization mutates it in place, the sides must not alias)
-  doAssert n.kind == gpuBinOp
-  if n.bOp.ident() in ["<=", "==", ">=", "!="]:
-    return n
-  template genAssign(left, rnode, op: typed): untyped =
-    let right = GpuAst(kind: gpuBinOp, bType: n.bType, bOp: op,
-                       bLeft: left.clone(), bRight: rnode)
-    GpuAst(kind: gpuAssign, aLeft: left, aRight: right, aRequiresMemcpy: false)
-  let op = n.bOp.ident()
-  if op.len >= 2 and op[^1] == '=':
-    var opAst = GpuAst(kind: gpuIdent, symbol: newSymbol(op[0 .. ^2]))
-    opAst.symbol.iSym = opAst.symbol.name
-    var lhs = n.bLeft
-    if lhs.kind == gpuAddr:
-      lhs = lhs.aOf
-    result = genAssign(lhs, n.bRight, opAst)
-  else:
-    result = n
 
 proc dceCalleesFrom(ctx: var GpuContext, n: GpuAst): void =
   ## Adds every fn called in `n` (transitively) to `fnTab`:

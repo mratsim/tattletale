@@ -183,6 +183,8 @@ type
         ## Resolved from the `{.smem.}`/`{.rmem.}`/`{.const_mem.}` pragma, unannotated locals default to asRMEM
     of gpuAssign:
       aLeft*, aRight*: GpuAst
+      aOp*: string = "="
+        ## Compound-assignment token the target applies or the plain `"="`
       aRequiresMemcpy*: bool
     of gpuIdent:
       symbol*: Symbol
@@ -538,6 +540,7 @@ func clone*(ast: GpuAst): GpuAst =
     result = GpuAst(kind: gpuAssign)
     result.aLeft = ast.aLeft.clone()
     result.aRight = ast.aRight.clone()
+    result.aOp = ast.aOp
     result.aRequiresMemcpy = ast.aRequiresMemcpy
   of gpuIdent:
     result = GpuAst(kind: gpuIdent, symbol: ast.symbol) ## Share the Symbol ref!
@@ -882,6 +885,8 @@ proc pretty*(n: GpuAst, indent: int = 0): string =
       result.add idd("AddressSpace")
       result.add idd(n.addressSpace)
   of gpuAssign:
+    if n.aOp != "=":
+      result.add id("Op", n.aOp)
     result.add pretty(n.aLeft, indent + 2)
     result.add pretty(n.aRight, indent + 2)
   of gpuIdent:

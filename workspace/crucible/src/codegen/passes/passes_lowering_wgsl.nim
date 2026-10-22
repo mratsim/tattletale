@@ -315,7 +315,6 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
   ## object constructor stripping, call signature updates, var type updates.
   case n.kind
   of gpuBinOp:
-    # compound-assign rewriting is the rewriteCompoundAssignment pass's home
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
   of gpuObjConstr:

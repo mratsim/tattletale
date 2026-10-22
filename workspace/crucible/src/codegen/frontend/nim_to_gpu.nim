@@ -554,21 +554,29 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, static
       let isBoolean = leftTyp.kind == gtBool
       let tbl = if isBoolean: NimGpuBooleanOperators else: NimGpuNumericBuiltinsOperators
       let mappedOp = tbl.getOrDefault(node[0].repr, node[0].repr)
-      result.bOp.symbol = newSymbol(mappedOp)
-      result.bOp.symbol.iSym = result.bOp.symbol.name
-      if result.bLeft.kind == gpuLit:
-        result.bLeft.lType = leftTyp
-      elif result.bRight.kind == gpuLit:
-        result.bRight.lType = rightTyp
       # compound-assign ops declare no return type in their ProcTy,
-      # the result type is the LHS operand type (var wrapper stripped)
+      # a real binop always does
       let retTypNode = typ[0][0]
       if retTypNode.kind == nnkEmpty:
-        var lhsTyp = node[1].getTypeInst()
-        if lhsTyp.kind == nnkVarTy:
-          lhsTyp = lhsTyp[0]
-        result.bType = resolveType(reg, lhsTyp)
+        result = GpuAst(kind: gpuAssign,
+                        aLeft: result.bLeft,
+                        aRight: result.bRight,
+                        aOp: mappedOp)
+        # the compound-assign template takes the target by `var T`:
+        # complex lvalue arguments arrive address-wrapped
+        if result.aLeft.kind == gpuAddr:
+          result.aLeft = result.aLeft.aOf
+        if result.aLeft.kind == gpuLit:
+          result.aLeft.lType = leftTyp
+        elif result.aRight.kind == gpuLit:
+          result.aRight.lType = rightTyp
       else:
+        result.bOp.symbol = newSymbol(mappedOp)
+        result.bOp.symbol.iSym = result.bOp.symbol.name
+        if result.bLeft.kind == gpuLit:
+          result.bLeft.lType = leftTyp
+        elif result.bRight.kind == gpuLit:
+          result.bRight.lType = rightTyp
         result.bType = resolveType(reg, retTypNode)
   of nnkDotExpr:
     # typed macro: only real field accesses arrive here, method-call syntax does not

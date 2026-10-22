@@ -235,7 +235,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genCuda(ast.vInit)
   of gpuAssign:
-    result = indentStr & ctx.genCuda(ast.aLeft) & " = " & ctx.genCuda(ast.aRight)
+    result = indentStr & ctx.genCuda(ast.aLeft) & ' ' & ast.aOp & ' ' &
+             ctx.genCuda(ast.aRight)
   of gpuIf:
     # skip semicolon in the condition. Otherwise can lead to problematic code
     ctx.withoutSemicolon: # skip semicolon for if bodies

@@ -296,7 +296,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= " = " & ctx.genOpenCL(ast.vInit)
 
   of gpuAssign:
-    result = indentStr & ctx.genOpenCL(ast.aLeft) & " = " & ctx.genOpenCL(ast.aRight)
+    result = indentStr & ctx.genOpenCL(ast.aLeft) & ' ' & ast.aOp & ' ' &
+             ctx.genOpenCL(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
       result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
