@@ -13,39 +13,6 @@ import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ./lang_utils
 
-const MetalReservedKeywords = [
-  # C++/MSL keyword table (MSL is C++14-based)
-  "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
-  "bool", "break", "case", "catch", "char", "char16_t", "char32_t", "class",
-  "compl", "const", "const_cast", "constexpr", "continue", "decltype",
-  "default", "delete", "do", "double", "dynamic_cast", "else", "enum",
-  "explicit", "export", "extern", "float", "for", "friend", "goto",
-  "half", "if", "inline", "int", "long", "mutable", "namespace", "new",
-  "noexcept", "not", "not_eq", "nullptr", "object_data", "operator", "or",
-  "or_eq", "private", "protected", "public", "ray_data", "register",
-  "reinterpret_cast", "return", "short", "signed", "sizeof", "static",
-  "static_assert", "static_cast", "struct", "switch", "template", "this",
-  "thread", "thread_local", "threadgroup", "threadgroup_imageblock", "throw",
-  "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
-  "vertex", "virtual", "void", "volatile", "wchar_t", "while", "xor",
-  "xor_eq",
-  # MSL address-space qualifiers and the printer's scalar type names
-  # `threadgroup` repeats the C++ group above: it is both a C++ keyword and an MSL address space.
-  "kernel", "device", "constant", "threadgroup", "uchar", "ushort", "ulong",
-  # `metal` is the MSL namespace, not a keyword
-  "metal",
-]
-  ## MSL keywords the printer must never emit as identifiers. The Metal compiler
-  ## rejects them with parser errors that do not name the cause, so the printer
-  ## raises with a rename hint instead.
-
-proc checkReservedIdent(name: string, what: string) =
-  ## Raises when `name` is a reserved MSL keyword, so the shader source never contains a colliding identifier.
-  if name == "metal":
-    error "'" & name & "' collides with the MSL `metal::` namespace. Rename the " & what & "."
-  elif name in MetalReservedKeywords:
-    error "'" & name & "' is a reserved keyword in MSL. Rename the " & what & "."
-
 proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string
 
 proc getInnerArrayType(t: GpuType): string =
@@ -125,7 +92,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
   of gtGenericInst:
     # NOTE: `foo[float32, uint32]` becomes `foo_f32_u32`,
     # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
-    checkReservedIdent(t.gName, "type")
     result = t.gName
     if t.gArgs.len == 1:
       result.add gpuTypeToShortString(t.gArgs[0])
@@ -133,7 +99,6 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject:
-    checkReservedIdent(t.name, "type")
     result = t.name
   of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
   of gtStatic: result = "int"
@@ -192,7 +157,6 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
   var slot = 0
   for p in fn.pParams:
     let name = p.ident.ident()
-    checkReservedIdent(name, "parameter")
     if p.ident.symbol.coordBuiltin != gbkNone:
       # The vector coordinate builtins are `uint3` attribute params.
       # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
@@ -219,7 +183,6 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   ## `thread` names the caller's locals, `device` names kernel buffers,
   ## `threadgroup` names `{.smem.}` arenas.
   let name = p.ident.ident()
-  checkReservedIdent(name, "parameter")
   if p.typ.kind == gtPtr:
     var inner = p.typ.to
     if inner.kind == gtUA:
@@ -265,7 +228,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   case ast.kind
   of gpuDiscard: return # nothing to emit
   of gpuProc:
-    checkReservedIdent(ast.pName.ident(), "function")
     let isKernel = attGlobal in ast.pAttributes
     # Parameters
     var params: seq[string]
@@ -276,7 +238,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         if p.passByRef:
           # Reference params carry the space of their argument: the caller's
           # threadgroup arena or the calling thread's memory.
-          checkReservedIdent(p.ident.ident(), "parameter")
           let space = if p.addressSpace == asSMEM: "threadgroup " else: "thread const "
           params.add space & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
         else:
@@ -316,7 +277,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuVar:
     let vName = ast.vName.ident()
-    checkReservedIdent(vName, "variable")
     var attrs = ""
     if ast.addressSpace != asRMEM:
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
@@ -360,7 +320,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                ctx.genMetalImpl(ast.tElse, 0) & ')'
 
   of gpuFor:
-    checkReservedIdent(ast.fVar.ident(), "loop variable")
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
     result = indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0) & "; " &
@@ -438,7 +397,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # param `genKernelParams` emits for a kernel, or to the plain param a device
     # function receives for the same builtin.
     # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
-    checkReservedIdent(ast.ident(), "identifier")
     case ast.symbol.coordBuiltin
     of gbkThreadIndexInThreadgroup:
       # Scalar MSL attribute param is uint,
@@ -484,7 +442,6 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
         result.add "  char _;\n"
       else:
         for el in ast.tFields:
-          checkReservedIdent(el.name, "field")
           # MSL has no string type, gtString fields drop at emission (no runtime strings reach MSL)
           if el.typ.kind == gtString:
             continue
