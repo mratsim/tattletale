@@ -110,5 +110,18 @@ block:
     "npUnassigned for generic inst should produce hash suffix"
   echo "  OK — npUnassigned: generic inst gets hash suffix"
 
+# ═══════════════════════════════════════════════════════════════════════
+# 6. mangledHashName — chars 8 positions apart must not collide
+# ═══════════════════════════════════════════════════════════════════════
+block:
+  # the old XOR-into-byte-lanes hash mapped both to the same value
+  let a = mangledHashName("foo", "foo_000000000")
+  let b = mangledHashName("foo", "foo_100000001")
+  doAssert a != b,
+    "distinct iSyms 8 chars apart must hash differently: " & a & " vs " & b
+  doAssert mangledHashName("foo", "foo_000000000") == a, "hash is deterministic"
+  doAssert a.len == "foo_".len + 7, "suffix is the 7-char base58 hash"
+  echo "  OK — mangledHashName: 8-apart chars no longer collide"
+
 echo ""
 echo "  All mangleNames tests passed."

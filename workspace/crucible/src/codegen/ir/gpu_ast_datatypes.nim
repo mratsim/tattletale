@@ -72,6 +72,7 @@ type
 
   GpuType* = ref object
     builtin*: bool ## Whether the type refers to a builtin type or not
+    isTuple*: bool ## Object or generic inst stands for a Nim tuple
     fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
     case kind*: GpuTypeKind
     of gtPtr:
@@ -1228,12 +1229,17 @@ func shortHash*(sigHash: int64): string =
 
 func mangledHashName*(name, iSym: string): string =
   ## npHashSuffix display name, `name` + the 7-char base58 hash of `iSym`
-  var hashVal: int64 = 0
-  for i, c in iSym:
-    hashVal = hashVal xor (int64(ord(c)) shl ((i and 7) * 8))
-  if hashVal == 0:
-    hashVal = 1
-  result = name & "_" & shortHash(hashVal)
+  ## FNV-1a accumulation plus a splitmix64 finalizer: XOR into byte lanes
+  ## let chars 8 positions apart cancel out
+  var h: uint64 = 0xcbf29ce484222325'u64
+  for c in iSym:
+    h = (h xor uint64(ord(c))) * 0x100000001b3'u64
+  h = (h xor (h shr 30)) * 0xbf58476d1ce4e5b9'u64
+  h = (h xor (h shr 27)) * 0x94d049bb133111eb'u64
+  h = h xor (h shr 31)
+  if h == 0:
+    h = 1
+  result = name & "_" & shortHash(cast[int64](h))
 
 func gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.
@@ -1253,13 +1259,13 @@ func gpuTypeToShortString*(t: GpuType): string =
   of gtF8E5M2:  result = "f8e5m2"
   of gtBool:    result = "bool"
   of gtObject:
-    if t.name.startsWith("Tuple_"):
-      result = "Tuple_" & shortHash(int64(hash(t)))
+    if t.isTuple:
+      result = mangledHashName("Tuple", $hash(t))
     else:
       result = $t.name
   of gtGenericInst:
-    result = if t.gName.startsWith("Tuple_"): "Tuple_" else: t.gName
-    result.add shortHash(int64(hash(t)))
+    let base = if t.isTuple: "Tuple" else: t.gName
+    result = mangledHashName(base, $hash(t))
   of gtVoidPtr: result = "void_ptr"
   of gtPtr:
     result = "ptr_" & gpuTypeToShortString(t.to)

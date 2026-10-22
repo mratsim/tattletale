@@ -42,6 +42,12 @@ func initGpuVoidPtr*(): GpuType =
 func initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
   ## Initializes an object/struct type
   result = GpuType(kind: gtObject, name: name, fields: flds)
+  result.isTuple = name.startsWith("Tuple_")
+
+func initGpuGenericInstType*(gName: string): GpuType =
+  ## Initializes a generic instantiation, tuple-ness derived once here
+  result = GpuType(kind: gtGenericInst, gName: gName)
+  result.isTuple = gName.startsWith("Tuple_")
 
 func initGpuSpanType*(elemTyp: GpuType): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type

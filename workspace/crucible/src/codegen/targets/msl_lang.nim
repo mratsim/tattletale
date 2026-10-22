@@ -131,7 +131,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
       result.add gpuTypeToShortString(t.gArgs[0])
     elif t.gArgs.len > 1:
       # 2+ args collapse to a short hash
-      result.add '_' & shortHash(int64(hash(t)))
+      result.add mangledHashName("", $hash(t))
   of gtObject:
     checkReservedIdent(t.name, "type")
     result = t.name

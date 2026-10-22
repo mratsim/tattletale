@@ -134,7 +134,7 @@ proc resolveStructuralType*(reg: var TypeRegistry, impl: NimNode, t: NimNode): G
   of nnkObjectTy:
     doAssert impl.kind == nnkObjectTy, "Unexpected node kind for generic inst: " & $impl.treerepr
     ## XXX: use signature hash for type name? Otherwise will produce duplicates
-    result = GpuType(kind: gtGenericInst, gName: t.repr)
+    result = initGpuGenericInstType(t.repr)
     result.fields = resolveRecordFields(reg, impl)
   of nnkStaticTy:
     # Static int, the resolver preserves its value for struct naming.
@@ -208,7 +208,7 @@ proc resolveAliasExpansion(reg: var TypeRegistry, app, rhs: NimNode): GpuType =
       # A non-object RHS would emit a fieldless generic instantiation.
       error "Alias RHS '" & $rhs.repr &
         "' does not expand to an object or tuple type. Use the canonical type application"
-    result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(rhs))
+    result = initGpuGenericInstType(getGenericTypeName(rhs))
     for i in 1 ..< rhs.len:
       result.gArgs.add resolveType(reg, rhs[i])
     result.fields = resolveRecordFields(reg, impl)
@@ -231,14 +231,14 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
     if t.typeKind != ntyNone:
       return resolveType(reg, t.getTypeInst())
     else:
-      return GpuType(kind: gtGenericInst, gName: t.repr)
+      return initGpuGenericInstType(t.repr)
   # Value expressions are canonicalized at the resolveType entry.
   case t.kind
   of nnkBracketExpr:
     if isAliasBase(t[0]):
       # keeps the emitted type name equal to the canonical instantiation's
       return resolveAliasExpansion(reg, t, substituteAliasArgs(t[0].getImpl(), t))
-    result = GpuType(kind: gtGenericInst, gName: getGenericTypeName(t))
+    result = initGpuGenericInstType(getGenericTypeName(t))
     for i in 1 ..< t.len:
       result.gArgs.add resolveType(reg, t[i])
     let impl = t.getTypeImpl() # resolves the `fields` members
@@ -427,7 +427,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       if inst.typeKind == ntyGenericInst:
         result = resolveInstantiatedType(reg, inst)
       else:
-        result = GpuType(kind: gtGenericInst, gName: n.repr)
+        result = initGpuGenericInstType(n.repr)
     of ntyStatic:
       # compile-time int values or type descriptors
       let inst = n.getTypeInst()
