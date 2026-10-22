@@ -11,8 +11,8 @@ import
   ./codegen/ir/gpu_ast_datatypes,
   ./codegen/ir/gpu_type_constructors,
   ./codegen/ir/gpu_ast_type_resolvers,
-  ./codegen/frontend/nim_to_gpu,
-  ./codegen/frontend/nim_to_gpu_type_resolvers,
+  ./codegen/frontend/nim_to_crucible,
+  ./codegen/frontend/nim_type_resolvers,
   ./codegen/passes/pass_datatypes,
   ./codegen/passes/pass_registry,
   ./codegen/passes/passes_legalizations,
@@ -30,7 +30,7 @@ import
   ./builtins/builtins_functions
 
 export gpu_compiler, gpu_ast_datatypes, gpu_type_constructors, gpu_ast_type_resolvers,
-       nim_to_gpu, nim_to_gpu_type_resolvers,
+       nim_to_crucible, nim_type_resolvers,
        pass_datatypes, pass_registry,
        passes_legalizations, passes_validations,
        passes_optimizations, passes_normalizations, passes_lowering,

@@ -335,7 +335,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
   of gpuAssign:
-    result = indentStr & ctx.genMetalImpl(ast.aLeft, 0) & " = " &
+    result = indentStr & ctx.genMetalImpl(ast.aLeft, 0) & ' ' & ast.aOp & ' ' &
              ctx.genMetalImpl(ast.aRight, 0)
   of gpuIf:
     # skip semicolon in the condition. Otherwise can lead to problematic code

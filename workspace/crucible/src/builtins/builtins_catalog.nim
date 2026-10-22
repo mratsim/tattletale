@@ -12,7 +12,7 @@ type
   ivec3* = tuple[x, y, z: int]
     ## Canonical GPU coordinate vector, int domain:
     ## - crucible lowers int to the target's int width, int32 in CUDA C
-    ## - tuple so `.x` and `[idx]` access both work, `nim_to_gpu` normalizes
+    ## - tuple so `.x` and `[idx]` access both work, `nim_to_crucible` normalizes
     ##   tuple `[idx]` to a field access
 
 # ═══════════════════════════════════════════════════════════

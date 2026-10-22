@@ -34,7 +34,7 @@ macro runAndSummarize(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toGpuAst(typeReg, body)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
   runPasses(ctx, reg)
   var summary = ""

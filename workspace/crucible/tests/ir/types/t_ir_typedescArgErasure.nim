@@ -35,12 +35,12 @@ func make_tensor_like*[T](t: TensorView[T]): TensorView[T] =
   make_tensor(T, t.layout)
 
 # ── Helpers ──────────────────────────────────────────────────────────────
-macro toGpuAstWithInstsPruned(body: typed): untyped =
-  ## Like `toGpuAstWithInsts` plus a pruneCompileTimeParams run, so tests can
+macro toCrucibleAstWithInstsPruned(body: typed): untyped =
+  ## Like `toCrucibleAstWithInsts` plus a pruneCompileTimeParams run, so tests can
   ## inspect the post-prune callee signature.
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
-  var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
+  var gpuAst = nim_to_crucible.toCrucibleAst(ctx, typeReg, body)
   ctx.types = typeReg.types
   var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
@@ -51,11 +51,11 @@ macro toGpuAstWithInstsPruned(body: typed): untyped =
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 
-macro toGpuAstWithInsts(body: typed): untyped =
-  ## Runs the frontend like `toGpuAst` and also returns the generic instantiations, so tests can inspect the callee signatures
+macro toCrucibleAstWithInsts(body: typed): untyped =
+  ## Runs the frontend like `toCrucibleAst` and also returns the generic instantiations, so tests can inspect the callee signatures
   var ctx = GpuContext()
   var typeReg = TypeRegistry(types: ctx.types)
-  var gpuAst = nim_to_gpu.toGpuAst(ctx, typeReg, body)
+  var gpuAst = nim_to_crucible.toCrucibleAst(ctx, typeReg, body)
   ctx.types = typeReg.types
   var gen: seq[GpuAst]
   for k, v in ctx.genericInsts:
@@ -63,7 +63,7 @@ macro toGpuAstWithInsts(body: typed): untyped =
   result = nnkTupleConstr.newTree(newLit(gpuAst), newLit(gen))
 
 proc getProcNamed(ir: GpuAst, name: string): GpuAst =
-  ## Extract the gpuProc whose pName starts with `name` from a toGpuAst block.
+  ## Extract the gpuProc whose pName starts with `name` from a toCrucibleAst block.
   doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
   for st in ir.statements:
     if st.kind == gpuProc and st.pName.ident().startsWith(name):
@@ -103,7 +103,7 @@ proc argRepr(a: GpuAst): string =
 
 # ── Test 1: typedesc arg (first position) erased; callee param dropped ────
 static:
-  let (ir, gen) = toGpuAstWithInsts:
+  let (ir, gen) = toCrucibleAstWithInsts:
     proc fill(_: typedesc[float32], a: int32, L: Layout) {.device.} =
       discard
     proc kernel(x: int32) {.device.} =
@@ -124,7 +124,7 @@ static:
     "second arg must be literal 7, got " & argRepr(call.cArgs[1])
   doAssert call.cArgs[2].ident() == "L",
     "third arg must be L, got " & argRepr(call.cArgs[2])
-  let (ir2, gen2) = toGpuAstWithInstsPruned:
+  let (ir2, gen2) = toCrucibleAstWithInstsPruned:
     proc fill(_: typedesc[float32], a: int32, L: Layout) {.device.} =
       discard
     proc kernel(x: int32) {.device.} =
@@ -150,7 +150,7 @@ echo "  OK - typedesc arg (first position): frontend 1:1, prune drops param and 
 
 # ── Test 2: typedesc arg NOT first — non-typedesc args keep position/order ──
 static:
-  let (ir, gen) = toGpuAstWithInsts:
+  let (ir, gen) = toCrucibleAstWithInsts:
     proc fill2(a: int32, _: typedesc[float32], L: Layout) {.device.} =
       discard
     proc kernel2() {.device.} =
@@ -165,7 +165,7 @@ static:
   let call = ir.getProcNamed("kernel2").findCall("fill2")
   doAssert call.cArgs[1].kind == gpuDiscard,
     "middle typedesc arg becomes a gpuDiscard placeholder"
-  let (ir2, gen2) = toGpuAstWithInstsPruned:
+  let (ir2, gen2) = toCrucibleAstWithInstsPruned:
     proc fill2(a: int32, _: typedesc[float32], L: Layout) {.device.} =
       discard
     proc kernel2() {.device.} =
@@ -191,7 +191,7 @@ echo "  OK - typedesc arg (middle position): order preserved through prune"
 
 # ── Test 3: genuine value symbols are NEVER erased (INV-C3) ──────────────
 static:
-  let (ir, gen) = toGpuAstWithInsts:
+  let (ir, gen) = toCrucibleAstWithInsts:
     proc usev(a: int32, b: float32) {.device.} =
       discard
     proc kernel3() {.device.} =
@@ -210,7 +210,7 @@ echo "  OK — genuine value args are never erased"
 # type param T passed as a typedesc value must vanish from both the emitted
 # call and the emitted callee signature (REQ-C1 + REQ-C2).
 static:
-  let (ir, gen) = toGpuAstWithInsts:
+  let (ir, gen) = toCrucibleAstWithInsts:
     proc kernel4() {.device.} =
       var tv: TensorView[float32]
       let s = make_tensor_like(tv)
@@ -226,7 +226,7 @@ static:
   doAssert call.cArgs.len == 1,
     "make_tensor_like has no typedesc param: the tensor arg stays, got " &
     $call.cArgs.len & " args"
-  let (ir2, gen2) = toGpuAstWithInstsPruned:
+  let (ir2, gen2) = toCrucibleAstWithInstsPruned:
     proc kernel4() {.device.} =
       var tv: TensorView[float32]
       let s = make_tensor_like(tv)
