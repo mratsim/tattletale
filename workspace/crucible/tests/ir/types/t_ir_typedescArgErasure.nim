@@ -7,7 +7,7 @@
 ## - CUDA emission shows no `T` arg and no typedesc param
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/types/t_ir_typedescArgErasure.nim
 
@@ -102,7 +102,7 @@ proc argRepr(a: GpuAst): string =
   else: $a.kind
 
 # ── Test 1: typedesc arg (first position) erased; callee param dropped ────
-block:
+static:
   let (ir, gen) = toGpuAstWithInsts:
     proc fill(_: typedesc[float32], a: int32, L: Layout) {.device.} =
       discard
@@ -149,7 +149,7 @@ block:
 echo "  OK - typedesc arg (first position): frontend 1:1, prune drops param and arg"
 
 # ── Test 2: typedesc arg NOT first — non-typedesc args keep position/order ──
-block:
+static:
   let (ir, gen) = toGpuAstWithInsts:
     proc fill2(a: int32, _: typedesc[float32], L: Layout) {.device.} =
       discard
@@ -190,7 +190,7 @@ block:
 echo "  OK - typedesc arg (middle position): order preserved through prune"
 
 # ── Test 3: genuine value symbols are NEVER erased (INV-C3) ──────────────
-block:
+static:
   let (ir, gen) = toGpuAstWithInsts:
     proc usev(a: int32, b: float32) {.device.} =
       discard
@@ -209,7 +209,7 @@ echo "  OK — genuine value args are never erased"
 # Exercises the real Class-C shape (tensor_datatypes.nim:47-48): the generic
 # type param T passed as a typedesc value must vanish from both the emitted
 # call and the emitted callee signature (REQ-C1 + REQ-C2).
-block:
+static:
   let (ir, gen) = toGpuAstWithInsts:
     proc kernel4() {.device.} =
       var tv: TensorView[float32]
@@ -240,7 +240,7 @@ block:
 echo "  OK — generic make_tensor_like: callee signature has no typedesc param"
 
 # ── Test 5: full CUDA emission of the make_tensor_like shape (REQ-C3 text) ──
-block:
+static:
   let cu = cuda:
     proc kernel5() {.global.} =
       var tv: TensorView[float32]

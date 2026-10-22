@@ -1,13 +1,17 @@
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_patchBoolToI32.nim
 
 import std / [sets, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering_wgsl
+import workspace/crucible/tests/ir/ir_testutils
 
-proc boolTyp(): GpuType = GpuType(kind: gtBool)
+proc registerWgslChain(reg: var PassRegistry) {.nimcall.} =
+  reg.registerWgslLoweringPasses()
+  reg.donePasses.incl("ensureBlock")
+  reg.donePasses.incl("pruneCompileTimeParams")
 
 proc body(stmts: varargs[GpuAst]): GpuAst =
   GpuAst(kind: gpuBlock, statements: @stmts)
@@ -44,6 +48,14 @@ proc findKind(n: GpuAst, kind: GpuNodeKind): GpuAst =
 
 proc ident(sym: Symbol): GpuAst = GpuAst(kind: gpuIdent, symbol: sym)
 
+proc boolTyp(): GpuType = GpuType(kind: gtBool)
+
+proc boolGlobal(ctx: var GpuContext, name: string): Symbol =
+  ## A bool storage global, the pipeline state after param lifting
+  result = newSymbol(name, iSym = name & "_h0", typ = boolTyp())
+  ctx.globals[name & "_h0"] = GpuParam(ident: ident(result), typ: boolTyp(),
+                                       addressSpace: asDevice)
+
 proc lit(t: GpuType, v: string): GpuAst = GpuAst(kind: gpuLit, lType: t, lValue: v)
 
 proc kernelFn(stmts: varargs[GpuAst]): GpuAst =
@@ -54,32 +66,16 @@ proc kernelFn(stmts: varargs[GpuAst]): GpuAst =
          pRetType: GpuType(kind: gtVoid),
          pBody: body(stmts))
 
-proc runWgslChain(ctx: var GpuContext) =
-  ## Runs the WGSL registry, the public pipeline entry
-  var reg = PassRegistry.new()
-  reg.registerWgslLoweringPasses()
-  # the fixture satisfies the common-pipeline preconditions by construction:
-  # its body is a block, its params are runtime values
-  reg.donePasses.incl("ensureBlock")
-  reg.donePasses.incl("pruneCompileTimeParams")
-  ctx.runPasses(reg)
-
-proc boolGlobal(ctx: var GpuContext, name: string): Symbol =
-  ## A bool storage global, the pipeline state after param lifting
-  result = newSymbol(name, iSym = name & "_h0", typ = boolTyp())
-  ctx.globals[name & "_h0"] = GpuParam(ident: ident(result), typ: boolTyp(),
-                                       addressSpace: asDevice)
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. bool global: load use wraps in conv(gtBool), storage becomes i32
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var ctx = GpuContext()
   let sym = ctx.boolGlobal("flag")
   let k = kernelFn(ident(sym))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   let use = k.pBody.findKind(gpuConv)
   doAssert use != nil, "load use should wrap in conv, none found"
   doAssert use.convTo.kind == gtBool
@@ -90,13 +86,13 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. assignment to a bool global: RHS wraps in conv(gtInt32), target stays bare
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var ctx = GpuContext()
   let sym = ctx.boolGlobal("flag")
   let k = kernelFn(GpuAst(kind: gpuAssign, aLeft: ident(sym), aRight: lit(boolTyp(), "true")))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   let assign = k.pBody.findKind(gpuAssign)
   doAssert assign != nil
   doAssert assign.aLeft.kind == gpuIdent, "assignment target keeps its storage form"
@@ -107,7 +103,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. ptr bool global: deref load wraps in conv(gtBool), storage becomes ptr i32
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var ctx = GpuContext()
   let ptrBool = initGpuPtrType(boolTyp(), implicitPtr = false)
   let sym = newSymbol("pflag", iSym = "pflag_h0", typ = ptrBool)
@@ -115,7 +111,7 @@ block:
   let k = kernelFn(GpuAst(kind: gpuDeref, dOf: ident(sym)))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   let use = k.pBody.findKind(gpuConv)
   doAssert use != nil and use.convTo.kind == gtBool,
     "deref load should wrap in conv(gtBool)"
@@ -127,7 +123,7 @@ block:
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. i32 global untouched
 # ═══════════════════════════════════════════════════════════════════════════
-block:
+static:
   var ctx = GpuContext()
   let sym = newSymbol("val", iSym = "val_h0", typ = initGpuType(gtInt32))
   ctx.globals["val_h0"] = GpuParam(ident: ident(sym), typ: initGpuType(gtInt32),
@@ -136,12 +132,12 @@ block:
                           aRight: lit(initGpuType(gtInt32), "1")))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   doAssert k.pBody.findKind(gpuConv).isNil, "no conv nodes expected"
   doAssert ctx.globals["val_h0"].typ.kind == gtInt32
   echo "  OK — i32 global untouched"
 
-block:
+static:
   # C8: bare bool RHS assigned to a bool local
   var ctx = GpuContext()
   let flag = ctx.boolGlobal("flag")
@@ -149,7 +145,7 @@ block:
   let k = kernelFn(GpuAst(kind: gpuAssign, aLeft: ident(ySym), aRight: ident(flag)))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   let assign = k.pBody.statements[0]
   doAssert assign.kind == gpuAssign
   let loadWrap = assign.aRight
@@ -159,7 +155,7 @@ block:
   doAssert assign.aLeft.kind == gpuIdent, "target stays bare"
   echo "  OK - bare bool RHS wraps in conv(gtBool)"
 
-block:
+static:
   # M8: mutable and implicit survive the ptr bool to ptr i32 conversion
   var ctx = GpuContext()
   let ptrBool = initGpuPtrType(boolTyp(), implicitPtr = true)
@@ -169,7 +165,7 @@ block:
   let k = kernelFn(GpuAst(kind: gpuDeref, dOf: ident(sym)))
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  ctx.runWgslChain()
+  registerWgslChain.runPassPrepared(ctx)
   doAssert ctx.globals["pflag_h0"].typ.to.kind == gtInt32
   doAssert ctx.globals["pflag_h0"].typ.mutable, "mutable must survive the conversion"
   doAssert ctx.globals["pflag_h0"].typ.implicit, "implicit must survive the conversion"

@@ -3,7 +3,7 @@
 ## Test that a primitive fold-tail gpuBinOp carries a non-nil gtInt32 bType
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/ir/types/t_ir_binop_btype.nim
 
@@ -18,29 +18,29 @@ template foldDo(body: untyped): untyped =
     let it_b {.inject.} = int32(2)
     body
 
-proc runTest() =
-  block:
-    let ir = toGpuAst:
-      proc probeKernel(x: int32) {.device.} =
-        let y = foldDo:
-          acc * it_a
-    doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
-    let fn = ir.statements[0]
-    doAssert fn.kind == gpuProc, "Expected gpuProc first, got " & $fn.kind
-    var tail: GpuAst = nil
-    proc findBinOp(n: GpuAst) =
-      if n == nil or not tail.isNil: return
-      if n.kind == gpuBinOp:
-        tail = n
-        return
-      for ch in n.items:
-        findBinOp(ch)
-    findBinOp(fn.pBody)
-    doAssert not tail.isNil, "Expected a gpuBinOp in the fold body"
-    doAssert not tail.bIsOverloaded, "Primitive fold must stay a gpuBinOp (not gpuCall)"
-    doAssert not tail.bType.isNil, "Fold-tail gpuBinOp must carry non-nil bType"
-    doAssert tail.bType == initGpuType(gtInt32),
-      "acc * it_a must carry gtInt32 bType, got " & $tail.bType
+proc findBinOp(n: GpuAst): GpuAst =
+  ## First gpuBinOp in the tree, nil when absent.
+  if n == nil:
+    return nil
+  if n.kind == gpuBinOp:
+    return n
+  for ch in n.items:
+    let found = findBinOp(ch)
+    if not found.isNil:
+      return found
 
-runTest()
-echo "t_ir_binop_btype: all assertions passed"
+static:
+  let ir = toGpuAst:
+    proc probeKernel(x: int32) {.device.} =
+      let y = foldDo:
+        acc * it_a
+  doAssert ir.kind == gpuBlock, "Expected gpuBlock at top level, got " & $ir.kind
+  let fn = ir.statements[0]
+  doAssert fn.kind == gpuProc, "Expected gpuProc first, got " & $fn.kind
+  let tail = findBinOp(fn.pBody)
+  doAssert not tail.isNil, "Expected a gpuBinOp in the fold body"
+  doAssert not tail.bIsOverloaded, "Primitive fold must stay a gpuBinOp (not gpuCall)"
+  doAssert not tail.bType.isNil, "Fold-tail gpuBinOp must carry non-nil bType"
+  doAssert tail.bType == initGpuType(gtInt32),
+    "acc * it_a must carry gtInt32 bType, got " & $tail.bType
+  echo "  OK — fold-tail gpuBinOp carries gtInt32 bType"

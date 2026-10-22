@@ -8,7 +8,7 @@
 ## - folded shapes cover float32/64, int32, and uint32 operands
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/optimizations/ir_foldMaxMin.nim
 
@@ -17,15 +17,11 @@ import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_optimizations {.all.}
 import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
+import workspace/crucible/tests/ir/ir_testutils
 
-proc runOne(ctx: var GpuContext) =
-  ## Runs the single pass under test through the public registry.
-  var reg = PassRegistry.new()
+proc registerFoldMaxMinChain(reg: var PassRegistry) {.nimcall.} =
   reg.registerMangleNames()
   reg.registerFoldMaxMinToBuiltins()
-  ctx.runPasses(reg)
-
-# ─── IR construction helpers (mirror the shapes nim_to_gpu produces) ───
 
 proc ident(name: string, t: GpuType): GpuAst =
   var sym = newSymbol(name)
@@ -52,7 +48,7 @@ proc foldInCtx(body: GpuAst; retType: GpuType): GpuAst =
                            aLeft: ident("result", retType),
                            aRight: body)]))
   ctx.allFnTab[fnName] = fn
-  runOne(ctx)
+  runPassPrepared(registerFoldMaxMinChain, ctx)
   ctx.allFnTab[fnName].pBody
 
 proc assignRhs(body: GpuAst): GpuAst =
@@ -68,11 +64,10 @@ proc rhsCallName(body: GpuAst): string =
 
 # ─── Tests ─────────────────────────────────────────────────────────────
 
-let f32 = GpuType(kind: gtFloat32)
-let i32 = GpuType(kind: gtInt32)
-let u32 = GpuType(kind: gtUint32)
-
-block: # 1. float32 NaN-guarded max folds to max
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 1. float32 NaN-guarded max folds to max
   let x = ident("x", f32)
   let y = ident("y", f32)
   let guardForm = GpuAst(kind: gpuTernary,
@@ -83,7 +78,10 @@ block: # 1. float32 NaN-guarded max folds to max
   doAssert rhsCallName(body) == "max", "guard-form float32 max: got " & rhsCallName(body)
   echo "  OK — float32 NaN-guarded max folds to max call"
 
-block: # 2. float32 NaN-guarded min folds to min
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 2. float32 NaN-guarded min folds to min
   let x = ident("x", f32)
   let y = ident("y", f32)
   let guardForm = GpuAst(kind: gpuTernary,
@@ -94,7 +92,10 @@ block: # 2. float32 NaN-guarded min folds to min
   doAssert rhsCallName(body) == "min", "guard-form float32 min: got " & rhsCallName(body)
   echo "  OK — float32 NaN-guarded min folds to min call"
 
-block: # 3. unguarded int max folds to max
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 3. unguarded int max folds to max
   let a = ident("a", i32)
   let b = ident("b", i32)
   let plainForm = GpuAst(kind: gpuTernary, tCond: binOp("<=", b, a),
@@ -104,7 +105,10 @@ block: # 3. unguarded int max folds to max
   doAssert rhsCallName(body) == "max", "plain int32 max: got " & rhsCallName(body)
   echo "  OK — unguarded int32 max folds to max call"
 
-block: # 4. unguarded uint32 min folds to min
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 4. unguarded uint32 min folds to min
   let a = ident("a", u32)
   let b = ident("b", u32)
   let plainForm = GpuAst(kind: gpuTernary, tCond: binOp("<=", a, b),
@@ -114,7 +118,10 @@ block: # 4. unguarded uint32 min folds to min
   doAssert rhsCallName(body) == "min", "plain uint32 min: got " & rhsCallName(body)
   echo "  OK — unguarded uint32 min folds to min call"
 
-block: # 5. unguarded float max does NOT fold (NaN propagates to tElse)
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 5. unguarded float max does NOT fold (NaN propagates to tElse)
   let x = ident("x", f32)
   let y = ident("y", f32)
   let plainForm = GpuAst(kind: gpuTernary, tCond: binOp("<=", y, x),
@@ -124,7 +131,10 @@ block: # 5. unguarded float max does NOT fold (NaN propagates to tElse)
     "unguarded float max must stay a ternary (NaN semantics), got " & rhsKind(body)
   echo "  OK — unguarded float max stays a ternary (NaN semantics)"
 
-block: # 6. then/else not matching the comparison operands does NOT fold
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 6. then/else not matching the comparison operands does NOT fold
   let x = ident("x", f32)
   let y = ident("y", f32)
   let z = ident("z", f32)
@@ -135,7 +145,10 @@ block: # 6. then/else not matching the comparison operands does NOT fold
     "mismatched operands must stay a ternary, got " & rhsKind(body)
   echo "  OK — mismatched then/else stays a ternary"
 
-block: # 7. object types (Int[N] structs) do NOT fold
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 7. object types (Int[N] structs) do NOT fold
   let objT = GpuType(kind: gtObject, name: "Int1")
   let a = ident("a", objT)
   let b = ident("b", objT)
@@ -146,7 +159,10 @@ block: # 7. object types (Int[N] structs) do NOT fold
     "Int[N] struct ternary must stay (ceramic genBinOp handles it), got " & rhsKind(body)
   echo "  OK — Int[N] struct ternary stays (genBinOp territory)"
 
-block: # 8. bool operands do NOT fold
+static:
+  let f32 = GpuType(kind: gtFloat32)
+  let i32 = GpuType(kind: gtInt32)
+  let u32 = GpuType(kind: gtUint32) # 8. bool operands do NOT fold
   let bt = GpuType(kind: gtBool)
   let a = ident("a", bt)
   let b = ident("b", bt)
