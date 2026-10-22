@@ -15,6 +15,16 @@ import ../../builtins/builtins_functions
 import ./pass_datatypes
 import ./passes_preprocessing
 
+# ############################################################
+#
+# Normalizations
+#
+# ############################################################
+#
+# Canonical reshaping right after IR construction establishes the forms
+# every later stage assumes. Every backend registers them identically.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════

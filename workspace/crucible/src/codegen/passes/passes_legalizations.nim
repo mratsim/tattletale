@@ -11,6 +11,17 @@ import ../frontend/nim_to_gpu_type_resolvers
 import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 
+# ############################################################
+#
+# Legalizations
+#
+# ############################################################
+#
+# Legalizations conform the IR to the crucible IR model itself:
+# every statement is a block, result is assigned, constexprs are lifted.
+# Target-independent, every backend registers them identically.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════

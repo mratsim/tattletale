@@ -17,6 +17,16 @@ import ./passes_validations
 import ./passes_optimizations
 import ./passes_preprocessing
 
+# ############################################################
+#
+# OpenCL validations and impls
+#
+# ############################################################
+#
+# Validations reject what OpenCL C cannot express. The OpenCL lowering
+# impls (byref params) live here and are registered by passes_lowering_opencl.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -24,12 +34,6 @@ import ./passes_preprocessing
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerOpenclPasses*(reg: var PassRegistry) =
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
-  reg.registerExpandStructKernelParams()
   reg.register("rejectOpenCLKeywords", pkValidation, phaseEarly,
     "Rejects identifiers that are reserved OpenCL C keywords",
     proc(ctx: var GpuContext): void =

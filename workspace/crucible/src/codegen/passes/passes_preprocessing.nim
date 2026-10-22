@@ -10,6 +10,16 @@ import ../ir/gpu_ast_type_resolvers
 import ./pass_datatypes
 import ./passes_legalizations
 
+# ############################################################
+#
+# Preprocessing
+#
+# ############################################################
+#
+# Symbol naming: mangling policies, generics scanning and span
+# rewriting ahead of lowering. Every backend registers them identically.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════════

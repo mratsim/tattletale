@@ -15,6 +15,17 @@ import ./passes_validations
 import ./passes_preprocessing
 import ./passes_lowering # insertPointerDeref
 
+# ############################################################
+#
+# GLSL (Vulkan) validations and pass impls
+#
+# ############################################################
+#
+# Validations reject what GLSL cannot express: reserved words, divergent
+# push-constant layouts. The GLSL lowering impls (kVar inout params)
+# are registered by passes_lowering_glsl.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -22,8 +33,8 @@ import ./passes_lowering # insertPointerDeref
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerVulkanPasses*(reg: var PassRegistry) =
-  ## Register Vulkan-specific passes: GLSL keyword rejection, pointer deref
-  ## insertion for buffer-reference rendering.
+  ## Register Vulkan-specific validation passes: GLSL keyword rejection,
+  ## shared push-constant layout consistency.
   reg.register("rejectVulkanKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved GLSL keywords",
     proc(ctx: var GpuContext): void =
@@ -33,25 +44,6 @@ proc registerVulkanPasses*(reg: var PassRegistry) =
     "Rejects multi-kernel sources whose push-constant layouts differ",
     proc(ctx: var GpuContext): void =
       ctx.validateSharedPushConstLayout()
-  )
-  # GLSL buffer references cannot be indexed directly, the deref must be
-  # explicit in the IR for the renderer to compose `.x`.
-  reg.register(
-    name = "insertPointerDeref",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Wraps pointer-typed index and field parents in explicit gpuDeref",
-    dependsOn = @[
-      "rewriteIndexDeref"],
-    run = insertPointerDeref
-  )
-  reg.register(
-    name = "qualifyVarParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Retypes kVar params to their pointee, unwraps their body derefs and call-site gpuAddr args",
-    dependsOn = @[],
-    run = qualifyVarParams
   )
 
 

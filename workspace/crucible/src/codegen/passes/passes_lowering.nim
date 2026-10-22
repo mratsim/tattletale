@@ -15,6 +15,18 @@ import ../ir/gpu_ast_type_resolvers
 import ../ir/gpu_type_constructors
 import ./pass_datatypes
 
+# ############################################################
+#
+# Lowering
+#
+# ############################################################
+#
+# Lowering replaces IR constructs with their composition at the target
+# calling convention: spans become ptr + len, compile-time params are erased.
+# Backends cherry-pick the impls they want. A policy that differs per target
+# takes a flag.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════

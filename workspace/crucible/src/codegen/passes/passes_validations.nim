@@ -9,6 +9,15 @@ import std / [macros, sequtils, tables]
 import ../ir/gpu_ast_datatypes
 import ./pass_datatypes
 
+# ############################################################
+#
+# Validations
+#
+# ############################################################
+#
+# Invariant checks over the IR, a violated invariant is a compile-time error.
+
+
 proc warnUnassigned(n: GpuAst, fnName: string): void =
   ## Emit a warning if `result` is read before being assigned in any branch.
   case n.kind

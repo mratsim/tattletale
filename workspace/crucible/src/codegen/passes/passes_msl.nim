@@ -15,6 +15,16 @@ import ./passes_legalizations
 import ./passes_validations
 import ./passes_preprocessing
 
+# ############################################################
+#
+# MSL (Metal) validations, impls and printer helpers
+#
+# ############################################################
+#
+# Validations reject what MSL cannot express. The MSL lowering impls
+# live here and are registered by passes_lowering_msl.
+
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════
@@ -26,19 +36,6 @@ proc registerMetalPasses*(reg: var PassRegistry) =
     "Rejects identifiers that are reserved MSL keywords",
     proc(ctx: var GpuContext): void =
       ctx.checkReservedKeywords(["kernel", "device", "constant", "threadgroup"], "MSL")
-  )
-  reg.registerExpandStructKernelParams()
-  reg.register("smemArena", pkTransform, phaseMain,
-    "Hoists device functions' {.smem.} vars to threadgroup params as Metal doesn't support threadgroup allocation in device functions",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      smemArenaImpl(ctx)
-  )
-  reg.register("materializeIndexBuiltinParams", pkTransform, phaseMain,
-    "Materializes coordinate-builtin binding: builtin params appended to pParams, call-site forwarding args",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      materializeIndexBuiltinParamsImpl(ctx)
   )
 
 # ═══════════════════════════════════════════════════════════
@@ -187,7 +184,7 @@ proc bindSmemCallSites(ctx: var GpuContext, fn: var GpuAst) =
           "' to a threadgroup param, the caller '" & $fn.pName.symbol.iSym &
           "' must declare a matching {.smem.} var"
 
-proc smemArenaImpl(ctx: var GpuContext) =
+proc smemArenaImpl*(ctx: var GpuContext) =
   # Sweep 1: the tables share GpuAst refs, hoisting is idempotent.
   for fnKey in ctx.allFnTab.keys:
     var fn = ctx.allFnTab[fnKey]

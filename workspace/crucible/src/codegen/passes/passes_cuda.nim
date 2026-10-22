@@ -11,13 +11,18 @@ import ./pass_registry
 import ./passes_validations
 import ./passes_optimizations
 
+# ############################################################
+#
+# CUDA validations
+#
+# ############################################################
+#
+# Keyword rejection. CUDA's lowering impls are shared and
+# registered by passes_lowering_cuda.
+
+
 proc registerCudaPasses*(reg: var PassRegistry) =
-  ## Register CUDA-specific passes: byref-arg materialization, keyword rejection.
-  reg.register("materializePassByRefArgs", pkTransform, phaseMain,
-    "Wraps non-lvalue passByRef args in gpuMaterialize nodes",
-    dependsOn = @["ensureBlock"],
-    run = materializePassByRefArgs
-  )
+  ## Register CUDA-specific validation passes: keyword rejection.
   reg.register("rejectCUDAKeywords", pkValidation, phaseMain,
     "Rejects identifiers that are reserved CUDA keywords",
     proc(ctx: var GpuContext): void =
