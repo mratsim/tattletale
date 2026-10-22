@@ -482,8 +482,6 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       result.ifElse = GpuAst(kind: gpuDiscard)
 
   of nnkIfExpr:
-    # accepts Expr (parse output) and Branch node forms, sem keeps Branch
-    # for return-expression ifs, branches must be single expressions
     proc requireSimpleBranch(n: NimNode) =
       let ok = n.kind != nnkStmtList or n.len == 1
       doAssert ok, "GPU if-expression branches must be single expressions, " &
@@ -491,8 +489,6 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     doAssert node.len >= 1
     doAssert node.len == 1 or node[^1].kind in {nnkElseExpr, nnkElse},
       "GPU if-expression must have an else branch"
-    # the lowerIfExpr pass converts these gpuIf(isExpr) to gpuTernary
-    result = GpuAst(kind: gpuIf, ifIsExpr: true)
     proc buildIfExpr(ctx: var GpuContext, reg: var TypeRegistry, branches: NimNode, idx: int): GpuAst =
       let child = branches[idx]
       case child.kind
@@ -706,7 +702,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     result.symbol.name = node.repr # for sym choices
     if result.symbol.name == "_":
       result.symbol.name = "underscore"
-      
+
   of nnkSym:
     # Sanitize the identifier name: backticks are used by Nim for gensym
     # symbols (e.g., ``field`gensym229``) but are invalid in C.

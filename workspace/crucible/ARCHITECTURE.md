@@ -145,16 +145,16 @@ src/
                                     `walk` traversal; `runPasses` (checks
                                     dependsOn).
       pass_registry.nim             PassRegistry.new().
-      passes_normalizations.nim     lowerIfExpr, mapOperators, patchBoolToI32,
-                                    deEmbedForRangeAdjustment, ...
-      passes_legalizations.nim      Legalization transforms (result insertion,
-                                    distinct resolve, byref params).
-      passes_preprocessing.nim      rewriteIndexDeref, decomposeMemcpyVars,
-                                    annotateTypesForCodegen, mangleNames,
-                                    WGSL/bool-global phases.
+      passes_legalizations.nim      ensureBlock, maybeInsertResult, liftConstexpr,
+                                    unwrapBlockInDot, rewriteIndexDeref,
+                                    mapIfExprToTernary, blitBlockExprs
+      passes_normalizations.nim     mapOperators, filterPragmas,
+                                    resolveOverloadedOperators,
+                                    deadCodeElimination,
+                                    deEmbedForRangeAdjustment, mangleNames
       passes_optimizations.nim      max/min folding, constant-shell elimination.
       passes_lowering.nim           gtSpan -> ptr + len, compile-time parameter
-                                    pruning.
+                                    pruning, memcpy decomposition.
       passes_validations.nim        Pre/post validation (e.g. warnUnassigned).
       passes_cuda.nim               Per-language passes: reserved words,
       passes_glsl.nim               pointer rules, subgroup emission, SSBO /
@@ -212,13 +212,25 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
    `globalBlocks`, and per-scope symbol tables. The `fnTable` holds all known functions keyed by `iSym`.
    Range nodes record their range kind (inclusive/exclusive) instead of encoding exclusivity with a `+1`.
 
-3. **Pass pipeline.** `registerCommonPasses` registers, in order: pre-validation, normalization,
-   type-system, legalization, preprocessing, optimization, lowering, post-validation.
-   - `runPasses` (in `pass_datatypes.nim`) executes them in registration order, verifying each
-     pass's `dependsOn` list was satisfied, and passes mutate the IR in place.
-   - `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis`
-     (metadata only). `PassPhase` orders it: `phaseEarly`, `phasePreprocessing`, `phaseMain`.
-   - Per-language passes are registered by the `passes_<lang>.nim` modules.
+3. **Pass pipeline.** `registerCommonPasses` registers the stage bundles in order,
+   backend lowering bundles append after it.
+
+   | Stage | Contract |
+   |---|---|
+   | pre-validation | well-formedness of the freshly built IR |
+   | legalization | Nim-only constructs (if-expressions, block expressions, index/deref shapes) become backend-neutral IR |
+   | normalization | names and call shapes canonicalized, mangleNames last |
+   | optimization | max/min folding, constant-shell elimination |
+   | shared lowering | spans become ptr + len, memcpy decomposition, no frontend constructs survive |
+   | post-validation | the codegen boundary, no block expressions remain |
+
+   `runPasses` (in `pass_datatypes.nim`) executes them in registration order,
+   verifying each pass's `dependsOn` list was satisfied.
+   Passes mutate the IR in place, bundle call order is execution order,
+   there is no scheduler.
+
+   `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis` (metadata only).
+   Per-language passes are registered by the `passes_<lang>.nim` modules.
 
 4. **Language printing (`targets/`).** Each printer exposes `preprocess` and `codegen`, `targets_lang.nim` dispatches.
    The printers walk the now-annotated IR and emit native text.

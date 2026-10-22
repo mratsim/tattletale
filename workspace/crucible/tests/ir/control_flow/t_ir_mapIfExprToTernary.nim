@@ -1,4 +1,4 @@
-## lowerIfExpr pass
+## mapIfExprToTernary pass
 ##
 ## Test that gpuIf(isExpr: true) rewrites to gpuTernary, nested shapes included,
 ## while statement-position gpuIf nodes stay untouched.
@@ -10,11 +10,11 @@
 ## Run:
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/ir/control_flow/t_ir_lowerIfExpr.nim
+##     workspace/crucible/tests/ir/control_flow/t_ir_mapIfExprToTernary.nim
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
+import workspace/crucible/src/codegen/passes/passes_legalizations {.all.}
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/tests/ir/ir_testutils
 
@@ -29,7 +29,7 @@ static:
                       ifCond: cond, ifThen: thenVal, ifElse: elseVal,
                       ifElifs: @[])
 
-  let lowered = registerLowerIfExpr.runPassOnNode(ifExpr)[0]
+  let lowered = registerMapIfExprToTernary.runPassOnNode(ifExpr)[0]
 
   doAssert lowered.kind == gpuTernary, "gpuIf(isExpr:true) should become gpuTernary, got " & $lowered.kind
   doAssert lowered.tCond.lValue == "true"
@@ -48,7 +48,7 @@ static:
                       ifCond: cond, ifThen: thenVal, ifElse: GpuAst(kind: gpuDiscard),
                       ifElifs: @[])
 
-  let lowered = registerLowerIfExpr.runPassOnNode(stmtIf)[0]
+  let lowered = registerMapIfExprToTernary.runPassOnNode(stmtIf)[0]
 
   doAssert lowered.kind == gpuIf, "gpuIf(ifIsExpr:false) should remain gpuIf, got " & $lowered.kind
   doAssert lowered.ifIsExpr == false
@@ -71,7 +71,7 @@ static:
                        ifCond: cond1, ifThen: v1, ifElse: innerIf,
                        ifElifs: @[])
 
-  let lowered = registerLowerIfExpr.runPassOnNode(outerIf)[0]
+  let lowered = registerMapIfExprToTernary.runPassOnNode(outerIf)[0]
 
   doAssert lowered.kind == gpuTernary, "Outer should be ternary"
   doAssert lowered.tThen.lValue == "10"

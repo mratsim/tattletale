@@ -30,7 +30,6 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
-  reg.registerLowerIfExpr()
   reg.registerMapOperators()
   reg.registerFilterPragmas()
   reg.registerResolveOverloadedOperators()
@@ -46,20 +45,6 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerDeEmbedForRangeAdjustment()
 
   reg.registerMangleNames()
-
-func registerLowerIfExpr(reg: var PassRegistry) =
-  reg.register("lowerIfExpr", pkTransform, phaseEarly,
-    "Converts gpuIf(isExpr:true) to gpuTernary",
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          lowerIfExprImpl(fn.pBody)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          lowerIfExprImpl(fn.pBody)
-  )
 
 func registerMapOperators(reg: var PassRegistry) =
   reg.register("mapOperators", pkTransform, phaseEarly,
@@ -214,91 +199,6 @@ func mangleNamesImpl(ctx: var GpuContext) =
       discard
 
     seenNames.incl ident.symbol.name
-
-# ═══════════════════════════════════════════════════════════════════════
-# lowerIfExpr
-# ═══════════════════════════════════════════════════════════════════════
-
-func lowerIfExprImpl(n: var GpuAst) =
-  ## Backends emit `cond ? then : else` from the lowered gpuTernary
-  case n.kind
-  of gpuIf:
-    if n.ifIsExpr:
-      let tern = GpuAst(
-        kind: gpuTernary,
-        tCond: n.ifCond,
-        tThen: n.ifThen,
-        tElse: n.ifElse
-      )
-      n = tern
-      lowerIfExprImpl(n.tCond)
-      lowerIfExprImpl(n.tThen)
-      if n.tElse.kind != gpuDiscard:
-        lowerIfExprImpl(n.tElse)
-    else:
-      lowerIfExprImpl(n.ifCond)
-      lowerIfExprImpl(n.ifThen)
-      for el in n.ifElifs.mitems:
-        lowerIfExprImpl(el.cond)
-        lowerIfExprImpl(el.body)
-      if n.ifElse.kind != gpuDiscard:
-        lowerIfExprImpl(n.ifElse)
-  of gpuBlock:
-    for i in 0 ..< n.statements.len:
-      lowerIfExprImpl(n.statements[i])
-  of gpuFor:
-    lowerIfExprImpl(n.fStart)
-    lowerIfExprImpl(n.fEnd)
-    lowerIfExprImpl(n.fBody)
-  of gpuWhile:
-    lowerIfExprImpl(n.wCond)
-    lowerIfExprImpl(n.wBody)
-  of gpuTernary:
-    lowerIfExprImpl(n.tCond)
-    lowerIfExprImpl(n.tThen)
-    if n.tElse.kind != gpuDiscard:
-      lowerIfExprImpl(n.tElse)
-  of gpuCall:
-    for i in 0 ..< n.cArgs.len:
-      lowerIfExprImpl(n.cArgs[i])
-  of gpuBinOp:
-    lowerIfExprImpl(n.bLeft)
-    lowerIfExprImpl(n.bRight)
-  of gpuVar:
-    lowerIfExprImpl(n.vInit)
-  of gpuAssign:
-    lowerIfExprImpl(n.aLeft)
-    lowerIfExprImpl(n.aRight)
-  of gpuReturn:
-    lowerIfExprImpl(n.rValue)
-  of gpuDot:
-    lowerIfExprImpl(n.dParent)
-    lowerIfExprImpl(n.dField)
-  of gpuIndex:
-    lowerIfExprImpl(n.iArr)
-    lowerIfExprImpl(n.iIndex)
-  of gpuObjConstr:
-    for f in n.ocFields.mitems:
-      lowerIfExprImpl(f.value)
-  of gpuPrefix:
-    lowerIfExprImpl(n.pVal)
-  of gpuAddr:
-    lowerIfExprImpl(n.aOf)
-  of gpuDeref:
-    lowerIfExprImpl(n.dOf)
-  of gpuConv:
-    lowerIfExprImpl(n.convExpr)
-  of gpuCast:
-    lowerIfExprImpl(n.cExpr)
-  of gpuConstexpr:
-    lowerIfExprImpl(n.cValue)
-  of gpuMaterialize:
-    lowerIfExprImpl(n.mExpr)
-  of gpuArrayLit:
-    for v in n.aValues.mitems:
-      lowerIfExprImpl(v)
-  else:
-    discard
 
 # ═══════════════════════════════════════════════════════════════════════
 # mapOperators

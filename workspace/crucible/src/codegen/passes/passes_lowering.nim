@@ -36,7 +36,6 @@ func registerSharedLoweringPasses*(reg: var PassRegistry) =
   ## Registers the lowering passes common to every backend
   reg.registerPruneCompileTimeParams()
   reg.registerLowerSpans()
-  reg.registerBlitBlockExprs()
   reg.registerDecomposeMemcpyVars()
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =
