@@ -519,12 +519,21 @@ proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
     if ctx.usesFloatAtomic(ch):
       return true
 
+proc usesSubgroupReduce(ctx: GpuContext, n: GpuAst): bool =
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.reductionBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if ctx.usesSubgroupReduce(ch):
+      return true
+
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle.
   # Check if we need fp64/fp16 extensions
   var needsFp64 = false
   var needsFp16 = false
   var needsFloatAtomic = false
+  var needsSubgroup = false
   for blk in ctx.globalBlocks:
     # We could scan types here, but for now we check in the generated code
     discard
@@ -541,6 +550,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsFp16 = true
     if ctx.usesFloatAtomic(fn.pBody):
       needsFloatAtomic = true
+    if ctx.usesSubgroupReduce(fn.pBody):
+      needsSubgroup = true
 
   if needsFp64:
     result = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n\n"
@@ -548,6 +559,8 @@ proc codegen*(ctx: var GpuContext): string =
     result = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n\n"
   if needsFloatAtomic:
     result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n\n"
+  if needsSubgroup:
+    result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n\n"
 
   # 1. Generate code for the global blocks (types, global vars etc)
   for blk in ctx.globalBlocks:

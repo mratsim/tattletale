@@ -131,7 +131,8 @@ proc allocBuffer*(ctx: OpenCLContext, size: int): OpenCLBuffer =
   check status
 
 proc dealloc*(buffer: var OpenCLBuffer) =
-  check releaseMemObject(buffer.mem)
+  if not buffer.mem.isNil:
+    check releaseMemObject(buffer.mem)
 
 proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   if size != buffer.size:
