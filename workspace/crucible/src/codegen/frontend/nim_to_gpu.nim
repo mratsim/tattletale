@@ -809,9 +809,9 @@ proc toGpuAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, static
         s.add node[i].strVal
       of nnkSym:
         # Nim resolves backtick identifiers to Syms, the printer substitutes
-        # the mangled name at the TAG_IDENT_IN_ASM placeholder
+        # the mangled name at the TAG_IDENT_INLINE_ASM placeholder
         ops.add ctx.toGpuAst(reg, node[i])
-        s.add TAG_IDENT_IN_ASM & $(ops.len - 1)
+        s.add TAG_IDENT_INLINE_ASM & $(ops.len - 1)
       else:
         doAssert false, "unexpected asm node: " & $node[i].kind & " in " & node.repr
     result.stmt = s

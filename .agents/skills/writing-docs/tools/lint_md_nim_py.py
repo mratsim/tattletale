@@ -22,6 +22,7 @@ Rule table (rule | trigger | severity):
 | stray-fragment       | a line ends on a bare connective or a fragment after the period                                   | counted  |
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
+| severed-tail         | a continuing sentence ends its line on a 1-2 word tail after the last clause boundary              | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
@@ -107,6 +108,7 @@ writing the fixed text back.
 | article-eol, stray-fragment | rewrap the paragraph so no line ends on a dangling article, a bare connective, or a 1-2 word tail after a period |
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
+| severed-tail                | rewrap so a continuing sentence's line ends 3+ words past its last clause boundary                               |
 | quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
@@ -462,6 +464,8 @@ RULES = {
                         "a colon orphaned at line start or split from its lead phrase"),
     "unit-split": Rule("unit-split", True,
                        "a line opens on a severed one-word continuation"),
+    "severed-tail": Rule("severed-tail", True,
+                         "a continuing sentence ends its line on a 1-2 word tail after the last clause boundary"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
@@ -2188,7 +2192,21 @@ def scan(path, text, findings):
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
-            prev_prose = (n, c, kind)
+            # a continuing sentence must not end its line on a 1-2 word
+            # orphan after the last clause boundary, the semantic unit
+            # continues on the next line
+            if (prev_prose is not None and prev_prose[2] == kind
+                    and prev_prose[0] + 1 == n and c[:1].islower()
+                    and not trailing and not prev_prose[3]):
+                prev_txt = re.sub(r"`[^`]*`", " XcodeX ", prev_prose[1].rstrip())
+                tail = re.split(r"[,;:.]", prev_txt)[-1].strip()
+                wc = len(tail.split())
+                if 0 < wc < 3:
+                    findings.append(Finding(
+                        path, prev_prose[0], "severed-tail",
+                        "line ends on a %d-word tail after the last clause "
+                        "boundary, the sentence continues" % wc))
+            prev_prose = (n, c, kind, trailing)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
 
