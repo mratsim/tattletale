@@ -22,10 +22,11 @@ import
   workspace/ceramic/src/tile_algebra/tile_ops_ternary,
   workspace/ceramic/src/tile_algebra/tile_loadstore,
   workspace/ceramic/src/tile_algebra/tile_reductions,
+  workspace/ceramic/src/tile_algebra/tile_reduce,
   workspace/ceramic/src/tile_algebra/tile_matmul
 
 export tiles, tile_foreach, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
-       tile_loadstore, tile_reductions, tile_matmul
+       tile_loadstore, tile_reductions, tile_reduce, tile_matmul
 
 # Symbols outside tile_algebra's jurisdiction, re-exported per symbol
 # for the single-import surface of the kernels and the macro emissions:
