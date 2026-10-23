@@ -23,18 +23,14 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
-## Runtime names a GPU runtime backend: `newEngine(runX)` constructs the engine that executes kernels on it.
-## The compile-target enums BackendKind and CompileTarget name emitted shader languages and stay separate from it.
 type
   Runtime* = enum
-    runCuda     ## CUDA runtime (NVRTC)
-    runWebGPU   ## WebGPU runtime (wgpu)
-    runOpenCL   ## OpenCL runtime (OpenCL C)
-    runVulkan   ## Vulkan runtime (MoltenVK-compatible loader)
-    runMetal    ## Metal runtime (macOS)
+    runCuda
+    runWebGPU
+    runOpenCL
+    runVulkan
+    runMetal
 
-# when/elif, not case: the branches return distinct engine types.
-# Nim type-checks every branch of a case statement even on a static value, so a case would force one common type for the `auto` result.
 proc newEngine*(runtime: static Runtime): auto {.inline.} =
   when runtime == runCuda:
     newCudaEngine()

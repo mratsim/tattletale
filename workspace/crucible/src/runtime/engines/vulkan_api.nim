@@ -33,7 +33,7 @@ type
     entryPoint: string
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
-    isHlsl: bool   # HLSL sources emit one module as `main`, every kernel name runs it
+    isHlsl: bool
     caches: VulkanCaches
 
 template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
@@ -49,21 +49,7 @@ proc newVulkanEngine*(): VulkanEngine =
 # ════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
-  ## Stores the source, compiles it to SPIR-V, re-entrant.
-  ##
-  ## The source language comes from the text shape, no user flag:
-  ##
-  ## - GLSL: a `#version` first line, glslangValidator compiles, the GLSL preamble names the entry point and squadron
-  ## - HLSL: the `[numthreads(x, y, z)]` attribute, dxc compiles entry `main`, the attribute bakes the squadron
-  ## - neither marker: failLoud names the expectation
-  ##
-  ## The HLSL printer discards the DSL kernel name and emits one module as `main`,
-  ## so launchKernel runs it for any kernel name: the GLSL per-kernel
-  ## recompile path does not apply.
-  ##
-  ## The launch route per kernel comes from the SPIR-V itself:
-  ## usesPhysicalStorageBuffer re-derives it at each launch from the module
-  ## about to run.
+  ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
@@ -81,8 +67,6 @@ proc ingest*(engine: VulkanEngine, source: string) =
              source.splitLines()[0])
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
-  ## GLSL ingest: glslangValidator compiles, the GLSL preamble names the entry
-  ## point and bakes the squadron.
   # multi-kernel sources cannot address per-kernel scalars in the shared
   # deduped push block, ingest quits loudly
   if countKernels(glsl) > 1:
@@ -104,9 +88,6 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
-  ## HLSL ingest: dxc compiles one module per source, entry `main`,
-  ## the squadron comes from the `[numthreads]` attribute.
-  ##
   engine.entryPoint = "main"
   engine.spirv = compileHlslToSpirV(hlsl)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
@@ -202,8 +183,6 @@ proc parseShaderSquadron(glsl: string): Dim3 =
     else: result.z = n
 
 proc parseHlslSquadron(hlsl: string): Dim3 =
-  ## Extracts the shader-baked squadron from the `[numthreads(x, y, z)]` attribute.
-  ## Absent attribute: (0, 0, 0), run then fails squadron validation loudly.
   const marker = "[numthreads("
   let i = hlsl.find(marker)
   if i < 0:
@@ -288,7 +267,6 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
-  # The launch route re-derives from the SPIR-V about to run
   if usesPhysicalStorageBuffer(spirv):
     launchAddressRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
   else:
@@ -296,8 +274,6 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
 
 proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                         output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
-  ## One dispatch through the address route: pointer args are 64-bit
-  ## buffer-device addresses, scalars pack into the push-constant block.
   var dctx = SerializationCtx(vctx: engine.ctx)
   bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
   let pushConstLen = dctx.pn
@@ -336,11 +312,6 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
 
 proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                            output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
-  ## One dispatch through the descriptor route:
-  ##
-  ## - buffer args bind as storage-buffer descriptors, output first then args in parameter order
-  ## - the pipeline carries the set layout, pointer-only
-  ## - scalar args have no uniform-block layout model yet and fail loudly
   var bufs: seq[VulkanBuffer]
   template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
     bufs.add v
@@ -361,8 +332,7 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
       engine.ctx.createPipeline(shaderModule, entry, 0, setLayout)
     engine.ctx.destroyShaderModule(shaderModule)
 
-  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local)),
-  # the fence wait blocks until the dispatch completes
+  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
   engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
                  [uint32(cfg.grid.x * squadron.x),
                   uint32(cfg.grid.y * squadron.y),

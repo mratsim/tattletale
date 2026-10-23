@@ -4,10 +4,8 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-## Address route: buffers reach the kernel as 64-bit buffer-device addresses.
-## The addresses pack into push constants, no descriptor set exists.
+## Address route: buffers reach the kernel as 64-bit buffer-device addresses packed into push constants, no descriptor set.
 ## The shader declares buffer_reference blocks, the GLSL printer output.
-## Kernel parameters dereference the buffers through the addresses the push block carries.
 
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/abis/vulkan_abi as vk
