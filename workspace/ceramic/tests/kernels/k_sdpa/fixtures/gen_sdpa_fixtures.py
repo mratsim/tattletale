@@ -12,8 +12,7 @@ One directory per fixture under this script's directory:
 
 The reference runs in float64 end to end for a tight truth.
 
-- bf16 inputs are float32 values rounded to bf16 bits with
-  round-to-nearest-even, stored as raw uint16
+- bf16 inputs are float32 values rounded to bf16 bits, round-to-nearest-even, stored as raw uint16
 - fixtures keep at least one unmasked key per query row
 - the fully-masked-row NaN contract stays documented, it is not
   fixture-tested
@@ -35,6 +34,11 @@ def f32_to_bf16_bits(x):
     u = x.astype(np.float32).view(np.uint32)
     rounding = ((u >> 16) & 1) + 0x7FFF
     return ((u + rounding) >> 16).astype(np.uint16)
+
+
+def bits_to_f32(u):
+    """uint16 bf16 bits -> float32 array, the stored values."""
+    return (u.astype(np.uint32) << 16).view(np.float32)
 
 
 def sdpa_reference(q, k, v, mask, causal, scale):
@@ -85,14 +89,24 @@ def make_fixture(name, dtype, B, Hq, Hkv, L, S, Dk, Dv, scale,
 
     mask = None
     if mask_kind == "additive":
-        # (B, Hm, S, S) with Hm in {1, Hkv}. A few -inf blocks, each
-        # query row keeps at least one unmasked key
+        # (B, Hm, S, S) with Hm in {1, Hkv}. A few -inf blocks mask
+        # some key tiles, and every query row keeps one unmasked key
         Hm = mask_heads if mask_heads else Hkv
         mask = np.where(rng.standard_normal((B, Hm, S, S)) > 1.5,
                         np.float32(-np.inf), np.float32(0.0))
         # guarantee one open key per row: clear the diagonal
         diag = np.arange(S)
         mask[:, :, diag, diag] = 0.0
+
+    # The reference must see the values the kernel replays, so round the inputs to the storage dtype first
+    if dtype == "float16":
+        q = q.astype(np.float16).astype(np.float32)
+        k = k.astype(np.float16).astype(np.float32)
+        v = v.astype(np.float16).astype(np.float32)
+    elif dtype == "bfloat16":
+        q = bits_to_f32(f32_to_bf16_bits(q))
+        k = bits_to_f32(f32_to_bf16_bits(k))
+        v = bits_to_f32(f32_to_bf16_bits(v))
 
     o = sdpa_reference(q, k, v, mask, causal, scale)
 
@@ -109,8 +123,10 @@ def make_fixture(name, dtype, B, Hq, Hkv, L, S, Dk, Dv, scale,
 
     qOut, kOut, vOut = q, k, v
     if dtype == "float16":
+        # the rounded f32 values convert back to f16 exactly
         qOut, kOut, vOut = q.astype(np.float16), k.astype(np.float16), v.astype(np.float16)
     elif dtype == "bfloat16":
+        # the f32 values already sit on bf16 representable points
         qOut, kOut, vOut = f32_to_bf16_bits(q), f32_to_bf16_bits(k), f32_to_bf16_bits(v)
     write_bin(os.path.join(out, "q.bin"), qOut)
     write_bin(os.path.join(out, "k.bin"), kOut)
