@@ -369,8 +369,8 @@ BANNED = [
      "state the offset or position directly, or restate the layout"),
     (r"\blands?\b|\barrives?\b", None,
      "say what produces or holds the construct, arrival verbs hide the mechanism"),
-    (r"\bstamp(?:s|ed|ing)?\b", None,
-     "name the mechanism (derives, carries, specializes, writes); stamp hides what changed, the type or the site"),
+    (r"\bre?stamp(?:s|ed|ing)?\b", None,
+     "name the mechanism (derives, carries, specializes, writes, re-types); stamp hides what changed, the type or the site"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -1049,7 +1049,7 @@ HOW_NARRATION_RE = _compile_table(HOW_NARRATION, True)
 # lean on context the audience, a CS undergraduate that just cloned the
 # repo and want to understand usage, does not have.
 HIDDEN_CONTEXT = [
-    (r"\bmirror(?:s|ing)?\b",
+    (r"\bmirror(?:s|ed|ing)?\b",
      "beware of hidden context or narration, the audience is a CS "
      "undergraduate that just cloned the repo and want to understand usage"),
 ]
