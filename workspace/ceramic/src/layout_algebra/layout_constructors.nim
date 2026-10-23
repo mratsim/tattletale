@@ -147,8 +147,6 @@ func orderLeafAt[I: Ordinal, T](order: array[I, T], i: static int): int =
   order[i]
 
 func orderLeafRank(t: typedesc[int]): static int =
-  ## Rank of one order leaf from its type alone.
-  ## A runtime leaf is a dynamic order entry, reporting the dynamic sentinel.
   DynamicSentinel
 
 func orderLeafRank[V: static int](t: typedesc[Int[V]]): static int =
@@ -164,9 +162,8 @@ func leafAt(t: int, i: static int): int =
   t
 
 proc productExpr(shape: NimNode, permPos: seq[int], i: int): NimNode {.compileTime.} =
-  ## Product of the shape leaves ranked before dimension i, over leaf range [0, i),
-  ## an ordinary expression chain: the `Int` overload matrix decides per product
-  ## whether it folds to an `Int[...]()` node or computes at runtime.
+  ## An ordinary expression chain, the `Int` overload matrix decides per
+  ## product whether it folds to an `Int[...]()` node or computes at runtime.
   result = quote do: Int[1]()
   for j in 0 ..< permPos.len:
     if permPos[j] < permPos[i]:
@@ -174,11 +171,8 @@ proc productExpr(shape: NimNode, permPos: seq[int], i: int): NimNode {.compileTi
       result = nnkInfix.newTree(bindSym"*", result, leaf)
 
 func orderedPermPos[O](n: static int, order: O): seq[int] =
-  ## Ranks of the order leaves:
-  ##
-  ## - dynamic entries substituted
-  ## - dimension positions sorted ascending
-  ## - evaluated at compile time, feeding the scheduling macro as a static argument
+  ## Evaluated at compile time, the result reaches the scheduling macro as a static argument.
+  ## A seq-typed const local fails device code generation.
   var ranks: array[n, int]
   staticFor i, 0, n:
     ranks[i] = orderLeafAt(order, i)
@@ -188,10 +182,9 @@ macro stridesTuple(shape: typed, permPos: static seq[int]): untyped =
   ## Stride leaves in original dimension order, dimension i taking the product
   ## of the shape leaves ranked before it.
   ##
-  ## - the scheduling is compile-time macro work and vanishes with the expansion
-  ## - the products are ordinary expressions for the `Int` overload matrix
-  ## - the tuple constructor is emitted directly, a fold through `concat` lowers as a call over the callee's parameter symbols
-  ##   and dies in device code generation
+  ## - the scheduling happens inside the macro expansion
+  ## - the stride tuple constructor is emitted directly, seq-typed const locals fail device code generation
+  ## - a `concat` call over the callee's parameter symbols fails device code generation too
   result = nnkPar.newTree(productExpr(shape, permPos, 0))
   for i in 1 ..< permPos.len:
     result.add(productExpr(shape, permPos, i))
@@ -214,12 +207,9 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   stridesTuple(shape, orderedPermPos(n, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
-  ## Compile-time order: the order values rank the shape leaves directly.
   make_layout(shape, compactOrderStrides(shape, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O): auto =
-  ## Runtime order leaves. Each int leaf is a dynamic order entry.
-  ## Ranks derive from the leaf types, after every static `Int[...]` leaf.
   const n: int = Sh.rank()
   const ranks = block:
     var r: array[n, int]
@@ -264,7 +254,6 @@ template make_ordered_layout*(shape, order: untyped): auto =
   ##
   ## Expansion happens at the call site. Static promotion rewrites literal leaves
   ## into `Int[...]` nodes before the algebra runs. A runtime leaf stays verbatim.
-  ## The two impl overloads differ in order regime only, the stride algebra is one body.
   make_ordered_layout_impl(makeIntTuple(shape), order)
 
 # ═══════════════════════════════════════════════════════════════
