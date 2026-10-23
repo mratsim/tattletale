@@ -57,9 +57,6 @@ func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
 func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
-func roundStepUp*(x, step: int): int {.inline.} =
-  round_multiple_up(x, step)
-
 func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment, phantom/static types excluded,
   ##  Nim int/uint lowered to 4 bytes
@@ -71,9 +68,9 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
       result.align = 1
       for f in fields(default(T)):
         let fl = deviceLayout(typeof(f), backend)
-        result.size = roundStepUp(result.size, fl.align) + fl.size
+        result.size = round_multiple_up(result.size, fl.align) + fl.size
         result.align = max(result.align, fl.align)
-      result.size = roundStepUp(result.size, result.align)
+      result.size = round_multiple_up(result.size, result.align)
   elif T is array:
     let ea = if default(T).len > 0: argWidth(typeof(default(T)[0]), backend) else: 1
     result = (sizeof(T), ea)
@@ -124,18 +121,18 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
   when T is object|tuple:
     when not isStaticArg(T):
       let a = deviceLayout(T, backend).align
-      off = roundStepUp(off, a)
+      off = round_multiple_up(off, a)
       for f in fields(v):
         dst.packFrom(off, f, backend)
-      off = roundStepUp(off, a)
+      off = round_multiple_up(off, a)
   elif T is array:
     let a = deviceLayout(T, backend).align
-    off = roundStepUp(off, a)
+    off = round_multiple_up(off, a)
     copyMem(dst[off].addr, v.addr, sizeof(v))
     off += sizeof(v)
   else:
     const a = argWidth(T, backend)
-    off = roundStepUp(off, a)
+    off = round_multiple_up(off, a)
     putBytes(dst, off, v, a)
     off += a
 
