@@ -177,6 +177,9 @@ proc validateAddressSpaceCasts(ctx: var GpuContext) =
     let fn = ctx.genericInsts[fnKey]
     if fn.kind == gpuProc:
       ctx.validateSpaceCastsIn(fn.pBody, fn.pName.ident())
+  # top-level type and var statements are emitted verbatim, they get the same rejection
+  for blk in ctx.globalBlocks:
+    ctx.validateSpaceCastsIn(blk, "global scope")
 
 proc validateSpaceCastsIn(ctx: var GpuContext, n: GpuAst, fnName: string) =
   ## Validates every cast/conv in depth-first pre-order, other kinds pass
@@ -209,4 +212,6 @@ proc validateSpaceCast(ctx: var GpuContext, n: GpuAst, fnName: string) =
   ## One cast/conv node against the operand's accessed space, other kinds pass
   let rejection = ctx.spaceCastRejection(n, fnName)
   if rejection.len > 0:
-    error rejection
+    # a raised error stays catchable in static test blocks, in the macro
+    # pipeline it fails compilation either way
+    raise newException(ValueError, rejection)
