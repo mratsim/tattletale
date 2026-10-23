@@ -5,11 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tile reduce over Metal: strip reductions, accumulation and rowView
+## Tile reduce over Metal: strip reductions, accumulation and atAxisIndex
 ##
 ## Test that the two-phase tile reduce matches an f64 host reference on Metal.
-## It covers compact, ragged and multi-tile strips with clear and accumulate
-## semantics and checks that rowView cuts per-row strips end to end.
+## It covers compact, ragged and multi-tile strips with overwrite and accumulate
+## semantics and checks that atAxisIndex cuts per-row strips end to end.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \
@@ -83,11 +83,14 @@ proc stripReduceKernel(dst, src: distinct TensorView, op: static ReduceOp, clear
     tiled = make_layout(src.size()).logical_divide(reg.getLayout())
     stripTiles = tiled.getTileGrid().size()
   for tileID in 0 ..< stripTiles:
-    reg.load(src, thrID, tileID, padWith = reduceIdentity[src.T](op))
+    reg.load(src, thrID, tileID, padWith = reduceIdentity(op, src.T))
     if tileID == 0:
-      reduce(acc, reg, op, clear)
+      when clear:
+        acc.reduce(reg, op)
+      else:
+        acc.reduceAcc(reg, op)
     else:
-      reduce(acc, reg, op, false)
+      acc.reduceAcc(reg, op)
   if thrID == 0:
     dst[0] = acc
 
@@ -96,10 +99,10 @@ proc accumulateKernel(dst, a, b: distinct TensorView) =
   let thrID = getLocalThreadID()
   var reg: tile(a.T)
   var acc = zero(a.T)
-  reg.load(a, thrID, 0, padWith = reduceIdentity[a.T](roSum))
-  reduce(acc, reg, roSum, clear = true)
-  reg.load(b, thrID, 0, padWith = reduceIdentity[b.T](roSum))
-  reduce(acc, reg, roSum, clear = false)
+  reg.load(a, thrID, 0, padWith = reduceIdentity(roSum, a.T))
+  acc.reduce(reg, roSum)
+  reg.load(b, thrID, 0, padWith = reduceIdentity(roSum, b.T))
+  acc.reduceAcc(reg, roSum)
   if thrID == 0:
     dst[0] = acc
 
@@ -108,13 +111,13 @@ proc rowReduceKernel(dst, src: distinct TensorView, op: static ReduceOp) =
   let
     thrID = getLocalThreadID()
     rowFlat = getLocalTileID(dst.shape)
-  let strip = rowView(src, 2, rowFlat)
+  let strip = atAxisIndex(src, 2, rowFlat)
   var reg: tile(strip.T)
-  reg.load(strip, thrID, 0, padWith = reduceIdentity[strip.T](op))
+  reg.load(strip, thrID, 0, padWith = reduceIdentity(op, strip.T))
   var outv = zero(strip.T)
-  reduce(outv, reg, op, clear = true)
+  outv.reduce(reg, op)
   if thrID == 0:
-    rowView(dst, 2, rowFlat)[0] = outv
+    atAxisIndex(dst, 2, rowFlat)[0] = outv
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The cases
@@ -211,7 +214,7 @@ proc combineCase[E: HwEngine](engine: E, op: static ReduceOp) =
   else:
     checkClose(got, expect, "min, strip B combines onto strip A (clear = false)")
 
-proc rowViewCase[E: HwEngine](engine: E, strides: tuple, msg: string) =
+proc atAxisIndexCase[E: HwEngine](engine: E, strides: tuple, msg: string) =
   ## Per-row sum and max over (3, 5, 7) along axis 2 at the given strides,
   ## every output slot prefilled at the sentinel 12345 and overwritten
   var src = makeHostTensor(float32, (3, 5, 7), strides)
@@ -269,8 +272,8 @@ proc runTest =
   accumulateCase(engine)
   combineCase(engine, roMax)
   combineCase(engine, roMin)
-  rowViewCase(engine, (35, 7, 1), "rowView over (3, 5, 7) row-major")
-  rowViewCase(engine, (70, 14, 2), "rowView over (3, 5, 7) with a 2x-scaled stride on axis 2")
+  atAxisIndexCase(engine, (35, 7, 1), "atAxisIndex over (3, 5, 7) row-major")
+  atAxisIndexCase(engine, (70, 14, 2), "atAxisIndex over (3, 5, 7) with a 2x-scaled stride on axis 2")
   echo "t_tile_reduce_metal: all cases passed"
 
 when isMainModule:

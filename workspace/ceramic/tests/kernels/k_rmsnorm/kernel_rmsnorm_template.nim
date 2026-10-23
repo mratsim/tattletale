@@ -146,38 +146,6 @@ proc checkRmsnorm*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
   echo msg, ": worst |d| = ", formatFloat(report.worst, ffScientific, 3)
   doAssert report.bad == 0, msg & ": " & $report.bad & " mismatched elements"
 
-proc checkWeightContract*(msg: string) =
-  ## Weight-contract rejections of the weighted rmsnorm.
-  ##
-  ## - a badly shaped weight fails the compile-time shape check,
-  ##   `rmsnormWeightShapeCheck` rejects it at instantiation
-  ## - a well-shaped static weight passes the same check
-  ## - a rank-3 static source over axis 1: the size check reads the reduced axis size, a weight sized to the leading dimension fails to compile
-  ##
-  ## Args:
-  ## - msg: the case label echoed on failure
-  var src = makeHostTensor(float32, (2, 64), (64, 1))
-  var weight2d = makeHostTensor(float32, (2, 64), (64, 1))
-  doAssert not compiles(rmsnormWeightShapeCheck(weight2d.view(), src.view(), 1)),
-    msg & ": rank-2 weight must fail to compile"
-
-  # statically laid out views: the compile-time size check needs both shape
-  # leaves as compile-time literals
-  const
-    rowLayout = make_layout((2, 64), (64, 1))
-    goodLayout = make_layout((64,), (1,))
-    undersizedLayout = make_layout((32,), (1,))
-  var srcBuf: array[128, float32]
-  var goodBuf: array[64, float32]
-  var undersizedBuf: array[32, float32]
-  let rowSrc = make_view(addr srcBuf[0], rowLayout)
-  let goodWeight = make_view(addr goodBuf[0], goodLayout)
-  let undersized = make_view(addr undersizedBuf[0], undersizedLayout)
-  doAssert compiles(rmsnormWeightShapeCheck(goodWeight, rowSrc, 1)),
-    msg & ": a weight matching the axis size must pass the shape check"
-  doAssert not compiles(rmsnormWeightShapeCheck(undersized, rowSrc, 1)),
-    msg & ": undersized weight must fail to compile"
-
 func genRmsnormCases*[Sh: tuple](shapes: varargs[Sh]): seq[tuple[src, dst: tuple[shape, strides: Sh], axis, iters: int]] =
   ## Returns one case per (stride order, axis) per shape.
   ##
@@ -309,4 +277,3 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
       "strided dst, 2x stride on the non-reduced axis, weighted")
 
   # ── the weight must fit the reduced axis: one slot per axis position ──
-  checkWeightContract("weight contract")

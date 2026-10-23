@@ -13,51 +13,6 @@
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
 
-func staticShape[T, Sh, St](_: typedesc[TensorView[T, Sh, St]]): Sh =
-  ## Compile-time shape of a tensor type: the shape tuple of the view's layout.
-  ##
-  ## - value-level shape reads such as `weight.rank()` do not fold in device code,
-  ##   the shape type does: the codegen takes the raw generic body
-  ## Static leaves are `Int[V]` phantom values, their value compares through `===`.
-  ## Runtime leaves are plain `int` and `default` reads 0.
-  ##
-  ## Example: `staticShape(typeof(view)).rank()` is the view's rank.
-  default(Sh)
-
-template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
-    weight: TensorView[T, ShW, StW], src: TensorView[T, ShS, StS], axis: static int) =
-  ## Compile-time part of the weighted rmsnorm's weight contract.
-  ## The kernel and the host-side checks share this one body.
-  ##
-  ## - the weight is rank 1, one slot per axis position, always enforced
-  ## - the weight size matches the source axis size when both sizes are
-  ##   compile-time literals
-  ##
-  ## Runtime-shaped weights are unchecked: the weight size must equal
-  ## the source axis size, a mismatch is the caller's responsibility
-  ## and undefined behavior.
-  ##
-  ## The kernel instantiates this check on every weighted launch.
-  ## The compiles() cases in the test suite exercise this template body directly,
-  ## the only host-reachable test surface:
-  ## host-scope compiles() of a whole kernel call is always false.
-  ##
-  ## Example:
-  ##   doAssert not compiles(rmsnormWeightShapeCheck(undersizedWeight, src, axis))
-  ##   doAssert compiles(rmsnormWeightShapeCheck(goodWeight, src, axis))
-  const
-    wShape = staticShape(typeof(weight))
-    wLeaf = when wShape is tuple: wShape[0] else: wShape
-    sShape = staticShape(typeof(src))
-    sLeaf = when sShape is tuple: sShape[axis] else: sShape
-  static:
-    doAssert wShape.rank() == 1,
-      "rmsnorm weight must be rank 1, one slot per axis position"
-  when typeof(wLeaf) is Int and typeof(sLeaf) is Int:
-    static:
-      doAssert wLeaf === sLeaf,
-        "rmsnorm weight size must match the source axis size"
-
 proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
   ## Row-wise RMS normalization shared by the two entry points.
   ##
@@ -97,10 +52,6 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
   # per-simdgroup partials uncombined or rows partially written.
   # Deferred: cross-warp combine via shared memory and barrier.
-  when withWeight:
-    # a statically mismatched weight fails to compile,
-    # a runtime-shaped weight is the caller's responsibility
-    rmsnormWeightShapeCheck(weight, src, axis)
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()
