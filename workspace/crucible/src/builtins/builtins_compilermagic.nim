@@ -13,6 +13,7 @@ type CompileTarget* = enum
   ctOpenCL
   ctVulkan
   ctWebGPU
+  ctHlsl
 
 var crucibleCompileTarget* {.compileTime.}: CompileTarget = ctNone
   # ctNone until a DSL wrapper records its target.
@@ -23,5 +24,5 @@ proc ccGetBackend*(): CompileTarget {.compileTime.} =
   ##
   ## Outside a DSL block the call fails with a compile-time error.
   doAssert crucibleCompileTarget != ctNone,
-    "ccGetBackend: not inside a cuda:/metal:/opencl:/vulkan:/webgpu: block"
+    "ccGetBackend: not inside a cuda:/metal:/opencl:/vulkan:/webgpu:/hlsl: block"
   crucibleCompileTarget

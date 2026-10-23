@@ -22,6 +22,8 @@ import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
+import ./passes/passes_lowering_hlsl
+import ./passes/passes_validations_hlsl
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
 import ./backends/lang_utils
@@ -215,3 +217,26 @@ macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
+
+macro codegenHlsl(body: typed): string =
+  ## Compiles an `hlsl:` block body into HLSL compute shader code.
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.registerHlslLoweringPasses()
+  reg.registerValidationPostPasses()
+  reg.registerHlslValidationPasses()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
+  ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
+  runPasses(ctx, reg)
+  result = newLit(ctx.codegenHlsl())
+
+macro hlsl*(body: untyped): string =
+  ## Converts the body of this macro into HLSL compute shader code.
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctHlsl
+  result = newCall(bindSym"codegenHlsl", body)

@@ -45,4 +45,4 @@ export launch_device_fn.DeviceFnSugar,
 # ═══════════════════════════════════════════════════════════════
 
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.vulkan,
-       gpu_compiler.webgpu, gpu_compiler.metal
+       gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl

@@ -31,6 +31,8 @@ import
   ./codegen/passes/passes_lowering_glsl,
   ./codegen/passes/passes_lowering_opencl,
   ./codegen/passes/passes_lowering_wgsl,
+  ./codegen/passes/passes_lowering_hlsl,
+  ./codegen/passes/passes_validations_hlsl,
   ./codegen/gpu_compiler,
   ./builtins/builtins_pragmas,
   ./builtins/builtins_functions
@@ -44,4 +46,5 @@ export gpu_compiler, ast_datatypes, ast_type_constructors, ast_type_resolvers,
        passes_low_array_assign, passes_low_address_spaces,
        passes_lowering_msl, passes_lowering_cuda, passes_lowering_glsl,
        passes_lowering_opencl, passes_lowering_wgsl,
+       passes_lowering_hlsl, passes_validations_hlsl,
        builtins_pragmas, builtins_functions

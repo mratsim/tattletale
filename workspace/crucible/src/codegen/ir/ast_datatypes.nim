@@ -15,7 +15,8 @@ type
     bkWebGPU,   ## WebGPU WGSL backend
     bkOpenCL, ## OpenCL backend
     bkVulkan, ## Vulkan (SPIR-V) backend
-    bkMetal   ## Metal (MSL) backend
+    bkMetal,  ## Metal (MSL) backend
+    bkHlsl    ## HLSL backend, compiled through the glslang HLSL frontend
 
   GpuNodeKind* = enum
     gpuDiscard         # Just an empty statement. Useful to not emit anything

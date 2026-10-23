@@ -42,7 +42,7 @@ func registerSharedLoweringPasses*(reg: var PassRegistry) =
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =
   reg.register(name, pkTransform, phaseMain,
-    "Renames identifiers colliding with backend reserved words: fn names, call sites, params, globals, struct fields, field accesses",
+    "Renames identifiers colliding with backend reserved words: fn names, call sites, params, locals, globals, struct fields, field accesses",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       ctx.renameReservedIdentifiers(reserved)
@@ -84,6 +84,28 @@ proc renameFieldAccesses(n: var GpuAst, reserved: HashSet[string]) =
     for ch in mitems(n):
       renameFieldAccesses(ch, reserved)
 
+proc collectLocalDeclRenames(n: GpuAst, reserved: HashSet[string], renames: var Table[string, string]) =
+  ## Records a rename for every local declaration whose name is a reserved word:
+  ## var declarations, constexprs and for-loop variables, keyed by the declaration's iSym.
+  ## A var's name and a for-loop's variable are not child nodes of their statement,
+  ## so each declaration ident is read at its owning node
+  template rename(decl: GpuAst) =
+    let oldName = decl.ident()
+    let safeName = renameReservedKeywords(oldName, reserved)
+    if oldName != safeName:
+      renames[decl.symbol.iSym] = safeName
+      decl.symbol.name = safeName
+  case n.kind
+  of gpuVar:
+    rename(n.vName)
+  of gpuConstexpr:
+    rename(n.cIdent)
+  of gpuFor:
+    rename(n.fVar)
+  else:
+    for ch in n:
+      collectLocalDeclRenames(ch, reserved, renames)
+
 proc renameReservedIdentifiers(ctx: var GpuContext, reserved: HashSet[string]) =
   ## Renames identifiers colliding with target keywords at every emitted site:
   ## - fn names, call sites and fn params
@@ -114,6 +136,7 @@ proc renameReservedIdentifiers(ctx: var GpuContext, reserved: HashSet[string]) =
         if oldName != safeName:
           renames[p.ident.symbol.iSym] = safeName
           p.ident.symbol.name = safeName
+      collectLocalDeclRenames(fn.pBody, reserved, renames)
       if renames.len > 0:
         renameIdents(fn.pBody, renames)
   for fn in ctx.allFnTab.values:

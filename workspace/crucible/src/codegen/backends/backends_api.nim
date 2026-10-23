@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang
+import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang, ./hlsl_lang
 import ../ir/ast_datatypes
 
 proc codegenCuda*(ctx: var GpuContext): string =
@@ -22,3 +22,6 @@ proc codegenGLSL*(ctx: var GpuContext): string =
 
 proc codegenMetal*(ctx: var GpuContext): string =
   msl_lang.codegen(ctx)
+
+proc codegenHlsl*(ctx: var GpuContext): string =
+  hlsl_lang.codegen(ctx)

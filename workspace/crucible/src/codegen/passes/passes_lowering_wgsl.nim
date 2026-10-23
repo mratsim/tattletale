@@ -21,6 +21,7 @@ import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
+import ./pass_helpers
 import ./passes_low_address_spaces
 import ./passes_lowering
 import ./passes_low_pointers
@@ -483,20 +484,6 @@ proc substituteIdents(n: var GpuAst, subst: Table[string, GpuAst]) =
   else:
     for ch in mitems(n):
       substituteIdents(ch, subst)
-
-proc containsReturnStmt(n: GpuAst): bool =
-  if n.kind == gpuReturn:
-    return true
-  for ch in n:
-    if ch.containsReturnStmt():
-      return true
-
-proc collectIdentNames(n: GpuAst, names: var HashSet[string]) =
-  if n.kind == gpuIdent and n.symbol != nil:
-    names.incl n.symbol.name
-  else:
-    for ch in n:
-      ch.collectIdentNames(names)
 
 proc hasNonFnPtrParam(fn: GpuAst): bool =
   ## True when a pointer parameter sits outside the `function` address space.
