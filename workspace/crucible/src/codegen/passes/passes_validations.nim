@@ -159,7 +159,7 @@ proc validateAddressSpaceCasts(ctx: var GpuContext) =
   ##
   ## Contract for every `gpuCast`/`gpuConv` whose target is a pointer, span, or array:
   ## - the target space must equal the space the operand accesses
-  ## - the frontend stamps pointer targets from the operand at birth,
+  ## - the frontend derives pointer targets from the operand at birth,
   ##   a derived pointer stays in its source storage, so a mismatch means
   ##   a target space written independently of the operand: the C-style
   ##   `cast[ptr T](rawInt)` shape

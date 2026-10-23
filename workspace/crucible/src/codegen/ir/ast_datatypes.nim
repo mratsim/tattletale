@@ -74,7 +74,7 @@ type
     builtin*: bool ## Whether the type refers to a builtin type or not
     isTuple*: bool ## Object or generic inst stands for a Nim tuple
     fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
-    addressSpace*: AddressSpace ## Memory a gtPtr/gtSpan/gtArray accesses, unstamped kinds keep asRMEM.
+    addressSpace*: AddressSpace ## Memory a gtPtr/gtSpan/gtArray accesses, untagged kinds keep asRMEM.
                   ## Variables carry their own storage space on `GpuParam.addressSpace`/`gpuVar.addressSpace`
     case kind*: GpuTypeKind
     of gtPtr:

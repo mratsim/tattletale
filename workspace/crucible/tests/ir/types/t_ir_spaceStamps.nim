@@ -1,6 +1,6 @@
 ## Address spaces survive the lowering passes
 ##
-## Test that stamped address spaces survive the lowering passes:
+## Test that address spaces survive the lowering passes:
 ## span-to-pointer splitting, generic instantiation, smem arena hoisting,
 ## ptr-array decay and view decomposition
 ##
@@ -106,7 +106,7 @@ static:
     $inst.pParams[1].typ.addressSpace
   echo "  OK - device span survives span-to-pointer normalization"
 
-# ── 2. Smem arena: the hoisted threadgroup pointer stamps asSMEM ──
+# ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
   reg.registerLegalizationPasses()
@@ -172,9 +172,9 @@ static:
       arenaArgs += 1
   doAssert arenaArgs == 1,
     "exactly one call arg forwards the threadgroup arena, got " & $arenaArgs
-  echo "  OK - smem arena stamps asSMEM on the hoisted type"
+  echo "  OK - smem arena carries asSMEM on the hoisted type"
 
-# ── 3. A ptr-to-array param decays keeping its stamped space ──
+# ── 3. A ptr-to-array param decays keeping its space ──
 static:
   let ir = toCrucibleAst:
     proc reduce(dst: ptr array[16, float32], src: ptr array[16, float32]) {.device.} =
@@ -195,13 +195,13 @@ static:
   registerLowerDecay.runPassPrepared(ctx)
 
   # the decay rebuilds gtPtr(gtArray) as gtPtr(gtUA)
-  # a fresh rebuild would reset the space, the stamped birth space must survive
+  # a fresh rebuild would reset the space, the birth space must survive
   for i in 0 ..< 2:
     doAssert reduceFn.pParams[i].typ.kind == gtPtr and
       reduceFn.pParams[i].typ.addressSpace == asDevice,
       "the decayed ptr-array param keeps asDevice, got " &
       $reduceFn.pParams[i].typ.addressSpace
-  echo "  OK - ptr-array decay keeps the stamped space"
+  echo "  OK - ptr-array decay keeps the birth space"
 
 # ── 4. A span view binding decomposes keeping the span's space ──
 static:

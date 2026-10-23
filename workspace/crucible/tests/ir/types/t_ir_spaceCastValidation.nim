@@ -96,7 +96,7 @@ static:
 
   let fn = ir.findFirst(gpuProc)
   doAssert not fn.isNil, "expected the kernel proc"
-  # the frontend stamps every target from its operand, so the validation passes
+  # the frontend derives every target from its operand, so the validation passes
   discard registerValidateAddressSpaceCasts.runPass(fn)
   echo "  OK - frontend casts carry their operand's space and pass validation"
 

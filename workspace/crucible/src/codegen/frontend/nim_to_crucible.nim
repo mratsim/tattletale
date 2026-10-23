@@ -388,7 +388,6 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       varNode.vType = resolveType(reg, declaration)
       if varNode.addressSpace != asRMEM and
           varNode.vType.kind in {gtPtr, gtSpan, gtArray}:
-        # the storage space stamps the var's ptr/span/array type
         varNode.vType = varNode.vType.withAddressSpace(varNode.addressSpace)
       varNode.vName.symbol.typ = varNode.vType # type cached on the symbol for later lookup
       varNode.vMutable = node.kind == nnkVarSection
@@ -403,7 +402,9 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
             varNode.vName.symbol.typ = varNode.vType
         if varNode.vType.kind in {gtObject, gtGenericInst} and
             varNode.vInit.kind == gpuObjConstr:
-          # field spaces stamp from init values, the declared type is shared
+          # one declared Holder, each construction gets its own field types:
+          # Holder(p: addr outp[0]) types the field a device ptr,
+          # Holder(p: addr tmp) a thread ptr, the declared type stays untouched
           var instType = varNode.vType.clone()
           for i in 0 ..< instType.fields.len:
             for fc in varNode.vInit.ocFields:

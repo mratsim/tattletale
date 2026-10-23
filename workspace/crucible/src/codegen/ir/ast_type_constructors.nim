@@ -38,10 +38,10 @@ func initGpuUAType*(to: GpuType): GpuType =
     result = GpuType(kind: gtUA, uaTo: to)
 
 func withAddressSpace*(t: GpuType, space: AddressSpace): GpuType =
-  ## Returns `t` stamped with `space`, copy-on-write:
+  ## Returns `t` carrying `space`, copy-on-write:
   ## the same space returns `t` unchanged, a different space returns a clone
   ## carrying `space`. GpuType refs are shared between contexts and table keys,
-  ## stamping one in place would leak the space to every sharer.
+  ## writing one in place would leak the space to every sharer.
   if t.isNil or t.addressSpace == space:
     result = t
   else:

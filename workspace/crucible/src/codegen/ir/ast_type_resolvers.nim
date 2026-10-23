@@ -213,7 +213,7 @@ proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## Returns:
   ## - the innermost pointer/span/array type's space along the access chain,
   ##   `p[i]` and `p` resolve to the same space
-  ## - the space a pointer-cast target carries, its operand stamps it at birth
+  ## - the space a pointer-cast target carries, its operand derives it at birth
   ## - the storage a value-cast (`cast[uint64](p)`) or integer arithmetic over
   ##   one derives from, pointer provenance survives the round-trip
   ## - asRMEM for plain values
@@ -229,7 +229,7 @@ proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   of gpuDeref:
     result = getTypeAccessedSpace(ctx.getOperandType(n.dOf))
   of gpuCast:
-    # a pointer/span/array cast target carries its own space stamped from
+    # a pointer/span/array cast target carries its own space derived from
     # the operand at birth
     # a cast to a plain value keeps the operand's storage provenance,
     # `cast[uint64](p) + off` still derives from p

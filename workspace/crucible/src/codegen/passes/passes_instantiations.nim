@@ -16,7 +16,7 @@
 #
 # - call sites: one callee instantiation per space combination
 # - struct constructions: one type def per field-space combination
-# - identity: callee key + the type hash of each restamped parameter,
+# - identity: callee key + the type hash of each parameter's space,
 #   reusing the existing instantiation hashing
 #
 # A pointer/span parameter is implicitly generic over its space,
@@ -77,7 +77,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   if not specializes:
     return
 
-  # Identity: the callee's iSym gains the hash of every restamped parameter
+  # Identity: the callee's iSym gains the hash of every parameter whose space changed
   # like the Nim-level generic instantiation hashing
   var key = call.cName.symbol.iSym
   for i, p in callee.pParams:
@@ -93,7 +93,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   var inst = callee.clone()
   inst.pName = instIdent
   # The clone shares the original's Symbols (a gpuIdent clone shares the ref):
-  # restamped parameters get fresh symbols and the body rebinds onto them,
+  # parameters carrying a new space get fresh symbols and the body rebinds onto them,
   # the original's parameters stay untouched
   var fresh = initTable[string, Symbol]()
   for i, p in inst.pParams.mpairs:
@@ -115,7 +115,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   ctx.instantiateCallsIn(inst.pBody)
 
 proc rebindIdents(n: var GpuAst, fresh: Table[string, Symbol]) =
-  ## Points every ident whose iSym was restamped onto its fresh Symbol.
+  ## Points every ident whose iSym was re-keyed onto its fresh Symbol.
   if n.isNil:
     return
   if n.kind == gpuIdent:
@@ -126,8 +126,8 @@ proc rebindIdents(n: var GpuAst, fresh: Table[string, Symbol]) =
       ch.rebindIdents(fresh)
 
 proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst) =
-  ## Instantiates every call in `n` whose argument spaces restamp
-  ## a pointer/span parameter of the callee
+  ## Instantiates every call in `n` whose argument spaces mismatch
+  ## the callee's pointer/span parameter spaces
   if n.isNil:
     return
   if n.kind == gpuCall:
@@ -141,7 +141,7 @@ proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst) =
 
 proc instantiatedStructType(ocType: GpuType, ocFields: seq[GpuFieldInit]): GpuType =
   ## Instantiated struct type of a construction: the declared type,
-  ## fields carrying the construction's stamped field types
+  ## fields carrying the construction's field types
   ## Returns nil when the construction matches the declared field types
   var differs = false
   var fields: seq[GpuTypeField]
@@ -202,7 +202,7 @@ proc instantiateStructConstr(ctx: var GpuContext, constr: var GpuAst): bool =
 
 proc instantiateStructTypesIn(ctx: var GpuContext, n: var GpuAst) =
   ## Instantiates every struct construction in `n` whose field inits
-  ## restamp the declared field spaces.
+  ## differ from the declared field spaces.
   if n.isNil:
     return
   case n.kind
