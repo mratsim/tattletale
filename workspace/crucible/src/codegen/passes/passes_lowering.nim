@@ -20,6 +20,7 @@ import ../ir/ast_type_resolvers
 import ../ir/ast_type_constructors
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_low_pointers
 import ./passes_legalizations
 
 # ############################################################
@@ -36,6 +37,7 @@ import ./passes_legalizations
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerSharedLoweringPasses*(reg: var PassRegistry) =
+  reg.registerStampPointerLocals()
   reg.registerPruneCompileTimeParams()
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =

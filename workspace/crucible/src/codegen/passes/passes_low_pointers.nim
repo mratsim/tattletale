@@ -20,6 +20,13 @@
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
+func registerStampPointerLocals*(reg: var PassRegistry) =
+  reg.register("stampPointerLocals", pkTransform, phaseMain,
+    "Retypes pointer locals from the storage their assignment designates",
+    dependsOn = @[],
+    run = stampPointerLocals
+  )
+
 func registerExpandStructKernelParams*(reg: var PassRegistry) =
   ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
   ## (GLSL pointer fields cross as 64-bit buffer device addresses)
@@ -173,3 +180,38 @@ proc explodeGlobalStructWithPtrFields(ctx: var GpuContext) =
       else:
         params.add p
     fn.pParams = params
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pointer local assignment
+# ═══════════════════════════════════════════════════════════════════════
+
+proc stampPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[string, GpuAst]) =
+  ## Retypes pointer locals from their assignments
+  if n.isNil:
+    return
+  case n.kind
+  of gpuVar:
+    if n.vType.kind == gtPtr:
+      locals[n.vName.symbol.name] = n
+  of gpuAssign:
+    if n.aLeft.kind == gpuIdent and not n.aLeft.symbol.isNil and
+        not n.aLeft.symbol.typ.isNil and n.aLeft.symbol.typ.kind == gtPtr:
+      let space = ctx.resolveAddressSpace(n.aRight)
+      if space != n.aLeft.symbol.typ.addressSpace:
+        let newTyp = n.aLeft.symbol.typ.withAddressSpace(space)
+        n.aLeft.symbol.typ = newTyp
+        let owned = locals.getOrDefault(n.aLeft.symbol.name, nil)
+        if not owned.isNil:
+          owned.vType = newTyp
+  else:
+    discard
+  for ch in n.items:
+    ctx.stampPointerLocalsIn(ch, locals)
+
+proc stampPointerLocals(ctx: var GpuContext) =
+  ## A pointer local declared without an initializer is untagged at birth,
+  ## its assignment decides the storage the declaration must carry
+  for _, fn in ctx.allFnTab.mpairs:
+    if fn.kind == gpuProc:
+      var locals = initTable[string, GpuAst]()
+      ctx.stampPointerLocalsIn(fn.pBody, locals)

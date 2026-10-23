@@ -310,6 +310,52 @@ static:
     $constrs[1].ocType.fields[0].typ.addressSpace
   echo "  OK - a nested construction specializes"
 
+# ── 1f. A pointer local takes the storage its assignment designates ──
+static:
+  let ir = toCrucibleAst:
+    proc kern(outp: ptr float32) {.global.} =
+      var tmp: float32
+      var p: ptr float32
+      p = addr tmp
+      var q: ptr float32
+      q = outp
+      outp[] = p[] + q[]
+
+  var ctx = GpuContext()
+  var kern: GpuAst = nil
+  for stmt in ir.statements:
+    if stmt.kind == gpuProc:
+      ctx.allFnTab[stmt.pName] = stmt
+      if stmt.pName.symbol.name == "kern":
+        kern = stmt
+        ctx.fnTab[stmt.pName] = stmt
+
+  proc registerStampLocals(reg: var PassRegistry) {.nimcall.} =
+    reg.registerStampPointerLocals()
+  registerStampLocals.runPassPrepared(ctx)
+
+  # an uninitialized pointer local is untagged at birth, the assignment decides
+  # the storage: `addr tmp` is thread, `outp` device
+  proc findVarTyped(n: GpuAst, name: string): GpuAst =
+    if n.isNil:
+      return nil
+    if n.kind == gpuVar and n.vName.symbol.name == name:
+      return n
+    for ch in n.items:
+      let found = ch.findVarTyped(name)
+      if not found.isNil:
+        return found
+  let pv = kern.pBody.findVarTyped("p")
+  let qv = kern.pBody.findVarTyped("q")
+  doAssert not pv.isNil and not qv.isNil, "expected the pointer locals"
+  doAssert pv.vType.addressSpace == asRMEM,
+    "a pointer assigned a thread address stays thread, got " &
+    $pv.vType.addressSpace
+  doAssert qv.vType.addressSpace == asDevice,
+    "a pointer assigned a device pointer becomes device, got " &
+    $qv.vType.addressSpace
+  echo "  OK - pointer locals take the assigned storage's space"
+
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
