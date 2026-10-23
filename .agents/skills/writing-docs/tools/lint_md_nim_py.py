@@ -367,6 +367,8 @@ BANNED = [
      "(a colon-terminated lead-in announcing the adjacent example is exempt)"),
     (r"\blands? at\b|\bsits? at\b", None,
      "state the offset or position directly, or restate the layout"),
+    (r"\blands?\b|\barrives?\b", None,
+     "say what produces or holds the construct, arrival verbs hide the mechanism"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
