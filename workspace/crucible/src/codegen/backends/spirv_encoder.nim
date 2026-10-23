@@ -446,13 +446,23 @@ type
     sections*: array[SpvSection, seq[uint32]]
 
 const spvMagic* = 0x07230203'u32
+## Module baseline: SPIR-V 1.3, encoded in the spvVersion13 version word.
+## The baseline carries semantics beyond the number:
+## - the entry-point interface lists Input/Output variables only
+## - OpTypeFloat omits the FPEncoding operand, the 1.3 form
+## - PhysicalStorageBufferAddresses is extension-gated
+## - push-constant members narrower than 32 bits refuse, they need the SPIR-V 1.5 storage capabilities
+##
+## Bumping the constant to 1.4+ requires the entry-point interface to list
+## every referenced global variable, the push-constant block variable included.
 const spvVersion13* = 0x00010300'u32
 const spvGeneratorNone* = 0'u32
 const spvSchemaNone* = 0'u32
 
-proc initSpvModule*(version: uint32 = spvVersion13): SpvModule =
-  ## Empty module, result ids start at 1, id 0 is reserved
-  SpvModule(version: version, nextId: 1)
+proc initSpvModule*(): SpvModule =
+  ## Empty module at the spvVersion13 baseline, result ids start at 1,
+  ## id 0 is reserved
+  SpvModule(version: spvVersion13, nextId: 1)
 
 proc addWord*(m: var SpvModule, section: SpvSection, word: uint32) =
   ## Append one raw word to a section
@@ -529,9 +539,9 @@ type
       ## Bit width of every emitted OpTypeInt/OpTypeFloat, keyed by type id.
       ## OpConstant literal word counts derive from it
 
-proc initSpvBuilder*(version: uint32 = spvVersion13): SpvBuilder =
-  ## Builder over an empty module
-  SpvBuilder(module: initSpvModule(version))
+proc initSpvBuilder*(): SpvBuilder =
+  ## Builder over an empty module at the spvVersion13 baseline
+  SpvBuilder(module: initSpvModule())
 
 proc memoInst*(b: var SpvBuilder, opcode: uint32, operands: openArray[uint32]): uint32 =
   ## Emit a result-carrying type or constant instruction, deduplicated on
@@ -590,6 +600,8 @@ proc emitEntryPoint*(b: var SpvBuilder, executionModel, entryPoint: uint32, name
   ## - interface ids, the global Input/Output variables the entry point reads
   ## Vulkan requires every such variable listed. An empty list is valid
   ## when the entry point reads none.
+  ## The Input/Output-only interface matches the spvVersion13 baseline,
+  ## SPIR-V 1.4+ requires listing every referenced global variable, push-constant block included.
   b.module.startInst(ssEntryPoints, spvOpcode("OpEntryPoint"),
                      2 + stringWords(name) + iface.len)
   b.module.addWords(ssEntryPoints, @[executionModel, entryPoint])

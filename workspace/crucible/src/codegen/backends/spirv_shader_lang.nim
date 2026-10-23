@@ -258,9 +258,9 @@ type
       ## pending extensions (the float-atomics extension among them),
       ## flushed with the capabilities, sorted for byte-stable modules
 
-proc initSpvLangCtx*(version: uint32 = spvVersion13): SpvLangCtx =
-  ## Empty context, Shader capability recorded up front
-  result.builder = initSpvBuilder(version)
+proc initSpvLangCtx*(): SpvLangCtx =
+  ## Empty context at the spvVersion13 baseline, Shader capability recorded up front
+  result.builder = initSpvBuilder()
   result.caps.incl capShader
 
 proc scalarId*(ctx: var SpvLangCtx, t: GpuType): uint32 =
@@ -379,7 +379,7 @@ proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock 
   ## Builds the push-constant block over already-lowered member types, declaration order
   ## - parameter i lives at member i, byte offset offsets[i]
   ## - members narrower than 32 bits refuse loudly: 8/16-bit push members need
-  ##   the SPIR-V 1.5 storage capabilities, the 1.3 module baseline has none
+  ##   the SPIR-V 1.5 storage capabilities, the spvVersion13 baseline has none
   ## Callers pack the push blob at the returned offsets
   for m in members:
     if m.kind == stkScalar and scalarByteSize(m.scalar) < 4:
