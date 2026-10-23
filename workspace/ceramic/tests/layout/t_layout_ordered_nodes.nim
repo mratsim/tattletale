@@ -95,6 +95,12 @@ proc runOrderRegimeTests =
     doAssert l === ((2, 3, 4), (4, 8, 1))
     echo "    12. Int-node and runtime order leaves mix: OK"
 
+  block:
+    let l = make_ordered_layout(((2, 3), 4), (0, 1, 2))
+    doAssert l === (((2, 3), 4), ((1, 2), 2))
+    doAssert typeof(l.stride[0][0]) is Int[1]
+    echo "    13. nested shape keeps its nesting: OK"
+
 proc runRefusalTests =
   block:
     doAssert not compiles(make_ordered_layout((2, 3, 4), 1))

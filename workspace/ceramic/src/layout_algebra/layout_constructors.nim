@@ -161,23 +161,13 @@ template orderFlatRank(order: IntOrIntTuple): static int =
 template orderFlatRank[I: static int, T](order: array[I, T]): static int =
   order.len
 
-func leafAt[T: tuple](t: T, i: static int): auto =
-  t[i]
-
-func leafAt[V: static int](t: Int[V], i: static int): Int[V] =
-  t
-
-func leafAt(t: int, i: static int): int =
-  t
-
-proc productExpr(shape: NimNode, permPos: seq[int], i: int): NimNode {.compileTime.} =
+proc productExpr(leaves: seq[NimNode], permPos: seq[int], i: int): NimNode {.compileTime.} =
   ## An ordinary expression chain, the `Int` overload matrix decides per
   ## product whether it folds to an `Int[...]()` node or computes at runtime.
   result = quote do: Int[1]()
   for j in 0 ..< permPos.len:
     if permPos[j] < permPos[i]:
-      let leaf = nnkCall.newTree(bindSym"leafAt", shape, newLit(j))
-      result = nnkInfix.newTree(bindSym"*", result, leaf)
+      result = nnkInfix.newTree(bindSym"*", result, leaves[j])
 
 func orderedPermPos[O](n: static int, order: O): seq[int] =
   ## Evaluated at compile time, the result reaches the scheduling macro as a static argument.
@@ -194,9 +184,14 @@ macro stridesTuple(shape: typed, permPos: static seq[int]): untyped =
   ## - the scheduling happens inside the macro expansion
   ## - the stride tuple constructor is emitted directly, seq-typed const locals fail device code generation
   ## - a `concat` call over the callee's parameter symbols fails device code generation too
-  result = nnkPar.newTree(productExpr(shape, permPos, 0))
+  ## - the products run over the shape's flat leaves, make_layout's per-mode
+  ##   scan reassembles a nested shape's stride nesting
+  var leaves: seq[NimNode] = @[]
+  for (leaf, _) in shape.tupleStream().leaves():
+    leaves.add leaf
+  result = nnkPar.newTree(productExpr(leaves, permPos, 0))
   for i in 1 ..< permPos.len:
-    result.add(productExpr(shape, permPos, i))
+    result.add(productExpr(leaves, permPos, i))
 
 func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
   ## Compact strides ranked by `order`, one body over IntOrIntTuple operands.
@@ -214,7 +209,7 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ## - operands flow through the `Int` overload matrix, no per-leaf dispatch
   ## - order ranks and product scheduling are compile-time, leaf products are
   ##   ordinary expressions evaluated by overload resolution
-  const n: int = Sh.rank()
+  const n: int = flatten(shape).rank()
   static: doAssert orderFlatRank(order) == n,
     "make_ordered_layout: shape and order of equal flat rank required"
   stridesTuple(shape, orderedPermPos(n, order))
@@ -223,7 +218,7 @@ func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto):
   make_layout(shape, compactOrderStrides(shape, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O): auto =
-  const n: int = Sh.rank()
+  const n: int = flatten(shape).rank()
   static: doAssert orderFlatRank(order) == n,
     "make_ordered_layout: shape and order of equal flat rank required"
   const ranks = block:
