@@ -5,23 +5,32 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## HLSL emission: one compute kernel per source, device functions emitted natively.
+## HLSL emission: one compute kernel per source.
 ##
-## DXC compiles multi-function HLSL: device functions emit as ordinary functions, the kernel as `main`.
+## The printer emits each device proc as a standalone HLSL function and the kernel as `main`.
+## DXC accepts multi-function HLSL, so nothing is inlined: calls compile to plain calls.
 ##
 ## Resource mapping, kernels:
-## - pointer parameters become StructuredBuffer / RWStructuredBuffer resources
-##   on `register(tN/uN, space0)`, scalars a ConstantBuffer on `register(bN, space0)`
-## - one global ordinal across all resources in declaration order,
-##   read-only vs read-write from the write-scan: read-only buffers take t registers,
-##   read-write u, the scalar block comes last
-## - scalar reads render `push.<name>` through the ConstantBuffer
-## - coordinate builtins join `main`'s signature only when read, mapped to SV_DispatchThreadID / SV_GroupID / SV_GroupIndex
+## - A pointer parameter binds to a StructuredBuffer (read-only) or an RWStructuredBuffer
+##   (read-write) resource. A scalar parameter becomes a member of one shared ConstantBuffer.
+## - The printer assigns ordinals in declaration order: each read-only buffer takes
+##   the next `register(tN, space0)`, each read-write buffer the next `register(uN, space0)`,
+##   and the ConstantBuffer takes the last `register(bN, space0)`.
+## - The write-scan classifies each buffer: a function that never stores through it is read-only.
+## - Reading a scalar parameter emits the expression `push.<name>`, a member access into
+##   the ConstantBuffer struct.
+##
+## Coordinate builtins (SV_DispatchThreadID / SV_GroupID / SV_GroupIndex):
+## - The kernel reads coordinate builtins through HLSL input semantics.
+## - `main`'s signature contains only the semantics that the body actually reads.
 ##
 ## Resource mapping, device functions:
-## - pointer parameters become unbound StructuredBuffer / RWStructuredBuffer resource params, the resource identity flows from the call site
-## - read-only vs read-write decided by the function's own write-scan
-## - scalars pass by value, large-struct params bind `inout`
+## - A device-function buffer parameter declares a resource type but no register.
+##   Each call passes the caller's buffer as the argument, so the same function
+##   reads or writes whichever buffer the caller gives it.
+## - The function's own write-scan decides read-only (StructuredBuffer) vs
+##   read-write (RWStructuredBuffer).
+## - Scalars pass by value. A large-struct parameter binds `inout` to avoid a copy.
 ##
 ## DXC notes honored here:
 ## - the entry point is always `main`, matching the required `-E main` invocation
@@ -292,9 +301,11 @@ proc emitCast(ctx: GpuContext, target: GpuType, exprText: string, source: GpuTyp
   gpuTypeToString(target, allowEmptyIdent = true) & "(" & exprText & ")"
 
 proc genIdentRef(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
-  ## Text of an identifier read: kernel scalar parameters read through the push block,
-  ## coordinate builtins join main's signature on first read,
-  ## buffer parameters refuse bare use outside a call argument
+  ## Text of an identifier read:
+  ## - a kernel scalar parameter reads through the push block (`push.<name>`)
+  ## - a coordinate builtin adds its semantic input to `main`'s signature
+  ##   when the body first reads it
+  ## - buffer parameters refuse bare use outside a call argument
   let sym = n.symbol
   case sym.coordBuiltin
   of gbkThreadIndexInThreadgroup:
@@ -730,7 +741,8 @@ proc deviceFnText(ctx: var GpuContext, fn: GpuAst, forwardDeclare: bool): string
   ##
   ## - the signature from its classified params
   ## - `;` for a forward declaration, otherwise the body in braces
-  ## - device function calls emit as plain calls, early returns emit natively
+  ## - device function calls emit as plain HLSL calls. An early `return`
+  ##   emits as an HLSL `return`
   if fn.pBody.isNil:
     error "HLSL: device function `" & fn.pName.ident() & "` has no IR body, extern declarations have no emission"
   var st = HlslKernel()
@@ -790,7 +802,8 @@ proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   for fn in fns:
     result.add ctx.deviceFnText(fn, forwardDeclare = false) & "\n\n"
 
-  # the body emits first: the input variables join the signature only when a read demands them
+  # The body emits before the signature: the printer must know which inputs
+  # the body reads before it can write main's signature.
   let body = ctx.genHlsl(st, kernel.pBody, 1)
 
   let lws = kernel.workgroupSize()
