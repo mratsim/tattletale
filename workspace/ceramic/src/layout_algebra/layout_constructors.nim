@@ -8,6 +8,7 @@
 import std/macros
 import std/algorithm
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/macros/static_for
 import ./layouts_datatypes
 import ./layout_compiletime
 import ./layouts_unsanctioned_helpers
@@ -79,9 +80,8 @@ macro make_layout*(shape, stride: typed): untyped =
     prefixProductScan(shape, strideVal, strideTy)
   result = emitLayoutLit(shapeVal, shapeTy, strideFolded, strideFoldedTy)
 
-proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Assign compact strides in ascending order-value order, ties keep
-  ## left-to-right position, each stride the prefix product so far.
+proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] =
+  ## Assign compact strides in ascending order-value order, each stride the prefix product so far. Ties keep left-to-right position.
   result = newSeq[int](shVals.len)
   var pairs = newSeq[(int, int)](shVals.len)
   for i in 0 ..< shVals.len:
@@ -91,9 +91,9 @@ proc compactOrderStridesImpl(shVals, ordVals: seq[int]): seq[int] {.compileTime.
     result[i] = current
     current *= shVals[i]
 
-proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.} =
-  ## Resolve dynamic order entries to unique values larger than any static
-  ## order value, preserving their relative position.
+proc compactOrderDynamicSubstitution(ordVals: openArray[int]): seq[int] =
+  ## Dynamic order entries rank after every static entry, each resolving to a unique
+  ## value above the largest static one, in left-to-right position.
   let n = ordVals.len
   var maxStatic = -1
   for v in ordVals:
@@ -107,6 +107,16 @@ proc compactOrderDynamicSubstitution(ordVals: seq[int]): seq[int] {.compileTime.
       inc nextVal
     else:
       result[i] = ordVals[i]
+
+proc compactOrderPermPos(ordVals: openArray[int]): seq[int] =
+  ## Position of each dimension in the (order value, position) ascending sort, ties keeping left-to-right position.
+  var pairs = newSeq[(int, int)](ordVals.len)
+  for i in 0 ..< ordVals.len:
+    pairs[i] = (ordVals[i], i)
+  let sortedPairs = pairs.sorted(system.cmp)
+  result = newSeq[int](ordVals.len)
+  for pos, p in sortedPairs:
+    result[p[1]] = pos
 
 proc compactLikeStrides(sh, st: seq[int], scale = 1): seq[int] {.compileTime.} =
   ## Strides of the compact layout preserving an (shape, stride) pair's element-access order.
@@ -124,42 +134,101 @@ proc compactLikeStrides(sh, st: seq[int], scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
-proc orderedStaticInt(leaf, leafTy: NimNode): int {.compileTime.} =
-  ## Returns: the static value of one shape/order leaf,
-  ## DynamicSentinel when the leaf is a runtime value.
-  ##
-  ## Leaf value sources, in order:
-  ## - literals and Int[N] nodes, the value sits in the node
-  ## - the leaf's type, a tuple variable's Int[N] leaf is an indexing
-  ##   expression and carries its static value in the type
-  ## - a const definition, `const order = (1, 0)`, each leaf becomes
-  ##   an indexing of a const symbol whose impl carries the value
-  result = leaf.getStaticInt()
-  if result != DynamicSentinel:
-    return
-  result = leafTy.getStaticInt()
-  if result != DynamicSentinel:
-    return
-  if leaf.kind in {nnkBracketExpr, nnkCall} and leaf.len == 2 and
-      leaf[0].kind == nnkSym and leaf[0].symKind == nskConst and
-      leaf[1].kind == nnkIntLit:
-    let impl = leaf[0].getImpl()
-    if impl.kind == nnkConstDef and impl[2].kind in {nnkTupleConstr, nnkPar}:
-      let val = impl[2][int(leaf[1].intVal)]
-      if val.kind == nnkIntLit:
-        return int(val.intVal)
-  result = DynamicSentinel
+func orderLeafAt(order: int, i: static int): int =
+  order
 
-macro make_ordered_layout*(shape, order: typed): untyped =
+func orderLeafAt[V: static int](order: Int[V], i: static int): int =
+  V
+
+func orderLeafAt[T: tuple](order: T, i: static int): auto =
+  order[i]
+
+func orderLeafAt[I: Ordinal, T](order: array[I, T], i: static int): int =
+  order[i]
+
+func orderLeafRank(t: typedesc[int]): static int =
+  ## Rank of one order leaf from its type alone.
+  ## A runtime leaf is a dynamic order entry, reporting the dynamic sentinel.
+  DynamicSentinel
+
+func orderLeafRank[V: static int](t: typedesc[Int[V]]): static int =
+  V
+
+func leafAt[T: tuple](t: T, i: static int): auto =
+  t[i]
+
+func leafAt[V: static int](t: Int[V], i: static int): Int[V] =
+  t
+
+func leafAt(t: int, i: static int): int =
+  t
+
+proc productExpr(shape: NimNode, permPos: seq[int], i: int): NimNode {.compileTime.} =
+  ## Product of the shape leaves ranked before dimension i, over leaf range [0, i),
+  ## an ordinary expression chain: the `Int` overload matrix decides per product
+  ## whether it folds to an `Int[...]()` node or computes at runtime.
+  result = quote do: Int[1]()
+  for j in 0 ..< permPos.len:
+    if permPos[j] < permPos[i]:
+      let leaf = nnkCall.newTree(bindSym"leafAt", shape, newLit(j))
+      result = nnkInfix.newTree(bindSym"*", result, leaf)
+
+macro stridesTuple(shape: typed, permPos: static seq[int]): untyped =
+  ## Stride leaves in original dimension order, dimension i taking the product
+  ## of the shape leaves ranked before it, the leaves folded by `concat`.
+  result = productExpr(shape, permPos, 0)
+  for i in 1 ..< permPos.len:
+    result = nnkCall.newTree(bindSym"concat", result, productExpr(shape, permPos, i))
+
+func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
+  ## Compact strides ranked by `order`, one body over IntOrIntTuple operands.
+  ##
+  ## Contract:
+  ## - `order[i]` ranks dimension i: smaller value = faster-varying (smaller stride)
+  ## - ties keep left-to-right position
+  ## - dynamic entries rank after every static entry
+  ## - the order is compile-time per contract
+  ##
+  ## - static shape leaves are `Int[...]` nodes, their products fold at compile time
+  ## - any runtime leaf turns the strides it touches into plain runtime arithmetic
+  ## - operands flow through the `Int` overload matrix, no per-leaf dispatch
+  ## - order ranks and product scheduling are compile-time, leaf products are
+  ##   ordinary expressions evaluated by overload resolution
+  const n: int = Sh.rank()
+  const ordSub = block:
+    var ranks: array[n, int]
+    staticFor i, 0, n:
+      ranks[i] = orderLeafAt(order, i)
+    compactOrderDynamicSubstitution(ranks)
+  const permPos = compactOrderPermPos(ordSub)
+  stridesTuple(shape, permPos)
+
+func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
+  ## Compile-time order: the order values rank the shape leaves directly.
+  make_layout(shape, compactOrderStrides(shape, order))
+
+func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O): auto =
+  ## Runtime order leaves. Each int leaf is a dynamic order entry.
+  ## Ranks derive from the leaf types, after every static `Int[...]` leaf.
+  const n: int = Sh.rank()
+  const ranks = block:
+    var r: array[n, int]
+    staticFor i, 0, n:
+      r[i] = orderLeafRank(typeof(order[i]))
+    r
+  make_layout(shape, compactOrderStrides(shape, ranks))
+
+template make_ordered_layout*(shape, order: untyped): auto =
   ## Construct a compact layout whose strides are ranked by `order`.
   ##
   ## Returns: the layout with the input shape and strides ranked by `order`.
   ##
   ## `order[i]` specifies the position of dimension `i` in the stride ordering:
   ## smaller value = faster-varying (smaller stride).
-  ## The dimension with `order[i] = 0` gets stride 1, the next gets
-  ## stride = shape[fastest], and so on.
-  ## Dynamic order entries rank after every static entry, in left-to-right position, so they compact column-major behind every static rank.
+  ##
+  ## - the dimension with `order[i] = 0` gets stride 1, the next stride = shape[fastest], and so forth
+  ## - dynamic order entries rank after every static entry, in left-to-right position,
+  ##   compacting column-major behind every static rank
   ##
   ## Example, 2D permutations:
   ##   make_ordered_layout((2,3), (0,1))  →  (2,3):(1,2)   # col-major (dimension 0 fastest)
@@ -176,26 +245,17 @@ macro make_ordered_layout*(shape, order: typed): untyped =
   ## - dimension 2 next → stride 1*2 = 2
   ## - dimension 1 slowest → stride 1*2*4 = 8
   ##   and the result is (2,3,4):(1,8,2)
-  var shVals, ordVals: seq[int] = @[]
-  for (leaf, leafTy) in shape.tupleStream().leaves():
-    let v = orderedStaticInt(leaf, leafTy)
-    doAssert v != DynamicSentinel,
-      "make_ordered_layout: shape leaves must be statically known, " &
-      "a dynamic shape leaf cannot produce a compile-time compact stride"
-    shVals.add v
-  for (leaf, leafTy) in order.tupleStream().leaves():
-    # dynamic order leaves rank after every static entry,
-    # the substitution keeps their relative position
-    ordVals.add orderedStaticInt(leaf, leafTy)
-  doAssert shVals.len == ordVals.len,
-    "make_ordered_layout: shape and order of equal flat rank required"
-  let strides = compactOrderStridesImpl(shVals, compactOrderDynamicSubstitution(ordVals))
-  var builder = TupleBuilderFlat.new(1)
-  for s in strides:
-    builder.append((IntCT(s), intTy(s)))
-  result = make_layout(
-    shape,
-    builder.emit(0, emitScalarForSize1 = not shape.getTypeInst().isTupleTy()))
+  ##
+  ## Static shape leaves fold to phantom `Int[...]` strides, a runtime leaf
+  ## computes its strides at runtime through the same body:
+  ##
+  ##   make_ordered_layout((rows, 32), (0,1))  # rows: int
+  ##   # → (rows, 32):(Int[1], int)
+  ##
+  ## Expansion happens at the call site. Static promotion rewrites literal leaves
+  ## into `Int[...]` nodes before the algebra runs. A runtime leaf stays verbatim.
+  ## The two impl overloads differ in order regime only, the stride algebra is one body.
+  make_ordered_layout_impl(makeIntTuple(shape), order)
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout_like
