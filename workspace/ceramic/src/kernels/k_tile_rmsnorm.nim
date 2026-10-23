@@ -9,6 +9,9 @@
 ##
 ## - `rmsnorm(dst, src, eps, axis)`: x * rsqrt(mean(x²) + eps) over the input axis
 ## - `rmsnorm(dst, src, weight, eps, axis)`: the same, scaled by the per-axis weight
+##
+## Launch the kernels with `launchRmsnorm`: the one-warp-per-row launch contract
+## is checked loud on the host, before any device work.
 
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
@@ -40,8 +43,9 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## Preconditions:
   ## - the axis size is at least 1
   ## - dst has the same shape as src
-  ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total,
-  ##   other launches are rejected and dst comes back NaN
+  ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total.
+  ##   `launchRmsnorm` rejects other launches loud on the host before any device work,
+  ##   a raw `launchDeviceFn` launch comes back NaN
   ## - when withWeight, the weight is rank 1 with one slot per axis position, see `rmsnorm`
   ##
   ## Args:
@@ -121,7 +125,13 @@ proc rmsnorm*(dst, src: distinct TensorView, eps: float32, axis: static int) {.i
   ## Each row computes x * rsqrt(mean(x²) + eps).
   ## Mean accumulation in fp32, identical to the reference implementations.
   ##
-  ## Preconditions: the axis size is at least 1, dst has the same shape as src.
+  ## Preconditions:
+  ## - the axis size is at least 1
+  ## - dst has the same shape as src
+  ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total
+  ##
+  ## Off-contract launches are rejected: `launchRmsnorm` fails loud on the host,
+  ## a raw `launchDeviceFn` launch comes back all-NaN.
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
@@ -138,8 +148,15 @@ proc rmsnorm*(dst, src, weight: distinct TensorView, eps: float32, axis: static 
   ## along the normalized axis. Element r of the row scales by weight[r],
   ## as in `mx.fast.rms_norm(x, weight, eps)` on the last axis.
   ##
-  ## Precondition: the axis size is at least 1, dst has the same shape as src,
-  ## the weight is rank 1 with one slot per axis position, shape (axis size,).
+  ## Preconditions:
+  ## - the axis size is at least 1
+  ## - dst has the same shape as src
+  ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total
+  ## - the weight is rank 1 with one slot per axis position, shape (axis size,)
+  ##
+  ## Off-contract launches are rejected: `launchRmsnorm` fails loud on the host,
+  ## a raw `launchDeviceFn` launch comes back all-NaN.
+  ##
   ## A wrong weight fails to compile when its shape is a compile-time literal,
   ## otherwise the launch comes back all-NaN.
   ##
@@ -152,3 +169,87 @@ proc rmsnorm*(dst, src, weight: distinct TensorView, eps: float32, axis: static 
   ## - eps: the stability constant added to the mean of squares
   ## - axis: the axis normalized over
   rmsnormImpl(dst, src, weight, eps, axis, withWeight = true)
+
+template rmsnormLaneWidth(E: typedesc[HwEngine]): int =
+  ## Lane width of the backend the engine drives, as a compile-time constant.
+  ##
+  ## Same value as tile_algebra's `getLaneWidth()` for the same backend.
+  ## Evaluable on the host: `getLaneWidth()` resolves inside device codegen,
+  ## the launch-site contract check runs before any device work.
+  ## The two tables cover the same backends and must change together.
+  when E is CudaEngine:
+    32
+  elif E is MetalEngine:
+    32
+  elif E is OpenCLEngine:
+    32
+  elif E is VulkanEngine:
+    32
+  elif E is WebgpuEngine:
+    32
+
+template checkRmsnormLaunchBlk[E: HwEngine](engine: E, launchBlk: tuple) =
+  ## One-warp-per-row launch contract, checked on the host at the launch site.
+  ##
+  ## The kernel's butterfly is simdgroup-scoped: the threadgroup must hold exactly
+  ## one warp's threads, `rmsnormLaneWidth(E)` in total. Any other size raises
+  ## before any device work.
+  ##
+  ## The kernel's device-side NaN guard stays as the last line of defense,
+  ## covering launches that bypass `launchRmsnorm`.
+  const laneW = rmsnormLaneWidth(E)
+  let threads = dim3(launchBlk)
+  doAssert threads.x * threads.y * threads.z == laneW,
+    "rmsnorm launch: the threadgroup must hold exactly one warp's threads, " &
+    $laneW & " lanes in total, got " & $threads.x & "x" & $threads.y & "x" & $threads.z
+
+template launchRmsnorm*[E: HwEngine](engine: E, dst, src: auto, eps: float32, axis: static int, launchGrid: tuple, launchBlk: tuple) =
+  ## Launches the unweighted rmsnorm, the one-warp-per-row contract checked on the host.
+  ##
+  ## The threadgroup must hold exactly one warp's threads, `getLaneWidth()` in total.
+  ## Any other size raises at the launch site, before any device work.
+  ##
+  ## A raw `launchDeviceFn` bypass skips this check, the kernel's device-side
+  ## NaN guard rejects it instead.
+  ##
+  ## Example:
+  ##   engine.launchRmsnorm(dstDev, srcDev, 1e-5'f32, axis, (2, 1), (32, 1))
+  ##
+  ## Args:
+  ## - dst, src: the tensors normalized in place over axis, dst same shape as src
+  ## - launchGrid, launchBlk: the launch grid and threadgroup, any tuple dim3 accepts,
+  ##   the flat threadgroup size must be one warp
+  ##
+  ## Scalars:
+  ## - eps: the stability constant added to the mean of squares
+  ## - axis: the axis normalized over
+  checkRmsnormLaunchBlk(engine, launchBlk)
+  engine.launchDeviceFn rmsnorm(dst, src, eps, axis) do:
+    grid = launchGrid
+    blk = launchBlk
+
+template launchRmsnorm*[E: HwEngine](engine: E, dst, src, weight: auto, eps: float32, axis: static int, launchGrid: tuple, launchBlk: tuple) =
+  ## Launches the weighted rmsnorm, the one-warp-per-row contract checked on the host.
+  ##
+  ## The threadgroup must hold exactly one warp's threads, `getLaneWidth()` in total.
+  ## Any other size raises at the launch site, before any device work.
+  ##
+  ## A raw `launchDeviceFn` bypass skips this check, the kernel's device-side
+  ## NaN guard rejects it instead.
+  ##
+  ## Example:
+  ##   engine.launchRmsnorm(dstDev, srcDev, weightDev, 1e-5'f32, axis, (2, 1), (32, 1))
+  ##
+  ## Args:
+  ## - dst, src: the tensors normalized in place over axis, dst same shape as src
+  ## - weight: one slot per axis position, shape (axis size,), any strides
+  ## - launchGrid, launchBlk: the launch grid and threadgroup, any tuple dim3 accepts,
+  ##   the flat threadgroup size must be one warp
+  ##
+  ## Scalars:
+  ## - eps: the stability constant added to the mean of squares
+  ## - axis: the axis normalized over
+  checkRmsnormLaunchBlk(engine, launchBlk)
+  engine.launchDeviceFn rmsnorm(dst, src, weight, eps, axis) do:
+    grid = launchGrid
+    blk = launchBlk
