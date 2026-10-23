@@ -101,14 +101,29 @@ proc runOrderRegimeTests =
     doAssert typeof(l.stride[0][0]) is Int[1]
     echo "    13. nested shape keeps its nesting: OK"
 
+proc runBoundarySymbolTests =
+  block:
+    const s = (2, 3)
+    let l = make_ordered_layout(s, (0, 1))
+    doAssert l === ((2, 3), (1, 2))
+    doAssert typeof(l.stride[0]) is Int[1]
+    echo "    14. const symbol shape folds: OK"
+
+  block:
+    let s = (2, 3)
+    let l = make_ordered_layout(s, (0, 1))
+    doAssert l.stride[1] == 2
+    doAssert typeof(l.stride[1]) is int
+    echo "    15. let symbol shape stays a runtime leaf: OK"
+
 proc runRefusalTests =
   block:
     doAssert not compiles(make_ordered_layout((2, 3, 4), 1))
-    echo "    13. scalar order on a rank-3 shape refuses at compile time: OK"
+    echo "    16. scalar order on a rank-3 shape refuses at compile time: OK"
 
   block:
     doAssert not compiles(make_ordered_layout((2, 3), (0, 1, 2)))
-    echo "    14. overlong order tuple refuses at compile time: OK"
+    echo "    17. overlong order tuple refuses at compile time: OK"
 
 proc runTests =
   echo "--- static result types ---"
@@ -117,6 +132,8 @@ proc runTests =
   runRuntimeLeafTests()
   echo "--- order regimes ---"
   runOrderRegimeTests()
+  echo "--- boundary symbols ---"
+  runBoundarySymbolTests()
   echo "--- rank refusals ---"
   runRefusalTests()
 

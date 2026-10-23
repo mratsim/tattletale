@@ -275,6 +275,8 @@ template make_ordered_layout*(shape, order: untyped): auto =
   ## Expansion happens at the call site. Static promotion rewrites literal
   ## leaves of both operands into `Int[...]` nodes before the algebra runs,
   ## a runtime leaf stays verbatim.
+  ## Promotion sees literal leaves only. A `const` symbol folds in the VM,
+  ## a `let` symbol is a runtime leaf, values verbatim, strides runtime.
   make_ordered_layout_impl(makeIntTuple(shape), orderIntTuple(order))
 
 # ═══════════════════════════════════════════════════════════════
