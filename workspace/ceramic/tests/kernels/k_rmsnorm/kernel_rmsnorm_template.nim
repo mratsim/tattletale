@@ -146,7 +146,7 @@ proc checkRmsnorm*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
   echo msg, ": worst |d| = ", formatFloat(report.worst, ffScientific, 3)
   doAssert report.bad == 0, msg & ": " & $report.bad & " mismatched elements"
 
-proc checkWeightContract*[E: HwEngine](engine: E, msg: string) =
+proc checkWeightContract*(msg: string) =
   ## Weight-contract rejections of the weighted rmsnorm.
   ##
   ## - a badly shaped weight fails the compile-time shape check,
@@ -155,7 +155,6 @@ proc checkWeightContract*[E: HwEngine](engine: E, msg: string) =
   ## - a rank-3 static source over axis 1: the size check reads the reduced axis size, a weight sized to the leading dimension fails to compile
   ##
   ## Args:
-  ## - engine: the device engine
   ## - msg: the case label echoed on failure
   var src = makeHostTensor(float32, (2, 64), (64, 1))
   var weight2d = makeHostTensor(float32, (2, 64), (64, 1))
@@ -163,8 +162,7 @@ proc checkWeightContract*[E: HwEngine](engine: E, msg: string) =
     msg & ": rank-2 weight must fail to compile"
 
   # statically laid out views: the compile-time size check needs both shape
-  # leaves as compile-time literals. The suite's host tensors carry
-  # runtime-shaped layouts
+  # leaves as compile-time literals
   const
     rowLayout = make_layout((2, 64), (64, 1))
     goodLayout = make_layout((64,), (1,))
@@ -311,4 +309,4 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
       "strided dst, 2x stride on the non-reduced axis, weighted")
 
   # ── the weight must fit the reduced axis: one slot per axis position ──
-  checkWeightContract(engine, "weight contract")
+  checkWeightContract("weight contract")

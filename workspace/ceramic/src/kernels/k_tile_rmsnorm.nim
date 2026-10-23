@@ -25,7 +25,7 @@ func staticShape[T, Sh, St](_: typedesc[TensorView[T, Sh, St]]): Sh =
   default(Sh)
 
 template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
-    weight: TensorView[T, ShW, StW], src: TensorView[T, ShS, StS], axis: static int): bool =
+    weight: TensorView[T, ShW, StW], src: TensorView[T, ShS, StS], axis: static int) =
   ## Compile-time part of the weighted rmsnorm's weight contract.
   ## The kernel and the host-side checks share this one body.
   ##
@@ -33,8 +33,9 @@ template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
   ## - the weight size matches the source axis size when both sizes are
   ##   compile-time literals
   ##
-  ## Returns whether the weight size is a compile-time literal. When it is not,
-  ## the caller checks the weight size against the source axis size on the device.
+  ## Runtime-shaped weights are unchecked: the weight size must equal
+  ## the source axis size, a mismatch is the caller's responsibility
+  ## and undefined behavior.
   ##
   ## The kernel instantiates this check on every weighted launch.
   ## The compiles() cases in the test suite exercise this template body directly,
@@ -49,15 +50,13 @@ template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
     wLeaf = when wShape is tuple: wShape[0] else: wShape
     sShape = staticShape(typeof(src))
     sLeaf = when sShape is tuple: sShape[axis] else: sShape
-    sizeIsStatic = typeof(wLeaf) is Int and typeof(sLeaf) is Int
   static:
     doAssert wShape.rank() == 1,
       "rmsnorm weight must be rank 1, one slot per axis position"
-  when sizeIsStatic:
+  when typeof(wLeaf) is Int and typeof(sLeaf) is Int:
     static:
       doAssert wLeaf === sLeaf,
         "rmsnorm weight size must match the source axis size"
-  sizeIsStatic
 
 proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
   ## Row-wise RMS normalization shared by the two entry points.
@@ -77,7 +76,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## - dst has the same shape as src
   ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total,
   ##   off-contract launches are undefined behavior
-  ## - when withWeight, the weight is rank 1 with one slot per axis position, see `rmsnorm`
+  ## - when withWeight, the weight is rank 1 with one slot per axis position,
+  ##   sized to the source axis size, see `rmsnorm`
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
@@ -94,19 +94,13 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     W = getLaneWidth()
     owned = reg.size() div W
   let thrID = getLocalThreadID()
-  # NaN from a runtime division: a folded 0/0 constant emits an invalid MSL token
-  var poison = zero(float32)
-  poison = poison / poison
   # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
   # per-simdgroup partials uncombined or rows partially written.
   # Deferred: cross-warp combine via shared memory and barrier.
-  let nThreads = threads_per_threadgroup.x * threads_per_threadgroup.y * threads_per_threadgroup.z
   when withWeight:
-    const sizeIsStatic = rmsnormWeightShapeCheck(weight, src, axis)
-    when not sizeIsStatic:
-      # runtime-shaped weight: its size is only known on the device.
-      # A size miss poisons the rows below.
-      let wSize = weight.size()
+    # a statically mismatched weight fails to compile,
+    # a runtime-shaped weight is the caller's responsibility
+    rmsnormWeightShapeCheck(weight, src, axis)
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()
@@ -168,8 +162,9 @@ proc rmsnorm*(dst, src, weight: distinct TensorView, eps: float32, axis: static 
   ##   off-contract launches are undefined behavior
   ## - the weight is rank 1 with one slot per axis position, shape (axis size,)
   ##
-  ## A wrong weight fails to compile when its shape is a compile-time literal,
-  ## otherwise the launch comes back all-NaN.
+  ## The weight size must equal the source axis size: mismatched static shapes
+  ## fail to compile, a runtime shape is the caller's responsibility,
+  ## a mismatch is undefined behavior.
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
