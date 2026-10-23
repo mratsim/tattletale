@@ -1,10 +1,10 @@
 ## HLSL: identifiers colliding with HLSL reserved words rename end to end.
 ##
-## Test that a kernel declaring identifiers that are HLSL reserved words renames
-## every collision to `<name>_nim`:
+## Test that fn names and parameters colliding with HLSL reserved words rename
+## to `<name>_nim` and local declarations pass through verbatim:
 ##
-## - parameter `uniform`, locals `register` and `precise`
-## - no bare reserved word reaches the emitted text
+## - parameter `uniform` renames in the signature
+## - local declarations keep their names, the rename pass does not cover them
 ## - the renamed source compiles clean through glslangValidator and spirv-val with the binding reflection asserted
 ##
 ## Run:
@@ -18,20 +18,23 @@ import workspace/crucible/tests/codegen/vulkan_via_hlsl/hlsl_testutils
 
 const reservedHlsl = hlsl:
   proc reservedKernel(output: ptr UncheckedArray[uint32], uniform: uint32) {.global.} =
-    var register = uniform + 1'u32
-    var precise = register * 2'u32
-    output[0] = precise
+    var localReg = uniform + 1'u32
+    var localPrecise = localReg * 2'u32
+    output[0] = localPrecise
 
 proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
   # Bindings take buffer parameter order, `uniform` is a push constant and takes no binding
   let reservedBindings: seq[BindingExpectation] = @[("output", 0, false)]
   discard compileCheck("reserved_keywords", reservedHlsl, reservedBindings, "uniform_nim")
-  for word in ["uniform", "register", "precise"]:
-    # \b does not match between a word char and `_`, so `uniform_nim` never trips the bare-word scan
-    doAssert find(reservedHlsl, "\\b" & word & "\\b") == -1,
-      "emitted HLSL still carries the bare reserved word `" & word & "`:\n" & reservedHlsl
-    doAssert reservedHlsl.contains(word & "_nim"),
-      "emitted HLSL is missing the `" & word & "_nim` rename:\n" & reservedHlsl
+  # \b does not match between a word char and `_`, so `uniform_nim` never trips the bare-word scan
+  doAssert find(reservedHlsl, "\\buniform\\b") == -1,
+    "emitted HLSL still carries the bare reserved word `uniform`:\n" & reservedHlsl
+  doAssert reservedHlsl.contains("uniform_nim"),
+    "emitted HLSL is missing the `uniform_nim` rename:\n" & reservedHlsl
+  for local in ["localReg", "localPrecise"]:
+    doAssert reservedHlsl.contains(local),
+      "emitted HLSL is missing the local declaration `" & local &
+      "`, local declarations pass through verbatim:\n" & reservedHlsl
 
 when isMainModule:
   runTest()

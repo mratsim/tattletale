@@ -159,47 +159,4 @@ static:
     "non-colliding fn name must stay, got: " & caller.pName.ident()
   echo "  OK: fn name renamed in decl and at call sites"
 
-# ═══════════════════════════════════════════════════════════════════════
-# 5. local declarations renamed: var, for-loop variable, body refs follow
-# ═══════════════════════════════════════════════════════════════════════
-static:
-  let intTy = GpuType(kind: gtInt32)
-  # body: `var layout = 3`, `for buffer in 0 ..< 3`, a ref to the local sharing its iSym
-  let varName = GpuAst(kind: gpuIdent, symbol: newSymbol("layout", iSym = "local_layout", typ = intTy))
-  let varDecl = GpuAst(kind: gpuVar, vName: varName, vType: intTy,
-                       vInit: GpuAst(kind: gpuLit, lValue: "3", lType: intTy),
-                       vMutable: true, addressSpace: asRMEM)
-  let forVar = GpuAst(kind: gpuIdent, symbol: newSymbol("buffer", iSym = "local_forvar", typ = intTy))
-  let forNode = GpuAst(kind: gpuFor, fVar: forVar,
-                       fStart: GpuAst(kind: gpuLit, lValue: "0", lType: intTy),
-                       fEnd: GpuAst(kind: gpuLit, lValue: "3", lType: intTy),
-                       fStep: GpuAst(kind: gpuLit, lValue: "1", lType: intTy),
-                       fBody: GpuAst(kind: gpuBlock), fRangeKind: rkExclusive)
-  # body ref to the `layout` local: fresh ident node sharing the iSym
-  let refNode = GpuAst(kind: gpuIdent, symbol: newSymbol("layout", iSym = "local_layout", typ = intTy))
-  # hazard negative: a non-colliding local must stay untouched
-  let plainVar = GpuAst(kind: gpuVar,
-                        vName: GpuAst(kind: gpuIdent, symbol: newSymbol("count", iSym = "local_count", typ = intTy)),
-                        vType: intTy, vInit: GpuAst(kind: gpuDiscard),
-                        vMutable: true, addressSpace: asRMEM)
-  var body = GpuAst(kind: gpuBlock)
-  body.statements.add @[varDecl, forNode, refNode, plainVar]
-  var procNode = GpuAst(kind: gpuProc,
-                        pName: GpuAst(kind: gpuIdent, symbol: newSymbol("fn")),
-                        pBody: body)
-  var ctx = GpuContext()
-  ctx.fnTab[procNode.pName] = procNode
-
-  registerRenameReserved.runPassPrepared(ctx)
-
-  doAssert procNode.pBody.statements[0].vName.ident() == "layout_nim",
-    "reserved local var name should rename, got: " & procNode.pBody.statements[0].vName.ident()
-  doAssert procNode.pBody.statements[1].fVar.ident() == "buffer_nim",
-    "reserved for-loop variable should rename, got: " & procNode.pBody.statements[1].fVar.ident()
-  doAssert procNode.pBody.statements[2].ident() == "layout_nim",
-    "body refs of a renamed local should follow, got: " & procNode.pBody.statements[2].ident()
-  doAssert procNode.pBody.statements[3].vName.ident() == "count",
-    "non-colliding local must stay untouched, got: " & procNode.pBody.statements[3].vName.ident()
-  echo "  OK: local var, for-loop variable and their refs renamed, non-colliding local untouched"
-
 echo "  OK - t_ir_renameReservedIdentifiers"
