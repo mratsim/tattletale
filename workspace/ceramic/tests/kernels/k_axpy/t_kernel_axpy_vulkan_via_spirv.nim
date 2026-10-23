@@ -1,5 +1,5 @@
 ## Run:
-##   nim c -r -d:crucibleVulkanCodegen=spirv --outdir:build/tests \
+##   nim c -r --outdir:build/tests \
 ##     workspace/ceramic/tests/kernels/k_axpy/t_kernel_axpy_vulkan_via_spirv.nim
 
 import workspace/crucible
@@ -11,7 +11,7 @@ proc main =
   # the spirv leg: the ingested kernel artifact is binary words, not a text source,
   # getArtifact stays empty (a glslang/dxc ingest always leaves source text)
   doAssert engine.getArtifact().len == 0,
-    "the kernel compiled through a text route, the via_spirv leg needs -d:crucibleVulkanCodegen=spirv"
+    "the kernel compiled through a text route, the Vulkan bridge emits words directly"
 
 when isMainModule:
   main()
