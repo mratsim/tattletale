@@ -5,32 +5,19 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## SPIR-V encoder core (flavor-agnostic): grammar tables, word stream, builders
-##
-## Layer stack, bottom-up (all flavor-agnostic, no Vulkan/OpenCL assumptions):
-## - opcode rows cover the compute subset, execution-model rows carry
-##   the full grammar enumerant set (vertex/fragment included as vocabulary)
-## - `verifyGrammar` checks each opcode row against spirv.core.grammar.json
-## - `SpvModule` buffers instructions into sections (SPIR-V §2.4 layout order)
-## - `finalize` flattens all sections behind the 5-word header, typed
-##   wrappers sit over `memoInst` (dedup) and `freshInst` (body ops)
-##
-## Flavor modules drive emission, the Vulkan environment flavor lives in `spirv_shader_lang`.
+## SPIR-V binary encoder core: opcode table, word stream, builders
 ##
 ## Instruction encoding (first word): `wordCount shl 16 or opcode`.
 ## String operands: UTF-8 bytes + NUL, zero-padded to a word boundary,
 ## little-endian per word.
-import std/json
 import std/tables
 
 ##
-## spvInstTable transcribes the core grammar (spirv.core.grammar.json):
+## spvInstTable transcribes the core grammar opcode subset:
 ## - the opcode number per instruction
 ## - operand kinds and quantifiers per instruction
-## - the GLCompute-kernel opcode subset only
 ## Enum-valued operands (Capability, StorageClass, ...) are raw uint32
 ## constants with values taken from the grammar.
-## `verifyGrammar` checks the table against the grammar JSON at test time.
 
 
 type
@@ -74,14 +61,6 @@ type
     name*: string
     opcode*: uint32
     operands*: seq[SpvOperand]
-
-const spvKindGrammarNames*: array[SpvKind, string] = [
-  "IdResult", "IdResultType", "IdRef", "IdScope", "IdMemorySemantics",
-  "LiteralInteger", "LiteralString", "LiteralContextDependentNumber",
-  "FPEncoding", "PairLiteralIntegerIdRef", "StorageClass", "Capability", "Decoration",
-  "BuiltIn", "ExecutionModel", "ExecutionMode", "AddressingModel",
-  "MemoryModel", "FunctionControl", "SelectionControl", "LoopControl",
-  "MemoryAccess", "GroupOperation"]
 
 func o*(kind: SpvKind): SpvOperand {.inline.} =
   ## Operand required exactly once
@@ -354,44 +333,6 @@ const
   fcNone* = 0'u32
   selNone* = 0'u32
   lcNone* = 0'u32
-
-proc verifyGrammar*(grammarJsonText: string): seq[string] =
-  ## Verifies the opcode table against core-grammar JSON text:
-  ## - the opcode number per table row
-  ## - operand kinds and quantifiers per table row
-  ## Grammar quantifiers "" / "?" / "*" map to qOne / qOpt / qMany.
-  ## Returns one human-readable mismatch per disagreeing row, an empty sequence
-  ## means every row matches the grammar.
-  let grammar = parseJson(grammarJsonText)
-  var byName: Table[string, JsonNode]
-  for instr in grammar["instructions"]:
-    byName[instr["opname"].getStr()] = instr
-  for row in spvInstTable:
-    let g = byName.getOrDefault(row.name)
-    if g.isNil:
-      result.add row.name & ": not found in grammar"
-      continue
-    if g["opcode"].getInt().uint32 != row.opcode:
-      result.add row.name & ": opcode " & $row.opcode & " != grammar " &
-                  $g["opcode"].getInt()
-    let gOps = if "operands" in g: g["operands"] else: nil
-    let n = if gOps.isNil: 0 else: gOps.len
-    if n != row.operands.len:
-      result.add row.name & ": " & $row.operands.len &
-                  " operands in table, " & $n & " in grammar"
-      continue
-    for i in 0 ..< n:
-      let gKind = gOps[i]["kind"].getStr()
-      let gQuant = if "quantifier" in gOps[i]: gOps[i]["quantifier"].getStr()
-                   else: ""
-      let tKind = spvKindGrammarNames[row.operands[i].kind]
-      let tQuant = case row.operands[i].quant
-                   of qOne: ""
-                   of qOpt: "?"
-                   of qMany: "*"
-      if gKind != tKind or gQuant != tQuant:
-        result.add row.name & " operand " & $i & ": table (" & tKind & ", \"" &
-                    tQuant & "\") != grammar (\"" & gKind & "\", \"" & gQuant & "\")"
 
 ##
 ## SpvModule buffers instructions into named sections ordered per the SPIR-V
