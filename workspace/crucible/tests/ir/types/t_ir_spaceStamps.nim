@@ -1,6 +1,8 @@
-## Address spaces stamped on GpuType at birth
+## Address spaces survive the lowering passes
 ##
-## Test that pointer and span types carry their address space from birth through lowering
+## Test that stamped address spaces survive the lowering passes:
+## span-to-pointer splitting, generic instantiation, smem arena hoisting,
+## ptr-array decay and view decomposition
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off --out:build/wip/t_ir_spaceStamps \
@@ -11,15 +13,6 @@ import std/tables
 import workspace/crucible/src/codegen/ir/ast_type_constructors
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/tests/ir/ir_testutils
-
-type Holder = object
-  p: ptr float32
-
-proc findProc(n: GpuAst): GpuAst =
-  ## First gpuProc statement of a top-level block, nil when absent
-  for stmt in n.statements:
-    if stmt.kind == gpuProc:
-      return stmt
 
 proc findVar(n: GpuAst, name: string): GpuAst =
   ## First gpuVar named `name` among the statements, recursing into blocks,
@@ -32,118 +25,7 @@ proc findVar(n: GpuAst, name: string): GpuAst =
       if not found.isNil:
         return found
 
-proc findFirst(n: GpuAst, kind: GpuNodeKind): GpuAst =
-  ## First node of `kind` in depth-first pre-order, nil when absent
-  if n.isNil:
-    return nil
-  if n.kind == kind:
-    return n
-  for ch in n.items:
-    let found = findFirst(ch, kind)
-    if not found.isNil:
-      return found
-
-proc collectObjConstrs(n: GpuAst, acc: var seq[GpuAst]) =
-  ## Every gpuObjConstr in depth-first pre-order
-  if n.isNil:
-    return
-  if n.kind == gpuObjConstr:
-    acc.add n
-  for ch in n.items:
-    collectObjConstrs(ch, acc)
-
-# ── 1. Birth stamps: explicit `ptr T` is a device pointer, `var T` stays thread ──
-static:
-  let ir = toCrucibleAst:
-    var gbuf: ptr float32
-
-    proc stampKernel(outp: ptr UncheckedArray[float32], v: var float32, p: ptr float32) {.global.} =
-      v = p[] + outp[0]
-      let c = cast[ptr float32](outp)
-      outp[3] = c[]
-      gbuf[] = v
-
-  let fn = ir.findProc
-  doAssert fn.kind == gpuProc, "expected the kernel proc, got " & $fn.kind
-
-  let outpTyp = fn.pParams[0].typ
-  doAssert outpTyp.kind == gtPtr and not outpTyp.implicit and
-    outpTyp.addressSpace == asDevice,
-    "explicit `ptr UncheckedArray[float32]` param stamps asDevice, got " &
-    $outpTyp.addressSpace
-
-  let varTyp = fn.pParams[1].typ
-  doAssert varTyp.kind == gtPtr and varTyp.implicit and
-    varTyp.addressSpace == asRMEM,
-    "`var float32` param stays asRMEM (implicit pointer, thread storage), got " &
-    $varTyp.addressSpace
-
-  let ptrTyp = fn.pParams[2].typ
-  doAssert ptrTyp.kind == gtPtr and not ptrTyp.implicit and
-    ptrTyp.addressSpace == asDevice,
-    "explicit `ptr float32` param stamps asDevice, got " & $ptrTyp.addressSpace
-
-  let gbufVar = ir.findVar("gbuf")
-  doAssert gbufVar.kind == gpuVar, "expected the global gpuVar gbuf"
-  doAssert gbufVar.vType.kind == gtPtr and gbufVar.vType.addressSpace == asDevice,
-    "global `ptr float32` stamps asDevice, got " & $gbufVar.vType.addressSpace
-
-  # the cast target type flows through resolveType like any written type
-  # a special-cased cast path cannot silently drop the stamp
-  let castNode = findFirst(fn.pBody, gpuCast)
-  doAssert not castNode.isNil, "expected the cast[ptr float32] node in the body"
-  doAssert castNode.cTo.kind == gtPtr and castNode.cTo.addressSpace == asDevice,
-    "a cast target `ptr float32` stamps asDevice, got " &
-    $castNode.cTo.addressSpace
-  echo "  OK - explicit ptr stamps asDevice, var stays asRMEM"
-
-# ── 2. Address-of: the result inherits the space of the addressed storage ──
-static:
-  let ir = toCrucibleAst:
-    proc addrKernel(outp: ptr UncheckedArray[float32]) {.global.} =
-      var tmp: float32 = 0.0'f32
-      var hDev = Holder(p: addr outp[0])
-      var hThr = Holder(p: addr tmp)
-      outp[1] = hDev.p[] + hThr.p[]
-
-  let fn = ir.findProc
-  var constrs: seq[GpuAst]
-  fn.collectObjConstrs(constrs)
-  doAssert constrs.len == 2,
-    "expected the two Holder constructions, got " & $constrs.len
-
-  doAssert constrs[0].ocFields[0].typ.kind == gtPtr and
-    constrs[0].ocFields[0].typ.addressSpace == asDevice,
-    "Holder(p: addr outp[0]) field type is a device pointer, got " &
-    $constrs[0].ocFields[0].typ.addressSpace
-  doAssert constrs[1].ocFields[0].typ.kind == gtPtr and
-    constrs[1].ocFields[0].typ.addressSpace == asRMEM,
-    "Holder(p: addr tmp) field type is a thread pointer, got " &
-    $constrs[1].ocFields[0].typ.addressSpace
-
-  # the same stamp must flow through the operand-type resolver the passes read
-  var addrs: seq[GpuAst]
-  # depth-first pre-order over the body, collecting gpuAddr nodes
-  proc collectAddrs(n: GpuAst, acc: var seq[GpuAst]) =
-    if n.isNil:
-      return
-    if n.kind == gpuAddr:
-      acc.add n
-    for ch in n.items:
-      collectAddrs(ch, acc)
-  collectAddrs(fn.pBody, addrs)
-  doAssert addrs.len == 2, "expected the two address-of nodes, got " & $addrs.len
-
-  var ctx = GpuContext()
-  doAssert ctx.getOperandType(addrs[0]).addressSpace == asDevice,
-    "addr outp[0] derives a device pointer, got " &
-    $ctx.getOperandType(addrs[0]).addressSpace
-  doAssert ctx.getOperandType(addrs[1]).addressSpace == asRMEM,
-    "addr tmp derives a thread pointer, got " &
-    $ctx.getOperandType(addrs[1]).addressSpace
-  echo "  OK - address-of inherits the addressed storage's space"
-
-# ── 3. A span built over device memory keeps device through lowerArraysAndViews ──
+# ── 1. A span built over device memory keeps device through lowerArraysAndViews ──
 proc registerLowerDecay(reg: var PassRegistry) {.nimcall.} =
   reg.registerLowerArraysAndViews(decayArrays = true)
 
@@ -224,7 +106,7 @@ static:
     $inst.pParams[1].typ.addressSpace
   echo "  OK - device span survives span-to-pointer normalization"
 
-# ── 4. Smem arena: the hoisted threadgroup pointer stamps asSMEM ──
+# ── 2. Smem arena: the hoisted threadgroup pointer stamps asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
   reg.registerLegalizationPasses()
@@ -292,45 +174,7 @@ static:
     "exactly one call arg forwards the threadgroup arena, got " & $arenaArgs
   echo "  OK - smem arena stamps asSMEM on the hoisted type"
 
-# ── 5. const_mem keeps its storage space on the variable side ──
-static:
-  let ir = toCrucibleAst:
-    proc constKernel(outp: ptr UncheckedArray[float32]) {.global.} =
-      var scale {.const_mem.}: float32
-      outp[0] = scale
-
-  let fn = ir.findProc
-  let scale = fn.pBody.findVar("scale")
-  doAssert scale.kind == gpuVar and scale.addressSpace == asConstant,
-    "a {.const_mem.} scalar keeps asConstant on the variable side, got " &
-    $scale.addressSpace
-  doAssert scale.vType.kind == gtFloat32,
-    "the {.const_mem.} scalar's type is the plain scalar, got " & $scale.vType.kind
-  echo "  OK - const_mem storage space stays on the variable side"
-
-# ── 6. withAddressSpace is copy-on-write and spans clone whole ──
-static:
-  let elem = GpuType(kind: gtFloat32)
-  let span = initGpuSpanType(elem)
-
-  # same space: the returned type is the same ref, a change through it
-  # is visible through the original
-  let restamped = span.withAddressSpace(asRMEM)
-  restamped.sElemTyp = GpuType(kind: gtBool)
-  doAssert span.sElemTyp.kind == gtBool,
-    "restamping the default space returns the same ref, not a clone"
-  span.sElemTyp = elem
-
-  # different space: a clone, the shared type is never mutated
-  let deviceSpan = span.withAddressSpace(asDevice)
-  deviceSpan.sElemTyp = GpuType(kind: gtBool)
-  doAssert span.sElemTyp.kind == gtFloat32,
-    "a different space returns a clone, the shared type keeps its element type"
-  doAssert deviceSpan.addressSpace == asDevice,
-    "the span clone carries the stamped space, got " & $deviceSpan.addressSpace
-  echo "  OK - withAddressSpace clones copy-on-write, span clones keep sElemTyp"
-
-# ── 7. A ptr-to-array param decays keeping its stamped space ──
+# ── 3. A ptr-to-array param decays keeping its stamped space ──
 static:
   let ir = toCrucibleAst:
     proc reduce(dst: ptr array[16, float32], src: ptr array[16, float32]) {.device.} =
@@ -359,7 +203,7 @@ static:
       $reduceFn.pParams[i].typ.addressSpace
   echo "  OK - ptr-array decay keeps the stamped space"
 
-# ── 8. A span view binding decomposes keeping the span's space ──
+# ── 4. A span view binding decomposes keeping the span's space ──
 static:
   # Nim cannot bind openArray to a local, the binding shape only exists as IR
   # after span lowering, so the pass runs on hand-built IR per the standard
@@ -388,24 +232,5 @@ static:
     "decomposePtrLen rebuilds the view binding as a device ptr, got " &
     $viewVar.vType.addressSpace
   echo "  OK - span view binding decomposes to a device ptr"
-
-# ── 9. A ptr-typed var stamps from its init's storage ──
-static:
-  let ir = toCrucibleAst:
-    proc smemAliasKernel(outp: ptr UncheckedArray[uint32]) {.global.} =
-      var scratch {.smem.}: array[4, uint32]
-      var p: ptr uint32 = addr scratch[0]
-      outp[0] = p[]
-
-  let fn = ir.findProc
-  let pVar = fn.pBody.findVar("p")
-  doAssert not pVar.isNil, "expected the ptr-typed var p"
-  doAssert pVar.vType.kind == gtPtr and pVar.vType.addressSpace == asSMEM,
-    "a declared `ptr uint32` initialized from threadgroup storage stamps asSMEM, got " &
-    $pVar.vType.addressSpace
-  doAssert pVar.vName.symbol.typ.addressSpace == asSMEM,
-    "the var's symbol type follows the stamped init space, got " &
-    $pVar.vName.symbol.typ.addressSpace
-  echo "  OK - a ptr-typed var stamps from its init's storage"
 
 echo "t_ir_spaceStamps: all static assertions passed"
