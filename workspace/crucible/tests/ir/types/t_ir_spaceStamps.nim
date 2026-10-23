@@ -315,14 +315,14 @@ static:
 
   # same space: the returned type is the same ref, a change through it
   # is visible through the original
-  let restamped = withAddressSpace(span, asRMEM)
+  let restamped = span.withAddressSpace(asRMEM)
   restamped.sElemTyp = GpuType(kind: gtBool)
   doAssert span.sElemTyp.kind == gtBool,
     "restamping the default space returns the same ref, not a clone"
   span.sElemTyp = elem
 
   # different space: a clone, the shared type is never mutated
-  let deviceSpan = withAddressSpace(span, asDevice)
+  let deviceSpan = span.withAddressSpace(asDevice)
   deviceSpan.sElemTyp = GpuType(kind: gtBool)
   doAssert span.sElemTyp.kind == gtFloat32,
     "a different space returns a clone, the shared type keeps its element type"

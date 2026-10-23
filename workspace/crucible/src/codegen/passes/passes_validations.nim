@@ -195,7 +195,7 @@ proc spaceCastRejection(ctx: GpuContext, n: GpuAst, fnName: string): string =
   if target.kind notin {gtPtr, gtSpan, gtArray}:
     return ""
   let operand = if n.kind == gpuCast: n.cExpr else: n.convExpr
-  let operandSpace = ctx.getAccessedSpace(operand)
+  let operandSpace = ctx.resolveAddressSpace(operand)
   let targetSpace = getTypeAccessedSpace(target)
   if operandSpace == targetSpace:
     return ""

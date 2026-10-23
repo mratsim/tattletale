@@ -68,7 +68,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
     # - an implicit pointer param (a `var T` reference) binds whole
     if not p.typ.isNil and p.typ.kind in {gtPtr, gtSpan} and
         not p.typ.implicit and p.addressSpace in {asDevice, asRMEM}:
-      let want = withAddressSpace(p.typ, ctx.getAccessedSpace(call.cArgs[i]))
+      let want = p.typ.withAddressSpace(ctx.resolveAddressSpace(call.cArgs[i]))
       if want != p.typ:
         specializes = true
       wanted.add want

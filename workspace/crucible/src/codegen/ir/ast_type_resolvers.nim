@@ -208,7 +208,7 @@ proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
   else:
     result = asRMEM
 
-proc getAccessedSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## Memory the storage designated by an expression accesses
   ## Returns:
   ## - the innermost pointer/span/array type's space along the access chain,
@@ -236,14 +236,14 @@ proc getAccessedSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
     if n.cTo.kind in {gtPtr, gtSpan, gtArray}:
       result = getTypeAccessedSpace(n.cTo)
     else:
-      result = ctx.getAccessedSpace(n.cExpr)
+      result = ctx.resolveAddressSpace(n.cExpr)
   of gpuBinOp:
     result = getTypeAccessedSpace(ctx.getOperandType(n))
     if result == asRMEM:
       # integer arithmetic over cast pointers keeps the pointer's storage provenance
-      result = ctx.getAccessedSpace(n.bLeft)
+      result = ctx.resolveAddressSpace(n.bLeft)
       if result == asRMEM:
-        result = ctx.getAccessedSpace(n.bRight)
+        result = ctx.resolveAddressSpace(n.bRight)
   else:
     result = getTypeAccessedSpace(ctx.getOperandType(n))
 
@@ -266,7 +266,7 @@ proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuAddr:
     let inner = ctx.getOperandType(n.aOf)
     if inner.isNil or inner.kind == gtInvalid: nil
-    else: initGpuPtrType(inner, false, ctx.getAccessedSpace(n.aOf))
+    else: initGpuPtrType(inner, false, ctx.resolveAddressSpace(n.aOf))
   of gpuDeref:
     let d = ctx.getOperandType(n.dOf)
     if not d.isNil and d.kind == gtPtr: d.to else: d

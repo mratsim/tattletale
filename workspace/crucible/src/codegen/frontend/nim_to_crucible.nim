@@ -390,7 +390,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
           varNode.vType.kind in {gtPtr, gtSpan, gtArray}:
         # a space-annotated var's pointer/span/array type carries the storage space,
         # a threadgroup-hoisted array is an smem-array
-        varNode.vType = withAddressSpace(varNode.vType, varNode.addressSpace)
+        varNode.vType = varNode.vType.withAddressSpace(varNode.addressSpace)
       varNode.vName.symbol.typ = varNode.vType # type cached on the symbol for later lookup
       varNode.vMutable = node.kind == nnkVarSection
       ## XXX: array initialization needs a memcpy, not yet handled
@@ -399,9 +399,9 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         if varNode.vType.kind == gtPtr:
           # an initialized pointer keeps the storage its init accesses,
           # addr-derived pointers stay in the addressed storage's space
-          let initSpace = ctx.getAccessedSpace(varNode.vInit)
+          let initSpace = ctx.resolveAddressSpace(varNode.vInit)
           if initSpace != varNode.vType.addressSpace:
-            varNode.vType = withAddressSpace(varNode.vType, initSpace)
+            varNode.vType = varNode.vType.withAddressSpace(initSpace)
             varNode.vName.symbol.typ = varNode.vType
         if varNode.vType.kind in {gtObject, gtGenericInst} and
             varNode.vInit.kind == gpuObjConstr:
@@ -843,7 +843,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
           # over the space its init value accesses
           let valueType = ctx.getOperandType(f.value)
           if not valueType.isNil:
-            f.typ = withAddressSpace(flds[i].typ, getTypeAccessedSpace(valueType))
+            f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
           else:
             f.typ = flds[i].typ
           result.ocFields.add f
@@ -875,7 +875,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         # the field's space is its init value's space, matching the object path
         let valueType = ctx.getOperandType(f.value)
         if not valueType.isNil:
-          f.typ = withAddressSpace(flds[i].typ, getTypeAccessedSpace(valueType))
+          f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
         else:
           f.typ = flds[i].typ
         result.ocFields.add f
@@ -908,9 +908,9 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     if convTo.kind in {gtPtr, gtSpan}:
       # a pointer-typed conversion target keeps the space its operand accesses,
       # a derived pointer stays in its source storage
-      let space = ctx.getAccessedSpace(convExpr)
+      let space = ctx.resolveAddressSpace(convExpr)
       if space != asRMEM:
-        convTo = withAddressSpace(convTo, space)
+        convTo = convTo.withAddressSpace(space)
     result = GpuAst(kind: gpuConv, convTo: convTo, convExpr: convExpr)
   of nnkCast:
     let castExpr = ctx.toCrucibleAst(reg, node[1])
@@ -919,9 +919,9 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       # a pointer-typed cast target keeps the space its operand accesses,
       # a threadgroup-to-`ptr T` cast stays threadgroup, a cast across
       # spaces is an explicit backend-validated operation
-      let space = ctx.getAccessedSpace(castExpr)
+      let space = ctx.resolveAddressSpace(castExpr)
       if space != asRMEM:
-        castTo = withAddressSpace(castTo, space)
+        castTo = castTo.withAddressSpace(space)
     result = GpuAst(kind: gpuCast, cTo: castTo, cExpr: castExpr)
 
   of nnkAddr, nnkHiddenAddr:
