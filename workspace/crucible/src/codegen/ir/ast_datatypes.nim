@@ -58,7 +58,7 @@ type
     gtString,
     gtObject,      # Struct types
     gtPtr,         # Pointer type, carries inner type
-    gtUA,          # UncheckedArray (UA) mapped to runtime sized arrays
+    gtUncheckedArray,          # UncheckedArray, mapped to runtime sized arrays
     gtSpan,         # Runtime-length array view (openArray/varargs)
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
@@ -82,7 +82,7 @@ type
       implicit*: bool # Whether the type was implicitly a pointer, i.e. `var T`.
       mutable*: bool # WebGPU "Generics" only: Mutable (read write) or immutable pointer (read only)?
                     # True for raw pointer and `var T` arguments, false for `foo.addr` of a non pointer type.
-    of gtUA: uaTo*: GpuType # `UncheckedArray[T]`
+    of gtUncheckedArray: uaTo*: GpuType # `UncheckedArray[T]`
     of gtObject:
       name*: string
     of gtArray:
@@ -441,7 +441,7 @@ func clone*(typ: GpuType): GpuType =
     result.to = typ.to.clone()
     result.implicit = typ.implicit
     result.mutable = typ.mutable
-  of gtUA:
+  of gtUncheckedArray:
     result.uaTo = typ.uaTo.clone()
   of gtObject:
     result.name = typ.name
@@ -636,7 +636,7 @@ func hash*(t: GpuType): Hash =
     h = h !& hash(t.implicit)
     h = h !& hash(t.mutable)
     h = h !& hash(t.addressSpace)
-  of gtUA:
+  of gtUncheckedArray:
     h = h !& hash(t.uaTo)
   of gtObject:
     h = h !& hash(t.name)
@@ -681,7 +681,7 @@ proc `==`*(a, b: GpuType): bool =
     case a.kind
     of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable and
       a.addressSpace == b.addressSpace
-    of gtUA:  result = a.uaTo == b.uaTo
+    of gtUncheckedArray:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
       if a.fields.len != b.fields.len: result = false
@@ -793,7 +793,7 @@ proc pretty*(t: GpuType): string =
     of gtPtr:
       result = if t.implicit: "var " else: "ptr "
       result.add pretty(t.to)
-    of gtUA:
+    of gtUncheckedArray:
       result = "UncheckedArray[" & t.uaTo.pretty() & "]"
     of gtObject:
       result = t.name # just the name
@@ -1093,7 +1093,7 @@ func size*(t: GpuType): int =
     result = 8
   of gtSize_t:
     result = 8
-  of gtPtr, gtUA, gtVoidPtr:
+  of gtPtr, gtUncheckedArray, gtVoidPtr:
     result = 8  # pointer size on 64-bit
   of gtString:
     result = 8  # pointer

@@ -43,7 +43,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoidPtr: "void*"
   of gtObject: "struct"
   of gtString: "const char*"
-  of gtUA: ""       # UncheckedArray used as buffer pointer
+  of gtUncheckedArray: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
   else:
     error "Invalid type : " & $t
@@ -52,7 +52,7 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
     if inner.kind == gtArray:
       let ptrStar = gpuTypeToString(t.kind)
       result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
@@ -90,7 +90,7 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject: result = "struct " & t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
@@ -113,7 +113,7 @@ proc containsFloat64(t: GpuType): bool =
     result = t.to.containsFloat64()
   of gtArray:
     result = t.aTyp.containsFloat64()
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsFloat64()
   of gtFloat64: result = true
   else: result = false
@@ -124,7 +124,7 @@ proc containsFloat16(t: GpuType): bool =
     result = t.to.containsFloat16()
   of gtArray:
     result = t.aTyp.containsFloat16()
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsFloat16()
   of gtFloat16: result = true
   else: result = false

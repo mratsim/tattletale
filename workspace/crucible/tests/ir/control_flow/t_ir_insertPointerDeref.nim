@@ -21,7 +21,7 @@ static:
   # ── 1. Wraps gpuIndex over a pointer to unsized array ─────────────────────
   block:
     let int32 = GpuType(kind: gtInt32)
-    let uaTyp = GpuType(kind: gtUA, uaTo: int32)
+    let uaTyp = GpuType(kind: gtUncheckedArray, uaTo: int32)
     let ptrTyp = GpuType(kind: gtPtr, to: uaTyp)
     let ptrSym = newSymbol("p", iSym = "p_h1", typ = ptrTyp)
     let ptrIdent = GpuAst(kind: gpuIdent, symbol: ptrSym)
@@ -80,7 +80,7 @@ static:
   # ── 5. Never derefs under addr-of ─────────────────────────────────────────
   block:
     let int32 = GpuType(kind: gtInt32)
-    let uaTyp = GpuType(kind: gtUA, uaTo: int32)
+    let uaTyp = GpuType(kind: gtUncheckedArray, uaTo: int32)
     let ptrTyp = GpuType(kind: gtPtr, to: uaTyp)
     let ptrSym = newSymbol("p", iSym = "p_h5", typ = ptrTyp)
     let ptrIdent = GpuAst(kind: gpuIdent, symbol: ptrSym)

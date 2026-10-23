@@ -44,7 +44,7 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
         paramType = resolveType(reg, param[typIdx-1].getTypeInst())
       p.symbol.typ = paramType
       let byref = paramType.kind != gtCompileTimeValue and isLargeStruct(paramType)
-      # explicit `ptr T` is a device pointer, implicit `var T` and scalars stay in registers
+      # birth space only: `ptr T` defaults device, `var T` (ntyVar) registers, both re-spaced by call sites and {.smem.} hoisting
       let paramAddrSpace =
         if paramType.kind == gtPtr and not paramType.implicit: asDevice
         else: asRMEM

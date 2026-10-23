@@ -194,7 +194,7 @@ static:
         reduceFn = stmt
   registerLowerDecay.runPassPrepared(ctx)
 
-  # the decay rebuilds gtPtr(gtArray) as gtPtr(gtUA)
+  # the decay rebuilds gtPtr(gtArray) as gtPtr(gtUncheckedArray)
   # a fresh rebuild would reset the space, the birth space must survive
   for i in 0 ..< 2:
     doAssert reduceFn.pParams[i].typ.kind == gtPtr and

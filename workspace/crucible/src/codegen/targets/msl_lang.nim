@@ -45,7 +45,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoidPtr: "void*"
   of gtObject: "struct"
   of gtString: "const char*"
-  of gtUA: "" # `UncheckedArray` by itself is nothing in MSL
+  of gtUncheckedArray: "" # `UncheckedArray` by itself is nothing in MSL
   of gtStatic: "int"
   else:
     error "Invalid type : " & $t
@@ -57,7 +57,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
     if inner.kind == gtArray: # ptr to array type
       # Need to pass `*` for the pointer into the identifier.
       # `state: var array[4, BigInt]` must become `BigInt (*state)[4]`.
@@ -100,7 +100,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
       result.add mangledHashName("", $hash(t))
   of gtObject:
     result = t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
@@ -166,7 +166,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
       continue
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
-      if inner.kind == gtUA:
+      if inner.kind == gtUncheckedArray:
         inner = inner.uaTo
       var elem = gpuTypeToString(inner, allowEmptyIdent = true)
       params.add "device " & elem & "* " & name & " [[buffer(" & $slot & ")]]"
@@ -192,7 +192,7 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   let name = p.ident.ident()
   if p.typ.kind == gtPtr:
     var inner = p.typ.to
-    if inner.kind == gtUA:
+    if inner.kind == gtUncheckedArray:
       inner = inner.uaTo
     if inner.kind == gtArray:
       inner = inner.aTyp

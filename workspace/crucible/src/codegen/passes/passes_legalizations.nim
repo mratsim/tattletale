@@ -679,7 +679,7 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
           case arrTyp.kind
           of gtPtr: lhsType = arrTyp.to
           of gtArray: lhsType = arrTyp.aTyp
-          of gtUA: lhsType = arrTyp.uaTo
+          of gtUncheckedArray: lhsType = arrTyp.uaTo
           else: discard
     # Expression block as lvalue: hoist intermediate stmts, keep last as lvalue
     if slot.aLeft.kind == gpuBlock and slot.aLeft.isExpr:
@@ -813,7 +813,7 @@ proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
                 case arrTyp.kind
                 of gtPtr: lhsType = arrTyp.to
                 of gtArray: lhsType = arrTyp.aTyp
-                of gtUA: lhsType = arrTyp.uaTo
+                of gtUncheckedArray: lhsType = arrTyp.uaTo
                 else: discard
           preamble = ctx.blitExprSlot(stmt, lhsType, fnRetType)
       of gpuBlock:

@@ -32,7 +32,7 @@ proc getInnerArrayType(t: GpuType): string =
 proc refTypeName(inner: GpuType): string =
   ## GLSL name of the buffer-reference block binding `inner`:
   ## a pointer renders as its reference block type
-  let pt = if inner.kind == gtUA: inner.uaTo else: inner
+  let pt = if inner.kind == gtUncheckedArray: inner.uaTo else: inner
   let base = gpuTypeToString(pt, allowEmptyIdent = true)
   result = "Ref_" & base.multiReplace((" ", "_"), ("[", ""), ("]", ""),
                                       (",", "_"), ("(", ""), (")", ""))
@@ -63,9 +63,9 @@ proc refBlockDecl(inner: GpuType): string =
         else: gpuTypeToString(inner, allowEmptyIdent = true)) &
         " is currently unsupported, only integers, floats, bool and arrays of those are supported"
   let member =
-    if inner.kind == gtUA:
+    if inner.kind == gtUncheckedArray:
       let el = inner.uaTo
-      doAssert el.kind != gtUA,
+      doAssert el.kind != gtUncheckedArray,
         "Runtime array of runtime arrays is not expressible in a GLSL buffer block"
       if el.kind == gtArray:
         let (base, dims) = arrayDims(el)
@@ -94,7 +94,7 @@ proc collectRefPointees(t: GpuType, pointees: var seq[GpuType]) =
   of gtArray:
     if t.aTyp != nil:
       collectRefPointees(t.aTyp, pointees)
-  of gtUA:
+  of gtUncheckedArray:
     if t.uaTo != nil:
       collectRefPointees(t.uaTo, pointees)
   of gtObject, gtGenericInst:
@@ -122,7 +122,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtPtr: error "Vulkan GLSL renders pointers as buffer references (buffer device addresses) — render the full type, not the bare kind"
   of gtVoidPtr: error "Vulkan GLSL renders void* as a void buffer reference — render the full type, not the bare kind"
   of gtString: "const char*"
-  of gtUA: ""       # UncheckedArray used as buffer pointer
+  of gtUncheckedArray: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
   of gtObject: "struct"
   else:
@@ -162,7 +162,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, a
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject: result = t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
@@ -593,7 +593,7 @@ proc codegen*(ctx: var GpuContext): string =
       needsAtomicFloat = true
   for pt in refPointees:
     var b = pt
-    while b.kind in {gtArray, gtUA}:
+    while b.kind in {gtArray, gtUncheckedArray}:
       b = if b.kind == gtArray: b.aTyp else: b.uaTo
     if b.kind == gtUint8:
       needsInt8 = true

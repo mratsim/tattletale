@@ -12,12 +12,12 @@ import ./ast_datatypes
 import ./ast_type_constructors
 
 func getPointeeKind*(t: GpuType): GpuTypeKind =
-  ## Scalar kind at the end of a pointer/array/UA chain,
+  ## Scalar kind at the end of a pointer, array or UncheckedArray chain,
   ## gtInvalid when the type is unknown.
   if t.isNil:
     return gtInvalid
   var cur = t
-  while cur.kind in {gtPtr, gtArray, gtUA}:
+  while cur.kind in {gtPtr, gtArray, gtUncheckedArray}:
     cur = case cur.kind
           of gtPtr: cur.to
           of gtArray: cur.aTyp
@@ -110,13 +110,13 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
         case arrType.kind
         of gtPtr: result = arrType.to      # ptr-to-ptr: (*p) is ptr T
         of gtArray: result = arrType.aTyp  # (*p)[i] → element type
-        of gtUA: result = arrType.uaTo
+        of gtUncheckedArray: result = arrType.uaTo
         else: result = arrType             # scalar pointee: p[i] is the pointee
       else:
         case arrType.kind
         of gtPtr: result = arrType.to
         of gtArray: result = arrType.aTyp
-        of gtUA: result = arrType.uaTo
+        of gtUncheckedArray: result = arrType.uaTo
         else:
           error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
@@ -162,21 +162,27 @@ proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
     let arrT = ctx.getDotParentTypeImpl(n.iArr)
     if arrT.isNil:
       nil
-    elif arrT.kind == gtArray: arrT.aTyp
-    elif arrT.kind == gtPtr: arrT.to
-    elif arrT.kind == gtUA: arrT.uaTo
-    else: nil
+    elif arrT.kind == gtArray:
+      arrT.aTyp
+    elif arrT.kind == gtPtr:
+      arrT.to
+    elif arrT.kind == gtUncheckedArray:
+      arrT.uaTo
+    else:
+      nil
   of gpuObjConstr: n.ocType
   of gpuConv: n.convTo
   of gpuCast: n.cTo
   of gpuMaterialize: ctx.getDotParentTypeImpl(n.mExpr)
   of gpuDot:
-    # Field type on the parent struct type (ptr/UA layers stripped),
+    # Field type on the parent struct type (ptr/UncheckedArray layers stripped),
     # for field-access chains.
     block:
       var pT = ctx.getDotParentTypeImpl(n.dParent)
-      if pT != nil and pT.kind == gtPtr: pT = pT.to
-      if pT != nil and pT.kind == gtUA: pT = pT.uaTo
+      if pT != nil and pT.kind == gtPtr:
+        pT = pT.to
+      if pT != nil and pT.kind == gtUncheckedArray:
+        pT = pT.uaTo
       if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
         nil
       else:
@@ -190,11 +196,11 @@ proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
   else: nil
 
 proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Struct type of a field-access base, with the pointer/UA layer stripped.
+  ## Struct type of a field-access base, with the pointer/UncheckedArray layer stripped.
   var t = ctx.getDotParentTypeImpl(n)
   if t != nil and t.kind == gtPtr:
     t = t.to
-  if t != nil and t.kind == gtUA:
+  if t != nil and t.kind == gtUncheckedArray:
     t = t.uaTo
   result = t
 
@@ -276,7 +282,7 @@ proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
     else:
       case t.kind
       of gtArray: t.aTyp
-      of gtUA: t.uaTo
+      of gtUncheckedArray: t.uaTo
       of gtPtr: t.to
       else: nil
   of gpuDot:
@@ -337,7 +343,7 @@ func containsKind*(t: GpuType, kind: GpuTypeKind): bool =
     result = t.to.containsKind(kind)
   of gtArray:
     result = t.aTyp.containsKind(kind)
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsKind(kind)
   else:
     result = t.kind == kind

@@ -379,7 +379,7 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
       result = initGpuVoidPtr()
     of ntyUncheckedArray:
       # only a pointer through `ptr UncheckedArray[T]`, resolve the element type
-      result = initGpuUAType(resolveInnerPointerType(reg, n))
+      result = initGpuUncheckedArrayType(resolveInnerPointerType(reg, n))
     of ntyOpenArray:
       ## OpenArray[T] → gtSpan(T)
       doAssert n.kind == nnkBracketExpr and n[0].strVal == "openArray",
