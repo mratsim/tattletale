@@ -1,0 +1,15 @@
+{
+ "name": "causal_gqa2_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 2,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": true,
+ "mask": "none",
+ "checksum": -58.007295962529476
+}

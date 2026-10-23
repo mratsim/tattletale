@@ -1,0 +1,15 @@
+{
+ "name": "mask_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 2,
+ "Hkv": 2,
+ "L": 48,
+ "S": 48,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "mask": "additive",
+ "checksum": 72.46243318115975
+}

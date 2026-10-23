@@ -1,0 +1,15 @@
+{
+ "name": "gqa2_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 2,
+ "Hkv": 1,
+ "L": 32,
+ "S": 32,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "mask": "none",
+ "checksum": 67.38323480469752
+}

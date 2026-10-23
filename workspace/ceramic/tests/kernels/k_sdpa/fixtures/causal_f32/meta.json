@@ -1,0 +1,15 @@
+{
+ "name": "causal_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 1,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": true,
+ "mask": "none",
+ "checksum": 78.87905000970702
+}

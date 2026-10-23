@@ -1,0 +1,15 @@
+{
+ "name": "decode_gqa8_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 8,
+ "Hkv": 1,
+ "L": 32,
+ "S": 256,
+ "Dk": 64,
+ "Dv": 64,
+ "scale": 0.125,
+ "causal": true,
+ "mask": "none",
+ "checksum": -835.6807350255484
+}

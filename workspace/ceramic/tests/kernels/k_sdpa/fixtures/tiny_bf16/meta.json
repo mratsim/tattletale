@@ -1,0 +1,15 @@
+{
+ "name": "tiny_bf16",
+ "dtype": "bfloat16",
+ "B": 1,
+ "Hq": 1,
+ "Hkv": 1,
+ "L": 32,
+ "S": 32,
+ "Dk": 16,
+ "Dv": 16,
+ "scale": 0.25,
+ "causal": false,
+ "mask": "none",
+ "checksum": 19.379749789767
+}

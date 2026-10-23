@@ -1,0 +1,15 @@
+{
+ "name": "batched_gqa_f32",
+ "dtype": "float32",
+ "B": 2,
+ "Hq": 4,
+ "Hkv": 2,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "mask": "none",
+ "checksum": -17.19566287264071
+}
