@@ -618,6 +618,11 @@ task test_crucible_webgpu, "Test workspace/crucible WebGPU codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/webgpu"):
       runCmd(cmd)
 
+task test_crucible_spirv, "Test workspace/crucible SPIR-V codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan_via_spirv"):
+      runCmd(cmd)
+
 task test_crucible_metal, "Test workspace/crucible Metal codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
