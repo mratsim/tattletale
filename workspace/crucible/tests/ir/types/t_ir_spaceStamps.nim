@@ -12,6 +12,7 @@
 import std/tables
 import workspace/crucible/src/codegen/ir/ast_type_constructors
 import workspace/crucible/src/crucible_internal_compiler
+import workspace/crucible/src/codegen/passes/passes_lowering_msl {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 proc findVar(n: GpuAst, name: string): GpuAst =
@@ -357,17 +358,16 @@ static:
   echo "  OK - pointer locals take the assigned storage's space"
 
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
-proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
-  # the bundle's shared lowering passes depend on the early legalization phase
-  reg.registerLegalizationPasses()
-  reg.registerMetalLoweringPasses()
+proc registerSmemOnly(reg: var PassRegistry) {.nimcall.} =
+  reg.registerSmemArena()
 
 static:
   let ir = toCrucibleAst:
     proc foldScratch(inp: ptr UncheckedArray[float32], outp: ptr UncheckedArray[float32]) {.inline.} =
       var scratch {.smem.}: array[64, float32]
+      var plainLocal: float32
       let t = thread_position_in_threadgroup.x
-      scratch[t] = inp[t]
+      scratch[t] = inp[t] + plainLocal
       outp[t] = scratch[t]
     proc smemKernel(outp: ptr UncheckedArray[float32], inp: ptr UncheckedArray[float32]) {.global.} =
       var scratch {.smem.}: array[64, float32]
@@ -380,7 +380,7 @@ static:
       ctx.allFnTab[stmt.pName] = stmt
       if stmt.pName.symbol.name == "smemKernel":
         kern = stmt
-  registerMetalLowering.runPassPrepared(ctx)
+  registerSmemOnly.runPassPrepared(ctx)
 
   # the device fn's {.smem.} var hoists to a threadgroup pointer param
   var fold: GpuAst = nil
@@ -422,6 +422,19 @@ static:
       arenaArgs += 1
   doAssert arenaArgs == 1,
     "exactly one call arg forwards the threadgroup arena, got " & $arenaArgs
+
+  # negative: a local without the {.smem.} pragma stays a plain local,
+  # no threadgroup param materializes for it
+  var plainParams = 0
+  for p in fold.pParams:
+    if p.addressSpace == asSMEM:
+      plainParams += 1
+  var plain = fold.pBody.findVar("plainLocal")
+  doAssert not plain.isNil, "expected the non-arena local to stay in the body"
+  doAssert plain.addressSpace != asSMEM,
+    "a local without {.smem.} keeps its storage, got " & $plain.addressSpace
+  doAssert plainParams == 1,
+    "only the {.smem.} arena hoists to a threadgroup param, got " & $plainParams
   echo "  OK - smem arena carries asSMEM on the hoisted type"
 
 # ── 3. A ptr-to-array param decays keeping its address space ──
