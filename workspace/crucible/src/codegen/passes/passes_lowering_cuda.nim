@@ -20,7 +20,7 @@ import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
-import ./passes_instantiations
+import ./passes_low_address_spaces
 import ./passes_optimizations
 
 {.experimental: "codeReordering".}
