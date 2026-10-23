@@ -10,7 +10,7 @@
 # Cases list what to run, nothing is derived.
 # Correctness lives in the k_rmsnorm tests, not here.
 #
-# GB/s traffic model: 2 source passes plus 1 destination pass = 12 bytes per logical element (unweighted kernel).
+# GB/s traffic model: 2 source passes plus 1 destination pass = 12 bytes per logical element.
 # The weight vector is rowSize floats total and stays cache resident, uncounted.
 #
 # Timing: a warmup launch then 3 timed launches per case, the median per-iteration time is reported.
@@ -48,9 +48,10 @@ proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
     tv(i) = T(i mod 7) * T(0.25) + T(0.5)
 
 proc fillWeight[T, Sh, St](tv: var TensorView[T, Sh, St]) =
-  ## Position mod 5, times 0.25 plus 0.5: per-axis weights in [0.5, 1.5]
+  ## Position mod 5, times 0.25 plus 1.0: per-axis weights in [1.0, 2.0],
+  ## the same pattern the MLX runner fills.
   for r in 0 ..< tv.size():
-    tv(r) = T(r mod 5) * T(0.25) + T(0.5)
+    tv(r) = T(r mod 5) * T(0.25) + T(1.0)
 
 proc rmsnormLoop(weighted: static bool, dst, src, weight: distinct TensorView, eps: float32, axis: static int, iters: int) =
   ## Bench harness: iters RMSNorm passes in one launch.
@@ -130,11 +131,6 @@ const Cases2: array[6, tuple[src, dst: tuple[shape, strides: (int, int)], axis, 
   ((shape: (4096, 4096), strides: (8192, 2)),
    (shape: (4096, 4096), strides: (4096, 1)), 1, 20)]
 
-const Cases2W: array[1, tuple[src, dst: tuple[shape, strides: (int, int)], axis, iters: int]] = [
-  # weighted, row-major, dense rows
-  ((shape: (4096, 4096), strides: (4096, 1)),
-   (shape: (4096, 4096), strides: (4096, 1)), 1, 50)]
-
 const Cases3: array[4, tuple[src, dst: tuple[shape, strides: (int, int, int)], axis, iters: int]] = [
   # row-major, dense rows of 512
   ((shape: (256, 128, 512), strides: (65536, 512, 1)),
@@ -163,11 +159,9 @@ proc main() =
     staticFor ci, 0, cases.len:
       runCase(engine, cases[ci].src.shape, cases[ci].src.strides,
           cases[ci].dst.strides, cases[ci].axis, cases[ci].iters, weighted)
-  runCases(Cases2, false)
-  writeLine(stdout, "weighted, 4096 x 4096 axis-last:")
-  runCases(Cases2W, true)
-  runCases(Cases3, false)
-  runCases(Cases4, false)
+  runCases(Cases2, true)
+  runCases(Cases3, true)
+  runCases(Cases4, true)
   separator()
 
 when isMainModule:
