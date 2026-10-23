@@ -6,8 +6,26 @@
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/serialization/t_metal_ptr_struct_field_cast.nim
 
-import std/[unittest, strutils]
+import std/[unittest, strutils, sequtils]
 import workspace/crucible
+
+proc structBodies(msl: string): seq[(string, string)] =
+  ## (def line, body text) pairs of every struct def, emission order.
+  ## Body text runs from the def line through the closing brace
+  let lines = msl.split('\n')
+  var i = 0
+  while i < lines.len:
+    let s = lines[i].strip()
+    if s.startsWith("struct ") and s.endsWith("{"):
+      var body = s & "\n"
+      inc i
+      while i < lines.len and not lines[i].strip().startsWith("};"):
+        body.add lines[i] & "\n"
+        inc i
+      if i < lines.len:
+        body.add lines[i]
+      result.add (s, body)
+    inc i
 
 type
   DeviceView = object
@@ -70,8 +88,15 @@ proc runTest() =
       var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
-      check "device uint* data;" in src
-      check "(device uint*)" in src
+      # the construction space equals the declared field's birth space
+      # (device), the same-space rule keeps one def.
+      # A cross-space construction spawns a `_<typehash>` instantiated def
+      let viewBodies = src.structBodies.filterIt(it[0].startsWith("struct DeviceView"))
+      check viewBodies.len == 1
+      check viewBodies[0][0] == "struct DeviceView{"
+      check "device uint* data;" in viewBodies[0][1]
+      check "threadgroup" notin viewBodies[0][1]
+      check src.split('\n').anyIt("(device uint*)" in it and "input" in it)
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
       let iDev = engine.allocDevice(uint32, 4)
       engine.copyToDeviceFromHost(iDev, addr input[0], 4)
@@ -86,8 +111,17 @@ proc runTest() =
       var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
-      check "threadgroup uint* data;" in src
-      check "(threadgroup uint*)" in src
+      # the instantiated def carries the construction's space (threadgroup),
+      # the kernel uses it.
+      # The declared def keeps the birth space
+      let viewBodies = src.structBodies.filterIt(it[0].startsWith("struct SmemView"))
+      check viewBodies.len == 2
+      check viewBodies.anyIt(it[0] == "struct SmemView{")
+      check viewBodies.anyIt(it[0].startsWith("struct SmemView_"))
+      let inst = viewBodies.filterIt(it[0].startsWith("struct SmemView_"))
+      check inst.len == 1 and "threadgroup uint* data;" in inst[0][1]
+      check "device uint* data;" notin inst[0][1]
+      check src.split('\n').anyIt("(threadgroup uint*)" in it and "scratch" in it)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "ptrFieldSmemKernel", oDev, ())
@@ -100,10 +134,18 @@ proc runTest() =
       var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
-      # the per-space struct variants are distinct defs, the second
-      # View def carries the type-hash instance name
-      check "struct View{" in src
-      check "struct View_" in src
+      # the per-space variants are distinct defs.
+      # The declared def keeps the plain name.
+      # The instantiated def carries the type-hash instance name.
+      # Each body carries exactly one space qualifier
+      let viewBodies = src.structBodies.filterIt(it[0].startsWith("struct View"))
+      check viewBodies.len == 2
+      check viewBodies.anyIt(it[0] == "struct View{")
+      check viewBodies.anyIt(it[0].startsWith("struct View_"))
+      check viewBodies.countIt("device uint* data;" in it[1]) == 1
+      check viewBodies.countIt("threadgroup uint* data;" in it[1]) == 1
+      check viewBodies.allIt(not ("device uint* data;" in it[1] and
+                                  "threadgroup uint* data;" in it[1]))
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
       let iDev = engine.allocDevice(uint32, 4)
       engine.copyToDeviceFromHost(iDev, addr input[0], 4)
