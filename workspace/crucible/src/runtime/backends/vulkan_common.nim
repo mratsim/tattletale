@@ -154,8 +154,10 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
 
   writeFile(srcPath, glsl)
   defer:
-    if fileExists(srcPath): removeFile(srcPath)
-    if fileExists(spvPath): removeFile(spvPath)
+    if fileExists(srcPath):
+      removeFile(srcPath)
+    if fileExists(spvPath):
+      removeFile(spvPath)
   var args = @["-V", "-e", entryPoint, "--source-entrypoint", "main"]
   if "GL_KHR_shader_subgroup" in glsl:
     args.add "--target-env"
@@ -505,7 +507,8 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or
       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
     if (flags and best) == best:
-      memTypeIdx = i; break
+      memTypeIdx = i
+      break
     if (flags and cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) != 0:
       if memTypeIdx == high(uint32):
         memTypeIdx = i
@@ -784,14 +787,24 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
     vkCmdPushConstants(cmdBuf, pipeline.layout, uint32(VK_SHADER_STAGE_COMPUTE_BIT),
                        0, uint32(pushConstSize), pushConstData)
 
-  var gx = 1'u32; var gy = 1'u32; var gz = 1'u32
-  var lx = 1'u32; var ly = 1'u32; var lz = 1'u32
-  if globalWorkSize.len > 0: gx = globalWorkSize[0]
-  if globalWorkSize.len > 1: gy = globalWorkSize[1]
-  if globalWorkSize.len > 2: gz = globalWorkSize[2]
-  if localWorkSize.len > 0: lx = localWorkSize[0]
-  if localWorkSize.len > 1: ly = localWorkSize[1]
-  if localWorkSize.len > 2: lz = localWorkSize[2]
+  var gx = 1'u32
+  var gy = 1'u32
+  var gz = 1'u32
+  var lx = 1'u32
+  var ly = 1'u32
+  var lz = 1'u32
+  if globalWorkSize.len > 0:
+    gx = globalWorkSize[0]
+  if globalWorkSize.len > 1:
+    gy = globalWorkSize[1]
+  if globalWorkSize.len > 2:
+    gz = globalWorkSize[2]
+  if localWorkSize.len > 0:
+    lx = localWorkSize[0]
+  if localWorkSize.len > 1:
+    ly = localWorkSize[1]
+  if localWorkSize.len > 2:
+    lz = localWorkSize[2]
 
   let gcx = (gx + lx - 1) div lx
   let gcy = (gy + ly - 1) div ly
