@@ -1,0 +1,22 @@
+{
+ "name": "mask_gqa_heads_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 4,
+ "Hkv": 2,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "mask": "additive",
+ "checksum": 195.9769183257329,
+ "mask_neg_inf_count": 539,
+ "input_checksums": {
+  "q.bin": 25.909314142452786,
+  "k.bin": 13.588633779785596,
+  "v.bin": 104.77455653226934,
+  "mask.bin": 0.0
+ }
+}

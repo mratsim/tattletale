@@ -40,7 +40,7 @@ else:
     "tiny_f32", "gqa2_f32", "batched_gqa_f32", "causal_f32",
     "mask_f32", "causal_mask_gqa4_f32", "mask_broadcast_f32",
     "gqa4_f32", "gqa8_f32", "gqa8_causal_f32", "gqa8_mask_f32",
-    "d128_causal_f32", "scale_f32"]
+    "d128_causal_f32", "scale_f32", "cross_attn_f32", "mask_gqa_heads_f32"]
 
 proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: typedesc[T], Dk, Dv: static int) =
   ## Bridges one fixture, launches the kernel, compares against o.bin

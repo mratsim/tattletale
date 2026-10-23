@@ -186,6 +186,8 @@ FIXTURES = [
     dict(name="gqa4_f16", dtype="float16", B=1, Hq=4, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, seed=18),
     dict(name="gqa8_causal_f16", dtype="float16", B=1, Hq=8, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, causal=True, seed=19),
     dict(name="gqa2_bf16", dtype="bfloat16", B=1, Hq=2, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, seed=20),
+    dict(name="cross_attn_f32", dtype="float32", B=1, Hq=2, Hkv=1, L=48, S=72, Dk=32, Dv=32, scale=None, seed=21),
+    dict(name="mask_gqa_heads_f32", dtype="float32", B=1, Hq=4, Hkv=2, L=64, S=64, Dk=32, Dv=32, scale=None, mask_kind="additive", mask_heads=2, seed=22),
 ]
 
 
