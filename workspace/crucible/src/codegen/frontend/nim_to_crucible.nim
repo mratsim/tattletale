@@ -664,10 +664,16 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
                         aLeft: result.bLeft,
                         aRight: result.bRight,
                         aOp: mappedOp)
+
         # the compound assignment template takes the target by `var T`:
-        # complex lvalue arguments arrive address-wrapped
+        # complex lvalue arguments are address-wrapped
         if result.aLeft.kind == gpuAddr:
           result.aLeft = result.aLeft.aOf
+        # a `var T` scalar parameter materializes as a pointer.
+        # The target derefs like the plain-assignment path (a bare ident is pointer arithmetic)
+        if result.aLeft.kind == gpuIdent and not result.aLeft.symbol.isNil and
+            not result.aLeft.symbol.typ.isNil and result.aLeft.symbol.typ.kind == gtPtr:
+          result.aLeft = GpuAst(kind: gpuDeref, dOf: result.aLeft)
         if result.aLeft.kind == gpuLit:
           result.aLeft.lType = leftTyp
         elif result.aRight.kind == gpuLit:

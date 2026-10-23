@@ -214,7 +214,7 @@ macro hasUnderscore*(Cs: varargs[typed]): bool =
 #  sliceAxes and diceAxes, reduction-axis selection by axis number
 # ═══════════════════════════════════════════════════════════════
 
-proc axesSelector(n: int, axes: seq[int], rest, axis: string): NimNode =
+proc axesSelector(n: int, axes: seq[int], rest, axis: static string): NimNode =
   ## Per-mode selector: `axis` marker at the axes, `rest` marker elsewhere
   result = nnkPar.newTree()
   for i in 0 ..< n:
@@ -223,9 +223,9 @@ proc axesSelector(n: int, axes: seq[int], rest, axis: string): NimNode =
       if a == i:
         isAxis = true
     if isAxis:
-      result.add ident(axis)
+      result.add bindSym(axis)
     else:
-      result.add ident(rest)
+      result.add bindSym(rest)
 
 macro sliceAxes*(target: Layout, axes: varargs[int]{lit|`const`}): untyped =
   ## Layout keeping every mode except `axes`.
