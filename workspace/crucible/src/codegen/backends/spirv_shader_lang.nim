@@ -475,8 +475,6 @@ proc flushCapabilities*(ctx: var SpvLangCtx) =
 type
   SpvFnCtx* = object
     ## Per-kernel emission state over the module-level SpvLangCtx
-    fnId*: uint32                      ## OpFunction result id
-    entryLabel*: uint32                ## entry (setup) block label
     locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
     paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
     paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
@@ -1716,7 +1714,7 @@ proc emitDeviceFn*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
       paramTyIds.add ctx.tyId(valueTy(valueType(p.typ)))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
-  var fn = SpvFnCtx(fnId: result, fns: ctx.fns)
+  var fn = SpvFnCtx(fns: ctx.fns)
   # parameters come first, the entry label opens the body block
   for i, p in procNode.pParams:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
@@ -1739,7 +1737,7 @@ proc emitDeviceFn*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
       objParams.add (sym, pid, p.typ)
     else:
       fn.paramVals[sym.iSym] = pid
-  fn.entryLabel = ctx.builder.opLabel()
+  discard ctx.builder.opLabel()
   hoistTernaryTemps(ctx, fn, procNode.pBody)
   hoistLocals(ctx, fn, procNode.pBody)
   # by-value object parameter copies: every OpVariable in a function must
@@ -1842,8 +1840,8 @@ proc emitKernel*(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]
   let voidTy = ctx.builder.tyVoid()
   let fnTy = ctx.builder.tyFunction(voidTy, @[])
   result = ctx.builder.opFunction(voidTy, fnTy)
-  var fn = SpvFnCtx(fnId: result, fns: ctx.fns)
-  fn.entryLabel = ctx.builder.opLabel()
+  var fn = SpvFnCtx(fns: ctx.fns)
+  discard ctx.builder.opLabel()
 
   # setup block: Function-storage variables first, then hoisted parameter loads,
   # all later blocks are dominated by the entry block
