@@ -14,8 +14,9 @@
 ## - guarded thread (the `AddKernel.lean` model): buffers `a`, `b` (read) +
 ##   `output` (written), let-bound `thread_position_in_grid.x` (the Lean `tid`),
 ##   one bare `if` with guard `tidVar < literal`, positive literal `n` (the length)
-## - loop: one `for` over the compile-time constant range `0 ..< n`, start 0,
-##   step 1, exclusive, one indexed write over the loop variable and the buffers
+## - loop (the axpy shape): one `for` over a constant range, one indexed write storing `alpha * a[i] + b[i]` plus a uint32 scalar
+##
+## The axpy scalar is uniform across the iterations and maps to a trailing `UInt32` argument of the emitted defs.
 ##
 ## - `{.precondition.}` - an assumption, carried by the scaffolds as hypothesis `h` (guarded thread only)
 ## - `{.invariant.}` - implied by the guard, proved by `exact h` (loop shape: a loop-counter property over the remaining count `k`)
@@ -244,6 +245,7 @@ type
     value: string        ## emitted Lean text of the stored value, in terms of `tid` or the update binder `j`
     nValue: int          ## the guard literal (guarded-thread shape) or loop bound (loop shape)
     loopVar: string      ## loop shape: the Nim loop variable's name
+    scalarName: string   ## the uint32 scalar parameter (axpy shape), "" when the kernel has none
     isAddShape: bool     ## guarded-thread shape: stored value is `<buf1> tid + <buf2> tid`, enables examples
 
 proc unsupported(kind: GpuNodeKind, detail: string): ref ValueError =
@@ -251,16 +253,21 @@ proc unsupported(kind: GpuNodeKind, detail: string): ref ValueError =
   result = newException(ValueError,
     "lean_lang: unsupported GpuAst node " & $kind & " - " & detail)
 
-proc emitExpr(n: GpuAst, idxName: string, idxLean: string, bufNames: HashSet[string]): string =
-  ## Renders one GpuAst expression as Lean text. The index variable `idxName`
-  ## renders as its Lean name `idxLean` (`tid` or the update binder `j`).
-  ## An indexed buffer read renders as a function application
+proc emitExpr(n: GpuAst, idxName: string, idxLean: string, paramNames: HashSet[string], mulAllowed: bool): string =
+  ## Renders one GpuAst expression as Lean text:
+  ##
+  ## - the index variable `idxName` renders as its Lean name `idxLean`
+  ##   (`tid` or the update binder `j`)
+  ## - `paramNames` is the set of kernel parameters: buffers plus the axpy
+  ##   scalar
+  ## - an indexed buffer read renders as a function application
+  ## - the multiply is emitted only when `mulAllowed` is true (the axpy shape)
   case n.kind
   of gpuIdent:
     let name = n.symbol.name
     if name == idxName:
       return idxLean
-    if name in bufNames:
+    if name in paramNames:
       return name
     raise unsupported(n.kind, "identifier '" & name &
       "' is not a kernel parameter or the index variable")
@@ -271,11 +278,13 @@ proc emitExpr(n: GpuAst, idxName: string, idxLean: string, bufNames: HashSet[str
       " in value position (only uint32 literals are supported)")
   of gpuBinOp:
     let op = n.bOp.symbol.name
-    case op
-    of "+", "<", "==":
+    if op == "*" and not mulAllowed:
+      raise unsupported(n.kind, "binary operator '*' - the multiply is in scope" &
+        " for the axpy shape only (a loop kernel with a scalar parameter)")
+    if op in ["+", "<", "==", "*"]:
       let leanOp = if op == "==": "=" else: op
-      let l = emitExpr(n.bLeft, idxName, idxLean, bufNames)
-      let r = emitExpr(n.bRight, idxName, idxLean, bufNames)
+      let l = emitExpr(n.bLeft, idxName, idxLean, paramNames, mulAllowed)
+      let r = emitExpr(n.bRight, idxName, idxLean, paramNames, mulAllowed)
       let lp = if n.bLeft.kind == gpuBinOp: "(" & l & ")" else: l
       let rp = if n.bRight.kind == gpuBinOp: "(" & r & ")" else: r
       return lp & " " & leanOp & " " & rp
@@ -283,13 +292,13 @@ proc emitExpr(n: GpuAst, idxName: string, idxLean: string, bufNames: HashSet[str
       raise unsupported(n.kind, "binary operator '" & op & "'")
   of gpuIndex:
     if n.iArr.kind == gpuDeref and n.iArr.dOf.kind == gpuIdent and
-        n.iArr.dOf.symbol.name in bufNames:
+        n.iArr.dOf.symbol.name in paramNames:
       if n.iIndex.kind != gpuIdent or n.iIndex.symbol.name != idxName:
         # a nested index like `a[a[i]]` would render a bogus Lean application
         raise unsupported(n.kind,
           "index expression is not the index variable (the model covers reads" &
           " at the thread's own index or the loop variable's index only)")
-      return n.iArr.dOf.symbol.name & " " & emitExpr(n.iIndex, idxName, idxLean, bufNames)
+      return n.iArr.dOf.symbol.name & " " & emitExpr(n.iIndex, idxName, idxLean, paramNames, mulAllowed)
     raise unsupported(n.kind, "indexing into anything but a kernel buffer parameter")
   else:
     raise unsupported(n.kind, "expression")
@@ -373,7 +382,7 @@ proc checkWriteTarget(lhs: GpuAst, bufNames: HashSet[string]): string =
       "assignment to '" & buf & "' which is not a kernel parameter")
   result = buf
 
-proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], model: var KernelModel): GpuAst =
+proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], paramNames: HashSet[string], model: var KernelModel): GpuAst =
   ## Walks the single `gpuFor` of the loop shape: a compile-time constant
   ## exclusive range `[0, n)` with step 1, one indexed write of a supported
   ## expression over the loop variable.
@@ -421,7 +430,8 @@ proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], model: var Kerne
       buf & "'")
   model.writeBuf = buf
   result = w.aRight
-  model.value = emitExpr(w.aRight, loopVar, "j", bufNames)
+  model.value = emitExpr(w.aRight, loopVar, "j", paramNames,
+    model.scalarName != "")
 
 proc analyzeKernel(kernel: GpuAst): KernelModel =
   ## Walks one post-pass global kernel and derives the body model
@@ -439,17 +449,28 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
     raise unsupported(gpuProc, "kernel is not `{.global.}`")
 
   var paramNames: seq[string]
+  var bufSeq: seq[string]
   var bufNames: HashSet[string]
+  var scalarCount = 0
   for p in kernel.pParams:
-    if not isUint32Buffer(p):
+    if isUint32Buffer(p):
+      paramNames.add p.ident.symbol.name
+      bufSeq.add p.ident.symbol.name
+      bufNames.incl p.ident.symbol.name
+    elif p.typ.kind == gtUint32:
+      inc scalarCount
+      if scalarCount > 1:
+        raise unsupported(gpuProc, "more than one uint32 scalar parameter - the" &
+          " model covers exactly one uniform scalar (the axpy shape)")
+      result.scalarName = p.ident.symbol.name
+      paramNames.add p.ident.symbol.name
+    else:
       raise unsupported(gpuProc, "parameter '" & p.ident.symbol.name &
-        "' is not a ptr UncheckedArray[uint32] buffer")
-    paramNames.add p.ident.symbol.name
-    bufNames.incl p.ident.symbol.name
-  if kernel.pParams.len != 3 or bufNames != ["a", "b", "output"].toHashSet():
+        "' is neither a ptr UncheckedArray[uint32] buffer nor a uint32 scalar")
+  if bufNames != ["a", "b", "output"].toHashSet():
     raise unsupported(gpuProc, "buffer parameters must be exactly `a` and `b`" &
       " (read) plus `output` (written), the binders of the emitted Lean def - got '" &
-      paramNames.join(", ") & "'")
+      bufSeq.join(", ") & "'")
 
   if kernel.pBody.kind != gpuBlock:
     raise unsupported(kernel.pBody.kind, "kernel body is not a statement block")
@@ -459,9 +480,13 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
   let stmts = kernel.pBody.statements
   if stmts.len == 1 and stmts[0].kind == gpuFor:
     # the loop shape: everything before/after the loop is refused, the tracer kernel
-    # is exactly one constant-bound for loop
+    # is exactly one constant-bound for loop. The scalar parameter (if any) joins
+    # the emitted def as a trailing `UInt32` argument
     result.kind = kkLoopRange
-    valueAst = analyzeLoopKernel(stmts[0], bufNames, result)
+    var paramSet = bufNames
+    if result.scalarName != "":
+      paramSet.incl result.scalarName
+    valueAst = analyzeLoopKernel(stmts[0], bufNames, paramSet, result)
   else:
     for stmt in stmts:
       case stmt.kind
@@ -497,12 +522,16 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
             raise unsupported(gpuAssign, "more than one write per thread")
           result.writeBuf = buf
           valueAst = w.aRight
-          result.value = emitExpr(w.aRight, tidName, "tid", bufNames)
+          result.value = emitExpr(w.aRight, tidName, "tid", bufNames, false)
       else:
         raise unsupported(stmt.kind, "statement at kernel-body top level")
     if tidName == "":
       raise unsupported(gpuVar, "no `thread_position_in_grid.x` binding found")
     result.kind = kkGuardedThread
+    if result.scalarName != "":
+      raise unsupported(gpuProc, "scalar parameter '" & result.scalarName &
+        "' on the guarded-thread shape - the guarded-thread shape takes no" &
+        " scalar parameter (the scalar is the axpy loop shape)")
 
   if result.writeBuf == "":
     raise unsupported(gpuAssign, "no buffer write found in the kernel body")
@@ -519,7 +548,7 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
   result.kernelName = kernel.pName.symbol.name
   result.bodyName = leanBodyName(result.kernelName)
   for p in kernel.pParams:
-    if p.ident.symbol.name != result.writeBuf:
+    if isUint32Buffer(p) and p.ident.symbol.name != result.writeBuf:
       result.readBufs.add p.ident.symbol.name
   result.isAddShape = isAddOfTidReads(valueAst, tidName, result.readBufs)
 
@@ -564,7 +593,7 @@ count `k`, threading the output buffer through functional updates, so the
 kernel stays a loop in Lean and nothing is unrolled. Buffers are total
 functions `Nat → UInt32`, and `UInt32.add` wraps modulo 2^32 like the GPU
 arithmetic the kernel emits.
-
+@SCALARDOC@
 Divergence note: the Lean loop counter is a `Nat`, unbounded, while the GPU
 counter is 32-bit and Nim wraps it at 2^32. The bound `@N@` is a compile-time
 literal, so the counter provably stays in `[0, @N@)` and the two encodings
@@ -579,7 +608,13 @@ constructive with `[propext]` alone.
   let doc = case model.kind
     of kkGuardedThread: threadDoc
     of kkLoopRange: loopDoc
+  let scalarDoc = if model.scalarName == "": ""
+    else: "The scalar parameter `" & model.scalarName & "` is uniform across the\n" &
+      "iterations: it maps to a `UInt32` argument appended after the buffer\n" &
+      "binders of the emitted defs, and `UInt32.mul` wraps modulo 2^32 like\n" &
+      "`UInt32.add`.\n\n"
   result = doc.replace("@KERNEL@", model.kernelName).replace("@N@", $model.nValue)
+    .replace("@SCALARDOC@", scalarDoc)
 
 proc emitBodyDef(model: KernelModel): string =
   ## Body def(s) of the emitted module, per kernel shape: the guarded-thread
@@ -624,17 +659,23 @@ can evaluate the def (worked `decide` examples stay available). -/
       "  if tid < n then fun i => if i = tid then " & model.value & " else out i\n" &
       "  else out\n"
   of kkLoopRange:
+    let scalarBinder = if model.scalarName == "": ""
+      else: " (" & model.scalarName & " : UInt32)"
+    let scalarArg = if model.scalarName == "": "" else: " " & model.scalarName
     return loopDoc.replace("@N@", $model.nValue) &
       "def " & leanLoopName(model.kernelName) &
-      " (k : Nat) (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
+      " (k : Nat) (a b out : Nat → UInt32)" & scalarBinder & " : Nat → UInt32 :=\n" &
       "  match k with\n" &
       "  | 0 => out\n" &
       "  | k+1 =>\n" &
       "    " & leanLoopName(model.kernelName) & " k a b " &
-        "(fun j => if j = " & $model.nValue & " - (k + 1) then " & model.value & " else out j)\n" &
+        "(fun j => if j = " & $model.nValue & " - (k + 1) then " & model.value &
+        " else out j)" & scalarArg & "\n" &
       "\n" & loopEntryDoc.replace("@N@", $model.nValue) &
-      "def " & model.bodyName & " (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
-      "  " & leanLoopName(model.kernelName) & " " & $model.nValue & " a b out\n"
+      "def " & model.bodyName & " (a b out : Nat → UInt32)" & scalarBinder &
+      " : Nat → UInt32 :=\n" &
+      "  " & leanLoopName(model.kernelName) & " " & $model.nValue & " a b out" &
+        scalarArg & "\n"
 
 proc emitLoopTheorems(model: KernelModel): string =
   ## Loop-shape spec theorems: the loop-state lemma, then the four spec
@@ -642,13 +683,18 @@ proc emitLoopTheorems(model: KernelModel): string =
   ## All proofs close for any supported stored value: they depend on the def shape alone.
   let loopName = leanLoopName(model.kernelName)
   let n = $model.nValue
+  let scalarBinder = if model.scalarName == "": ""
+    else: " (" & model.scalarName & " : UInt32)"
+  let scalarImplicit = if model.scalarName == "": ""
+    else: " {" & model.scalarName & " : UInt32}"
+  let scalarArg = if model.scalarName == "": "" else: " " & model.scalarName
   result = "/-- Loop-state lemma: with the iterations at remaining count `k` still to\n" &
     "run, index `j` of the running buffer ends at the stored value iff it lies\n" &
     "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &
     "otherwise. The loop's induction hypothesis, every spec theorem below\n" &
     "derives from it at the entry count. -/\n" &
-    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32) (j : Nat) :\n" &
-    "    " & loopName & " k a b out j =\n" &
+    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32)" & scalarBinder & " (j : Nat) :\n" &
+    "    " & loopName & " k a b out" & scalarArg & " j =\n" &
     "      if " & n & " - k ≤ j ∧ j < " & n & " then " & model.value & " else out j := by\n" &
     "  induction k generalizing out j with\n" &
     "  | zero => rw [" & loopName & ", if_neg (by omega)]\n" &
@@ -666,28 +712,28 @@ proc emitLoopTheorems(model: KernelModel): string =
     "\n" &
     "/-- Postcondition, write half: every index of the `[0, " & n & ")` range\n" &
     "holds the stored value after the loop. -/\n" &
-    "theorem " & model.bodyName & "_writes_own_index {a b out : Nat → UInt32} {j : Nat} (h : j < " & n & ") :\n" &
-    "    " & model.bodyName & " a b out j = " & model.value & " := by\n" &
+    "theorem " & model.bodyName & "_writes_own_index {a b out : Nat → UInt32}" & scalarImplicit & " {j : Nat} (h : j < " & n & ") :\n" &
+    "    " & model.bodyName & " a b out" & scalarArg & " j = " & model.value & " := by\n" &
     "  rw [" & model.bodyName & ", " & loopName & "_eq, if_pos (by omega)]\n" &
     "\n" &
     "/-- Postcondition, no-collateral-damage half: every index outside the\n" &
     "range keeps its old value. -/\n" &
-    "theorem " & model.bodyName & "_preserves_others {a b out : Nat → UInt32} {j : Nat} (h : " & n & " ≤ j) :\n" &
-    "    " & model.bodyName & " a b out j = out j := by\n" &
+    "theorem " & model.bodyName & "_preserves_others {a b out : Nat → UInt32}" & scalarImplicit & " {j : Nat} (h : " & n & " ≤ j) :\n" &
+    "    " & model.bodyName & " a b out" & scalarArg & " j = out j := by\n" &
     "  rw [" & model.bodyName & ", " & loopName & "_eq, if_neg (by omega)]\n" &
     "\n" &
     "/-- The loop postcondition as a single contract. -/\n" &
-    "theorem " & model.bodyName & "_post {a b out : Nat → UInt32} :\n" &
-    "    (∀ j, j < " & n & " → " & model.bodyName & " a b out j = " & model.value & ") ∧\n" &
-    "      (∀ j, " & n & " ≤ j → " & model.bodyName & " a b out j = out j) :=\n" &
+    "theorem " & model.bodyName & "_post {a b out : Nat → UInt32}" & scalarImplicit & " :\n" &
+    "    (∀ j, j < " & n & " → " & model.bodyName & " a b out" & scalarArg & " j = " & model.value & ") ∧\n" &
+    "      (∀ j, " & n & " ≤ j → " & model.bodyName & " a b out" & scalarArg & " j = out j) :=\n" &
     "  ⟨fun _ hj => " & model.bodyName & "_writes_own_index hj,\n" &
     "    fun _ hj => " & model.bodyName & "_preserves_others hj⟩\n" &
     "\n" &
     "/-- Bounds theorem: the loop only changes indices inside `[0, " & n & ")`. This\n" &
     "is the property the codegen gate must establish for every emitted kernel\n" &
     "body. -/\n" &
-    "theorem " & model.bodyName & "_only_writes_in_range {a b out : Nat → UInt32} {j : Nat}\n" &
-    "    (h : " & model.bodyName & " a b out j ≠ out j) : j < " & n & " := by\n" &
+    "theorem " & model.bodyName & "_only_writes_in_range {a b out : Nat → UInt32}" & scalarImplicit & " {j : Nat}\n" &
+    "    (h : " & model.bodyName & " a b out" & scalarArg & " j ≠ out j) : j < " & n & " := by\n" &
     "  rw [" & model.bodyName & ", " & loopName & "_eq] at h\n" &
     "  by_cases hc : " & n & " - " & n & " ≤ j ∧ j < " & n & "\n" &
     "  · exact hc.2\n" &
@@ -788,6 +834,11 @@ proc prepareSpec(model: KernelModel, spec: RawSpec): Scaffold =
   ## - a false property is not judged here. It fails the Lean proof attempt
   ##   and is downgraded (see `emitLeanModuleWithSpecs`)
   let kind = specKindByName(spec.name)
+  if model.scalarName != "":
+    raise leanRefusal(
+      "lean_lang: unsupported spec pragma '" & spec.name & "' on kernel '" &
+      model.kernelName & "' - the scalar-parameter (axpy) shape is outside" &
+      " the scaffold model")
   let expr = parseSpecPayload(spec.payload)
   var nameMap: Table[string, string]
   for r in model.readBufs:
