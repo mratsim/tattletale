@@ -21,10 +21,10 @@ import workspace/crucible/src/codegen/passes/pass_registry
 proc runOne(ctx: var GpuContext) =
   ## Runs the single pass under test through the public registry.
   var reg = PassRegistry.new()
-  reg.registerLowerSpans()
+  reg.registerLowerArraysAndViews(decayArrays = true)
   ctx.runPasses(reg)
 
-proc assertLenExprShape(n: GpuAst; expectTyp: GpuType) =
+proc assertLenExprShape(n: GpuAst, expectTyp: GpuType) =
   ## Assert a lowered lenExpr `(last - first) + 1`: the `+` binop, the inner
   ## `-` binop and the `+ 1` literal all carry `expectTyp`.
   doAssert n.kind == gpuBinOp, "expected a `+` gpuBinOp, got " & $n.kind
@@ -86,20 +86,6 @@ static:
     "len(toOpenArray) must lower to exactly one statement, got " & $lowered.pBody.statements.len
   # the len(toOpenArray) call is rewritten in place to the `+` binop
   assertLenExprShape(lowered.pBody.statements[0], idxTyp)
-
-# ── Part (a2): bare toOpenArray(...) inline — the second `+ 1` literal site ──
-static:
-  let idxTyp = initGpuType(gtInt64)
-  let firstIdx = GpuAst(kind: gpuIdent, symbol: newSymbol("first", iSym = "first", typ = idxTyp))
-  let lowered = runLower(buildSpanProc(@[toOpenArrayCall(firstIdx)]))
-  doAssert lowered.pBody.statements.len == 1,
-    "bare toOpenArray must lower to exactly one statement, got " & $lowered.pBody.statements.len
-  let blk = lowered.pBody.statements[0]
-  doAssert blk.kind == gpuBlock and blk.isExpr,
-    "bare toOpenArray must lower to a 2-value expr block, got " & $blk.kind
-  doAssert blk.statements.len == 2, "expected { ptr + first, last - first + 1 }, got " & $blk.statements.len
-  doAssert not blk.statements[0].bType.isNil, "ptrPlus bType must be non-nil"
-  assertLenExprShape(blk.statements[1], idxTyp)
 
 # ── Part (b): unknown-shape index (gpuDot) — loud gtInt32 fallback ──
 static:

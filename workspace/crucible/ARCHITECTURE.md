@@ -133,28 +133,28 @@ src/
       nim_type_resolvers.nim Type and overload resolution during IR
                                     construction.
     ir/
-      gpu_ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
+      ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
                                     GpuContext (unified fnTable, symbols with
                                     immutable iSym fingerprint), BackendKind,
                                     NamePolicy, base58 encoder.
-      gpu_ast_type_resolvers.nim    IR type helpers (pointee kinds, type
+      ast_type_resolvers.nim    IR type helpers (pointee kinds, type
                                     traversal).
-      gpu_type_constructors.nim     GpuType constructors and helpers.
+      ast_type_constructors.nim     GpuType constructors and helpers.
     passes/
       pass_datatypes.nim            GpuPass, PassKind, PassPhase, PassRegistry;
                                     `walk` traversal; `runPasses` (checks
                                     dependsOn).
       pass_registry.nim             PassRegistry.new().
-      passes_normalizations.nim     lowerIfExpr, mapOperators, patchBoolToI32,
-                                    deEmbedForRangeAdjustment, ...
-      passes_legalizations.nim      Legalization transforms (result insertion,
-                                    distinct resolve, byref params).
-      passes_preprocessing.nim      rewriteIndexDeref, decomposeMemcpyVars,
-                                    annotateTypesForCodegen, mangleNames,
-                                    WGSL/bool-global phases.
+      passes_legalizations.nim      ensureBlock, maybeInsertResult, liftConstexpr,
+                                    unwrapBlockInDot, rewriteIndexDeref,
+                                    mapIfExprToTernary, blitBlockExprs
+      passes_normalizations.nim     mapOperators, filterPragmas,
+                                    resolveOverloadedOperators,
+                                    deadCodeElimination,
+                                    deEmbedForRangeAdjustment, mangleNames
       passes_optimizations.nim      max/min folding, constant-shell elimination.
       passes_lowering.nim           gtSpan -> ptr + len, compile-time parameter
-                                    pruning.
+                                    pruning, memcpy decomposition.
       passes_validations.nim        Pre/post validation (e.g. warnUnassigned).
       passes_cuda.nim               Per-language passes: reserved words,
       passes_glsl.nim               pointer rules, subgroup emission, SSBO /
@@ -206,19 +206,31 @@ src/
 1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `vulkan:`, `webgpu:`, or `metal:` block.
    The corresponding macro in `gpu_compiler.nim` calls `ctx.toGpuAst(typeReg, body)`.
 It walks the typed Nim AST and emits a `GpuAst` 1:1, one IR node per AST construct, no semantic rewriting.
-Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `gpu_ast_datatypes.nim`).
+Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `ast_datatypes.nim`).
 
 2. **IR construction.** The frontend populates the `GpuContext`: the unified `fnTable`, `types`,
    `globalBlocks`, and per-scope symbol tables. The `fnTable` holds all known functions keyed by `iSym`.
    Range nodes record their range kind (inclusive/exclusive) instead of encoding exclusivity with a `+1`.
 
-3. **Pass pipeline.** `registerCommonPasses` registers, in order: pre-validation, normalization,
-   type-system, legalization, preprocessing, optimization, lowering, post-validation.
-   - `runPasses` (in `pass_datatypes.nim`) executes them in registration order, verifying each
-     pass's `dependsOn` list was satisfied, and passes mutate the IR in place.
-   - `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis`
-     (metadata only). `PassPhase` orders it: `phaseEarly`, `phasePreprocessing`, `phaseMain`.
-   - Per-language passes are registered by the `passes_<lang>.nim` modules.
+3. **Pass pipeline.** `registerCommonPasses` registers the stage bundles in order,
+   backend lowering bundles append after it.
+
+   | Stage | Contract |
+   |---|---|
+   | pre-validation | well-formedness of the freshly built IR |
+   | legalization | Nim-only constructs (if-expressions, block expressions, index/deref shapes) become backend-neutral IR |
+   | normalization | names and call shapes canonicalized, mangleNames last |
+   | optimization | max/min folding, constant-shell elimination |
+   | shared lowering | spans become ptr + len, memcpy decomposition, no frontend constructs survive |
+   | post-validation | the codegen boundary, no block expressions remain |
+
+   `runPasses` (in `pass_datatypes.nim`) executes them in registration order,
+   verifying each pass's `dependsOn` list was satisfied.
+   Passes mutate the IR in place, bundle call order is execution order,
+   there is no scheduler.
+
+   `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis` (metadata only).
+   Per-language passes are registered by the `passes_<lang>.nim` modules.
 
 4. **Language printing (`targets/`).** Each printer exposes `preprocess` and `codegen`, `targets_lang.nim` dispatches.
    The printers walk the now-annotated IR and emit native text.
@@ -251,7 +263,7 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
 1. Add a printer file under `src/codegen/targets/` exposing `preprocess` and `codegen`.
 2. Wire it into `targets_lang.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
 3. Add the platform session under `src/runtime/exec/`, the engine facade under `src/runtime/engines/`,
-   the raw bindings under `src/abis/`, and the `BackendKind` value in `gpu_ast_datatypes.nim`.
+   the raw bindings under `src/abis/`, and the `BackendKind` value in `ast_datatypes.nim`.
 4. Add a `tests/codegen/<backend>/` suite obeying the naming convention of [`AGENTS.md`](AGENTS.md).
    Backends that cannot auto-run get a `manual_*` test.
 

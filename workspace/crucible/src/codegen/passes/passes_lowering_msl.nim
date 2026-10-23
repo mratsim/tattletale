@@ -17,8 +17,8 @@
 # pointer-carrying structs expand to ptr/scalar leaves
 
 import std / [sequtils, sets, tables, strutils]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
@@ -26,12 +26,36 @@ import ./passes_validations
 
 {.experimental: "codeReordering".}
 
+const MetalReserved = [
+  # C++/MSL keyword table (MSL is C++14-based)
+  "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
+  "bool", "break", "case", "catch", "char", "char16_t", "char32_t", "class",
+  "compl", "const", "const_cast", "constexpr", "continue", "decltype",
+  "default", "delete", "do", "double", "dynamic_cast", "else", "enum",
+  "explicit", "export", "extern", "float", "for", "friend", "goto",
+  "half", "if", "inline", "int", "long", "mutable", "namespace", "new",
+  "noexcept", "not", "not_eq", "nullptr", "object_data", "operator", "or",
+  "or_eq", "private", "protected", "public", "ray_data", "register",
+  "reinterpret_cast", "return", "short", "signed", "sizeof", "static",
+  "static_assert", "static_cast", "struct", "switch", "template", "this",
+  "thread", "thread_local", "threadgroup", "threadgroup_imageblock", "throw",
+  "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
+  "vertex", "virtual", "void", "volatile", "wchar_t", "while", "xor",
+  "xor_eq",
+  # MSL address-space qualifiers and scalar type names
+  "kernel", "device", "constant", "threadgroup", "uchar", "ushort", "ulong",
+  # `metal` is the MSL namespace, not a keyword
+  "metal",
+].toHashSet()
+
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
+  reg.registerSharedLoweringPasses()
+  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerExpandStructKernelParams()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()

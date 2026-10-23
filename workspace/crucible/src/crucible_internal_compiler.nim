@@ -8,9 +8,9 @@
 ## Test surface of the crucible internals
 
 import
-  ./codegen/ir/gpu_ast_datatypes,
-  ./codegen/ir/gpu_type_constructors,
-  ./codegen/ir/gpu_ast_type_resolvers,
+  ./codegen/ir/ast_datatypes,
+  ./codegen/ir/ast_type_constructors,
+  ./codegen/ir/ast_type_resolvers,
   ./codegen/frontend/nim_to_crucible,
   ./codegen/frontend/nim_type_resolvers,
   ./codegen/passes/pass_datatypes,
@@ -29,7 +29,7 @@ import
   ./builtins/builtins_pragmas,
   ./builtins/builtins_functions
 
-export gpu_compiler, gpu_ast_datatypes, gpu_type_constructors, gpu_ast_type_resolvers,
+export gpu_compiler, ast_datatypes, ast_type_constructors, ast_type_resolvers,
        nim_to_crucible, nim_type_resolvers,
        pass_datatypes, pass_registry,
        passes_legalizations, passes_validations,

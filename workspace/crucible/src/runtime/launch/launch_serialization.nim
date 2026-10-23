@@ -7,7 +7,7 @@
 
 import std/macros
 import std/typetraits
-import workspace/crucible/src/codegen/ir/gpu_ast_datatypes
+import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/engines/engines_common
 
 # ═════════════════════════════════════════════════════════════════════════

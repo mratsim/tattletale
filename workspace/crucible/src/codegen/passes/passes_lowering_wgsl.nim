@@ -17,8 +17,8 @@
 # - structs carrying pointers expand to ptr/scalar leaves
 
 import std / [macros, strformat, strutils, sugar, sequtils, sets, tables, options]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
@@ -40,7 +40,8 @@ const WgslReserved = [
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  reg.registerLowerArraysAndViews(decayArrays = false)
+  reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
   reg.registerExpandStructKernelParams()
@@ -56,6 +57,8 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerInlinePointerParamCalls()
   reg.registerMakeCodeValid()
   reg.registerPatchBoolToI32()
+  reg.registerMarkWrittenGlobals()
+  reg.registerStripGlobalPointerTypes()
   reg.registerCheckCodeValidWgsl()
 
 func registerPullConstantPragmaVars(reg: var PassRegistry) =
@@ -130,6 +133,25 @@ func registerMakeCodeValid(reg: var PassRegistry) =
         ctx.makeCodeValidImpl(fn, inGlobal = fn.isGlobal())
   )
 
+func registerMarkWrittenGlobals(reg: var PassRegistry) =
+  reg.register("markWrittenGlobals", pkTransform, phaseMain,
+    "Upgrades globals written through the kernel body to the kVar flavor, the printer derives read_write from it",
+    dependsOn = @["makeCodeValid"],
+    run = proc(ctx: var GpuContext): void =
+      for (_, fn) in ctx.fnTab.mpairs:
+        markWrittenGlobalsImpl(ctx, fn.pBody)
+  )
+
+func registerStripGlobalPointerTypes(reg: var PassRegistry) =
+  reg.register("stripGlobalPointerTypes", pkTransform, phaseMain,
+    "Strips the pointer indirection off globals: WGSL storage bindings cannot be ptr types",
+    dependsOn = @["patchBoolToI32"],
+    run = proc(ctx: var GpuContext): void =
+      for iSym, g in ctx.globals.mpairs:
+        if g.typ.kind == gtPtr:
+          ctx.globals[iSym].typ = g.typ.to
+  )
+
 func registerCheckCodeValidWgsl(reg: var PassRegistry) =
   reg.register("checkCodeValidWgsl", pkTransform, phaseMain,
     "Validates WGSL constraints after transformations",
@@ -194,6 +216,31 @@ proc determineIdent(arg: GpuAst): GpuAst =
   of gpuMaterialize: arg.mExpr.determineIdent()
   else:
     error "Cannot determine ident from: " & $arg
+
+# ═══════════════════════════════════════════════════════════════════════
+# Written globals
+# ═══════════════════════════════════════════════════════════════════════
+
+proc markWrittenGlobalsImpl(ctx: var GpuContext, n: GpuAst) =
+  ## Marks globals assigned anywhere in `n` as kVar.
+  case n.kind
+  of gpuAssign:
+    collectWrittenGlobals(ctx, n.aLeft)
+  else:
+    for ch in n:
+      ctx.markWrittenGlobalsImpl(ch)
+
+proc collectWrittenGlobals(ctx: var GpuContext, n: GpuAst) =
+  if n.kind == gpuIndex:
+    # a[i] = x writes the base a, the index expression i is only evaluated
+    # (a[b[j]] = x must not mark b written)
+    ctx.collectWrittenGlobals(n.iArr)
+    return
+  if n.kind == gpuIdent and n.symbol != nil and
+     n.symbol.iSym in ctx.globals:
+    ctx.globals[n.symbol.iSym].flavor = kVar
+  for ch in n:
+    ctx.collectWrittenGlobals(ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bool globals to i32 storage

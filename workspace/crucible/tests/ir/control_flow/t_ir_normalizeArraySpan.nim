@@ -18,7 +18,7 @@ import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 proc registerNormalizeArraySpanDecay(reg: var PassRegistry) {.nimcall.} =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
 
 proc makePtrToArray(symName: string): tuple[ident: GpuAst, deref: GpuAst] =
   ## A `p: ptr array[4, int32]` ident + its gpuDeref — the IR shape of a

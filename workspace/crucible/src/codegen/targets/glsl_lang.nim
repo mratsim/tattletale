@@ -7,8 +7,8 @@
 
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./lang_utils
 
 

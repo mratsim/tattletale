@@ -38,6 +38,24 @@ The writing-docs linter holds the blocklist.
 Litmus test: delete the comment. If code plus name still tells the whole
 story to a competent reader, the comment stays deleted.
 
+## Audience: CS undergraduate, no hidden context
+
+Every comment addresses a reader fluent in the language, data structures and algorithms.
+
+The reader knows nothing about this codebase beyond what the same file says:
+
+- no knowledge of internal jargon or team shorthand
+- no knowledge of the history behind the code
+- no memory of the conversation that produced the change
+
+Two rules follow:
+
+- A concept named but never stated, like "per the callee's param kind",
+  hides context the reader cannot recover.
+- State the concept in full where the file first uses it.
+- A comment that only makes sense after reading the surrounding 200 lines
+  carries hidden context. Rewrite it until it stands alone.
+
 ## No drive-by comment edits
 
 Do not touch comments in code the change does not otherwise modify.

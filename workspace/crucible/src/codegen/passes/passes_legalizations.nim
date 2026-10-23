@@ -6,9 +6,10 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std / [macros, sequtils, sets, strutils, tables]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_ast_type_resolvers
+import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
+import ./pass_helpers
 
 # ############################################################
 #
@@ -84,12 +85,13 @@ func registerLegalizationPasses*(reg: var PassRegistry) =
     )
 
   reg.registerRewriteIndexDeref()
+  reg.registerMapIfExprToTernary()
+  reg.registerBlitBlockExprs()
 
 func registerBlitBlockExprs*(reg: var PassRegistry) =
-  ## Registered after lowerIfExpr: the ternary branches carry its block exprs
   reg.register("blitBlockExprs", pkTransform, phaseMain,
-    "Converts gpuBlock(isExpr:true) into scope blocks + blit temps",
-    dependsOn = @["ensureBlock", "liftConstexpr"],
+    "Converts gpuBlock expressions and statement-branch if-expressions into scope blocks + blit temps",
+    dependsOn = @["ensureBlock", "liftConstexpr", "mapIfExprToTernary"],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:
         let fn = ctx.allFnTab[fnKey]
@@ -101,6 +103,20 @@ func registerBlitBlockExprs*(reg: var PassRegistry) =
           blitFnBody(ctx, fn.pBody, fn.pRetType)
     )
 
+
+func registerMapIfExprToTernary(reg: var PassRegistry) =
+  reg.register("mapIfExprToTernary", pkTransform, phaseEarly,
+    "Converts gpuIf(isExpr:true) with expression-only branches to gpuTernary",
+    run = proc(ctx: var GpuContext): void =
+      for fnKey in ctx.allFnTab.keys:
+        var fn = ctx.allFnTab[fnKey]
+        if fn.kind == gpuProc:
+          mapIfExprToTernaryImpl(fn.pBody)
+      for fnKey in ctx.genericInsts.keys:
+        var fn = ctx.genericInsts[fnKey]
+        if fn.kind == gpuProc:
+          mapIfExprToTernaryImpl(fn.pBody)
+  )
 
 func registerRewriteIndexDeref(reg: var PassRegistry) =
   reg.register("rewriteIndexDeref", pkTransform, phaseMain,
@@ -117,31 +133,6 @@ func registerRewriteIndexDeref(reg: var PassRegistry) =
           rewriteIndexDerefImpl(ctx, fn.pBody)
   )
 
-# ═══════════════════════════════════════════════════════════════════════
-# Index deref normalization
-# ═══════════════════════════════════════════════════════════════════════
-
-proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
-  ## `(*arr)[idx]` ≡ `arr[idx]` in C, the IR keeps the simpler form.
-  case n.kind
-  of gpuIndex:
-    if n.iArr.kind == gpuDeref:
-      # ptr-to-array keeps the deref (C array decay), plain ptr rewrites
-      let isPtrToArray = (block:
-        let derefOf = n.iArr.dOf
-        if derefOf.kind == gpuIdent and derefOf.symbol != nil:
-          let symTyp = derefOf.symbol.typ
-          symTyp != nil and symTyp.kind == gtPtr and
-          symTyp.to != nil and symTyp.to.kind == gtArray
-        else:
-          false)
-      if not isPtrToArray:
-        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
-    for ch in mitems(n):
-      rewriteIndexDerefImpl(ctx, ch)
-  else:
-    for ch in mitems(n):
-      rewriteIndexDerefImpl(ctx, ch)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Result insertion
@@ -182,6 +173,7 @@ proc insertResult(ctx: var GpuContext, fn: GpuAst) =
         elif stmt.kind != gpuAssign:
           fn.pBody.statements[i] = GpuAst(kind: gpuAssign, aLeft: resId, aRight: stmt)
         break
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Constexpr lifting
@@ -297,16 +289,336 @@ proc liftConstexpr(pbody: var GpuAst) =
   else:
     discard
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Dot block unwrapping
+# ═══════════════════════════════════════════════════════════════════════
+
+proc unwrapBlockInDot(n: var GpuAst) =
+  ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.
+  case n.kind
+  of gpuDot:
+    if n.dParent.kind == gpuBlock and n.dParent.isExpr and n.dParent.statements.len == 1:
+      n.dParent = n.dParent.statements[0]
+    else:
+      unwrapBlockInDot(n.dParent)
+    unwrapBlockInDot(n.dField)
+  of gpuIndex:
+    unwrapBlockInDot(n.iArr)
+    unwrapBlockInDot(n.iIndex)
+  of gpuDeref:
+    unwrapBlockInDot(n.dOf)
+  of gpuAddr:
+    unwrapBlockInDot(n.aOf)
+  of gpuCall:
+    for arg in n.cArgs.mitems:
+      unwrapBlockInDot(arg)
+  of gpuObjConstr:
+    for f in n.ocFields.mitems:
+      unwrapBlockInDot(f.value)
+  of gpuArrayLit:
+    for v in n.aValues.mitems:
+      unwrapBlockInDot(v)
+  of gpuReturn:
+    unwrapBlockInDot(n.rValue)
+  of gpuAssign:
+    unwrapBlockInDot(n.aLeft)
+    unwrapBlockInDot(n.aRight)
+  of gpuVar:
+    unwrapBlockInDot(n.vInit)
+  else:
+    discard
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Index deref normalization
+# ═══════════════════════════════════════════════════════════════════════
+
+proc rewriteIndexDerefImpl(ctx: var GpuContext, n: var GpuAst) =
+  ## `(*arr)[idx]` ≡ `arr[idx]` in C, the IR keeps the simpler form.
+  case n.kind
+  of gpuIndex:
+    if n.iArr.kind == gpuDeref:
+      # ptr-to-array keeps the deref (C array decay), plain ptr rewrites
+      let isPtrToArray = (block:
+        let derefOf = n.iArr.dOf
+        if derefOf.kind == gpuIdent and derefOf.symbol != nil:
+          let symTyp = derefOf.symbol.typ
+          symTyp != nil and symTyp.kind == gtPtr and
+          symTyp.to != nil and symTyp.to.kind == gtArray
+        else:
+          false)
+      if not isPtrToArray:
+        n = GpuAst(kind: gpuIndex, iArr: n.iArr.dOf, iIndex: n.iIndex)
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
+  else:
+    for ch in mitems(n):
+      rewriteIndexDerefImpl(ctx, ch)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# If-expression mapping
+# ═══════════════════════════════════════════════════════════════════════
+
+func mapIfExprToTernaryImpl(n: var GpuAst) =
+  ## Backends emit `cond ? then : else` from the lowered gpuTernary.
+  ## Branches carrying statements stay gpuIf: they lower in blitBlockExprs
+  ## as a statement if assigning a fresh temp, so the unselected branch's
+  ## statements never run.
+  case n.kind
+  of gpuIf:
+    if n.ifIsExpr:
+      if isExprOnlyBranch(n.ifThen) and isExprOnlyBranch(n.ifElse):
+        let tern = GpuAst(
+          kind: gpuTernary,
+          tCond: n.ifCond,
+          tThen: n.ifThen,
+          tElse: n.ifElse)
+        n = tern
+        mapIfExprToTernaryImpl(n.tCond)
+        mapIfExprToTernaryImpl(n.tThen)
+        if n.tElse.kind != gpuDiscard:
+          mapIfExprToTernaryImpl(n.tElse)
+      else:
+        mapIfExprToTernaryImpl(n.ifCond)
+        mapIfExprToTernaryImpl(n.ifThen)
+        if n.ifElse.kind != gpuDiscard:
+          mapIfExprToTernaryImpl(n.ifElse)
+    else:
+      mapIfExprToTernaryImpl(n.ifCond)
+      mapIfExprToTernaryImpl(n.ifThen)
+      for el in n.ifElifs.mitems:
+        mapIfExprToTernaryImpl(el.cond)
+        mapIfExprToTernaryImpl(el.body)
+      if n.ifElse.kind != gpuDiscard:
+        mapIfExprToTernaryImpl(n.ifElse)
+  of gpuBlock:
+    for i in 0 ..< n.statements.len:
+      mapIfExprToTernaryImpl(n.statements[i])
+  of gpuFor:
+    mapIfExprToTernaryImpl(n.fStart)
+    mapIfExprToTernaryImpl(n.fEnd)
+    mapIfExprToTernaryImpl(n.fBody)
+  of gpuWhile:
+    mapIfExprToTernaryImpl(n.wCond)
+    mapIfExprToTernaryImpl(n.wBody)
+  of gpuTernary:
+    mapIfExprToTernaryImpl(n.tCond)
+    mapIfExprToTernaryImpl(n.tThen)
+    if n.tElse.kind != gpuDiscard:
+      mapIfExprToTernaryImpl(n.tElse)
+  of gpuCall:
+    for i in 0 ..< n.cArgs.len:
+      mapIfExprToTernaryImpl(n.cArgs[i])
+  of gpuBinOp:
+    mapIfExprToTernaryImpl(n.bLeft)
+    mapIfExprToTernaryImpl(n.bRight)
+  of gpuVar:
+    mapIfExprToTernaryImpl(n.vInit)
+  of gpuAssign:
+    mapIfExprToTernaryImpl(n.aLeft)
+    mapIfExprToTernaryImpl(n.aRight)
+  of gpuReturn:
+    mapIfExprToTernaryImpl(n.rValue)
+  of gpuDot:
+    mapIfExprToTernaryImpl(n.dParent)
+    mapIfExprToTernaryImpl(n.dField)
+  of gpuIndex:
+    mapIfExprToTernaryImpl(n.iArr)
+    mapIfExprToTernaryImpl(n.iIndex)
+  of gpuObjConstr:
+    for f in n.ocFields.mitems:
+      mapIfExprToTernaryImpl(f.value)
+  of gpuPrefix:
+    mapIfExprToTernaryImpl(n.pVal)
+  of gpuAddr:
+    mapIfExprToTernaryImpl(n.aOf)
+  of gpuDeref:
+    mapIfExprToTernaryImpl(n.dOf)
+  of gpuConv:
+    mapIfExprToTernaryImpl(n.convExpr)
+  of gpuCast:
+    mapIfExprToTernaryImpl(n.cExpr)
+  of gpuConstexpr:
+    mapIfExprToTernaryImpl(n.cValue)
+  of gpuMaterialize:
+    mapIfExprToTernaryImpl(n.mExpr)
+  of gpuArrayLit:
+    for v in n.aValues.mitems:
+      mapIfExprToTernaryImpl(v)
+  else:
+    discard
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# If-expression statement branches
+# ═══════════════════════════════════════════════════════════════════════
+
+proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRetType: GpuType): seq[GpuAst]
+
+proc collectUseNames(n: GpuAst, into: var seq[string]) =
+  ## Returns the names read in `n`: identifier uses.
+  ## Def positions stay excluded, the gpuVar name and the gpuAssign lhs.
+  case n.kind
+  of gpuIdent:
+    into.add n.symbol.name
+  of gpuVar:
+    collectUseNames(n.vInit, into)
+  of gpuAssign:
+    collectUseNames(n.aRight, into)
+    if n.aLeft.kind != gpuIdent:
+      collectUseNames(n.aLeft, into)
+  else:
+    for ch in n:
+      collectUseNames(ch, into)
+
+proc collectDefNames(n: GpuAst, into: var seq[string]) =
+  ## Names defined in `n` at any depth: gpuVar decls, gpuAssign to idents.
+  case n.kind
+  of gpuVar:
+    into.add n.vName.symbol.name
+  of gpuAssign:
+    if n.aLeft.kind == gpuIdent:
+      into.add n.aLeft.symbol.name
+    collectDefNames(n.aRight, into)
+    if n.aLeft.kind != gpuIdent:
+      collectDefNames(n.aLeft, into)
+  else:
+    for ch in n:
+      collectDefNames(ch, into)
+
+proc hoistSharedBranchDefs(pre: var seq[GpuAst], otherReads, branchWrites: seq[string], lifted: var seq[GpuAst]) =
+  ## Moves a branch's single-target definitions that the other branch reads
+  ## to the pre-if preamble.
+  ##
+  ## toCrucibleAst materializes a shared subexpression once, in the first
+  ## branch that evaluates it.
+  ## The other branch keeps a cross-branch reference to that temp.
+  ##
+  ## Sound only for pure definitions reading nothing any branch writes:
+  ##
+  ## - anything else errors, the other branch would read an undefined temp
+  var kept: seq[GpuAst]
+  for st in pre.mitems:
+    var defs: seq[string]
+    collectDefNames(st, defs)
+    if defs.len != 1 or defs[0] notin otherReads:
+      kept.add st
+      continue
+    var reads: seq[string]
+    collectUseNames(st, reads)
+    var hasCall = false
+    st.walk(proc(m: var GpuAst): void =
+      if m.kind == gpuCall:
+        hasCall = true)
+    for r in reads:
+      if r in branchWrites:
+        error "a value shared between if-expression branches depends on branch-written state: " & defs[0]
+    if hasCall:
+      error "a value shared between if-expression branches has a side-effecting definition: " & defs[0]
+    lifted.add st
+  pre = kept
+
+proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType)
+
+proc lowerIfExprStatementBranches(ctx: var GpuContext, slot: var GpuAst, fnRetType: GpuType): seq[GpuAst] =
+  ## An if-expression whose branches carry statements lowers to a statement
+  ## if that assigns a fresh temp.
+  ## The unselected branch's statements must not run.
+  ## Nothing hoists across branches.
+  ##
+  ## Before (IR):
+  ##   `result = if cond: (block: (t = a; t + 1)) else: u * 2`
+  ##
+  ## After (IR): the fresh temp `_ifres_0` carries the branch type,
+  ## both branches assign it, the slot reads it:
+  ##
+  ##   if cond:
+  ##     t = a
+  ##     _ifres_0 = t + 1
+  ##   else:
+  ##     _ifres_0 = u * 2
+  ##   result = _ifres_0
+  let condPre = ctx.blitExprSlot(slot.ifCond, GpuType(kind: gtVoid), fnRetType)
+  var thenN = unwrapSingleStmtBlocks(slot.ifThen)
+  var elseN = unwrapSingleStmtBlocks(slot.ifElse)
+
+  var thenPre, elsePre: seq[GpuAst]
+  var thenTail, elseTail: GpuAst
+  if thenN.kind == gpuBlock:
+    thenPre = thenN.statements[0 ..< thenN.statements.len - 1]
+    thenTail = thenN.statements[^1]
+  else:
+    thenTail = thenN
+  if elseN.kind == gpuBlock:
+    elsePre = elseN.statements[0 ..< elseN.statements.len - 1]
+    elseTail = elseN.statements[^1]
+  else:
+    elseTail = elseN
+
+  # a branch tail may itself be a statement-branch if-expr: lower it here,
+  # its statements belong inside this branch
+  if thenTail.kind == gpuIf and thenTail.ifIsExpr:
+    thenPre.add ctx.blitExprSlot(thenTail, GpuType(kind: gtVoid), fnRetType)
+  if elseTail.kind == gpuIf and elseTail.ifIsExpr:
+    elsePre.add ctx.blitExprSlot(elseTail, GpuType(kind: gtVoid), fnRetType)
+
+  var t = ctx.getExprType(thenTail)
+  if t.isNil or t.kind == gtVoid:
+    t = ctx.getExprType(elseTail)
+  if t.isNil or t.kind == gtVoid:
+    error "Cannot determine type for the if-expression result temp"
+
+  var thenReads, elseReads: seq[string]
+  for st in thenPre:
+    collectUseNames(st, thenReads)
+  collectUseNames(thenTail, thenReads)
+  for st in elsePre:
+    collectUseNames(st, elseReads)
+  collectUseNames(elseTail, elseReads)
+  var branchWrites: seq[string]
+  for st in thenPre & elsePre:
+    collectDefNames(st, branchWrites)
+  var lifted: seq[GpuAst]
+  hoistSharedBranchDefs(thenPre, elseReads, branchWrites, lifted)
+  hoistSharedBranchDefs(elsePre, thenReads, branchWrites, lifted)
+
+  let ifresName = "_ifres_" & $ctx.genSymCount
+  inc ctx.genSymCount
+  let ifresSym = newSymbol(ifresName, iSym = ifresName, typ = t, symKind = gsLocal)
+  let ifresIdent = GpuAst(kind: gpuIdent, symbol: ifresSym)
+  let decl = GpuAst(kind: gpuVar, vName: ifresIdent.clone(), vType: t,
+                    vInit: GpuAst(kind: gpuDiscard), vMutable: true)
+  let thenBody = GpuAst(kind: gpuBlock, statements: thenPre & @[
+    GpuAst(kind: gpuAssign, aLeft: ifresIdent.clone(), aOp: "=", aRight: thenTail)])
+  let elseBody = GpuAst(kind: gpuBlock, statements: elsePre & @[
+    GpuAst(kind: gpuAssign, aLeft: ifresIdent.clone(), aOp: "=", aRight: elseTail)])
+  var ifStmt = GpuAst(kind: gpuIf, ifIsExpr: false,
+                      ifCond: slot.ifCond, ifThen: thenBody, ifElse: elseBody)
+  ctx.blitFnBody(ifStmt, fnRetType)
+  result = condPre & lifted
+  result.add decl
+  result.add ifStmt
+  slot = GpuAst(kind: gpuIdent, symbol: newSymbol(ifresName, iSym = ifresName, typ = t, symKind = gsLocal))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Block-expression blitting
 # ═══════════════════════════════════════════════════════════════════════
 
-proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType)
-
 proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRetType: GpuType): seq[GpuAst] =
-  ## Process an expression slot. If `slot` is a gpuBlock(isExpr: true),
-  ## replace it with a blit temp reference and return preamble statements.
-  if slot.kind == gpuBlock and slot.isExpr:
+  ## Statements cannot live inside a C expression.  Rewrite Nim statement-expressions via a temporary
+  ##
+  ## Before (IR):
+  ##   x = block: { t = a; t + b }
+  ##
+  ## After (IR):
+  ##   int _blit_0                            (the temp, returned first)
+  ##   { t = a
+  ##     _blit_0 = t + b }                    (the body with its tail stored, returned second)
+  ##   x = _blit_0                            (the slot, the block replaced by the temp reference)
+  if slot.kind == gpuBlock:
     if slot.statements.len == 1:
       slot = slot.statements[0]
       result = ctx.blitExprSlot(slot, blitType, fnRetType)
@@ -417,11 +729,19 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
   of gpuCast:
     result = ctx.blitExprSlot(slot.cExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuIf:
-    result.add ctx.blitExprSlot(slot.ifCond, GpuType(kind: gtVoid), fnRetType)
-    for el in slot.ifElifs.mitems:
-      result.add ctx.blitExprSlot(el.cond, GpuType(kind: gtVoid), fnRetType)
+    if not slot.ifIsExpr:
+      discard
+    elif isExprOnlyBranch(slot.ifThen) and isExprOnlyBranch(slot.ifElse):
+      # mapIfExprToTernary normally converted this, keep blit standalone
+      slot = GpuAst(kind: gpuTernary, tCond: slot.ifCond,
+                    tThen: slot.ifThen, tElse: slot.ifElse)
+      result.add ctx.blitExprSlot(slot.tCond, GpuType(kind: gtVoid), fnRetType)
+      result.add ctx.blitExprSlot(slot.tThen, GpuType(kind: gtVoid), fnRetType)
+      result.add ctx.blitExprSlot(slot.tElse, GpuType(kind: gtVoid), fnRetType)
+    else:
+      result = ctx.lowerIfExprStatementBranches(slot, fnRetType)
   of gpuTernary:
-    # ternary branches can carry block exprs (lowerIfExpr), blit every branch
+    # ternary branches can carry block exprs (mapIfExprToTernary), blit every branch
     # so ensureNoExprBlocks never sees one
     result.add ctx.blitExprSlot(slot.tCond, GpuType(kind: gtVoid), fnRetType)
     result.add ctx.blitExprSlot(slot.tThen, GpuType(kind: gtVoid), fnRetType)
@@ -441,18 +761,10 @@ proc blitExprSlot(ctx: var GpuContext, slot: var GpuAst, blitType: GpuType, fnRe
     result = ctx.blitExprSlot(slot.mExpr, GpuType(kind: gtVoid), fnRetType)
   of gpuConstexpr:
     result = ctx.blitExprSlot(slot.cValue, GpuType(kind: gtVoid), fnRetType)
-  of gpuBlock:
-    # statement-shaped block in an expr slot: descend, inner expr blocks blit in place
-    ctx.blitFnBody(slot, fnRetType)
   else:
     discard
 
-# ═══════════════════════════════════════════════════════════════════════
-# Duplicate var renaming
-# ═══════════════════════════════════════════════════════════════════════
-
 proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
-  ## Walk a function body tree, blitting all gpuBlock(isExpr: true) nodes.
   case body.kind
   of gpuBlock:
     ctx.scopeSymsStack.add(ctx.currentScopeSyms)
@@ -548,40 +860,5 @@ proc blitFnBody(ctx: var GpuContext, body: var GpuAst, fnRetType: GpuType) =
     blitFnBody(ctx, body.fBody, fnRetType)
   of gpuWhile:
     blitFnBody(ctx, body.wBody, fnRetType)
-  else:
-    discard
-
-proc unwrapBlockInDot(n: var GpuAst) =
-  ## Unwrap single-stmt gpuBlock(isExpr) when used as gpuDot's dParent.
-  case n.kind
-  of gpuDot:
-    if n.dParent.kind == gpuBlock and n.dParent.isExpr and n.dParent.statements.len == 1:
-      n.dParent = n.dParent.statements[0]
-    else:
-      unwrapBlockInDot(n.dParent)
-    unwrapBlockInDot(n.dField)
-  of gpuIndex:
-    unwrapBlockInDot(n.iArr)
-    unwrapBlockInDot(n.iIndex)
-  of gpuDeref:
-    unwrapBlockInDot(n.dOf)
-  of gpuAddr:
-    unwrapBlockInDot(n.aOf)
-  of gpuCall:
-    for arg in n.cArgs.mitems:
-      unwrapBlockInDot(arg)
-  of gpuObjConstr:
-    for f in n.ocFields.mitems:
-      unwrapBlockInDot(f.value)
-  of gpuArrayLit:
-    for v in n.aValues.mitems:
-      unwrapBlockInDot(v)
-  of gpuReturn:
-    unwrapBlockInDot(n.rValue)
-  of gpuAssign:
-    unwrapBlockInDot(n.aLeft)
-    unwrapBlockInDot(n.aRight)
-  of gpuVar:
-    unwrapBlockInDot(n.vInit)
   else:
     discard

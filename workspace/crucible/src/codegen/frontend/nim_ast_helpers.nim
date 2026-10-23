@@ -12,11 +12,9 @@
 import std/macros
 
 proc unwrapSingleStmt*(n: NimNode): NimNode =
-  ## Callers keep their own multi-statement constraints.
-  if n.kind == nnkStmtList and n.len == 1:
-    n[0]
-  else:
-    n
+  result = n
+  while result.kind == nnkStmtList and result.len == 1:
+    result = result[0]
 
 proc isTypeDescNode*(n: NimNode): bool =
   result = n.getTypeInst().typeKind == ntyTypeDesc

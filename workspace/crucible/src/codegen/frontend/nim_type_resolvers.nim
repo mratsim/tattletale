@@ -8,8 +8,8 @@
 ## Nim AST → GpuType resolvers
 
 import std / [macros, strutils, sequtils, tables, sets]
-import ../ir/gpu_ast_datatypes
-import ../ir/gpu_type_constructors
+import ../ir/ast_datatypes
+import ../ir/ast_type_constructors
 import ../../builtins/builtins_gpu_types
 
 # ═══════════════════════════════════════════════════════════════════════

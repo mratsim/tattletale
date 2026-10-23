@@ -8,8 +8,8 @@
 ## GPU-AST type resolution: expression and function type lookups and pointer/array peeling.
 
 import std/[macros, tables]
-import ./gpu_ast_datatypes
-import ./gpu_type_constructors
+import ./ast_datatypes
+import ./ast_type_constructors
 
 func getPointeeKind*(t: GpuType): GpuTypeKind =
   ## Scalar kind at the end of a pointer/array/UA chain,
@@ -266,7 +266,7 @@ proc getLoweringExprType*(n: GpuAst): GpuType =
     # Span ptr/len args are ints in practice, a wrong-width fallback
     # must surface when it fires.
     result = initGpuType(gtInt32)
-    stderr.writeLine "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
+    warning "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
       "; assuming gtInt32 for span index/pointer arithmetic"
 
 func getStructType*(n: GpuAst): GpuType =

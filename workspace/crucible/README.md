@@ -139,9 +139,9 @@ workspace/crucible/
         nim_to_crucible.nim            Frontend: pure 1:1 Nim AST -> IR translator
         nim_type_resolvers.nim  Type/overload resolution
       ir/
-        gpu_ast_datatypes.nim     IR types: GpuAst, GpuType, GpuContext, Symbol, fnTable
-        gpu_ast_type_resolvers.nim  IR type helpers
-        gpu_type_constructors.nim Type constructors
+        ast_datatypes.nim     IR types: GpuAst, GpuType, GpuContext, Symbol, fnTable
+        ast_type_resolvers.nim  IR type helpers
+        ast_type_constructors.nim Type constructors
       passes/
         pass_datatypes.nim        Pass/registry types, walk, runPasses
         pass_registry.nim         PassRegistry

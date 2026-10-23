@@ -24,10 +24,10 @@ proc boolParamFn(iSym: string): GpuAst =
   result = fn
 
 proc registerDecayTrue(reg: var PassRegistry) {.nimcall.} =
-  reg.registerNormalizeArraySpanParams(decayArrays = true)
+  reg.registerLowerArraysAndViews(decayArrays = true)
 
 proc registerDecayFalse(reg: var PassRegistry) {.nimcall.} =
-  reg.registerNormalizeArraySpanParams(decayArrays = false)
+  reg.registerLowerArraysAndViews(decayArrays = false)
 
 proc runPolicy(decay: static bool): GpuAst =
   let fn = boolParamFn("f" & $int(decay))
