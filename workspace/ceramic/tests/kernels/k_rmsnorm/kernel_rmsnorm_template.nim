@@ -284,3 +284,6 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
       "guard, threadgroup wider than the lane width (33)")
   checkOffContractLaunch(engine, (2, 64), (64, 1), (32, 4),
       "guard, threadgroup holding several warps (32, 4)")
+
+  # ── the weight must fit the reduced axis: one slot per axis position ──
+  checkWeightContract(engine, "weight contract")

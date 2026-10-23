@@ -13,6 +13,17 @@
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
 
+func staticShape[T, Sh, St](_: typedesc[TensorView[T, Sh, St]]): Sh =
+  ## Compile-time shape of a tensor type: the shape tuple of the view's layout.
+  ##
+  ## - value-level shape reads such as `weight.rank()` do not fold in device code,
+  ##   the shape type does: the codegen takes the raw generic body
+  ## Static leaves are `Int[V]` phantom values, their value compares through `===`.
+  ## Runtime leaves are plain `int` and `default` reads 0.
+  ##
+  ## Example: `staticShape(typeof(view)).rank()` is the view's rank.
+  default(Sh)
+
 proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
   ## Row-wise RMS normalization shared by the two entry points.
   ##
@@ -31,6 +42,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## - dst has the same shape as src
   ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total,
   ##   other launches are rejected and dst comes back NaN
+  ## - when withWeight, the weight is rank 1 with one slot per axis position, see `rmsnorm`
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
@@ -56,6 +68,26 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   let
     nThreads = threads_per_threadgroup.x * threads_per_threadgroup.y * threads_per_threadgroup.z
     offContract = nThreads != W
+  when withWeight:
+    const
+      wShape = staticShape(typeof(weight))
+      wLeaf = when wShape is tuple: wShape[0] else: wShape
+      sShape = staticShape(typeof(src))
+      sLeaf = when sShape is tuple: sShape[axis] else: sShape
+      sizeIsStatic = typeof(wLeaf) is Int and typeof(sLeaf) is Int
+    static:
+      doAssert wShape.rank() == 1,
+        "rmsnorm weight must be rank 1, one slot per axis position"
+    # the weight size folds statically when both leaves are compile-time literals,
+    # runtime-shaped weights are rejected on the device instead
+    when sizeIsStatic:
+      static:
+        doAssert wLeaf === sLeaf,
+          "rmsnorm weight size must match the source axis size"
+    else:
+      # runtime-shaped weight: its size is only known on the device.
+      # A size miss poisons the rows below.
+      let wSize = weight.size()
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()
@@ -106,7 +138,10 @@ proc rmsnorm*(dst, src, weight: distinct TensorView, eps: float32, axis: static 
   ## along the normalized axis. Element r of the row scales by weight[r],
   ## as in `mx.fast.rms_norm(x, weight, eps)` on the last axis.
   ##
-  ## Preconditions: the axis size is at least 1, dst has the same shape as src.
+  ## Precondition: the axis size is at least 1, dst has the same shape as src,
+  ## the weight is rank 1 with one slot per axis position, shape (axis size,).
+  ## A wrong weight fails to compile when its shape is a compile-time literal,
+  ## otherwise the launch comes back all-NaN.
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
