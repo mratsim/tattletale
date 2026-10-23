@@ -2,7 +2,7 @@
 ##
 ## Test that the `hlsl:` macro emits HLSL for a kernel using an if/elif/else chain, a ternary,
 ## a brace-initialized plain-data struct with member-wise assignment and an int32-to-uint32 cast,
-## compiling clean through glslangValidator and spirv-val with the binding reflection asserted.
+## compiling clean through DXC and spirv-val with the binding reflection asserted.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

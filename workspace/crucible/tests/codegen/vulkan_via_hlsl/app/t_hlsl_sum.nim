@@ -2,7 +2,7 @@
 ##
 ## Test that the `hlsl:` macro emits HLSL for a kernel accumulating buffer elements
 ## into output[0] with a counted for loop over grid-offset indices,
-## compiling clean through glslangValidator and spirv-val with the binding reflection asserted.
+## compiling clean through DXC and spirv-val with the binding reflection asserted.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

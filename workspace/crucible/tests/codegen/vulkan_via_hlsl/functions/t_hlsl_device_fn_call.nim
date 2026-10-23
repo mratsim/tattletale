@@ -5,7 +5,7 @@
 ##
 ## - an early return in a device fn emits natively
 ## - the call sites keep the callee names, no splicing into the kernel body
-## - the source compiles clean through glslangValidator and spirv-val with the binding reflection asserted
+## - the source compiles clean through DXC and spirv-val with the binding reflection asserted
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

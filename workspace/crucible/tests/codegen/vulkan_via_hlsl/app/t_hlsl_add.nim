@@ -1,7 +1,7 @@
-## HLSL: add kernels through the real pass bundle, compile check via glslang and spirv-val.
+## HLSL: add kernels through the real pass bundle, compile check via DXC and spirv-val.
 ##
 ## Test that the `hlsl:` macro emits HLSL for the plain and push-scalar add kernels
-## compiling clean through glslangValidator and spirv-val with the binding reflection asserted.
+## compiling clean through DXC and spirv-val with the binding reflection asserted.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

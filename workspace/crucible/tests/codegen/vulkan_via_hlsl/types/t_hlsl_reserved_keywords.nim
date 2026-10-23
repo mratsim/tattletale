@@ -5,7 +5,7 @@
 ##
 ## - parameter `uniform` renames in the signature
 ## - local declarations keep their names, the rename pass does not cover them
-## - the renamed source compiles clean through glslangValidator and spirv-val with the binding reflection asserted
+## - the renamed source compiles clean through DXC and spirv-val with the binding reflection asserted
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

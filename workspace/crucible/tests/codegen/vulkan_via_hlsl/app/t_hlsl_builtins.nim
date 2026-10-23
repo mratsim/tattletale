@@ -1,6 +1,6 @@
 ## HLSL: coordinate-builtin reads and numeric builtins through the real pass bundle.
 ##
-## Test that the `hlsl:` macro emits HLSL compiling clean through glslangValidator
+## Test that the `hlsl:` macro emits HLSL compiling clean through DXC
 ## and spirv-val with the binding reflection asserted:
 ##
 ## - a kernel reading thread_position_in_grid emits the SV_DispatchThreadID input
@@ -28,7 +28,9 @@ const intrinsicsHlsl = hlsl:
     let a = int32(-5)
     output[2] = abs(a).uint32
     output[3] = uint32(max(2.5'f32, 7.25'f32))
-    output[4] = uint32(min(0.5'f32, -1.5'f32))
+    # in-range operands: a negative float32-to-uint32 conversion is undefined per HLSL,
+    # DXC constant-folds it to undef and the DXIL validator rejects the UAV store
+    output[4] = uint32(min(0.5'f32, 1.5'f32))
 
 proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
   # Bindings take buffer parameter order, each kernel writes its single `output` buffer
@@ -44,7 +46,7 @@ proc runTest() =   # private: the compile checks run in a proc so build artifact
     "uint32 min must call its materialized wrapper:\n" & intrinsicsHlsl
   doAssert intrinsicsHlsl.find(re"max_\w+\(2\.5f, 7\.25f\)") >= 0,
     "float32 max must call its materialized wrapper:\n" & intrinsicsHlsl
-  doAssert intrinsicsHlsl.find(re"min_\w+\(0\.5f, -1\.5f\)") >= 0,
+  doAssert intrinsicsHlsl.find(re"min_\w+\(0\.5f, 1\.5f\)") >= 0,
     "float32 min must call its materialized wrapper:\n" & intrinsicsHlsl
   doAssert intrinsicsHlsl.contains("abs(a)"),
     "int32 abs must print the plain intrinsic, Nim constant-folds abs of literals:\n" & intrinsicsHlsl

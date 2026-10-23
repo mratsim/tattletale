@@ -1,5 +1,6 @@
 ## HLSL test utilities:
-## - glslang + spirv-val compile of emitted kernel source (compileToSpirV, compileCheck)
+## - DXC two-leg compile of emitted kernel source (compileToSpirV, compileCheck):
+##   the DXIL leg, then the SPIR-V leg through spirv-val
 ## - SPIR-V binding reflection for the descriptor-route tests (assertHlslBindings)
 ##
 ## Shared by the tests under `tests/codegen/vulkan_via_hlsl/`,
@@ -10,24 +11,32 @@ import std/[os, osproc, strutils, tables]
 type BindingExpectation* = tuple[name: string, ordinal: int, readOnly: bool]
 
 proc compileToSpirV*(name, source: string): seq[uint32] =
-  ## Compiles one emitted kernel through the validated route:
-  ## - glslangValidator -V -S comp -D -e main
+  ## Compiles one emitted kernel through the validated DXC route:
+  ## - dxc -T cs_6_4 -E main -Fo, the DXIL leg
+  ## - dxc -T cs_6_4 -E main -spirv -Fo, the SPIR-V leg
   ## - spirv-val --target-env vulkan1.1
   ## Returns the SPIR-V words for vkCreateShaderModule.
-  ## Artifacts go to `build/tests/hlsl/<name>.hlsl(.spv)`.
+  ## Artifacts go to `build/tests/hlsl/<name>.hlsl(.cso)(.spv)`.
   ## A non-zero exit fails the test.
-  let glslang = findExe("glslangValidator")
-  doAssert glslang.len > 0, "glslangValidator not found on PATH, the HLSL tests need it"
+  ##
+  ## -E is required, DXC has no default entry point.
+  ## This DXC 1.11 build rejects the cs_6_x profile alias, cs_6_4 is the profile in use.
+  let dxc = findExe("dxc")
+  doAssert dxc.len > 0, "dxc not found on PATH, the HLSL tests need it"
   let spirvVal = findExe("spirv-val")
   doAssert spirvVal.len > 0, "spirv-val not found on PATH, the HLSL tests need it"
   let dir = "build" / "tests" / "hlsl"
   createDir(dir)
   let path = dir / name & ".hlsl"
   writeFile(path, source)
-  let (glslOut, glslCode) = execCmdEx(
-    glslang & " -V -S comp -D -e main -o " & path & ".spv " & path)
-  doAssert glslCode == 0,
-    "glslangValidator failed (exit " & $glslCode & ") for " & name & ":\n" & glslOut
+  let (dxilOut, dxilCode) = execCmdEx(
+    dxc & " -T cs_6_4 -E main -Fo " & path & ".cso " & path)
+  doAssert dxilCode == 0,
+    "dxc DXIL leg failed (exit " & $dxilCode & ") for " & name & ":\n" & dxilOut
+  let (spvOut, spvCode) = execCmdEx(
+    dxc & " -T cs_6_4 -E main -spirv -Fo " & path & ".spv " & path)
+  doAssert spvCode == 0,
+    "dxc SPIR-V leg failed (exit " & $spvCode & ") for " & name & ":\n" & spvOut
   let (valOut, valCode) = execCmdEx(
     spirvVal & " --target-env vulkan1.1 " & path & ".spv")
   doAssert valCode == 0,
@@ -40,7 +49,8 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
   ## Checks the compiled module's SPIR-V reflection against the printer's
   ## binding assignment. Per buffer resource:
   ## - the Binding decoration matches the printer's parameter-order numbering, set 0
-  ## - the NonWritable decoration appears exactly on read-only buffers
+  ## - no resource carries NonWritable: DXC emits no read-only decoration,
+  ##   the printer's write-scan is the only read-only source (it chooses t vs u registers)
   ##
   ## Binding-order mismatches are silent on MoltenVK, zero diagnostics, so the disassembly is the guard.
   let spirvDis = findExe("spirv-dis")
@@ -59,7 +69,7 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
         idNames[rest[0 ..< sp]] = rest[sp + 1 .. ^1].strip(chars = {'"'})
     elif t.startsWith("OpDecorate "):
       # Decoration line: `OpDecorate %id <decoration> <value?>`.
-      # glslang suffixes duplicate OpNames with `_0`, the resource variable (not its block type) carries the decorations
+      # the compiler suffixes duplicate OpNames with `_0`, the resource variable (not its block type) carries the decorations
       let parts = t.split(' ')
       if parts.len >= 3:
         case parts[2]
@@ -83,9 +93,8 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
       doAssert decorations[id].setNum == 0,
         "binding reflection: " & name & " sits in descriptor set " &
         $decorations[id].setNum & ", want 0"
-      doAssert decorations[id].nonWritable == readOnly,
-        "binding reflection: " & name & " NonWritable is " & $decorations[id].nonWritable &
-        ", want " & $readOnly
+      doAssert not decorations[id].nonWritable,
+        "binding reflection: " & name & " carries NonWritable, DXC emits none"
       found = true
       break
     doAssert found,
@@ -104,7 +113,7 @@ proc compileCheck*(name, source: string, expected: openArray[BindingExpectation]
       "emitted HLSL for " & name & " is missing `" & expect & "`:\n" & source
   result = compileToSpirV(name, source)
   if expected.len == 0:
-    echo name, ": glslang + spirv-val ok"
+    echo name, ": dxc + spirv-val ok"
   else:
     assertHlslBindings("build" / "tests" / "hlsl" / name & ".hlsl.spv", expected)
-    echo name, ": glslang + spirv-val + binding reflection ok"
+    echo name, ": dxc + spirv-val + binding reflection ok"
