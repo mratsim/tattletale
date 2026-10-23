@@ -118,6 +118,58 @@ proc runTest() =
     doAssert renderSpec(e, nameMap) == "addBody tid n a b out tid ≠ a tid + b tid"
     echo "  `≠` comparator round-trip through the payload grammar: ok"
 
+  block: # payload grammar: ∧ chain, uint literals, buffer applications, specRefs
+    let e = parseSpecPayload("n ∧ tid < 3 ∧ a tid ≤ b tid + 7")
+    doAssert e.kind == seBin and e.op == "∧", "the ∧ chain is one left-associative tree"
+    doAssert e.left.op == "∧" and e.left.left.kind == seIdent and e.left.left.name == "n"
+    doAssert e.left.right.op == "<" and e.left.right.left.name == "tid"
+    doAssert e.left.right.right.kind == seUint and e.left.right.right.value == "3"
+    doAssert e.right.op == "≤" and e.right.left.kind == seApp and e.right.left.fn == "a"
+    doAssert e.right.right.op == "+"
+    doAssert e.right.right.left.kind == seApp and e.right.right.left.fn == "b"
+    doAssert e.right.right.right.kind == seUint and e.right.right.right.value == "7"
+    doAssert specRefs(e) == @["n", "tid", "a", "b"], "refs in first-occurrence order"
+    echo "  payload grammar: ∧ chain, uint literals, applications: ok"
+
+  block: # payload grammar precedence: sum over comparator over ∧, left-associative sums
+    let chain = parseSpecPayload("tid < 3 ∧ 4 ≤ n")
+    doAssert chain.kind == seBin and chain.op == "∧", "comparators bind tighter than ∧"
+    doAssert chain.left.op == "<" and chain.left.left.name == "tid"
+    doAssert chain.left.right.kind == seUint and chain.left.right.value == "3"
+    doAssert chain.right.op == "≤" and chain.right.left.value == "4"
+    doAssert chain.right.right.name == "n"
+    let cmp = parseSpecPayload("a tid + 7 ≤ b tid")
+    doAssert cmp.kind == seBin and cmp.op == "≤", "the sum binds tighter than the comparator"
+    doAssert cmp.left.op == "+" and cmp.left.left.fn == "a" and cmp.left.right.value == "7"
+    doAssert cmp.right.kind == seApp and cmp.right.fn == "b"
+    let sum = parseSpecPayload("a tid + 7 + 9")
+    doAssert sum.op == "+" and sum.left.op == "+" and sum.left.right.value == "7"
+    doAssert sum.right.value == "9", "left-associative sums"
+    echo "  payload grammar precedence: cmp < ∧, sum < cmp, left-assoc: ok"
+
+  block: # renderSpec maps the loop counter through bareMap, buffer reads stay `tid` applications
+    var bareMap: Table[string, string]
+    bareMap["i"] = "4 - k"
+    var nameMap: Table[string, string]
+    nameMap["a"] = "a"
+    nameMap["b"] = "b"
+    let e = parseSpecPayload("i < 3 ∧ a tid ≤ b tid + 7")
+    doAssert renderSpec(e, nameMap, bareMap) == "4 - k < 3 ∧ a tid ≤ b tid + 7"
+    echo "  renderSpec: loop counter over the remaining count, reads at `tid`: ok"
+
+  block: # payload grammar refusals: stray character, trailing input, unrenderable terms
+    expectRefusal("lean_lang: invalid spec payload 'tid < n - 1' - unexpected character '-'", proc() =
+      discard parseSpecPayload("tid < n - 1"))
+    expectRefusal("lean_lang: invalid spec payload 'tid < n n' - trailing input at token 'n'", proc() =
+      discard parseSpecPayload("tid < n n"))
+    var nameMap: Table[string, string]
+    nameMap["a"] = "a"
+    expectRefusal("lean_lang: invalid spec payload - 'a' must be applied to `tid`", proc() =
+      discard renderSpec(parseSpecPayload("a"), nameMap))
+    expectRefusal("lean_lang: invalid spec payload - 'x' is neither `tid`, `n` nor a kernel buffer parameter", proc() =
+      discard renderSpec(parseSpecPayload("x"), nameMap))
+    echo "  payload grammar refusals: stray character, trailing input, bare terms: ok"
+
   block: # a position-less lean error line refuses the settling, it cannot be misattributed
     # a lean run reporting one scaffold error plus one `file: error:` line
     # with no file:line position would otherwise:
