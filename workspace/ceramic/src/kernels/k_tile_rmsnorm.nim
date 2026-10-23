@@ -13,6 +13,64 @@
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
 
+proc rmsnormStridedImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
+  ## Strided-axis RMSNorm body, the lane mode spans the rows.
+  ##
+  ## One lane per row over 32-row blocks walked grid-stride:
+  ## - lane l owns row l outright, its running sum of squares is the row total
+  ## - pass 1 needs no cross-lane combine, pass 2 stores directly through
+  ##   the row strips' own layouts
+  ## - rows off the tensor's end stay idle
+  ##
+  ## Loads and stores coalesce when the non-reduced part's compact order is
+  ## memory-consecutive (non-reduced stride 1, the column-major case).
+  ## Correct but strided otherwise.
+  const depthOwn = 8  # sums in flight per lane over the serial row walk
+  let
+    W = getLaneWidth()
+    thrID = getLocalThreadID()
+    rows = src.sliceAxes(axis).size()
+    gridStride = getGridSize()
+    rowSize = src.diceAxes(axis).size()
+    rowBlock0 = getLocalTileID(src.shape) * W
+  for blk0 in countup(rowBlock0, rows - 1, gridStride * W):
+    let
+      rowFlat = blk0 + thrID
+      rowActive = rowFlat < rows
+      srcRow = atAxisIndex(src, axis, rowFlat)
+      dstRow = atAxisIndex(dst, axis, rowFlat)
+      fullEnd = rowSize.round_multiple_down(depthOwn)
+    var acc = zero(float32)
+    if rowActive:
+      var accs: array[depthOwn, float32]
+      for j in 0 ..< depthOwn:
+        accs[j] = zero(float32)
+      for c0 in countup(0, fullEnd - 1, depthOwn):
+        for j in 0 ..< depthOwn:
+          accs[j] += srcRow[c0 + j].square()
+      for c in fullEnd ..< rowSize:
+        accs[0] += srcRow[c].square()
+      for j in 0 ..< depthOwn:
+        acc += accs[j]
+    let scale = rsqrt(acc / float32(rowSize) + eps)
+    when withWeight:
+      let weightStrip = atAxisIndex(weight, 0, 0)
+      for c0 in countup(0, fullEnd - 1, depthOwn):
+        for j in 0 ..< depthOwn:
+          if rowActive:
+            dstRow[c0 + j] = srcRow[c0 + j] * scale * weightStrip[c0 + j]
+      for c in fullEnd ..< rowSize:
+        if rowActive:
+          dstRow[c] = srcRow[c] * scale * weightStrip[c]
+    else:
+      for c0 in countup(0, fullEnd - 1, depthOwn):
+        for j in 0 ..< depthOwn:
+          if rowActive:
+            dstRow[c0 + j] = srcRow[c0 + j] * scale
+      for c in fullEnd ..< rowSize:
+        if rowActive:
+          dstRow[c] = srcRow[c] * scale
+
 proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
   ## Row-wise RMS normalization shared by the two entry points.
   ##
@@ -55,29 +113,40 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()
-  for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
-    let
-      srcRow = atAxisIndex(src, axis, g)
-      dstRow = atAxisIndex(dst, axis, g)
-      rowSize = srcRow.size()
-      tiled = make_layout(rowSize).logical_divide(reg.getLayout())
-      stripTiles = tiled.getTileGrid().size()
-    # pass 1: sum of squares, one register tile at a time
-    var acc = zero(float32)
-    for tileID in 0 ..< stripTiles:
-      reg.load(srcRow, thrID, tileID, padWith = reduceIdentity(roSum, float32))
-      for i in 0 ..< owned:
-        reg.data[i] = reg.data[i].square()
-      acc.reduceAcc(reg, roSum)
-    let scale = rsqrt(acc / float32(rowSize) + eps)
-    # pass 2: scaled apply, the weight broadcast along the axis
-    when withWeight:
-      let weightStrip = atAxisIndex(weight, 0, 0)
-      for r in countup(thrID, rowSize - 1, W):
-        dstRow[r] = srcRow[r] * scale * weightStrip[r]
-    else:
-      for r in countup(thrID, rowSize - 1, W):
-        dstRow[r] = srcRow[r] * scale
+  # Map selection from the source layout's strides:
+  # - the reduced axis is the lane mode when it is memory-contiguous,
+  #   maxCommonVector >= lane width, lanes share each row and a subgroup
+  #   butterfly combines the partials
+  # - the row mode takes over when it is strided: one lane per row, no butterfly, direct stores, see rmsnormStridedImpl
+  # - both maps index rows in the non-reduced part's compact order, every
+  #   element addressed through its own layout
+  let lanesShareRow = src.diceAxes(axis).maxCommonVector() >= W
+  if lanesShareRow:
+    for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
+      let
+        srcRow = atAxisIndex(src, axis, g)
+        dstRow = atAxisIndex(dst, axis, g)
+        rowSize = srcRow.size()
+        tiled = make_layout(rowSize).logical_divide(reg.getLayout())
+        stripTiles = tiled.getTileGrid().size()
+      # pass 1: sum of squares, one register tile at a time
+      var acc = zero(float32)
+      for tileID in 0 ..< stripTiles:
+        reg.load(srcRow, thrID, tileID, padWith = reduceIdentity(roSum, float32))
+        for i in 0 ..< owned:
+          reg.data[i] = reg.data[i].square()
+        acc.reduceAcc(reg, roSum)
+      let scale = rsqrt(acc / float32(rowSize) + eps)
+      # pass 2: scaled apply, the weight broadcast along the axis
+      when withWeight:
+        let weightStrip = atAxisIndex(weight, 0, 0)
+        for r in countup(thrID, rowSize - 1, W):
+          dstRow[r] = srcRow[r] * scale * weightStrip[r]
+      else:
+        for r in countup(thrID, rowSize - 1, W):
+          dstRow[r] = srcRow[r] * scale
+  else:
+    rmsnormStridedImpl(dst, src, weight, eps, axis, withWeight)
 
 proc rmsnorm*(dst, src: distinct TensorView, eps: float32, axis: static int) {.inline.} =
   ## Root-mean-square normalization over the input axis, fully overwriting dst.
