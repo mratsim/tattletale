@@ -1,12 +1,7 @@
 ## Vulkan: descriptor-route execution of `hlsl:` kernels through the engine.
 ##
 ## Test that the engine ingests an HLSL source, detects the descriptor route
-## from the compiled SPIR-V, and executes its kernels with exact readback:
-##
-## - add kernel: output[i] = a[i] + b[i] over 256 elements, exact readback
-## - coordinate kernel: output[i] = i + 3 over the dispatch thread index
-## - both launched via engine.launchKernel, buffers bound as storage-buffer
-##   descriptors in parameter order
+## from the compiled SPIR-V, and executes its kernels with exact readback.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

@@ -1,10 +1,8 @@
 ## Vulkan (GLSL): the address route survives engine route autodetection.
 ##
-## Test that a `glsl:` kernel with buffer and by-value scalar arguments keeps
-## running through the address route under engine route autodetection:
-##
-## - two buffer inputs + one by-value scalar, packed as push constants
-## - results read back and asserted exactly
+## Test that a `glsl:` kernel with two buffer inputs and a by-value scalar
+## keeps running through the address route under engine route autodetection,
+## results read back and asserted exactly.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
