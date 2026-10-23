@@ -15,7 +15,7 @@
 ## - `finalize` flattens all sections behind the 5-word header, typed
 ##   wrappers sit over `memoInst` (dedup) and `freshInst` (body ops)
 ##
-## Flavor modules drive emission. Vulkan flavor: `spirv_shader_lang`.
+## Flavor modules drive emission, the Vulkan environment flavor lives in `spirv_shader_lang`.
 ##
 ## Instruction encoding (first word): `wordCount shl 16 or opcode`.
 ## String operands: UTF-8 bytes + NUL, zero-padded to a word boundary,

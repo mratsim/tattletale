@@ -175,7 +175,7 @@ macro glsl*(body: untyped): string =
   result = newCall(bindSym"codegenGLSL", body)
 
 macro codegenSpirv(body: typed): seq[uint32] =
-  ## Compiles a `spirv:` block body into binary SPIR-V words (Vulkan flavor).
+  ## Compiles a `spirv:` block body into binary SPIR-V words (Vulkan environment).
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -189,7 +189,7 @@ macro codegenSpirv(body: typed): seq[uint32] =
   result = newLit(ctx.codegenSpirv())
 
 macro spirv*(body: untyped): seq[uint32] =
-  ## Converts the body of this macro into binary SPIR-V words (Vulkan flavor).
+  ## Converts the body of this macro into binary SPIR-V words (Vulkan environment).
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated

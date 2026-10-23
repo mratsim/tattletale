@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Vulkan-flavor SPIR-V emission: type/interface layer and kernel body printer
+## SPIR-V emission for the Vulkan environment: type/interface layer and kernel body printer
 ##
 ## GpuType subset to memoized OpType ids, std430 layout, push-constant block, builtin inputs
 ## GpuAst kernel bodies to phi-free structured control flow over the same types
@@ -59,7 +59,7 @@ template spvRefuse(what: string) =
 
 type
   SpvTyKind* = enum
-    ## Type shapes the Vulkan flavor supports
+    ## Type shapes the Vulkan environment flavor supports
     stkScalar
     stkVector
     stkArray
@@ -237,7 +237,7 @@ func std430Offsets*(members: seq[SpvTy]): seq[int] =
 
 type
   SpvLangCtx* = object
-    ## Vulkan-flavor emission context over the encoder builder
+    ## Emission context for the Vulkan environment over the encoder builder
     builder*: SpvBuilder
     caps*: HashSet[uint32]              ## pending capabilities, flushCapabilities emits them
     structMemo*: Table[seq[uint32], uint32]
@@ -1945,7 +1945,7 @@ proc emitKernel*(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]
 # ═══════════════════════════════════════════════════════════════════════
 
 proc codegen*(ctx: var GpuContext): seq[uint32] =
-  ## Returns the SPIR-V words of one `spirv:` block, Vulkan flavor
+  ## Returns the SPIR-V words of one `spirv:` block for the Vulkan environment
   ## (SPIR-V 1.3, target environment vulkan1.4).
   ##
   ## Module shape:
