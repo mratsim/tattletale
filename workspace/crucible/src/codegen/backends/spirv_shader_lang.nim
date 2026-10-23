@@ -296,9 +296,9 @@ func pushMemberTy(p: GpuType): SpvTy =
   else: spvTy(p)
 
 proc buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
+  # bool members never reach here: the patchBoolToI32 pass lowers bool kernel
+  # params and the pekObject leaf collection lowers bool leaves to i32
   for m in members:
-    if m.kind == stkScalar and m.scalar.kind == gtBool:
-      spvRefuse("push-constant member bool, OpTypeBool cannot appear in a push-constant block")
     if m.kind == stkScalar and getScalarByteSize(m.scalar) < 4:
       spvRefuse("push-constant member " & $m.scalar.kind &
         " narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
@@ -511,6 +511,11 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
   if source.kind == to.kind:
     return v
   let fFloatTy = source.kind in {gtFloat16, gtFloat32, gtFloat64}
+  if to.kind == gtBool and not fFloatTy:
+    # Bool reads as truthiness: any nonzero integer means true.
+    # This is the patchBoolToI32 pass rule, the WGSL bool(i32) form.
+    let zero = ctx.builder.constUint(ctx.scalarId(source), 0)
+    return ctx.builder.freshInst(OpINotEqual, @[ctx.tyId(spvScalar(to)), v, zero])
   let tFloatTy = to.kind in {gtFloat16, gtFloat32, gtFloat64}
   let fInt = source.kind in spvScalarKinds and source.kind != gtBool and not fFloatTy
   let tInt = to.kind in spvScalarKinds and to.kind != gtBool and not tFloatTy
@@ -1572,6 +1577,10 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
           continue
         if leaf.typ.kind in {gtPtr, gtUncheckedArray}:
           memberTys.add spvScalar(GpuType(kind: gtUint64))
+        elif leaf.typ.kind == gtBool:
+          # OpTypeBool cannot appear in a push-constant block.
+          # The leaf declares i32, the load converts at the use boundary.
+          memberTys.add spvScalar(GpuType(kind: gtInt32))
         else:
           memberTys.add spvScalar(leaf.typ)
       expansions.add (pekObject, leaves, start)
@@ -1642,7 +1651,11 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
         let idxConst = ctx.builder.constUint(ctx.scalarId(uint32Type()),
           uint64(memberIdx))
         let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[idxConst])
-        leafVals.add ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+        let loaded = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+        if leaf.typ.kind == gtBool:
+          leafVals.add ctx.convertValue(loaded, GpuType(kind: gtInt32), leaf.typ)
+        else:
+          leafVals.add loaded
         inc memberIdx
       var cursor = 0
       let objVal = composeParam(ctx, p.typ, leafVals, cursor)
