@@ -72,9 +72,9 @@ proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: ty
       nBytes = int(getFileSize(dir / "mask.bin"))
       Hm = nBytes div (4 * meta.B * meta.S * meta.S)
       mh = loadFixtureTensor[float32](dir, "mask.bin", (meta.B, Hm, meta.S, meta.S))
+      maskDev = engine.bridge(mh)
     doAssert Hm == 1 or Hm == meta.Hkv,
       "fixture " & meta.name & ": mask head count " & $Hm & " is neither 1 nor Hkv " & $meta.Hkv
-      maskDev = engine.bridge(mh)
     if meta.causal:
       engine.launchDeviceFn scaled_dot_product_attention(
           tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
