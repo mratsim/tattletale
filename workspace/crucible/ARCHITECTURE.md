@@ -187,6 +187,7 @@ src/
       vulkan_common.nim             buffers, raw dispatch. The engine facades
       vulkan_descriptor_runtime.nim drive these.
       vulkan_address_runtime.nim
+      vulkan_compile.nim
       webgpu_runtime.nim
       metal_runtime.nim
       runtime_utils.nim

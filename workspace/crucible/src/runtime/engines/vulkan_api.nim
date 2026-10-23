@@ -13,6 +13,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
+import workspace/crucible/src/runtime/backends/vulkan_compile
 import workspace/crucible/src/runtime/backends/vulkan_address_runtime
 import workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

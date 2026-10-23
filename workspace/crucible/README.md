@@ -173,6 +173,7 @@ workspace/crucible/
         vulkan_common.nim
         vulkan_descriptor_runtime.nim
         vulkan_address_runtime.nim
+        vulkan_compile.nim
         webgpu_runtime.nim
         metal_runtime.nim         MSL compile/dispatch
         runtime_utils.nim
