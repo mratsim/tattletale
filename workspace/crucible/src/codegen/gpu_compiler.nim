@@ -217,7 +217,6 @@ macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
-
 macro codegenHlsl(body: typed): string =
   ## Compiles an `hlsl:` block body into HLSL compute shader code.
   var ctx = GpuContext()
