@@ -559,14 +559,160 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
     vkUnmapMemory(buf.device, buf.memory)
 
 # ═══════════════════════════════════════════════════════════════════════
+# Shader modules and descriptor sets
+# ═══════════════════════════════════════════════════════════════════════
+# Descriptor route: buffers bind as STORAGE_BUFFER descriptors.
+# One binding per buffer parameter: binding i is the i-th buffer parameter in declaration order,
+# in descriptor set 0, matching the printer's [[vk::binding(N, 0)]] emission.
+# Push-constant parameters take no binding.
+# createPipeline carries the set layout, runKernel binds the set.
+
+proc createShaderModule*(ctx: VulkanContext, spirv: seq[uint32]): VkShaderModule =
+  ## vkCreateShaderModule over validated SPIR-V words.
+  ## Caller releases the module with destroyShaderModule.
+  let vkCreateShaderModule = cast[
+    proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
+         pAllocator: pointer,
+         pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkCreateShaderModule"))
+  var smCI = VkShaderModuleCreateInfo(
+    sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+    codeSize: csize_t(spirv.len * sizeof(uint32)),
+    pCode: spirv[0].addr
+  )
+  check vkCreateShaderModule(ctx.device, smCI.addr, nil, result.addr)
+
+proc destroyShaderModule*(ctx: VulkanContext, shaderModule: VkShaderModule) =
+  ## Releases a module from createShaderModule, nil skips.
+  let vkDestroyShaderModule = cast[
+    proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyShaderModule"))
+  if shaderModule != nil:
+    vkDestroyShaderModule(ctx.device, shaderModule, nil)
+
+proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32): VkDescriptorSetLayout =
+  ## One STORAGE_BUFFER binding per buffer argument, compute stage only:
+  ## binding i is the i-th buffer parameter in declaration order, in descriptor set 0,
+  ## matching the printer's [[vk::binding(N, 0)]] numbering. Push-constant parameters take no binding.
+  let vkCreateDescriptorSetLayout = cast[
+    proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
+         pAllocator: pointer,
+         pSetLayout: ptr VkDescriptorSetLayout): VkResult {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorSetLayout"))
+  var bindings = newSeq[VkDescriptorSetLayoutBinding](bindingCount.int)
+  for i in 0 ..< bindingCount.int:
+    bindings[i] = VkDescriptorSetLayoutBinding(
+      binding: uint32(i),
+      descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      descriptorCount: 1,
+      stageFlags: VK_SHADER_STAGE_COMPUTE_BIT,
+      pImmutableSamplers: nil
+    )
+  var slCI = VkDescriptorSetLayoutCreateInfo(
+    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+    bindingCount: bindingCount
+  )
+  if bindingCount > 0:
+    slCI.pBindings = bindings[0].addr
+  check vkCreateDescriptorSetLayout(ctx.device, slCI.addr, nil, result.addr)
+
+proc destroyDescriptorSetLayout*(ctx: VulkanContext, setLayout: VkDescriptorSetLayout) =
+  ## Releases a set layout from createDescriptorSetLayout, nil skips.
+  let vkDestroyDescriptorSetLayout = cast[
+    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
+  if setLayout != nil:
+    vkDestroyDescriptorSetLayout(ctx.device, setLayout, nil)
+
+proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32): VkDescriptorPool =
+  ## Pool sized to exactly one set of bindingCount storage-buffer descriptors.
+  ## Set lifetime is owned by the pool: destroyDescriptorPool frees the sets.
+  let vkCreateDescriptorPool = cast[
+    proc(device: VkDevice, pCreateInfo: ptr VkDescriptorPoolCreateInfo,
+         pAllocator: pointer,
+         pDescriptorPool: ptr VkDescriptorPool): VkResult {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorPool"))
+  var poolSize = VkDescriptorPoolSize(
+    `type`: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    descriptorCount: bindingCount
+  )
+  var poolCI = VkDescriptorPoolCreateInfo(
+    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+    maxSets: 1,
+    poolSizeCount: 1,
+    pPoolSizes: poolSize.addr
+  )
+  check vkCreateDescriptorPool(ctx.device, poolCI.addr, nil, result.addr)
+
+proc destroyDescriptorPool*(ctx: VulkanContext, pool: VkDescriptorPool) =
+  ## Releases a pool and every set allocated from it, nil skips.
+  let vkDestroyDescriptorPool = cast[
+    proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
+  if pool != nil:
+    vkDestroyDescriptorPool(ctx.device, pool, nil)
+
+proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayout: VkDescriptorSetLayout): VkDescriptorSet =
+  ## One descriptor set from `pool`, bound against `setLayout`.
+  let vkAllocateDescriptorSets = cast[
+    proc(device: VkDevice, pAllocateInfo: ptr VkDescriptorSetAllocateInfo, pDescriptorSets: ptr VkDescriptorSet): VkResult {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkAllocateDescriptorSets"))
+  var allocInfo = VkDescriptorSetAllocateInfo(
+    sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+    descriptorPool: pool,
+    descriptorSetCount: 1,
+    pSetLayouts: setLayout.addr
+  )
+  check vkAllocateDescriptorSets(ctx.device, allocInfo.addr, result.addr)
+
+proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer]) =
+  ## One write per binding: binding i covers the whole i-th buffer.
+  ##
+  ## Precondition: `buffers` enumerates the kernel's buffer parameters in declaration order,
+  ## binding i writes the i-th buffer, matching the printer's [[vk::binding(N, 0)]] numbering
+  ## (buffers only, push-constant parameters unbound).
+  ##
+  ## A mismatched order is silent on the device: reads and writes reach the wrong buffers, no validation error.
+  let vkUpdateDescriptorSets = cast[
+    proc(device: VkDevice, descriptorWriteCount: uint32,
+         pDescriptorWrites: ptr VkWriteDescriptorSet,
+         descriptorCopyCount: uint32,
+         pDescriptorCopies: ptr VkWriteDescriptorSet) {.cdecl.}
+  ](ctx.gpaAddr(ctx.instance, "vkUpdateDescriptorSets"))
+  var bufInfos = newSeq[VkDescriptorBufferInfo](buffers.len)
+  var writes = newSeq[VkWriteDescriptorSet](buffers.len)
+  for i, buf in buffers:
+    bufInfos[i] = VkDescriptorBufferInfo(
+      buffer: buf.handle,
+      offset: 0,
+      range: VkDeviceSize(buf.size)
+    )
+    writes[i] = VkWriteDescriptorSet(
+      sType: VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      dstSet: setHandle,
+      dstBinding: uint32(i),
+      dstArrayElement: 0,
+      descriptorCount: 1,
+      descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      pBufferInfo: bufInfos[i].addr
+    )
+  if writes.len > 0:
+    vkUpdateDescriptorSets(ctx.device, uint32(writes.len), writes[0].addr, 0, nil)
+
+# ═══════════════════════════════════════════════════════════════════════
 # Pipeline management
 # ═══════════════════════════════════════════════════════════════════════
 
 proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
                      entryPoint: string = "main",
-                     pushConstSize: int = 0): VulkanPipeline =
-  ## Compute pipeline with push constants only: buffers bind by device
-  ## address (BDA), there are no descriptors.
+                     pushConstSize: int = 0,
+                     setLayout: VkDescriptorSetLayout = nil): VulkanPipeline =
+  ## Compute pipeline over a shader module.
+  ##
+  ## Default layout: push constants only, buffers bind by device address (BDA).
+  ## With `setLayout` the layout carries that descriptor set, the dispatch binds it (runKernel's `descriptorSet`).
+  ##
+  ## Returns: the pipeline, `=destroy` releases the pipeline and its layout.
   result = VulkanPipeline()
   result.device = ctx.device
   result.vkDestroyPipeline = cast[
@@ -592,6 +738,9 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   var plCI = VkPipelineLayoutCreateInfo(
     sType: VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
   var pushConstRange: VkPushConstantRange
+  if setLayout != nil:
+    plCI.setLayoutCount = 1
+    plCI.pSetLayouts = setLayout.addr
   if pushConstSize > 0:
     pushConstRange = VkPushConstantRange(
       stageFlags: uint32(VK_SHADER_STAGE_COMPUTE_BIT),
@@ -621,7 +770,13 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
 
 proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
                 globalWorkSize, localWorkSize: openArray[uint32],
-                pushConstData: pointer = nil, pushConstSize: int = 0) =
+                pushConstData: pointer = nil, pushConstSize: int = 0,
+                descriptorSet: VkDescriptorSet = nil) =
+  ## One dispatch: bind pipeline, push constants, dispatch, fence wait.
+  ##
+  ## With `descriptorSet` that set binds as set 0 against the pipeline layout, which must carry the matching set layout.
+  ##
+  ## Returns: nothing, the fence wait blocks until the dispatch completes.
   let vkAllocateCommandBuffers = cast[
     proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateCommandBuffers"))
@@ -671,6 +826,16 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   check vkBeginCommandBuffer(cmdBuf, beginInfo.addr)
 
   vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.handle)
+
+  if descriptorSet != nil:
+    let vkCmdBindDescriptorSets = cast[
+      proc(commandBuffer: VkCommandBuffer, pipelineBindPoint: VkPipelineBindPoint,
+           layout: VkPipelineLayout, firstSet: uint32, descriptorSetCount: uint32,
+           pDescriptorSets: ptr VkDescriptorSet, dynamicOffsetCount: uint32,
+           pDynamicOffsets: ptr uint32) {.cdecl.}
+    ](ctx.gpaAddr(ctx.instance, "vkCmdBindDescriptorSets"))
+    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout,
+                            0, 1, descriptorSet.addr, 0, nil)
 
   if pushConstSize > 0:
     let vkCmdPushConstants = cast[
