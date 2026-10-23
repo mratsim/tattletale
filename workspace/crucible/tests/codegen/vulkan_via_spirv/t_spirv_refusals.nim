@@ -105,6 +105,13 @@ template compoundAssignBlock() =
       output[0] = acc
   discard k
 
+template floatModBlock() =
+  let k = spirv:
+    proc floatModKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
+      for i in 0 ..< n:
+        output[i] = x[i] % 2.0'f32
+  discard k
+
 template floatComparisonBlock() =
   let k = spirv:
     proc floatCmpKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
@@ -193,6 +200,10 @@ discard k
   block recursiveDeviceFn:
     doAssert not compiles(recursiveDeviceFnBlock()),
       "a recursive device function call must refuse to compile"
+
+  block floatMod:
+    doAssert not compiles(floatModBlock()),
+      "a float modulo must refuse to compile"
 
   block floatComparison:
     doAssert not compiles(floatComparisonBlock()),

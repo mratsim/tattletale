@@ -777,7 +777,14 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): string =
   of "<=": (if signed: "OpSLessThanEqual" else: "OpULessThanEqual")
   of ">": (if signed: "OpSGreaterThan" else: "OpUGreaterThan")
   of ">=": (if signed: "OpSGreaterThanEqual" else: "OpUGreaterThanEqual")
-  of "%": (if signed: "OpSMod" else: "OpUMod")
+  of "%":
+    # a float `%` refuses: no float-mod opcode exists in the table
+    # an OpUMod over float operands is invalid
+    # the frontend refuses the same construct as an undeclared identifier
+    if isFloat:
+      spvRefuse("float modulo %")
+    elif signed: "OpSMod"
+    else: "OpUMod"
   of "&&": "OpLogicalAnd"
   of "||": "OpLogicalOr"
   else:
