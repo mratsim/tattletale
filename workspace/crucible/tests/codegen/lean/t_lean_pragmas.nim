@@ -133,8 +133,9 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath)
+    expectRefusal("lean_lang: proof settling failed - lean exited with 1 but no error was " &
+            "attributable to a scaffold: ", proc() =
+          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath))
     doAssert not fileExists(negOutPath.changeFileExt("manifest.json")),
       "no manifest may record a proven verdict for unchecked proofs"
     echo "  proof settling refusal on an unattributable lean failure: ok"
@@ -145,41 +146,46 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(unparseable.gpu, unparseable.specs, genSpecRelPath)
+    expectRefusal("lean_lang: invalid spec payload - expected an identifier or a uint " &
+            "literal, got ''", proc() =
+          discard emitLeanModuleWithSpecs(unparseable.gpu.statements[0], unparseable.specs, genSpecRelPath))
 
     let unknownIdent = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "bogus tid = a tid".} =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(unknownIdent.gpu, unknownIdent.specs, genSpecRelPath)
+    expectRefusal("lean_lang: invalid spec payload - 'bogus tid' is not a read of a kernel " &
+            "buffer parameter", proc() =
+          discard emitLeanModuleWithSpecs(unknownIdent.gpu.statements[0], unknownIdent.specs, genSpecRelPath))
 
     let badPrecondition = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "n < tid".} =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(badPrecondition.gpu, badPrecondition.specs, genSpecRelPath)
+    expectRefusal("lean_lang: unsupported precondition payload 'n < tid' - the tracer " &
+            "model's launch precondition is `tid < n`", proc() =
+          discard emitLeanModuleWithSpecs(badPrecondition.gpu.statements[0], badPrecondition.specs, genSpecRelPath))
 
     let bufferInvariant = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a tid < n".} =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(bufferInvariant.gpu, bufferInvariant.specs, genSpecRelPath)
+    expectRefusal("lean_lang: unsupported invariant payload 'a tid < n' - the tracer " &
+            "invariant must be implied by the guard `tid < n` and mention both " &
+            "`tid` and `n`", proc() =
+          discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0], bufferInvariant.specs, genSpecRelPath))
 
     let plain = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(plain.gpu.statements[0],
-        @[RawSpec(name: "sidecondition", payload: "tid < n")], genSpecRelPath)
+    expectRefusal("lean_lang: unsupported spec pragma 'sidecondition'", proc() =
+          discard emitLeanModuleWithSpecs(plain.gpu.statements[0],
+            @[RawSpec(name: "sidecondition", payload: "tid < n")], genSpecRelPath))
     echo "  refusals on out-of-scope payloads: ok"
 
   block: # a pragma-less proc (no `{.global.}`) is refused loudly
@@ -190,8 +196,8 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(plain.gpu.statements[0], plain.specs, genSpecRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuProc - kernel is not `{.global.}`", proc() =
+          discard emitLeanModuleWithSpecs(plain.gpu.statements[0], plain.specs, genSpecRelPath))
     echo "  refusal on a pragma-less (not `{.global.}`) kernel proc: ok"
 
   block: # a multi-kernel block is refused loudly at expansion time

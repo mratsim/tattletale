@@ -11,6 +11,22 @@ import std/[os, osproc]
 
 const leanProjectDir* = currentSourcePath().parentDir()
 
+proc expectRefusal*(prefix: string, body: proc) =
+  ## Runs `body`, expects the `lean_lang: ...` ValueError whose message
+  ## starts with `prefix`.
+  ##
+  ## Contract:
+  ## - `prefix` is the refusal's documented reason, so a refusal raised for
+  ##   the wrong reason fails with expected and got in the message
+  ## - no ValueError at all fails with the expected prefix in the message
+  try:
+    body()
+  except ValueError as e:
+    doAssert e.msg.startsWith(prefix),
+      "wrong refusal reason, expected '" & prefix & "', got: " & e.msg
+    return
+  doAssert false, "expected a refusal: " & prefix
+
 proc elaborate*(relPath: string): tuple[output: string, exitCode: int] =
   ## Elaborates one emitted Lean module through the lake environment,
   ## warnings escalated to errors so a sorry fails

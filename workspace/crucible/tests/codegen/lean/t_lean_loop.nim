@@ -66,75 +66,75 @@ proc runTest() =
       proc nonLiteralBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< thread_position_in_grid.x:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nonLiteralBound.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop bound is not a compile-time literal", proc() =
+          discard emitLeanModule(nonLiteralBound.statements[0], genLoopRelPath))
 
     let nonzeroStart = irLean:
       proc nonzeroStart(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 1 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nonzeroStart.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop start must be the literal 0", proc() =
+          discard emitLeanModule(nonzeroStart.statements[0], genLoopRelPath))
 
     let inclusiveRange = irLean:
       proc inclusiveRange(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 .. 3:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(inclusiveRange.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop range is not `[0 ..< n)` exclusive", proc() =
+          discard emitLeanModule(inclusiveRange.statements[0], genLoopRelPath))
 
     let stepped = irLean:
       proc stepped(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in countup(0, 6, 2):
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(stepped.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop range is not `[0 ..< n)` exclusive", proc() =
+          discard emitLeanModule(stepped.statements[0], genLoopRelPath))
 
     let nested = irLean:
       proc nested(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           for j in 0 ..< 4:
             output[j] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nested.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - statement inside the loop body", proc() =
+          discard emitLeanModule(nested.statements[0], genLoopRelPath))
 
     let nonLoopVarWrite = irLean:
       proc nonLoopVarWrite(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[0] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nonLoopVarWrite.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - write index is not the loop variable", proc() =
+          discard emitLeanModule(nonLoopVarWrite.statements[0], genLoopRelPath))
 
     let nonLoopVarRead = irLean:
       proc nonLoopVarRead(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[0] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nonLoopVarRead.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIndex - index expression is not the index variable", proc() =
+          discard emitLeanModule(nonLoopVarRead.statements[0], genLoopRelPath))
 
     let stmtBefore = irLean:
       proc stmtBefore(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         output[0] = 1
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(stmtBefore.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - statement at kernel-body top level", proc() =
+          discard emitLeanModule(stmtBefore.statements[0], genLoopRelPath))
 
     let stmtAfter = irLean:
       proc stmtAfter(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
         output[0] = 1
-    doAssertRaises(ValueError):
-      discard emitLeanModule(stmtAfter.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - statement at kernel-body top level", proc() =
+          discard emitLeanModule(stmtAfter.statements[0], genLoopRelPath))
 
     let twoWrites = irLean:
       proc twoWrites(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
           output[i] = a[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(twoWrites.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop body is not a single-statement block", proc() =
+          discard emitLeanModule(twoWrites.statements[0], genLoopRelPath))
 
     echo "  refusals on loop shapes outside the supported shape: ok"
 
@@ -143,22 +143,23 @@ proc runTest() =
       proc unsupportedOp(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] * b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(unsupportedOp.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuBinOp - binary operator '*'", proc() =
+          discard emitLeanModule(unsupportedOp.statements[0], genLoopRelPath))
 
     let zeroBound = irLean:
       proc zeroBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 0:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(zeroBound.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop bound must be positive (got 0)", proc() =
+          discard emitLeanModule(zeroBound.statements[0], genLoopRelPath))
 
     let wrongParams = irLean:
       proc wrongParams(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           dst[i] = x[i] + y[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(wrongParams.statements[0], genLoopRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuProc - buffer parameters must be exactly `a` and `b` (read) plus " &
+            "`output` (written)", proc() =
+          discard emitLeanModule(wrongParams.statements[0], genLoopRelPath))
     echo "  refusals carried over from the guarded-thread shape: ok"
 
   block: # right loop-guard invariant: proved, manifest `proven: true`, exit 0
@@ -212,33 +213,36 @@ proc runTest() =
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "tid < n".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(withPrecondition.gpu.statements[0],
-        withPrecondition.specs, genLoopInvRelPath)
+    expectRefusal("lean_lang: unsupported precondition payload 'tid < n' - the loop shape has no thread-id launch precondition", proc() =
+          discard emitLeanModuleWithSpecs(withPrecondition.gpu.statements[0],
+            withPrecondition.specs, genLoopInvRelPath))
 
     let withPostcondition = irLeanSpec:
-      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "output i = a i + b i".} =
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "tid < n".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(withPostcondition.gpu.statements[0],
-        withPostcondition.specs, genLoopInvRelPath)
+    expectRefusal("lean_lang: unsupported postcondition payload 'tid < n' - the " &
+            "loop postcondition is the composed", proc() =
+          discard emitLeanModuleWithSpecs(withPostcondition.gpu.statements[0],
+            withPostcondition.specs, genLoopInvRelPath))
 
     let bufferInvariant = irLeanSpec:
-      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a i < 4".} =
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a tid < 4".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0],
-        bufferInvariant.specs, genLoopInvRelPath)
+    expectRefusal("lean_lang: unsupported invariant payload 'a tid < 4' - the " &
+            "loop-shape invariant must mention the loop counter 'i'", proc() =
+          discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0],
+            bufferInvariant.specs, genLoopInvRelPath))
 
     let boundInvariant = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i < n".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModuleWithSpecs(boundInvariant.gpu.statements[0],
-        boundInvariant.specs, genLoopInvRelPath)
+    expectRefusal("lean_lang: unsupported invariant payload 'i < n' - the loop-shape " &
+            "invariant may only mention the loop counter 'i'", proc() =
+          discard emitLeanModuleWithSpecs(boundInvariant.gpu.statements[0],
+            boundInvariant.specs, genLoopInvRelPath))
     echo "  refusals on loop-shape pragma payloads: ok"
 
 when isMainModule:

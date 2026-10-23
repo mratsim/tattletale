@@ -72,8 +72,9 @@ proc runTest() =
         while i < 4:
           output[i] = a[i] + b[i]
           i = i + 1
-    doAssertRaises(ValueError):
-      discard emitLeanModule(ir.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuVar - " &
+      "let-binding whose initializer is not `thread_position_in_grid.x`", proc() =
+      discard emitLeanModule(ir.statements[0], genRelPath))
     echo "  refusal on out-of-scope construct: ok"
 
   block: # loud refusal on a buffer-parameter set other than the add shape
@@ -82,24 +83,27 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           dst[i] = src[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(copy.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuProc - buffer parameters " &
+        "must be exactly `a` and `b` (read) plus `output` (written)", proc() =
+      discard emitLeanModule(copy.statements[0], genRelPath))
 
     let renamed = irLean:
       proc renamedKernel(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
           dst[i] = x[i] + y[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(renamed.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuProc - buffer parameters " &
+        "must be exactly `a` and `b` (read) plus `output` (written)", proc() =
+      discard emitLeanModule(renamed.statements[0], genRelPath))
 
     let unreadInput = irLean:
       proc copyA(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(unreadInput.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuProc - the kernel body " &
+        "must read both input buffers `a` and `b`", proc() =
+      discard emitLeanModule(unreadInput.statements[0], genRelPath))
     echo "  refusal on kernels outside the add-shape buffer parameters: ok"
 
   block: # loud refusal on a non-positive guard literal
@@ -108,16 +112,18 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 0:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(zeroBound.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - guard literal must " &
+        "be positive (got 0)", proc() =
+      discard emitLeanModule(zeroBound.statements[0], genRelPath))
 
     let negativeBound = irLean:
       proc negativeBoundKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < -1:
           output[i] = a[i] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(negativeBound.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - guard literal must " &
+        "be positive (got -1)", proc() =
+      discard emitLeanModule(negativeBound.statements[0], genRelPath))
     echo "  refusal on non-positive guard literals: ok"
 
   block: # loud refusal on nested indexing
@@ -128,8 +134,9 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[a[i]] + b[i]
-    doAssertRaises(ValueError):
-      discard emitLeanModule(nested.statements[0], genRelPath)
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIndex - index expression " &
+        "is not the index variable", proc() =
+      discard emitLeanModule(nested.statements[0], genRelPath))
     echo "  refusal on nested indexing: ok"
 
 when isMainModule:
