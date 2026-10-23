@@ -14,9 +14,8 @@
 ## - guarded thread (the `AddKernel.lean` model): buffers `a`, `b` (read) +
 ##   `output` (written), let-bound `thread_position_in_grid.x` (the Lean `tid`),
 ##   one bare `if` with guard `tidVar < literal`, positive literal `n` (the length)
-## - loop (the axpy shape): one `for` over a constant range, one indexed write storing `alpha * a[i] + b[i]` plus a uint32 scalar
-##
-## The axpy scalar is uniform across the iterations and maps to a trailing `UInt32` argument of the emitted defs.
+## - loop (the axpy shape): one `for` over the compile-time `0 ..< n` range (start 0, step 1, exclusive),
+##   one indexed write, the uint32 scalar maps to a trailing `UInt32` argument
 ##
 ## - `{.precondition.}` - an assumption, carried by the scaffolds as hypothesis `h` (guarded thread only)
 ## - `{.invariant.}` - implied by the guard, proved by `exact h` (loop shape: a loop-counter property over the remaining count `k`)
@@ -410,9 +409,10 @@ proc analyzeLoopKernel(loop: GpuAst, bufNames: HashSet[string], paramNames: Hash
   if loop.fVar.kind != gpuIdent:
     raise unsupported(gpuFor, "loop variable is not an identifier")
   let loopVar = loop.fVar.symbol.name
-  if loopVar in bufNames or loopVar == "j":
+  if loopVar in bufNames or loopVar == "j" or loopVar == model.scalarName:
     raise unsupported(gpuFor, "loop variable '" & loopVar &
-      "' collides with a kernel buffer parameter or the emitted update binder 'j'")
+      "' collides with a kernel buffer parameter, the emitted update binder" &
+      " 'j' or the scalar parameter")
   model.loopVar = loopVar
   if loop.fBody.kind != gpuBlock or loop.fBody.statements.len != 1:
     raise unsupported(gpuFor, "loop body is not a single-statement block")
@@ -448,13 +448,11 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
   if attGlobal notin kernel.pAttributes:
     raise unsupported(gpuProc, "kernel is not `{.global.}`")
 
-  var paramNames: seq[string]
   var bufSeq: seq[string]
   var bufNames: HashSet[string]
   var scalarCount = 0
   for p in kernel.pParams:
     if isUint32Buffer(p):
-      paramNames.add p.ident.symbol.name
       bufSeq.add p.ident.symbol.name
       bufNames.incl p.ident.symbol.name
     elif p.typ.kind == gtUint32:
@@ -463,7 +461,9 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
         raise unsupported(gpuProc, "more than one uint32 scalar parameter - the" &
           " model covers exactly one uniform scalar (the axpy shape)")
       result.scalarName = p.ident.symbol.name
-      paramNames.add p.ident.symbol.name
+      if result.scalarName == "j":
+        raise unsupported(gpuProc, "scalar parameter 'j' collides with the" &
+          " emitted update binder 'j' of the loop shape")
     else:
       raise unsupported(gpuProc, "parameter '" & p.ident.symbol.name &
         "' is neither a ptr UncheckedArray[uint32] buffer nor a uint32 scalar")
@@ -616,6 +616,19 @@ constructive with `[propext]` alone.
   result = doc.replace("@KERNEL@", model.kernelName).replace("@N@", $model.nValue)
     .replace("@SCALARDOC@", scalarDoc)
 
+proc scalarBinder(model: KernelModel): string =
+  ## Lean binder text of the scalar parameter, "" when the kernel has none:
+  ## a `UInt32` argument appended after the buffer binders of the emitted defs
+  if model.scalarName == "":
+    return ""
+  result = " (" & model.scalarName & " : UInt32)"
+
+proc scalarArg(model: KernelModel): string =
+  ## Lean argument text of the scalar parameter, "" when the kernel has none
+  if model.scalarName == "":
+    return ""
+  result = " " & model.scalarName
+
 proc emitBodyDef(model: KernelModel): string =
   ## Body def(s) of the emitted module, per kernel shape: the guarded-thread
   ## `addBody` def or the loop shape's remaining-count recursion plus entry point
@@ -659,9 +672,8 @@ can evaluate the def (worked `decide` examples stay available). -/
       "  if tid < n then fun i => if i = tid then " & model.value & " else out i\n" &
       "  else out\n"
   of kkLoopRange:
-    let scalarBinder = if model.scalarName == "": ""
-      else: " (" & model.scalarName & " : UInt32)"
-    let scalarArg = if model.scalarName == "": "" else: " " & model.scalarName
+    let scalarBinder = model.scalarBinder
+    let scalarArg = model.scalarArg
     return loopDoc.replace("@N@", $model.nValue) &
       "def " & leanLoopName(model.kernelName) &
       " (k : Nat) (a b out : Nat → UInt32)" & scalarBinder & " : Nat → UInt32 :=\n" &
@@ -683,11 +695,10 @@ proc emitLoopTheorems(model: KernelModel): string =
   ## All proofs close for any supported stored value: they depend on the def shape alone.
   let loopName = leanLoopName(model.kernelName)
   let n = $model.nValue
-  let scalarBinder = if model.scalarName == "": ""
-    else: " (" & model.scalarName & " : UInt32)"
+  let scalarBinder = model.scalarBinder
   let scalarImplicit = if model.scalarName == "": ""
     else: " {" & model.scalarName & " : UInt32}"
-  let scalarArg = if model.scalarName == "": "" else: " " & model.scalarName
+  let scalarArg = model.scalarArg
   result = "/-- Loop-state lemma: with the iterations at remaining count `k` still to\n" &
     "run, index `j` of the running buffer ends at the stored value iff it lies\n" &
     "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &

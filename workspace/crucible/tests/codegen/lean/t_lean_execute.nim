@@ -72,9 +72,10 @@ def main : IO Unit := do
     writeFile(genAxpyExecRelPath, harness)
     let (outp, code) = execute("generated/axpy_exec.lean")
     doAssert code == 0, "the Lean run of the emitted axpy failed:\n" & outp
+    let gotLines = outp.splitLines()
     for j in 0 ..< 3:
       let want = "res " & $j & " = " & $expected[j]
-      doAssert want in outp,
+      doAssert want in gotLines,
         "missing executed value '" & want & "' in the Lean run output:\n" & outp
     echo "  executed axpyBody over a=[2,3] b=[10,20] alpha=4: got [18, 32],",
       " index 2 preserved: ok"
@@ -101,6 +102,23 @@ def main : IO Unit := do
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(guardedWithScalar.statements[0], genAxpyRelPath)
+
+    # a scalar named `j` would be shadowed by the emitted update binder.
+    # A loop variable named like the scalar leaves the binder unread.
+    # Both are name collisions the emitter must refuse before emitting
+    let scalarNamedJ = irLean:
+      proc jKernel(output, a, b: ptr UncheckedArray[uint32], j: uint32) {.global.} =
+        for i in 0 ..< 2:
+          output[i] = j * a[i] + b[i]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(scalarNamedJ.statements[0], genAxpyRelPath)
+
+    let loopVarNamedScalar = irLean:
+      proc loopVarNamedScalar(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global.} =
+        for alpha in 0 ..< 2:
+          output[alpha] = a[alpha] + b[alpha]
+    doAssertRaises(ValueError):
+      discard emitLeanModule(loopVarNamedScalar.statements[0], genAxpyRelPath)
 
     let withSpec = irLeanSpec:
       proc axpySpec(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global, invariant: "i < 2".} =
