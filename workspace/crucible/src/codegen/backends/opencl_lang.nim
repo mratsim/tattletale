@@ -43,7 +43,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoidPtr: "void*"
   of gtObject: "struct"
   of gtString: "const char*"
-  of gtUA: ""       # UncheckedArray used as buffer pointer
+  of gtUncheckedArray: ""       # UncheckedArray used as buffer pointer
   of gtStatic: "int"
   else:
     error "Invalid type : " & $t
@@ -52,7 +52,7 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
     if inner.kind == gtArray:
       let ptrStar = gpuTypeToString(t.kind)
       result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
@@ -60,10 +60,11 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
     else:
       let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
       let ptrStar = gpuTypeToString(t.kind)
-      # Explicit `ptr T` types bind device buffers and carry
-      # `__global` wherever they appear.
-      # Implicit `var T` pointers are per-thread registers.
-      let space = if t.implicit: "" else: "__global "
+      let space = case t.addressSpace
+                  of asDevice: "__global "
+                  of asSMEM: "__local "
+                  of asConstant: "__constant "
+                  of asRMEM: ""
       result = space & typ & ptrStar
   of gtArray:
     if ident.len == 0 and not allowEmptyIdent:
@@ -90,7 +91,7 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject: result = "struct " & t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
@@ -113,7 +114,7 @@ proc containsFloat64(t: GpuType): bool =
     result = t.to.containsFloat64()
   of gtArray:
     result = t.aTyp.containsFloat64()
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsFloat64()
   of gtFloat64: result = true
   else: result = false
@@ -124,7 +125,7 @@ proc containsFloat16(t: GpuType): bool =
     result = t.to.containsFloat16()
   of gtArray:
     result = t.aTyp.containsFloat16()
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsFloat16()
   of gtFloat16: result = true
   else: result = false
@@ -214,10 +215,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # __local T*, shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
-      elif p.typ.kind == gtPtr and p.addressSpace == asDevice:
+      elif p.typ.kind == gtPtr and p.typ.addressSpace == asDevice:
         # __global T* restrict: explicit `ptr T` params
         # bind device buffers, in kernel signatures and device functions alike.
-        # Implicit `var T` pointer params take the plain form below.
+        # the qualifier reads the pointer type's space, an implicit `var T`
+        # pointer param takes the plain form below
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:
@@ -262,17 +264,21 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
 
   of gpuVar:
-    # Address-space keyword prefixes the declaration ident, as in `__local uint scratch[8]`.
+    # a pointer declaration self-qualifies, a variable-level prefix would
+    # qualify the pointed-to type twice
     var typeStr: string
-    case ast.addressSpace
-    of asSMEM:
-      typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asRMEM:
-      typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asConstant:
-      typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asDevice:
+    if ast.vType.kind == gtPtr:
       typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
+    else:
+      case ast.addressSpace
+      of asSMEM:
+        typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asRMEM:
+        typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asConstant:
+        typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asDevice:
+        typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
     if ast.vInit.kind != gpuDiscard:

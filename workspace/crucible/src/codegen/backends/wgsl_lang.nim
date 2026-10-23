@@ -50,7 +50,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoid: ""
   of gtSize_t: "u32" ##: Acceptable mapping?
   of gtPtr: "ptr" ## XXX: needs address space and target type, `ptr<address_space, target_type>`
-  of gtUA: "array"
+  of gtUncheckedArray: "array"
   of gtObject: "struct"
   of gtUint8, gtUint16, gtUint64, gtInt16, gtInt64, gtFloat64, gtVoidPtr, gtString:
     error "The type " & $t & " does not exist on the WebGPU target."
@@ -101,7 +101,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject: result = t.name
-  of gtUA:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
+  of gtUncheckedArray:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
   of gtStatic: result = "i32"
   else:        result = gpuTypeToString(t.kind)
 
@@ -276,7 +276,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     case ast.addressSpace
     of asSMEM: addrSpaceAttr = "<workgroup>"
     of asRMEM, asDevice, asConstant: discard
-    let vSpace = ctx.symAddressSpaces.getOrDefault(ast.vName.symbol.iSym, asRMEM)
+    # the pointer type carries the space it accesses
+    let vSpace = ast.vType.addressSpace
     result = &"{indentStr}{letOrVar}{addrSpaceAttr} {gpuTypeToString(ast.vType, ast.vName.ident(), addrSpace = vSpace)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."

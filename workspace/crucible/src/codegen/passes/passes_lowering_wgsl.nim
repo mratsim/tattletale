@@ -21,7 +21,10 @@ import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_low_address_spaces
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
@@ -41,18 +44,17 @@ const WgslReserved = [
 
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = false)
+  # Array copies surface unlowered, WGSL has no memcpy builtin and the printer
+  # rejects the requiresMemcpy node
   reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
   reg.registerExpandStructKernelParams()
-  # Reads original params: runs before liftKernelParamsToGlobals empties them.
-  reg.registerScanGenerics()
-  # WGSL functions take no parameters: global fns' params move to ctx.globals.
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
+  reg.registerRecordPtrFieldBindings()
   reg.registerLiftKernelParamsToGlobals()
   reg.registerPullConstantPragmaVars()
   reg.registerRemoveStructPointerFields()
-  # Before scanGenerics derives generic argument spaces from the authoritative map.
-  reg.registerCollectValueAddressSpaces()
   reg.registerAddressOfInjection()
   reg.registerInlinePointerParamCalls()
   reg.registerMakeCodeValid()
@@ -89,18 +91,14 @@ func registerAddressOfInjection(reg: var PassRegistry) =
           ctx.injectAddressOfImpl(fn)
   )
 
-func registerScanGenerics(reg: var PassRegistry) =
-  reg.register("scanGenerics", pkTransform, phaseMain,
-    "Derives generic instantiation argument spaces from original params",
+func registerRecordPtrFieldBindings(reg: var PassRegistry) =
+  reg.register("recordPtrFieldBindings", pkTransform, phaseMain,
+    "Records where struct pointer fields bind: the printer rewrites field accesses to the recorded kernel-param ident",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       let fns = toSeq(ctx.fnTab.pairs)
       for (fnIdent, fn) in fns:
-        let fnOrig = ctx.allFnTab[fnIdent]
-        var callParams = initTable[string, GpuParam]()
-        for p in fnOrig.pParams:
-          callParams[p.ident.symbol.iSym] = p
-        ctx.scanGenericsImpl(fn, callParams)
+        ctx.recordPtrFieldBindingsImpl(fn)
   )
 
 func registerLiftKernelParamsToGlobals(reg: var PassRegistry) =
@@ -287,15 +285,7 @@ proc patchBoolToI32(ctx: var GpuContext) =
 # Forward declarations consumed by wgsl_lang.preprocess
 # ═══════════════════════════════════════════════════════════════════════
 
-func patchTypeImpl(t: GpuType): GpuType
 
-proc patchSymbolImpl(n: GpuAst): GpuAst
-
-proc genGenericName(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string
-
-proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst
-
-proc getGenericArguments(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg]
 
 # ═══════════════════════════════════════════════════════════════════════
 # Address-of injection
@@ -410,26 +400,11 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
   of gpuCall:
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
-    let fnName = n.cName
-    if fnName in ctx.fnTab:
-      let fn = ctx.fnTab[fnName]
-      let params = fn.pParams
-      for i, arg in n:
-        let argId = arg.determineIdent()
-        if argId.kind != gpuDiscard and argId.ident().len > 0:
-          var p = params[i]
-          let argSpace = ctx.resolveIdentAddressSpace(argId)
-          if p.addressSpace != argSpace:
-            p.addressSpace = argSpace
-            ctx.symAddressSpaces[p.ident.symbol.iSym] = argSpace
-            fn.pParams[i] = p
   of gpuVar:
     for ch in n.mitems:
       ctx.makeCodeValidImpl(ch, inGlobal)
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      let space = ctx.resolveIdentAddressSpace(rightId)
-      ctx.symAddressSpaces[n.vName.symbol.iSym] = space
       # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS carries a mutability flag.
       let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
       let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
@@ -467,41 +442,16 @@ func updateSymsInGlobalsImpl(ctx: var GpuContext, n: GpuAst) =
 # Generic instantiation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc scanGenericsImpl(ctx: var GpuContext, n: GpuAst, callerParams: Table[string, GpuParam], owner = "") =
-  ## Scans for gpuCall nodes, generates generic instantiations for pointer args, records pointer-field bindings under the scanned variable name.
+proc recordPtrFieldBindingsImpl(ctx: var GpuContext, n: GpuAst, owner = "") =
+  ## Records where struct pointer fields bind: a construction's pointer-typed
+  ## field init is a kernel-param ident, the printer rewrites `foo.field`
+  ## accesses to it
+  ## Keys:
+  ## - (type, field)
+  ## - (variable, field), the type-keyed entry cannot separate same-type variables
   case n.kind
-  of gpuCall:
-    let fn = n.cName
-    if fn in ctx.allFnTab:
-      let params = ctx.allFnTab[fn].pParams
-      let gi = GenericInst(name: genGenericName(ctx, n, params, callerParams),
-                           args: getGenericArguments(ctx, n.cArgs, params, callerParams))
-      let anyPointers = params.anyIt(it.typ.kind == gtPtr)
-      if anyPointers:
-        n.cName = GpuAst(kind: gpuIdent,
-                         symbol: newSymbol(gi.name, symKind = gsProc, iSym = gi.name))
-        let gName = n.cName
-        if gName notin ctx.fnTab:
-          let fnCalled = ctx.allFnTab[fn].clone()
-          let fnGen = makeFnGeneric(ctx, fnCalled, gi)
-          ctx.fnTab[gName] = fnGen
-          ctx.allFnTab[gName] = fnGen
-          var callParams = initTable[string, GpuParam]()
-          for p in fnGen.pParams:
-            callParams[p.ident.symbol.iSym] = p
-          ctx.scanGenericsImpl(fnGen, callParams)
-      elif fn notin ctx.fnTab:
-        let fnCalled = ctx.allFnTab[fn]
-        ctx.fnTab[fn] = fnCalled
-        for ch in fnCalled:
-          ctx.scanGenericsImpl(ch, callerParams)
-      for arg in n.cArgs:
-        ctx.scanGenericsImpl(arg, callerParams)
-    else:
-      for ch in n:
-        ctx.scanGenericsImpl(ch, callerParams)
   of gpuVar:
-    ctx.scanGenericsImpl(n.vInit, callerParams, n.vName.ident())
+    ctx.recordPtrFieldBindingsImpl(n.vInit, n.vName.ident())
   of gpuObjConstr:
     for f in n.ocFields:
       if f.typ.kind == gtPtr:
@@ -509,93 +459,15 @@ proc scanGenericsImpl(ctx: var GpuContext, n: GpuAst, callerParams: Table[string
         let id = f.value.determineIdent()
         doAssert id.symbol.symKind == gsGlobalKernelParam
         ctx.structsWithPtrs[(n.ocType, f.name)] = id
-        # Also record by variable name:
-        # the type-keyed table stores one entry per struct type, so constructions
-        # after the first overwrite its entry.
         if owner.len > 0:
           ctx.ptrFieldBindings[(owner, f.name)] = id
+  # call arguments leave the owner's scope, the old scan reset the owner there
+  of gpuCall:
+    for ch in n:
+      ctx.recordPtrFieldBindingsImpl(ch)
   else:
     for ch in n:
-      ctx.scanGenericsImpl(ch, callerParams, owner)
-
-proc genGenericName(ctx: GpuContext, n: GpuAst, params: seq[GpuParam], callerParams: Table[string, GpuParam]): string =
-  ## Generates unique name for a generic WGSL function instantiation.
-  doAssert n.kind == gpuCall
-  result = n.cName.ident() & '_'
-  for i, arg in n.cArgs:
-    let p = params[i]
-    var s: string
-    if p.typ.kind != gtPtr:
-      s = "l"
-    else:
-      let argIdent = arg.determineIdent()
-      var lArg: GpuAst = arg
-      if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams:
-        lArg = callerParams[argIdent.symbol.iSym].ident
-      let addrSpace = ctx.resolveIdentAddressSpace(lArg)
-      let mutable = lArg.determineMutability()
-      let m = if mutable: "mut" else: ""
-      s = shortAddrSpace(addrSpace) & m
-    result.add s
-    if i < n.cArgs.high:
-      result.add '_'
-
-proc makeFnGeneric(ctx: var GpuContext, fn: GpuAst, gi: GenericInst): GpuAst =
-  ## Returns a cloned function with params updated for the generic instantiation.
-  result = fn
-  let pnSym = newSymbol(gi.name, symKind = gsProc)
-  result.pName = GpuAst(kind: gpuIdent, symbol: pnSym)
-  for i, p in result.pParams.mpairs:
-    let arg = gi.args[i]
-    p.addressSpace = arg.addrSpace
-    ctx.symAddressSpaces[p.ident.symbol.iSym] = arg.addrSpace
-    if p.ident.symbol.typ.kind == gtPtr:
-      p.ident.symbol.typ.mutable = arg.mutable
-    p.ident = patchSymbolImpl(p.ident)
-    p.typ = p.ident.symbol.typ
-  proc getIf(params: seq[GpuParam], n: GpuAst): Option[GpuParam] =
-    doAssert n.kind == gpuIdent
-    for p in params:
-      if p.ident.symbol.iSym == n.symbol.iSym: return some(p)
-  proc updateSyms(n: var GpuAst, params: seq[GpuParam]) =
-    case n.kind
-    of gpuIdent:
-      let pOpt = params.getIf(n)
-      if pOpt.isSome:
-        let p = pOpt.get
-        n.symbol.symKind = p.ident.symbol.symKind
-        n.symbol.typ = p.typ
-    else:
-      for ch in n.mitems:
-        updateSyms(ch, params)
-  updateSyms(result.pBody, result.pParams)
-
-proc patchSymbolImpl(n: GpuAst): GpuAst =
-  doAssert n.kind == gpuIdent
-  result = n
-  if n.symbol != nil and n.symbol.symKind == gsGlobalKernelParam:
-    result.symbol.typ = patchTypeImpl(result.symbol.typ)
-
-func patchTypeImpl(t: GpuType): GpuType =
-  result = t
-  if result.kind == gtBool:
-    result.kind = gtInt32
-  elif result.kind == gtPtr and result.to.kind == gtBool:
-    result.to.kind = gtInt32
-
-proc getGenericArguments(ctx: GpuContext, args: seq[GpuAst], params: seq[GpuParam], callerParams: Table[string, GpuParam]): seq[GenericArg] =
-  for i, arg in args:
-    let p = params[i]
-    if p.typ.kind != gtPtr:
-      result.add GenericArg(addrSpace: asRMEM, mutable: false)
-    else:
-      let argIdent = arg.determineIdent()
-      var lArg: GpuAst = arg
-      if argIdent.kind != gpuDiscard and argIdent.symbol.iSym in callerParams:
-        lArg = callerParams[argIdent.symbol.iSym].ident
-      let addrSpace = ctx.resolveIdentAddressSpace(lArg)
-      let mutable = lArg.determineMutability()
-      result.add GenericArg(addrSpace: addrSpace, mutable: mutable)
+      ctx.recordPtrFieldBindingsImpl(ch, owner)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer-param call inlining
@@ -630,7 +502,7 @@ proc hasNonFnPtrParam(fn: GpuAst): bool =
   ## True when a pointer parameter sits outside the `function` address space.
   ## WGSL rejects storage, uniform and workgroup pointers as user-function parameter types.
   for p in fn.pParams:
-    if p.typ != nil and p.typ.kind == gtPtr and p.addressSpace != asRMEM:
+    if p.typ.kind == gtPtr and p.typ.addressSpace != asRMEM:
       return true
 
 proc hasPtrStructParam(fn: GpuAst, ctx: GpuContext): bool =
@@ -696,7 +568,6 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
       let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
       let binding = GpuAst(kind: gpuIdent, symbol: sym)
       subst[p.ident.symbol.iSym] = binding
-      ctx.symAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
       result.add GpuAst(kind: gpuVar, vMutable: false, vName: binding,
                         vType: typ, vInit: arg, vRequiresMemcpy: false,
                         addressSpace: asRMEM)

@@ -23,6 +23,10 @@ import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
+import ./passes_low_array_assign
+import ./passes_low_address_spaces
 import ./passes_legalizations
 import ./passes_validations
 
@@ -51,9 +55,9 @@ func registerQualifyVarParams*(reg: var PassRegistry) =
 func registerGlslLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = false)
   reg.registerSharedLoweringPasses()
-  # GLSL buffer references cannot be indexed directly, the deref must be
-  # explicit in the IR for the renderer to compose `.x`.
+  reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerInsertPointerDeref()
   reg.registerQualifyVarParams()
 

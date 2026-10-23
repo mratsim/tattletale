@@ -11,14 +11,14 @@ Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`, `metal`).
 Each macro consumes a kernel body written in that subset of Nim and emits a string of native GPU source code.
 
 - It does not ship a device runtime or a scheduler.
-- It does include minimal host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/):
+- It does include minimal host-side runtimes under [`src/runtime/backends/`](src/runtime/backends/):
   they compile, load, and launch the generated code on each backend.
 
 It is the base layer of the tattletale GPU stack: kernels, layout algebra, tile algebra all call Crucible to compile to GPUs.
 
 - The generated source is handed to an external toolchain to run:
   NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V.
-- The host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/), backed by the ABIs under
+- The host-side runtimes under [`src/runtime/backends/`](src/runtime/backends/), backed by the ABIs under
   [`src/abis/`](src/abis/), load and launch the results.
 - The Metal runtime compiles MSL on-device via `newLibraryWithSource`, it needs no external CLI.
 
@@ -30,7 +30,7 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 - **One IR, five backends.** [`src/codegen/frontend/nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim)
   lowers Nim AST to a backend-neutral IR.
-  Each target under [`src/codegen/targets/`](src/codegen/targets/) prints it:
+  Each backend under [`src/codegen/backends/`](src/codegen/backends/) prints it:
   `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
   run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
@@ -56,7 +56,7 @@ so the IR only ever contains canonical names, with no alias tables or name-to-ki
   a `metal:` kernel may write `blockIdx.x`.
 - The catalog, [`src/builtins/builtins_catalog.nim`](src/builtins/builtins_catalog.nim),
   defines the canonical dummies and the alias set.
-- The printers, [`src/codegen/targets/`](src/codegen/targets/), emit the native names below.
+- The printers, [`src/codegen/backends/`](src/codegen/backends/), emit the native names below.
 
 | Canonical (MSL) | CUDA | OpenCL | Vulkan (GLSL) | WGSL |
 | --- | --- | --- | --- | --- |
@@ -156,8 +156,8 @@ workspace/crucible/
         passes_msl.nim
         passes_opencl.nim
         passes_wgsl.nim
-      targets/
-        targets_lang.nim          Dispatches codegen to the printers
+      backends/
+        backends_api.nim          Dispatches codegen to the printers
         cuda_lang.nim             Printers: CUDA C++, OpenCL C, GLSL, WGSL, MSL
         opencl_lang.nim
         glsl_lang.nim

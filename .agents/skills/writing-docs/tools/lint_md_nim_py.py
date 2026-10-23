@@ -369,6 +369,8 @@ BANNED = [
      "state the offset or position directly, or restate the layout"),
     (r"\blands?\b|\barrives?\b", None,
      "say what produces or holds the construct, arrival verbs hide the mechanism"),
+    (r"\bre?stamp(?:s|ed|ing)?\b", None,
+     "name the mechanism (derives, carries, specializes, writes, re-types); stamp hides what changed, the type or the site"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
     (r"\brungs?\b", None,
@@ -531,6 +533,8 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
+    "diag-downgrade": Rule("diag-downgrade", True,
+                           "echo, debugEcho, raiseAssert or raise as a diagnostic, use error() or the warning builtin"),
     "registration-top": Rule("registration-top", True,
                              "a register proc defined below the first implementation in a passes file, registration lives at the top"),
     "section-banner": Rule("section-banner", True,
@@ -1047,7 +1051,7 @@ HOW_NARRATION_RE = _compile_table(HOW_NARRATION, True)
 # lean on context the audience, a CS undergraduate that just cloned the
 # repo and want to understand usage, does not have.
 HIDDEN_CONTEXT = [
-    (r"\bmirror(?:s|ing)?\b",
+    (r"\bmirror(?:s|ed|ing)?\b",
      "beware of hidden context or narration, the audience is a CS "
      "undergraduate that just cloned the repo and want to understand usage"),
 ]
@@ -2423,6 +2427,7 @@ def lint(paths, base=None):
             passes_export_hygiene(f, text, findings, added)
         if f.suffix == ".nim":
             stmt_inline(f, text, findings, added)
+            diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
@@ -4669,6 +4674,31 @@ def _nim_statement_frames(lines):
                 depth += 1
             elif ch in ")]}":
                 depth -= 1
+
+
+DIAG_DOWNGRADE_RE = re.compile(
+    r"\braiseAssert\b|\bdebugEcho\b|\braise newException\b|(?<![\w.])echo\b")
+
+
+def diagnostic_channel(path, text, findings, added):
+    """Compile-time diagnostics use error() or the warning builtin.
+
+    echo, debugEcho and raiseAssert print past the diagnostic channel;
+    raise turns a compile-time rejection into a catchable exception, the
+    rejected program then compiles inside a test. Tests and the host-side
+    runtime keep echo, fixture output and device logging.
+    """
+    sp = str(path).replace("\\", "/")
+    if "/tests/" in sp or "manual_" in sp or "/runtime/" in sp:
+        return
+    for no, code, _, _ in _nim_statement_frames(text.splitlines()):
+        if added is not None and no not in added:
+            continue
+        if DIAG_DOWNGRADE_RE.search(code):
+            findings.append(Finding(
+                path, no, "diag-downgrade",
+                "compile-time diagnostics use error() or the warning builtin, "
+                "echo/debugEcho/raiseAssert/raise downgrade or catch the channel"))
 
 
 def stmt_inline(path, text, findings, added):

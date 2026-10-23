@@ -45,7 +45,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoidPtr: "void*"
   of gtObject: "struct"
   of gtString: "const char*"
-  of gtUA: "" # `UncheckedArray` by itself is nothing in MSL
+  of gtUncheckedArray: "" # `UncheckedArray` by itself is nothing in MSL
   of gtStatic: "int"
   else:
     error "Invalid type : " & $t
@@ -57,7 +57,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
     if inner.kind == gtArray: # ptr to array type
       # Need to pass `*` for the pointer into the identifier.
       # `state: var array[4, BigInt]` must become `BigInt (*state)[4]`.
@@ -100,7 +100,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
       result.add mangledHashName("", $hash(t))
   of gtObject:
     result = t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 
@@ -166,7 +166,7 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
       continue
     if p.typ.kind == gtPtr:
       var inner = p.typ.to
-      if inner.kind == gtUA:
+      if inner.kind == gtUncheckedArray:
         inner = inner.uaTo
       var elem = gpuTypeToString(inner, allowEmptyIdent = true)
       params.add "device " & elem & "* " & name & " [[buffer(" & $slot & ")]]"
@@ -178,6 +178,13 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
     inc slot
   result = params.join(", ")
 
+proc addrSpaceToMsl(space: AddressSpace): string =
+  case space
+  of asDevice: "device"
+  of asConstant: "constant"
+  of asSMEM: "threadgroup"
+  of asRMEM: "thread"
+
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   ## Pointer params carry an explicit MSL address space.
   ## `thread` names the caller's locals, `device` names kernel buffers,
@@ -185,7 +192,7 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   let name = p.ident.ident()
   if p.typ.kind == gtPtr:
     var inner = p.typ.to
-    if inner.kind == gtUA:
+    if inner.kind == gtUncheckedArray:
       inner = inner.uaTo
     if inner.kind == gtArray:
       inner = inner.aTyp
@@ -194,7 +201,8 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
       let op = if p.typ.to.kind in {gtObject, gtGenericInst}: "&" else: "*"
       result = "threadgroup " & elem & op & ' ' & name
     else:
-      let space = if p.typ.implicit: "thread" else: "device"
+      # the pointer type carries the space it accesses
+      let space = addrSpaceToMsl(p.typ.addressSpace)
       result = space & ' ' & elem & "* " & name
   else:
     # By-value array params decay to pointers in MSL. They are read-only
@@ -205,22 +213,8 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
     else:
       result = gpuTypeToString(p.typ, name)
 
-proc addrSpaceToMsl(space: AddressSpace): string =
-  case space
-  of asDevice: "device"
-  of asConstant: "constant"
-  of asSMEM: "threadgroup"
-  of asRMEM: "thread"
-
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string
-
-proc structVariantName(ctx: GpuContext, t: GpuType, spaces: seq[AddressSpace]): string =
-  ## MSL struct name of a space tuple, the base name for the first observed tuple,
-  ## otherwise the base name suffixed with the tuple's space tags.
-  result = gpuTypeToString(t, allowEmptyIdent = true)
-  if ctx.ptrFieldVariants.getOrDefault(t, @[]).find(spaces) > 0:
-    result.add variantSuffix(spaces)
 
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
   ## Generates the MSL for one AST node.
@@ -282,15 +276,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
     var typ = gpuTypeToString(ast.vType, vName)
     if ast.vType.kind == gtPtr and ast.addressSpace == asRMEM:
-      typ = addrSpaceToMsl(ctx.resolveValueAddressSpace(ast.vInit)) & ' ' & typ
-    if ast.vInit.kind == gpuObjConstr:
-      # The var's decl type must match the objconstr's variant name, or MSL
-      # rejects the type mismatch.
-      let variantName = ctx.structVariantName(ast.vInit.ocType,
-                                              resolvePtrFieldAddressSpaces(ctx, ast.vInit))
-      let base = gpuTypeToString(ast.vInit.ocType, allowEmptyIdent = true)
-      if variantName != base:
-        typ = variantName & ' ' & vName
+      # the pointer type carries the space it accesses
+      typ = addrSpaceToMsl(ast.vType.addressSpace) & ' ' & typ
     result = indentStr & attrs & typ
     if ast.vInit.kind != gpuDiscard:
       result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
@@ -429,35 +416,23 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
 
   of gpuTypeDef:
-    let ptrNames = getPtrFieldNames(ast.tTyp)
-    var tuples = ctx.ptrFieldVariants.getOrDefault(ast.tTyp, @[])
-    if tuples.len == 0:
-      # Never constructed: one struct with per-thread pointer fields.
-      tuples = @[newSeqWith(ptrNames.len, asRMEM)]
-    for i, spaces in tuples:
-      let suffix = if i == 0: "" else: variantSuffix(spaces)
-      result.add "struct " & gpuTypeToString(ast.tTyp) & suffix & "{\n"
-      if ast.tFields.len == 0:
-        # MSL requires at least one field in a struct.
-        result.add "  char _;\n"
-      else:
-        for el in ast.tFields:
-          # MSL has no string type, gtString fields drop at emission (no runtime strings reach MSL)
-          if el.typ.kind == gtString:
-            continue
-          # MSL requires an explicit address-space qualifier on pointer-typed fields
-          if el.typ.kind == gtPtr:
-            let fi = ptrNames.find(el.name)
-            let space = if fi >= 0 and fi < spaces.len: spaces[fi] else: asRMEM
-            result.add "  " & addrSpaceToMsl(space) & ' ' &
-                       gpuTypeToString(el.typ, el.name) & ";\n"
-          else:
-            result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-      result.add '}'
-      if i < tuples.high:
-        # MSL requires `;` after every struct declaration, not just the last
-        # variant of the type.
-        result.add ";\n"
+    result.add "struct " & gpuTypeToString(ast.tTyp) & "{\n"
+    if ast.tFields.len == 0:
+      # MSL requires at least one field in a struct.
+      result.add "  char _;\n"
+    else:
+      for el in ast.tFields:
+        # MSL has no string type, gtString fields drop at emission (no runtime strings reach MSL)
+        if el.typ.kind == gtString:
+          continue
+        # MSL requires an explicit address-space qualifier on pointer-typed fields,
+        # the field's own type carries the space
+        if el.typ.kind == gtPtr:
+          result.add "  " & addrSpaceToMsl(el.typ.addressSpace) & ' ' &
+                     gpuTypeToString(el.typ, el.name) & ";\n"
+        else:
+          result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
+    result.add '}'
 
   of gpuAlias:
     # Aliases come from `ctx.types`, MSL emits them as C++11 `using`
@@ -468,7 +443,7 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
     # Braced init list: `TypeName{val1, val2, ...}` is a functional-style cast, a valid C++
     # expression usable with member access (gpuDot). A bare `{val}` braced-init-list
     # is not an expression.
-    result = ctx.structVariantName(ast.ocType, resolvePtrFieldAddressSpaces(ctx, ast)) & "{"
+    result = gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "{"
     for i, el in ast.ocFields:
       if el.value.kind == gpuDiscard:
         result.add "{}"
@@ -495,15 +470,15 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuConv:
     var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
-    # Pointer-typed casts need an explicit address-space qualifier, the space
-    # is resolved from the cast operand's value (`asRMEM` default).
+    # Pointer-typed casts need an explicit address-space qualifier,
+    # the cast target's type carries the space
     if ast.convTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(resolveValueAddressSpace(ctx, ast.convExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(ast.convTo.addressSpace) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
   of gpuCast:
     var castTyp = gpuTypeToString(ast.cTo, allowEmptyIdent = true)
     if ast.cTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(resolveValueAddressSpace(ctx, ast.cExpr)) & ' ' & castTyp
+      castTyp = addrSpaceToMsl(ast.cTo.addressSpace) & ' ' & castTyp
     result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.cExpr, 0)
 
   of gpuAddr:

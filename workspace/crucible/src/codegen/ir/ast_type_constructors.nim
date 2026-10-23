@@ -5,9 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GpuType constructors and helpers — no NimNode type resolution.
-## These functions create or inspect GpuType/Ast values.
-## They do NOT call getTypeInst / getTypeImpl / getImpl.
+## GpuType constructors and helpers.
+## No NimNode type resolution: getTypeInst/getTypeImpl/getImpl are never called.
 
 import std / [macros, strutils, tables]
 import ./ast_datatypes
@@ -17,48 +16,53 @@ import ./ast_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 func initGpuType*(kind: GpuTypeKind): GpuType =
-  ## If `kind` is `gtPtr` `to` must be the type we point to
   if kind in [gtObject, gtPtr, gtArray, gtSpan]:
     error "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
   result = GpuType(kind: kind)
 
-func initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
-  ## If `kind` is `gtPtr` `to` must be the type we point to
+func initGpuPtrType*(to: GpuType, implicitPtr: bool, addressSpace = asRMEM): GpuType =
   if to.kind == gtInvalid: # this is not a valid type
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtPtr, to: to, implicit: implicitPtr)
+    result.addressSpace = addressSpace
 
-func initGpuUAType*(to: GpuType): GpuType =
-  ## Initializes a GPU type for an unchecked array (ptr wraps this)
+func initGpuUncheckedArrayType*(to: GpuType): GpuType =
   if to.kind == gtInvalid: # this is not a valid type
     result = GpuType(kind: gtInvalid)
   else:
-    result = GpuType(kind: gtUA, uaTo: to)
+    result = GpuType(kind: gtUncheckedArray, uaTo: to)
+
+func withAddressSpace*(t: GpuType, space: AddressSpace): GpuType =
+  ## Copy-on-write:
+  ## - same address space: returns `t` unchanged
+  ## - different address space: returns a clone carrying `space`
+  ## Refs are shared (contexts, table keys), writing in place leaks to every sharer.
+  if t.isNil or t.addressSpace == space:
+    result = t
+  else:
+    result = t.clone()
+    result.addressSpace = space
 
 func initGpuVoidPtr*(): GpuType =
   result = GpuType(kind: gtVoidPtr)
 
 func initGpuObjectType*(name: string, flds: seq[GpuTypeField]): GpuType =
-  ## Initializes an object/struct type
   result = GpuType(kind: gtObject, name: name, fields: flds)
   result.isTuple = name.startsWith("Tuple_")
 
 func initGpuGenericInstType*(gName: string): GpuType =
-  ## Initializes a generic instantiation, tuple-ness derived once here
   result = GpuType(kind: gtGenericInst, gName: gName)
   result.isTuple = gName.startsWith("Tuple_")
 
-func initGpuSpanType*(elemTyp: GpuType): GpuType =
-  ## Initializes a span type (openArray/varargs) with the given element type
+func initGpuSpanType*(elemTyp: GpuType, addressSpace = asRMEM): GpuType =
   if elemTyp.kind == gtInvalid:
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtSpan, sElemTyp: elemTyp)
+    result.addressSpace = addressSpace
 
 proc toTypeDef*(typ: GpuType): GpuAst =
-  ## Converts a given object or generic instantiation type into an AST of a
-  ## corresponding type def.
   # store the type instantiation
   result = GpuAst(kind: gpuTypeDef, tTyp: typ)
   case typ.kind
@@ -94,20 +98,15 @@ func toGpuTypeKind*(t: NimTypeKind): GpuTypeKind =
 # ═══════════════════════════════════════════════════════════════════════
 
 func stripPtrOrArrayType*(t: GpuType): GpuType =
-  ## Strips any pointer or array type to return any struct / generic instantiation
-  ## it might contain
   case t.kind
   of gtPtr:    result = stripPtrOrArrayType t.to
-  of gtUA:     result = stripPtrOrArrayType t.uaTo
+  of gtUncheckedArray:     result = stripPtrOrArrayType t.uaTo
   of gtArray:  result = stripPtrOrArrayType t.aTyp
   of gtSpan:   result = stripPtrOrArrayType t.sElemTyp
   else:        result = t
 
 
 proc registerObjectType*(reg: var TypeRegistry, typ: GpuType) =
-  ## Adds the given type to the table of known types, if it is some kind of
-  ## object type.
-  ##
   ## XXX: What about aliases and distincts?
   let typ = typ.stripPtrOrArrayType() # get any underlying type
   if typ.kind in [gtObject, gtGenericInst] and typ notin reg.types:
@@ -119,8 +118,6 @@ proc registerObjectType*(reg: var TypeRegistry, typ: GpuType) =
 
 
 func getGenericTypeName*(t: NimNode): string =
-  ## Returns the base name of the generic type, i.e. for
-  ## `Foo[Bar, Baz]` returns `Foo`.
   # Recursion handles nested bracket expressions by peeling outer layers
   # until it hits the root Sym, e.g.:
   # ```
@@ -136,7 +133,6 @@ func getGenericTypeName*(t: NimNode): string =
   else: error "Unexpected node kind for generic instantiation type: " & $t.treerepr
 
 func requiresMemcpy*(n: NimNode): bool =
-  ## At the moment we only emit a `memcpy` statement for array types
   result = n.typeKind == ntyArray and n.kind != nnkBracket # need to emit a memcpy
 
 func isBuiltIn*(n: NimNode): bool =
@@ -151,7 +147,6 @@ func isBuiltIn*(n: NimNode): bool =
       return true
 
 func collectRawPragmas*(n: NimNode): seq[string] =
-  ## Collect ALL pragma names from a pragma node as raw strings.
   ## Preserves Nim-specific pragmas that are filtered out by `filterPragmas` pass.
   if n.kind == nnkEmpty: return
   for pragma in n:

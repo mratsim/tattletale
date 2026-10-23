@@ -161,8 +161,8 @@ src/
       passes_msl.nim                push-constant lowering, address spaces.
       passes_opencl.nim
       passes_wgsl.nim
-    targets/
-      targets_lang.nim              Dispatches codegen to the printers.
+    backends/
+      backends_api.nim              Dispatches codegen to the printers.
       msl_lang.nim                  Language printers: walk the IR, emit
       glsl_lang.nim                 native text. Deliberately "dumb": they
       opencl_lang.nim               format the IR, they do not reason about it.
@@ -232,11 +232,11 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
    `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis` (metadata only).
    Per-language passes are registered by the `passes_<lang>.nim` modules.
 
-4. **Language printing (`targets/`).** Each printer exposes `preprocess` and `codegen`, `targets_lang.nim` dispatches.
+4. **Language printing (`backends/`).** Each printer exposes `preprocess` and `codegen`, `backends_api.nim` dispatches.
    The printers walk the now-annotated IR and emit native text.
 
 5. **Runtime path.** The compile-time macro result is a source string.
-   - An engine ingests it via `engine.ingest(source)`, the platform session under `runtime/exec/`
+   - An engine ingests it via `engine.ingest(source)`, the platform session under `runtime/backends/`
      compiles it to an executable artifact.
    - `launchKernel` or `launchDeviceFn` dispatches it, packing arguments through
      `launch_serialization.nim`.
@@ -260,9 +260,9 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
 
 ### Adding a backend
 
-1. Add a printer file under `src/codegen/targets/` exposing `preprocess` and `codegen`.
-2. Wire it into `targets_lang.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
-3. Add the platform session under `src/runtime/exec/`, the engine facade under `src/runtime/engines/`,
+1. Add a printer file under `src/codegen/backends/` exposing `preprocess` and `codegen`.
+2. Wire it into `backends_api.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
+3. Add the platform session under `src/runtime/backends/`, the engine facade under `src/runtime/engines/`,
    the raw bindings under `src/abis/`, and the `BackendKind` value in `ast_datatypes.nim`.
 4. Add a `tests/codegen/<backend>/` suite obeying the naming convention of [`AGENTS.md`](AGENTS.md).
    Backends that cannot auto-run get a `manual_*` test.

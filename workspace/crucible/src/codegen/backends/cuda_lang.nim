@@ -41,7 +41,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtVoidPtr: "void*"
   of gtObject: "struct"
   of gtString: "const char*"
-  of gtUA: "" # `UncheckedArray` by itself is nothing in CUDA
+  of gtUncheckedArray: "" # `UncheckedArray` by itself is nothing in CUDA
   of gtStatic: "int"
   else:
     error "Invalid type : " & $t
@@ -57,7 +57,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
   var skipIdent = false
   case t.kind
   of gtPtr:
-    let inner = if t.to.kind == gtUA: t.to.uaTo else: t.to
+    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
     if inner.kind == gtArray: # ptr to array type
       # need to pass `*` for the pointer into the identifier, i.e.
       # `state: var array[4, BigInt]`
@@ -102,7 +102,7 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
   of gtObject: result = t.name
-  of gtUA:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## XXX: unchecked array just T?
+  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## XXX: unchecked array just T?
   of gtStatic: result = "int"
   else:        result = gpuTypeToString(t.kind)
 

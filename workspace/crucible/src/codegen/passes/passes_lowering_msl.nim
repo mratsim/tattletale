@@ -19,9 +19,14 @@
 import std / [sequtils, sets, tables, strutils]
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
+import ../ir/ast_type_constructors
 import ./pass_datatypes
 import ./pass_registry
+import ./passes_low_address_spaces
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
+import ./passes_low_array_assign
 import ./passes_validations
 
 {.experimental: "codeReordering".}
@@ -55,11 +60,12 @@ const MetalReserved = [
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
+  reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerExpandStructKernelParams()
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()
-  reg.registerCollectValueAddressSpaces()
 
 func registerSmemArena(reg: var PassRegistry) =
   reg.register("smemArena", pkTransform, phaseMain,
@@ -86,8 +92,9 @@ proc hoistSmemVar(fn: var GpuAst, stmt: GpuAst) =
     "{.smem.} hoisting takes arrays or objects, got: " & $stmt.vType.kind
   doAssert stmt.vInit.kind == gpuDiscard,
     "a hoisted {.smem.} var takes no initializer: " & stmt.vName.symbol.name
-  let arena = GpuType(kind: gtPtr, to: stmt.vType,
-                      implicit: false, mutable: true)
+  # the arena's pointer accesses threadgroup storage
+  let arena = initGpuPtrType(stmt.vType, implicitPtr = false, addressSpace = asSMEM)
+  arena.mutable = true
   fn.pParams.add(GpuParam(ident: stmt.vName, typ: arena,
                           addressSpace: asSMEM, passByRef: false))
 

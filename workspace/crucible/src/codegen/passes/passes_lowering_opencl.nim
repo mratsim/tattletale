@@ -22,6 +22,10 @@ import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
+import ./passes_low_array_assign
+import ./passes_low_address_spaces
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
@@ -40,10 +44,11 @@ const OclReserved = [
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
+  reg.registerDecomposeArrayAssign()
   reg.registerMaterializePassByRefArgs()
   reg.registerExpandStructKernelParams()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
-  # By-ref lowering: params become `const Type*`, call sites materialize addrs.
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerLowerByrefParams()
   reg.register("insertByrefAddrs", pkTransform, phaseMain,
     "Wraps by-ref call args in gpuAddr",

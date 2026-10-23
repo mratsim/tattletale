@@ -12,12 +12,12 @@ import ./ast_datatypes
 import ./ast_type_constructors
 
 func getPointeeKind*(t: GpuType): GpuTypeKind =
-  ## Scalar kind at the end of a pointer/array/UA chain,
+  ## Scalar kind at the end of a pointer, array or UncheckedArray chain,
   ## gtInvalid when the type is unknown.
   if t.isNil:
     return gtInvalid
   var cur = t
-  while cur.kind in {gtPtr, gtArray, gtUA}:
+  while cur.kind in {gtPtr, gtArray, gtUncheckedArray}:
     cur = case cur.kind
           of gtPtr: cur.to
           of gtArray: cur.aTyp
@@ -110,13 +110,13 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
         case arrType.kind
         of gtPtr: result = arrType.to      # ptr-to-ptr: (*p) is ptr T
         of gtArray: result = arrType.aTyp  # (*p)[i] → element type
-        of gtUA: result = arrType.uaTo
+        of gtUncheckedArray: result = arrType.uaTo
         else: result = arrType             # scalar pointee: p[i] is the pointee
       else:
         case arrType.kind
         of gtPtr: result = arrType.to
         of gtArray: result = arrType.aTyp
-        of gtUA: result = arrType.uaTo
+        of gtUncheckedArray: result = arrType.uaTo
         else:
           error "getExprType(gpuIndex): cannot get element type of " & $arrType.kind
   of gpuDeref:
@@ -162,21 +162,27 @@ proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
     let arrT = ctx.getDotParentTypeImpl(n.iArr)
     if arrT.isNil:
       nil
-    elif arrT.kind == gtArray: arrT.aTyp
-    elif arrT.kind == gtPtr: arrT.to
-    elif arrT.kind == gtUA: arrT.uaTo
-    else: nil
+    elif arrT.kind == gtArray:
+      arrT.aTyp
+    elif arrT.kind == gtPtr:
+      arrT.to
+    elif arrT.kind == gtUncheckedArray:
+      arrT.uaTo
+    else:
+      nil
   of gpuObjConstr: n.ocType
   of gpuConv: n.convTo
   of gpuCast: n.cTo
   of gpuMaterialize: ctx.getDotParentTypeImpl(n.mExpr)
   of gpuDot:
-    # Field type on the parent struct type (ptr/UA layers stripped),
+    # Field type on the parent struct type (ptr/UncheckedArray layers stripped),
     # for field-access chains.
     block:
       var pT = ctx.getDotParentTypeImpl(n.dParent)
-      if pT != nil and pT.kind == gtPtr: pT = pT.to
-      if pT != nil and pT.kind == gtUA: pT = pT.uaTo
+      if pT != nil and pT.kind == gtPtr:
+        pT = pT.to
+      if pT != nil and pT.kind == gtUncheckedArray:
+        pT = pT.uaTo
       if pT == nil or n.dField.kind != gpuIdent or n.dField.symbol == nil:
         nil
       else:
@@ -190,13 +196,64 @@ proc getDotParentTypeImpl(ctx: GpuContext, n: GpuAst): GpuType =
   else: nil
 
 proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
-  ## Struct type of a field-access base, with the pointer/UA layer stripped.
+  ## Struct type of a field-access base, with the pointer/UncheckedArray layer stripped.
   var t = ctx.getDotParentTypeImpl(n)
   if t != nil and t.kind == gtPtr:
     t = t.to
-  if t != nil and t.kind == gtUA:
+  if t != nil and t.kind == gtUncheckedArray:
     t = t.uaTo
   result = t
+
+proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType
+
+proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
+  ## Storage a value of this type lives in, the untagged default reads
+  ## as thread. Scalar types carry a space when written (constant globals)
+  if not t.isNil and t.addressSpace != asRMEM:
+    result = t.addressSpace
+  else:
+    result = asRMEM
+
+proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  ## Memory the storage designated by an expression accesses
+  ## Returns:
+  ## - the address space of the innermost pointer/span/array type along the access chain, `p[i]` and `p` resolve to the same address space
+  ## - the address space a pointer-cast target carries, its operand derives it at birth
+  ## - the storage a value-cast (`cast[uint64](p)`) or integer arithmetic over
+  ##   one derives from, pointer provenance survives the round-trip
+  ## - asRMEM for plain values
+  case n.kind
+  of gpuIndex:
+    var container = n.iArr
+    if container.kind == gpuDeref:
+      container = container.dOf
+    if container.kind == gpuDot:
+      result = ctx.resolveAddressSpace(container)
+    else:
+      result = getTypeAccessedSpace(ctx.getOperandType(container))
+  of gpuDot:
+    let fieldTyp = ctx.getOperandType(n)
+    if not fieldTyp.isNil and fieldTyp.kind in {gtPtr, gtSpan}:
+      result = getTypeAccessedSpace(fieldTyp)
+    else:
+      result = ctx.resolveAddressSpace(n.dParent)
+  of gpuDeref:
+    result = getTypeAccessedSpace(ctx.getOperandType(n.dOf))
+  of gpuCast:
+    # a pointer/span/array target keeps its own address space, a value cast keeps the operand's storage provenance
+    if n.cTo.kind in {gtPtr, gtSpan, gtArray}:
+      result = getTypeAccessedSpace(n.cTo)
+    else:
+      result = ctx.resolveAddressSpace(n.cExpr)
+  of gpuBinOp:
+    result = getTypeAccessedSpace(ctx.getOperandType(n))
+    if result == asRMEM:
+      # integer arithmetic over cast pointers keeps the pointer's storage provenance
+      result = ctx.resolveAddressSpace(n.bLeft)
+      if result == asRMEM:
+        result = ctx.resolveAddressSpace(n.bRight)
+  else:
+    result = getTypeAccessedSpace(ctx.getOperandType(n))
 
 proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Type of an expression node, nil when undeterminable, never errors.
@@ -217,7 +274,7 @@ proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuAddr:
     let inner = ctx.getOperandType(n.aOf)
     if inner.isNil or inner.kind == gtInvalid: nil
-    else: initGpuPtrType(inner, false)
+    else: initGpuPtrType(inner, false, ctx.resolveAddressSpace(n.aOf))
   of gpuDeref:
     let d = ctx.getOperandType(n.dOf)
     if not d.isNil and d.kind == gtPtr: d.to else: d
@@ -227,7 +284,7 @@ proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
     else:
       case t.kind
       of gtArray: t.aTyp
-      of gtUA: t.uaTo
+      of gtUncheckedArray: t.uaTo
       of gtPtr: t.to
       else: nil
   of gpuDot:
@@ -288,158 +345,8 @@ func containsKind*(t: GpuType, kind: GpuTypeKind): bool =
     result = t.to.containsKind(kind)
   of gtArray:
     result = t.aTyp.containsKind(kind)
-  of gtUA:
+  of gtUncheckedArray:
     result = t.uaTo.containsKind(kind)
   else:
     result = t.kind == kind
 
-# ═══════════════════════════════════════════════════════════════════════
-# Value address spaces
-# ═══════════════════════════════════════════════════════════════════════
-
-func getPtrFieldNames*(t: GpuType): seq[string] =
-  case t.kind
-  of gtObject, gtGenericInst:
-    for f in t.fields:
-      if f.typ.kind == gtPtr:
-        result.add f.name
-  else: discard
-
-proc resolveIdentAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
-  var base = n
-  while base != nil and base.kind != gpuIdent:
-    case base.kind
-    of gpuAddr: base = base.aOf
-    of gpuDeref: base = base.dOf
-    of gpuIndex: base = base.iArr
-    of gpuDot: base = base.dParent
-    of gpuCast: base = base.cExpr
-    of gpuBlock: base = base.statements[^1]
-    of gpuMaterialize: base = base.mExpr
-    else: return asRMEM
-  if base == nil or base.symbol == nil:
-    return asRMEM
-  ctx.symAddressSpaces.getOrDefault(base.symbol.iSym, asRMEM)
-
-proc resolveFieldValueSpace(ctx: GpuContext, n: GpuAst): AddressSpace =
-  case n.kind
-  of gpuDot: ctx.resolveIdentAddressSpace(n)
-  of gpuCast: ctx.resolveFieldValueSpace(n.cExpr)
-  of gpuConv: ctx.resolveFieldValueSpace(n.convExpr)
-  of gpuAddr: ctx.resolveFieldValueSpace(n.aOf)
-  of gpuIndex: ctx.resolveFieldValueSpace(n.iArr)
-  of gpuDeref: ctx.resolveFieldValueSpace(n.dOf)
-  of gpuPrefix: ctx.resolveFieldValueSpace(n.pVal)
-  of gpuBinOp: ctx.resolveFieldValueSpace(n.bLeft)
-  of gpuMaterialize: ctx.resolveFieldValueSpace(n.mExpr)
-  else: ctx.resolveIdentAddressSpace(n)
-
-proc resolvePtrFieldAddressSpaces*(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
-  for fname in getPtrFieldNames(n.ocType):
-    var space = asRMEM
-    for f in n.ocFields:
-      if f.name == fname and f.value.kind != gpuDiscard:
-        space = ctx.resolveFieldValueSpace(f.value)
-        break
-    result.add space
-
-proc resolveInstanceVariantSpaces(ctx: GpuContext, n: GpuAst): seq[AddressSpace] =
-  ## Pointer-field address-space tuple of the struct instance a dot accesses:
-  ## - constructions carry it directly
-  ## - variables through their init, else their storage space
-  ## - other parents resolve to an empty tuple, no variant match
-  case n.kind
-  of gpuObjConstr:
-    return ctx.resolvePtrFieldAddressSpaces(n)
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in ctx.objFieldAddressSpaces:
-      return ctx.objFieldAddressSpaces[n.symbol.iSym]
-    let space = ctx.resolveIdentAddressSpace(n)
-    let ptype = ctx.getDotParentType(n)
-    let cnt = if ptype != nil: getPtrFieldNames(ptype).len else: 0
-    result = newSeq[AddressSpace](cnt)
-    for i in 0 ..< cnt:
-      result[i] = space
-  else:
-    result = @[]
-
-proc resolveValueAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
-  if n == nil:
-    return asRMEM
-  case n.kind
-  of gpuIdent:
-    if n.symbol == nil:
-      asRMEM
-    elif n.symbol.iSym in ctx.symAddressSpaces:
-      ctx.symAddressSpaces[n.symbol.iSym]
-    elif n.symbol.symKind in {gsDeviceKernelParam, gsGlobalKernelParam}:
-      # explicit `ptr T` is a device pointer, implicit `var T` is thread
-      if n.symbol.typ != nil and n.symbol.typ.kind == gtPtr and
-         not n.symbol.typ.implicit:
-        asDevice
-      else:
-        asRMEM
-    else:
-      asRMEM
-  of gpuAddr: ctx.resolveValueAddressSpace(n.aOf)
-  of gpuCast: ctx.resolveValueAddressSpace(n.cExpr)
-  of gpuConv: ctx.resolveValueAddressSpace(n.convExpr)
-  of gpuBinOp: ctx.resolveValueAddressSpace(n.bLeft)
-  of gpuDot:
-    let ptype = ctx.getDotParentType(n.dParent)
-    if ptype != nil and ptype in ctx.ptrFieldVariants and
-        n.dParent.kind in {gpuIdent, gpuObjConstr}:
-      let fieldIdx = getPtrFieldNames(ptype).find(n.dField.ident())
-      if fieldIdx >= 0:
-        let expected = ctx.resolveInstanceVariantSpaces(n.dParent)
-        let vi = ctx.ptrFieldVariants[ptype].find(expected)
-        if vi >= 0:
-          let base = ctx.ptrFieldVariants[ptype][vi]
-          if fieldIdx < base.len:
-            return base[fieldIdx] # the instance variant's space of the field
-    ctx.resolveValueAddressSpace(n.dParent)
-  of gpuIndex: ctx.resolveValueAddressSpace(n.iArr)
-  of gpuDeref: ctx.resolveValueAddressSpace(n.dOf)
-  of gpuPrefix: ctx.resolveValueAddressSpace(n.pVal)
-  of gpuMaterialize: ctx.resolveValueAddressSpace(n.mExpr)
-  else: asRMEM
-
-proc getParamAddressSpace(p: GpuParam): AddressSpace =
-  if p.addressSpace != asRMEM:
-    p.addressSpace
-  elif p.typ != nil and p.typ.kind == gtPtr and not p.typ.implicit:
-    asDevice
-  else:
-    asRMEM
-
-proc collectValueAddressSpacesImpl(ctx: var GpuContext, n: GpuAst) =
-  if n == nil:
-    return
-  case n.kind
-  of gpuVar:
-    if n.vName.symbol != nil:
-      ctx.symAddressSpaces[n.vName.symbol.iSym] = n.addressSpace
-      if n.vInit.kind == gpuObjConstr:
-        ctx.objFieldAddressSpaces[n.vName.symbol.iSym] =
-          ctx.resolvePtrFieldAddressSpaces(n.vInit)
-  of gpuObjConstr:
-    let spaces = ctx.resolvePtrFieldAddressSpaces(n)
-    var variants = ctx.ptrFieldVariants.getOrDefault(n.ocType, @[])
-    if spaces notin variants:
-      variants.add spaces
-    ctx.ptrFieldVariants[n.ocType] = variants
-  else: discard
-  for ch in n:
-    ctx.collectValueAddressSpacesImpl(ch)
-
-proc collectValueAddressSpaces*(ctx: var GpuContext) =
-  ## Generic-fn params get authoritative entries at their clone sites (makeFnGeneric)
-  for (_, fn) in ctx.fnTab.pairs:
-    for p in fn.pParams:
-      if p.ident.symbol != nil:
-        ctx.symAddressSpaces[p.ident.symbol.iSym] = getParamAddressSpace(p)
-    ctx.collectValueAddressSpacesImpl(fn)
-  for (iSym, g) in ctx.globals.pairs:
-    ctx.symAddressSpaces[iSym] = asDevice
-  for blk in ctx.globalBlocks:
-    ctx.collectValueAddressSpacesImpl(blk)

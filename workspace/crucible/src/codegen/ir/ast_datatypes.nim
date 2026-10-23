@@ -58,7 +58,7 @@ type
     gtString,
     gtObject,      # Struct types
     gtPtr,         # Pointer type, carries inner type
-    gtUA,          # UncheckedArray (UA) mapped to runtime sized arrays
+    gtUncheckedArray,          # UncheckedArray, mapped to runtime sized arrays
     gtSpan,         # Runtime-length array view (openArray/varargs)
     gtGenericInst, # Instantiated generic type with one or more generic arguments (instantiated!)
     gtVoidPtr      # Opaque void pointer
@@ -74,13 +74,15 @@ type
     builtin*: bool ## Whether the type refers to a builtin type or not
     isTuple*: bool ## Object or generic inst stands for a Nim tuple
     fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
+    addressSpace*: AddressSpace ## Memory a gtPtr/gtSpan/gtArray accesses, untagged kinds keep asRMEM.
+                  ## Variables carry their own storage space on `GpuParam.addressSpace`/`gpuVar.addressSpace`
     case kind*: GpuTypeKind
     of gtPtr:
       to*: GpuType # `ptr T` points to `to`
       implicit*: bool # Whether the type was implicitly a pointer, i.e. `var T`.
       mutable*: bool # WebGPU "Generics" only: Mutable (read write) or immutable pointer (read only)?
                     # True for raw pointer and `var T` arguments, false for `foo.addr` of a non pointer type.
-    of gtUA: uaTo*: GpuType # `UncheckedArray[T]`
+    of gtUncheckedArray: uaTo*: GpuType # `UncheckedArray[T]`
     of gtObject:
       name*: string
     of gtArray:
@@ -335,9 +337,6 @@ type
 
     structsWithPtrs*: Table[(GpuType, string), GpuAst] ## WGSL: (type, field) -> kernel-param ident at construction, printer rewrites `foo.field` to it
     ptrFieldBindings*: Table[(string, string), GpuAst] ## WGSL: per-variable (variable, field) binding, the type-keyed table would alias same-struct variables
-    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]] ## Address-space tuples of pointer-typed struct fields, one per distinct construction-site combination
-    objFieldAddressSpaces*: Table[string, seq[AddressSpace]] ## Per pointer-field address space of a variable's instance, keyed by iSym
-    symAddressSpaces*: Table[string, AddressSpace] ## Symbol iSym -> storage address space, unannotated locals as asRMEM
 
     generics*: HashSet[string] ## Generic proc names seen in Nim -> GpuAst, triggers instantiation recording into `genericInsts`
     ## All known functions (defined, generic-inst, external, builtin), keyed by iSym
@@ -349,15 +348,6 @@ type
     builtinFns*: OrderedTable[GpuAst, GpuAst] ## Builtin/importc functions encountered, consulted for value-return at `gpuCall` sites
     types*: OrderedTable[GpuType, GpuAst] ## All known types from Nim -> GpuAst, key the raw type, value a full `gpuTypeDef`
     symChoices*: HashSet[string] ## Produced function symbol names, a name collision switches the display name from `iName` to `iSym`
-
-  GenericArg* = object
-    addrSpace*: AddressSpace ## Argument address space at the call site
-    mutable*: bool # if the argument is mutable or not
-  GenericInst* = object
-    name*: string # unique name of this generic variant
-    args*: seq[GenericArg] # argument kinds at the call site, pointer args get pointer semantics
-    # types resolve from the original function at codegen time, not stored here
-
 
 type
   TypeRegistry* = object
@@ -445,12 +435,13 @@ func scopeGet*(scope: seq[(string, Symbol)], name: string): Symbol =
 func clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
   result = GpuType(kind: typ.kind)
+  result.addressSpace = typ.addressSpace
   case result.kind
   of gtPtr:
     result.to = typ.to.clone()
     result.implicit = typ.implicit
     result.mutable = typ.mutable
-  of gtUA:
+  of gtUncheckedArray:
     result.uaTo = typ.uaTo.clone()
   of gtObject:
     result.name = typ.name
@@ -461,6 +452,8 @@ func clone*(typ: GpuType): GpuType =
     result.aLen = typ.aLen
   of gtStatic:
     result.sValue = typ.sValue
+  of gtSpan:
+    result.sElemTyp = typ.sElemTyp.clone()
   of gtGenericInst:
     result.gName = typ.gName
     for g in typ.gArgs:
@@ -642,7 +635,8 @@ func hash*(t: GpuType): Hash =
     h = h !& hash(t.to)
     h = h !& hash(t.implicit)
     h = h !& hash(t.mutable)
-  of gtUA:
+    h = h !& hash(t.addressSpace)
+  of gtUncheckedArray:
     h = h !& hash(t.uaTo)
   of gtObject:
     h = h !& hash(t.name)
@@ -651,6 +645,7 @@ func hash*(t: GpuType): Hash =
   of gtArray:
     h = h !& hash(t.aTyp)
     h = h !& hash(t.aLen)
+    h = h !& hash(t.addressSpace)
   of gtStatic:
     h = h !& hash(t.sValue)
   of gtGenericInst:
@@ -659,6 +654,9 @@ func hash*(t: GpuType): Hash =
       h = h !& hash(g)
     for f in t.fields:
       h = h !& hash(f)
+  of gtSpan:
+    h = h !& hash(t.sElemTyp)
+    h = h !& hash(t.addressSpace)
   of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
   result = !$ h
@@ -681,8 +679,9 @@ proc `==`*(a, b: GpuType): bool =
   else:
     result = true
     case a.kind
-    of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable
-    of gtUA:  result = a.uaTo == b.uaTo
+    of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable and
+      a.addressSpace == b.addressSpace
+    of gtUncheckedArray:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
       if a.fields.len != b.fields.len: result = false
@@ -698,7 +697,9 @@ proc `==`*(a, b: GpuType): bool =
           result = result and (a.gArgs[i] == b.gArgs[i])
         for i in 0 ..< a.fields.len:
           result = result and (a.fields[i] == b.fields[i])
-    of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
+    of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen and
+      a.addressSpace == b.addressSpace
+    of gtSpan: result = a.sElemTyp == b.sElemTyp and a.addressSpace == b.addressSpace
     of gtStatic: result = a.sValue == b.sValue
     of gtInvalid: result = false
     else: discard
@@ -792,7 +793,7 @@ proc pretty*(t: GpuType): string =
     of gtPtr:
       result = if t.implicit: "var " else: "ptr "
       result.add pretty(t.to)
-    of gtUA:
+    of gtUncheckedArray:
       result = "UncheckedArray[" & t.uaTo.pretty() & "]"
     of gtObject:
       result = t.name # just the name
@@ -1092,7 +1093,7 @@ func size*(t: GpuType): int =
     result = 8
   of gtSize_t:
     result = 8
-  of gtPtr, gtUA, gtVoidPtr:
+  of gtPtr, gtUncheckedArray, gtVoidPtr:
     result = 8  # pointer size on 64-bit
   of gtString:
     result = 8  # pointer

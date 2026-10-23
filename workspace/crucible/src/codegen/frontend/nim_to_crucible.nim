@@ -44,7 +44,7 @@ proc parseProcParameters(ctx: var GpuContext, reg: var TypeRegistry, params: Nim
         paramType = resolveType(reg, param[typIdx-1].getTypeInst())
       p.symbol.typ = paramType
       let byref = paramType.kind != gtCompileTimeValue and isLargeStruct(paramType)
-      # explicit `ptr T` is a device pointer, implicit `var T` and scalars stay in registers
+      # birth space only: `ptr T` defaults device, `var T` (ntyVar) registers, both re-spaced by call sites and {.smem.} hoisting
       let paramAddrSpace =
         if paramType.kind == gtPtr and not paramType.implicit: asDevice
         else: asRMEM
@@ -386,11 +386,34 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         varNode.addressSpace = collectAddressSpace(declaration[0][1])
       else: error "Unexpected node kind for variable: " & $declaration.treeRepr
       varNode.vType = resolveType(reg, declaration)
+      if varNode.addressSpace != asRMEM and
+          varNode.vType.kind in {gtPtr, gtSpan, gtArray}:
+        varNode.vType = varNode.vType.withAddressSpace(varNode.addressSpace)
       varNode.vName.symbol.typ = varNode.vType # type cached on the symbol for later lookup
       varNode.vMutable = node.kind == nnkVarSection
       ## XXX: array initialization needs a memcpy, not yet handled
       if declaration.len > 2 and declaration[2].kind != nnkEmpty:
         varNode.vInit = ctx.toCrucibleAst(reg, declaration[2])
+        if varNode.vType.kind == gtPtr:
+          # an initialized pointer takes the space of its initializer's storage
+          let initSpace = ctx.resolveAddressSpace(varNode.vInit)
+          if initSpace != varNode.vType.addressSpace:
+            varNode.vType = varNode.vType.withAddressSpace(initSpace)
+            varNode.vName.symbol.typ = varNode.vType
+        if varNode.vType.kind in {gtObject, gtGenericInst} and
+            varNode.vInit.kind == gpuObjConstr:
+          # one declared Holder, each construction gets its own field types:
+          # Holder(p: addr outp[0]) types the field a device ptr,
+          # Holder(p: addr tmp) a thread ptr, the declared type stays untouched
+          var instType = varNode.vType.clone()
+          for i in 0 ..< instType.fields.len:
+            for fc in varNode.vInit.ocFields:
+              if fc.name == instType.fields[i].name and
+                  fc.typ.kind in {gtPtr, gtSpan, gtArray} and
+                  fc.typ.addressSpace != instType.fields[i].typ.addressSpace:
+                instType.fields[i].typ = fc.typ
+          varNode.vType = instType
+          varNode.vName.symbol.typ = instType
         varNode.vRequiresMemcpy = requiresMemcpy(declaration[2])
         result.statements.add(varNode)
       else:
@@ -813,7 +836,12 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         let idx = findIdx(ocFields, flds[i].name)
         if idx >= 0:
           var f = ocFields[idx]
-          f.typ = flds[i].typ
+          # a ptr/span/array field is implicitly generic over its init value's space
+          let valueType = ctx.getOperandType(f.value)
+          if not valueType.isNil:
+            f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
+          else:
+            f.typ = flds[i].typ
           result.ocFields.add f
         else:
           let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))
@@ -840,7 +868,11 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       let idx = findIdx(ocFields, flds[i].name)
       if idx >= 0:
         var f = ocFields[idx]
-        f.typ = flds[i].typ
+        let valueType = ctx.getOperandType(f.value)
+        if not valueType.isNil:
+          f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
+        else:
+          f.typ = flds[i].typ
         result.ocFields.add f
       else:
         let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))
@@ -866,9 +898,20 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     doAssert node[0].kind == nnkEmpty
     result = ctx.toCrucibleAst(reg, node[1])
   of nnkConv:
-    result = GpuAst(kind: gpuConv, convTo: resolveType(reg, node[0]), convExpr: ctx.toCrucibleAst(reg, node[1]))
+    let convExpr = ctx.toCrucibleAst(reg, node[1])
+    var convTo = resolveType(reg, node[0])
+    if convTo.kind in {gtPtr, gtSpan}:
+      # the target keeps its operand's space
+      let space = ctx.resolveAddressSpace(convExpr)
+      convTo = convTo.withAddressSpace(space)
+    result = GpuAst(kind: gpuConv, convTo: convTo, convExpr: convExpr)
   of nnkCast:
-    result = GpuAst(kind: gpuCast, cTo: resolveType(reg, node[0]), cExpr: ctx.toCrucibleAst(reg, node[1]))
+    let castExpr = ctx.toCrucibleAst(reg, node[1])
+    var castTo = resolveType(reg, node[0])
+    if castTo.kind in {gtPtr, gtSpan}:
+      let space = ctx.resolveAddressSpace(castExpr)
+      castTo = castTo.withAddressSpace(space)
+    result = GpuAst(kind: gpuCast, cTo: castTo, cExpr: castExpr)
 
   of nnkAddr, nnkHiddenAddr:
     # HiddenAddr appears for accesses to `var` passed arguments
