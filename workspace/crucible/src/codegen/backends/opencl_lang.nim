@@ -60,10 +60,11 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
     else:
       let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
       let ptrStar = gpuTypeToString(t.kind)
-      # Explicit `ptr T` types bind device buffers and carry
-      # `__global` wherever they appear.
-      # Implicit `var T` pointers are per-thread registers.
-      let space = if t.implicit: "" else: "__global "
+      let space = case t.addressSpace
+                  of asDevice: "__global "
+                  of asSMEM: "__local "
+                  of asConstant: "__constant "
+                  of asRMEM: ""
       result = space & typ & ptrStar
   of gtArray:
     if ident.len == 0 and not allowEmptyIdent:
@@ -263,17 +264,21 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
 
   of gpuVar:
-    # Address-space keyword prefixes the declaration ident, as in `__local uint scratch[8]`.
+    # a pointer declaration self-qualifies, a variable-level prefix would
+    # qualify the pointed-to type twice
     var typeStr: string
-    case ast.addressSpace
-    of asSMEM:
-      typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asRMEM:
-      typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asConstant:
-      typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
-    of asDevice:
+    if ast.vType.kind == gtPtr:
       typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
+    else:
+      case ast.addressSpace
+      of asSMEM:
+        typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asRMEM:
+        typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asConstant:
+        typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
+      of asDevice:
+        typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
     result = indentStr & typeStr
     if ast.vInit.kind != gpuDiscard:
