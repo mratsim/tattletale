@@ -11,22 +11,17 @@
 #
 # ############################################################
 #
-# Lower the crucible IR for direct SPIR-V binary emission, registered by the SPIR-V pipeline only.
-#
-# The bundle registers the shared lowering trio: lowerArraysAndViews,
-# the shared lowering passes, insertPointerDeref. The text passes stay out:
-# - renameReservedIdentifiers: binary output has no keyword collisions
-# - decomposeArrayAssign: the printer emits composite stores itself
-# - qualifyVarParams: GLSL-only inout text-legality workaround, SPIR-V has the native
-#   Function-storage pointer ABI
-# - the GLSL keyword validations
-#
-# instantiateImplicitAddressSpaceGenerics stays out while master's getOperandType
-# retypes struct field inits through the pointee container: its gpuIndex branch
-# over a pointer yields the container itself, so a `Vec2(x: a[0], ...)` construction
-# grows unchecked-array fields and the emitted composites mismatch the member types.
-# The frontend tags kernel pointer params with their space and the printer picks
-# storage classes by role, so no per-space instantiation is needed today.
+# Lowers the crucible IR for direct SPIR-V binary emission.
+# The bundle registers the SPIR-V pipeline's passes:
+# - the shared lowering trio plus insertPointerDeref
+# - no text passes:
+#   binary output has no keyword collisions
+#   composite stores come from the printer itself
+#   Function storage is the native pointer ABI, no inout workaround needed
+# - no instantiateImplicitAddressSpaceGenerics:
+#   its gpuIndex retyping over pointers yields the container type
+#   struct constructions then grow unchecked-array fields
+#   the emitted composites mismatch the member types
 
 import ./pass_datatypes
 import ./pass_registry
