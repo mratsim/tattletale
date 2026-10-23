@@ -39,6 +39,15 @@ proc runTest() =
     doAssert b.constUint(b.tyInt(64, false), 1'u64 shl 40) !=
              b.constUint(b.tyInt(32, false), 0), "64-bit consts take two words"
 
+  block versionWord:
+    # the module baseline is the single named constant: no version parameter
+    # threads through the builders, changing the baseline is a deliberate edit
+    # of spvVersion13 together with the semantics coupled to it
+    doAssert not compiles(initSpvBuilder(0x00010400'u32)),
+      "initSpvBuilder takes no version argument, the baseline is spvVersion13"
+    doAssert not compiles(initSpvModule(0x00010400'u32)),
+      "initSpvModule takes no version argument, the baseline is spvVersion13"
+
   block goldenWords:
     var b = initSpvBuilder()
     b.emitCapability(capShader)
