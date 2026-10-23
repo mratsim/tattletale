@@ -37,6 +37,39 @@ proc structDefLines(msl: string): seq[string] =
     if stripped.startsWith("struct ") and stripped.endsWith("{"):
       result.add stripped
 
+proc collectCallNodes(n: GpuAst, iSym: string, acc: var seq[GpuAst]) =
+  ## Every gpuCall whose callee iSym is `iSym`, depth-first pre-order
+  if n.isNil:
+    return
+  if n.kind == gpuCall and not n.cName.symbol.isNil and
+      n.cName.symbol.iSym == iSym:
+    acc.add n
+  for ch in n.items:
+    collectCallNodes(ch, iSym, acc)
+
+proc findProcNamed(n: GpuAst, name: string): GpuAst =
+  ## First gpuProc whose pName symbol name is exactly `name`
+  if n.isNil:
+    return nil
+  if n.kind == gpuProc and n.pName.symbol.name == name:
+    return n
+  for ch in n.items:
+    let found = findProcNamed(ch, name)
+    if not found.isNil:
+      return found
+
+proc findProcPrefixed(n: GpuAst, prefix: string): GpuAst =
+  ## First gpuProc whose pName symbol name starts with `prefix_`
+  ## This is mangledHashName's instantiation-naming shape
+  if n.isNil:
+    return nil
+  if n.kind == gpuProc and n.pName.symbol.name.startsWith(prefix & "_"):
+    return n
+  for ch in n.items:
+    let found = findProcPrefixed(ch, prefix)
+    if not found.isNil:
+      return found
+
 proc collectCalleeCalls(n: GpuAst, callee: string, acc: var seq[string]) =
   ## iSyms of every `callee` call site in `n`, body order
   if n.isNil:
@@ -47,19 +80,20 @@ proc collectCalleeCalls(n: GpuAst, callee: string, acc: var seq[string]) =
   for ch in n:
     collectCalleeCalls(ch, callee, acc)
 
-# ── 1. Frontend: the two call sites must reference distinct instantiations ──
+# ── 1. IR: the two call sites must reference distinct instantiations ──
 # Both args are `ptr float32`: the device arg comes from the kernel buffer param,
 # the thread arg from a local temp. Pointee storage is the only difference,
 # so only a space-aware instantiation can tell the two sites apart.
+# The iSyms are observed post-pass, after the bundles rename both call sites.
 static:
-  let ir = toCrucibleAst:
+  let ir = metalIr:
     proc twoSpaceKernel(outp: ptr UncheckedArray[float32]) {.global.} =
       var tmp: float32 = 0.0'f32
       addOne(addr outp[0])
       addOne(addr tmp)
 
   var calls: seq[string]
-  ir.statements[0].collectCalleeCalls("addOne", calls)
+  ir.collectCalleeCalls("addOne", calls)
   doAssert calls.len == 2, "expected the two call sites, got: " & $calls
   doAssert calls[0] != calls[1],
     "each call site must reference its own space instantiation, both share " &
@@ -84,7 +118,8 @@ static:
 
   # the pairing is locked by argument order: the outp[0] site (device storage)
   # must call the device-qualified instantiation, the tmp site the thread one
-  let callLines = msl.split('\n').filterIt("addOne((" in it)
+  # call statements start with the callee name, declarations/definitions with `void`
+  let callLines = msl.split('\n').filterIt(it.strip().startsWith("addOne"))
   doAssert callLines.len == 2,
     "both call sites appear in the emitted MSL, got: " & $callLines
   let siteNames = callLines.mapIt(
@@ -149,5 +184,85 @@ static:
     "struct def names must not depend on construction observation order, got: " &
     $defsDeviceFirst & " vs " & $defsThreadFirst
   echo "  OK - struct defs are order-independent"
+
+# ── 3b. Two same-space constructions share one instantiated def ──
+static:
+  let msl = metal:
+    proc structKernelSameSpace(outp: ptr UncheckedArray[float32]) {.global.} =
+      var tmp: float32 = 0.0'f32
+      var h1 = PtrHolder(p: addr tmp)
+      var h2 = PtrHolder(p: addr tmp)
+      h1.p[] = 1.0'f32
+      h2.p[] = 2.0'f32
+      outp[1] = h1.p[]
+      outp[2] = h2.p[]
+
+  let defs = msl.structDefLines
+  doAssert defs.len == 2,
+    "the declared def and one instantiated def serve both same-space sites, got: " & $defs
+  doAssert defs.countIt(it.startsWith("struct PtrHolder_")) == 1,
+    "same-space constructions must dedup to one instantiated def, got: " & $defs
+  echo "  OK - same-space struct constructions dedup to one def"
+
+# ── 4. Nested calls instantiate recursively, declared fns stay untouched ──
+static:
+  let ir = metalIr:
+    var gbuf: float32
+    proc leaf(data: openArray[float32]) {.device.} =
+      gbuf = data[0]
+    proc middle(data: openArray[float32], count: var int32) {.device.} =
+      leaf(data)
+      count = count + 1
+    proc nestKernel(outp: ptr UncheckedArray[float32]) {.global.} =
+      var tmpArr: array[4, float32]
+      var n: int32 = 0
+      middle(toOpenArray(outp, 0, 3), n)
+      middle(toOpenArray(tmpArr, 0, 3), n)
+
+  # two sites on middle: the device span site gets its own instantiation
+  # the thread span site binds the declared middle fn unchanged
+  # the var count parameter multiplies nothing across the sites
+  var middleCalls: seq[string]
+  ir.collectCalleeCalls("middle", middleCalls)
+  doAssert middleCalls.len == 2 and middleCalls[0] != middleCalls[1],
+    "the two span sites reference distinct middle fns, got: " & $middleCalls
+  let declaredMiddle = ir.findProcNamed("middle")
+  doAssert not declaredMiddle.isNil,
+    "the thread span site binds the declared middle"
+  doAssert declaredMiddle.pParams[0].typ.kind == gtPtr and
+    declaredMiddle.pParams[0].typ.addressSpace == asRMEM,
+    "the declared middle's split ptr keeps its birth space, got " &
+    $declaredMiddle.pParams[0].typ.addressSpace
+
+  # the instantiated middle specializes its split ptr to the device span
+  let instMiddle = ir.findProcPrefixed("middle")
+  doAssert not instMiddle.isNil, "the device span site got a middle instantiation"
+  doAssert instMiddle.pParams[0].typ.kind == gtPtr and
+    instMiddle.pParams[0].typ.addressSpace == asDevice,
+    "the instantiated middle's split ptr specializes to device, got " &
+    $instMiddle.pParams[0].typ.addressSpace
+
+  # the instantiated body's leaf call instantiates leaf in turn
+  # the forwarded argument is the instantiation's own fresh device symbol
+  var leafCalls: seq[string]
+  instMiddle.pBody.collectCalleeCalls("leaf", leafCalls)
+  doAssert leafCalls.len == 1,
+    "the instantiated middle calls leaf once, got: " & $leafCalls
+  let declaredLeaf = ir.findProcNamed("leaf")
+  doAssert not declaredLeaf.isNil and
+    leafCalls[0] != declaredLeaf.pName.symbol.iSym,
+    "the nested leaf call references its own instantiation, not the declared leaf"
+  let instLeaf = ir.findProcPrefixed("leaf")
+  doAssert not instLeaf.isNil and
+    instLeaf.pParams[0].typ.addressSpace == asDevice,
+    "the nested leaf instantiation specializes to device, got " &
+    $instLeaf.pParams[0].typ.addressSpace
+  var leafArgs: seq[GpuAst]
+  collectCallNodes(instMiddle.pBody, leafCalls[0], leafArgs)
+  doAssert leafArgs.len == 1 and leafArgs[0].cArgs[0].kind == gpuIdent and
+    leafArgs[0].cArgs[0].symbol.typ.addressSpace == asDevice,
+    "the forwarded span arg is the instantiation's fresh device symbol, got " &
+    $leafArgs[0].cArgs[0].symbol.typ.addressSpace
+  echo "  OK - nested instantiation recurses, declared fns stay untouched"
 
 echo "t_ir_spaceInstantiation: all static assertions passed"

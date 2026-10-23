@@ -352,15 +352,6 @@ type
     types*: OrderedTable[GpuType, GpuAst] ## All known types from Nim -> GpuAst, key the raw type, value a full `gpuTypeDef`
     symChoices*: HashSet[string] ## Produced function symbol names, a name collision switches the display name from `iName` to `iSym`
 
-  GenericArg* = object
-    addrSpace*: AddressSpace ## Argument address space at the call site
-    mutable*: bool # if the argument is mutable or not
-  GenericInst* = object
-    name*: string # unique name of this generic variant
-    args*: seq[GenericArg] # argument kinds at the call site, pointer args get pointer semantics
-    # types resolve from the original function at codegen time, not stored here
-
-
 type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup

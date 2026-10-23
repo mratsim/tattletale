@@ -164,6 +164,8 @@ static:
       ctx.allFnTab[stmt.pName] = stmt
       if stmt.pName.symbol.name == "spanKernel":
         kern = stmt
+        # the farmed kernel is the one called subset entry, as ingestTopLevel does
+        ctx.fnTab[stmt.pName] = stmt
   registerLowerDecay.runPassPrepared(ctx)
 
   # the view argument splits into ptr + len, the pointer side derives its type
@@ -197,8 +199,6 @@ static:
 
   # the callee's openArray param splits to ptr + len in its rewritten signature
   # the split ptr keeps the DECLARED span type's space (asRMEM at birth)
-  # a callee span param is implicitly generic over its space, like a struct's
-  # ptr field. The instantiation pass (M3) owns the split ptr's device space
   var scale: GpuAst = nil
   for stmt in ir.statements:
     if stmt.kind == gpuProc and stmt.pName.symbol.name == "scaleData":
@@ -206,6 +206,22 @@ static:
   doAssert not scale.isNil, "expected the device fn in the context"
   doAssert scale.pParams[1].typ.kind == gtPtr,
     "the callee's openArray param splits to a ptr in its rewritten signature"
+
+  # a callee span param is implicitly generic over its space: the split ptr is
+  # born asRMEM (the declared openArray carries no written space) and the call
+  # site's device argument specializes the instantiation's split ptr to device
+  proc registerInstantiate(reg: var PassRegistry) {.nimcall.} =
+    reg.registerInstantiateGenerics()
+  registerInstantiate.runPassPrepared(ctx)
+  # `call` is the same node the pass retitled in place
+  doAssert call.cName.symbol.iSym != scale.pName.symbol.iSym,
+    "the device span call site references its own instantiation, got: " &
+    call.cName.symbol.iSym
+  let inst = ctx.allFnTab[call.cName]
+  doAssert inst.pParams[1].typ.kind == gtPtr and
+    inst.pParams[1].typ.addressSpace == asDevice,
+    "the instantiated callee's split ptr param carries the call site's device space, got: " &
+    $inst.pParams[1].typ.addressSpace
   echo "  OK - device span survives span-to-pointer normalization"
 
 # ── 4. Smem arena: the hoisted threadgroup pointer stamps asSMEM ──

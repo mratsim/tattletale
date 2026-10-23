@@ -200,3 +200,39 @@ macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
+macro codegenMetalIr(body: typed): GpuAst =
+  ## Runs the Metal pass bundles over the body, without codegen
+  ## Returns the top-level block IR for IR-level assertions
+  ## The pass transforms are visible through the context's fn refs
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.registerMetalLoweringPasses()
+  reg.registerValidationPostPasses()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
+  ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
+  runPasses(ctx, reg)
+  # the returned block carries every fn the context emits
+  # original procs are the tree's own refs
+  # instantiated fns are appended from the fnTab tables
+  if gpuAst.kind == gpuBlock:
+    var known: seq[string]
+    for stmt in gpuAst.statements:
+      if stmt.kind == gpuProc:
+        known.add stmt.pName.symbol.iSym
+    for fn in ctx.fnTab.values:
+      if fn.kind == gpuProc and fn.pName.symbol.iSym notin known:
+        gpuAst.statements.add fn
+  result = newLit(gpuAst)
+
+macro metalIr*(body: untyped): GpuAst =
+  ## Runs the `metal:` pipeline through the pass bundles without codegen
+  ## Returns the first top-level proc's IR
+  # The untyped -> typed macro delegation dance:
+  # - delays compileTime const resolution
+  # - runs after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctMetal
+  result = newCall(bindSym"codegenMetalIr", body)
+

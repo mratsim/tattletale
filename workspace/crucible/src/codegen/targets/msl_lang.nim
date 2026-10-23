@@ -178,6 +178,13 @@ proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
     inc slot
   result = params.join(", ")
 
+proc addrSpaceToMsl(space: AddressSpace): string =
+  case space
+  of asDevice: "device"
+  of asConstant: "constant"
+  of asSMEM: "threadgroup"
+  of asRMEM: "thread"
+
 proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
   ## Pointer params carry an explicit MSL address space.
   ## `thread` names the caller's locals, `device` names kernel buffers,
@@ -194,7 +201,8 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
       let op = if p.typ.to.kind in {gtObject, gtGenericInst}: "&" else: "*"
       result = "threadgroup " & elem & op & ' ' & name
     else:
-      let space = if p.typ.implicit: "thread" else: "device"
+      # the pointer type carries the space it accesses
+      let space = addrSpaceToMsl(p.typ.addressSpace)
       result = space & ' ' & elem & "* " & name
   else:
     # By-value array params decay to pointers in MSL. They are read-only
@@ -204,13 +212,6 @@ proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
       result = "const " & gpuTypeToString(p.typ, name)
     else:
       result = gpuTypeToString(p.typ, name)
-
-proc addrSpaceToMsl(space: AddressSpace): string =
-  case space
-  of asDevice: "device"
-  of asConstant: "constant"
-  of asSMEM: "threadgroup"
-  of asRMEM: "thread"
 
 proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
 proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string
