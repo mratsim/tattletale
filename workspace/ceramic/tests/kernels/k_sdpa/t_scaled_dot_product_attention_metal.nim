@@ -130,8 +130,7 @@ proc runFixture(name: string) =
     of 64: replay(engine, meta, dir, T, 64, 64)
     of 128: replay(engine, meta, dir, T, 128, 128)
     else: doAssert false, "no static head-dim case for " & $meta.Dk
-  
-when defined(SdpaLegF16):
+  when defined(SdpaLegF16):
     dispatchD(float16)
   elif defined(SdpaLegBf16):
     dispatchD(bfloat16)
