@@ -813,7 +813,13 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         let idx = findIdx(ocFields, flds[i].name)
         if idx >= 0:
           var f = ocFields[idx]
-          f.typ = flds[i].typ
+          # a struct with a pointer/span/array field is implicitly generic
+          # over the space its init value accesses
+          let valueType = ctx.getOperandType(f.value)
+          if not valueType.isNil:
+            f.typ = withAddressSpace(flds[i].typ, getTypeAccessedSpace(valueType))
+          else:
+            f.typ = flds[i].typ
           result.ocFields.add f
         else:
           let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))
@@ -840,7 +846,12 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       let idx = findIdx(ocFields, flds[i].name)
       if idx >= 0:
         var f = ocFields[idx]
-        f.typ = flds[i].typ
+        # the field's space is its init value's space, matching the object path
+        let valueType = ctx.getOperandType(f.value)
+        if not valueType.isNil:
+          f.typ = withAddressSpace(flds[i].typ, getTypeAccessedSpace(valueType))
+        else:
+          f.typ = flds[i].typ
         result.ocFields.add f
       else:
         let dfl = GpuAst(kind: gpuLit, lValue: "DEFAULT", lType: GpuType(kind: gtVoid))

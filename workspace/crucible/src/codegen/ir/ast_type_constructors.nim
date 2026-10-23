@@ -22,12 +22,13 @@ func initGpuType*(kind: GpuTypeKind): GpuType =
     error "Objects/Pointers/Arrays/Spans must be constructed using dedicated constructors"
   result = GpuType(kind: kind)
 
-func initGpuPtrType*(to: GpuType, implicitPtr: bool): GpuType =
+func initGpuPtrType*(to: GpuType, implicitPtr: bool, addressSpace = asRMEM): GpuType =
   ## If `kind` is `gtPtr` `to` must be the type we point to
   if to.kind == gtInvalid: # this is not a valid type
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtPtr, to: to, implicit: implicitPtr)
+    result.addressSpace = addressSpace
 
 func initGpuUAType*(to: GpuType): GpuType =
   ## Initializes a GPU type for an unchecked array (ptr wraps this)
@@ -35,6 +36,17 @@ func initGpuUAType*(to: GpuType): GpuType =
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtUA, uaTo: to)
+
+func withAddressSpace*(t: GpuType, space: AddressSpace): GpuType =
+  ## Returns `t` stamped with `space`, copy-on-write:
+  ## the same space returns `t` unchanged, a different space returns a clone
+  ## carrying `space`. GpuType refs are shared between contexts and table keys,
+  ## stamping one in place would leak the space to every sharer.
+  if t.isNil or t.addressSpace == space:
+    result = t
+  else:
+    result = t.clone()
+    result.addressSpace = space
 
 func initGpuVoidPtr*(): GpuType =
   result = GpuType(kind: gtVoidPtr)
@@ -49,12 +61,13 @@ func initGpuGenericInstType*(gName: string): GpuType =
   result = GpuType(kind: gtGenericInst, gName: gName)
   result.isTuple = gName.startsWith("Tuple_")
 
-func initGpuSpanType*(elemTyp: GpuType): GpuType =
+func initGpuSpanType*(elemTyp: GpuType, addressSpace = asRMEM): GpuType =
   ## Initializes a span type (openArray/varargs) with the given element type
   if elemTyp.kind == gtInvalid:
     result = GpuType(kind: gtInvalid)
   else:
     result = GpuType(kind: gtSpan, sElemTyp: elemTyp)
+    result.addressSpace = addressSpace
 
 proc toTypeDef*(typ: GpuType): GpuAst =
   ## Converts a given object or generic instantiation type into an AST of a

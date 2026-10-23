@@ -198,6 +198,36 @@ proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
     t = t.uaTo
   result = t
 
+proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType
+
+proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
+  ## Memory a pointer/span/array type accesses
+  ## Returns asRMEM for any other kind, plain values live in per-thread registers
+  if not t.isNil and t.kind in {gtPtr, gtSpan, gtArray}:
+    result = t.addressSpace
+  else:
+    result = asRMEM
+
+proc getAccessedSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
+  ## Memory the storage designated by an expression accesses
+  ## Returns:
+  ## - the innermost pointer/span/array type's space along the access chain,
+  ##   `p[i]` and `p` resolve to the same space
+  ## - asRMEM for plain values
+  case n.kind
+  of gpuIndex:
+    # the indexed container carries the space, `p[i]` accesses what `p` accesses.
+    # a derefed container (`(*p)[i]`, the raw form for pointer indexing) takes
+    # the deref's pointer, the pointee itself carries no space
+    var container = n.iArr
+    if container.kind == gpuDeref:
+      container = container.dOf
+    result = getTypeAccessedSpace(ctx.getOperandType(container))
+  of gpuDeref:
+    result = getTypeAccessedSpace(ctx.getOperandType(n.dOf))
+  else:
+    result = getTypeAccessedSpace(ctx.getOperandType(n))
+
 proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
   ## Type of an expression node, nil when undeterminable, never errors.
   ##
@@ -217,7 +247,7 @@ proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType =
   of gpuAddr:
     let inner = ctx.getOperandType(n.aOf)
     if inner.isNil or inner.kind == gtInvalid: nil
-    else: initGpuPtrType(inner, false)
+    else: initGpuPtrType(inner, false, ctx.getAccessedSpace(n.aOf))
   of gpuDeref:
     let d = ctx.getOperandType(n.dOf)
     if not d.isNil and d.kind == gtPtr: d.to else: d

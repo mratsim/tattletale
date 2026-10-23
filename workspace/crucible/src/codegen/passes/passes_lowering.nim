@@ -263,7 +263,7 @@ proc collectSpanSigs(ctx: var GpuContext): SpanSigMap =
           paramIdx: idx,
           ptrName: p.ident.symbol.name,
           lenName: p.ident.symbol.name & "_len",
-          ptrTyp: initGpuPtrType(p.typ.sElemTyp, implicitPtr = false),
+          ptrTyp: initGpuPtrType(p.typ.sElemTyp, implicitPtr = false, addressSpace = p.typ.addressSpace),
           lenTyp: initGpuType(gtInt32)
         )
     if spans.len > 0:
@@ -356,7 +356,7 @@ proc rewriteViewUses(n: var GpuAst, sigMap: SpanSigMap) =
   of gpuIdent:
     if n.symbol.typ != nil and n.symbol.typ.kind == gtSpan:
       # Span-typed ident -> ptr ident (same name, ptr type)
-      n = GpuAst(kind: gpuIdent, symbol: newSymbol(n.symbol.name, typ = initGpuPtrType(n.symbol.typ.sElemTyp, implicitPtr = false), symKind = n.symbol.symKind))
+      n = GpuAst(kind: gpuIdent, symbol: newSymbol(n.symbol.name, typ = initGpuPtrType(n.symbol.typ.sElemTyp, implicitPtr = false, addressSpace = n.symbol.typ.addressSpace), symKind = n.symbol.symKind))
   of gpuDot:
     if n.dField.kind == gpuIdent and n.dField.symbol.name == "len" and
        n.dParent.symbol.typ != nil and n.dParent.symbol.typ.kind == gtSpan:
@@ -574,7 +574,7 @@ proc decomposePtrLen(n: var GpuAst): GpuAst =
   if c.cName.kind != gpuIdent or c.cName.symbol.name != "toOpenArray" or c.cArgs.len < 3:
     return nil
   let (ptrPlus, lenExpr) = spanPtrLenParts(c)
-  let ptrTyp = initGpuPtrType(n.vType.sElemTyp, implicitPtr = false)
+  let ptrTyp = initGpuPtrType(n.vType.sElemTyp, implicitPtr = false, addressSpace = n.vType.addressSpace)
   n.vType = ptrTyp
   n.vInit = ptrPlus
   n.vName.symbol.typ = ptrTyp
@@ -908,7 +908,7 @@ func normalizeArraySpanFn(fn: var GpuAst, decayArrays: bool) =
       continue
     if p.typ.kind == gtPtr and p.typ.to.kind == gtArray:
       if decayArrays:
-        p.typ = initGpuPtrType(p.typ.to.aTyp, implicitPtr = p.typ.implicit)
+        p.typ = initGpuPtrType(p.typ.to.aTyp, implicitPtr = p.typ.implicit, addressSpace = p.typ.addressSpace)
         p.ident.symbol.typ = p.typ
     elif p.typ.kind == gtPtr and p.typ.to.kind == gtSpan:
       p.typ = p.typ.to

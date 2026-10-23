@@ -74,6 +74,8 @@ type
     builtin*: bool ## Whether the type refers to a builtin type or not
     isTuple*: bool ## Object or generic inst stands for a Nim tuple
     fields*: seq[GpuTypeField] ## Fields of gtObject and gtGenericInst, declaration order
+    addressSpace*: AddressSpace ## Memory a gtPtr/gtSpan/gtArray accesses, unstamped kinds keep asRMEM.
+                  ## Variables carry their own storage space on `GpuParam.addressSpace`/`gpuVar.addressSpace`
     case kind*: GpuTypeKind
     of gtPtr:
       to*: GpuType # `ptr T` points to `to`
@@ -445,6 +447,7 @@ func scopeGet*(scope: seq[(string, Symbol)], name: string): Symbol =
 func clone*(typ: GpuType): GpuType =
   ## Returns a clone of the input type
   result = GpuType(kind: typ.kind)
+  result.addressSpace = typ.addressSpace
   case result.kind
   of gtPtr:
     result.to = typ.to.clone()
@@ -461,6 +464,8 @@ func clone*(typ: GpuType): GpuType =
     result.aLen = typ.aLen
   of gtStatic:
     result.sValue = typ.sValue
+  of gtSpan:
+    result.sElemTyp = typ.sElemTyp.clone()
   of gtGenericInst:
     result.gName = typ.gName
     for g in typ.gArgs:
@@ -642,6 +647,7 @@ func hash*(t: GpuType): Hash =
     h = h !& hash(t.to)
     h = h !& hash(t.implicit)
     h = h !& hash(t.mutable)
+    h = h !& hash(t.addressSpace)
   of gtUA:
     h = h !& hash(t.uaTo)
   of gtObject:
@@ -651,6 +657,7 @@ func hash*(t: GpuType): Hash =
   of gtArray:
     h = h !& hash(t.aTyp)
     h = h !& hash(t.aLen)
+    h = h !& hash(t.addressSpace)
   of gtStatic:
     h = h !& hash(t.sValue)
   of gtGenericInst:
@@ -659,6 +666,9 @@ func hash*(t: GpuType): Hash =
       h = h !& hash(g)
     for f in t.fields:
       h = h !& hash(f)
+  of gtSpan:
+    h = h !& hash(t.sElemTyp)
+    h = h !& hash(t.addressSpace)
   of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
   result = !$ h
@@ -681,7 +691,8 @@ proc `==`*(a, b: GpuType): bool =
   else:
     result = true
     case a.kind
-    of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable
+    of gtPtr: result = a.to == b.to and a.implicit == b.implicit and a.mutable == b.mutable and
+      a.addressSpace == b.addressSpace
     of gtUA:  result = a.uaTo == b.uaTo
     of gtObject:
       result = a.name == b.name
@@ -698,7 +709,9 @@ proc `==`*(a, b: GpuType): bool =
           result = result and (a.gArgs[i] == b.gArgs[i])
         for i in 0 ..< a.fields.len:
           result = result and (a.fields[i] == b.fields[i])
-    of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen
+    of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen and
+      a.addressSpace == b.addressSpace
+    of gtSpan: result = a.sElemTyp == b.sElemTyp and a.addressSpace == b.addressSpace
     of gtStatic: result = a.sValue == b.sValue
     of gtInvalid: result = false
     else: discard

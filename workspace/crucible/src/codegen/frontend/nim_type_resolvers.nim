@@ -371,7 +371,8 @@ proc resolveType*(reg: var TypeRegistry, n: NimNode): GpuType =
     of ntyString: # only supported on some backends!
       result = initGpuType(toGpuTypeKind n.typeKind)
     of ntyPtr:
-      result = initGpuPtrType(resolveInnerPointerType(reg, n), implicitPtr = false)
+      # explicit `ptr T` is a device pointer, `var T` (ntyVar) stays in registers
+      result = initGpuPtrType(resolveInnerPointerType(reg, n), implicitPtr = false, addressSpace = asDevice)
     of ntyVar:
       result = initGpuPtrType(resolveInnerPointerType(reg, n), implicitPtr = true)
     of ntyPointer:
