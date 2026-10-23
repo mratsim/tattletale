@@ -3,7 +3,7 @@
 ## Test that the spirv macro rejects a kernel whose push-constant block would contain a bool member.
 ##
 ## Expected compile error:
-##   SPIR-V: push-constant member bool, OpTypeBool cannot appear in a push-constant block
+##   SPIR-V backend does not support: push-constant member bool, OpTypeBool cannot appear in a push-constant block
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \
@@ -13,7 +13,7 @@ import workspace/crucible
 
 proc runTest() =
   let k = spirv:
-    proc flagSet(output: ptr uint32, flag: bool) =
+    proc flagSet(output: ptr uint32, flag: bool) {.global.} =
       if flag:
         output[] = 1'u32
       else:

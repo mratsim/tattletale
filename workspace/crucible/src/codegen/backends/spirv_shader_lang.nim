@@ -380,8 +380,12 @@ proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock 
   ## - parameter i lives at member i, byte offset offsets[i]
   ## - members narrower than 32 bits refuse loudly: 8/16-bit push members need
   ##   the SPIR-V 1.5 storage capabilities, the spvVersion13 baseline has none
+  ## - bool members refuse loudly: the Vulkan environment forbids OpTypeBool
+  ##   inside externally visible storage classes, the push-constant block is one
   ## Callers pack the push blob at the returned offsets
   for m in members:
+    if m.kind == stkScalar and m.scalar.kind == gtBool:
+      spvRefuse("push-constant member bool, OpTypeBool cannot appear in a push-constant block")
     if m.kind == stkScalar and scalarByteSize(m.scalar) < 4:
       spvRefuse("push-constant member " & $m.scalar.kind &
         " narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
