@@ -29,6 +29,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## Preconditions:
   ## - the axis size is at least 1
   ## - dst has the same shape as src
+  ## - the launch threadgroup holds exactly one warp's threads, `getLaneWidth()` in total,
+  ##   other launches are rejected and dst comes back NaN
   ##
   ## Args:
   ## - dst: same shape as src, receives the normalized rows
@@ -45,6 +47,15 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     W = getLaneWidth()
     owned = reg.size() div W
   let thrID = getLocalThreadID()
+  # NaN from a runtime division: a folded 0/0 constant emits an invalid MSL token
+  var poison = zero(float32)
+  poison = poison / poison
+  # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
+  # per-simdgroup partials uncombined or rows partially written.
+  # Deferred: cross-warp combine via shared memory and barrier.
+  let
+    nThreads = threads_per_threadgroup.x * threads_per_threadgroup.y * threads_per_threadgroup.z
+    offContract = nThreads != W
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()

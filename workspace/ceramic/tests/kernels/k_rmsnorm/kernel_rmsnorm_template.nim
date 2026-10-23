@@ -275,3 +275,12 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
       "strided dst, 2x stride on the non-reduced axis")
   checkRmsnorm(rng, engine, (4, 16), (16, 1), (32, 1), 1e-5'f32, 1, true,
       "strided dst, 2x stride on the non-reduced axis, weighted")
+
+  # ── the one-warp-per-row contract is enforced at the launch: a threadgroup
+  #    of any other size is rejected, dst comes back NaN ──
+  checkOffContractLaunch(engine, (2, 64), (64, 1), (31, 1),
+      "guard, threadgroup narrower than the lane width (31)")
+  checkOffContractLaunch(engine, (2, 64), (64, 1), (33, 1),
+      "guard, threadgroup wider than the lane width (33)")
+  checkOffContractLaunch(engine, (2, 64), (64, 1), (32, 4),
+      "guard, threadgroup holding several warps (32, 4)")

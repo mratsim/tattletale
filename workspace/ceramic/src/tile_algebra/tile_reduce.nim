@@ -69,6 +69,8 @@ proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, c
   ##
   ## Contract:
   ## - all lanes must call `reduce` unconditionally, subgroup collectives are non-divergent
+  ## - the lanes of one `reduce` call are one simdgroup, the butterfly combines within it only
+  ##   lanes of a wider threadgroup hold per-simdgroup partials
   ## - the tile comes from `tile_algebra`'s `load`, a lane's storage holds its owned elements at `data[0 ..< size div lane width]`
   let owned = src.size() div getLaneWidth()
   var acc = reduceIdentity[T](op)
