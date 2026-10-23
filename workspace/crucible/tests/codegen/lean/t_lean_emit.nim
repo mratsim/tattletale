@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## nim_to_lean emitter, end-to-end
+## lean_lang emitter, end-to-end
 ##
 ## Test that the emitter produces the add kernel's Lean verification module:
 ##
@@ -20,14 +20,15 @@
 import std/[assertions, os, osproc, strutils]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/frontend/lean_pragmas
+import workspace/crucible/src/codegen/backends/lean_lang
 import workspace/crucible/src/codegen/frontend/nim_to_lean
 import lean_testutils
 
 const genRelPath = leanProjectDir & "/generated/add.lean"
 
 proc statementTail(path: string): string =
-  ## Everything from the per-thread def doc comment onward: the def, the spec
-  ## theorems and the worked examples, byte-exact
+  ## Everything from the per-thread def doc comment onward, byte-exact:
+  ## the def, the spec theorems and the worked examples
   let text = readFile(path)
   let idx = text.find("/-- Per-thread body")
   doAssert idx >= 0, "per-thread def doc comment not found in " & path
@@ -63,8 +64,8 @@ proc runTest() =
     echo "  emission + elaboration (warningAsError) + P1 statement match: ok"
 
   block: # loud refusal on an out-of-scope construct (while loop)
-    # a `for` over a compile-time constant range is the P4 loop shape, tested
-    # by t_p4_loop.nim. A while loop stays out of scope
+    # a `for` over a compile-time constant range is the P4 loop shape.
+    # t_lean_loop.nim tests it. A while loop stays out of scope
     let ir = irLean:
       proc whileAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         var i = 0

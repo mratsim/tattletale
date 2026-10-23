@@ -21,6 +21,7 @@
 import std/[assertions, json, os, osproc, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/frontend/lean_pragmas
+import workspace/crucible/src/codegen/backends/lean_lang
 import workspace/crucible/src/codegen/frontend/nim_to_lean
 import lean_testutils
 
@@ -182,9 +183,8 @@ proc runTest() =
     echo "  refusals on out-of-scope payloads: ok"
 
   block: # a pragma-less proc (no `{.global.}`) is refused loudly
-    # a proc without `{.global.}` is outside the tracer's scope: the macro
-    # hands crucible an empty pragma node, and `analyzeKernel` refuses
-    # through the documented channel
+    # a proc without `{.global.}` is outside the tracer's scope: the macro hands
+    # crucible an empty pragma node and `analyzeKernel` refuses through the documented channel
     let plain = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) =
         let i = thread_position_in_grid.x
@@ -195,8 +195,8 @@ proc runTest() =
     echo "  refusal on a pragma-less (not `{.global.}`) kernel proc: ok"
 
   block: # a multi-kernel block is refused loudly at expansion time
-    # only the first proc of a statement list would be converted, silently
-    # dropping the others and their verification pragmas
+    # only the first proc of a statement list would be converted,
+    # silently dropping the others and their verification pragmas
     static:
       doAssert not compiles(block:
         let k = irLeanSpec:

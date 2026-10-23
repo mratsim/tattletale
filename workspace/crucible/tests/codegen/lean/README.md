@@ -1,6 +1,6 @@
-# Lean verification frontend: toolchain, reference model, and suites
+# Lean verification backend: toolchain, reference model, and suites
 
-Crucible's Lean frontend (`src/codegen/frontend/nim_to_lean.nim`) emits a Lean 4
+Crucible's Lean verification backend (`src/codegen/backends/lean_lang.nim`) emits a Lean 4
 verification module from a `{.global.}` kernel's post-pass IR.
 
 This directory holds the locked Lean project plus the suite tests.

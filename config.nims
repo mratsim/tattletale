@@ -619,7 +619,7 @@ task test_crucible_metal, "Test workspace/crucible Metal codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
       runCmd(cmd)
 
-task test_crucible_lean, "Test workspace/crucible Lean verification frontend":
+task test_crucible_lean, "Test workspace/crucible Lean verification backend":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/lean"):
       runCmd(cmd)
