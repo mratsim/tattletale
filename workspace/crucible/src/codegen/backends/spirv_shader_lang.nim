@@ -12,7 +12,6 @@
 ## Layers over `spirv_encoder`, the flavor-agnostic core, Vulkan-specific operands stay here
 ##
 ## Layout rules match the glslang reference compiler (std430 is target-environment independent):
-## - vec3 alignment is 4 times the component size, vec3 size 3 components
 ## - array stride is the element size rounded up to the element alignment
 ## - struct alignment is the largest member alignment, struct size is the member span rounded up to that alignment
 ## - bool occupies 4 bytes
@@ -61,7 +60,6 @@ type
   SpvTyKind* = enum
     ## Type shapes the Vulkan environment flavor supports
     stkScalar
-    stkVector
     stkArray
     stkRuntimeArray
     stkStruct
@@ -72,9 +70,6 @@ type
     case kind*: SpvTyKind
     of stkScalar:
       scalar*: GpuType
-    of stkVector:
-      comp*: GpuType
-      count*: int
     of stkArray:
       elem*: SpvTy
       len*: int
@@ -90,11 +85,6 @@ func spvScalar*(t: GpuType): SpvTy =
   ## Scalar descriptor over a scalar GpuType
   doAssert t.kind in spvScalarKinds, "not a scalar GpuType: " & $t.kind
   SpvTy(kind: stkScalar, scalar: t)
-
-func spvVec*(t: GpuType, count: int): SpvTy =
-  ## Vector descriptor of `count` scalar components, count 2, 3 or 4
-  doAssert count in {2, 3, 4}, "vector count must be 2, 3 or 4"
-  SpvTy(kind: stkVector, comp: t, count: count)
 
 func spvArray*(elem: SpvTy, len: int): SpvTy =
   ## Fixed-array descriptor of `len` elements
@@ -199,12 +189,6 @@ func std430Layout*(t: SpvTy): SpvLayout =
   of stkScalar:
     let s = scalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
-  of stkVector:
-    let cs = scalarByteSize(t.comp)
-    if t.count == 3:
-      SpvLayout(size: 3 * cs, align: 4 * cs)
-    else:
-      SpvLayout(size: t.count * cs, align: t.count * cs)
   of stkArray:
     let e = std430Layout(t.elem)
     let stride = roundUp(e.size, e.align)
@@ -348,7 +332,6 @@ proc structTy*(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint3
 proc tyId*(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   case t.kind
   of stkScalar: ctx.scalarId(t.scalar)
-  of stkVector: ctx.builder.tyVector(ctx.scalarId(t.comp), t.count)
   of stkArray: ctx.arrayTy(t.elem, t.len)
   of stkRuntimeArray: ctx.runtimeArrayTy(t.relem)
   of stkStruct: ctx.structTy(t.members)
@@ -395,13 +378,6 @@ proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock 
   result.structTy = ctx.structTy(result.members, isBlock = true)
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
-
-proc buildPushBlock*(ctx: var SpvLangCtx, params: openArray[GpuType]): SpvPushBlock =
-  ## Builds the push-constant block over kernel parameters in declaration order,
-  ## one block member per parameter
-  for p in params:
-    result.members.add pushMemberTy(p)
-  result = ctx.buildPushBlockTys(result.members)
 
 proc builtinInput*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ## Lazily emits an Input variable of vec3<u32> decorated BuiltIn
@@ -1809,7 +1785,7 @@ proc emitDeviceFnRec*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   ctx.emittedFns[isym] = result
   ctx.emitting.excl isym
 
-proc emitKernel*(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst] = initTable[string, GpuAst]()): uint32 =
+proc emitKernel*(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]): uint32 =
   ## Emits one global kernel as a GLCompute entry point, with the fn-table
   ## device functions it calls emitted alongside.
   ## Returns: the OpFunction result id.

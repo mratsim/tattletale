@@ -99,7 +99,7 @@ func instDef*(name: static string, opcode: uint32, operands: varargs[SpvOperand]
   ## Table row, the opcode number plus operand kinds with quantifiers
   SpvInstDef(name: name, opcode: opcode, operands: @operands)
 
-const spvInstTable*: array[86, SpvInstDef] = [
+const spvInstTable*: array[84, SpvInstDef] = [
   instDef("OpNop", 0),
   instDef("OpUndef", 1, [o(spvIdResultType), o(spvIdResult)]),
   instDef("OpExtInstImport", 11, [o(spvIdResult), o(spvLiteralString)]),
@@ -253,14 +253,6 @@ const spvInstTable*: array[86, SpvInstDef] = [
   instDef("OpGroupNonUniformFAdd", 350, [o(spvIdResultType), o(spvIdResult),
                                          o(spvIdScope), o(spvGroupOperation),
                                          o(spvIdRef), oOpt(spvIdRef)]),
-  # Subgroup shuffle instructions, the per-ladder-step reduction shape
-  # for flavors that spell reductions without the arithmetic opcodes
-  instDef("OpGroupNonUniformShuffle", 345, [o(spvIdResultType), o(spvIdResult),
-                                            o(spvIdScope), o(spvIdRef),
-                                            o(spvIdRef)]),
-  instDef("OpGroupNonUniformShuffleXor", 346, [o(spvIdResultType), o(spvIdResult),
-                                               o(spvIdScope), o(spvIdRef),
-                                               o(spvIdRef)]),
   # SPV_EXT_shader_atomic_float_add: fp atomic add, pairing the extension string with the AtomicFloat32AddEXT capability
   instDef("OpAtomicFAddEXT", 6035, [o(spvIdResultType), o(spvIdResult),
                                     o(spvIdRef), o(spvIdScope),
@@ -295,11 +287,8 @@ const
   capInt64* = 11'u32
   capInt8* = 39'u32
   capInt16* = 22'u32
-  capVulkanMemoryModel* = 5345'u32
   capPhysicalStorageBufferAddresses* = 5347'u32
   capGroupNonUniformArithmetic* = 63'u32
-  capGroupNonUniformShuffle* = 65'u32
-  capVariablePointers* = 4442'u32
   capAtomicFloat32AddEXT* = 6033'u32
 
 const
@@ -307,10 +296,7 @@ const
   decBlock* = 2'u32
   decArrayStride* = 6'u32
   decBuiltIn* = 11'u32
-  decNonWritable* = 24'u32
   decOffset* = 35'u32
-  decBinding* = 33'u32
-  decDescriptorSet* = 34'u32
 
 const
   ## BuiltIn values (grammar ValueEnum), compute subset
@@ -323,33 +309,22 @@ const
 
 const
   ## StorageClass values (grammar ValueEnum)
-  scUniformConstant* = 0'u32
   scInput* = 1'u32
-  scUniform* = 2'u32
-  scOutput* = 3'u32
-  scWorkgroup* = 4'u32
-  scPrivate* = 6'u32
   scFunction* = 7'u32
   scPushConstant* = 9'u32
-  scStorageBuffer* = 12'u32
   scPhysicalStorageBuffer* = 5349'u32
 
 const
   ## ExecutionModel values (grammar ValueEnum)
-  emVertex* = 0'u32
-  emFragment* = 4'u32
   emGLCompute* = 5'u32
 
 const
   ## ExecutionMode values (grammar ValueEnum)
   modeLocalSize* = 17'u32
-  modeLocalSizeId* = 38'u32
 
 const
   ## MemoryModel values (grammar ValueEnum)
-  mmSimple* = 0'u32
   mmGLSL450* = 1'u32
-  mmVulkan* = 3'u32
 
   ## AddressingModel values (grammar ValueEnum)
   amLogical* = 0'u32
@@ -358,14 +333,10 @@ const
 const
   ## GroupOperation values (grammar ValueEnum), OpGroupNonUniform* operands
   groupOpReduce* = 0'u32
-  groupOpInclusiveScan* = 1'u32
-  groupOpExclusiveScan* = 2'u32
 
-  ## Scope constants (grammar kind IdScope), operand words for OpControlBarrier
+  ## Scope constants (grammar kind IdScope), OpGroupNonUniform* operand words
   scopeDevice* = 1'u32
-  scopeWorkgroup* = 2'u32
   scopeSubgroup* = 3'u32
-  scopeInvocation* = 4'u32
 
   ## MemoryAccess bit values (grammar BitEnum), Aligned carries a trailing
   ## literal alignment word the grammar operand list does not model
@@ -373,14 +344,9 @@ const
 
 const
   ## MemorySemantics bit values (grammar BitEnum), the operand words
-  ## for OpControlBarrier and the OpAtomic* instructions
-  semNone* = 0'u32
-  semAcquire* = 0x2'u32
-  semRelease* = 0x4'u32
+  ## for the OpAtomic* instructions
   semAcquireRelease* = 0x8'u32
   semUniformMemory* = 0x40'u32
-  semSubgroupMemory* = 0x80'u32
-  semWorkgroupMemory* = 0x100'u32
 
 const
   ## Control bit masks, all-None words for OpFunction / OpSelectionMerge /
@@ -388,7 +354,6 @@ const
   fcNone* = 0'u32
   selNone* = 0'u32
   lcNone* = 0'u32
-  maNone* = 0'u32
 
 proc verifyGrammar*(grammarJsonText: string): seq[string] =
   ## Verifies the opcode table against core-grammar JSON text:
@@ -651,10 +616,6 @@ proc opVariable*(b: var SpvBuilder, resultType, storageClass: uint32): uint32 =
   b.module.emitInstSeq(ssTypesConstantsGlobals, spvOpcode("OpVariable"),
                        @[resultType, result, storageClass])
 
-proc opNop*(b: var SpvBuilder) =
-  ## Append OpNop
-  b.module.emitInstSeq(ssFunctions, spvOpcode("OpNop"), @[])
-
 # ── Types and constants, memoized ──
 
 proc tyVoid*(b: var SpvBuilder): uint32 =
@@ -703,11 +664,6 @@ proc tyStruct*(b: var SpvBuilder, memberTypes: openArray[uint32]): uint32 =
   ## Returns the memoized result id.
   b.memoInst(spvOpcode("OpTypeStruct"), memberTypes)
 
-proc tyRuntimeArray*(b: var SpvBuilder, elementType: uint32): uint32 =
-  ## Emit OpTypeRuntimeArray, the unsized SSBO element array.
-  ## Returns the memoized result id.
-  b.memoInst(spvOpcode("OpTypeRuntimeArray"), @[elementType])
-
 proc tyPointer*(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
   ## Emit OpTypePointer into a storage class. Returns the memoized result id.
   b.memoInst(spvOpcode("OpTypePointer"), @[storageClass, pointeeType])
@@ -744,16 +700,6 @@ proc constBool*(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
   ## Returns the memoized result id.
   let op = if value: spvOpcode("OpConstantTrue") else: spvOpcode("OpConstantFalse")
   b.memoTypedInst(op, @[ty])
-
-proc constNull*(b: var SpvBuilder, ty: uint32): uint32 =
-  ## Emit OpConstantNull, the zero of any type.
-  ## Returns the memoized result id.
-  b.memoTypedInst(spvOpcode("OpConstantNull"), @[ty])
-
-proc undef*(b: var SpvBuilder, ty: uint32): uint32 =
-  ## Emit OpUndef into the types-constants-globals section.
-  ## Returns the memoized result id.
-  b.memoTypedInst(spvOpcode("OpUndef"), @[ty])
 
 # ── Function body ──
 
@@ -835,23 +781,6 @@ proc opCompositeExtract*(b: var SpvBuilder, resultType, composite: uint32, indic
   for i in indices:
     ops.add uint32(i)
   b.freshInst(spvOpcode("OpCompositeExtract"), ops)
-
-proc opControlBarrier*(b: var SpvBuilder, execution, memory, semantics: uint32) =
-  ## Append OpControlBarrier:
-  ## - execution and memory scopes as scope operand words
-  ## - memory semantics as the third operand word
-  b.module.emitInstSeq(ssFunctions, spvOpcode("OpControlBarrier"),
-                       @[execution, memory, semantics])
-
-proc opIEqual*(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
-  ## Append OpIEqual, integer equality yielding a boolean.
-  ## Returns the boolean result id.
-  b.freshInst(spvOpcode("OpIEqual"), @[resultType, operand1, operand2])
-
-proc opSLessThan*(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
-  ## Append OpSLessThan, signed integer comparison yielding a boolean.
-  ## Returns the boolean result id.
-  b.freshInst(spvOpcode("OpSLessThan"), @[resultType, operand1, operand2])
 
 proc opSelect*(b: var SpvBuilder, resultType, condition, object1, object2: uint32): uint32 =
   ## Append OpSelect, per-component selection between two same-typed objects.
