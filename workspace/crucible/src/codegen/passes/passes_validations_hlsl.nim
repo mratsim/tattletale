@@ -17,7 +17,6 @@
 # Every message names the rejected construct.
 
 import std / [macros, sets, tables]
-import ../../builtins/builtins_gpu_types
 import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
@@ -119,10 +118,6 @@ proc validateHlslCall(ctx: GpuContext, n: GpuAst, shape: HlslParamShape, fnName:
     error "HLSL: subgroup reductions have no emission, wave intrinsics are outside this backend"
   if sym.atomicsBuiltin != gbkNone:
     error "HLSL: atomic builtins have no emission in this backend"
-  # fp16 conversions have no HLSL mapping: float16 types are outside the subset,
-  # a raw conversion call would surface as a glslang "unknown function" error
-  if isFp16ConversionBuiltin(sym.name):
-    error "HLSL: fp16 conversion builtin `" & sym.name & "` has no emission, float16 types are outside the HLSL subset"
   # synchro builtins (barriers) and intrinsics (max/min/abs, exp2, rsqrt) emit,
   # device function calls are spliced away by the inline pass before validation
   for arg in n.cArgs:

@@ -78,20 +78,6 @@ let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), 
    (bkWebGPU,   "toFp32"): "f32",
    (bkWebGPU,   "asFp16"): "bitcast<f16>"}.toTable()
 
-proc isFp16ConversionBuiltin*(name: string): bool =
-  ## Returns true for the fp16 conversion builtins:
-  ## - `toFp16`
-  ## - `toFp32`
-  ## - `asFp16`
-  ## - `asU16`
-  ##
-  ## NimGpuFp16ConversionBuiltins maps these call names to the per-backend emissions.
-  ## A backend with no mapping for the name rejects the call, and the target compiler cannot resolve an emission for it.
-  for key in NimGpuFp16ConversionBuiltins.keys:
-    if key[1] == name:
-      return true
-  result = false
-
 proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   if n.kind != nnkSym:
     return gtVoid
