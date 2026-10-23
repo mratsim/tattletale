@@ -134,32 +134,11 @@ proc compactLikeStrides(sh, st: seq[int], scale = 1): seq[int] {.compileTime.} =
     else:
       result[i] *= scale
 
-func orderLeafAt(order: int, i: static int): int =
-  order
-
-func orderLeafAt[V: static int](order: Int[V], i: static int): int =
-  V
-
-func orderLeafAt[T: tuple](order: T, i: static int): int =
-  ## Per-leaf rank dispatch: an `Int[V]` leaf ranks as `V`, an int leaf
-  ## as its value.
-  orderLeafAt(order[i], i)
-
-func orderLeafAt[I: Ordinal, T](order: array[I, T], i: static int): int =
-  order[i]
-
 func orderLeafRank(t: typedesc[int]): static int =
   DynamicSentinel
 
 func orderLeafRank[V: static int](t: typedesc[Int[V]]): static int =
   V
-
-template orderFlatRank(order: IntOrIntTuple): static int =
-  ## Flat leaf count of an order operand, nested tuples included.
-  flatten(order).rank()
-
-template orderFlatRank[I: static int, T](order: array[I, T]): static int =
-  order.len
 
 proc productExpr(leaves: seq[NimNode], permPos: seq[int], i: int): NimNode {.compileTime.} =
   ## An ordinary expression chain, the `Int` overload matrix decides per
@@ -173,8 +152,16 @@ func orderedPermPos[O](n: static int, order: O): seq[int] =
   ## Evaluated at compile time, the result reaches the scheduling macro as a static argument.
   ## A seq-typed const local fails device code generation.
   var ranks: array[n, int]
-  staticFor i, 0, n:
-    ranks[i] = orderLeafAt(order, i)
+  when O is (int or Int):
+    # a scalar order cannot be indexed, it is its single dimension's rank
+    ranks[0] = orderLeafRank(typeof(order))
+  elif O is array:
+    # an int array's elements are their own ranks, their type is always int
+    staticFor i, 0, n:
+      ranks[i] = order[i]
+  else:
+    staticFor i, 0, n:
+      ranks[i] = orderLeafRank(typeof(order[i]))
   compactOrderPermPos(compactOrderDynamicSubstitution(ranks))
 
 macro stridesTuple(shape: typed, permPos: static seq[int]): untyped =
@@ -210,8 +197,13 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ## - order ranks and product scheduling are compile-time, leaf products are
   ##   ordinary expressions evaluated by overload resolution
   const n: int = flatten(shape).rank()
-  static: doAssert orderFlatRank(order) == n,
-    "make_ordered_layout: shape and order of equal flat rank required"
+  static:
+    when order is array:
+      doAssert order.len == n,
+        "make_ordered_layout: shape and order of equal flat rank required"
+    else:
+      doAssert flatten(order).rank() == n,
+        "make_ordered_layout: shape and order of equal flat rank required"
   stridesTuple(shape, orderedPermPos(n, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
@@ -219,7 +211,7 @@ func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto):
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O): auto =
   const n: int = flatten(shape).rank()
-  static: doAssert orderFlatRank(order) == n,
+  static: doAssert flatten(order).rank() == n,
     "make_ordered_layout: shape and order of equal flat rank required"
   const ranks = block:
     var r: array[n, int]
