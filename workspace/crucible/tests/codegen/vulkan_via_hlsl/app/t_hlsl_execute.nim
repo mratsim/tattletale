@@ -65,7 +65,7 @@ proc runTest() =
     let setLayout = vctx.createDescriptorSetLayout(3)
     let pool = vctx.createDescriptorPool(3)
     let descSet = vctx.allocateDescriptorSet(pool, setLayout)
-    vctx.updateDescriptorSet(descSet, [oBuf, aBuf, bBuf])
+    vctx.updateDescriptorSet(descSet, [oBuf, aBuf, bBuf], 3)
 
     var sm = vctx.createShaderModule(addWords)
     var pipeline = vctx.createPipeline(sm, "main", 4, setLayout)
@@ -85,7 +85,7 @@ proc runTest() =
       let coordLayout = vctx.createDescriptorSetLayout(1)
       let coordPool = vctx.createDescriptorPool(1)
       let coordSet = vctx.allocateDescriptorSet(coordPool, coordLayout)
-      vctx.updateDescriptorSet(coordSet, [cBuf])
+      vctx.updateDescriptorSet(coordSet, [cBuf], 1)
       var csm = vctx.createShaderModule(coordWords)
       var cpipeline = vctx.createPipeline(csm, "main", 0, coordLayout)
       vctx.runKernel(cpipeline, [256'u32, 1, 1], [256'u32, 1, 1], nil, 0, coordSet)

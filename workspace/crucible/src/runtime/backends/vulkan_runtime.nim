@@ -31,6 +31,8 @@ type
     device: VkDevice
     handle: VkPipeline
     layout: VkPipelineLayout
+    setLayout: VkDescriptorSetLayout  ## Set layout from createPipeline, nil on the BDA route
+    pushConstSize: int  ## The push-constant range size from createPipeline, 0 when the kernel takes none
     vkDestroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
     vkDestroyPipelineLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
 
@@ -665,14 +667,21 @@ proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayou
   )
   check vkAllocateDescriptorSets(ctx.device, allocInfo.addr, result.addr)
 
-proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer]) =
+proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer], bindingCount: uint32) =
   ## One write per binding: binding i covers the whole i-th buffer.
   ##
-  ## Precondition: `buffers` enumerates the kernel's buffer parameters in declaration order,
-  ## binding i writes the i-th buffer, matching the printer's [[vk::binding(N, 0)]] numbering
-  ## (buffers only, push-constant parameters unbound).
+  ## Precondition:
+  ## - `buffers` enumerates the kernel's buffer parameters in declaration order,
+  ##   binding i writes the i-th buffer, matching the printer's [[vk::binding(N, 0)]] numbering
+  ##   (buffers only, push-constant parameters unbound)
+  ## - `bindingCount` is the set layout's binding count from createDescriptorSetLayout:
+  ##   fewer buffers leaves bindings unwritten (reads hit stale device state),
+  ##   more writes bindings the layout does not declare
   ##
   ## A mismatched order is silent on the device: reads and writes reach the wrong buffers, no validation error.
+  if buffers.len != bindingCount.int:
+    failLoud("Vulkan updateDescriptorSet: " & $buffers.len & " buffers for a set layout of " &
+      $bindingCount & " bindings, unwritten or undeclared bindings read stale device state")
   let vkUpdateDescriptorSets = cast[
     proc(device: VkDevice, descriptorWriteCount: uint32,
          pDescriptorWrites: ptr VkWriteDescriptorSet,
@@ -713,8 +722,12 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   ## With `setLayout` the layout carries that descriptor set, the dispatch binds it (runKernel's `descriptorSet`).
   ##
   ## Returns: the pipeline, `=destroy` releases the pipeline and its layout.
+  ## runKernel checks its `descriptorSet` and `pushConstSize` arguments against the recorded
+  ## setLayout and pushConstSize, a mismatch quits loudly.
   result = VulkanPipeline()
   result.device = ctx.device
+  result.setLayout = setLayout
+  result.pushConstSize = pushConstSize
   result.vkDestroyPipeline = cast[
     proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyPipeline"))
@@ -777,6 +790,18 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   ## With `descriptorSet` that set binds as set 0 against the pipeline layout, which must carry the matching set layout.
   ##
   ## Returns: nothing, the fence wait blocks until the dispatch completes.
+  ##
+  ## Precondition: `descriptorSet` is given iff the pipeline was created with a setLayout,
+  ## and `pushConstSize` matches the pipeline's recorded push-constant range.
+  ## A violation is silent on the device (stale descriptor state, wrong push-constant bytes):
+  ## the checks quit loudly instead.
+  if (descriptorSet != nil) != (pipeline.setLayout != nil):
+    failLoud("Vulkan runKernel: descriptorSet and the pipeline's set layout must be given together, got " &
+      (if descriptorSet != nil: "a descriptor set" else: "no descriptor set") & " against " &
+      (if pipeline.setLayout != nil: "a set layout" else: "no set layout"))
+  if pushConstSize != pipeline.pushConstSize:
+    failLoud("Vulkan runKernel: pushConstSize " & $pushConstSize &
+      " does not match the pipeline's recorded push-constant range " & $pipeline.pushConstSize)
   let vkAllocateCommandBuffers = cast[
     proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateCommandBuffers"))
