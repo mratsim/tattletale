@@ -38,7 +38,8 @@ export int_tuples.Int, int_tuples.`+`, int_tuples.`-`, int_tuples.`*`,
        int_tuples.round_multiple_down, int_tuples.round_multiple_up,
        int_tuples.toInt, int_tuples.flatten, int_tuples.tupleStream,
        int_tuples.items
-export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
+export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.make_ordered_layout,
+       layout_algebra.cosize,
        layout_algebra.crd2idx, layout_algebra.idx2crd,
        layout_algebra.logical_divide, layout_algebra.diceAxes,
        layout_algebra.sliceAxes
