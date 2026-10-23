@@ -599,12 +599,12 @@ task test_crucible_opencl, "Test workspace/crucible OpenCL codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/opencl"):
       runCmd(cmd)
 
-task test_crucible_vulkan, "Test workspace/crucible Vulkan codegen":
+task test_crucible_vulkan_via_glsl, "Test workspace/crucible Vulkan codegen (GLSL)":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan_via_glsl"):
       runCmd(cmd)
 
-task test_crucible_hlsl, "Test workspace/crucible HLSL codegen":
+task test_crucible_vulkan_via_hlsl, "Test workspace/crucible Vulkan codegen (HLSL)":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan_via_hlsl"):
       runCmd(cmd)
