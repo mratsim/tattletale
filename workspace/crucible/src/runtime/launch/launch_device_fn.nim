@@ -7,6 +7,7 @@
 
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
+from workspace/crucible/src/codegen/backends/hlsl_lang import fvD3D12
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/cuda_api
 import workspace/crucible/src/runtime/engines/opencl_api
@@ -46,6 +47,16 @@ func base58(h: int): string =
     result = alphabet[int(x mod 58)] & result
     x = x div 58
 
+const crucibleVulkanCodegen* {.strdefine.} = "glsl"
+  ## Shader language the Vulkan engine compiles `{.global.}` kernels through:
+  ## - "glsl" (default): the `glsl` macro, glslangValidator to SPIR-V
+  ## - "hlsl": the `hlsl` macro, dxc to SPIR-V
+  ##
+  ## Vulkan is the only engine with two compile targets,
+  ## the engine type alone cannot pick the codegen macro,
+  ## the define does. The runtime side needs no knob,
+  ## ingest autodetects the language of the artifact.
+
 macro bridge(engine: HwEngine, node: untyped): untyped =
   ## Defers the generated global function generation
   ## so that it happens in a `device` environment.
@@ -55,6 +66,8 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let glslCg = bindSym"glsl"
+  let hlslCg = bindSym"hlsl"
+  let fvD3D12Cg = bindSym"fvD3D12"
   let webgpuCg = bindSym"webgpu"
   let t = engine.getTypeInst()
   if sameType(t, bindSym"MetalEngine"):
@@ -64,7 +77,13 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   elif sameType(t, bindSym"OpenCLEngine"):
     result = openclCg.newCall(node)
   elif sameType(t, bindSym"VulkanEngine"):
-    result = glslCg.newCall(node)
+    when crucibleVulkanCodegen == "hlsl":
+      # the flavor overload explicitly,
+      # a 1-arg call can bind the body to the static flavor parameter,
+      # semming the kernel before the hlsl macro records ctHlsl.
+      result = hlslCg.newCall(fvD3D12Cg, node)
+    else:
+      result = glslCg.newCall(node)
   elif sameType(t, bindSym"WebgpuEngine"):
     result = webgpuCg.newCall(node)
   else:
