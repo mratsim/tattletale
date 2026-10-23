@@ -37,10 +37,10 @@ kernel docs, Lean comments, test file headers, and commit messages.
 3. **Write without hidden context.** Rewrite any sentence a repo puller cannot understand.
 4. **A wall of text is hostile.** Prefer diagrams for lifecycles, dataflow, and multidimensional structures.
 5. **A wall of text is hostile, part two.** Prefer bullet points for contracts.
-6. **Write coursebook sentences.** Every sentence carries a subject and a verb.
-   Code and data never act: name the actor. Style exemplars: Physically-Based
-   Rendering, Crafting Interpreters, The Art of Multiprocessor Programming, PMPP.
-   Plain subjects, active verbs, mechanisms over category labels, no marketing or lawyer speech.
+6. **Write coursebook sentences.** Every prose sentence carries a subject and a verb.
+   Titles, headers, and label bullets are exempt. Code and data never act: name the actor.
+   Style exemplars: Physically-Based Rendering, Crafting Interpreters, The Art of Multiprocessor
+   Programming, PMPP. Plain subjects, active verbs, no marketing or lawyer speech.
 
 ## Quick start
 
@@ -76,7 +76,8 @@ A CS undergraduate is the comprehension floor.
 - Label status explicitly (`implemented`, `qualified`, `research-only`, `unsupported`).
 - State evidence as conditions, measurement, result, and conclusion, not as a story.
 - Comments explain invariants, intent, and non-obvious constraints, never change history.
-- Every sentence carries a subject and a verb. A noun pile that only names is not a sentence.
+- Every prose sentence carries a subject and a verb. A noun pile that only names is not a sentence.
+  Titles, headers, and label bullets are exempt.
 - Code and data never act. Banned: "Scalar reads render `push.<name>`".
   Write who does what: "Reading a scalar parameter emits `push.<name>`".
 - TODOs name the missing condition and the removal criterion.

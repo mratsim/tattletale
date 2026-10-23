@@ -63,8 +63,10 @@ The style exemplars are Physically-Based Rendering, Crafting Interpreters,
 The Art of Multiprocessor Programming, and Programming Massively Parallel
 Processors (PMPP): plain subjects, active verbs, mechanisms over labels.
 
-- Every sentence carries a subject and a verb. A noun pile that only names
+- Every prose sentence carries a subject and a verb. A noun pile that only names
   ("one global ordinal across all resources in declaration order") is not a sentence.
+  Titles, headers, and label bullets are exempt: a noun phrase is the correct
+  form for a name (module headers open on one).
 - Code and data never act. "The resource identity flows from the call site" is banned.
   Name the actor: "each call passes the caller's buffer as the argument".
 - No marketing speech ("seamlessly", "elegant", "powerful") and no lawyer
