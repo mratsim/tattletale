@@ -48,7 +48,7 @@ proc worstAbsDiff(a, b: F.Tensor): float32 =
 proc rmsNormResInKernel(Xh, Rh, Gh: seq[uint16], M, C: int, eps: float32): F.Tensor =
   ## Runs rmsNormResInKernel on the fp16 buffers; returns the fp16
   ## output converted to fp32.
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(rmsMsl)
   var outO = newSeq[uint16](M * C)
   engine.launchKernel << (grid: (1, (M + 7) div 8), blk: (32, 1)) >> ("rmsNormResInKernel", outO, (Xh, Rh, Gh, int32(M), int32(C), eps))

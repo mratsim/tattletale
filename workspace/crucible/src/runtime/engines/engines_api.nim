@@ -23,19 +23,29 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
-proc newEngine*(backend: static BackendKind): auto {.inline.} =
-  when backend == bkCuda:
+## Runtime names a GPU runtime backend: `newEngine(runX)` constructs the engine that executes kernels on it.
+## The compile-target enums BackendKind and CompileTarget name emitted shader languages and stay separate from it.
+type
+  Runtime* = enum
+    runCuda     ## CUDA runtime (NVRTC)
+    runWebGPU   ## WebGPU runtime (wgpu)
+    runOpenCL   ## OpenCL runtime (OpenCL C)
+    runVulkan   ## Vulkan runtime (MoltenVK-compatible loader)
+    runMetal    ## Metal runtime (macOS)
+
+# when/elif, not case: the branches return distinct engine types.
+# Nim type-checks every branch of a case statement even on a static value, so a case would force one common type for the `auto` result.
+proc newEngine*(runtime: static Runtime): auto {.inline.} =
+  when runtime == runCuda:
     newCudaEngine()
-  elif backend == bkOpenCL:
+  elif runtime == runOpenCL:
     newOpenCLEngine()
-  elif backend == bkVulkan:
+  elif runtime == runVulkan:
     newVulkanEngine()
-  elif backend == bkWebGPU:
+  elif runtime == runWebGPU:
     newWebgpuEngine()
-  elif backend == bkMetal:
+  elif runtime == runMetal:
     newMetalEngine()
-  else:
-    {.error: "newEngine: unknown BackendKind".}
 
 export engines_common.BackendKind, engines_common.Dim3, engines_common.LaunchConfig,
        engines_common.dim3, engines_common.DeviceMem

@@ -36,7 +36,7 @@ const varParamMsl = metal:
 proc runTest() =
   suite "Metal - var T params":
     test "setPair + swap round-trip":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(varParamMsl)
       let msl = engine.getArtifact()
       # Unannotated locals emit no address-space qualifier: register (thread)

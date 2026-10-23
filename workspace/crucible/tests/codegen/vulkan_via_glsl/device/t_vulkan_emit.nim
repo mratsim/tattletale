@@ -121,7 +121,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Vulkan - {.emit.} raw GLSL injection":
 
     test "single string literal emits the sum":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t1Vk)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
@@ -136,7 +136,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form with one interpolated ident":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t2Vk)
       var a: array[1, uint32] = [41'u32]
       let aDev = engine.allocDevice(uint32, a.len)
@@ -148,7 +148,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t3Vk)
       var a: array[1, uint32] = [20'u32]
       let aDev = engine.allocDevice(uint32, a.len)
@@ -160,7 +160,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "backtick form on a local variable":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t4Vk)
       var a: array[1, uint32] = [40'u32]
       let aDev = engine.allocDevice(uint32, a.len)
@@ -172,7 +172,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "triple-quoted multiline string":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t5Vk)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
@@ -188,7 +188,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 13
 
     test "emit is not silently dropped (must override the DSL write)":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t6Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
@@ -197,7 +197,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t7Vk)
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, x.len)
@@ -209,7 +209,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form on a kernel parameter":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t8Vk)
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, x.len)
@@ -221,7 +221,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t10Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
@@ -230,7 +230,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t12Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
@@ -239,7 +239,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t14Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t14Kernel", oDev, ())
@@ -248,7 +248,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t15Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
@@ -257,7 +257,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(t16Vk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())

@@ -53,7 +53,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # ── Execution via Vulkan runtime ────────────────────────────────────────────
 
   block: # addKernel
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(addVk)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -73,7 +73,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     doAssert out32[1] == 22
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(vec2Vk)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -93,7 +93,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     doAssert out32[1] == 204
 
   block: # maxKernel (generic instantiation)
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(maxVk)
 
     var a: array[1, uint32] = [42'u32]

@@ -19,7 +19,7 @@ const whileMsl = metal:
 proc runTest() =
   suite "Metal - while loop":
     test "output[i] = i for i in 0..<4":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(whileMsl)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("whileKernel", oDev, ())

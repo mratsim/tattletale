@@ -17,7 +17,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
           C[0] = ct_tmp
 
       var buf: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let o0 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_const", o0, ())
@@ -32,7 +32,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
           C[0] = rt_tmp
 
       var buf: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let o1 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_let", o1, (7'u32,))
@@ -48,7 +48,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
             C[i] = inner_tmp
 
       var buf: array[5, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let o2 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 5)>>("kernel_var", o2, ())
@@ -65,7 +65,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
           C[0] = v() + 1'u32
 
       var buf: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let o3 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_eoa", o3, (41'u32,))
@@ -82,7 +82,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
           C[0] = uint32(idx)
 
       var buf: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let o4 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_multi", o4, ())

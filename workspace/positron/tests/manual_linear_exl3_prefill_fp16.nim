@@ -38,7 +38,7 @@ proc exl3GemmKernel(xBits: seq[uint16], trellis: seq[int16],
                     suh, svh: seq[uint16], M, K, N, bits, cb: int): F.Tensor =
   ## Runs the fused prefill-GEMM kernel on the fp16 inputs and returns
   ## its fp16 output as fp32.
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(exl3GemmMsl)
   var outO = newSeq[uint16](M * N)
   engine.launchKernel << (grid: (N div 128, (M + 31) div 32, 1), blk: (32, 1)) >> (

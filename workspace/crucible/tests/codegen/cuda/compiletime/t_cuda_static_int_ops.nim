@@ -62,7 +62,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "all five overload shapes compile, run, and produce the right values":
       var buf: array[10, int32]
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let iDev = engine.allocDevice(int32, dynArr.len)
       engine.copyToDeviceFromHost(iDev, addr dynArr[0], dynArr.len)

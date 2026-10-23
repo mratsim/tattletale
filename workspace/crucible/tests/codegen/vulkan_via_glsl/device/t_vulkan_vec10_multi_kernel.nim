@@ -19,7 +19,7 @@ const code = vulkan:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var a: array[10, uint32] = [1'u32, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   var b: array[10, uint32] = [10'u32, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(code)
   let aDev = engine.allocDevice(uint32, a.len)
   let bDev = engine.allocDevice(uint32, b.len)

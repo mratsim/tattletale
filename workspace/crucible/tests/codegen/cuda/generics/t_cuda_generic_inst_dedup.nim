@@ -57,7 +57,7 @@ const dedupSrc = cuda:
     scaleSwap[7, 5](outp, inp)
 
 proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(dedupSrc)
   let outW = if outWidth < 0: width else: outWidth
   var inp = newSeq[float32](width)

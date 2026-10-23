@@ -6,7 +6,7 @@ import workspace/crucible
 import workspace/ceramic/tests/kernels/k_sum/kernel_sum_template
 
 proc main =
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   run_sum_full_tests(engine, moduleName = "test_k_sum_full_vulkan")
 
 when isMainModule:

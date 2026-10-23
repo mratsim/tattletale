@@ -43,7 +43,7 @@ const variantMsl = metal:
 proc runTest() =
   suite "Metal - view variant dot resolution keeps the instance address space":
     test "device view: +% through the field reads input[i + 1]":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(variantMsl)
       var input = [10'u32, 20'u32, 30'u32, 40'u32, 50'u32]
       let iDev = engine.allocDevice(uint32, input.len)
@@ -56,7 +56,7 @@ proc runTest() =
       for i in 0 ..< 4:
         check output[i] == input[i + 1]
     test "threadgroup view: +% through the field reads scratch[t + 1]":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(variantMsl)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (8, 1)) >> (

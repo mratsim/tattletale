@@ -39,7 +39,7 @@ proc runTest() =   # private, engines are destroyed at proc return
       # Host-initialized values are copied H->D before launch: the kernel's `+=`
       # must READ the stored value and write the accumulation back, otherwise the result would not depend on the initialization at all.
       var output: array[4, int32] = [10'i32, 11, 12, 13]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(int32, output.len)
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
@@ -52,7 +52,7 @@ proc runTest() =   # private, engines are destroyed at proc return
 
     test "x[tick(x) + 1] += 7 evaluates the index expression exactly once":
       var x: array[4, int32] = [0'i32, 0, 0, 0]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(hazardKernel)
       let oDev = engine.allocDevice(int32, x.len)
       engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
@@ -64,7 +64,7 @@ proc runTest() =   # private, engines are destroyed at proc return
 
     test "x.at(i.int32) = 7; x.at(i.int32) += 5 goes through the var-return call lvalue":
       var x: array[4, int32] = [0'i32, 0, 0, 0]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(callLhsKernel)
       let oDev = engine.allocDevice(int32, x.len)
       engine.copyToDeviceFromHost(oDev, addr x[0], x.len)

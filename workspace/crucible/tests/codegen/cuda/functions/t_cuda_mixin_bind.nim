@@ -29,7 +29,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Crucible - mixin/bind statements":
     test "template with mixin inside cuda: compiles":
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())

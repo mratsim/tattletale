@@ -42,7 +42,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert elifMsl.find("else if ((x[0] == 1))") < elifMsl.find("else if ((x[0] == 2))")
       for v in ["output[0] = 10;", "output[0] = 20;", "output[0] = 30;", "output[0] = 40;"]:
         doAssert v in elifMsl
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(elifMsl)
       let xDev = engine.allocDevice(int32, 1)
       let oDev = engine.allocDevice(int32, 1)
@@ -73,7 +73,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       # has no `else`, so a spurious `else { }` must not appear.
       doAssert "else if ((x[0] == 1)) {" in noElseMsl
       doAssert "else {" notin noElseMsl
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(noElseMsl)
       let xDev = engine.allocDevice(int32, 1)
       let oDev = engine.allocDevice(int32, 1)

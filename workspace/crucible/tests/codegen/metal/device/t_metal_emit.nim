@@ -131,7 +131,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - {.emit.} raw MSL injection":
 
     test "single string literal emits the sum":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t1Msl)
       var a: array[1, uint32] = [40'u32]
       var b: array[1, uint32] = [2'u32]
@@ -146,7 +146,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form with one interpolated ident":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t2Msl)
       var a: array[1, uint32] = [41'u32]
       let aDev = engine.allocDevice(uint32, 1)
@@ -158,7 +158,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t3Msl)
       var a: array[1, uint32] = [20'u32]
       let aDev = engine.allocDevice(uint32, 1)
@@ -170,7 +170,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "backtick form on a local variable":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t4Msl)
       var a: array[1, uint32] = [40'u32]
       let aDev = engine.allocDevice(uint32, 1)
@@ -182,7 +182,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "triple-quoted multiline string":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t5Msl)
       var a: array[2, uint32] = [40'u32, 10'u32]
       var b: array[2, uint32] = [2'u32, 3'u32]
@@ -198,7 +198,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 13
 
     test "emit is not silently dropped (must override the DSL write)":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t6Msl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
@@ -207,7 +207,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t7Msl)
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, 1)
@@ -219,7 +219,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "comma form on a kernel parameter":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t8Msl)
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, 1)
@@ -231,7 +231,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t10Msl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
@@ -240,7 +240,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "emit survives generic instantiation (clone path)":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t11Msl)
       var a: array[1, uint32] = [42'u32]
       let aDev = engine.allocDevice(uint32, 1)
@@ -252,7 +252,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t12Msl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
@@ -261,7 +261,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t14Msl)
       let msl = engine.getArtifact()
       check "#define MSL_EMIT_TILE 32" in msl
@@ -279,7 +279,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "multi-item emit rendered on a single line:\n" & t15Msl
       doAssert "C[0] = 1;" in t15Msl and "C[0] = 2;" in t15Msl,
         "multi-item emit dropped an item:\n" & t15Msl
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t15Msl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
@@ -288,7 +288,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(t16Msl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())

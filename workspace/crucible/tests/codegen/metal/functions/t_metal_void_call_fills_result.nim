@@ -22,7 +22,7 @@ const sqMsl = metal:
 proc runTest() =
   suite "Metal - device fn result filled by a void call":
     test "A device function using the implicit result variable returns its value":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(sqMsl)
       let oDev = engine.allocDevice(float32, 4)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("sqKernel", oDev, (3.5'f32,))

@@ -110,7 +110,7 @@ proc benchAppleNax(engine: MetalEngine, M, N, K, iters: int): auto =
   dHost
 
 proc main() =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   var wanted: seq[int]
   for p in commandLineParams():
     wanted.add parseInt(p)

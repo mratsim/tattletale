@@ -50,7 +50,7 @@ const f16Vk = vulkan:
     C[i] = A[i] * B[i]
 
 proc runTest() =
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(f16Vk)
   const N = 64
   var rng = initRand(0xF16)

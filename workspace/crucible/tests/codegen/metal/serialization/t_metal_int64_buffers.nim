@@ -22,7 +22,7 @@ const int64Msl = metal:
 proc runTest() =
   suite "Metal - int64/uint64 buffers":
     test "int64 add + uint64 scale round-trip":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(int64Msl)
       var a: array[2, int64] = [-5'i64, 12'i64]
       var b: array[2, uint64] = [3'u64, 0'u64]

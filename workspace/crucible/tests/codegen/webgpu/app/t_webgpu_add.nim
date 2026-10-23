@@ -69,7 +69,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== wgpu-native execution ===\n"
 
   block: # addKernel
-    var engine = bkWebGPU.newEngine()
+    var engine = newEngine(runWebGPU)
     engine.ingest(addWgsl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -90,7 +90,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkWebGPU.newEngine()
+    var engine = newEngine(runWebGPU)
     engine.ingest(vec2Wgsl)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -111,7 +111,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # maxKernel (generic instantiation)
-    var engine = bkWebGPU.newEngine()
+    var engine = newEngine(runWebGPU)
     engine.ingest(maxWgsl)
 
     var a: array[1, uint32] = [42'u32]

@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - CuTe Layout + Tile":
     test "tileAt reads and dot products on the device":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelMsl)
       var res: array[6, uint32]
       let oDev = engine.allocDevice(uint32, 6)

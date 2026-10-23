@@ -29,7 +29,7 @@ const code2 = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: scalar by-value param via push constants ===\n"
 
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(code1)
 
   let oDev = engine.allocDevice(uint32, 1)

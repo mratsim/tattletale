@@ -20,7 +20,7 @@ import workspace/crucible
 import workspace/ceramic/tests/kernels/k_rmsnorm/kernel_rmsnorm_template
 
 proc runTest =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   run_rmsnorm_tests(engine, moduleName = "test_k_rmsnorm_metal")
 
 when isMainModule:

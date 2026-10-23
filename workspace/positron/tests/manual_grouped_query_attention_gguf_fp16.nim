@@ -124,7 +124,7 @@ proc kernelUnderTest(p: AttnCase, x: seq[uint16], kSlab, vSlab: var seq[uint16])
   ## fp16 stage widened to fp32 tensors.
   doAssert (p.H and 7) == 0 and (p.Nkv and 7) == 0,
     "the composed q/k views require H % 8 == 0 and Nkv % 8 == 0"
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(ggufAttnMsl)
   let numSeqs = p.cuSeqlensQ.len - 1
   let nTokens = p.cuSeqlensQ[^1].int

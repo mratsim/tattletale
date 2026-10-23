@@ -64,7 +64,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "simd_sum(" in scalarMsl
 
     test "scalar reduce sums the 32 lanes and broadcasts to each":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(scalarMsl)
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumScalar", oDev, ())
@@ -75,7 +75,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[lane] == 496.0
 
     test "reduceAdd: 4 partials per thread, each summed across the 32 threads":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(partialsMsl)
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumPartials", oDev, ())
@@ -87,7 +87,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
           check res[lane * 4 + j] == float32(496 + 32 * j)
 
     test "reduceMax takes the max of the 32 lanes and broadcasts it to each":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(maxScalarMsl)
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxScalar", oDev, ())
@@ -98,7 +98,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[lane] == 31.0
 
     test "reduceMax: 4 partials per thread, each maxed across the 32 threads":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(maxPartialsMsl)
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxPartials", oDev, ())

@@ -296,8 +296,8 @@ proc gateChecks(engine: HwEngine, big: BigHost) =
     "stale bf " & &"{staleBfMismatches}/{BfArenaLen} f32 {staleF32Mismatches}/{F32ArenaLen}"
 
 proc main =
-  echo "device: ", bkMetal.newEngine().deviceName()
-  var engine = bkMetal.newEngine()
+  echo "device: ", newEngine(runMetal).deviceName()
+  var engine = newEngine(runMetal)
   engine.ingest(MegaGdnMsl)
   gateChecks(engine, buildBigHost(Seed, f32ToBf16))
 

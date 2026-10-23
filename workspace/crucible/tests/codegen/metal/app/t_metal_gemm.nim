@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - CuTe GEMM":
     test "A(2×3) * B(3×2) = C(2×2) on the device":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelCode)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("gemmKernel", oDev, ())

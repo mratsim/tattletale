@@ -21,7 +21,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   doAssert "barrier(CLK_LOCAL_MEM_FENCE)" in kernelCode,
     "OpenCL barrier lowering missing:\n" & kernelCode
 
-  var engine = bkOpenCL.newEngine()
+  var engine = newEngine(runOpenCL)
   engine.ingest(kernelCode)
   var res: array[8, uint32]
   # 2 work-groups of (4, 2). Each group stages identical values, so the

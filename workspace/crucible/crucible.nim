@@ -36,7 +36,7 @@
 
 ##
 ## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
-## - var engine = bkCuda.newEngine()
+## - var engine = newEngine(runCuda)
 ## - engine.ingest(kernelCode)
 ## - engine.launchKernel<<grid, blk>>("addKernel", out, (a, b))
 ## - engine.launchDeviceFn myDeviceFunction(out, args) do:

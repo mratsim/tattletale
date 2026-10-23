@@ -23,7 +23,7 @@ const shadowMsl = metal:
 proc runTest() =
   suite "Metal - attribute injection + shadowed local":
     test "single attr param tracks the grid x position":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(singleAttrMsl)
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel<<(grid: (2, 1), blk: (1, 1))>>("singleAttrKernel", oDev, ())
@@ -33,7 +33,7 @@ proc runTest() =
       check res[1] == 1'u32
 
     test "local shadowing the attr name wins; no attr param injected":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(shadowMsl)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("shadowKernel", oDev, ())

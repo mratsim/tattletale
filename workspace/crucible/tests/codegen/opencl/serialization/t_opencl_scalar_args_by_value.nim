@@ -16,7 +16,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(kernelCode)
     var a: array[1, float32] = [2.5'f32]
     var alpha = 3.0'f32

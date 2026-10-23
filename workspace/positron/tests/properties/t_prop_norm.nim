@@ -166,8 +166,8 @@ proc runShape(engine: HwEngine, M, cases: int, seed: uint64, label: string) =
   suiteTotal += judge1.total
 
 proc main =
-  echo "device: ", bkMetal.newEngine().deviceName()
-  var engine = bkMetal.newEngine()
+  echo "device: ", newEngine(runMetal).deviceName()
+  var engine = newEngine(runMetal)
   engine.ingest(NormMsl)
   runShape(engine, 8, 16, 0xC04D0601'u64, "exact one tile")
   runShape(engine, 13, 16, 0xC04D0602'u64, "tail rows")

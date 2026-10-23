@@ -63,7 +63,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       output[6] = ifWithFor(false, 9'u32)
 
   var buf: array[7, uint32]
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("resultFlowKernel", oDev, ())

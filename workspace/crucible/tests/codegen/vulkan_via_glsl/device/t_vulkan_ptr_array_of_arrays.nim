@@ -18,7 +18,7 @@ const kernelCode = vulkan:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block:
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(array[32, byte], 2)
     engine.launchKernel("k", oDev, ())

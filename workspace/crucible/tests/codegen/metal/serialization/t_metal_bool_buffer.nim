@@ -29,7 +29,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - bool buffer marshalling":
 
     test "array[bool] input reads 1-byte elements":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelBoolRead)
       let flags = [true, false, true, false]
       let fDev = engine.allocDevice(bool, flags.len)
@@ -41,7 +41,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "seq[bool] input reads 1-byte elements":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelBoolRead)
       let flags = @[true, false, true, false]
       let fDev = engine.allocDevice(bool, flags.len)
@@ -53,7 +53,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "array[bool] output writes 1-byte elements":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelBoolWrite)
       let vals = [1'u32, 0'u32, 1'u32, 0'u32]
       let vDev = engine.allocDevice(uint32, vals.len)

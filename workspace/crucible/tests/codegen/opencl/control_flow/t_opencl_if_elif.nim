@@ -40,7 +40,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert elifCl.find("else if ((x[0] == 1))") < elifCl.find("else if ((x[0] == 2))")
       for v in ["output[0] = 10;", "output[0] = 20;", "output[0] = 30;", "output[0] = 40;"]:
         doAssert v in elifCl
-      var engine = bkOpenCL.newEngine()
+      var engine = newEngine(runOpenCL)
       engine.ingest(elifCl)
       var res: array[1, int32]
       var x = [0'i32]
@@ -69,7 +69,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "no else in source emits no else block":
       doAssert "else if ((x[0] == 1)) {" in noElseCl
       doAssert "else {" notin noElseCl
-      var engine = bkOpenCL.newEngine()
+      var engine = newEngine(runOpenCL)
       engine.ingest(noElseCl)
       var res: array[1, int32]
       var x = [0'i32]

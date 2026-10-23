@@ -59,7 +59,7 @@ const dedupSrc = vulkan:
     outp[0] = scaleSwap[7, 5](inp[0])
 
 proc runScale(launcher: string, inpVal = 1.0'f32): float32 =
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(dedupSrc)
   var inp = newSeq[float32](1)
   inp[0] = inpVal

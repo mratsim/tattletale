@@ -55,7 +55,7 @@ func worstAbsDiff(a, b: seq[uint16]): float32 =
     if d > result: result = d
 
 proc checkGGUFDequant(): bool =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(ggufDequantMsl)
   let cases = [
     ("dequantQ8_0", 128, 128, genQ8_0, decodeWeightsQ8_0),

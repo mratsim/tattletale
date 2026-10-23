@@ -113,7 +113,7 @@ proc runTest() =
 
   when defined(macosx):
     block: # Metal comparison: same arithmetic, byte-identical readback
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addMsl)
       var a: array[2, uint32] = [10'u32, 20'u32]
       var b: array[2, uint32] = [1'u32, 2'u32]

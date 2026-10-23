@@ -56,7 +56,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var bufImpl: array[2, uint32]
   var bufFallback: array[2, uint32]
   var bufInt: array[1, uint32]
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDevImpl = engine.allocDevice(uint32, bufImpl.len)

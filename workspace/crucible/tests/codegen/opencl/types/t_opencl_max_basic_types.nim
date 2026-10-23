@@ -41,7 +41,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check kernelCode.contains("fmin")
 
       var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
-      var engine = bkOpenCL.newEngine()
+      var engine = newEngine(runOpenCL)
       engine.ingest(kernelCode)
       var out32: array[9, float32]
       let dDev = engine.allocDevice(float32, dynArr.len)

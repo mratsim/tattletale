@@ -41,7 +41,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
   echo "=== OpenCL compound-assign execution ===\n"
 
   block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(accCl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -59,7 +59,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     echo "  OK"
 
   block: # hazardKernel: x[tick(x) + 1] += 7, the index side effect fires exactly once
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(hazardCl)
 
     var x: array[4, int32] = [0'i32, 0, 0, 0]
@@ -75,7 +75,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
     echo "  OK"
 
   block: # blitKernel: x[block-expr] += 3, the block index is blitted and accumulated
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(blitCl)
 
     var x: array[4, int32] = [0'i32, 0, 0, 0]

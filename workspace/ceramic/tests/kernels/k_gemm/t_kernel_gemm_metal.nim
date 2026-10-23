@@ -51,7 +51,7 @@ const GemmFuzzCases = genGemmCases((32, 32, 32), (40, 45, 41))
 # ═══════════════════════════════════════════════════════════════
 
 proc main =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   var rng: Rand
   let seedVal = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
   rng.seed(int64(seedVal))

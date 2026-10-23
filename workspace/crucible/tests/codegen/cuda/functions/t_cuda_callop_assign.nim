@@ -60,7 +60,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "NVRTC callop assign":
     test "fillWith via NVRTC":
       var buf: array[128, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())

@@ -39,14 +39,14 @@ const codeWithVal = vulkan:
 
 proc childIngestMulti() =
   ## Child mode: ingesting a multi-kernel scalar source must quit loudly.
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(codeMulti)   # unreachable: ingest quits here
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: multi-kernel push-constant guard ===\n"
 
   block:  # supported pattern: single-kernel kernelB(3, 4) gives 7
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(codeSingle)
     var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
     let oDev = engine.allocDevice(uint32, 1)

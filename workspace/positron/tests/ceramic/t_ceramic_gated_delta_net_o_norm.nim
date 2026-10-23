@@ -257,8 +257,8 @@ proc runCombo(engine: HwEngine; M, cases: int; seed: uint64; label: string) =
   suiteTotal += total
 
 proc main =
-  echo "device: ", bkMetal.newEngine().deviceName()
-  var engine = bkMetal.newEngine()
+  echo "device: ", newEngine(runMetal).deviceName()
+  var engine = newEngine(runMetal)
   engine.ingest(ONormMsl)
   runCombo(engine, 8, 32, 0xC04D0501'u64, "exact one tile")
   runCombo(engine, 13, 32, 0xC04D0502'u64, "tail rows")

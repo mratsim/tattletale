@@ -22,7 +22,7 @@ proc accumulateKernel(outP: ptr UncheckedArray[float32], x: float32) =
   outP[0] = acc
 
 proc runTest() =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   let dev = engine.allocDevice(float32, 1)
   engine.launchDeviceFn accumulateKernel(dev, 41.0'f32) do:
     grid = (1, 1)

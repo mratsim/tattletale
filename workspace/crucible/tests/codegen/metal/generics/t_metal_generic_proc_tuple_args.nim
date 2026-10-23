@@ -30,7 +30,7 @@ const kernelMsl = metal:
 proc runTest() =
   suite "Metal - generic proc with tuple-of-static-int type args":
     test "scaleBox lowers with one type name for the tuple args":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelMsl)
       let oDev = engine.allocDevice(float32, 2)
       engine.launchKernel("repro", oDev, ())

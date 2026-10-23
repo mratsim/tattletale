@@ -71,7 +71,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Crucible - constexpr tuple init in expression slots":
     test "Pattern A — constexpr tuple in let RHS (block-unwrapped)":
       var output: array[1, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelA)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -80,7 +80,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Pattern B — constexpr in arithmetic expression":
       var output: array[1, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelB)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -89,7 +89,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Pattern C — template wrapConst (block with constexpr)":
       var output: array[1, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelC)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -98,7 +98,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Pattern E — block with constexpr temp (evalOnceAs sim)":
       var output: array[1, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelE)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -107,7 +107,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "Pattern F — constexpr tuple field access":
       var output: array[1, float32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelF)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())

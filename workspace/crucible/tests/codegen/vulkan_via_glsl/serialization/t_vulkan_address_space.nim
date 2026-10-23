@@ -23,7 +23,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "private uint" notin addressSpaceVk
       check "uint x = 7;" in addressSpaceVk
       check "shared uint scratch[8];" in addressSpaceVk
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addressSpaceVk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 2))>>("addressSpaceKernel", oDev, ())

@@ -42,7 +42,7 @@ const codeMul = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: pipeline / SPIR-V cache ===\n"
 
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(code)
 
   block:  # entry kernel, run twice with different data on the same engine

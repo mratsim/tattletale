@@ -16,7 +16,7 @@ const code = vulkan:
     output[0] = extra[0]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(code)
   echo "UNREACHABLE — differing multi-kernel push-constant layouts must be rejected at codegen"
 

@@ -21,7 +21,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - whole-value coordinate":
 
     test "let p = thread_position_in_grid keeps the i32 domain":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(kernelWhole)
       var res: array[8, uint32]
       let oDev = engine.allocDevice(uint32, res.len)

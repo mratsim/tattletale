@@ -39,7 +39,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "nanf" notin kernelSpecials
       check "inff" notin kernelFoldedDiv
     test "device values carry the true ±Inf bit patterns":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelSpecials)
       let oDev = engine.allocDevice(float32, 3)
       engine.launchKernel("specials", oDev, ())
@@ -49,7 +49,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check bits32(res[1]) == 0x7F800000'u32
       check classify(res[2]) == fcNan
     test "folded ±1/0 constants compile and reach the device as ±Inf":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelFoldedDiv)
       let oDev = engine.allocDevice(float32, 2)
       engine.launchKernel("foldedDiv", oDev, ())

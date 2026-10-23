@@ -868,8 +868,8 @@ proc checkReassociation(dt: ScalarKind; T, H, E: int; seed: uint64) =
 
 
 proc main =
-  echo "device: ", bkMetal.newEngine().deviceName()
-  var engine = bkMetal.newEngine()
+  echo "device: ", newEngine(runMetal).deviceName()
+  var engine = newEngine(runMetal)
   engine.ingest(MoeRouterMsl)
   runCombo(engine, kBfloat16, 8, 2048, 256, 8, 8, 0xC04D0521'u64, 1.0'f32,
     "router mega")

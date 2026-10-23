@@ -151,7 +151,7 @@ const Cases4: array[1, tuple[src, dst: tuple[shape, strides: (int, int, int, int
    (shape: (64, 32, 64, 128), strides: (8192, 524288, 128, 1)), 3, 20)]
 
 proc main() =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   writeLine(stdout, "rmsnorm, Metal, blk = (32, 1), one warp per row, GB/s = logical elements x 12 bytes")
   writeLine(stdout, "        np      rows     gx   iters   GB/s")
   separator()

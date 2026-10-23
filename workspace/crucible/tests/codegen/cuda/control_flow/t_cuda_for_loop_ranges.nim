@@ -17,7 +17,7 @@ const kInfix = cuda:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var buf1: array[4, uint32]
   block:
-    var engine = bkCuda.newEngine()
+    var engine = newEngine(runCuda)
     engine.ingest(kInfix)
     let oDev = engine.allocDevice(uint32, buf1.len)
     engine.launchKernel<<(1, 4)>>("infixRangeKernel", oDev, ())
@@ -35,7 +35,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var buf2: array[3, uint32]
   block:
-    var engine = bkCuda.newEngine()
+    var engine = newEngine(runCuda)
     engine.ingest(kBodyAccess)
     let oDev = engine.allocDevice(uint32, buf2.len)
     engine.launchKernel<<(1, 2)>>("bodyAccessKernel", oDev, ())
@@ -54,7 +54,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var buf3: array[2, uint32]
   block:
-    var engine = bkCuda.newEngine()
+    var engine = newEngine(runCuda)
     engine.ingest(kVarBound)
     let oDev = engine.allocDevice(uint32, buf3.len)
     engine.launchKernel<<(1, 2)>>("varBoundKernel", oDev, ())

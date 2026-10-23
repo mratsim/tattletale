@@ -20,7 +20,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "WebGPU - multi-axis dispatch":
 
     test "2D: baked (4, 2) × grid (2, 4) = 8×8 work-items":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(kernel2d)
       var res: array[64, uint32]
       let oDev = engine.allocDevice(uint32, res.len)

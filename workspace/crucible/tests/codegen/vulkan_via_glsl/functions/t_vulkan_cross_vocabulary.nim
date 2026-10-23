@@ -33,7 +33,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Vulkan - cross-vocabulary coordinates + barrier":
 
     test "CUDA + OpenCL idioms agree; flat local is native; barrier runs":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernel2d)
       # The generated GLSL source (the `vulkan:` macro output) must carry
       # the native flat-index spelling. The Vulkan engine's getArtifact

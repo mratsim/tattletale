@@ -39,7 +39,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "#extension GL_EXT_shader_atomic_float : enable" in addFpVk
 
     test "fp: 32 lanes add 1.0, each reads a distinct old value 0..31":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addFpSameVk)
       let cDev = engine.allocDevice(float32, 1)
       let oDev = engine.allocDevice(float32, 32)
@@ -61,7 +61,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 32.0
 
     test "fp: 32 lanes add their lane index, counter ends at 496":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addFpVk)
       let cDev = engine.allocDevice(float32, 1)
       let oDev = engine.allocDevice(float32, 32)
@@ -83,7 +83,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 496.0
 
     test "int: 32 lanes increment, counter ends at 32":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addIntVk)
       let cDev = engine.allocDevice(int32, 1)
       # vkAllocateMemory contents are undefined, initialize the counter
@@ -95,7 +95,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 32
 
     test "fp: 4 threadgroups x 32 lanes, counter ends at 128":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addMultiTgVk)
       let cDev = engine.allocDevice(float32, 1)
       # vkAllocateMemory contents are undefined, initialize the counter

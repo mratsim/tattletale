@@ -219,8 +219,8 @@ proc mixerInit*(): HwEngine =
     "the mixer's GDN binding is Dk = Dv = 128"
   doAssert TopK == 8 and NumExperts == 256 and Inter == 512,
     "the mixer's MoE geometry is the Qwen decode class"
-  echo "device: ", bkMetal.newEngine().deviceName()
-  result = bkMetal.newEngine()
+  echo "device: ", newEngine(runMetal).deviceName()
+  result = newEngine(runMetal)
   result.ingest(MixerMsl)
 
 proc fillNorm1(m: var MegaGdnBufs; norm1: seq[uint16]) =

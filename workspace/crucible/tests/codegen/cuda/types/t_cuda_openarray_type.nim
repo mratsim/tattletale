@@ -53,7 +53,7 @@ const kernel2 = cuda:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   var fullIn = [1.0'f32, 2.0, 3.0, 4.0]
   var fullBuf: array[4, float32]
-  var engine1 = bkCuda.newEngine()
+  var engine1 = newEngine(runCuda)
   engine1.ingest(kernel1)
   let iDev1 = engine1.allocDevice(float32, fullIn.len)
   engine1.copyToDeviceFromHost(iDev1, addr fullIn[0], fullIn.len)
@@ -68,7 +68,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # Kernel 2
   var halfIn = [1.0'f32, 2.0, 3.0, 4.0]
   var halfBuf: array[2, float32]
-  var engine2 = bkCuda.newEngine()
+  var engine2 = newEngine(runCuda)
   engine2.ingest(kernel2)
   let iDev2 = engine2.allocDevice(float32, halfIn.len)
   engine2.copyToDeviceFromHost(iDev2, addr halfIn[0], halfIn.len)

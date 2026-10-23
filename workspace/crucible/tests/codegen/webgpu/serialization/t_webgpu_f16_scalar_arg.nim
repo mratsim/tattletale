@@ -13,7 +13,7 @@ const f16ScalarWgsl = webgpu:
 
 proc runTest() =   # private, tests run in a proc so engines are destroyed at return
   block: # f16ScaleKernel (float16 scalar by value)
-    var engine = bkWebGPU.newEngine()
+    var engine = newEngine(runWebGPU)
     engine.ingest(f16ScalarWgsl)
 
     var a: array[1, uint32] = [10'u32]

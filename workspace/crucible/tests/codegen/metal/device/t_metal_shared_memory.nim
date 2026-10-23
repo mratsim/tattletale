@@ -20,7 +20,7 @@ const sharedMsl = metal:
 proc runTest() =
   suite "Metal - shared memory + barrier":
     test "64 threads reverse-fill through threadgroup memory":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(sharedMsl)
       let oDev = engine.allocDevice(uint32, 64)
       engine.launchKernel<<(grid: (64, 1), blk: (64, 1))>>("sharedKernel", oDev, ())

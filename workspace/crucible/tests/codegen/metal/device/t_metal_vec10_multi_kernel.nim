@@ -30,7 +30,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - multi-kernel source":
     test "vec10_add and vec10_mul from one library":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(code)
       let aDev = engine.allocDevice(uint32, a.len)
       engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
