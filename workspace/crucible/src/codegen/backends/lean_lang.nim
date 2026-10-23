@@ -22,9 +22,10 @@
 ## - `{.postcondition.}` - stated against the per-thread body, attempted with the derived `simp` scripts (guarded thread only)
 ##
 ## A failed scaffold proof is downgraded to a `sorry`-backed scaffold, recorded unproven in a JSON manifest beside the module.
-## The pragma payloads use the payload language of the frontend's `lean_pragmas.nim`.
+## The pragma payloads use the payload language defined
+## in the `lean_pragmas` section below.
 
-import std/[json, os, osproc, sets, strutils, tables]
+import std/[json, macros, os, osproc, sets, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
 
 proc leanRefusal(msg: string): ref ValueError =
@@ -845,8 +846,8 @@ type
     startLine: int    ## 1-based line of the scaffold's first line in the module
 
 const specPragmaNames* = ["precondition", "invariant", "postcondition"]
-  ## Verification pragma vocabulary, one single source for the frontend
-  ## capture filter (`frontend/nim_to_lean.nim`) and for `specKindByName`
+  ## Verification pragma vocabulary: one source,
+  ## consumed by the `irLeanSpec` capture filter (below) and `specKindByName`
 
 proc specKindByName(name: string): SpecKind =
   ## Maps a captured pragma name to its kind, refusing anything else
@@ -1187,3 +1188,133 @@ proc emitLeanModule*(kernel: GpuAst, outPath: string): string =
   ## - refuses loudly (ValueError, "lean_lang: unsupported ...") on any
   ##   construct outside the tracer's scope
   emitLeanModuleWithSpecs(kernel, @[], outPath)
+
+# ── Verification pragmas ─────────────────────────────────────────────────────
+
+## Lean properties cannot be written in Nim, so each pragma payload is a string holding
+## a Lean property expression over the kernel's parameter names,
+## plus the model binders `tid` (thread id) and `n` (buffer bound).
+##
+## - `{.precondition: "<payload>".}` - assumed at launch, never proved
+## - `{.invariant: "<payload>".}` - holds whenever the guarded branch is entered, implied by the guard `tid < n`
+## - `{.postcondition: "<payload>".}` - holds for the written buffer after the thread ran
+##
+## - `prop := cmp ('∧' cmp)*`
+## - `cmp  := sum ('=' | '≠' | '<' | '≤') sum`
+## - `sum  := term ('+' term)*`
+## - `term := ident | ident 'tid' | uint literal`
+##
+## Example: `{.postcondition: "output tid = a tid + b tid".}` on the add kernel.
+## A well-formed payload stating a false property fails its Lean proof attempt and is downgraded to a sorry-backed scaffold.
+## Anything the grammar cannot parse is refused loudly.
+
+template precondition*(expr: static string) {.pragma.}
+  ## Payload: a Lean property assumed true at kernel launch, like `"tid < n"`.
+
+template invariant*(expr: static string) {.pragma.}
+  ## Payload: a Lean property implied by the guard of the guarded branch, `tid < n` in the tracer model, like `"tid < n"`.
+
+template postcondition*(expr: static string) {.pragma.}
+  ## Payload: a Lean property over the kernel parameters, `tid` and `n`,
+  ## stating the written buffer's state after the thread ran, like `"output tid = a tid + b tid"`.
+
+# ── Nim ingest ───────────────────────────────────────────────────────────────
+
+##   Nim kernel proc -> irLean/irLeanSpec -> post-pass GpuAst -> this emitter
+##
+## Runs the common pass set plus explicit pointer derefs over the kernel body,
+## the canonical buffer-access form of the analysis model.
+##
+## Backend bundles are excluded on purpose. Each backend bundle renames
+## source identifiers to satisfy its target's reserved words, so the GLSL
+## bundle renames a parameter the kernel names `output` to `output_nim`.
+## The model reasons over the kernel's semantic names, not renamed ones.
+
+proc toPostPassAst(body: NimNode): GpuAst {.compileTime.} =
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.registerInsertPointerDeref()
+  var typeReg = TypeRegistry(types: ctx.types)
+  result = ctx.toCrucibleAst(typeReg, body)
+  ctx.types = typeReg.types
+  ctx.ingestTopLevel(result, typesFirst = true)
+  runPasses(ctx, reg)
+
+macro irLean*(body: typed): GpuAst =
+  ## Evaluates to the post-pass GpuAst the Lean emitter consumes
+  result = newLit(toPostPassAst(body))
+
+proc statementSpecPragma(node: NimNode): string =
+  ## Name of the first verification pragma at statement level inside `node`,
+  ## or "" when none.
+  ##
+  ## Only proc-level pragmas are captured:
+  ## - crucible's frontend maps a statement pragma to a discarded statement
+  ## - a misplaced `.invariant.` would vanish from the emitted module
+  case node.kind
+  of nnkPragma, nnkPragmaExpr:
+    let pragma = if node.kind == nnkPragmaExpr: node[0] else: node
+    for item in pragma:
+      let nameNode = if item.kind in {nnkExprColonExpr, nnkCall}: item[0] else: item
+      if nameNode.kind in {nnkIdent, nnkSym} and
+          nameNode.strVal in specPragmaNames:
+        return nameNode.strVal
+    if node.kind == nnkPragmaExpr:
+      result = statementSpecPragma(node[1])
+  else:
+    for child in node:
+      let found = statementSpecPragma(child)
+      if found != "":
+        return found
+
+macro irLeanSpec*(body: typed): untyped =
+  ## Like `irLean`, plus capture of the verification pragmas on the kernel proc.
+  ## Evaluates to the tuple `(specs, gpu)`.
+  ##
+  ## - `specs` carries the raw pragma payloads
+  ## - `gpu` is the post-pass GpuAst of the same proc
+  ## - Crucible's frontend refuses verification pragmas, so they are stripped
+  ##   before the conversion
+  ##
+  ## The verification pragmas sit beside `global` on the kernel proc, each carrying a string payload.
+  ## `emitLeanModuleWithSpecs` turns them into Lean scaffolds.
+  ##
+  ## Payloads that are not string literals, and the same pragma twice,
+  ## are refused loudly at expansion time.
+  if body.kind == nnkStmtList and body.len != 1:
+    error "lean_lang: expected exactly one kernel proc" &
+      " in the guarded block, got " & $body.len & " statements"
+  let procNode = if body.kind == nnkStmtList: body[0] else: body
+  if procNode.kind != nnkProcDef:
+    error "lean_lang: expected a kernel proc, got node kind " & $procNode.kind
+  let misplaced = statementSpecPragma(procNode.body)
+  if misplaced != "":
+    error "lean_lang: unsupported statement-level '" &
+      misplaced & "' pragma inside the kernel body - verification pragmas" &
+      " are captured at proc level only"
+  var specs: seq[RawSpec]
+  var kept = newNimNode(nnkPragma, procNode.pragma)
+  for item in procNode.pragma:
+    if item.kind in {nnkExprColonExpr, nnkCall} and
+        item[0].kind in {nnkIdent, nnkSym} and
+        item[0].strVal in specPragmaNames:
+      if item[1].kind != nnkStrLit:
+        error "lean_lang: pragma '" &
+          item[0].strVal & "' payload must be a string literal"
+      for existing in specs:
+        if existing.name == item[0].strVal:
+          error "lean_lang: more than one '" &
+            item[0].strVal & "' pragma on the kernel"
+      specs.add RawSpec(name: item[0].strVal, payload: item[1].strVal)
+    else:
+      kept.add item
+  let stripped = copyNimTree(procNode)
+  # an empty nnkPragma trips crucible's `pragma.len > 0` assert at expansion.
+  # The empty node also keeps `analyzeKernel`'s own `{.global.}` refusal loud
+  stripped.pragma = if kept.len == 0: newEmptyNode() else: kept
+  let astIn = if body.kind == nnkStmtList: newStmtList(stripped) else: stripped
+  let gpuAst = toPostPassAst(astIn)
+  result = nnkPar.newTree(
+    nnkExprColonExpr.newTree(ident"specs", newLit(specs)),
+    nnkExprColonExpr.newTree(ident"gpu", newLit(gpuAst)))

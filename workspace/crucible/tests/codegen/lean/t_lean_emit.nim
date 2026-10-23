@@ -19,9 +19,7 @@
 
 import std/[assertions, os, osproc, strutils]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/frontend/lean_pragmas
 import workspace/crucible/src/codegen/backends/lean_lang
-import workspace/crucible/src/codegen/frontend/nim_to_lean
 import lean_testutils
 
 const genRelPath = leanProjectDir & "/generated/add.lean"
