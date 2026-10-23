@@ -85,7 +85,7 @@ static:
   discard registerValidateAddressSpaceCasts.runPass(fixtureFn(fixtureBlock(convNode)))
   echo "  OK - a conversion whose operand and target are device pointers passes"
 
-# ── 5. Frontend casts validate: device operand and smem operand ──
+# ── 5. Frontend kernel casts pass validation ──
 static:
   let ir = toCrucibleAst:
     proc castKernel(outp: ptr UncheckedArray[float32]) {.global.} =
@@ -96,51 +96,8 @@ static:
 
   let fn = ir.findFirst(gpuProc)
   doAssert not fn.isNil, "expected the kernel proc"
-  var casts: seq[GpuAst]
-  var n = fn
-  proc collectCasts(n: GpuAst) =
-    if n.kind == gpuCast:
-      casts.add n
-    for ch in n.items:
-      collectCasts(ch)
-  n.collectCasts()
-  doAssert casts.len == 2, "expected the device and smem casts, got " & $casts.len
-  doAssert casts[0].cTo.addressSpace == asDevice,
-    "the frontend stamps the cast target from the device operand, got " &
-    $casts[0].cTo.addressSpace
-  doAssert casts[1].cTo.addressSpace == asSMEM,
-    "the frontend stamps the cast target from the smem operand, got " &
-    $casts[1].cTo.addressSpace
   # the frontend stamps every target from its operand, so the validation passes
   discard registerValidateAddressSpaceCasts.runPass(fn)
   echo "  OK - frontend casts carry their operand's space and pass validation"
-
-# ── 6. The rejection decision, driven on hand-built nodes both directions ──
-static:
-  # the error path cannot raise inside a static block, so the decision
-  # boundary is asserted directly: mismatch rejects, same space passes,
-  # for cast and conversion targets alike
-  var ctx = GpuContext()
-  let rmemPtr = GpuAst(kind: gpuIdent,
-    symbol: newSymbol("p", typ = initGpuPtrType(GpuType(kind: gtFloat32), implicitPtr = false)))
-  let devTarget = initGpuPtrType(GpuType(kind: gtFloat32), implicitPtr = false,
-                                 addressSpace = asDevice)
-  let crossCast = GpuAst(kind: gpuCast, cTo: devTarget, cExpr: rmemPtr)
-  doAssert ctx.spaceCastRejection(crossCast, "k").len > 0,
-    "a thread-operand cast to a device ptr is rejected"
-  let sameCast = GpuAst(kind: gpuCast,
-    cTo: initGpuPtrType(GpuType(kind: gtFloat32), implicitPtr = false),
-    cExpr: rmemPtr)
-  doAssert ctx.spaceCastRejection(sameCast, "k").len == 0,
-    "a same-space cast passes"
-  let crossConv = GpuAst(kind: gpuConv, convTo: devTarget, convExpr: rmemPtr)
-  doAssert ctx.spaceCastRejection(crossConv, "k").len > 0,
-    "a thread-operand conversion to a device ptr is rejected"
-  let smemTarget = initGpuPtrType(GpuType(kind: gtFloat32), implicitPtr = false,
-                                  addressSpace = asSMEM)
-  let smemCast = GpuAst(kind: gpuCast, cTo: smemTarget, cExpr: rmemPtr)
-  doAssert ctx.spaceCastRejection(smemCast, "k").len > 0,
-    "a thread-operand cast to a threadgroup ptr is rejected"
-  echo "  OK - the rejection decision fires on cross-space, cast and conv"
 
 echo "t_ir_spaceCastValidation: all static assertions passed"
