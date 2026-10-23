@@ -27,6 +27,36 @@ func staticShape[T, Sh, St](_: typedesc[TensorView[T, Sh, St]]): Sh =
   ## Example: `staticShape(typeof(view)).rank()` is the view's rank.
   default(Sh)
 
+template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
+    weight: TensorView[T, ShW, StW], src: TensorView[T, ShS, StS], axis: static int): bool =
+  ## Compile-time part of the weighted rmsnorm's weight contract.
+  ## The kernel and the host-side checks share this one body.
+  ##
+  ## - the weight is rank 1, one slot per axis position, always enforced
+  ## - the weight size matches the source axis size when both sizes are
+  ##   compile-time literals
+  ##
+  ## Returns whether the weight size is a compile-time literal. When it is not,
+  ## the caller checks the size against the row size on the device.
+  ##
+  ## Example:
+  ##   doAssert not compiles(rmsnormWeightShapeCheck(undersizedWeight, src, axis))
+  ##   doAssert compiles(rmsnormWeightShapeCheck(goodWeight, src, axis))
+  const
+    wShape = staticShape(typeof(weight))
+    wLeaf = when wShape is tuple: wShape[0] else: wShape
+    sShape = staticShape(typeof(src))
+    sLeaf = when sShape is tuple: sShape[axis] else: sShape
+    sizeIsStatic = typeof(wLeaf) is Int and typeof(sLeaf) is Int
+  static:
+    doAssert wShape.rank() == 1,
+      "rmsnorm weight must be rank 1, one slot per axis position"
+  when sizeIsStatic:
+    static:
+      doAssert wLeaf === sLeaf,
+        "rmsnorm weight size must match the source axis size"
+  sizeIsStatic
+
 proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: static int, withWeight: static bool) {.inline.} =
   ## Row-wise RMS normalization shared by the two entry points.
   ##
@@ -73,22 +103,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     nThreads = threads_per_threadgroup.x * threads_per_threadgroup.y * threads_per_threadgroup.z
     offContract = nThreads != W
   when withWeight:
-    const
-      wShape = staticShape(typeof(weight))
-      wLeaf = when wShape is tuple: wShape[0] else: wShape
-      sShape = staticShape(typeof(src))
-      sLeaf = when sShape is tuple: sShape[axis] else: sShape
-      sizeIsStatic = typeof(wLeaf) is Int and typeof(sLeaf) is Int
-    static:
-      doAssert wShape.rank() == 1,
-        "rmsnorm weight must be rank 1, one slot per axis position"
-    # the weight size folds statically when both leaves are compile-time literals,
-    # runtime-shaped weights are rejected on the device instead
-    when sizeIsStatic:
-      static:
-        doAssert wLeaf === sLeaf,
-          "rmsnorm weight size must match the source axis size"
-    else:
+    const sizeIsStatic = rmsnormWeightShapeCheck(weight, src, axis)
+    when not sizeIsStatic:
       # runtime-shaped weight: its size is only known on the device.
       # A size miss poisons the rows below.
       let wSize = weight.size()
