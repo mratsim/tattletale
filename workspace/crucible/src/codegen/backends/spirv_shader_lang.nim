@@ -27,7 +27,7 @@ func uint32Type(): GpuType =
 func roundUp*(x, step: int): int =
   ((x + step - 1) div step) * step
 
-func scalarByteSize*(t: GpuType): int =
+func getScalarByteSize*(t: GpuType): int =
   case t.kind
   of gtVoid: 0
   of gtUint8: 1
@@ -150,7 +150,7 @@ type SpvLayout* = object
 func std430Layout*(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
-    let s = scalarByteSize(t.scalar)
+    let s = getScalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
   of stkArray:
     let e = std430Layout(t.elem)
@@ -299,7 +299,7 @@ proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock 
   for m in members:
     if m.kind == stkScalar and m.scalar.kind == gtBool:
       spvRefuse("push-constant member bool, OpTypeBool cannot appear in a push-constant block")
-    if m.kind == stkScalar and scalarByteSize(m.scalar) < 4:
+    if m.kind == stkScalar and getScalarByteSize(m.scalar) < 4:
       spvRefuse("push-constant member " & $m.scalar.kind &
         " narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
   result.members = members
@@ -517,7 +517,7 @@ proc convertValue*(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 
   let fFloat = source.kind in {gtFloat32, gtFloat64}
   let tFloat = to.kind in {gtFloat32, gtFloat64}
   let inst = if fInt and tInt:
-      if scalarByteSize(source) == scalarByteSize(to):
+      if getScalarByteSize(source) == getScalarByteSize(to):
         OpBitcast
       elif source.kind in spvSignedInts:
         OpSConvert
@@ -546,14 +546,14 @@ proc bdaPointerTy*(ctx: var SpvLangCtx, elem: GpuType): uint32 =
   let refStruct = ctx.structTy(@[spvRuntimeArray(spvScalar(elem))], isBlock = true)
   ctx.builder.tyPointer(scPhysicalStorageBuffer, refStruct)
 
-proc localVarId(fn: SpvFnCtx, sym: Symbol): uint32 =
+proc getLocalVarId(fn: SpvFnCtx, sym: Symbol): uint32 =
   if sym.iSym in fn.localsBySym:
     return fn.localsBySym[sym.iSym]
   if sym.name in fn.locals:
     return fn.locals[sym.name]
   spvRefuse("unknown local symbol " & sym.name)
 
-proc localType(fn: SpvFnCtx, sym: Symbol): GpuType =
+proc getLocalType(fn: SpvFnCtx, sym: Symbol): GpuType =
   if sym.iSym in fn.localTysBySym:
     return fn.localTysBySym[sym.iSym]
   if sym.name in fn.localTys:
@@ -573,8 +573,8 @@ proc emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
     return ctx.builder.constBool(boolTy, sym.name == "true")
   if sym.iSym in fn.localsBySym or sym.name in fn.locals:
-    let t = if sym.typ.kind == gtVoid: localType(fn, sym) else: sym.typ
-    return ctx.builder.opLoad(ctx.tyId(valueTy(t)), localVarId(fn, sym))
+    let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
+    return ctx.builder.opLoad(ctx.tyId(valueTy(t)), getLocalVarId(fn, sym))
   if sym.iSym in fn.paramVals:
     return fn.paramVals[sym.iSym]
   if sym.iSym in fn.addrs:
@@ -648,8 +648,8 @@ proc resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[
   of gpuIdent:
     let sym = root.symbol
     if sym.iSym in fn.localsBySym or sym.name in fn.locals:
-      let t = if sym.typ.kind == gtVoid: localType(fn, sym) else: sym.typ
-      return (localVarId(fn, sym), t, false)
+      let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
+      return (getLocalVarId(fn, sym), t, false)
     if sym.iSym in fn.addrs:
       # pointer params address their pointee, a chain root through them
       # starts at the pointee type, an implicit-ptr parameter's declared type
@@ -745,14 +745,14 @@ proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: G
       result.isBda = false
       return
     # local array: the Function-storage variable already is a pointer to it
-    let arrTy = localType(fn, sym)
+    let arrTy = getLocalType(fn, sym)
     doAssert arrTy.kind == gtArray, "indexing a non-array local: " & sym.name
     result.elem = valueType(arrTy.aTyp)
     doAssert result.elem.kind in spvScalarKinds,
       "composite element stores address scalar elements only"
     let elemPtrTy = ctx.builder.tyPointer(scFunction,
                                           ctx.tyId(spvScalar(result.elem)))
-    result.ptrId = ctx.builder.opAccessChain(elemPtrTy, localVarId(fn, sym),
+    result.ptrId = ctx.builder.opAccessChain(elemPtrTy, getLocalVarId(fn, sym),
                                              @[idxVal])
     result.isBda = false
     return
@@ -1137,7 +1137,7 @@ proc emitIf(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
 
 proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let indSym = n.fVar.symbol
-  let indVar = localVarId(fn, indSym)
+  let indVar = getLocalVarId(fn, indSym)
   doAssert (indSym.iSym in fn.localTysBySym) or (indSym.name in fn.localTys),
     "induction variable was not hoisted"
   let indTy = ctx.tyId(spvScalar(indSym.typ))
@@ -1317,7 +1317,7 @@ proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   of gpuVar:
     # storage hoisted to the setup block, the initializer stores here
     let sym = n.vName.symbol
-    let varId = localVarId(fn, sym)
+    let varId = getLocalVarId(fn, sym)
     if n.vInit.kind != gpuDiscard:
       let v = emitExpr(ctx, fn, n.vInit)
       if n.vType.kind in spvScalarKinds or isStaticInt(n.vType):

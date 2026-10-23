@@ -355,7 +355,7 @@ proc addWords*(m: var SpvModule, section: SpvSection, words: openArray[uint32]) 
   for w in words:
     m.sections[section].add w
 
-func stringWords*(s: string): int =
+func getStringWords*(s: string): int =
   (s.len + 4) div 4
 
 proc addString*(m: var SpvModule, section: SpvSection, s: string) =
@@ -460,7 +460,7 @@ proc emitEntryPoint*(b: var SpvBuilder, executionModel, entryPoint: uint32, name
   # - the Input/Output-only interface matches the spvVersion13 baseline,
   #   SPIR-V 1.4+ requires listing every referenced global variable,
   #   push-constant block included
-  b.module.startInst(ssEntryPoints, OpEntryPoint, 2 + stringWords(name) + iface.len)
+  b.module.startInst(ssEntryPoints, OpEntryPoint, 2 + getStringWords(name) + iface.len)
   b.module.addWords(ssEntryPoints, @[executionModel, entryPoint])
   b.module.addString(ssEntryPoints, name)
   b.module.addWords(ssEntryPoints, iface)
@@ -624,7 +624,7 @@ proc opLabelAt*(b: var SpvBuilder, label: uint32) =
   b.module.emitInstSeq(ssFunctions, OpLabel, @[label])
 
 proc emitExtension*(b: var SpvBuilder, name: string) =
-  b.module.startInst(ssExtensions, OpExtension, stringWords(name))
+  b.module.startInst(ssExtensions, OpExtension, getStringWords(name))
   b.module.addString(ssExtensions, name)
 
 proc opLoadAligned*(b: var SpvBuilder, resultType, pointer, alignment: uint32): uint32 =
