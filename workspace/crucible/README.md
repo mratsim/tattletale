@@ -174,6 +174,7 @@ workspace/crucible/
         vulkan_descriptor_runtime.nim
         vulkan_address_runtime.nim
         vulkan_compile.nim
+        d3d12_compile.nim         DXBC/DXIL compile via dxc (D3D12 smoke/POC)
         webgpu_runtime.nim
         metal_runtime.nim         MSL compile/dispatch
         runtime_utils.nim
@@ -185,6 +186,7 @@ workspace/crucible/
       c_abi.nim                   Raw C FFI bindings
       opencl_abi.nim
       vulkan_abi.nim
+      d3d12_abi.nim               D3D12 dynlib bindings (D3D12 smoke/POC)
       nvidia_abi.nim              CUDA driver + NVRTC bindings
       nvidia_paths.nim            CUDA library discovery
       objc_abi.nim                libobjc msgSend bridge (Metal's host API)
