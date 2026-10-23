@@ -66,16 +66,22 @@ macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
 
 func originOffset[Sh, St](layout: Layout[Sh, St]): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
-  let sh = layout.shape.flatten()
-  let st = layout.stride.flatten()
-  var strides: seq[int]
-  for f in fields(st):
-    strides.add(toInt(f))
-  var i = 0
-  for f in fields(sh):
-    if strides[i] < 0:
-      result += (toInt(f) - 1) * (-strides[i])
-    i.inc
+  when Sh.rank() == 1:
+    # a rank-1 layout flattens to a scalar, fields() needs a tuple
+    let d = toInt(layout.stride.flatten())
+    if d < 0:
+      result = (toInt(layout.shape.flatten()) - 1) * (-d)
+  else:
+    let sh = layout.shape.flatten()
+    let st = layout.stride.flatten()
+    var strides: seq[int]
+    for f in fields(st):
+      strides.add(toInt(f))
+    var i = 0
+    for f in fields(sh):
+      if strides[i] < 0:
+        result += (toInt(f) - 1) * (-strides[i])
+      i.inc
 
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)

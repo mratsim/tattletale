@@ -364,5 +364,11 @@ block:
   doAssert slice(L, (_, _)) === L
 echo "    slice via () syntax: 3 cases OK"
 
+block:
+  # crd2idx has no rank-0 identity, the empty shape refuses at compile time
+  # (layout_indexing.nim:128), the gap the kernel's rank-0 fork names
+  doAssert not compiles(crd2idx(make_layout((), ()), ()))
+echo "    crd2idx rank-0 refusal: 1 case OK"
+
 echo "\n--- layout_indexing tests ---"
 echo "  All tests passed."

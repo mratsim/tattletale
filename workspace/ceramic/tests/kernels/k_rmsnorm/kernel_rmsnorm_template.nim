@@ -35,21 +35,33 @@ func refRmsnorm[T, ShS, StS, ShD, StD, ShW, StW](
     rowSize = toInt(src.shape[axis])
     srcL = src.getLayout()
     dstL = dst.getLayout()
-  for i in 0 ..< toInt(dst.size()):
-    var crd = idx2crd(dst.shape, i)
-    if crd[axis] != 0:
-      continue
+  when ShS.rank() == 1:
+    # rank 1: the whole tensor is the one row, the coordinate is the axis position
     var ss = 0.0
     for r in 0 ..< rowSize:
-      crd[axis] = r
-      let x = float64(src.data[toInt crd2idx(srcL, crd)])
+      let x = float64(src.data[toInt crd2idx(srcL, r)])
       ss += x * x
     let scale = 1.0 / sqrt(ss / float64(rowSize) + float64(eps))
     for r in 0 ..< rowSize:
-      crd[axis] = r
       let w = float64(weight.data[toInt crd2idx(weight.getLayout(), r)])
-      dst.data[toInt crd2idx(dstL, crd)] = float32(
-          float64(src.data[toInt crd2idx(srcL, crd)]) * scale * w)
+      dst.data[toInt crd2idx(dstL, r)] = float32(
+          float64(src.data[toInt crd2idx(srcL, r)]) * scale * w)
+  else:
+    for i in 0 ..< toInt(dst.size()):
+      var crd = idx2crd(dst.shape, i)
+      if crd[axis] != 0:
+        continue
+      var ss = 0.0
+      for r in 0 ..< rowSize:
+        crd[axis] = r
+        let x = float64(src.data[toInt crd2idx(srcL, crd)])
+        ss += x * x
+      let scale = 1.0 / sqrt(ss / float64(rowSize) + float64(eps))
+      for r in 0 ..< rowSize:
+        crd[axis] = r
+        let w = float64(weight.data[toInt crd2idx(weight.getLayout(), r)])
+        dst.data[toInt crd2idx(dstL, crd)] = float32(
+            float64(src.data[toInt crd2idx(srcL, crd)]) * scale * w)
 
 func refRmsnorm[T, ShS, StS, ShD, StD](
     dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS],
@@ -59,20 +71,31 @@ func refRmsnorm[T, ShS, StS, ShD, StD](
     rowSize = toInt(src.shape[axis])
     srcL = src.getLayout()
     dstL = dst.getLayout()
-  for i in 0 ..< toInt(dst.size()):
-    var crd = idx2crd(dst.shape, i)
-    if crd[axis] != 0:
-      continue
+  when ShS.rank() == 1:
+    # rank 1: the whole tensor is the one row, the coordinate is the axis position
     var ss = 0.0
     for r in 0 ..< rowSize:
-      crd[axis] = r
-      let x = float64(src.data[toInt crd2idx(srcL, crd)])
+      let x = float64(src.data[toInt crd2idx(srcL, r)])
       ss += x * x
     let scale = 1.0 / sqrt(ss / float64(rowSize) + float64(eps))
     for r in 0 ..< rowSize:
-      crd[axis] = r
-      dst.data[toInt crd2idx(dstL, crd)] = float32(
-          float64(src.data[toInt crd2idx(srcL, crd)]) * scale)
+      dst.data[toInt crd2idx(dstL, r)] = float32(
+          float64(src.data[toInt crd2idx(srcL, r)]) * scale)
+  else:
+    for i in 0 ..< toInt(dst.size()):
+      var crd = idx2crd(dst.shape, i)
+      if crd[axis] != 0:
+        continue
+      var ss = 0.0
+      for r in 0 ..< rowSize:
+        crd[axis] = r
+        let x = float64(src.data[toInt crd2idx(srcL, crd)])
+        ss += x * x
+      let scale = 1.0 / sqrt(ss / float64(rowSize) + float64(eps))
+      for r in 0 ..< rowSize:
+        crd[axis] = r
+        dst.data[toInt crd2idx(dstL, crd)] = float32(
+            float64(src.data[toInt crd2idx(srcL, crd)]) * scale)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Data preparation
@@ -80,9 +103,6 @@ func refRmsnorm[T, ShS, StS, ShD, StD](
 
 proc randomHostVector*[T](rng: var Rand, _: typedesc[T], size: int, bounds: HSlice[float32, float32] = 1'f32 .. 2'f32): auto =
   ## Returns a random rank-1 host tensor of shape (size,), stride 1.
-  ##
-  ## Rank-1 layouts flatten single-element shape and stride tuples into scalars, the shared rank-N host tensor constructors reject that shape.
-  ## This constructor serves the vector case.
   let layout = make_layout((size,), (1,))
   result = HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
     data: cast[ptr UncheckedArray[T]](allocShared(size * sizeof(T))),
@@ -275,5 +295,16 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
       "strided dst, 2x stride on the non-reduced axis")
   checkRmsnorm(rng, engine, (4, 16), (16, 1), (32, 1), 1e-5'f32, 1, true,
       "strided dst, 2x stride on the non-reduced axis, weighted")
+
+  # ── rank 1: the whole tensor is one row, a strided source instantiates
+  #    the row map's rank-0 branch, crd2idx refuses rank-0 shapes ──
+  checkRmsnorm(rng, engine, (64,), (1,), (1,), 1e-5'f32, 0, false,
+      "rank-1 contiguous (lane mode)")
+  checkRmsnorm(rng, engine, (64,), (1,), (1,), 1e-5'f32, 0, true,
+      "rank-1 contiguous, weighted")
+  checkRmsnorm(rng, engine, (64,), (2,), (1,), 1e-5'f32, 0, false,
+      "rank-1 strided src (rank-0 row map branch)")
+  checkRmsnorm(rng, engine, (64,), (2,), (1,), 1e-5'f32, 0, true,
+      "rank-1 strided src, weighted")
 
   # ── the weight must fit the reduced axis: one slot per axis position ──

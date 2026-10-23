@@ -33,26 +33,33 @@ proc rmsnormStridedImpl(dst, src, weight: distinct TensorView, eps: float32, axi
     thrID = getLocalThreadID()
     nonReduced = src.sliceAxes(axis)
     reduced = src.diceAxes(axis)
-    rows = nonReduced.size()
     gridStride = getGridSize()
     rowSize = src.diceAxes(axis).size()
     rowBlock0 = getLocalTileID(src.shape) * W
   const nr: int = nonReduced.rank()
-  const identityOrder = block:
-    var r: array[nr, int]
-    staticFor i, 0, nr:
-      r[i] = i
-    r
-  let
-    rowMap = make_ordered_layout(nonReduced.shape, identityOrder)
-    dstNonReduced = dst.sliceAxes(axis)
-    dstReduced = dst.diceAxes(axis)
+  when nr == 0:
+    # the rank-0 slice's size is a static Int countup rejects, the empty map
+    # constructors do not lower through crucible
+    let rows = 1
+  else:
+    let rows = nonReduced.size()
+    const identityOrder = block:
+      var r: array[nr, int]
+      staticFor i, 0, nr:
+        r[i] = i
+      r
+    let
+      rowMap = make_ordered_layout(nonReduced.shape, identityOrder)
+      dstNonReduced = dst.sliceAxes(axis)
+      dstReduced = dst.diceAxes(axis)
   for blk0 in countup(rowBlock0, rows - 1, gridStride * W):
     let
       rowFlat = blk0 + thrID
       rowActive = rowFlat < rows
       fullEnd = rowSize.round_multiple_down(depthOwn)
-    when nonReduced.rank() == 0:
+    when nr == 0:
+      # crd2idx has no rank-0 identity (layout_indexing.nim:128), the whole tensor
+      # is the row strip
       let
         srcRow = src
         dstRow = dst
@@ -131,9 +138,12 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
   # per-simdgroup partials uncombined or rows partially written.
   # TODO: cross-warp combine via shared memory and barrier.
-  let
-    rows = src.sliceAxes(axis).size()
-    gridStride = getGridSize()
+  when src.rank() == 1:
+    # the rank-1 slice is empty, its size is a static Int countup rejects
+    let rows = 1
+  else:
+    let rows = src.sliceAxes(axis).size()
+  let gridStride = getGridSize()
   # Map selection from the source layout's strides:
   # - the reduced axis is the lane mode when it is memory-contiguous,
   #   maxCommonVector >= lane width, lanes share each row and a subgroup
