@@ -173,6 +173,69 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
+
+proc compileHlslToSpirV*(hlsl: string): seq[uint32] =
+  ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
+  ##
+  ## The HLSL printer emits one kernel per source as `main`:
+  ##
+  ## - ``-E main`` is required, DXC has no default entry point
+  ## - cs_6_4 is the profile this DXC 1.11 build accepts
+  ## - a non-zero exit fails loudly with the compiler output
+  let dxc = findExe("dxc")
+  if dxc.len == 0:
+    failLoud("dxc not found on PATH, the Vulkan engine needs it to compile HLSL sources")
+  let tmpDir = getKernelDir("vulkan")
+  # Private temp dir: 0700, symlink planting at deterministic paths stays
+  # impossible for other local users (TOCTOU), unique names keep concurrent
+  # compiles from colliding on the same file.
+  setFilePermissions(tmpDir, {fpUserExec, fpUserWrite, fpUserRead})
+  let srcPath = genTempPath("main_", ".hlsl", tmpDir)
+  let spvPath = genTempPath("main_", ".spv", tmpDir)
+
+  writeFile(srcPath, hlsl)
+  defer:
+    if fileExists(srcPath):
+      removeFile(srcPath)
+    if fileExists(spvPath):
+      removeFile(spvPath)
+  let args = ["-T", "cs_6_4", "-E", "main", "-spirv", "-Fo", spvPath, srcPath]
+  let p = startProcess(dxc, args = args, options = {poStdErrToStdOut})
+  let compOut = p.outputStream.readAll()
+  let exitCode = p.waitForExit()
+  defer: p.close()
+  if exitCode != 0:
+    failLoud("dxc failed (exit=" & $exitCode & "):\n" & compOut)
+
+  let raw = readFile(spvPath)
+  result = newSeq[uint32](raw.len div 4)
+  copyMem(result[0].addr, raw[0].addr, raw.len)
+
+proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
+  ## True when the SPIR-V module declares the PhysicalStorageBufferAddresses capability,
+  ## the marker of the address route:
+  ##
+  ## - address route: pointer arguments are 64-bit buffer-device addresses packed into push constants
+  ## - descriptor route: buffers bind as storage-buffer descriptors
+  ##
+  ## Numbers verified with spirv-dis against glslangValidator and DXC output:
+  ##
+  ## - OpCapability opcode: 17, the low 16 bits of the instruction word
+  ## - PhysicalStorageBufferAddresses capability: 5347
+  ## - a DXC-compiled module carries only OpCapability Shader
+  const opCapability = 17
+  const capPhysicalStorageBufferAddresses = 5347
+  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
+  var i = 5
+  while i < spv.len:
+    let wordCount = spv[i] shr 16
+    if wordCount == 0:
+      break
+    if (spv[i] and 0xFFFF) == opCapability and
+       i + 1 < spv.len and
+       spv[i + 1] == capPhysicalStorageBufferAddresses:
+      return true
+    inc i, wordCount.int
 # ═══════════════════════════════════════════════════════════════════════
 # Physical device queries
 # ═══════════════════════════════════════════════════════════════════════

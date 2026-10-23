@@ -14,6 +14,7 @@ import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_address_runtime
+import workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
@@ -32,6 +33,8 @@ type
     entryPoint: string
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
+    isHlsl: bool   # HLSL sources emit one module as `main`, every kernel name runs it
+    entryAddressRoute: bool   # ingest-time route of the entry kernel, validation only: the launch path re-derives the route from the SPIR-V about to run
     caches: VulkanCaches
 
 template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
@@ -47,16 +50,45 @@ proc newVulkanEngine*(): VulkanEngine =
 # ════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
-  ## Stores the source, glslangValidator → SPIR-V, re-entrant.
+  ## Stores the source, compiles it to SPIR-V, re-entrant.
+  ##
+  ## The source language comes from the text shape, no user flag:
+  ##
+  ## - GLSL: a `#version` first line, glslangValidator compiles, the GLSL preamble names the entry point and squadron
+  ## - HLSL: the `[numthreads(x, y, z)]` attribute, dxc compiles entry `main`, the attribute bakes the squadron
+  ## - neither marker: failLoud names the expectation
+  ##
+  ## The HLSL printer discards the DSL kernel name and emits one module as `main`,
+  ## so launchKernel runs it for any kernel name: the GLSL per-kernel
+  ## recompile path does not apply.
+  ##
+  ## The launch route per kernel comes from the SPIR-V itself:
+  ## usesPhysicalStorageBuffer re-derives it at each launch from the module
+  ## about to run.
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
 
+  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
+  engine.caches.spirvCache.clear()
+  engine.source = source
+  if source.startsWith("#version"):
+    ingestGlsl(engine, source)
+  elif "[numthreads(" in source:
+    ingestHlsl(engine, source)
+  else:
+    failLoud("Vulkan ingest: unrecognized source language, expected GLSL " &
+             "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
+             source.splitLines()[0])
+
+proc ingestGlsl(engine: VulkanEngine, glsl: string) =
+  ## GLSL ingest: glslangValidator compiles, the GLSL preamble names the entry
+  ## point and bakes the squadron.
   # multi-kernel sources cannot address per-kernel scalars in the shared
   # deduped push block, ingest quits loudly
-  if countKernels(source) > 1:
+  if countKernels(glsl) > 1:
     var inPush = false
-    for line in source.splitLines():
+    for line in glsl.splitLines():
       if "layout(push_constant" in line:
         inPush = true
       elif inPush and line.strip().startsWith("}"):
@@ -67,12 +99,21 @@ proc ingest*(engine: VulkanEngine, source: string) =
           failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
                    "use one kernel per source when passing by-value scalars")
 
-  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
-  engine.caches.spirvCache.clear()
-  engine.source = source
-  engine.entryPoint = parseEntryPoint(source)
-  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
-  engine.shaderSquadron = parseShaderSquadron(source)
+  engine.entryPoint = parseEntryPoint(glsl)
+  engine.spirv = compileGlslToSpirV(glsl, engine.entryPoint)
+  engine.shaderSquadron = parseShaderSquadron(glsl)
+  engine.isHlsl = false
+  engine.entryAddressRoute = usesPhysicalStorageBuffer(engine.spirv)
+
+proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
+  ## HLSL ingest: dxc compiles one module per source, entry `main`,
+  ## the squadron comes from the `[numthreads]` attribute.
+  ##
+  engine.entryPoint = "main"
+  engine.spirv = compileHlslToSpirV(hlsl)
+  engine.shaderSquadron = parseHlslSquadron(hlsl)
+  engine.isHlsl = true
+  engine.entryAddressRoute = usesPhysicalStorageBuffer(engine.spirv)
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
@@ -163,6 +204,35 @@ proc parseShaderSquadron(glsl: string): Dim3 =
     of 1: result.y = n
     else: result.z = n
 
+proc parseHlslSquadron(hlsl: string): Dim3 =
+  ## Extracts the shader-baked squadron from the `[numthreads(x, y, z)]` attribute.
+  ## Absent attribute: (0, 0, 0), run then fails squadron validation loudly.
+  const marker = "[numthreads("
+  let i = hlsl.find(marker)
+  if i < 0:
+    return Dim3(x: 0, y: 0, z: 0)
+  var fields: array[3, int]
+  var f = 0
+  var n = 0
+  var k = i + marker.len
+  while k < hlsl.len:
+    let c = hlsl[k]
+    if c in {'0' .. '9'}:
+      n = n * 10 + (ord(c) - ord('0'))
+    elif c == ',':
+      fields[f] = n
+      n = 0
+      inc f
+      if f > 2:
+        return Dim3(x: 0, y: 0, z: 0)
+    elif c == ')':
+      fields[f] = n
+      return Dim3(x: fields[0], y: fields[1], z: fields[2])
+    elif c notin {' ', '\t'}:
+      return Dim3(x: 0, y: 0, z: 0)
+    inc k
+  return Dim3(x: 0, y: 0, z: 0)
+
 proc countKernels(glsl: string): int =
   const marker = "layout(local_size_x"
   var i = glsl.find(marker)
@@ -210,7 +280,10 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
   # Entrypoint caching
   var entry = engine.entryPoint
   var spirv: seq[uint32]
-  if kernel == engine.entryPoint:
+  if engine.isHlsl:
+    spirv = engine.spirv
+    entry = "main"
+  elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:
     if not engine.caches.spirvCache.hasKey(kernel):
@@ -218,6 +291,16 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
+  # The launch route re-derives from the SPIR-V about to run
+  if usesPhysicalStorageBuffer(spirv):
+    launchAddressRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
+  else:
+    launchDescriptorRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
+
+proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+                        output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+  ## One dispatch through the address route: pointer args are 64-bit
+  ## buffer-device addresses, scalars pack into the push-constant block.
   var dctx = SerializationCtx(vctx: engine.ctx)
   bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
   let pushConstLen = dctx.pn
@@ -253,6 +336,46 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
+
+proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+                           output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+  ## One dispatch through the descriptor route:
+  ##
+  ## - buffer args bind as storage-buffer descriptors, output first then args in parameter order
+  ## - the pipeline carries the set layout, pointer-only
+  ## - scalar args have no uniform-block layout model yet and fail loudly
+  var bufs: seq[VulkanBuffer]
+  template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
+    bufs.add v
+  template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
+    failLoud("descriptor route: scalar kernel args are not supported, " &
+             "the uniform-block layout model does not exist yet")
+  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, bkGlsl)
+
+  let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len))
+  let pool = engine.ctx.createDescriptorPool(uint32(bufs.len))
+  let descSet = engine.ctx.allocateDescriptorSet(pool, setLayout)
+  engine.ctx.updateDescriptorSet(descSet, bufs, uint32(bufs.len))
+
+  let pipelineKey = (kernel, 0)
+  if not engine.caches.pipelineCache.hasKey(pipelineKey):
+    let shaderModule = engine.ctx.createShaderModule(spirv)
+    engine.caches.pipelineCache[pipelineKey] =
+      engine.ctx.createPipeline(shaderModule, entry, 0, setLayout)
+    engine.ctx.destroyShaderModule(shaderModule)
+
+  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local)),
+  # the fence wait blocks until the dispatch completes
+  engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
+                 [uint32(cfg.grid.x * squadron.x),
+                  uint32(cfg.grid.y * squadron.y),
+                  uint32(cfg.grid.z * squadron.z)],
+                 [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
+                 nil, 0, descSet)
+
+  # Sets and pools are per-launch and die once runKernel's fence wait returns, the pipeline outlives them in the engine's pipeline cache
+  engine.ctx.destroyDescriptorPool(pool)
+  engine.ctx.destroyDescriptorSetLayout(setLayout)
 
 proc allocDeviceImpl(engine: VulkanEngine, n: int): VulkanBuffer {.inline.} =
   engine.ctx.allocBuffer(n)
