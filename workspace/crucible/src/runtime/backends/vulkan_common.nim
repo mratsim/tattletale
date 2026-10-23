@@ -515,8 +515,6 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc createShaderModule*(ctx: VulkanContext, spirv: seq[uint32]): VkShaderModule =
-  ## vkCreateShaderModule over validated SPIR-V words.
-  ## Caller releases the module with destroyShaderModule.
   let vkCreateShaderModule = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
          pAllocator: pointer,
