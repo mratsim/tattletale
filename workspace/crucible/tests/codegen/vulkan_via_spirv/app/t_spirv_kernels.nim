@@ -91,6 +91,11 @@ const atomicSpv = spirv:
   proc atomicKernel(counter: ptr UncheckedArray[float32]) {.global.} =
     discard atomicFetchAdd(addr counter[0], 1.0'f32)
 
+const ternaryRangeSpv = spirv:
+  proc ternaryRangeKernel(output: ptr UncheckedArray[float32], n: int32) {.global.} =
+    for i in 0 ..< (if n > 0: 4 else: 8):
+      output[i] = float32(i)
+
 proc runTest() =
   validateSpv(vec2Spv, "t_spirv_kernels_vec2",
               @["OpFunctionCall", "OpCompositeConstruct",
@@ -111,6 +116,11 @@ proc runTest() =
                 "OpExtension \"SPV_EXT_shader_atomic_float_add\"",
                 "%uint_72",
                 "OpMemoryModel PhysicalStorageBuffer64 GLSL450"])
+  # a selection expression as the loop range end: the bound must compute
+  # in the pre-header block, a bound computed inside the header block
+  # strands OpLoopMerge in a block with branches
+  validateSpv(ternaryRangeSpv, "t_spirv_kernels_ternary_range",
+              @["OpLoopMerge", "OpBranchConditional"])
 
 when isMainModule:
   runTest()
