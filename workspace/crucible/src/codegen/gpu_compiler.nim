@@ -11,6 +11,11 @@ import std/[macros, sequtils, tables]
 import ./ir/ast_datatypes
 import ./targets/targets_lang
 import ./passes/passes_lowering
+import ./passes/passes_low_pointers
+import ./passes/passes_low_views
+import ./passes/passes_low_array_assign
+import ./passes/passes_legal_if_expr
+import ./passes/passes_legal_block_expr
 import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_opencl

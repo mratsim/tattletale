@@ -14,7 +14,7 @@
 
 import std / [tables, sequtils]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/src/codegen/passes/passes_low_array_assign {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -27,7 +27,7 @@ static:
   let varName = GpuAst(kind: gpuIdent, symbol: newSymbol("x", iSym = "x_h1", typ = arrTyp))
   let varNode = GpuAst(kind: gpuVar, vName: varName, vType: arrTyp,
                        vInit: initIdent, vRequiresMemcpy: true, vMutable: true)
-  let res = registerDecomposeMemcpyVars.runPassOnNode(varNode)
+  let res = registerDecomposeArrayAssign.runPassOnNode(varNode)
 
   doAssert res.len == 2, "Decomposition should yield 2 statements: var decl + memcpy call"
   doAssert res[0].kind == gpuVar, "First statement should be a var decl"
@@ -50,7 +50,7 @@ static:
   let rightIdent = GpuAst(kind: gpuIdent, symbol: newSymbol("b", iSym = "b_h2", typ = arrTyp))
   let assign = GpuAst(kind: gpuAssign, aLeft: leftIdent, aRight: rightIdent,
                       aRequiresMemcpy: true)
-  let res = registerDecomposeMemcpyVars.runPassOnNode(assign)[0]
+  let res = registerDecomposeArrayAssign.runPassOnNode(assign)[0]
 
   doAssert res.kind == gpuCall, "memcpy assign should become a gpuCall"
   doAssert res.cName.ident() == "__builtin_memcpy", "Should call __builtin_memcpy"
@@ -68,7 +68,7 @@ static:
   let initLit = GpuAst(kind: gpuLit, lValue: "42", lType: int32)
   let varNode = GpuAst(kind: gpuVar, vName: varName, vType: int32,
                        vInit: initLit, vRequiresMemcpy: false, vMutable: false)
-  let res = registerDecomposeMemcpyVars.runPassOnNode(varNode)[0]
+  let res = registerDecomposeArrayAssign.runPassOnNode(varNode)[0]
 
   doAssert res.kind == gpuVar, "Simple var without memcpy should be unchanged"
   doAssert res.vInit.lValue == "42", "Initializer should be preserved"
@@ -83,7 +83,7 @@ static:
   let rightLit = GpuAst(kind: gpuLit, lValue: "99", lType: int32)
   let assign = GpuAst(kind: gpuAssign, aLeft: leftIdent, aRight: rightLit,
                       aRequiresMemcpy: false)
-  let res = registerDecomposeMemcpyVars.runPassOnNode(assign)[0]
+  let res = registerDecomposeArrayAssign.runPassOnNode(assign)[0]
 
   doAssert res.kind == gpuAssign, "Simple assign without memcpy should be unchanged"
   echo "  OK — gpuAssign without RequiresMemcpy is unchanged"

@@ -17,7 +17,7 @@
 
 import std/[sequtils, strutils]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_legalizations
+import workspace/crucible/src/codegen/passes/passes_legal_block_expr
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/tests/ir/ir_testutils
 

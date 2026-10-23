@@ -13,7 +13,7 @@
 ##     workspace/crucible/tests/ir/control_flow/t_ir_insertPointerDeref.nim
 
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/src/codegen/passes/passes_low_pointers {.all.}
 
 # Pass impls run at compile time, getExprType raises through the `error` macro.
 

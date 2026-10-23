@@ -14,7 +14,7 @@
 
 import std/[tables]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_lowering {.all.}
+import workspace/crucible/src/codegen/passes/passes_low_views {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 proc registerNormalizeArraySpanDecay(reg: var PassRegistry) {.nimcall.} =

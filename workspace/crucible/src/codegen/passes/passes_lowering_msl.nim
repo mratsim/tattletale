@@ -24,6 +24,9 @@ import ./pass_datatypes
 import ./pass_registry
 import ./passes_low_address_spaces
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
+import ./passes_low_array_assign
 import ./passes_validations
 
 {.experimental: "codeReordering".}
@@ -57,6 +60,7 @@ const MetalReserved = [
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
+  reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerExpandStructKernelParams()
   reg.registerInstantiateImplicitAddressSpaceGenerics()

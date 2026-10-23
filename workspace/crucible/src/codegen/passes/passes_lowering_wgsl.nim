@@ -23,6 +23,8 @@ import ./pass_datatypes
 import ./pass_registry
 import ./passes_low_address_spaces
 import ./passes_lowering
+import ./passes_low_pointers
+import ./passes_low_views
 import ./passes_legalizations
 import ./passes_validations
 import ./passes_optimizations
@@ -42,6 +44,8 @@ const WgslReserved = [
 
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = false)
+  # Array copies surface unlowered, WGSL has no memcpy builtin and the printer
+  # rejects the requiresMemcpy node
   reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
