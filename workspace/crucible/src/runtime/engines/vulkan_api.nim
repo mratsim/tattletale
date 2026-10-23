@@ -20,9 +20,9 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   VulkanCaches = object
@@ -46,9 +46,9 @@ proc newVulkanEngine*(): VulkanEngine =
     ctx: vctx,
     caches: VulkanCaches())
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
   ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
@@ -95,6 +95,26 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
+proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
+  ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
+  ##
+  ## Args:
+  ## - the module carries one OpEntryPoint, the kernel name parses from the entry-point literal string
+  ## - the squadron parses from the LocalSize execution mode
+  ##
+  ## Contract:
+  ## - the push-constant layout matches the address route: parameter i lives
+  ##   at the std430 offset the module decorates
+  ## - pointers occupy one u64 device-address member
+  ## - scalars pack per the bkGlsl device layout
+  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
+  engine.caches.spirvCache.clear()
+  engine.source = ""
+  engine.spirv = spirv
+  engine.entryPoint = spirvEntryPoint(spirv)
+  engine.shaderSquadron = spirvLocalSize(spirv)
+  engine.isHlsl = false
+
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
   engine.source
@@ -114,9 +134,9 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   vctx: VulkanContext
@@ -161,9 +181,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
@@ -264,6 +284,9 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
   elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:
+    if engine.source.len == 0:
+      failLoud("Vulkan: a direct SPIR-V module carries exactly one entry point, " &
+               "launch it as \"" & engine.entryPoint & "\", got \"" & kernel & "\"")
     if not engine.caches.spirvCache.hasKey(kernel):
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
     spirv = engine.caches.spirvCache[kernel]

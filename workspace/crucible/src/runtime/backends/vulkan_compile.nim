@@ -8,6 +8,7 @@
 
 import std/[os, osproc, streams, strutils, tempfiles]
 import ../errors
+import ../engines/engines_common
 import ./runtime_utils
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -99,4 +100,42 @@ proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
        i + 1 < spv.len and
        spv[i + 1] == capPhysicalStorageBufferAddresses:
       return true
+    inc i, wordCount.int
+
+proc spirvEntryPoint*(spv: seq[uint32]): string =
+  ## Returns the name of the first OpEntryPoint, "" when the module declares none.
+  const opEntryPoint = 15
+  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
+  var i = 5
+  while i < spv.len:
+    let wordCount = spv[i] shr 16
+    if wordCount == 0:
+      break
+    if (spv[i] and 0xFFFF) == opEntryPoint:
+      # executionModel and entry-point id precede the literal name string
+      # the string is NUL-terminated and padded to the next word boundary
+      for j in i + 3 ..< i + wordCount.int:
+        for k in 0 ..< 4:
+          let c = char((spv[j] shr (k * 8)) and 0xFF)
+          if c == '\0':
+            return result
+          result.add c
+      return result
+    inc i, wordCount.int
+
+proc spirvLocalSize*(spv: seq[uint32]): Dim3 =
+  ## Returns the LocalSize literals of the first OpExecutionMode, (0, 0, 0) when the module bakes none.
+  const opExecutionMode = 16
+  const modeLocalSize = 17
+  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
+  var i = 5
+  while i < spv.len:
+    let wordCount = spv[i] shr 16
+    if wordCount == 0:
+      break
+    # OpExecutionMode carries the entry-point id and the mode before the literals,
+    # LocalSize contributes exactly three literals (x, y, z)
+    if (spv[i] and 0xFFFF) == opExecutionMode and
+       wordCount.int >= 6 and spv[i + 2] == modeLocalSize:
+      return Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int

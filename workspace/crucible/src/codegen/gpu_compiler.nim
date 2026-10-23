@@ -193,7 +193,7 @@ macro spirv*(body: untyped): seq[uint32] =
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctVulkan
+  crucibleCompileTarget = ctSpirv
   result = newCall(bindSym"codegenSpirv", body)
 
 macro codegenWebGpu(body: typed): string =
