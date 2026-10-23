@@ -58,3 +58,20 @@ proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
 
 func isSelfTerminating*(el: GpuAst): bool =
   result = el.kind in {gpuBlock, gpuEmit}
+
+func floatLiteralText*(lValue: string, suffix: string): string =
+  ## Returns the target text of one float literal.
+  ##
+  ## Args:
+  ## - `lValue`: the literal's digits as the IR carries them, e.g. `0` or `2.5`
+  ## - `suffix`: the target's float suffix, e.g. `f` or `h`
+  ##
+  ## C-family targets refuse integer-shaped float literals like `0f`.
+  ## The decimal point inserts before the suffix whenever the digits carry
+  ## no fractional part.
+  if lValue.len > 0 and lValue[0] in {'-', '+'}:
+    return lValue[0] & floatLiteralText(lValue[1 ..< lValue.len], suffix)
+  if '.' notin lValue and 'e' notin lValue and 'E' notin lValue:
+    result = lValue & ".0" & suffix
+  else:
+    result = lValue & suffix

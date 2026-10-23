@@ -37,6 +37,21 @@ export ast_datatypes.BackendKind
 # ▸ Types
 # ═══════════════════════════════════════════════════════════════════════
 
+type ReduceSource* = object
+  ## One generated axis-reduce kernel of the pair: its name and standalone source.
+  name*: string
+  source*: string
+
+type ScalarWorkspace* = object
+  ## Reduce-partials scratch of one scalar cotangent: the backward kernel
+  ## accumulates per-index partials into it, the reduce kernel folds it into
+  ## the scalar's 1-element gradient buffer.
+  gradName*: string        ## `d_<name>`, the 1-element gradient buffer
+  workspaceName*: string   ## `d_<name>_partials`, the backward kernel's scratch
+  tripCount*: int          ## Static index-loop trip count, -1 when runtime-derived
+  tripCountParam*: string  ## Name of the kernel parameter carrying the trip count, runtime-derived
+  tripCount64*: bool       ## Trip count is a 64-bit value, else 32-bit
+
 type BwdParamKind* = enum
   pkBuffer    ## Read-only input buffer, gradient is a same-shape buffer
   pkScalar    ## Scalar parameter (integer or float), integer scalars carry no gradient
@@ -70,9 +85,11 @@ type KernelPair* = object
   backend*: BackendKind                        ## Backend the sources target
   fwdSource*: string                           ## Forward kernel source, standalone translation unit
   bwdSource*: string                           ## Backward kernel source, `<kernel>_bwd`
-  reduceSources*: seq[tuple[name, source: string]] ## One axis-reduce kernel per scalar cotangent
+  reduceSources*: seq[ReduceSource]                ## One axis-reduce kernel per scalar cotangent
   params*: seq[BwdParamMeta]                   ## Forward parameters in declaration order
+  scalarWorkspaces*: seq[ScalarWorkspace]      ## Reduce-partials scratch per scalar cotangent, forward order
   bwdSignature*: seq[string]                   ## Backward signature, see the module header
+  bwdKernelParams*: seq[string]                ## Printed backward kernel's parameter names, post-lowering, in binding order
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Derivation
@@ -177,3 +194,41 @@ proc mirrorSignature*(params: seq[BwdParamMeta]): seq[string] =
       result.add m.gradName
   for m in params:
     result.add m.name
+
+const PairWideIntKinds = {gtInt64, gtUint64, gtSize_t}
+  ## Integer widths the reduce-kernel trip count may carry, grow with the IR's int kinds.
+
+proc deriveScalarWorkspaces*(fwd: GpuAst, metas: seq[BwdParamMeta]): seq[ScalarWorkspace] =
+  ## Derives the reduce-partials scratch records of a pair's scalar cotangents.
+  ##
+  ## The trip count is the forward kernel's index-loop bound.
+  ## A literal bound folds to a static trip count.
+  ## An identifier bound names the parameter carrying the trip count.
+  ##
+  ## Expected input:
+  ## - `fwd`: the forward kernel as the pipeline produced it
+  ## - `metas`: `deriveBwdParams`' output
+  ##
+  ## Output: one `ScalarWorkspace` per `gkBuffer1` parameter, forward order.
+  let bound = fwd.pBody.firstLoopBound()
+  doAssert not bound.isNil,
+    "scalar cotangent without an index-loop trip count"
+  var tripCount = -1
+  var tripCountParam = ""
+  var tripCount64 = false
+  if bound.kind == gpuLit:
+    tripCount = bound.lValue.parseInt()
+    tripCount64 = bound.lType.kind in PairWideIntKinds
+  else:
+    doAssert bound.kind == gpuIdent and bound.symbol != nil,
+      "the reduce-kernel trip count is neither a literal nor a kernel parameter"
+    tripCountParam = bound.symbol.name
+    tripCount64 = bound.symbol.typ.kind in PairWideIntKinds
+  for m in metas:
+    if m.gradKind == gkBuffer1:
+      result.add ScalarWorkspace(
+        gradName: m.gradName,
+        workspaceName: "d_" & m.name & "_partials",
+        tripCount: tripCount,
+        tripCountParam: tripCountParam,
+        tripCount64: tripCount64)

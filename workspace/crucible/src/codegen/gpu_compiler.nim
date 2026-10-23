@@ -204,10 +204,13 @@ proc codegenKernelADImpl*(bk: BackendKind, body: NimNode): KernelPair =
   regLow.registerValidationPostPasses()
   runPasses(ctx, regLow)
 
-  var reduceSources: seq[tuple[name, source: string]] = @[]
+  var reduceSources: seq[ReduceSource] = @[]
   for rk in reduces:
-    reduceSources.add (name: rk.pName.ident(),
-                       source: ctx.printSingleProc(bk, rk))
+    reduceSources.add ReduceSource(name: rk.pName.ident(),
+                                   source: ctx.printSingleProc(bk, rk))
+  var bwdParams: seq[string] = @[]
+  for p in bwd.pParams:
+    bwdParams.add p.ident.ident()
   let pair = KernelPair(
     kernelName: fwd.pName.ident(),
     backend: bk,
@@ -215,7 +218,9 @@ proc codegenKernelADImpl*(bk: BackendKind, body: NimNode): KernelPair =
     bwdSource: ctx.printSingleProc(bk, bwd),
     reduceSources: reduceSources,
     params: metas,
-    bwdSignature: metas.mirrorSignature())
+    scalarWorkspaces: fwd.deriveScalarWorkspaces(metas),
+    bwdSignature: metas.mirrorSignature(),
+    bwdKernelParams: bwdParams)
   result = pair
 
 macro codegenCuda(body: typed): string =

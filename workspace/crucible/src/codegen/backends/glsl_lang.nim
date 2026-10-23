@@ -217,7 +217,7 @@ proc genLit*(ast: GpuAst): string =
     result = "{}"
   else:
     case ast.lType.kind
-    of gtFloat32: result = ast.lValue & "f"
+    of gtFloat32: result = floatLiteralText(ast.lValue, "f")
     of gtFloat16, gtBf16:
       result = gpuTypeToString(ast.lType, allowEmptyIdent = true) & '(' & ast.lValue & ')'
     of gtUint32: result = ast.lValue & "U"
