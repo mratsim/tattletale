@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## P4 test: loop-kernel emission and loop-invariant scaffolds
+## Loop-kernel emission and loop-invariant scaffolds
 ##
 ## Test that the loop kernel shape, one `gpuFor` over a compile-time constant
 ## range `[0, N)` with one indexed write, emits a Lean module keeping the loop
@@ -17,19 +17,17 @@
 ## - precondition/postcondition pragmas on the loop shape are refused loudly
 ##
 ## Run:
-##   cd workspace/crucible
-##   nim c -r --hints:off --warnings:off \
-##     -o:build/wip/t_p4_loop --nimcache:nimcache/wip poc/lean/t_p4_loop.nim
+##   cd tattletale && nim test_crucible_lean
 
 import std/[assertions, json, os, strutils]
 import workspace/crucible/src/crucible_internal_compiler
-import lean_pragmas
-import nim_to_lean
-import poc_common
+import workspace/crucible/src/codegen/frontend/lean_pragmas
+import workspace/crucible/src/codegen/frontend/nim_to_lean
+import lean_testutils
 
-const genLoopRelPath = leanPocDir & "/generated/loop_add.lean"
-const genLoopInvRelPath = leanPocDir & "/generated/loop_inv.lean"
-const genLoopInvWrongRelPath = leanPocDir & "/generated/loop_inv_wrong.lean"
+const genLoopRelPath = leanProjectDir & "/generated/loop_add.lean"
+const genLoopInvRelPath = leanProjectDir & "/generated/loop_inv.lean"
+const genLoopInvWrongRelPath = leanProjectDir & "/generated/loop_inv_wrong.lean"
 
 proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
   ## Manifest scaffold entry of the given kind
@@ -244,4 +242,4 @@ proc runTest() =
 
 when isMainModule:
   runTest()
-  echo "t_p4_loop: all checks passed"
+  echo "t_lean_loop: all checks passed"

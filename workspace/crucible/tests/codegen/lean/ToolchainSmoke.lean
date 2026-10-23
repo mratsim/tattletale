@@ -10,8 +10,8 @@
 /-!
 # Lean toolchain gate (P0)
 
-Smoke module for the C10D09 POC toolchain gate: proves the lake build pipeline
-elaborates, typechecks, and compiles real proofs on this pinned toolchain.
+Smoke module for the Lean toolchain gate: proves the lake build pipeline
+elaborates, typechecks, and compiles real proofs on the pinned toolchain.
 -/
 
 theorem add_comm_smoke (a b : Nat) : a + b = b + a := Nat.add_comm a b

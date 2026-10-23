@@ -11,7 +11,7 @@
 # Add kernel, per-thread verification model (P1)
 
 Hand translation of the crucible add kernel thread function
-(`tests/codegen/vulkan/app/t_vulkan_add.nim`, `addKernel`) into Lean.
+(`tests/codegen/vulkan_via_glsl/app/t_vulkan_add.nim`, `addKernel`) into Lean.
 
 The verification unit is the per-thread body, parametrized by thread id:
 

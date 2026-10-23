@@ -5,25 +5,25 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## P2 test: end-to-end check of the nim_to_lean emitter
+## nim_to_lean emitter, end-to-end
 ##
-## Runs the emitter on the tracer add kernel (the GlobalInvocationID shape)
-## and asserts:
-## - the emitted module elaborates via `lake env lean -DwarningAsError=true` (a sorry fails)
-## - the emitted def plus spec theorems are byte-identical to the hand-written P1 statements
-## - kernels outside the emitter's scope are refused loudly (for-loop, non-add-shape buffer set, non-positive guard literal, nested indexing)
+## Test that the emitter produces the add kernel's Lean verification module:
+##
+## - the module elaborates via `lake env lean -DwarningAsError=true` (a sorry fails)
+## - the emitted def plus spec theorems are byte-identical to the hand-written
+##   `AddKernel.lean` statements
+## - kernels outside the supported shape are refused loudly
 ##
 ## Run:
-##   cd workspace/crucible
-##   nim c -r --hints:off --warnings:off \
-##     -o:build/wip/t_p2_emit --nimcache:nimcache/wip poc/lean/t_p2_emit.nim
+##   cd tattletale && nim test_crucible_lean
 
 import std/[assertions, os, osproc, strutils]
 import workspace/crucible/src/crucible_internal_compiler
-import nim_to_lean
-import poc_common
+import workspace/crucible/src/codegen/frontend/lean_pragmas
+import workspace/crucible/src/codegen/frontend/nim_to_lean
+import lean_testutils
 
-const genRelPath = leanPocDir & "/generated/add.lean"
+const genRelPath = leanProjectDir & "/generated/add.lean"
 
 proc statementTail(path: string): string =
   ## Everything from the per-thread def doc comment onward: the def, the spec
@@ -49,7 +49,7 @@ proc runTest() =
     doAssert code == 0, "Lean rejected the emitted module:\n" & outp
     doAssert "sorry" notin outp, "no sorry under warningAsError"
 
-    let reference = statementTail(leanPocDir & "/AddKernel.lean")
+    let reference = statementTail(leanProjectDir & "/AddKernel.lean")
     let generated = statementTail(genRelPath)
     if reference != generated:
       let refLines = reference.splitLines()
@@ -133,4 +133,4 @@ proc runTest() =
 
 when isMainModule:
   runTest()
-  echo "t_p2_emit: all checks passed"
+  echo "t_lean_emit: all checks passed"

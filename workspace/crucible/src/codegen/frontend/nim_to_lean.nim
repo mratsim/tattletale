@@ -366,7 +366,7 @@ proc emitModuleDoc(model: KernelModel): string =
 # Emitted @KERNEL@ verification module (P2)
 
 Produced by `nim_to_lean.nim` from the post-pass GpuAst of the crucible kernel
-`@KERNEL@`. `poc/lean/t_p2_emit.nim` regenerates this file; edit the emitter,
+`@KERNEL@`. `tests/codegen/lean/t_lean_emit.nim` regenerates this file; edit the emitter,
 not this file.
 
 The model matches `AddKernel.lean`: buffers are total functions `Nat → UInt32`,
@@ -379,7 +379,7 @@ GPU arithmetic the kernel emits.
 # Emitted @KERNEL@ verification module (P4)
 
 Produced by `nim_to_lean.nim` from the post-pass GpuAst of the crucible kernel
-`@KERNEL@`. `poc/lean/t_p4_loop.nim` regenerates this file; edit the emitter,
+`@KERNEL@`. `tests/codegen/lean/t_lean_loop.nim` regenerates this file; edit the emitter,
 not this file.
 
 The kernel is one loop over the compile-time constant range `[0, @N@)`. The

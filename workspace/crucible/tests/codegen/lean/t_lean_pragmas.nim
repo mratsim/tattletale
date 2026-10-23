@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## P3 test: verification pragma extraction to Lean spec scaffolds
+## Verification pragma extraction to Lean spec scaffolds
 ##
 ## Test that pragma payloads extract into Lean scaffolds with an honest
 ## proven/unproven verdict:
@@ -16,19 +16,17 @@
 ## - wrong modules fail the warningAsError elaboration, out-of-scope payloads are refused loudly
 ##
 ## Run:
-##   cd workspace/crucible
-##   nim c -r --hints:off --warnings:off \
-##     -o:build/wip/t_p3_pragmas --nimcache:nimcache/wip poc/lean/t_p3_pragmas.nim
+##   cd tattletale && nim test_crucible_lean
 
 import std/[assertions, json, os, osproc, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
-import lean_pragmas
-import nim_to_lean
-import poc_common
+import workspace/crucible/src/codegen/frontend/lean_pragmas
+import workspace/crucible/src/codegen/frontend/nim_to_lean
+import lean_testutils
 
-const genSpecRelPath = leanPocDir & "/generated/add_spec.lean"
-const genWrongPostRelPath = leanPocDir & "/generated/add_spec_wrong_post.lean"
-const genWrongInvRelPath = leanPocDir & "/generated/add_spec_wrong_inv.lean"
+const genSpecRelPath = leanProjectDir & "/generated/add_spec.lean"
+const genWrongPostRelPath = leanProjectDir & "/generated/add_spec_wrong_post.lean"
+const genWrongInvRelPath = leanProjectDir & "/generated/add_spec_wrong_inv.lean"
 
 proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
   ## Manifest scaffold entry of the given kind
@@ -123,9 +121,9 @@ proc runTest() =
     # a broken toolchain makes `lake env lean` exit nonzero, printing a lake-level error with no `file:line:col: error:` line
     # no error is attributable to a scaffold, so the proofs were never checked
     # and no manifest may record a `proven` verdict
-    let negDir = leanPocDir & "/generated/negativelake"
+    let negDir = leanProjectDir & "/generated/negativelake"
     createDir(negDir)
-    writeFile(negDir & "/lakefile.lean", readFile(leanPocDir & "/lakefile.lean"))
+    writeFile(negDir & "/lakefile.lean", readFile(leanProjectDir & "/lakefile.lean"))
     writeFile(negDir & "/lean-toolchain", "leanprover/lean4:v0.0.0-notinstalled")
     let negOutPath = negDir & "/generated/add_spec_neg.lean"
     removeFile(negOutPath.changeFileExt("manifest.json")) # stale runs
@@ -230,4 +228,4 @@ proc runTest() =
 
 when isMainModule:
   runTest()
-  echo "t_p3_pragmas: all checks passed"
+  echo "t_lean_pragmas: all checks passed"

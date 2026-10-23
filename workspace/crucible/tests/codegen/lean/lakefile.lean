@@ -1,10 +1,10 @@
 import Lake
 open Lake DSL
 
-package «leanpoc» where
+package «crucible_lean» where
   -- no dependencies: core Lean only
 
 @[default_target]
-lean_lib «LeanPoc» where
+lean_lib «ToolchainSmoke» where
   -- explicit roots, not a glob: Negative.lean stays out of `lake build`
-  roots := #[`LeanPoc, `AddKernel]
+  roots := #[`ToolchainSmoke, `AddKernel]
