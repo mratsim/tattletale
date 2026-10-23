@@ -46,6 +46,8 @@ proc newEngine*(runtime: static Runtime): auto {.inline.} =
     newWebgpuEngine()
   elif runtime == runMetal:
     newMetalEngine()
+  else:
+    {.error: "newEngine: unknown Runtime".}
 
 export engines_common.BackendKind, engines_common.Dim3, engines_common.LaunchConfig,
        engines_common.dim3, engines_common.DeviceMem
