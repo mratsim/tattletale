@@ -9,7 +9,7 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(outP: ptr UncheckedArray[array[32, byte]]) {.global.} =
     # outP[i][j] = uint8(i + j), the element type is a fixed 32-byte block
     for i in 0 ..< 2:
@@ -18,7 +18,7 @@ const kernelCode = vulkan:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block:
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(array[32, byte], 2)
     engine.launchKernel("k", oDev, ())

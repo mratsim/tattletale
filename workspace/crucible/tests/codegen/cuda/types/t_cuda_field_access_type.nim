@@ -39,7 +39,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "Case 1 — generic call with DotExpr arg":
       let code = kernelRank
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(code)
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
@@ -49,7 +49,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "Case 2 — typeof field access in type definition":
       let code = kernelTypeof
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(code)
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())

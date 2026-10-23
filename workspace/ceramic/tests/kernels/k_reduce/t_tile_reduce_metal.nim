@@ -254,7 +254,7 @@ proc atAxisIndexCase[E: HwEngine](engine: E, strides: tuple, msg: string) =
   checkClose(gotMax, expectMax, msg & ", per-row max")
 
 proc runTest =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   stripCase(engine, "sum, compact 128-element strip (one tile)",
       (1, 128), (128, 1), roSum, -64'f32, 1'f32)
   stripCase(engine, "sum, ragged 100-element strip",

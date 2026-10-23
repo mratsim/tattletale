@@ -43,7 +43,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Crucible - TensorView codegen repro":
     test "Pattern A — direct tuple let":
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelDirect)
       let oA = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oA, ())
@@ -53,7 +53,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "Pattern B — const + let":
       let code = kernelConstLet
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(code)
       let oB = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oB, ())
@@ -63,7 +63,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "Pattern C — block with const then yield":
       let code = kernelBlock
       var output: array[1, uint32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(code)
       let oC = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oC, ())

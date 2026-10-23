@@ -117,7 +117,7 @@ const Cases4: array[1, tuple[src, dst: tuple[shape, strides: (int, int, int, int
    (shape: (64, 1, 64, 128), strides: (8192, 128, 128, 1)), 1, 20)]
 
 proc main() =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   echo "axis sum, Metal, blk = (32, 1)"
   separator()
   template runCases(cases: untyped) =

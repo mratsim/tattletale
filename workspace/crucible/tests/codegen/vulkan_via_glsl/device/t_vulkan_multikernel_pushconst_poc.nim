@@ -16,7 +16,7 @@ import workspace/crucible
 # Two kernels with different scalar signatures in ONE source: the codegen
 # unions both signatures into one KernelParams block (val, a, b), which is
 # the configuration the guard rejects.
-const codeMulti = vulkan:
+const codeMulti = glsl:
   proc kernelA(output: ptr UncheckedArray[uint32];
                val: uint32) {.global.} =
     output[0] = val
@@ -26,27 +26,27 @@ const codeMulti = vulkan:
 
 # Single-kernel control: kernelB alone unions only its own params, so
 # packing from offset 0 is correct there.
-const codeSingle = vulkan:
+const codeSingle = glsl:
   proc kernelB(output: ptr UncheckedArray[uint32];
                a: uint32; b: uint32) {.global.} =
     output[0] = a + b
 
 # Single-kernel by-value scalar: emitted as a push constant block with no
 # function parameters (covers the contract from t_vulkan_kernel_pushconst).
-const codeWithVal = vulkan:
+const codeWithVal = glsl:
   proc kernelWithVal(output: ptr UncheckedArray[uint32], val: uint32) {.global.} =
     output[0] = val
 
 proc childIngestMulti() =
   ## Child mode: ingesting a multi-kernel scalar source must quit loudly.
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(codeMulti)   # unreachable: ingest quits here
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: multi-kernel push-constant guard ===\n"
 
   block:  # supported pattern: single-kernel kernelB(3, 4) gives 7
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(codeSingle)
     var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
     let oDev = engine.allocDevice(uint32, 1)
@@ -69,7 +69,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     doAssert codeWithVal.contains("void kernelWithVal()"),
              &"Expected void kernelWithVal() in:\n{codeWithVal}"
     doAssert codeWithVal.contains("val"),
-             &"Expected `val` in push constants or SSBO in:\n{codeWithVal}"
+             &"Expected `val` in push constants or a storage-buffer descriptor in:\n{codeWithVal}"
     echo "  single-kernel kernelWithVal: push_constant block, no function params"
 
   echo "\n  OK: multi-kernel scalar sources rejected loudly"

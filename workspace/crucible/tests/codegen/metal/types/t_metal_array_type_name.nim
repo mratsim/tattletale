@@ -23,7 +23,7 @@ const kernelMsl = metal:
 proc runTest() =
   suite "Metal - array types in proc signatures":
     test "a tuple-of-array param names without recursion":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelMsl)
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("repro", oDev, ())

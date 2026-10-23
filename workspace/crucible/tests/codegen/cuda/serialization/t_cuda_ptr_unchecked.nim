@@ -17,7 +17,7 @@ const kernelCode = cuda:
     addArrays(c, a, b, 8)
 
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
 
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"

@@ -50,7 +50,7 @@ proc genIn(T, H: int): tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[floa
 
 proc mlaKernel(g: tuple[xf, qaWF, qaGF, qbWF, kvaWF, kvaGF, kvbWF: seq[float32]],
                cosF, sinF: seq[float32], T, H: int): F.Tensor =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(mlaMsl)
   var outAll = newSeq[uint16](3 * T * H * 256)
   engine.launchKernel << (grid: (T div 8, H div 2, 1), blk: (32, 1)) >> ("mlaLatent", outAll,

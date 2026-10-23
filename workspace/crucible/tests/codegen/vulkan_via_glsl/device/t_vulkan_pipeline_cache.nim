@@ -1,7 +1,6 @@
 ##
 ## Vulkan: pipeline / SPIR-V cache (ingest-once, run-many).
-## Pipeline cache keyed by (kernel, ssboCount, pushConstSize), per-kernel SPIR-V
-## cached by kernel name.
+## Pipeline cache keyed by (kernel, pushConstLen), per-kernel SPIR-V cached by kernel name.
 ##
 ## Coverage:
 ##   - entry kernel run twice with different data (cached pipeline reuse)
@@ -17,7 +16,7 @@ import workspace/crucible
 
 # Pointer-only multi-kernel source (pointer-only multi-kernel is supported;
 # by-value scalars would trip the multi-kernel guard, see the poc test).
-const code = vulkan:
+const code = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =
@@ -32,7 +31,7 @@ const code = vulkan:
 # Replacement source for the re-ingest (cache invalidation) step: same
 # kernel name as the first source, different body. A stale cached pipeline
 # would return the old addition result instead of the product.
-const codeMul = vulkan:
+const codeMul = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =
@@ -42,7 +41,7 @@ const codeMul = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo "=== Vulkan: pipeline / SPIR-V cache ===\n"
 
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(code)
 
   block:  # entry kernel, run twice with different data on the same engine

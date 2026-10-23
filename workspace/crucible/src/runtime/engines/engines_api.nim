@@ -23,19 +23,27 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
-proc newEngine*(backend: static BackendKind): auto {.inline.} =
-  when backend == bkCuda:
+type
+  Runtime* = enum
+    runCuda
+    runWebGPU
+    runOpenCL
+    runVulkan
+    runMetal
+
+proc newEngine*(runtime: static Runtime): auto {.inline.} =
+  when runtime == runCuda:
     newCudaEngine()
-  elif backend == bkOpenCL:
+  elif runtime == runOpenCL:
     newOpenCLEngine()
-  elif backend == bkVulkan:
+  elif runtime == runVulkan:
     newVulkanEngine()
-  elif backend == bkWebGPU:
+  elif runtime == runWebGPU:
     newWebgpuEngine()
-  elif backend == bkMetal:
+  elif runtime == runMetal:
     newMetalEngine()
   else:
-    {.error: "newEngine: unknown BackendKind".}
+    {.error: "newEngine: unknown Runtime".}
 
 export engines_common.BackendKind, engines_common.Dim3, engines_common.LaunchConfig,
        engines_common.dim3, engines_common.DeviceMem

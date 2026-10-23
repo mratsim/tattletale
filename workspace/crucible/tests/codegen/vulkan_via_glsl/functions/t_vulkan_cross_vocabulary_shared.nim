@@ -10,7 +10,7 @@
 import std/strutils
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   var scratch {.smem.}: array[8, uint32]
   proc crossVocabSharedKernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     let tid = thread_index_in_threadgroup
@@ -26,7 +26,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     "Vulkan shared-array emission missing:\n" & kernelCode
   doAssert "barrier()" in kernelCode, "Vulkan barrier lowering missing:\n" & kernelCode
 
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, 8)
   # 2 work-groups of (4, 2). Each group stages identical values, so the

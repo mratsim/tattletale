@@ -30,7 +30,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       var buf: array[64, float32]
       buf[0] = -1.0'f32
       buf[40] = 99.0'f32   # 0*1 + 5*8 = 40
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernel)
       engine.launchKernel<<(1, 1)>>("kernel", buf, ())
       # tv(0, 5) with LayoutLeft stride (1, 8) → linear index 0*1 + 5*8 = 40

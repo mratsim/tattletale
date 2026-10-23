@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "atomic_fetch_add_explicit((volatile device atomic_float*)" in addFpMsl
 
     test "fp: 32 lanes add 1.0, each reads a distinct old value 0..31":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addFpSameMsl)
       let cDev = engine.allocDevice(float32, 1)
       let oDev = engine.allocDevice(float32, 32)
@@ -52,7 +52,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 32.0
 
     test "fp: 32 lanes add their lane index, counter ends at 496":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addFpMsl)
       let cDev = engine.allocDevice(float32, 1)
       let oDev = engine.allocDevice(float32, 32)
@@ -69,7 +69,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 496.0
 
     test "int: 32 lanes increment, counter ends at 32":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addIntMsl)
       let cDev = engine.allocDevice(int32, 1)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addInt", cDev.mem, ())
@@ -78,7 +78,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check counter[0] == 32
 
     test "fp: 4 threadgroups x 32 lanes, counter ends at 128":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addMultiTgMsl)
       let cDev = engine.allocDevice(float32, 1)
       engine.launchKernel<<(grid: (4, 1), blk: (32, 1))>>("addMultiTg", cDev.mem, ())

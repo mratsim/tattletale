@@ -25,7 +25,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - ternary lowering":
     test "data-dependent and constant ternaries":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(code)
       var a = [7'u32]
       var b = [3'u32]

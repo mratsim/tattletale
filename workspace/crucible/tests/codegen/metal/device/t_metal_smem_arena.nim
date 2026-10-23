@@ -48,7 +48,7 @@ proc foldKernel(output, input: ptr UncheckedArray[float32]) {.inline.} =
 proc runTest() =
   suite "Metal - {.smem.} arena pass":
     test "device fn scratch hoists to a threadgroup param, kernel owns the arena":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(smemArenaMsl)
       let iDev = engine.allocDevice(float32, 64)
       let oDev = engine.allocDevice(float32, 64)
@@ -76,7 +76,7 @@ proc runTest() =
         proc sumSmemObj(output: ptr UncheckedArray[float32], input: ptr UncheckedArray[float32]) {.global.} =
           var scratch {.smem.}: Stage
           foldObj(input, output)
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(smemObjMsl)
       let iDev = engine.allocDevice(float32, 64)
       let oDev = engine.allocDevice(float32, 64)
@@ -91,7 +91,7 @@ proc runTest() =
         check res[i] == 2016.0'f32
 
     test "launchDeviceFn synthesizes the arena for a hoisting device proc":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       let iDev = engine.allocDevice(float32, 64)
       let oDev = engine.allocDevice(float32, 64)
       var input: array[64, float32]

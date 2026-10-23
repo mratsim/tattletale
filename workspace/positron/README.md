@@ -18,7 +18,7 @@ GPU kernel compiler framework for Nim. Transpiles Nim code to multiple GPU backe
 │  cuda:{ ... }│     │  gpu_types    │     │ cuda_lang.nim     │
 │  webgpu:{...}│     │  nim_to_gpu   │     │ wgsl_lang.nim     │
 │  opencl:{...}│     │              │     │ opencl_lang.nim    │
-│  vulkan:{...}│     │              │     │ glsl_lang.nim    │
+│  glsl:{...}  │     │              │     │ glsl_lang.nim    │
 └─────────────┘     └──────────────┘     └───────────────────┘
 ```
 

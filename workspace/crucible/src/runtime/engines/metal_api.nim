@@ -13,6 +13,7 @@ import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/metal_runtime
+import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
@@ -186,7 +187,7 @@ when defined(macosx):
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
       if cfg.sharedMem > 0:
         # Metal requires a 16-byte multiple of threadgroup memory
-        let tgMem = roundStepUp(cfg.sharedMem, 16)
+        let tgMem = round_multiple_up(cfg.sharedMem, 16)
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(tgMem), objc.NSUInteger(0))
 

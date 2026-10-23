@@ -16,20 +16,20 @@ type
     f1: B
 
 # Pattern A: direct constructor in let
-const kernelDirect = vulkan:
+const kernelDirect = glsl:
   proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     let L = Tuple2[Int[8], Int[16]]()
     C[0] = 1'u32
 
 # Pattern B: separate const + let
-const kernelConstLet = vulkan:
+const kernelConstLet = glsl:
   proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     const tmp {.genSym.} = Tuple2[Int[8], Int[16]]()
     let L = tmp
     C[0] = 1'u32
 
 # Pattern C: block with const + yield (evalOnceAs pattern)
-const kernelBlock = vulkan:
+const kernelBlock = glsl:
   proc dummyKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     let L = block:
       const tmp {.genSym.} = Tuple2[Int[8], Int[16]]()
@@ -39,7 +39,7 @@ const kernelBlock = vulkan:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   suite "Vulkan - let-block-RHS":
     test "Pattern A — direct tuple let":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernelDirect)
       echo kernelDirect
       let oDev = engine.allocDevice(uint32, 1)
@@ -49,7 +49,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check buf[0] == 1
 
     test "Pattern B — const + let":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       let oDev = engine.allocDevice(uint32, 1)
@@ -59,7 +59,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       check buf[0] == 1
 
     test "Pattern C — block with const then yield":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernelBlock)
       echo kernelBlock
       let oDev = engine.allocDevice(uint32, 1)

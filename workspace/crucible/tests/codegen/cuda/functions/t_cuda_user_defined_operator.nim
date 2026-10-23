@@ -29,7 +29,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Operator codegen":
     test "basic types (int32) — all operators on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelBasic)
       let oB = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBasic", oB, ())
@@ -118,7 +118,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "User-defined operators":
     test "struct types (Wrapper) — operator syntax on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelStruct)
       let oS = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct", oS, ())
@@ -136,7 +136,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "struct types (Wrapper2) — operator syntax on GPU":
       var output: array[10, int32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelStruct2)
       let oS2 = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct2", oS2, ())
@@ -154,7 +154,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "struct types (both Wrapper + Wrapper2) — name collision":
       var output: array[2, int32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelBoth)
       let oBoth = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBoth", oBoth, ())

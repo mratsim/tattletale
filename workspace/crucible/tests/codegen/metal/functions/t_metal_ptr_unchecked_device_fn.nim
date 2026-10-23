@@ -22,7 +22,7 @@ const fillMsl = metal:
 proc runTest() =
   suite "Metal - ptr UncheckedArray device fn":
     test "fillArray writes i + 10 into the kernel output buffer":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(fillMsl)
       let oDev = engine.allocDevice(uint32, 8)
       engine.launchKernel("fillKernel", oDev, ())

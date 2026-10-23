@@ -12,7 +12,7 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(outP: ptr UncheckedArray[uint32]) {.global.} =
     let bytes = cast[ptr UncheckedArray[uint8]](outP)
     bytes[3] = uint8(outP[0] + 1)
@@ -20,7 +20,7 @@ const kernelCode = vulkan:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block:
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(uint32, 1)
     var zero: uint32 = 0

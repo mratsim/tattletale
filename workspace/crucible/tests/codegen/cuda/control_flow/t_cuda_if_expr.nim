@@ -13,7 +13,7 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   ## Compile + run one kernel. A proc so the NVRTC object (CUDA context +
   ## module) is released per call — templates do not scope `var` at module
   ## level, which would keep every context alive until program exit.
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(typeof(buf[0]), buf.len)
   engine.launchKernel(kernelName, oDev, ())
@@ -82,7 +82,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var buf5: array[4, uint32]
   block:
-    var engine = bkCuda.newEngine()
+    var engine = newEngine(runCuda)
     engine.ingest(kIfExprCond)
     let o5 = engine.allocDevice(uint32, buf5.len)
     engine.launchKernel<<(1, 4)>>("ifExprCondKernel", o5, ())
@@ -121,7 +121,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var buf7: array[4, uint32]
   block:
-    var engine = bkCuda.newEngine()
+    var engine = newEngine(runCuda)
     engine.ingest(kIfElifElse)
     let o7 = engine.allocDevice(uint32, buf7.len)
     engine.launchKernel<<(1, 4)>>("ifElifElseKernel", o7, ())

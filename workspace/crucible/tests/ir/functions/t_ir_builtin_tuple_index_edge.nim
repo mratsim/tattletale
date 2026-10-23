@@ -15,7 +15,7 @@ import workspace/crucible
 
 block:
   # `[1]` normalizes to the field access and emits `.y`
-  const okVulkan = vulkan:
+  const okVulkan = glsl:
     proc ok(C: ptr UncheckedArray[int]) {.global.} =
       C[0] = gl_GlobalInvocationID[1]
   doAssert "gl_GlobalInvocationID.y" in okVulkan,
@@ -26,7 +26,7 @@ block:
   # a uint32 index is a compile error
   static:
     doAssert not compiles(block:
-      const bad = vulkan:
+      const bad = glsl:
         proc bad(C: ptr UncheckedArray[int]) {.global.} =
           C[0] = gl_GlobalInvocationID[0'u32]
     )

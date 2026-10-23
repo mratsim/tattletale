@@ -29,7 +29,7 @@ genBinOp(`*`)
 # ── kernel ───────────────────────────────────────────────────────────────
 # This backend binds kernel args in order: output first, then inputs (per CONVENTIONS.md).
 # The dynamic value comes from an input buffer (same shape as CUDA's).
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc staticIntOps(res: ptr UncheckedArray[int32];
                     dyn: ptr UncheckedArray[int32]) {.global.} =
     let h = int(dyn[0])
@@ -62,7 +62,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
     test "all five overload shapes compile, run, and produce the right values":
       var dynArr: array[1, int32] = [100'i32]
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernelCode)
       let dynDev = engine.allocDevice(int32, 1)
       engine.copyToDeviceFromHost(dynDev, addr dynArr[0], 1)

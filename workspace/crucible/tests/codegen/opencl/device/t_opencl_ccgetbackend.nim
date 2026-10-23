@@ -11,7 +11,8 @@ import workspace/crucible
 const kernelCode = opencl:
   proc backendProbe(output: ptr UncheckedArray[int]) {.global.} =
     when ccGetBackend() == ctOpenCL: output[0] = 1
-    elif ccGetBackend() == ctVulkan: output[0] = 2
+    elif ccGetBackend() == ctGlsl:
+      output[0] = 2
     elif ccGetBackend() == ctMetal: output[0] = 3
     elif ccGetBackend() == ctCuda: output[0] = 4
     else: output[0] = 5

@@ -10,7 +10,7 @@
 import std/[unittest]
 import workspace/crucible
 
-const kernel2d = vulkan:
+const kernel2d = glsl:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     # direct builtin use — binding gl_GlobalInvocationID to a local let
     # hits an addr-lowering gap (global-let path), so index it inline
@@ -23,7 +23,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "Vulkan - multi-axis dispatch":
 
     test "2D: baked (4, 2) × grid (2, 4) = 8×8 work-items":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(kernel2d)
       let oDev = engine.allocDevice(uint32, 64)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("grid2d", oDev, ())

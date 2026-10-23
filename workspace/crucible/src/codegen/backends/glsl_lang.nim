@@ -392,7 +392,7 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           var vkArgs: seq[string]
           for arg in ast.cArgs:
             vkArgs.add ctx.genGLSL(arg)
-          result = indentStr & ctx.getFnName(bkVulkan, ast) & '(' & vkArgs.join(", ") & ')'
+          result = indentStr & ctx.getFnName(bkGlsl, ast) & '(' & vkArgs.join(", ") & ')'
 
 
   of gpuBinOp:

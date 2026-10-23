@@ -7,7 +7,7 @@ The allowed subset is everything except `string`, `seq`, memory allocations, and
 ## What it is / what it isn't
 
 Crucible is primarily a **compile-time code generator**.
-Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `hlsl`, `webgpu`, `metal`).
+Its entry points are Nim macros (`cuda`, `opencl`, `glsl`, `hlsl`, `webgpu`, `metal`).
 Each macro consumes a kernel body written in that subset of Nim and emits a string of native GPU source code.
 
 - It does not ship a device runtime or a scheduler.
@@ -35,7 +35,7 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
   run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
   Pass families: normalizations, legalizations, preprocessing, lowering, and validations.
-- **Compile-time codegen.** The `cuda`/`opencl`/`vulkan`/`hlsl`/`webgpu`/`metal` macros emit
+- **Compile-time codegen.** The `cuda`/`opencl`/`glsl`/`hlsl`/`webgpu`/`metal` macros emit
   source at compile time through [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
 - **Tests.** IR-level tests under [`tests/ir/`](tests/ir/) plus auto-runnable suites per backend
   (`cuda/`, `opencl/`, `vulkan_via_glsl/`, `vulkan_via_hlsl/`, `webgpu/`, `metal/`).
@@ -126,7 +126,7 @@ workspace/crucible/
       builtins_pragmas.nim      Backend pragmas: cudaName, workgroup, builtin, smem, ...
       builtins_compilermagic.nim  CompileTarget, ccGetBackend
     codegen/
-      gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`vulkan:`/`hlsl:`/`webgpu:`/`metal:` macros
+      gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`glsl:`/`hlsl:`/`webgpu:`/`metal:` macros
       frontend/
         nim_to_crucible.nim            Frontend: pure 1:1 Nim AST -> IR translator
         nim_type_resolvers.nim  Type/overload resolution
@@ -167,10 +167,13 @@ workspace/crucible/
         vulkan_api.nim
         webgpu_api.nim
         metal_api.nim
-      exec/
+      backends/
         cuda_runtime.nim          Platform sessions: library loading, device discovery,
         opencl_runtime.nim        source -> artifact compilation, buffers, dispatch
-        vulkan_runtime.nim
+        vulkan_common.nim
+        vulkan_descriptor_runtime.nim
+        vulkan_address_runtime.nim
+        vulkan_compile.nim
         webgpu_runtime.nim
         metal_runtime.nim         MSL compile/dispatch
         runtime_utils.nim

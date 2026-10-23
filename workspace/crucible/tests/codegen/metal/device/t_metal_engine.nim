@@ -1,4 +1,4 @@
-## Metal engine end-to-end: `bkMetal.newEngine()` → `ingest()` → `run()`,
+## Metal engine end-to-end: `newEngine(runMetal)` → `ingest()` → `run()`,
 ## with verified device output.
 ##
 ## Test that engine construction, ingest cache reuse and re-ingest
@@ -75,7 +75,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "ingest-once run-many keeps producing correct results across runs":
       # "No recompiles" is structural. Ingest is the only compileLibrary call site,
       # and the PSO cache is keyed by (kernel, argSizes).
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addMsl)
       var a: array[1, uint32] = [2'u32]
       var b: array[1, uint32] = [3'u32]
@@ -101,7 +101,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 30
 
     test "re-ingest with a changed body invalidates and recompiles":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(addMsl)
       var a: array[1, uint32] = [2'u32]
       var b: array[1, uint32] = [3'u32]
@@ -126,7 +126,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 6
 
     test "dispatch with grid/blk via dispatchThreadgroups":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(vecAddMsl)
       var a, b: array[128, uint32]
       for i in 0 ..< 128:
@@ -144,7 +144,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[i] == uint32(i) + 1
 
     test "scalar args pack into the constant buffer at 16-byte slots":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(scalarMsl)
       echo scalarMsl
       let oDev = engine.allocDevice(uint32, 2)
@@ -159,14 +159,14 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[1] == 2
 
     test "deviceName returns the Metal device name":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       let name = engine.deviceName()
       echo "  device: ", name
       check name.len > 0
 
     test "repeated init/run cycles destroy cleanly (RAII)":
       for i in 0 ..< 5:
-        var engine = bkMetal.newEngine()
+        var engine = newEngine(runMetal)
         engine.ingest(addMsl)
         var a: array[1, uint32] = [2'u32]
         var b: array[1, uint32] = [3'u32]

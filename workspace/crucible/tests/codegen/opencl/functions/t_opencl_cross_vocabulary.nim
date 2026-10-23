@@ -25,7 +25,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "OpenCL - cross-vocabulary coordinates + barrier":
 
     test "CUDA idiom + flat local + barrier execute with correct values":
-      var engine = bkOpenCL.newEngine()
+      var engine = newEngine(runOpenCL)
       engine.ingest(kernel2d)
       var res: array[64 + 8, uint32]
       let oDev = engine.allocDevice(uint32, 64 + 8)

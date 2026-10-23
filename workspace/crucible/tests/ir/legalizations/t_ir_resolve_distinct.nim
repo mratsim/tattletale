@@ -32,7 +32,7 @@ proc runTest() =
   # End-to-end: a kernel taking a distinct scalar compiles through
   # the public codegen API. Compilation is the smoke test: without
   # the wrapper peel the VM dies on the recursion before emitting code.
-  const code = vulkan:
+  const code = glsl:
     proc k(output: ptr UncheckedArray[uint32], dist: Kilometers) {.global.} =
       output[0] = uint32(dist)
   doAssert "uint(dist)" in code,

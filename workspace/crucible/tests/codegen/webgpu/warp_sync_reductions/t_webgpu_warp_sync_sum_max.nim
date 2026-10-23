@@ -65,7 +65,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - warp-synchronous sum and max":
 
     test "scalar reduce sums the 32 lanes and broadcasts to each":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(scalarWgsl)
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumScalar", oDev, ())
@@ -76,7 +76,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[lane] == 496.0
 
     test "reduceAdd: 4 partials per thread, each summed across the 32 threads":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(partialsWgsl)
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumPartials", oDev, ())
@@ -88,7 +88,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
           check res[lane * 4 + j] == float32(496 + 32 * j)
 
     test "reduceMax takes the max of the 32 lanes and broadcasts it to each":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(maxScalarWgsl)
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxScalar", oDev, ())
@@ -99,7 +99,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[lane] == 31.0
 
     test "reduceMax: 4 partials per thread, each maxed across the 32 threads":
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(maxPartialsWgsl)
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxPartials", oDev, ())

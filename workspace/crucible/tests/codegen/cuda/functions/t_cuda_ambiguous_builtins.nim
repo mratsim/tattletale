@@ -41,7 +41,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
       output[5] = clampU32(15'u32, 10'u32, 20'u32)
 
   var buf: array[6, uint32]
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("builtinKernel", oDev, ())

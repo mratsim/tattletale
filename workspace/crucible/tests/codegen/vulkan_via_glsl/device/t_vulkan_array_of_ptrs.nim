@@ -9,14 +9,14 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint32]]) {.global.} =
     ps[0][1] = ps[2][3] + 1
     sink[0] = ps[0][1]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block:
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let sDev = engine.allocDevice(uint32, 1)
     var devs = [engine.allocDevice(uint32, 4), engine.allocDevice(uint32, 4),

@@ -44,7 +44,7 @@ const kernelBlock = metal:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - let-block-RHS":
     test "Pattern A — direct tuple let":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelDirect)
       echo kernelDirect
       let oDev = engine.allocDevice(uint32, 1)
@@ -54,7 +54,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 8
 
     test "Pattern B — const + let":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelConstLet)
       echo kernelConstLet
       let oDev = engine.allocDevice(uint32, 1)
@@ -64,7 +64,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 8
 
     test "Pattern C — block with const then yield":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelBlock)
       echo kernelBlock
       let oDev = engine.allocDevice(uint32, 1)

@@ -13,6 +13,7 @@ import workspace/crucible/vendor/wgpu
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/webgpu_runtime
+import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
@@ -122,10 +123,10 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     static:
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  ctx.pn = roundStepUp(ctx.pn, 256)
+  ctx.pn = round_multiple_up(ctx.pn, 256)
   ctx.chunkOff[argIdx] = ctx.pn
   const size = deviceLayout(T, bkWebGPU).size
-  let padded = roundStepUp(size, 4)
+  let padded = round_multiple_up(size, 4)
   ctx.chunkLen[argIdx] = padded
   ctx.blob.setLen(ctx.pn + padded)
   if size > 0:

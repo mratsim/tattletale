@@ -32,7 +32,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   echo "=== OpenCL execution ===\n"
   block:
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(kernelCl)
     var res: array[6, uint32]
     let oDev = engine.allocDevice(uint32, 6)

@@ -6,7 +6,7 @@ import workspace/crucible
 import workspace/ceramic/tests/kernels/k_axpy/kernel_axpy_template
 
 proc main =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   run_axpy_tests(engine, moduleName = "test_k_axpy_metal")
 
 when isMainModule:

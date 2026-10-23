@@ -15,7 +15,7 @@ import workspace/crucible
 # The kernel calls a void-returning device function: the codegen forward-
 # declares it (`void helper(uint x);`) before the kernel's preamble, which is
 # exactly the shape that breaks a naive first-`void ` entry-point scan.
-const helperVk = vulkan:
+const helperVk = glsl:
   proc helper(x: uint32) {.device.} =
     let y = x + 1
 
@@ -38,7 +38,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     &"helper forward declaration (idx {fwdIdx}) must precede the kernel " &
     &"preamble (idx {preIdx})"
 
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   engine.ingest(helperVk)
 
   # Sentinel: a wrong entry point either fails ingest (glslang `-e helper`) or

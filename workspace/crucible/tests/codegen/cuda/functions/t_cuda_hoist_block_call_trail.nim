@@ -39,7 +39,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   var data = [1.0'f32, 2.0, 3.0, 4.0]
   var outBuf: array[1, float32]
-  var engine = bkCuda.newEngine()
+  var engine = newEngine(runCuda)
   engine.ingest(kernel)
   let iDev = engine.allocDevice(float32, data.len)
   engine.copyToDeviceFromHost(iDev, addr data[0], data.len)

@@ -34,7 +34,7 @@ proc runTest() =
   doAssert "__local uint* q" in kernelCode,
     "smem pointer printed without __local:\n" & kernelCode
 
-  var engine = bkOpenCL.newEngine()
+  var engine = newEngine(runOpenCL)
   engine.ingest(kernelCode)
 
   var cloneRes: array[1, uint32]

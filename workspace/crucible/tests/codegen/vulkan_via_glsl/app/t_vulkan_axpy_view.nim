@@ -1,4 +1,4 @@
-## launchDeviceFn with a View argument on vulkan: pointer + length in one object.
+## launchDeviceFn with a View argument on glsl: pointer + length in one object.
 ##
 ## Test that a View argument holding DeviceMem handles crosses launchDeviceFn
 ## into the kernel's pointer fields.
@@ -24,7 +24,7 @@ proc axpy(y: AxpyView, alpha: float32, x: AxpyView) =
     y.p[i] = alpha * x.p[i] + y.p[i]
 
 proc runTest() =
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   const N = 7
   let xDev = engine.allocDevice(float32, N)
   let yDev = engine.allocDevice(float32, N)

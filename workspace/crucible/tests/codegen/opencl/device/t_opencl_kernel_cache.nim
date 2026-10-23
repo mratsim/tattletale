@@ -22,7 +22,7 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
   echo "=== OpenCL kernel cache ===\n"
 
   block: # same kernel, two runs with different data (cache hit on second run)
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(kernelCode)
 
     var a: array[1, uint32] = [10'u32]
@@ -48,7 +48,7 @@ proc runTest() =   # private - tests run in a proc so engines are destroyed at r
     echo "  OK - cached kernel reused across runs"
 
   block: # re-ingest invalidates the cache, new source takes effect
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(kernelCode)
 
     var a: array[1, uint32] = [1'u32]

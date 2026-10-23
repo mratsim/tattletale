@@ -8,7 +8,7 @@
 import std/[strutils, unittest]
 import workspace/crucible
 
-const elifGlsl = vulkan:
+const elifGlsl = glsl:
   proc elifDispatch(output, x: ptr UncheckedArray[int32]) {.global.} =
     if x[0] == 0:
       output[0] = 10
@@ -19,7 +19,7 @@ const elifGlsl = vulkan:
     else:
       output[0] = 40
 
-const noElseGlsl = vulkan:
+const noElseGlsl = glsl:
   proc elifNoElse(output, x: ptr UncheckedArray[int32]) {.global.} =
     output[0] = 99
     if x[0] == 0:
@@ -33,7 +33,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Vulkan - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(elifGlsl)
       var x = [0'i32]
       let xDev = engine.allocDevice(int32, 1)
@@ -49,7 +49,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         check res[0] == want
 
     test "no else in source emits no else block":
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(noElseGlsl)
       var x = [0'i32]
       let xDev = engine.allocDevice(int32, 1)

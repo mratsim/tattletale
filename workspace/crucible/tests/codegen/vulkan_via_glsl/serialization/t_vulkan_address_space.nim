@@ -9,7 +9,7 @@
 import std/[strutils, unittest]
 import workspace/crucible
 
-const addressSpaceVk = vulkan:
+const addressSpaceVk = glsl:
   var scratch {.smem.}: array[8, uint32]
   proc addressSpaceKernel(output: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     var x: uint32 = 7
@@ -19,11 +19,11 @@ const addressSpaceVk = vulkan:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Vulkan - address-space emission for locals":
     test "unannotated locals emit no qualifier, smem stays shared, and run":
-      # The GLSL text is the `vulkan:` macro output; `getArtifact()` is SPIR-V.
+      # The GLSL text is the `glsl:` macro output and `getArtifact()` returns SPIR-V.
       check "private uint" notin addressSpaceVk
       check "uint x = 7;" in addressSpaceVk
       check "shared uint scratch[8];" in addressSpaceVk
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(addressSpaceVk)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 2))>>("addressSpaceKernel", oDev, ())

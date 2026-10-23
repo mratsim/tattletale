@@ -19,7 +19,7 @@ import workspace/ceramic/bench/reduce_sum_gpu/bench_sum_template
 const ProblemSizes = [1_000, 16_000, 100_000, 200_000, 1_000_000, 4_000_000, 16_000_000]
 
 proc main() =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   echo "full sum, Metal, blk = (32, 1)"
   var wanted: seq[int]
   for p in commandLineParams():

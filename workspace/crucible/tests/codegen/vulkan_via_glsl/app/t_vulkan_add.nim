@@ -18,16 +18,16 @@ proc vec2Add(a, b: Vec2): Vec2 {.device.} =
   result.x = a.x + b.x
   result.y = a.y + b.y
 
-# ── GLSL generation via `vulkan:` macro ─────────────────────────────────────
+# ── GLSL generation via `glsl:` macro ─────────────────────────────────────
 
-const addVk = vulkan:
+const addVk = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[1] + b[1]
 
-const vec2Vk = vulkan:
+const vec2Vk = glsl:
   proc vec2AddKernel(output: ptr UncheckedArray[uint32];
                      a: ptr UncheckedArray[uint32];
                      b: ptr UncheckedArray[uint32]) {.global.} =
@@ -37,7 +37,7 @@ const vec2Vk = vulkan:
     output[0] = vr.x
     output[1] = vr.y
 
-const maxVk = vulkan:
+const maxVk = glsl:
   proc maxGeneric[T](a, b: T): T {.device.} =
     if a > b: result = a else: result = b
 
@@ -53,7 +53,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   # ── Execution via Vulkan runtime ────────────────────────────────────────────
 
   block: # addKernel
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(addVk)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -73,7 +73,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     doAssert out32[1] == 22
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(vec2Vk)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -93,7 +93,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     doAssert out32[1] == 204
 
   block: # maxKernel (generic instantiation)
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(maxVk)
 
     var a: array[1, uint32] = [42'u32]

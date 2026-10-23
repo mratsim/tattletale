@@ -1,5 +1,5 @@
 ## Vulkan (GLSL): CuTe GEMM single tile, A(2×3) * B(3×2) = C(2×2).
-## Tile type, tileAt device fn, and kernel all live inside the `vulkan:` block.
+## Tile type, tileAt device fn, and kernel all live inside the `glsl:` block.
 ## A and B are tile constants in the body.
 ##
 ## Run:
@@ -19,7 +19,7 @@ type
 proc tileAt[M, N: static int](t: Tile[M, N]; r, c: uint32): uint32 =
   t.data[r * uint32(N) + c]
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc gemmKernel(C: ptr UncheckedArray[uint32]) {.global.} =
     let A = Tile[2, 3](data: [1'u32, 2, 3, 4, 5, 6])
     let B = Tile[3, 2](data: [7'u32, 8, 9, 10, 11, 12])
@@ -39,7 +39,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo kernelCode
 
   block:
-    var engine = bkVulkan.newEngine()
+    var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel("gemmKernel", oDev, ())

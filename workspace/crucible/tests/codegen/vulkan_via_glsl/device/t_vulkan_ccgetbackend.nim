@@ -8,10 +8,11 @@
 import std/[os, osproc, strutils, tempfiles]
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc backendProbe(output: ptr UncheckedArray[int]) {.global, workgroup: (32, 1, 1).} =
     when ccGetBackend() == ctOpenCL: output[0] = 1
-    elif ccGetBackend() == ctVulkan: output[0] = 2
+    elif ccGetBackend() == ctGlsl:
+      output[0] = 2
     elif ccGetBackend() == ctMetal: output[0] = 3
     elif ccGetBackend() == ctCuda: output[0] = 4
     else: output[0] = 5

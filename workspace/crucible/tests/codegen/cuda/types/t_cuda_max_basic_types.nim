@@ -34,7 +34,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     test "float32/uint32/int max compile, run, and produce the right values":
       var buf: array[6, float32]
       var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
-      var engine = bkCuda.newEngine()
+      var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let iDev = engine.allocDevice(float32, dynArr.len)
       engine.copyToDeviceFromHost(iDev, addr dynArr[0], dynArr.len)

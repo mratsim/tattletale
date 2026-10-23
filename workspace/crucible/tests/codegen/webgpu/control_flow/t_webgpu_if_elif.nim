@@ -42,7 +42,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       doAssert elifWgsl.find("else if (((&x)[0] == 1))") < elifWgsl.find("else if (((&x)[0] == 2))")
       for v in ["(&output)[0] = 10;", "(&output)[0] = 20;", "(&output)[0] = 30;", "(&output)[0] = 40;"]:
         doAssert v in elifWgsl
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(elifWgsl)
       var res: array[1, int32]
       var x = [0'i32]
@@ -71,7 +71,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "no else in source emits no else block":
       doAssert "else if (((&x)[0] == 1)) {" in noElseWgsl
       doAssert "else {" notin noElseWgsl
-      var engine = bkWebGPU.newEngine()
+      var engine = newEngine(runWebGPU)
       engine.ingest(noElseWgsl)
       var res: array[1, int32]
       var x = [0'i32]

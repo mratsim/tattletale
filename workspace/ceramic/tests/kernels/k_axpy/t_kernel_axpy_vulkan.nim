@@ -6,7 +6,7 @@ import workspace/crucible
 import workspace/ceramic/tests/kernels/k_axpy/kernel_axpy_template
 
 proc main =
-  var engine = bkVulkan.newEngine()
+  var engine = newEngine(runVulkan)
   run_axpy_tests(engine, moduleName = "test_k_axpy_vulkan")
 
 when isMainModule:

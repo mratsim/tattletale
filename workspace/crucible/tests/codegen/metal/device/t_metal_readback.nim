@@ -27,7 +27,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "Metal - direct contents() readback":
 
     test "multi-element uint32 output readback":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelCode)
       echo kernelCode
       var input = [1'u32, 2'u32, 3'u32, 4'u32]

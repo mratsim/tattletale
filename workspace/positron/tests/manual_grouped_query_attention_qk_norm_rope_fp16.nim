@@ -41,7 +41,7 @@ proc buildRopeCosSin(rows, D: int; theta: float32): tuple[cosT, sinT: seq[float3
 
 proc qkNormRopeKernel(x, gamma: seq[uint16], cosT, sinT: seq[float32],
                       rows: int, eps: float32): F.Tensor =
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(qkNormRopeMsl)
   var outO = newSeq[uint16](rows * 128)
   engine.launchKernel << (grid: (1, rows div 8, 1), blk: (32, 1)) >> (

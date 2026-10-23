@@ -10,13 +10,13 @@
 import std/unittest
 import workspace/crucible
 
-const rmwSpirv = vulkan:
+const rmwSpirv = glsl:
   proc rmwKernel(C: ptr UncheckedArray[int32]) {.global.} =
     for i in 0 ..< 4:
       C[i] += 5
       C[i] *= 2
 
-const hazardSpirv = vulkan:
+const hazardSpirv = glsl:
   proc tick(x: ptr UncheckedArray[int32]): int32 {.device.} =
     result = x[0]
     x[0] = result + 1
@@ -24,7 +24,7 @@ const hazardSpirv = vulkan:
   proc hazardKernel(x: ptr UncheckedArray[int32]) {.global.} =
     x[tick(x) + 1] += 7
 
-const blitSpirv = vulkan:
+const blitSpirv = glsl:
   proc blitKernel(x: ptr UncheckedArray[int32]) {.global.} =
     for i in 0 ..< 2:
       x[block:
@@ -38,7 +38,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
       # `+=` must READ the stored value and write the accumulation back:
       # otherwise the result would not depend on the initialization at all.
       var output: array[4, int32] = [10'i32, 11, 12, 13]
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(rmwSpirv)
       let oDev = engine.allocDevice(int32, output.len)
       engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
@@ -51,7 +51,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
 
     test "x[tick(x) + 1] += 7 evaluates the index expression exactly once":
       var x: array[4, int32] = [0'i32, 0, 0, 0]
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(hazardSpirv)
       let oDev = engine.allocDevice(int32, x.len)
       engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
@@ -63,7 +63,7 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
 
     test "x[block-expr] += 3 accumulates through the blitted lvalue":
       var x: array[4, int32] = [0'i32, 0, 0, 0]
-      var engine = bkVulkan.newEngine()
+      var engine = newEngine(runVulkan)
       engine.ingest(blitSpirv)
       let oDev = engine.allocDevice(int32, x.len)
       engine.copyToDeviceFromHost(oDev, addr x[0], x.len)

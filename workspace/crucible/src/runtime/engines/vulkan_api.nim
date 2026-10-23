@@ -12,7 +12,11 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
-import workspace/crucible/src/runtime/backends/vulkan_runtime
+import workspace/crucible/src/runtime/backends/vulkan_common
+import workspace/crucible/src/runtime/backends/vulkan_compile
+import workspace/crucible/src/runtime/backends/vulkan_address_runtime
+import workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime
+import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
@@ -31,9 +35,10 @@ type
     entryPoint: string
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
+    isHlsl: bool
     caches: VulkanCaches
 
-template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
+template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
 
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
@@ -46,16 +51,29 @@ proc newVulkanEngine*(): VulkanEngine =
 # ════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
-  ## Stores the source, glslangValidator → SPIR-V, re-entrant.
+  ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
   if engine.spirv.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
 
+  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
+  engine.caches.spirvCache.clear()
+  engine.source = source
+  if source.startsWith("#version"):
+    ingestGlsl(engine, source)
+  elif "[numthreads(" in source:
+    ingestHlsl(engine, source)
+  else:
+    failLoud("Vulkan ingest: unrecognized source language, expected GLSL " &
+             "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
+             source.splitLines()[0])
+
+proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   # multi-kernel sources cannot address per-kernel scalars in the shared
   # deduped push block, ingest quits loudly
-  if countKernels(source) > 1:
+  if countKernels(glsl) > 1:
     var inPush = false
-    for line in source.splitLines():
+    for line in glsl.splitLines():
       if "layout(push_constant" in line:
         inPush = true
       elif inPush and line.strip().startsWith("}"):
@@ -66,12 +84,16 @@ proc ingest*(engine: VulkanEngine, source: string) =
           failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
                    "use one kernel per source when passing by-value scalars")
 
-  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
-  engine.caches.spirvCache.clear()
-  engine.source = source
-  engine.entryPoint = parseEntryPoint(source)
-  engine.spirv = compileGlslToSpirV(source, engine.entryPoint)
-  engine.shaderSquadron = parseShaderSquadron(source)
+  engine.entryPoint = parseEntryPoint(glsl)
+  engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
+  engine.shaderSquadron = parseShaderSquadron(glsl)
+  engine.isHlsl = false
+
+proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
+  engine.entryPoint = "main"
+  engine.spirv = compileHlslToSpirvViaDxc(hlsl)
+  engine.shaderSquadron = parseHlslSquadron(hlsl)
+  engine.isHlsl = true
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
@@ -102,21 +124,21 @@ type SerializationCtx = object
   pn: int
 
 proc write8(ctx: var SerializationCtx, x: uint64) =
-  ctx.pn = roundStepUp(ctx.pn, 8)
+  ctx.pn = round_multiple_up(ctx.pn, 8)
   if ctx.pn + 8 > 128:
     failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
   inc ctx.pn, 8
 
 proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
-  ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
+  ctx.write8(deviceAddress(v, ctx.vctx))
 
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = deviceLayout(T, bkVulkan)
+  const lay = deviceLayout(T, bkGlsl)
   if lay.align > 1:
-    ctx.pn = roundStepUp(ctx.pn, lay.align)
+    ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
     failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   var blob: array[lay.size, byte]
@@ -124,17 +146,17 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
     for f in fields(v):
       when typeof(f) is DeviceMem:
-        off = roundStepUp(off, 8)
+        off = round_multiple_up(off, 8)
         let a = deviceAddress(f.mem, ctx.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
-        blob.packFrom(off, f, bkVulkan)
-    off = roundStepUp(off, lay.align)
+        blob.packFrom(off, f, bkGlsl)
+    off = round_multiple_up(off, lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
-    blob.packFrom(off, v, bkVulkan)
+    blob.packFrom(off, v, bkGlsl)
   if lay.size > 0:
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
@@ -161,6 +183,33 @@ proc parseShaderSquadron(glsl: string): Dim3 =
     of 0: result.x = n
     of 1: result.y = n
     else: result.z = n
+
+proc parseHlslSquadron(hlsl: string): Dim3 =
+  const marker = "[numthreads("
+  let i = hlsl.find(marker)
+  if i < 0:
+    return Dim3(x: 0, y: 0, z: 0)
+  var fields: array[3, int]
+  var f = 0
+  var n = 0
+  var k = i + marker.len
+  while k < hlsl.len:
+    let c = hlsl[k]
+    if c in {'0' .. '9'}:
+      n = n * 10 + (ord(c) - ord('0'))
+    elif c == ',':
+      fields[f] = n
+      n = 0
+      inc f
+      if f > 2:
+        return Dim3(x: 0, y: 0, z: 0)
+    elif c == ')':
+      fields[f] = n
+      return Dim3(x: fields[0], y: fields[1], z: fields[2])
+    elif c notin {' ', '\t'}:
+      return Dim3(x: 0, y: 0, z: 0)
+    inc k
+  return Dim3(x: 0, y: 0, z: 0)
 
 proc countKernels(glsl: string): int =
   const marker = "layout(local_size_x"
@@ -209,16 +258,26 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
   # Entrypoint caching
   var entry = engine.entryPoint
   var spirv: seq[uint32]
-  if kernel == engine.entryPoint:
+  if engine.isHlsl:
+    spirv = engine.spirv
+    entry = "main"
+  elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:
     if not engine.caches.spirvCache.hasKey(kernel):
-      engine.caches.spirvCache[kernel] = compileGlslToSpirV(engine.source, kernel)
+      engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
+  if usesPhysicalStorageBuffer(spirv):
+    launchAddressRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
+  else:
+    launchDescriptorRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
+
+proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+                        output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
-  bindArgs(dctx, output, args, store, VulkanBuffer, bkVulkan)
+  bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
   let pushConstLen = dctx.pn
 
   let pipelineKey = (kernel, pushConstLen)
@@ -252,6 +311,40 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
+
+proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+                           output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+  var bufs: seq[VulkanBuffer]
+  template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
+    bufs.add v
+  template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
+    failLoud("descriptor route: scalar kernel args are not supported, " &
+             "the uniform-block layout model does not exist yet")
+  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, bkGlsl)
+
+  let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len))
+  let pool = engine.ctx.createDescriptorPool(uint32(bufs.len))
+  let descSet = engine.ctx.allocateDescriptorSet(pool, setLayout)
+  engine.ctx.updateDescriptorSet(descSet, bufs, uint32(bufs.len))
+
+  let pipelineKey = (kernel, 0)
+  if not engine.caches.pipelineCache.hasKey(pipelineKey):
+    let shaderModule = engine.ctx.createShaderModule(spirv)
+    engine.caches.pipelineCache[pipelineKey] =
+      engine.ctx.createPipeline(shaderModule, entry, 0, setLayout)
+    engine.ctx.destroyShaderModule(shaderModule)
+
+  # Dispatch cfg.grid groups (runKernel computes groupCount = ceil(global/local))
+  engine.ctx.runKernel(engine.caches.pipelineCache[pipelineKey],
+                 [uint32(cfg.grid.x * squadron.x),
+                  uint32(cfg.grid.y * squadron.y),
+                  uint32(cfg.grid.z * squadron.z)],
+                 [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
+                 nil, 0, descSet)
+
+  # Sets and pools are per-launch and die once runKernel's fence wait returns, the pipeline outlives them in the engine's pipeline cache
+  engine.ctx.destroyDescriptorPool(pool)
+  engine.ctx.destroyDescriptorSetLayout(setLayout)
 
 proc allocDeviceImpl(engine: VulkanEngine, n: int): VulkanBuffer {.inline.} =
   engine.ctx.allocBuffer(n)

@@ -38,7 +38,7 @@ proc padRows8(fs: seq[float32], rows, rowStride: int): seq[float32] =
 
 proc swaAttnKernel(qf, kf, vf: seq[float32], numQo, numKv, qOffset, H, Nkv, window, D: int): F.Tensor =
   ## Runs the D-specialized wrapper on the fp16-rounded inputs, returns the fp16 output widened to fp32.
-  var engine = bkMetal.newEngine()
+  var engine = newEngine(runMetal)
   engine.ingest(swaMsl)
   let args = (fp32sToFp16(padRows8(qf, numQo, H * D)),
               fp32sToFp16(padRows8(kf, numKv, Nkv * D)),

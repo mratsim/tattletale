@@ -67,7 +67,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   echo "=== OpenCL execution ===\n"
 
   block: # addKernel
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(addCl)
 
     var a: array[2, uint32] = [10'u32, 20'u32]
@@ -88,7 +88,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # vec2AddKernel (external type + fn)
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(vec2Cl)
 
     var a: array[2, uint32] = [100'u32, 200'u32]
@@ -109,7 +109,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     echo "  OK"
 
   block: # maxKernel (generic instantiation)
-    var engine = bkOpenCL.newEngine()
+    var engine = newEngine(runOpenCL)
     engine.ingest(maxCl)
 
     var a: array[1, uint32] = [42'u32]

@@ -35,7 +35,7 @@ proc deviceFn(span: MySpan) =
   discard span(0, 0).idx
 
 # ── Kernel ─────────────────────────────────────────────────────────
-const kernel = vulkan:
+const kernel = glsl:
   proc reproKernel(
     output: ptr UncheckedArray[float32],
     input: ptr UncheckedArray[float32],

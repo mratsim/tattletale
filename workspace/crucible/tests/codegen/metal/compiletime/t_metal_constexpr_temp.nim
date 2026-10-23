@@ -75,7 +75,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - constexpr tuple init":
     test "Pattern A — constexpr tuple in let RHS":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelA)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testA", oDev, ())
@@ -83,7 +83,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 8
     test "Pattern B — constexpr in arithmetic":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelB)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testB", oDev, ())
@@ -91,7 +91,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 128
     test "Pattern C — template wrapConst":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelC)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testC", oDev, ())
@@ -99,7 +99,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 8
     test "Pattern D — tuple bracket access":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelD)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testD", oDev, ())
@@ -107,7 +107,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 0
     test "Pattern E — block with constexpr temp":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelE)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testE", oDev, ())
@@ -115,7 +115,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 1)
       check res[0] == 0
     test "Pattern F — constexpr tuple field access":
-      var engine = bkMetal.newEngine()
+      var engine = newEngine(runMetal)
       engine.ingest(kernelF)
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("testF", oDev, ())
