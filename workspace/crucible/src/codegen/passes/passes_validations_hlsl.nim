@@ -17,7 +17,6 @@
 # Every message names the rejected construct.
 
 import std / [macros, sets, tables]
-import ../../builtins/builtins_functions
 import ../../builtins/builtins_gpu_types
 import ../ir/ast_datatypes
 import ./pass_datatypes
@@ -88,10 +87,6 @@ proc validateHlslKernelShape(ctx: var GpuContext) =
   var kernelName = ""
   for fn in ctx.fnTab.values:
     if fn.kind != gpuProc:
-      continue
-    if numericBuiltinDisplayName(fn.pName.ident()).len > 0:
-      # a materialized min/max/abs: the call prints the HLSL intrinsic,
-      # the materialized body has no emission
       continue
     if not fn.isGlobal():
       # the inline pass spliced every callee reachable from a kernel,

@@ -16,21 +16,16 @@ import ../../builtins/builtins_gpu_types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
-  ## Returns the emitted name for a call, resolving the ambiguous builtins per backend:
-  ## - `min`/`max`/`abs` per operand type through NimGpuNumericBuiltinsFnNames
+  ## Resolves the per-backend intrinsic name for a call:
+  ## - the ambiguous numeric builtins `min`/`max`/`abs` per operand type,
+  ##   through NimGpuNumericBuiltinsFnNames
   ## - the fp16 conversions through NimGpuFp16ConversionBuiltins
-  ## - everything else verbatim
-  ##
-  ## A materialized numeric builtin reaches the printer as a mangled display name (`max_RJ1UXDu`, `max___ZE4xeJFcdj6wQZpDx9bBlvQ_SStiky4`).
-  ## A backend that declares an intrinsic name for the builtin/operand-type combo prints that intrinsic and drops the materialized body.
-  ## A backend without a declared mapping keeps the display name and emits the body alongside the call (GLSL/CUDA/OpenCL/Metal).
+  ## Every other name passes through verbatim.
   let name = call.cName.ident()
-  let builtin = numericBuiltinDisplayName(name)
-  if builtin.len > 0:
+  if name in NimGpuNumericBuiltinsFunctions:
     let t = ctx.getOperandType(call.cArgs[0]) # min/max/abs always have 1 or 2 cArgs
-    if not t.isNil and hasMaxMinAbsBuiltinFnName(backend, builtin, t.kind):
-      return getMaxMinAbsBuiltinFnName(backend, builtin, t.kind)
-    return name
+    if not t.isNil:
+      return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
   NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)
 
 # ═══════════════════════════════════════════════════════════════════════

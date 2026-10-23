@@ -26,7 +26,6 @@ import std / [macros, strutils, tables, sets, hashes]
 
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
-import ../../builtins/builtins_functions
 import ./lang_utils
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -575,10 +574,6 @@ proc codegen*(ctx: var GpuContext): string =
   var kernel: GpuAst = nil
   for _, fn in ctx.fnTab:
     if fn.kind != gpuProc:
-      continue
-    if numericBuiltinDisplayName(fn.pName.ident()).len > 0:
-      # a materialized min/max/abs: the call prints the HLSL intrinsic,
-      # the materialized body has no emission
       continue
     if fn.isGlobal():
       doAssert kernel.isNil, "HLSL compiles one kernel per source"

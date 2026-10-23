@@ -25,7 +25,6 @@
 # The pass splices every callee reachable from a kernel body into that body.
 
 import std / [macros, sets, sequtils, tables]
-import ../../builtins/builtins_functions
 import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_helpers
@@ -43,7 +42,7 @@ import ./passes_low_address_spaces
 
 func registerInlineKernelCallees*(reg: var PassRegistry) =
   reg.register("inlineKernelCallees", pkTransform, phaseMain,
-    "Splices every non-intrinsic callee reachable from a kernel body into the kernel body, dead fnTab entries drop. " &
+    "Splices every callee with an IR body reachable from a kernel body into the kernel body, dead fnTab entries drop. " &
     "Refuses: early returns, calls in loop headers or while conditions, recursion, " &
     "dereferences of pointer parameters bound to a pointer value, and references to names the kernel declares (the name-based splice would capture them)",
     dependsOn = @[],
@@ -192,12 +191,11 @@ proc collectLocalDecls(n: GpuAst, names: var seq[string], types: var Table[strin
     discard
 
 proc isSpliceableCall(ctx: GpuContext, call: GpuAst): bool =
-  ## True when a call's callee has an IR body the printer cannot emit, so the call splices into the caller.
-  ## Materialized numeric builtins (max/min/abs) print the backend intrinsic, barriers, reductions and atomics emit as plain calls
+  ## True when the callee has an IR body, so the call splices into the caller.
+  ## Calls without a body (intrinsics, barriers, reductions, atomics) print as plain calls
   if call.cName.symbol.isNil:
     return false
-  (call.cName in ctx.allFnTab or call.cName in ctx.genericInsts) and
-    numericBuiltinDisplayName(call.cName.symbol.name).len == 0
+  call.cName in ctx.allFnTab or call.cName in ctx.genericInsts
 
 proc containsSpliceableCall(ctx: GpuContext, n: GpuAst): bool =
   ## True when an expression subtree calls a device function: loop headers and while conditions evaluate per iteration.
@@ -544,9 +542,8 @@ proc collectCallTargetISyms(n: GpuAst, targets: var HashSet[string]) =
     collectCallTargetISyms(ch, targets)
 
 proc inlineKernelCallees(ctx: var GpuContext) =
-  ## Splices every non-intrinsic callee reachable from each kernel body into the kernel body, then drops the dead fnTab entries.
+  ## Splices every callee with an IR body reachable from each kernel body into the kernel body, then drops the dead fnTab entries.
   ##
-  ## - materialized numeric builtins keep their fnTab entry, the call prints the backend intrinsic
   ## - a fn no kernel reaches transitively drops, a fn only an unreachable fn calls is unreachable too
   for fnKey in toSeq(ctx.fnTab.keys):
     let fn = ctx.fnTab[fnKey]
@@ -569,8 +566,6 @@ proc inlineKernelCallees(ctx: var GpuContext) =
     for fnKey in toSeq(ctx.fnTab.keys):
       let fn = ctx.fnTab[fnKey]
       if fn.kind != gpuProc or fn.isGlobal():
-        continue
-      if numericBuiltinDisplayName(fn.pName.ident()).len > 0:
         continue
       if fn.pName.symbol.iSym notin targets:
         ctx.fnTab.del(fnKey)
