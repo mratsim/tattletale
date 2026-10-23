@@ -231,6 +231,11 @@ proc markWrittenGlobalsImpl(ctx: var GpuContext, n: GpuAst) =
       ctx.markWrittenGlobalsImpl(ch)
 
 proc collectWrittenGlobals(ctx: var GpuContext, n: GpuAst) =
+  if n.kind == gpuIndex:
+    # a[i] = x writes the base a, the index expression i is only evaluated
+    # (a[b[j]] = x must not mark b written)
+    ctx.collectWrittenGlobals(n.iArr)
+    return
   if n.kind == gpuIdent and n.symbol != nil and
      n.symbol.iSym in ctx.globals:
     ctx.globals[n.symbol.iSym].flavor = kVar

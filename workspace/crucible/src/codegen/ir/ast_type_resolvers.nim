@@ -266,7 +266,7 @@ proc getLoweringExprType*(n: GpuAst): GpuType =
     # Span ptr/len args are ints in practice, a wrong-width fallback
     # must surface when it fires.
     result = initGpuType(gtInt32)
-    stderr.writeLine "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
+    warning "[lowerSpans] WARNING: getLoweringExprType could not derive a type for " & $n.kind &
       "; assuming gtInt32 for span index/pointer arithmetic"
 
 func getStructType*(n: GpuAst): GpuType =

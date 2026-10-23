@@ -569,6 +569,7 @@ proc decomposePtrLen(n: var GpuAst): GpuAst =
   ## `s` holds `p + a`, the returned statement is `let s_len = b - a + 1`.
   if n.kind != gpuVar or n.vInit.kind != gpuCall:
     return nil
+  # A `var` view that is never rebound is a `let`.
   let c = n.vInit
   if c.cName.kind != gpuIdent or c.cName.symbol.name != "toOpenArray" or c.cArgs.len < 3:
     return nil
@@ -577,6 +578,7 @@ proc decomposePtrLen(n: var GpuAst): GpuAst =
   n.vType = ptrTyp
   n.vInit = ptrPlus
   n.vName.symbol.typ = ptrTyp
+  n.vMutable = false
   let lenSym = newSymbol(n.vName.symbol.name & "_len", iSym = n.vName.symbol.iSym & "_len",
                          typ = initGpuType(gtInt32), symKind = n.vName.symbol.symKind)
   result = GpuAst(kind: gpuVar,
@@ -662,10 +664,10 @@ proc lowerArraysAndViews(ctx: var GpuContext, decayArrays: bool) =
       normalizeFn(fn)
       ctx.genericInsts[fnKey] = fn
 
-  # Phase 3+4: split view signatures, rewrite bodies at statement scope
+  # Phase 3+4: split view signatures, rewrite bodies at statement scope.
+  # An empty sigMap only skips the signature splits.
+  # The local-view decomposition and span-use rewriting still run.
   let sigMap = collectSpanSigs(ctx)
-  if sigMap.len == 0:
-    return
   var rewritten = initHashSet[string]()
   template rewriteTab(tab: untyped) =
     var keys: seq[GpuAst]
