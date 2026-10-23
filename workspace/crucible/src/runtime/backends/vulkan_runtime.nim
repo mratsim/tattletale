@@ -423,6 +423,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
     size: VkDeviceSize(size),
     usage: VK_BUFFER_USAGE_STORAGE_BUFFER_BIT or
+           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT or
            VK_BUFFER_USAGE_TRANSFER_SRC_BIT or
            VK_BUFFER_USAGE_TRANSFER_DST_BIT or
            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -563,10 +564,11 @@ proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
 # ═══════════════════════════════════════════════════════════════════════
 # Shader modules and descriptor sets
 # ═══════════════════════════════════════════════════════════════════════
-# Descriptor route: buffers bind as STORAGE_BUFFER descriptors.
+# Descriptor route: buffers bind as STORAGE_BUFFER descriptors, the scalar ConstantBuffer blocks as UNIFORM_BUFFER descriptors.
 # One binding per buffer parameter: binding i is the i-th buffer parameter in declaration order,
-# in descriptor set 0, matching the printer's [[vk::binding(N, 0)]] emission.
-# Push-constant parameters take no binding.
+# in descriptor set 0, matching the printer's register(tN/uN, space0) emission.
+# The scalar ConstantBuffer block takes the first ordinal after the buffers,
+# matching the printer's register(bN, space0) emission, as UNIFORM_BUFFER descriptors.
 # createPipeline carries the set layout, runKernel binds the set.
 
 proc createShaderModule*(ctx: VulkanContext, spirv: seq[uint32]): VkShaderModule =
@@ -592,16 +594,19 @@ proc destroyShaderModule*(ctx: VulkanContext, shaderModule: VkShaderModule) =
   if shaderModule != nil:
     vkDestroyShaderModule(ctx.device, shaderModule, nil)
 
-proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32): VkDescriptorSetLayout =
-  ## One STORAGE_BUFFER binding per buffer argument, compute stage only:
-  ## binding i is the i-th buffer parameter in declaration order, in descriptor set 0,
-  ## matching the printer's [[vk::binding(N, 0)]] numbering. Push-constant parameters take no binding.
+proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, uniformCount: uint32 = 0): VkDescriptorSetLayout =
+  ## Descriptor set layout for the descriptor route, compute stage only:
+  ## - bindings 0 ..< bindingCount: STORAGE_BUFFER, one per buffer parameter
+  ##   in declaration order, matching the printer's register(tN/uN, space0) numbering
+  ## - bindings bindingCount ..< bindingCount + uniformCount: UNIFORM_BUFFER,
+  ##   matching the printer's register(bN, space0) ordinals for the scalar
+  ##   ConstantBuffer blocks, the first block sits after all buffers
   let vkCreateDescriptorSetLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
          pAllocator: pointer,
          pSetLayout: ptr VkDescriptorSetLayout): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorSetLayout"))
-  var bindings = newSeq[VkDescriptorSetLayoutBinding](bindingCount.int)
+  var bindings = newSeq[VkDescriptorSetLayoutBinding](bindingCount.int + uniformCount.int)
   for i in 0 ..< bindingCount.int:
     bindings[i] = VkDescriptorSetLayoutBinding(
       binding: uint32(i),
@@ -610,11 +615,19 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32): VkDes
       stageFlags: VK_SHADER_STAGE_COMPUTE_BIT,
       pImmutableSamplers: nil
     )
+  for i in bindingCount.int ..< bindingCount.int + uniformCount.int:
+    bindings[i] = VkDescriptorSetLayoutBinding(
+      binding: uint32(i),
+      descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      descriptorCount: 1,
+      stageFlags: VK_SHADER_STAGE_COMPUTE_BIT,
+      pImmutableSamplers: nil
+    )
   var slCI = VkDescriptorSetLayoutCreateInfo(
     sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-    bindingCount: bindingCount
+    bindingCount: bindingCount + uniformCount
   )
-  if bindingCount > 0:
+  if bindingCount + uniformCount > 0:
     slCI.pBindings = bindings[0].addr
   check vkCreateDescriptorSetLayout(ctx.device, slCI.addr, nil, result.addr)
 
@@ -626,23 +639,30 @@ proc destroyDescriptorSetLayout*(ctx: VulkanContext, setLayout: VkDescriptorSetL
   if setLayout != nil:
     vkDestroyDescriptorSetLayout(ctx.device, setLayout, nil)
 
-proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32): VkDescriptorPool =
-  ## Pool sized to exactly one set of bindingCount storage-buffer descriptors.
+proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32, uniformCount: uint32 = 0): VkDescriptorPool =
+  ## Pool sized to exactly one set of the layout's descriptors:
+  ## bindingCount storage-buffer descriptors and uniformCount uniform-buffer descriptors.
   ## Set lifetime is owned by the pool: destroyDescriptorPool frees the sets.
   let vkCreateDescriptorPool = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorPoolCreateInfo,
          pAllocator: pointer,
          pDescriptorPool: ptr VkDescriptorPool): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorPool"))
-  var poolSize = VkDescriptorPoolSize(
-    `type`: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-    descriptorCount: bindingCount
-  )
+  var poolSizes = [
+    VkDescriptorPoolSize(
+      `type`: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      descriptorCount: bindingCount
+    ),
+    VkDescriptorPoolSize(
+      `type`: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      descriptorCount: uniformCount
+    )
+  ]
   var poolCI = VkDescriptorPoolCreateInfo(
     sType: VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
     maxSets: 1,
-    poolSizeCount: 1,
-    pPoolSizes: poolSize.addr
+    poolSizeCount: 2,
+    pPoolSizes: poolSizes[0].addr
   )
   check vkCreateDescriptorPool(ctx.device, poolCI.addr, nil, result.addr)
 
@@ -667,14 +687,17 @@ proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayou
   )
   check vkAllocateDescriptorSets(ctx.device, allocInfo.addr, result.addr)
 
-proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer], bindingCount: uint32) =
-  ## One write per binding: binding i covers the whole i-th buffer.
+proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer], bindingCount: uint32, uniforms: openArray[VulkanBuffer] = []) =
+  ## One write per binding: binding i covers the whole i-th buffer, the uniform buffers
+  ## write bindings bindingCount ..< bindingCount + uniforms.len.
   ##
   ## Precondition:
   ## - `buffers` enumerates the kernel's buffer parameters in declaration order,
-  ##   binding i writes the i-th buffer, matching the printer's [[vk::binding(N, 0)]] numbering
-  ##   (buffers only, push-constant parameters unbound)
-  ## - `bindingCount` is the set layout's binding count from createDescriptorSetLayout:
+  ##   binding i writes the i-th buffer, matching the printer's register(tN/uN, space0) numbering
+  ## - `uniforms` enumerates the kernel's scalar ConstantBuffer blocks in declaration order,
+  ##   binding bindingCount + j writes the j-th block, matching the printer's
+  ##   register(bN, space0) ordinals, the first block after all buffers
+  ## - `bindingCount` is the set layout's storage-binding count from createDescriptorSetLayout:
   ##   fewer buffers leaves bindings unwritten (reads hit stale device state),
   ##   more writes bindings the layout does not declare
   ##
@@ -688,8 +711,8 @@ proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffer
          descriptorCopyCount: uint32,
          pDescriptorCopies: ptr VkWriteDescriptorSet) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkUpdateDescriptorSets"))
-  var bufInfos = newSeq[VkDescriptorBufferInfo](buffers.len)
-  var writes = newSeq[VkWriteDescriptorSet](buffers.len)
+  var bufInfos = newSeq[VkDescriptorBufferInfo](buffers.len + uniforms.len)
+  var writes = newSeq[VkWriteDescriptorSet](buffers.len + uniforms.len)
   for i, buf in buffers:
     bufInfos[i] = VkDescriptorBufferInfo(
       buffer: buf.handle,
@@ -703,6 +726,22 @@ proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffer
       dstArrayElement: 0,
       descriptorCount: 1,
       descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      pBufferInfo: bufInfos[i].addr
+    )
+  for j, buf in uniforms:
+    let i = buffers.len + j
+    bufInfos[i] = VkDescriptorBufferInfo(
+      buffer: buf.handle,
+      offset: 0,
+      range: VkDeviceSize(buf.size)
+    )
+    writes[i] = VkWriteDescriptorSet(
+      sType: VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      dstSet: setHandle,
+      dstBinding: uint32(bindingCount.int + j),
+      dstArrayElement: 0,
+      descriptorCount: 1,
+      descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
       pBufferInfo: bufInfos[i].addr
     )
   if writes.len > 0:

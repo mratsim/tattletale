@@ -3,7 +3,7 @@
 ## Test that the `hlsl:` macro's kernels execute on the Vulkan device through the descriptor route:
 ##
 ## - set layout, pool, set, descriptor writes in parameter order, pipeline, dispatch
-## - add kernel: readback [11, 22] with push scalar z = 0, [12, 23] with z = 1
+## - add kernel: readback [11, 22] with the scalar z = 0 in its uniform block, [12, 23] with z = 1
 ## - coordinate kernel: readback values derived from the dispatch thread index
 ## - add readback is byte-identical to the same arithmetic through the Metal engine
 ##
@@ -40,14 +40,14 @@ proc assertU32(got: seq[uint32], want: openArray[uint32], label: string) =
       label & ": slot " & $i & " got " & $got[i] & " want " & $want[i]
 
 proc runTest() =
-  # Bindings take buffer parameter order, the push scalar z is no buffer resource.
-  # `output` is written, `a` and `b` are read-only.
+  # Bindings take buffer parameter order, the scalar block sits on a uniform binding
+  # after the buffers: `output` is written, `a` and `b` are read-only, z is uniform.
   let addBindings: seq[BindingExpectation] =
     @[("output", 0, false), ("a", 1, true), ("b", 2, true)]
   let addWords = compileCheck("add_execute", addHlsl, addBindings)
   let coordBindings: seq[BindingExpectation] = @[("output", 0, false)]
   let coordWords = compileCheck("coord_execute", coordHlsl, coordBindings)
-  echo "  glslang + spirv-val ok, add: ", addWords.len, " words, coord: ", coordWords.len, " words"
+  echo "  dxc + spirv-val ok, add: ", addWords.len, " words, coord: ", coordWords.len, " words"
 
   var addReadback: seq[uint32]
   block: # Vulkan descriptor route: set layout, pool, set, writes, pipeline, dispatch
@@ -57,25 +57,29 @@ proc runTest() =
     var aBuf = vctx.allocBuffer(sizeof(a))
     var bBuf = vctx.allocBuffer(sizeof(b))
     var oBuf = vctx.allocBuffer(sizeof(a))
+    var zBuf = vctx.allocBuffer(sizeof(uint32))
     vctx.writeBuffer(aBuf, addr a[0], sizeof(a))
     vctx.writeBuffer(bBuf, addr b[0], sizeof(b))
 
     # One binding per buffer parameter, numbered by buffer-parameter ordinal:
-    # the writes enumerate output, a, b in that order, the push scalar z takes no binding
-    let setLayout = vctx.createDescriptorSetLayout(3)
-    let pool = vctx.createDescriptorPool(3)
+    # the writes enumerate output, a, b in that order, the scalar z writes
+    # the uniform block at binding 3, the first ordinal after the buffers
+    let setLayout = vctx.createDescriptorSetLayout(3, 1)
+    let pool = vctx.createDescriptorPool(3, 1)
     let descSet = vctx.allocateDescriptorSet(pool, setLayout)
-    vctx.updateDescriptorSet(descSet, [oBuf, aBuf, bBuf], 3)
+    var z = 0'u32
+    vctx.writeBuffer(zBuf, addr z, sizeof(uint32))
+    vctx.updateDescriptorSet(descSet, [oBuf, aBuf, bBuf], 3, [zBuf])
 
     var sm = vctx.createShaderModule(addWords)
-    var pipeline = vctx.createPipeline(sm, "main", 4, setLayout)
+    var pipeline = vctx.createPipeline(sm, "main", 0, setLayout)
 
-    var z = 0'u32
-    vctx.runKernel(pipeline, [256'u32, 1, 1], [256'u32, 1, 1], z.addr, 4, descSet)
+    vctx.runKernel(pipeline, [256'u32, 1, 1], [256'u32, 1, 1], nil, 0, descSet)
     addReadback = readBuffer[uint32](vctx, oBuf)
     assertU32(addReadback, [11'u32, 22'u32], "vulkan add z=0")
     z = 1'u32
-    vctx.runKernel(pipeline, [256'u32, 1, 1], [256'u32, 1, 1], z.addr, 4, descSet)
+    vctx.writeBuffer(zBuf, addr z, sizeof(uint32))
+    vctx.runKernel(pipeline, [256'u32, 1, 1], [256'u32, 1, 1], nil, 0, descSet)
     assertU32(readBuffer[uint32](vctx, oBuf), [12'u32, 23'u32], "vulkan add z=1")
     echo "  vulkan add: z=0 [11, 22], z=1 [12, 23] byte-exact"
     vctx.destroyShaderModule(sm)
@@ -104,6 +108,7 @@ proc runTest() =
     aBuf.dealloc()
     bBuf.dealloc()
     oBuf.dealloc()
+    zBuf.dealloc()
 
   block: # Metal comparison: same arithmetic, byte-identical readback
     var engine = bkMetal.newEngine()

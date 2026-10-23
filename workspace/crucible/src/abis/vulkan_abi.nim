@@ -123,9 +123,11 @@ const
 
   # Descriptor types
   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER* = VkDescriptorType(7)
+  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER* = VkDescriptorType(6)
 
   # Buffer usage flags
   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT* = VkBufferUsageFlagBits(1 shl 4)
+  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT* = VkBufferUsageFlagBits(1 shl 3)
   VK_BUFFER_USAGE_TRANSFER_SRC_BIT* = VkBufferUsageFlagBits(1 shl 1)
   VK_BUFFER_USAGE_TRANSFER_DST_BIT* = VkBufferUsageFlagBits(1 shl 0)
   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT* = VkBufferUsageFlagBits(1 shl 17)
