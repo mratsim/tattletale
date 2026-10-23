@@ -49,6 +49,7 @@ func registerInstantiateImplicitAddressSpaceGenerics*(reg: var PassRegistry) =
 # a call site's instantiation nests further instantiations in the cloned body
 proc instantiateCall(ctx: var GpuContext, call: var GpuAst): void
 proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst): void
+proc instantiateStructTypesIn(ctx: var GpuContext, n: var GpuAst): void
 
 proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   ## Rewrites `call` onto the instantiation its argument address spaces select:
@@ -107,6 +108,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   rebindIdents(inst.pBody, fresh)
   ctx.fnTab[instIdent] = inst
   ctx.allFnTab[instIdent] = inst
+  ctx.instantiateStructTypesIn(inst.pBody)
   ctx.instantiateCallsIn(inst.pBody)
 
 proc rebindIdents(n: var GpuAst, fresh: Table[string, Symbol]) =
@@ -185,6 +187,10 @@ proc instantiateStructConstr(ctx: var GpuContext, constr: var GpuAst): bool =
   ## Returns true on specialization, the caller retypes the variable holding it
   if constr.ocType.kind notin {gtObject, gtGenericInst}:
     return false
+  for f in constr.ocFields.mitems:
+    let valueTyp = ctx.getOperandType(f.value)
+    if not valueTyp.isNil:
+      f.typ = valueTyp
   let inst = instantiatedStructType(constr.ocType, constr.ocFields)
   if inst.isNil:
     return false

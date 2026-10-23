@@ -192,6 +192,69 @@ static:
       $v.vName.symbol.typ.addressSpace & " for " & name
   echo "  OK - field addresses inherit the parent pointer's storage"
 
+# ── 1d. A construction inside an instantiated callee specializes too ──
+static:
+  let ir = toCrucibleAst:
+    type
+      Holder = object
+        p: ptr float32
+    proc build(x: ptr float32): Holder {.device.} =
+      result = Holder(p: x)
+    proc kern(outp: ptr float32) {.global.} =
+      var tmp: float32
+      var h = build(addr tmp)
+      outp[] = h.p[]
+
+  var ctx = GpuContext()
+  var kern: GpuAst = nil
+  var buildFn: GpuAst = nil
+  for stmt in ir.statements:
+    if stmt.kind == gpuProc:
+      ctx.allFnTab[stmt.pName] = stmt
+      if stmt.pName.symbol.name == "kern":
+        kern = stmt
+        ctx.fnTab[stmt.pName] = stmt
+      if stmt.pName.symbol.name == "build":
+        buildFn = stmt
+
+  proc findBuildCall(n: GpuAst): GpuAst =
+    if n.isNil:
+      return nil
+    if n.kind == gpuCall and n.cName.symbol.name == "build":
+      return n
+    for ch in n.items:
+      let found = ch.findBuildCall()
+      if not found.isNil:
+        return found
+  let buildCall = kern.pBody.findBuildCall()
+  doAssert not buildCall.isNil, "expected the build call in the kernel"
+
+  proc registerInstantiate(reg: var PassRegistry) {.nimcall.} =
+    reg.registerInstantiateImplicitAddressSpaceGenerics()
+  registerInstantiate.runPassPrepared(ctx)
+
+  # the call specializes x to thread, the clone was copied before its body
+  # specialized and its Holder construction must not keep the declared field
+  # space (device), the construction binds x which is thread
+  let instBuild = ctx.allFnTab[buildCall.cName]
+  doAssert instBuild.pName.symbol.iSym != buildFn.pName.symbol.iSym,
+    "the thread-space call references its own instantiation"
+  proc findConstr(n: GpuAst): GpuAst =
+    if n.isNil:
+      return nil
+    if n.kind == gpuObjConstr:
+      return n
+    for ch in n.items:
+      let found = ch.findConstr()
+      if not found.isNil:
+        return found
+  let constr = instBuild.pBody.findConstr()
+  doAssert not constr.isNil, "expected the Holder construction in the clone"
+  doAssert constr.ocType.fields[0].typ.addressSpace == asRMEM,
+    "the clone's construction binds a thread-space field init, got " &
+    $constr.ocType.fields[0].typ.addressSpace
+  echo "  OK - a construction inside an instantiated callee specializes"
+
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
