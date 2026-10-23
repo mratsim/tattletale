@@ -102,40 +102,52 @@ proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
       return true
     inc i, wordCount.int
 
-proc spirvEntryPoint*(spv: seq[uint32]): string =
-  ## Returns the name of the first OpEntryPoint, "" when the module declares none.
-  const opEntryPoint = 15
-  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
-  var i = 5
-  while i < spv.len:
-    let wordCount = spv[i] shr 16
-    if wordCount == 0:
-      break
-    if (spv[i] and 0xFFFF) == opEntryPoint:
-      # executionModel and entry-point id precede the literal name string
-      # the string is NUL-terminated and padded to the next word boundary
-      for j in i + 3 ..< i + wordCount.int:
-        for k in 0 ..< 4:
-          let c = char((spv[j] shr (k * 8)) and 0xFF)
-          if c == '\0':
-            return result
-          result.add c
-      return result
-    inc i, wordCount.int
+type
+  SpvSquadron* = object
+    ## Launch identity parsed from a SPIR-V module's words
+    name*: string          ## OpEntryPoint literal name, "" when absent
+    id*: uint32            ## OpEntryPoint result id, 0 when absent
+    localSize*: Dim3       ## LocalSize literals of the mode bound to `id`, (0, 0, 0) when absent
+    entryPoints*: int      ## number of OpEntryPoint instructions in the module
 
-proc spirvLocalSize*(spv: seq[uint32]): Dim3 =
-  ## Returns the LocalSize literals of the first OpExecutionMode, (0, 0, 0) when the module bakes none.
+proc spirvSquadron*(spv: seq[uint32]): SpvSquadron =
+  ## One scan over the module words, returns the launch identity:
+  ## - name, id: the OpEntryPoint literal name and result id
+  ## - localSize: the LocalSize literals of the execution mode bound to id
+  ## - entryPoints: the OpEntryPoint instruction count
+  ## Absent pieces stay zero-valued: name "", id 0, localSize (0, 0, 0)
+  const opEntryPoint = 15
   const opExecutionMode = 16
   const modeLocalSize = 17
-  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
+  # the 5-word header holds no instructions, the stream begins at index 5
   var i = 5
   while i < spv.len:
     let wordCount = spv[i] shr 16
-    if wordCount == 0:
+    if wordCount == 0 or i + wordCount.int > spv.len:
       break
-    # OpExecutionMode carries the entry-point id and the mode before the literals,
-    # LocalSize contributes exactly three literals (x, y, z)
-    if (spv[i] and 0xFFFF) == opExecutionMode and
-       wordCount.int >= 6 and spv[i + 2] == modeLocalSize:
-      return Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
+    let opcode = spv[i] and 0xFFFF
+    if opcode == opEntryPoint:
+      inc result.entryPoints
+      # the first OpEntryPoint carries the name. Its word layout:
+      # executionModel, entry-point id, then the literal string
+      # the string is NUL-terminated and padded to the word boundary
+      # interface ids come after the string
+      if result.name.len == 0:
+        result.id = spv[i + 2]
+        var nameDone = false
+        for j in i + 3 ..< i + wordCount.int:
+          if nameDone:
+            break
+          for k in 0 ..< 4:
+            let c = char((spv[j] shr (k * 8)) and 0xFF)
+            if c == '\0':
+              nameDone = true
+              break
+            result.name.add c
+    elif opcode == opExecutionMode and wordCount.int >= 6 and
+         spv[i + 2] == modeLocalSize and spv[i + 1] == result.id:
+      # the LocalSize mode carries exactly three literal words
+      # the mode id must match the parsed entry-point id
+      # a mismatched LocalSize must not leak through
+      result.localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int

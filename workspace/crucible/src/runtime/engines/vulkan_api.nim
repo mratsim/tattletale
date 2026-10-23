@@ -11,6 +11,7 @@ import std/[strutils, tables]
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile
@@ -50,14 +51,17 @@ proc newVulkanEngine*(): VulkanEngine =
 # ▸ PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════
 
-proc ingest*(engine: VulkanEngine, source: string) =
-  ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
-  if engine.spirv.len > 0:
+proc resetCaches(engine: VulkanEngine) =
+  ## Drops the cached pipelines and SPIR-V variants, the ingest identity changes
+  if engine.spirv.len > 0 or engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
-
   engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
   engine.caches.spirvCache.clear()
+
+proc ingest*(engine: VulkanEngine, source: string) =
+  ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
+  resetCaches(engine)
   engine.source = source
   if source.startsWith("#version"):
     ingestGlsl(engine, source)
@@ -100,19 +104,28 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   ##
   ## Args:
   ## - the module carries one OpEntryPoint, the kernel name parses from the entry-point literal string
-  ## - the squadron parses from the LocalSize execution mode
+  ## - the squadron parses from the LocalSize execution mode bound to the entry-point id
   ##
   ## Contract:
+  ## - the module is a SPIR-V module: the 0x07230203 magic and at least the 5-word header
   ## - the push-constant layout matches the address route: parameter i lives
   ##   at the std430 offset the module decorates
   ## - pointers occupy one u64 device-address member
   ## - scalars pack per the bkGlsl device layout
-  engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
-  engine.caches.spirvCache.clear()
+  resetCaches(engine)
+  if spirv.len < 5 or spirv[0] != spvMagic:
+    failLoud("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &
+             "magic as word 0 and the 5-word header, got " &
+             (if spirv.len == 0: "an empty module"
+              else: $spirv.len & " words, word 0 = " & spirv[0].toHex()))
+  let sq = spirvSquadron(spirv)
+  if sq.entryPoints != 1:
+    failLoud("Vulkan ingest: a direct SPIR-V module carries exactly one " &
+             "OpEntryPoint, got " & $sq.entryPoints)
   engine.source = ""
   engine.spirv = spirv
-  engine.entryPoint = spirvEntryPoint(spirv)
-  engine.shaderSquadron = spirvLocalSize(spirv)
+  engine.entryPoint = sq.name
+  engine.shaderSquadron = sq.localSize
   engine.isHlsl = false
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
