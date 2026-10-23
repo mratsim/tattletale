@@ -115,11 +115,6 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
       else:
         case arrType.kind
         of gtPtr:
-          # Nim pointer indexing: `p[i]` over a pointer to an array,
-          # fixed-size or unchecked, is the element,
-          # matching the text backends' type printers,
-          # gpuTypeToString peels ptr(UncheckedArray(T)) to T.
-          # A pointer to a scalar passes through, pointer arithmetic
           result = arrType.to
           if result.kind == gtArray:
             result = result.aTyp
