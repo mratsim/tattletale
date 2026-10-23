@@ -254,11 +254,18 @@ template sdpaImpl(mmaQK, mmaPV: static TiledMma,
 
 proc scaled_dot_product_attention*(mmaQK, mmaPV: static TiledMma, o, q, k, v: distinct TensorView, scale: float32, Dk, Dv: static int) =
   ## Attention with no mask, `o = softmax(scale·Q·Kᵀ)·V`.
+  ##
+  ## Preconditions (device code cannot raise on a violated contract):
+  ## `Hq` a multiple of `Hkv`, query head `h` reads kv head
+  ## `h div (Hq div Hkv)`.
   sdpaImpl(mmaQK, mmaPV, o, q, k, v, q, scale, Dk, Dv, Causal = false, Masked = false)
 
 proc scaled_dot_product_attention*(mmaQK, mmaPV: static TiledMma, o, q, k, v: distinct TensorView,
     scale: float32, Dk, Dv: static int, Causal: static bool) =
   ## Attention with causal masking, key > query blocked before the softmax.
+  ##
+  ## Preconditions (device code cannot raise on a violated contract):
+  ## `Hq` a multiple of `Hkv`.
   ##
   ## Args:
   ##   - Causal: pass `true` for the lower-triangular mask
@@ -269,6 +276,11 @@ proc scaled_dot_product_attention*(mmaQK, mmaPV: static TiledMma, o, q, k, v, ma
   ##
   ## The mask is a float32 view `(B, Hm, S, S)` with `Hm` in `{1, Hkv}`,
   ## head count 1 broadcasts over the kv heads.
+  ##
+  ## Preconditions (device code cannot raise on a violated contract):
+  ## `Hq` a multiple of `Hkv`.
+  ## `Hm` equal to `1` or `Hkv`, other head counts read the wrong
+  ## mask heads. The mask `(S, S)` dims must match the keys' `S`.
   ##
   ## Args:
   ##   - Causal: `true` applies the lower-triangular mask on top

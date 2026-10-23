@@ -44,6 +44,10 @@ else:
 
 proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: typedesc[T], Dk, Dv: static int) =
   ## Bridges one fixture, launches the kernel, compares against o.bin
+  # host-side validation of the head-count contract: the device procs
+  # cannot raise on a violated one, the composed layouts would misindex
+  doAssert meta.Hq mod meta.Hkv == 0,
+    "fixture " & meta.name & ": Hq " & $meta.Hq & " is not a multiple of Hkv " & $meta.Hkv
   let
     qh = loadFixtureTensor[T](dir, "q.bin", (meta.B, meta.Hq, meta.L, meta.Dk))
     kh = loadFixtureTensor[T](dir, "k.bin", (meta.B, meta.Hkv, meta.S, meta.Dk))
@@ -65,6 +69,8 @@ proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: ty
       nBytes = int(getFileSize(dir / "mask.bin"))
       Hm = nBytes div (4 * meta.B * meta.S * meta.S)
       mh = loadFixtureTensor[float32](dir, "mask.bin", (meta.B, Hm, meta.S, meta.S))
+    doAssert Hm == 1 or Hm == meta.Hkv,
+      "fixture " & meta.name & ": mask head count " & $Hm & " is neither 1 nor Hkv " & $meta.Hkv
       maskDev = engine.bridge(mh)
     if meta.causal:
       engine.launchDeviceFn scaled_dot_product_attention(
