@@ -619,6 +619,17 @@ task test_crucible_metal, "Test workspace/crucible Metal codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
       runCmd(cmd)
 
+task test_crucible_d3d12_winforced_compile, "Compile-only check of the D3D12 smoke's windows branch":
+  withDir(ProjectRoot):
+    let src = "workspace/crucible/tests/codegen/d3d12/app/t_d3d12_smoke.nim"
+    let dst = "nimcache/tests/t_d3d12_smoke_winforced.nim"
+    mkDir("nimcache/tests")
+    writeFile(dst, readFile(src)
+      .replace("when defined(windows):", "when true:")
+      .replace("\nelse:", "\nelif false:"))
+    runCmd("nim cpp -c --hints:off --warnings:off --outdir:build/tests " &
+        "--nimcache:nimcache/tests_winforced " & dst)
+
 # ---------------------------------------------------
 
 const Pcre2Dir = ProjectRoot/"workspace/pcre2"
