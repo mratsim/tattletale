@@ -1356,9 +1356,16 @@ proc emitIf(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   emitIfChain(ctx, fn, branches, n.ifElse)
 
 proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  ## gpuFor phi-free: induction counter in Function storage, the header block
-  ## carries OpLoopMerge + the condition branch, the continue block increments and stores.
-  ## OpLoopMerge must precede a branch terminator in its block, the condition computes in between.
+  ## gpuFor phi-free: induction counter in Function storage
+  ##
+  ## - the start value and the range bound compute in the pre-header block
+  ## - the header block carries OpLoopMerge + the condition branch
+  ## - the continue block increments and stores the induction counter
+  ##
+  ## - the range bound computes before the header opens, OpLoopMerge must be
+  ##   the second-to-last instruction of its block: a selection structure
+  ##   (ternary, lazy bool) emitted there would leave OpLoopMerge stranded
+  ##   in the selection's merge block
   let indSym = n.fVar.symbol
   let indVar = localVarId(fn, indSym)
   doAssert (indSym.iSym in fn.localTysBySym) or (indSym.name in fn.localTys),
@@ -1368,6 +1375,10 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let startV = convertValue(ctx, emitExpr(ctx, fn, n.fStart),
                             exprType(fn, n.fStart), indSym.typ)
   ctx.builder.opStore(indVar, startV)
+  # the bound computes in the pre-header block, keeping the header block
+  # to OpLabel + load + condition + OpLoopMerge + branch
+  let endV = convertValue(ctx, emitExpr(ctx, fn, n.fEnd),
+                          exprType(fn, n.fEnd), indSym.typ)
   let headerLbl = ctx.builder.freshLabel()
   ctx.builder.opBranch(headerLbl)
   let bodyLbl = ctx.builder.freshLabel()
@@ -1375,8 +1386,6 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let mergeLbl = ctx.builder.freshLabel()
   ctx.builder.opLabelAt(headerLbl)
   let cur = ctx.builder.opLoad(indTy, indVar)
-  let endV = convertValue(ctx, emitExpr(ctx, fn, n.fEnd),
-                          exprType(fn, n.fEnd), indSym.typ)
   let cmpOp = case n.fRangeKind
               of rkExclusive:
                 if indSym.typ.kind in spvSignedInts: "OpSLessThan" else: "OpULessThan"
