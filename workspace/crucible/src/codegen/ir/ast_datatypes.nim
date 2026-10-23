@@ -337,9 +337,6 @@ type
 
     structsWithPtrs*: Table[(GpuType, string), GpuAst] ## WGSL: (type, field) -> kernel-param ident at construction, printer rewrites `foo.field` to it
     ptrFieldBindings*: Table[(string, string), GpuAst] ## WGSL: per-variable (variable, field) binding, the type-keyed table would alias same-struct variables
-    ptrFieldVariants*: Table[GpuType, seq[seq[AddressSpace]]] ## Address-space tuples of pointer-typed struct fields, one per distinct construction-site combination
-    objFieldAddressSpaces*: Table[string, seq[AddressSpace]] ## Per pointer-field address space of a variable's instance, keyed by iSym
-    symAddressSpaces*: Table[string, AddressSpace] ## Symbol iSym -> storage address space, unannotated locals as asRMEM
 
     generics*: HashSet[string] ## Generic proc names seen in Nim -> GpuAst, triggers instantiation recording into `genericInsts`
     ## All known functions (defined, generic-inst, external, builtin), keyed by iSym

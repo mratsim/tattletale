@@ -53,7 +53,6 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerLiftKernelParamsToGlobals()
   reg.registerPullConstantPragmaVars()
   reg.registerRemoveStructPointerFields()
-  reg.registerCollectValueAddressSpaces()
   reg.registerAddressOfInjection()
   reg.registerInlinePointerParamCalls()
   reg.registerMakeCodeValid()
@@ -404,8 +403,6 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
       ctx.makeCodeValidImpl(ch, inGlobal)
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      let space = ctx.resolveIdentAddressSpace(rightId)
-      ctx.symAddressSpaces[n.vName.symbol.iSym] = space
       # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS carries a mutability flag.
       let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
       let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
@@ -569,7 +566,6 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
       let sym = newSymbol(fresh, iSym = fresh, typ = typ, symKind = gsLocal)
       let binding = GpuAst(kind: gpuIdent, symbol: sym)
       subst[p.ident.symbol.iSym] = binding
-      ctx.symAddressSpaces[sym.iSym] = ctx.resolveIdentAddressSpace(arg)
       result.add GpuAst(kind: gpuVar, vMutable: false, vName: binding,
                         vType: typ, vInit: arg, vRequiresMemcpy: false,
                         addressSpace: asRMEM)

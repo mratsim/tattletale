@@ -49,13 +49,6 @@ func registerInsertPointerDeref*(reg: var PassRegistry) =
     run = insertPointerDeref
   )
 
-func registerCollectValueAddressSpaces*(reg: var PassRegistry) =
-  reg.register("collectValueAddressSpaces", pkTransform, phaseMain,
-    "Records var and objconstr pointer-field address spaces for resolution",
-    dependsOn = @[],
-    run = collectValueAddressSpaces
-  )
-
 func registerLowerArraysAndViews*(reg: var PassRegistry, decayArrays: static bool) =
   reg.register("lowerArraysAndViews", pkTransform, phaseMain,
     "Arrays decay to element pointers per decayArrays, openArray views split into ptr + len",

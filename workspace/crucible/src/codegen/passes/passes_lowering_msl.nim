@@ -59,13 +59,11 @@ func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerSharedLoweringPasses()
   # Consumes final argument types (post lowerArraysAndViews)
   # Precedes the passes that read struct types (expandStructKernelParams)
-  # and the address-space collector (collectValueAddressSpaces)
   reg.registerInstantiateGenerics()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerExpandStructKernelParams()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()
-  reg.registerCollectValueAddressSpaces()
 
 func registerSmemArena(reg: var PassRegistry) =
   reg.register("smemArena", pkTransform, phaseMain,

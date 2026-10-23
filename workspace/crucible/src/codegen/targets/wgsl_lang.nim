@@ -276,7 +276,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     case ast.addressSpace
     of asSMEM: addrSpaceAttr = "<workgroup>"
     of asRMEM, asDevice, asConstant: discard
-    let vSpace = ctx.symAddressSpaces.getOrDefault(ast.vName.symbol.iSym, asRMEM)
+    # the pointer type carries the space it accesses
+    let vSpace = ast.vType.addressSpace
     result = &"{indentStr}{letOrVar}{addrSpaceAttr} {gpuTypeToString(ast.vType, ast.vName.ident(), addrSpace = vSpace)}"
     # If there is an initialization, the type might require a memcpy
     doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."

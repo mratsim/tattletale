@@ -100,8 +100,10 @@ proc runTest() =
       var engine = bkMetal.newEngine()
       engine.ingest(msl)
       let src = engine.getArtifact()
+      # the per-space struct variants are distinct defs, the second
+      # View def carries the type-hash instance name
       check "struct View{" in src
-      check "struct View_smem{" in src
+      check "struct View_" in src
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
       let iDev = engine.allocDevice(uint32, 4)
       engine.copyToDeviceFromHost(iDev, addr input[0], 4)

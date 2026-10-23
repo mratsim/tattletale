@@ -53,19 +53,6 @@ proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
       result.add renderExpr(ctx, part.expr)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Metal printer helpers
-# ═══════════════════════════════════════════════════════════════════════
-
-func variantSuffix*(spaces: seq[AddressSpace]): string =
-  result = "_"
-  for space in spaces:
-    case space
-    of asDevice: result.add "device"
-    of asConstant: result.add "const"
-    of asSMEM: result.add "smem"
-    of asRMEM: result.add "rmem"
-
-# ═══════════════════════════════════════════════════════════════════════
 # IR predicates and farming
 # ═══════════════════════════════════════════════════════════════════════
 
