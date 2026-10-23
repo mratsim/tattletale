@@ -76,6 +76,12 @@ proc runOrderRegimeTests =
     doAssert l === ((2, 3), (1, 2))
     echo "    9. Int-leaf tuple variable shape: OK"
 
+  block:
+    let l = make_ordered_layout((2, 3), (Int[1](), Int[0]()))
+    doAssert l === ((2, 3), (3, 1))
+    doAssert typeof(l.stride[0]) is Int[3]
+    echo "    10. Int-node order leaves rank as their phantom value: OK"
+
 proc runTests =
   echo "--- static result types ---"
   runStaticTypeTests()

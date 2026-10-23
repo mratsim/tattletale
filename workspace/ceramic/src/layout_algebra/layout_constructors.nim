@@ -140,8 +140,10 @@ func orderLeafAt(order: int, i: static int): int =
 func orderLeafAt[V: static int](order: Int[V], i: static int): int =
   V
 
-func orderLeafAt[T: tuple](order: T, i: static int): auto =
-  order[i]
+func orderLeafAt[T: tuple](order: T, i: static int): int =
+  ## Per-leaf rank dispatch: an `Int[V]` leaf ranks as `V`, an int leaf
+  ## as its value.
+  orderLeafAt(order[i], i)
 
 func orderLeafAt[I: Ordinal, T](order: array[I, T], i: static int): int =
   order[i]
