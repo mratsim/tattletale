@@ -101,17 +101,6 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
 
 proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
-  ##
-  ## Args:
-  ## - the module carries one OpEntryPoint, the kernel name parses from the entry-point literal string
-  ## - the squadron parses from the LocalSize execution mode bound to the entry-point id
-  ##
-  ## Contract:
-  ## - the module is a SPIR-V module: the 0x07230203 magic and at least the 5-word header
-  ## - the push-constant layout matches the address route: parameter i lives
-  ##   at the std430 offset the module decorates
-  ## - pointers occupy one u64 device-address member
-  ## - scalars pack per the bkGlsl device layout
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
     failLoud("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &
