@@ -9,6 +9,7 @@ import std/macros
 import std/typetraits
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/backends/runtime_utils
 
 # ═════════════════════════════════════════════════════════════════════════
 # ▸ Compile-time binding
@@ -57,7 +58,7 @@ func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
 func roundStepUp*(x, step: int): int {.inline.} =
-  ((x + step - 1) div step) * step
+  round_multiple_up(x, step)
 
 func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment, phantom/static types excluded,

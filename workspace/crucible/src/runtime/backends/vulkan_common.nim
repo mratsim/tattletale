@@ -8,6 +8,7 @@
 import std/dynlib
 import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
+import ./runtime_utils
 
 type
   VulkanBuffer* = object
@@ -714,9 +715,9 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   if localWorkSize.len > 2:
     lz = localWorkSize[2]
 
-  let gcx = (gx + lx - 1) div lx
-  let gcy = (gy + ly - 1) div ly
-  let gcz = (gz + lz - 1) div lz
+  let gcx = ceil_div(gx, lx)
+  let gcy = ceil_div(gy, ly)
+  let gcz = ceil_div(gz, lz)
   vkCmdDispatch(cmdBuf, gcx, gcy, gcz)
 
   check vkEndCommandBuffer(cmdBuf)
