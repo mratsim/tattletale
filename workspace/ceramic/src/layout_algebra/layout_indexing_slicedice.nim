@@ -215,9 +215,7 @@ macro hasUnderscore*(Cs: varargs[typed]): bool =
 # ═══════════════════════════════════════════════════════════════
 
 proc axesSelector(n: int, axes: seq[int], rest, axis: static string): NimNode =
-  ## Per-mode selector: `axis` marker at the axes, `rest` marker elsewhere.
-  ## Markers bind through `bindSym`: a generic proc instantiates in its caller's scope,
-  ## an unquoted ident would resolve there and fail in modules without the marker imports.
+  ## Per-mode selector: `axis` marker at the axes, `rest` marker elsewhere
   result = nnkPar.newTree()
   for i in 0 ..< n:
     var isAxis = false
