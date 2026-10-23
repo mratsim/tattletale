@@ -46,9 +46,10 @@ def sdpa_reference(q, k, v, mask, causal, scale):
     _, Hkv, S, _ = k.shape
     Dv = v.shape[3]
     g = Hq // Hkv
-    # GQA: query head h reads kv head h // g. Reshaping the flat head axis
-    # as (g, Hkv) with g fastest gives exactly that pairing.
-    q5 = q.reshape(B, g, Hkv, L, Dk)                                # (B, g, Hkv, L, Dk)
+    # GQA: kv head h // g serves the query heads [hkv*g, (hkv+1)*g).
+    # Reshaping the flat head axis as (Hkv, g) pairs h = hkv*g + g_idx
+    # with kv head hkv, the transpose brings the group axis next to batch.
+    q5 = q.reshape(B, Hkv, g, L, Dk).transpose(0, 2, 1, 3, 4)       # (B, g, Hkv, L, Dk)
     k5 = np.broadcast_to(k.reshape(B, 1, Hkv, S, Dk), (B, g, Hkv, S, Dk))
     v5 = np.broadcast_to(v.reshape(B, 1, Hkv, S, Dv), (B, g, Hkv, S, Dv))
     s = np.einsum("bghqd,bghkd->bghqk", q5, k5) * scale
