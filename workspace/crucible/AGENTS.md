@@ -63,7 +63,8 @@ tests/
   codegen/
     cuda/         : CUDA via NVRTC (primary target)
     opencl/       : OpenCL
-    vulkan/       : Vulkan
+    vulkan_via_glsl/ : Vulkan (GLSL)
+    vulkan_via_hlsl/ : Vulkan (HLSL, glslang + spirv-val)
     webgpu/       : WebGPU
     metal/        : Metal (macOS)
     each backend: app/ compiletime/ control_flow/ device/ functions/
@@ -118,7 +119,7 @@ Only engine/runtime tests use the public API (below).
 **One import for everything:** `import workspace/crucible` re-exports the public surface.
 IR tests are the exception, they keep deep internal imports.
 
-- DSL macros: `cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:`
+- DSL macros: `cuda:`/`opencl:`/`vulkan:`/`hlsl:`/`webgpu:`/`metal:`
 - Engines: `bkCuda`/`bkOpenCL`/`bkVulkan`/`bkWebGPU`/`bkMetal`, `init`, `ingest`,
   `getArtifact`, `check`, `deviceName`
 - Launch: `launchKernel`, `launchDeviceFn`
@@ -134,7 +135,7 @@ from `when isMainModule: runTest()`.
 - The uniform name makes tests grep-able.
 - Proc scope deterministically destroys the engine at return, which tests the RAII
   lifecycle (`=destroy` never runs on module-scope engines).
-- See `tests/codegen/vulkan/serialization/t_vulkan_scalar_args.nim` for the pattern.
+- See `tests/codegen/vulkan_via_glsl/serialization/t_vulkan_scalar_args.nim` for the pattern.
 
 **Never declare backend-resource objects at module scope.** Blocks may separate
 sections within a proc, but a test made of only module-level `block`s (no proc) is a no-go.
@@ -220,7 +221,7 @@ nim c -r --hints:off --warnings:off \
 # Vulkan
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/vulkan/*/t_vulkan_*.nim
+  workspace/crucible/tests/codegen/vulkan_via_glsl/*/t_vulkan_*.nim
 
 # WebGPU
 nim c -r --hints:off --warnings:off \
@@ -287,7 +288,7 @@ Every test file must have a header comment:
 A "minimal repro" for a crucible bug:
 
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
-- Has a `cuda:` / `opencl:` / `vulkan:` / `webgpu:` / `metal:` block
+- Has a `cuda:` / `opencl:` / `vulkan:` / `hlsl:` / `webgpu:` / `metal:` block
 - Demonstrates the failing pattern in the simplest possible way
 - Runs the kernel via `engine.launchKernel()` to verify correctness
 

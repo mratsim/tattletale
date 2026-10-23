@@ -13,7 +13,7 @@
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
-## | Codegen       | `cuda`, `opencl`, `vulkan`, `webgpu`, `metal`                                                                         |
+## | Codegen       | `cuda`, `opencl`, `vulkan`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`)                                                |
 
 import
   ./codegen/gpu_compiler,
@@ -45,4 +45,8 @@ export launch_device_fn.DeviceFnSugar,
 # ═══════════════════════════════════════════════════════════════
 
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.vulkan,
-       gpu_compiler.webgpu, gpu_compiler.metal
+       gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl
+# the type export carries the non-pure enum's members to importers by bare name,
+# individual enum fields cannot be exported ("enum field cannot be exported individually")
+from ./codegen/backends/hlsl_lang import HlslFlavor
+export HlslFlavor

@@ -33,7 +33,8 @@ nim test_ceramic
 nim test_positron_naive    # workspace/positron naive reference tier + ceramic-vs-naive comparisons
 nim test_crucible_nvrtc
 nim test_crucible_opencl
-nim test_crucible_vulkan
+nim test_crucible_vulkan_via_glsl
+nim test_crucible_vulkan_via_hlsl
 nim test_crucible_webgpu
 ```
 

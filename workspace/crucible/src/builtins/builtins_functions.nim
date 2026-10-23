@@ -78,5 +78,5 @@ proc getMaxMinAbsBuiltinFnName*(backend: BackendKind; builtin: string;
                              tKind: GpuTypeKind): string =
   ## Backend function name for an ambiguous builtin call whose operands have
   ## type `tKind`.
-  ## Combos absent from NimGpuAmbiguousBuiltinFn keep the plain name.
+  ## Combos absent from NimGpuNumericBuiltinsFnNames keep the plain name.
   NimGpuNumericBuiltinsFnNames.getOrDefault((backend, builtin, tKind), builtin)
