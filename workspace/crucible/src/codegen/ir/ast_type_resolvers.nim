@@ -242,7 +242,7 @@ proc getAccessedSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
     if result == asRMEM:
       # integer arithmetic over cast pointers keeps the pointer's storage provenance
       result = ctx.getAccessedSpace(n.bLeft)
-      if result == asRMEM and not n.bRight.isNil:
+      if result == asRMEM:
         result = ctx.getAccessedSpace(n.bRight)
   else:
     result = getTypeAccessedSpace(ctx.getOperandType(n))

@@ -412,7 +412,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
           for i in 0 ..< instType.fields.len:
             for fc in varNode.vInit.ocFields:
               if fc.name == instType.fields[i].name and
-                  not fc.typ.isNil and fc.typ.kind in {gtPtr, gtSpan, gtArray} and
+                  fc.typ.kind in {gtPtr, gtSpan, gtArray} and
                   fc.typ.addressSpace != instType.fields[i].typ.addressSpace:
                 instType.fields[i].typ = fc.typ
           varNode.vType = instType
