@@ -23,5 +23,5 @@ proc codegenGLSL*(ctx: var GpuContext): string =
 proc codegenMetal*(ctx: var GpuContext): string =
   msl_lang.codegen(ctx)
 
-proc codegenHlsl*(ctx: var GpuContext): string =
-  hlsl_lang.codegen(ctx)
+proc codegenHlsl*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
+  hlsl_lang.codegen(ctx, flavor)

@@ -1,4 +1,4 @@
-## HLSL: 64-bit integer locals are rejected, int64_t is a glslang parse error and uint64_t pulls the SPIR-V Int64 capability.
+## HLSL: 64-bit integer locals are rejected, int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability.
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \

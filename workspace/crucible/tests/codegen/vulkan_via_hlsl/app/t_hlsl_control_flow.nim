@@ -38,7 +38,7 @@ proc runTest() =   # private: the compile checks run in a proc so build artifact
   # Bindings take buffer parameter order: `output` is written, `x` is read-only
   let flowBindings: seq[BindingExpectation] = @[("output", 0, false), ("x", 1, true)]
   discard compileCheck("control_flow", flowHlsl, flowBindings, "else if (")
-  doAssert flowHlsl.contains("if ((x[0].v == 0))"),
+  doAssert flowHlsl.contains("if ((x[0] == 0))"),
     "the chain must open on a plain if over the int32 buffer read:\n" & flowHlsl
   doAssert flowHlsl.contains(" ? "),
     "the ternary must print as a conditional expression:\n" & flowHlsl
@@ -46,7 +46,7 @@ proc runTest() =   # private: the compile checks run in a proc so build artifact
     "the struct decl must brace-initialize from the object constructor:\n" & flowHlsl
   doAssert flowHlsl.contains("picked.lo = 7u"),
     "the objconstr assignment must expand member-wise:\n" & flowHlsl
-  doAssert flowHlsl.contains("uint(x[2].v)"),
+  doAssert flowHlsl.contains("uint(x[2])"),
     "the int32-to-uint32 conversion must print an explicit cast:\n" & flowHlsl
 
 when isMainModule:

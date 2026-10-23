@@ -7,26 +7,24 @@
 
 ## HLSL emission: one compute kernel per source, device functions emitted natively.
 ##
-## DXC compiles multi-function HLSL, so device functions emit as ordinary
-## functions with forward declarations and the kernel emits as `main`.
-##
-## Emission pipeline (codegen): recursion check → parameter classification → write-scans → declarations → forward declarations → fn definitions → kernel.
+## DXC compiles multi-function HLSL: device functions emit as ordinary functions, the kernel as `main`.
 ##
 ## Resource mapping, kernels:
-## - pointer parameters become `[[vk::binding(N, 0)]]` StructuredBuffer / RWStructuredBuffer resources,
-##   numbered in declaration order, read-only vs read-write decided by the write-scan
-## - one wrapper struct (`struct WrapX { uint v; }`) per buffer parameter, MoltenVK merges identically typed storage blocks into one MSL struct
-## - scalar parameters become `[[vk::push_constant]] ConstantBuffer<Push> push` members, reads render `push.<name>`
+## - pointer parameters become StructuredBuffer / RWStructuredBuffer resources
+##   on `register(tN/uN, space0)`, scalars a ConstantBuffer on `register(bN, space0)`
+## - one global ordinal across all resources in declaration order,
+##   read-only vs read-write from the write-scan: read-only buffers take t registers,
+##   read-write u, the scalar block comes last
+## - scalar reads render `push.<name>` through the ConstantBuffer
 ## - coordinate builtins join `main`'s signature only when read, mapped to SV_DispatchThreadID / SV_GroupID / SV_GroupIndex
 ##
 ## Resource mapping, device functions:
-## - pointer parameters become StructuredBuffer / RWStructuredBuffer resource params
-##   without binding attributes, the resource identity flows from the call site
-## - read-only vs read-write decided by the function's own write-scan, one wrapper struct per element type
+## - pointer parameters become unbound StructuredBuffer / RWStructuredBuffer resource params, the resource identity flows from the call site
+## - read-only vs read-write decided by the function's own write-scan
 ## - scalars pass by value, large-struct params bind `inout`
 ##
-## glslang quirks honored here:
-## - the entry point is always `main`, matching the `-e main` glslang invocation
+## DXC notes honored here:
+## - the entry point is always `main`, matching the required `-E main` invocation
 ## - `[numthreads]` comes from pWorkgroupSize, (0, 0, 0) means 256x1x1
 ## - brace-initialization is declaration-only: an object constructor assigned to an already-declared local lowers to member-wise assignment
 ## - only int/uint/float/double/bool have HLSL type names, int64/uint64 are rejected by the printer
@@ -38,6 +36,18 @@ import ../../builtins/builtins_gpu_types
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ./lang_utils
+
+# ═══════════════════════════════════════════════════════════════════════
+# Flavor
+# ═══════════════════════════════════════════════════════════════════════
+
+type HlslFlavor* = enum
+  ## Resource-binding flavor of the emitted HLSL.
+  ## The flavor changes the resource-binding section only, the language body is identical.
+  fvD3D12   ## D3D12-native StructuredBuffer / RWStructuredBuffer / ConstantBuffer
+            ## on `register(tN/uN/bN, space0)`, consumable by DXC for DXIL and SPIR-V
+  fvVulkan  ## reserved for the BDA-capable Vulkan flavor with vk::BufferPointer
+            ## and zero-descriptor launches, no emission yet
 
 # ═══════════════════════════════════════════════════════════════════════
 # Type mapping
@@ -54,7 +64,7 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtStatic: "int"
   of gtObject, gtGenericInst, gtArray: "struct"
   of gtInt64, gtUint64:
-    error "HLSL via glslang: int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability, 64-bit integers are rejected"
+    error "HLSL: int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability, 64-bit integers are rejected"
   else:
     error "HLSL has no type name for " & $t
 
@@ -84,8 +94,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
     result.add ' ' & ident
 
 proc genLit*(ast: GpuAst): string =
-  ## HLSL literal text, suffixed per its type: without the suffix the glslang
-  ## HLSL frontend changes width or signedness
+  ## HLSL literal text, suffixed per its type: without the suffix the HLSL
+  ## frontend changes width or signedness
   if ast.lType.kind == gtString:
     result = '"' & ast.lValue & '"'
   elif ast.lValue == "DEFAULT":
@@ -113,8 +123,7 @@ proc genLit*(ast: GpuAst): string =
 type HlslBuffer = object
   name: string        ## display name of the buffer parameter, the resource variable name
   elem: GpuType       ## element type addressed through the buffer
-  wrap: string        ## wrapper struct name, distinct per kernel binding (MoltenVK block-merge trap), per element type on device functions
-  binding: int        ## vk::binding ordinal among kernel buffer parameters, unused on device function params
+  binding: int        ## global resource ordinal: register(tN/uN) number, unused on device function params
   readOnly: bool      ## true when the write-scan finds no store through the buffer
 
 type HlslKernel = ref object
@@ -127,10 +136,6 @@ type HlslKernel = ref object
   groupIdName: string                ## threadgroup_position_in_grid input name, "" when unread
   groupIndexName: string             ## thread_index_in_threadgroup input name, "" when unread
 
-func fnBufferWrap(elem: GpuType): string =
-  ## Wrapper struct name of a device function buffer parameter, keyed by element type
-  "Wrap" & gpuTypeToShortString(elem)
-
 func indexBase(n: GpuAst): GpuAst =
   ## Array expression an index node addresses, transparent through gpuDeref
   ## nodes around pointer bases
@@ -141,9 +146,9 @@ func indexBase(n: GpuAst): GpuAst =
 
 proc classifyParams(st: HlslKernel, fn: GpuAst) =
   ## Splits function parameters into buffer resources and scalars,
-  ## one wrapper struct name and one binding ordinal per buffer parameter:
-  ## - kernels: scalars join the push-constant block, buffer wrapper structs are per parameter
-  ## - device functions: scalars pass by value, buffer wrapper structs are per element type
+  ## one global resource ordinal per buffer parameter:
+  ## - kernels: scalars join the Push block, buffers take register(tN/uN) ordinals
+  ## - device functions: scalars pass by value, buffers are unbound resource params
   ##
   ## Rejects the parameter shapes the HLSL resource model cannot bind,
   ## every message names the rejected construct and the enclosing function.
@@ -171,8 +176,6 @@ proc classifyParams(st: HlslKernel, fn: GpuAst) =
       st.buffers[sym.iSym] = HlslBuffer(
         name: sym.name,
         elem: param.typ.to.uaTo,
-        wrap: if st.isKernel: "Wrap" & capitalizeAscii(sym.name)
-              else: fnBufferWrap(param.typ.to.uaTo),
         binding: ordinal)
       inc ordinal
     of gtObject, gtGenericInst:
@@ -241,8 +244,8 @@ proc fnRetTypeText(fn: GpuAst): string =
 proc deviceFnSignature(st: HlslKernel, fn: GpuAst): string =
   ## `RetType name(params)` of a device function:
   ##
-  ## - buffer params render as StructuredBuffer / RWStructuredBuffer resource params,
-  ##   read-only vs RW from the function's own write-scan
+  ## - buffer params render as StructuredBuffer / RWStructuredBuffer resource params
+  ##   over the element type, read-only vs RW from the function's own write-scan
   ## - scalars pass by value
   ## - large-struct params bind `inout`
   var params: seq[string]
@@ -251,7 +254,7 @@ proc deviceFnSignature(st: HlslKernel, fn: GpuAst): string =
     if sym.iSym in st.buffers:
       let buf = st.buffers[sym.iSym]
       let resTy = if buf.readOnly: "StructuredBuffer" else: "RWStructuredBuffer"
-      params.add resTy & "<" & buf.wrap & "> " & sym.name
+      params.add resTy & "<" & gpuTypeToString(buf.elem, allowEmptyIdent = true) & "> " & sym.name
     elif p.passByRef:
       params.add "inout " & gpuTypeToString(p.typ, sym.name)
     else:
@@ -327,7 +330,7 @@ proc genConstrValue(ctx: var GpuContext, st: HlslKernel, v: GpuAst): string =
     ctx.genHlslExpr(st, v)
 
 proc genBraceList(ctx: var GpuContext, st: HlslKernel, oc: GpuAst): string =
-  ## Brace initializer `{ a, { b, c } }` for an object constructor, fields in declaration order, verified against glslang 16.6
+  ## Brace initializer `{ a, { b, c } }` for an object constructor, fields in declaration order, verified against DXC
   result = "{ "
   for i, f in oc.ocFields:
     if i > 0:
@@ -366,8 +369,8 @@ proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
       error "HLSL: indexed base is not a plain identifier, got " & $base.kind
     let sym = base.symbol
     if sym.iSym in st.buffers:
-      # buffer element reads go through the wrapper member v
-      result = sym.name & "[" & ctx.genHlslExpr(st, n.iIndex) & "].v"
+      # buffer element reads address the resource directly
+      result = sym.name & "[" & ctx.genHlslExpr(st, n.iIndex) & "]"
     elif sym.typ != nil and sym.typ.kind == gtArray:
       result = sym.name & "[" & ctx.genHlslExpr(st, n.iIndex) & "]"
     else:
@@ -447,7 +450,7 @@ proc genObjAssignLeaves(ctx: var GpuContext, st: HlslKernel, targetType: GpuType
 
 proc genObjAssign(ctx: var GpuContext, st: HlslKernel, target: GpuAst, value: GpuAst, indent: int): string =
   ## Member-wise leaf assignment of an object constructor to a declared struct local:
-  ## glslang's HLSL frontend rejects compound literals on assignment
+  ## the HLSL frontend rejects compound literals on assignment
   let targetType = target.symbol.typ
   var lines: seq[string]
   ctx.genObjAssignLeaves(st, targetType, target.ident(), value, @[], lines)
@@ -498,7 +501,7 @@ proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): stri
       of gpuObjConstr:
         result = indentStr & tname & ' ' & name & " = " & ctx.genBraceList(st, ast.vInit)
       else:
-        # whole-struct copy declaration, verified against glslang 16.6
+        # whole-struct copy declaration, verified against DXC
         result = indentStr & tname & ' ' & name & " = " & ctx.genHlslExpr(st, ast.vInit)
     else:
       result = indentStr & gpuTypeToString(ast.vType, name)
@@ -522,7 +525,7 @@ proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): stri
             error "HLSL: assignment through read-only buffer parameter " & buf.name
           let rhs = ctx.emitCast(buf.elem, ctx.genHlslExpr(st, ast.aRight),
                                  ctx.getExprTypeHlsl(ast.aRight))
-          result = indentStr & buf.name & "[" & ctx.genHlslExpr(st, ast.aLeft.iIndex) & "].v = " & rhs
+          result = indentStr & buf.name & "[" & ctx.genHlslExpr(st, ast.aLeft.iIndex) & "] = " & rhs
         elif sym.typ != nil and sym.typ.kind == gtArray:
           let elem = sym.typ.aTyp
           let rhs = ctx.emitCast(elem, ctx.genHlslExpr(st, ast.aRight),
@@ -648,23 +651,21 @@ proc emitTypeDefs(ctx: GpuContext, outp: var string) =
   for name in byName.keys:
     emitStructDecl(byName, emitted, name, outp)
 
-proc emitResources(st: HlslKernel, kernel: GpuAst, result: var string) =
-  ## Emits the wrapper structs, the buffer resources with their explicit
-  ## [[vk::binding]] attributes and the push-constant block
-  for param in kernel.pParams:
-    let sym = param.ident.symbol
-    if sym.iSym notin st.buffers:
-      continue
-    let buf = st.buffers[sym.iSym]
-    result.add "struct " & buf.wrap & " { " &
-      gpuTypeToString(buf.elem, allowEmptyIdent = true) & " v; };\n"
+proc emitResources(st: HlslKernel, kernel: GpuAst, flavor: HlslFlavor, result: var string) =
+  ## Emits the kernel resources on D3D12 register declarations:
+  ## one global ordinal across all resources in declaration order,
+  ## read-only buffers take t registers, read-write u, the scalar block b.
+  if flavor == fvVulkan:
+    error "HLSL: the fvVulkan flavor with vk::BufferPointer and zero-descriptor launches has no emission yet"
   for param in kernel.pParams:
     let sym = param.ident.symbol
     if sym.iSym notin st.buffers:
       continue
     let buf = st.buffers[sym.iSym]
     let resTy = if buf.readOnly: "StructuredBuffer" else: "RWStructuredBuffer"
-    result.add "[[vk::binding(" & $buf.binding & ", 0)]] " & resTy & "<" & buf.wrap & "> " & buf.name & ";\n"
+    let reg = if buf.readOnly: 't' else: 'u'
+    result.add resTy & "<" & gpuTypeToString(buf.elem, allowEmptyIdent = true) & "> " &
+      buf.name & " : register(" & reg & $buf.binding & ", space0);\n"
   if st.pushParams.len > 0:
     result.add "struct Push {\n"
     for param in kernel.pParams:
@@ -673,25 +674,8 @@ proc emitResources(st: HlslKernel, kernel: GpuAst, result: var string) =
         result.add "  " & gpuTypeToString(st.pushParams[sym.iSym], allowEmptyIdent = true) &
           ' ' & sym.name & ";\n"
     result.add "};\n"
-    result.add "[[vk::push_constant]] ConstantBuffer<Push> push;\n"
-
-proc emitDeviceFnResources(fns: seq[GpuAst], outp: var string) =
-  ## Emits the wrapper structs the device function resource params share,
-  ## one per element type, deduplicated by name.
-  ##
-  ## Kernel resources keep per-parameter wrapper structs:
-  ## MoltenVK merges identically typed storage blocks into one MSL struct,
-  ## distinct wrapper types keep the kernel bindings apart.
-  var emitted = initHashSet[string]()
-  for fn in fns:
-    for p in fn.pParams:
-      if p.typ.kind != gtPtr or p.typ.to.kind != gtUncheckedArray:
-        continue
-      let wrap = fnBufferWrap(p.typ.to.uaTo)
-      if wrap notin emitted:
-        emitted.incl wrap
-        outp.add "struct " & wrap & " { " &
-          gpuTypeToString(p.typ.to.uaTo, allowEmptyIdent = true) & " v; };\n"
+    # the scalar block takes the first ordinal after the buffers
+    result.add "ConstantBuffer<Push> push : register(b" & $st.buffers.len & ", space0);\n"
 
 proc workgroupSize(kernel: GpuAst): tuple[x, y, z: int] =
   ## [numthreads] triple, (0, 0, 0) in the IR means the 256x1x1 default
@@ -761,15 +745,15 @@ proc deviceFnText(ctx: var GpuContext, fn: GpuAst, forwardDeclare: bool): string
     result.add ctx.genHlsl(st, fn.pBody, 1)
     result.add "\n}\n"
 
-proc codegen*(ctx: var GpuContext): string =
-  ## Renders the compiled IR as HLSL compute source for glslang's HLSL frontend.
+proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
+  ## Renders the compiled IR as HLSL compute source for DXC.
   ## Returns: the complete source text.
   ##
   ## Layout: struct definitions, resources, device function forward declarations,
   ## device function definitions, `[numthreads]` + `void main(...)`.
   ##
-  ## One global kernel per source, emitted as `main` to match the glslang
-  ## invocation `-e main` (glslang compiles one entry point per invocation).
+  ## One global kernel per source, emitted as `main` to match the DXC
+  ## invocation `-E main` (DXC compiles one entry point per invocation).
 
   var kernel: GpuAst = nil
   for _, fn in ctx.fnTab:
@@ -796,8 +780,7 @@ proc codegen*(ctx: var GpuContext): string =
 
   ctx.emitTypeDefs(result)
   result.add "\n"
-  st.emitResources(kernel, result)
-  emitDeviceFnResources(fns, result)
+  st.emitResources(kernel, flavor, result)
 
   # forward declarations first, a call resolves to a definition emitted later through them
   for fn in fns:
