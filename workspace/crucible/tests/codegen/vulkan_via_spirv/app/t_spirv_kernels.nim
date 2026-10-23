@@ -87,6 +87,10 @@ proc validateSpv(words: seq[uint32], name: string, expectOpcodes: openArray[stri
     doAssert op in disOut, name & " does not emit " & op
   doAssert "OpPhi" notin disOut, name & " emits OpPhi, the emission is phi-free by construction"
 
+const atomicSpv = spirv:
+  proc atomicKernel(counter: ptr UncheckedArray[float32]) {.global.} =
+    discard atomicFetchAdd(addr counter[0], 1.0'f32)
+
 proc runTest() =
   validateSpv(vec2Spv, "t_spirv_kernels_vec2",
               @["OpFunctionCall", "OpCompositeConstruct",
@@ -97,7 +101,17 @@ proc runTest() =
   # must address the branch-local variable, keyed by iSym first
   validateSpv(pickSpv, "t_spirv_kernels_pick",
               @["OpSelectionMerge", "OpCompositeConstruct", "OpStore"])
+  # atomic add through a buffer device address: the semantics word 72
+  # (0x48, UniformMemory | AcquireRelease) carries the non-relaxed memory
+  # order the Vulkan environment requires whenever a storage-class semantics
+  # bit is set, over the GLSL450 memory model the glslang reference compiler
+  # pairs with the atomic-float extension
+  validateSpv(atomicSpv, "t_spirv_kernels_atomic",
+              @["OpAtomicFAddEXT",
+                "OpExtension \"SPV_EXT_shader_atomic_float_add\"",
+                "%uint_72",
+                "OpMemoryModel PhysicalStorageBuffer64 GLSL450"])
 
 when isMainModule:
   runTest()
-  echo "t_spirv_kernels: spirv-val accepted both emitted modules"
+  echo "t_spirv_kernels: spirv-val accepted all emitted modules"
