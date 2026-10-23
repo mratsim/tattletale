@@ -143,6 +143,9 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
   ## Subgroup shuffles are SPIR-V 1.3 instructions (the KHR subgroup
   ## extensions the codegen emits), so their sources compile with the
   ## vulkan1.1 target env; all other sources stay on the SPIR-V 1.0 default.
+  let glslang = findExe("glslangValidator")
+  if glslang.len == 0:
+    failLoud("glslangValidator not found on PATH, the Vulkan engine needs it to compile GLSL sources")
   let tmpDir = getKernelDir("vulkan")
   # Private temp dir: 0700 so other local users cannot plant symlinks at
   # deterministic paths (TOCTOU), and unique names so concurrent compiles
@@ -162,8 +165,8 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
   args.add "-o"
   args.add spvPath
   args.add srcPath
-  let p = startProcess("glslangValidator", args = args,
-    options = {poUsePath, poStdErrToStdOut})
+  let p = startProcess(glslang, args = args,
+    options = {poStdErrToStdOut})
   let compOut = p.outputStream.readAll()
   let exitCode = p.waitForExit()
   defer: p.close()
