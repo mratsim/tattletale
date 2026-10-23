@@ -118,6 +118,63 @@ proc runTest() =
     doAssert renderSpec(e, nameMap) == "addBody tid n a b out tid ≠ a tid + b tid"
     echo "  `≠` comparator round-trip through the payload grammar: ok"
 
+  block: # a position-less lean error line refuses the settling, it cannot be misattributed
+    # a lean run reporting one scaffold error plus one `file: error:` line
+    # with no file:line position would otherwise:
+    # - downgrade the scaffold
+    # - keep the position-less error in the final module
+    # - record the other scaffolds `proven` over an unelaborating module
+    # A fake `lake` on PATH reproduces the diagnostic mix
+    let negDir = leanProjectDir & "/generated/negativelake"
+    createDir(negDir)
+    writeFile(negDir & "/lakefile.lean", readFile(leanProjectDir & "/lakefile.lean"))
+    writeFile(negDir & "/lean-toolchain", readFile(leanProjectDir & "/lean-toolchain"))
+    let shimDir = negDir & "/bin"
+    createDir(shimDir)
+    let shim = shimDir & "/lake"
+    writeFile(shim, """#!/bin/sh
+file="$3"
+line=$(grep -n "theorem .*_invariant" "$file" | head -1 | cut -d: -f1)
+echo "$file:$line:3: error: tactic 'exact h' failed"
+echo "$file: error: unknown constant 'add_spec_neg.settling'"
+exit 1
+""")
+    setFilePermissions(shim, {fpUserRead, fpUserWrite, fpUserExec,
+      fpGroupRead, fpGroupExec, fpOthersRead, fpOthersExec})
+    let savedPath = getenv("PATH")
+    putEnv("PATH", shimDir & ":" & savedPath)
+    let negOutPath = negDir & "/generated/add_spec_neg.lean"
+    removeFile(negOutPath)
+    removeFile(negOutPath.changeFileExt("settling.lean"))
+    removeFile(negOutPath.changeFileExt("manifest.json"))
+    let k = irLeanSpec:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid < n".} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: proof settling failed - 1 lean error line(s) carry no " &
+            "file:line position", proc() =
+          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath))
+    putEnv("PATH", savedPath)
+    doAssert not fileExists(negOutPath),
+      "no unverified first-pass module may stay on disk after the refusal"
+    doAssert not fileExists(negOutPath.changeFileExt("settling.lean")),
+      "no settling module may stay on disk after the refusal"
+    doAssert not fileExists(negOutPath.changeFileExt("manifest.json")),
+      "no manifest may record scaffold verdicts over an unsettled module"
+    echo "  proof settling refusal on a position-less lean error line: ok"
+
+  block: # the lean diagnostic extractor separates positioned from position-less errors
+    let diags = parseLeanDiagnostics("""
+generated/add_spec.lean:40:3: error: tactic 'exact h' failed
+generated/add_spec.lean: error: unknown constant 'foo'
+"""")
+    doAssert diags.len == 2, "both error lines extracted"
+    doAssert diags[0].line == 40 and diags[0].excerpt == "tactic 'exact h' failed"
+    doAssert diags[1].line == -1, "a `file: error:` line has no position"
+    doAssert diags[1].excerpt == "unknown constant 'foo'"
+    echo "  diagnostic extractor: positioned and position-less errors: ok"
+
   block: # proof settling refuses loudly when lean fails without attributable errors
     # a broken toolchain makes `lake env lean` exit nonzero, printing a lake-level error with no `file:line:col: error:` line
     # no error is attributable to a scaffold, so the proofs were never checked
@@ -127,6 +184,8 @@ proc runTest() =
     writeFile(negDir & "/lakefile.lean", readFile(leanProjectDir & "/lakefile.lean"))
     writeFile(negDir & "/lean-toolchain", "leanprover/lean4:v0.0.0-notinstalled")
     let negOutPath = negDir & "/generated/add_spec_neg.lean"
+    removeFile(negOutPath)
+    removeFile(negOutPath.changeFileExt("settling.lean"))
     removeFile(negOutPath.changeFileExt("manifest.json")) # stale runs
     let k = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid < n".} =
@@ -136,6 +195,10 @@ proc runTest() =
     expectRefusal("lean_lang: proof settling failed - lean exited with 1 but no error was " &
             "attributable to a scaffold: ", proc() =
           discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath))
+    doAssert not fileExists(negOutPath),
+      "no unverified first-pass module may stay on disk after the refusal"
+    doAssert not fileExists(negOutPath.changeFileExt("settling.lean")),
+      "no settling module may stay on disk after the refusal"
     doAssert not fileExists(negOutPath.changeFileExt("manifest.json")),
       "no manifest may record a proven verdict for unchecked proofs"
     echo "  proof settling refusal on an unattributable lean failure: ok"

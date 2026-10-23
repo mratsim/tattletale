@@ -983,19 +983,34 @@ theorem @NAME@ {tid n : Nat} {@BINDERS@ : Nat → UInt32} (h : tid < n) :
       .replace("@NAME@", s.leanName).replace("@BINDERS@", s.binders)
       .replace("@STMT@", s.statement).replace("@PROOF@", proof)
 
-proc leanErrorExcerpts(leanOutput: string): seq[tuple[line: int, excerpt: string]] =
-  ## Extracts the `error:` diagnostics of a Lean run as (line, message) pairs
+proc allDigits(s: string): bool =
+  ## Whether every character of `s` is a decimal digit, false when empty
+  if s.len == 0:
+    return false
+  for ch in s:
+    if ch notin {'0' .. '9'}:
+      return false
+  result = true
+
+proc parseLeanDiagnostics*(leanOutput: string): seq[tuple[line: int, excerpt: string]] =
+  ## Extracts the `error:` diagnostics of a Lean run as (line, message) pairs.
+  ##
+  ## Returns:
+  ## - one entry per error line: the `file:line:` position and the message text
+  ## - `line = -1` for an error line the head cannot position, so the caller
+  ##   treats it as unattributable and refuses on it
   for ln in leanOutput.splitLines():
     let idx = ln.find(": error: ")
     if idx < 0:
       continue
     let head = ln[0 ..< idx].split(':')
-    if head.len < 2:
-      continue
+    var line = -1
+    if head.len >= 2 and allDigits(head[^2]):
+      line = parseInt(head[^2])
     var excerpt = ln[idx + ": error: ".len .. ^1]
     if excerpt.len > 160:
       excerpt = excerpt[0 ..< 157] & "..."
-    result.add (parseInt(head[^2]), excerpt)
+    result.add (line, excerpt)
 
 proc findLakeDir(outPath: string): string =
   ## Walks up from `outPath` to the first directory containing a lakefile.lean
@@ -1016,6 +1031,10 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
   ##   construct or payload
   ## - settles each scaffold's proof attempt with `lake env lean`, downgrading
   ##   a failing proof to a `sorry`-backed scaffold recorded unproven in the JSON manifest beside the module
+  ##
+  ## - a settling failure publishes nothing: the module is staged under
+  ##   `<module>.settling.lean` and dropped on every refusal, so no unverified
+  ##   module and no manifest stay on disk
   let model = analyzeKernel(kernel)
   createDir(parentDir(outPath))
   result = leanHeader & "\n" & emitModuleDoc(model) & "\n" &
@@ -1043,22 +1062,35 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
     if kind in seen:
       scaffolds.add prepareSpec(model, ordered[ord(kind)])
 
-  # first pass: emit with the mechanical proof attempts
+  # first pass: emit the mechanical proof attempts to a staging file.
+  # The module at `outPath` appears only after the settling succeeds.
+  # A refusal leaves no unverified module behind
   var text = result
   for s in scaffolds:
     text &= "\n"
     var sc = s
     sc.startLine = text.count('\n') + 1
     text &= scaffoldText(model, sc, sc.attempt)
-  writeFile(outPath, text)
+  let lakeDir = findLakeDir(outPath)
+  let relFile = outPath.relativePath(lakeDir) ## the manifest's module field
+  let stagingPath = outPath.changeFileExt("settling.lean")
+  writeFile(stagingPath, text)
+
+  proc abortSettling(msg: string): ref ValueError =
+    ## Drops the staged module: nothing was settled, no artifact may stay
+    removeFile(stagingPath)
+    leanRefusal(msg)
 
   # settle the proof attempts by elaboration (a failed proof errors, a `sorry` only warns)
-  let lakeDir = findLakeDir(outPath)
-  let relFile = outPath.relativePath(lakeDir)
-  let (outp, exitCode) = execCmdEx("lake env lean " & relFile, workingDir = lakeDir)
+  let (outp, exitCode) = execCmdEx("lake env lean " & stagingPath.relativePath(lakeDir),
+    workingDir = lakeDir)
   var failed: Table[int, string] ## scaffold index -> error excerpt
+  var positionless: seq[string] ## error lines with no file:line position
   let lastLine = text.count('\n') + 1
-  for (line, excerpt) in leanErrorExcerpts(outp):
+  for (line, excerpt) in parseLeanDiagnostics(outp):
+    if line < 0:
+      positionless.add excerpt
+      continue
     var owner = -1
     for i, s in scaffolds:
       let endLine = if i + 1 < scaffolds.len: scaffolds[i + 1].startLine - 1
@@ -1066,9 +1098,16 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
       if line >= s.startLine and line <= endLine:
         owner = i
     if owner < 0:
-      raise leanRefusal( "lean_lang: proof attempt failed " &
+      raise abortSettling( "lean_lang: proof attempt failed " &
         "outside the pragma scaffolds (line " & $line & "): " & excerpt)
     failed[owner] = excerpt
+  if exitCode != 0 and positionless.len > 0:
+    # an error line the extractor could not position: it may name the module
+    # itself (a duplicate declaration, a stale olean), so the scaffold
+    # verdicts below would be recorded over a module that does not elaborate
+    raise abortSettling("lean_lang: proof settling failed - " &
+      $positionless.len & " lean error line(s) carry no file:line position, " &
+      "the scaffold verdicts would be a guess: " & positionless.join(" | "))
   if exitCode != 0 and failed.len == 0:
     # no error line was attributable to a scaffold, so no proof was settled:
     # a `proven` verdict would be a guess, e.g. a missing toolchain, a Lean crash
@@ -1076,7 +1115,7 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
     var excerpt = outp
     if excerpt.len > 800:
       excerpt = excerpt[0 ..< 797] & "..."
-    raise leanRefusal( "lean_lang: proof settling failed - " &
+    raise abortSettling("lean_lang: proof settling failed - " &
       "lean exited with " & $exitCode & " but no error was attributable" &
       " to a scaffold: " & excerpt)
 
@@ -1089,7 +1128,8 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
       sc.startLine = text.count('\n') + 1
       let proof = if i in failed: "sorry" else: s.attempt
       text &= scaffoldText(model, sc, proof)
-    writeFile(outPath, text)
+  writeFile(outPath, text)
+  removeFile(stagingPath)
 
   # machine-readable extraction manifest
   var entries = newJArray()
