@@ -388,8 +388,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       varNode.vType = resolveType(reg, declaration)
       if varNode.addressSpace != asRMEM and
           varNode.vType.kind in {gtPtr, gtSpan, gtArray}:
-        # a space-annotated var's pointer/span/array type carries the storage space,
-        # a threadgroup-hoisted array is an smem-array
+        # the storage space stamps the var's ptr/span/array type
         varNode.vType = varNode.vType.withAddressSpace(varNode.addressSpace)
       varNode.vName.symbol.typ = varNode.vType # type cached on the symbol for later lookup
       varNode.vMutable = node.kind == nnkVarSection
@@ -397,17 +396,14 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       if declaration.len > 2 and declaration[2].kind != nnkEmpty:
         varNode.vInit = ctx.toCrucibleAst(reg, declaration[2])
         if varNode.vType.kind == gtPtr:
-          # an initialized pointer keeps the storage its init accesses,
-          # addr-derived pointers stay in the addressed storage's space
+          # an initialized pointer keeps the storage its init accesses
           let initSpace = ctx.resolveAddressSpace(varNode.vInit)
           if initSpace != varNode.vType.addressSpace:
             varNode.vType = varNode.vType.withAddressSpace(initSpace)
             varNode.vName.symbol.typ = varNode.vType
         if varNode.vType.kind in {gtObject, gtGenericInst} and
             varNode.vInit.kind == gpuObjConstr:
-          # a constructed instance resolves its pointer/span field spaces
-          # from the field values, the declared type is space-less
-          # (`ptr T` defaults to device) and shared across instances
+          # field spaces stamp from init values, the declared type is shared
           var instType = varNode.vType.clone()
           for i in 0 ..< instType.fields.len:
             for fc in varNode.vInit.ocFields:
@@ -839,8 +835,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         let idx = findIdx(ocFields, flds[i].name)
         if idx >= 0:
           var f = ocFields[idx]
-          # a struct with a pointer/span/array field is implicitly generic
-          # over the space its init value accesses
+          # a ptr/span/array field is implicitly generic over its init value's space
           let valueType = ctx.getOperandType(f.value)
           if not valueType.isNil:
             f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
@@ -906,8 +901,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     let convExpr = ctx.toCrucibleAst(reg, node[1])
     var convTo = resolveType(reg, node[0])
     if convTo.kind in {gtPtr, gtSpan}:
-      # a pointer-typed conversion target keeps the space its operand accesses,
-      # a derived pointer stays in its source storage
+      # the target keeps its operand's space
       let space = ctx.resolveAddressSpace(convExpr)
       if space != asRMEM:
         convTo = convTo.withAddressSpace(space)
@@ -916,9 +910,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     let castExpr = ctx.toCrucibleAst(reg, node[1])
     var castTo = resolveType(reg, node[0])
     if castTo.kind in {gtPtr, gtSpan}:
-      # a pointer-typed cast target keeps the space its operand accesses,
-      # a threadgroup-to-`ptr T` cast stays threadgroup, a cast across
-      # spaces is an explicit backend-validated operation
+      # the target keeps its operand's space, a cross-space cast is validated per backend
       let space = ctx.resolveAddressSpace(castExpr)
       if space != asRMEM:
         castTo = castTo.withAddressSpace(space)
