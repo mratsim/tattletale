@@ -34,7 +34,12 @@ template rmsnormWeightShapeCheck*[T, ShW, StW, ShS, StS](
   ##   compile-time literals
   ##
   ## Returns whether the weight size is a compile-time literal. When it is not,
-  ## the caller checks the size against the row size on the device.
+  ## the caller checks the weight size against the source axis size on the device.
+  ##
+  ## The kernel instantiates this check on every weighted launch.
+  ## The compiles() cases in the test suite exercise this template body directly,
+  ## the only host-reachable test surface:
+  ## host-scope compiles() of a whole kernel call is always false.
   ##
   ## Example:
   ##   doAssert not compiles(rmsnormWeightShapeCheck(undersizedWeight, src, axis))

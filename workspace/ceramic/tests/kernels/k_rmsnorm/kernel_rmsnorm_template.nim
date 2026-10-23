@@ -152,6 +152,7 @@ proc checkWeightContract*[E: HwEngine](engine: E, msg: string) =
   ## - a badly shaped weight fails the compile-time shape check,
   ##   `rmsnormWeightShapeCheck` rejects it at instantiation
   ## - a well-shaped static weight passes the same check
+  ## - a rank-3 static source over axis 1: the size check reads the reduced axis size, a weight sized to the leading dimension fails to compile
   ##
   ## Args:
   ## - engine: the device engine
