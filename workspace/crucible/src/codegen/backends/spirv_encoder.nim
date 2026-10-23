@@ -99,7 +99,7 @@ func instDef*(name: static string, opcode: uint32, operands: varargs[SpvOperand]
   ## Table row, the opcode number plus operand kinds with quantifiers
   SpvInstDef(name: name, opcode: opcode, operands: @operands)
 
-const spvInstTable*: array[82, SpvInstDef] = [
+const spvInstTable*: array[86, SpvInstDef] = [
   instDef("OpNop", 0),
   instDef("OpUndef", 1, [o(spvIdResultType), o(spvIdResult)]),
   instDef("OpExtInstImport", 11, [o(spvIdResult), o(spvLiteralString)]),
@@ -210,6 +210,12 @@ const spvInstTable*: array[82, SpvInstDef] = [
                                o(spvIdRef), o(spvIdRef)]),
   instDef("OpINotEqual", 171, [o(spvIdResultType), o(spvIdResult), o(spvIdRef),
                                o(spvIdRef)]),
+  # Ordered float comparisons, the float counterparts of the integer
+  # comparison opcodes over unordered-capable FUnord* variants
+  instDef("OpFOrdGreaterThan", 186, [o(spvIdResultType), o(spvIdResult),
+                                     o(spvIdRef), o(spvIdRef)]),
+  instDef("OpFOrdLessThan", 184, [o(spvIdResultType), o(spvIdResult),
+                                  o(spvIdRef), o(spvIdRef)]),
   instDef("OpUGreaterThan", 172, [o(spvIdResultType), o(spvIdResult),
                                   o(spvIdRef), o(spvIdRef)]),
   instDef("OpSGreaterThan", 173, [o(spvIdResultType), o(spvIdResult),
@@ -224,6 +230,12 @@ const spvInstTable*: array[82, SpvInstDef] = [
                                     o(spvIdRef), o(spvIdRef)]),
   instDef("OpSLessThanEqual", 179, [o(spvIdResultType), o(spvIdResult),
                                     o(spvIdRef), o(spvIdRef)]),
+  # Logical equality over bool operands, the OpIEqual / OpINotEqual
+  # counterparts whose operands must be scalar or vector int
+  instDef("OpLogicalEqual", 164, [o(spvIdResultType), o(spvIdResult),
+                                  o(spvIdRef), o(spvIdRef)]),
+  instDef("OpLogicalNotEqual", 165, [o(spvIdResultType), o(spvIdResult),
+                                     o(spvIdRef), o(spvIdRef)]),
   instDef("OpLogicalOr", 166, [o(spvIdResultType), o(spvIdResult),
                                o(spvIdRef), o(spvIdRef)]),
   instDef("OpLogicalAnd", 167, [o(spvIdResultType), o(spvIdResult),

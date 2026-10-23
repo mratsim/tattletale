@@ -765,8 +765,10 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): string =
     if isFloat: "OpFDiv"
     elif signed: "OpSDiv"
     else: "OpUDiv"
-  of "==": "OpIEqual"
-  of "!=": "OpINotEqual"
+  of "==":
+    if operandTy.kind == gtBool: "OpLogicalEqual" else: "OpIEqual"
+  of "!=":
+    if operandTy.kind == gtBool: "OpLogicalNotEqual" else: "OpINotEqual"
   of "<": (if signed: "OpSLessThan" else: "OpULessThan")
   of "<=": (if signed: "OpSLessThanEqual" else: "OpULessThanEqual")
   of ">": (if signed: "OpSGreaterThan" else: "OpUGreaterThan")
@@ -1057,7 +1059,11 @@ proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): ui
   let b = ctx.convertValue(emitExpr(ctx, fn, n.cArgs[1]),
                            exprType(fn, n.cArgs[1]), opTy)
   let signed = opTy.kind in spvSignedInts
-  let cmpOp = if name == "max":
+  let isFloat = opTy.kind in {gtFloat32, gtFloat64}
+  let cmpOp = if isFloat:
+                # ordered float comparison, the counterpart of the integer compare opcodes
+                (if name == "max": "OpFOrdGreaterThan" else: "OpFOrdLessThan")
+              elif name == "max":
                 (if signed: "OpSGreaterThan" else: "OpUGreaterThan")
               else:
                 (if signed: "OpSLessThan" else: "OpULessThan")
