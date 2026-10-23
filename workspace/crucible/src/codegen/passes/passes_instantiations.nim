@@ -7,7 +7,7 @@
 
 # ############################################################
 #
-#            Generic instantiation over address spaces
+#       Implicit address-space generic instantiation
 #
 # ############################################################
 #
@@ -35,9 +35,9 @@ import ./pass_registry
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerInstantiateGenerics*(reg: var PassRegistry) =
-  reg.register("instantiateGenerics", pkTransform, phaseMain,
-    "Instantiates callees and struct types whose pointer/span arguments specialize the declared space",
+func registerInstantiateImplicitAddressSpaceGenerics*(reg: var PassRegistry) =
+  reg.register("instantiateImplicitAddressSpaceGenerics", pkTransform, phaseMain,
+    "Instantiates callees and struct types whose pointer/span arguments specialize the declared address space",
     dependsOn = @[],
     run = instantiateGenericsImpl
   )

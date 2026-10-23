@@ -41,12 +41,10 @@ const OclReserved = [
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
-  # Consumes final argument types (post lowerArraysAndViews)
-  reg.registerInstantiateGenerics()
   reg.registerMaterializePassByRefArgs()
   reg.registerExpandStructKernelParams()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
-  # By-ref lowering: params become `const Type*`, call sites materialize addrs.
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerLowerByrefParams()
   reg.register("insertByrefAddrs", pkTransform, phaseMain,
     "Wraps by-ref call args in gpuAddr",

@@ -35,7 +35,6 @@ const CudaReserved = [
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
-  # Consumes final argument types (post lowerArraysAndViews)
-  reg.registerInstantiateGenerics()
   reg.registerMaterializePassByRefArgs()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  reg.registerInstantiateImplicitAddressSpaceGenerics()

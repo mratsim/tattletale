@@ -57,11 +57,9 @@ const MetalReserved = [
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
-  # Consumes final argument types (post lowerArraysAndViews)
-  # Precedes the passes that read struct types (expandStructKernelParams)
-  reg.registerInstantiateGenerics()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerExpandStructKernelParams()
+  reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()
 

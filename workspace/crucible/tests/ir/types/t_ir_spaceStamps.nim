@@ -93,7 +93,7 @@ static:
   # born asRMEM (the declared openArray carries no written space) and the call
   # site's device argument specializes the instantiation's split ptr to device
   proc registerInstantiate(reg: var PassRegistry) {.nimcall.} =
-    reg.registerInstantiateGenerics()
+    reg.registerInstantiateImplicitAddressSpaceGenerics()
   registerInstantiate.runPassPrepared(ctx)
   # `call` is the same node the pass retitled in place
   doAssert call.cName.symbol.iSym != scale.pName.symbol.iSym,
