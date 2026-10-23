@@ -1263,7 +1263,11 @@ proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   ## gpuAssign: store the evaluated right side through the left-side pointer
   ## - index targets address elements, ident targets store locals whole
   ## - dot targets address one member, deref targets store through a pointer
+  ## - compound assignments refuse loudly: load-modify-store lowering does
+  ##   not exist yet, a silent `x = y` would drop the arithmetic
   doAssert not n.aRequiresMemcpy, "memcpy assignment outside the SPIR-V subset"
+  if n.aOp != "=":
+    spvRefuse("compound assignment " & n.aOp)
   let rhs = emitExpr(ctx, fn, n.aRight)
   case n.aLeft.kind
   of gpuDot:

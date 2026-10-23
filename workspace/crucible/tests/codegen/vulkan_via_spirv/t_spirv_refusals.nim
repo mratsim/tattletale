@@ -96,6 +96,15 @@ template recursiveDeviceFnBlock() =
       output[0] = fact(n)
   discard k
 
+template compoundAssignBlock() =
+  let k = spirv:
+    proc compoundAssignKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
+      var acc: float32 = 0.0
+      for i in 0 ..< n:
+        acc += x[i]
+      output[0] = acc
+  discard k
+
 template floatComparisonBlock() =
   let k = spirv:
     proc floatCmpKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
@@ -188,6 +197,12 @@ discard k
   block floatComparison:
     doAssert not compiles(floatComparisonBlock()),
       "a float comparison must refuse to compile"
+
+  block compoundAssign:
+    # the refusal is the contract until a dedicated lowering op exists:
+    # without it `x += y` compiles to a plain store and drops the arithmetic
+    doAssert not compiles(compoundAssignBlock()),
+      "a compound assignment must refuse to compile"
 
 when isMainModule:
   runTest()
