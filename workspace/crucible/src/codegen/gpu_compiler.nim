@@ -23,7 +23,6 @@ import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_hlsl
-import ./passes/passes_validations_hlsl
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
 import ./backends/lang_utils
@@ -42,8 +41,8 @@ import ../builtins/builtins_compilermagic
 export builtins_compilermagic
 
 proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: var GpuAst) =
-  ## Registers top-level procs in allFnTab, global fns in fnTab, top-level
-  ## vars in `varBlock`. A non-empty `kernel` narrows fnTab to that kernel.
+  ## Registers top-level procs in allFnTab, global fns in fnTab,
+  ## top-level vars in `varBlock`. A non-empty `kernel` narrows fnTab to that kernel.
   case ast.kind
   of gpuProc:
     ctx.allFnTab[ast.pName] = ast
@@ -224,7 +223,6 @@ macro codegenHlsl(body: typed): string =
   reg.registerCommonPasses()
   reg.registerHlslLoweringPasses()
   reg.registerValidationPostPasses()
-  reg.registerHlslValidationPasses()
   var typeReg = TypeRegistry(types: ctx.types)
   let gpuAst = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types

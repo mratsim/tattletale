@@ -1,15 +1,17 @@
-## HLSL: coordinate-builtin reads and max/min/abs intrinsic calls through the real pass bundle.
+## HLSL: coordinate-builtin reads and numeric builtins through the real pass bundle.
 ##
-## Test that the `hlsl:` macro emits HLSL for a kernel reading thread_position_in_grid
-## (SV_DispatchThreadID input) and for kernels calling the scalar numeric builtins,
-## compiling clean through glslangValidator and spirv-val with the binding reflection asserted.
+## Test that the `hlsl:` macro emits HLSL compiling clean through glslangValidator
+## and spirv-val with the binding reflection asserted:
+##
+## - a kernel reading thread_position_in_grid emits the SV_DispatchThreadID input
+## - min/max materialize and pass through under their mangled names, magic `abs` prints plain
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_hlsl/app/t_hlsl_builtins.nim
 
-import std/strutils
+import std/[re, strutils]
 import workspace/crucible
 import workspace/crucible/tests/codegen/vulkan_via_hlsl/hlsl_testutils
 
@@ -33,15 +35,19 @@ proc runTest() =   # private: the compile checks run in a proc so build artifact
   let coordBindings: seq[BindingExpectation] = @[("output", 0, false)]
   discard compileCheck("coord", coordHlsl, coordBindings, "uint3 gid : SV_DispatchThreadID")
   let intrinsicBindings: seq[BindingExpectation] = @[("output", 0, false)]
-  discard compileCheck("intrinsics", intrinsicsHlsl, intrinsicBindings, "max(30u, 7u)")
-  doAssert intrinsicsHlsl.contains("min(3u, 9u)"),
-    "uint32 min must print the plain intrinsic:\n" & intrinsicsHlsl
+  discard compileCheck("intrinsics", intrinsicsHlsl, intrinsicBindings)
+  # min/max materialize as wrapper functions under their mangled instantiation names
+  # and the call sites use those names (same pass-through shape as every backend)
+  doAssert intrinsicsHlsl.find(re"max_\w+\(30u, 7u\)") >= 0,
+    "uint32 max must call its materialized wrapper:\n" & intrinsicsHlsl
+  doAssert intrinsicsHlsl.find(re"min_\w+\(3u, 9u\)") >= 0,
+    "uint32 min must call its materialized wrapper:\n" & intrinsicsHlsl
+  doAssert intrinsicsHlsl.find(re"max_\w+\(2\.5f, 7\.25f\)") >= 0,
+    "float32 max must call its materialized wrapper:\n" & intrinsicsHlsl
+  doAssert intrinsicsHlsl.find(re"min_\w+\(0\.5f, -1\.5f\)") >= 0,
+    "float32 min must call its materialized wrapper:\n" & intrinsicsHlsl
   doAssert intrinsicsHlsl.contains("abs(a)"),
     "int32 abs must print the plain intrinsic, Nim constant-folds abs of literals:\n" & intrinsicsHlsl
-  doAssert intrinsicsHlsl.contains("max(2.5f, 7.25f)"),
-    "float32 max must print the plain intrinsic:\n" & intrinsicsHlsl
-  doAssert intrinsicsHlsl.contains("min(0.5f, -1.5f)"),
-    "float32 min must print the plain intrinsic:\n" & intrinsicsHlsl
 
 when isMainModule:
   runTest()

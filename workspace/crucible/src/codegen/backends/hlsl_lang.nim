@@ -29,10 +29,12 @@
 ## - the entry point is always `main`, matching the `-e main` glslang invocation
 ## - `[numthreads]` comes from pWorkgroupSize, (0, 0, 0) means 256x1x1
 ## - brace-initialization is declaration-only: an object constructor assigned to an already-declared local lowers to member-wise assignment
-## - only int/uint/float/double/bool have HLSL type names, int64/uint64 are rejected upstream by the HLSL validation pass
+## - only int/uint/float/double/bool have HLSL type names, int64/uint64 are rejected by the printer
 
 import std / [macros, strutils, tables, sets, hashes]
 
+import ../../builtins/builtins_functions
+import ../../builtins/builtins_gpu_types
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ./lang_utils
@@ -142,16 +144,30 @@ proc classifyParams(st: HlslKernel, fn: GpuAst) =
   ## one wrapper struct name and one binding ordinal per buffer parameter:
   ## - kernels: scalars join the push-constant block, buffer wrapper structs are per parameter
   ## - device functions: scalars pass by value, buffer wrapper structs are per element type
+  ##
+  ## Rejects the parameter shapes the HLSL resource model cannot bind,
+  ## every message names the rejected construct and the enclosing function.
+  let fnName = fn.pName.ident()
   var ordinal = 0
   for param in fn.pParams:
     let sym = param.ident.symbol
     if sym.coordBuiltin != gbkNone:
       # coordinate builtins are inputs joined on read, never parameters
       continue
+    if param.flavor == kVar:
+      error "HLSL: `var` (pass-by-reference) parameter " & sym.name & " in `" & fnName &
+        "` has no binding, buffers pass as `ptr UncheckedArray[T]`"
+    if param.passByRef and st.isKernel:
+      error "HLSL: by-reference parameter " & sym.name & " in kernel `" & fnName & "` has no binding"
+    if param.addressSpace == asSMEM:
+      error "HLSL: {.smem.} parameter " & sym.name & " in `" & fnName & "` has no binding"
     case param.typ.kind
+    of gtVoidPtr:
+      error "HLSL: void pointer parameter " & sym.name & " in `" & fnName & "` has no resource binding"
     of gtPtr:
-      doAssert param.typ.to.kind == gtUncheckedArray,
-        "buffer parameter " & sym.name & " is not ptr UncheckedArray, got ptr " & $param.typ.to.kind
+      if param.typ.to.kind != gtUncheckedArray:
+        error "HLSL: buffer parameter " & sym.name & " in `" & fnName &
+          "` must be `ptr UncheckedArray[T]`, got ptr " & $param.typ.to.kind
       st.buffers[sym.iSym] = HlslBuffer(
         name: sym.name,
         elem: param.typ.to.uaTo,
@@ -159,6 +175,24 @@ proc classifyParams(st: HlslKernel, fn: GpuAst) =
               else: fnBufferWrap(param.typ.to.uaTo),
         binding: ordinal)
       inc ordinal
+    of gtObject, gtGenericInst:
+      # gtObject carries the plain type name, gtGenericInst the generic's name
+      let tname = if param.typ.kind == gtGenericInst: param.typ.gName else: param.typ.name
+      if tname in ["TensorView", "TensorOwned"]:
+        error "HLSL: " & tname & " parameter " & sym.name & " in `" & fnName &
+          "` is outside the HLSL subset (HLSL structs cannot hold resources)"
+      if st.isKernel:
+        error "HLSL: struct parameter " & sym.name & " in kernel `" & fnName & "` has no binding"
+      # device functions take plain structs by value
+    of gtInt64, gtUint64:
+      error "HLSL: 64-bit integer parameter " & sym.name & " in `" & fnName &
+        "` is rejected: int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability"
+    of gtArray, gtUncheckedArray:
+      error "HLSL: " & $param.typ.kind & " parameter " & sym.name & " in `" & fnName &
+        "` has no binding, buffers pass as `ptr UncheckedArray[T]`"
+    of gtFloat16, gtBf16, gtF8E4M3, gtF8E5M2, gtUint8, gtUint16, gtInt16, gtSpan, gtString:
+      error "HLSL: parameter " & sym.name & " of type " & $param.typ.kind & " in `" & fnName &
+        "` has no HLSL type name"
     else:
       if st.isKernel:
         st.pushParams[sym.iSym] = param.typ
@@ -229,7 +263,14 @@ proc deviceFnSignature(st: HlslKernel, fn: GpuAst): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getExprTypeHlsl(ctx: GpuContext, n: GpuAst): GpuType =
-  ## getOperandType plus one fixup: coordinate-builtin component reads are uint32, synthesized component idents carry no type
+  ## getOperandType plus two fixups:
+  ## - `min`/`max`/`abs` calls resolve to the operand type: the call site keeps the unmangled
+  ##   Nim magic name while the materialized body sits in fnTab under its instantiation mangle,
+  ##   so the fn-table lookup cannot see it (the intrinsic prints the plain name)
+  ## - coordinate-builtin component reads are uint32, synthesized component idents carry no type
+  if n.kind == gpuCall and not n.cName.symbol.isNil and
+      n.cName.symbol.name in NimGpuNumericBuiltinsFunctions:
+    return ctx.getOperandType(n.cArgs[0])
   result = ctx.getOperandType(n)
   if result.isNil and n.kind == gpuDot and n.dParent.kind == gpuIdent and
       n.dParent.symbol != nil and n.dParent.symbol.coordBuiltin != gbkNone:
@@ -264,6 +305,15 @@ proc genIdentRef(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
   if sym.iSym in st.pushParams:
     return "push." & sym.name
   sym.name
+
+proc isFp16ConversionCall(n: GpuAst): bool =
+  ## True for the fp16 ↔ fp32 conversion builtins (toFp16, toFp32, asFp16, asU16):
+  ## the per-backend name table carries no HLSL entries, the calls have no emission
+  let name = n.cName.ident()
+  for key in NimGpuFp16ConversionBuiltins.keys:
+    if key[1] == name:
+      return true
+  false
 
 proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string
 proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): string
@@ -342,7 +392,10 @@ proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
         error "HLSL: subgroup reductions have no emission, wave intrinsics are outside this backend"
       if n.cName.symbol.atomicsBuiltin != gbkNone:
         error "HLSL: atomic builtins have no emission in this backend"
-      # max/min/abs resolve to the HLSL intrinsics through the shared name resolver, other plain names (exp2, rsqrt, device calls) emit verbatim
+      if isFp16ConversionCall(n):
+        error "HLSL: call to `" & n.cName.ident() & "` has no emission, float16 types are outside the HLSL subset"
+      # materialized min/max/abs wrappers pass through under their mangled names like on every backend,
+      # other plain names (exp2, rsqrt, device calls) emit verbatim
       var parts: seq[string]
       for arg in n.cArgs:
         if arg.kind == gpuIdent and arg.symbol.iSym in st.buffers:
@@ -433,6 +486,11 @@ proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): stri
     of gtPtr:
       error "HLSL: pointer-valued local " & name & " has no emission"
     of gtObject, gtGenericInst:
+      # gtObject carries the plain type name, gtGenericInst the generic's name
+      let typeName = if ast.vType.kind == gtGenericInst: ast.vType.gName else: ast.vType.name
+      if typeName in ["TensorView", "TensorOwned"]:
+        error "HLSL: " & typeName & " local " & name &
+          " is outside the HLSL subset (HLSL structs cannot hold resources)"
       let tname = gpuTypeToString(ast.vType, allowEmptyIdent = true)
       case ast.vInit.kind
       of gpuDiscard:
@@ -649,7 +707,8 @@ proc collectDeviceCallTargets(ctx: GpuContext, n: GpuAst, targets: var seq[GpuAs
     return
   if n.kind == gpuCall and not n.cName.isNil and not n.cName.symbol.isNil:
     let fn = ctx.fnTab.getOrDefault(n.cName, nil)
-    if fn != nil and not fn.isGlobal():
+    # `!= nil` is wrong here: GpuAst's custom `==` returns false for (nil, nil), so a nil fn compares unequal to nil
+    if not fn.isNil and not fn.isGlobal():
       targets.add fn
   for ch in n:
     if not ch.isNil:
@@ -720,6 +779,8 @@ proc codegen*(ctx: var GpuContext): string =
       doAssert kernel.isNil, "HLSL compiles one kernel per source"
       kernel = fn
   doAssert kernel.isNil.not, "HLSL found no global kernel"
+  if kernel.pRetType.kind != gtVoid:
+    error "HLSL: kernel `" & kernel.pName.ident() & "` must return void, got " & $kernel.pRetType.kind
 
   var fns: seq[GpuAst]
   for _, fn in ctx.fnTab:

@@ -1,4 +1,4 @@
-## HLSL: openArray kernel parameters are rejected, they have no glslang HLSL type name.
+## HLSL: openArray kernel parameters are rejected, they have no HLSL type name.
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \
