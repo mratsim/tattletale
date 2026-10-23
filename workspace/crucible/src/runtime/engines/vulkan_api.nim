@@ -83,13 +83,13 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
                    "use one kernel per source when passing by-value scalars")
 
   engine.entryPoint = parseEntryPoint(glsl)
-  engine.spirv = compileGlslToSpirV(glsl, engine.entryPoint)
+  engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.entryPoint = "main"
-  engine.spirv = compileHlslToSpirV(hlsl)
+  engine.spirv = compileHlslToSpirvViaDxc(hlsl)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
@@ -263,7 +263,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     spirv = engine.spirv
   else:
     if not engine.caches.spirvCache.hasKey(kernel):
-      engine.caches.spirvCache[kernel] = compileGlslToSpirV(engine.source, kernel)
+      engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 

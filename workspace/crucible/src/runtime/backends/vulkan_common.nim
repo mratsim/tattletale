@@ -137,7 +137,7 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32] =
+proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``.
   ## (``libshaderc_shared`` does not support compute shaders on this platform.)
   ## Subgroup shuffles are SPIR-V 1.3 instructions (the KHR subgroup
@@ -174,7 +174,7 @@ proc compileGlslToSpirV*(glsl: string; entryPoint: string = "main"): seq[uint32]
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc compileHlslToSpirV*(hlsl: string): seq[uint32] =
+proc compileHlslToSpirvViaDxc*(hlsl: string): seq[uint32] =
   ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
   let dxc = findExe("dxc")
   if dxc.len == 0:
