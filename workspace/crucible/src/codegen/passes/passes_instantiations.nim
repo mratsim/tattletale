@@ -15,7 +15,7 @@
 # specialize the declared address space:
 #
 # - call sites: one callee instantiation per space combination
-# - struct constructions: one type def per field-space combination
+# - struct constructions: one type def per field-address-space combination
 # - identity: callee key + the type hash of each parameter's address space,
 #   reusing the existing instantiation hashing
 #
@@ -51,9 +51,8 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst): void
 proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst): void
 
 proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
-  ## Rewrites `call` onto the instantiation its argument spaces select:
-  ## the declared callee when every pointer/span parameter already carries
-  ## the space its argument accesses, otherwise a space-keyed clone.
+  ## Rewrites `call` onto the instantiation its argument address spaces select:
+  ## the declared callee, or a space-keyed clone.
   if call.cName.symbol.isNil:
     return
   let callee = ctx.allFnTab.getOrDefault(call.cName, nil)
@@ -63,9 +62,8 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   var wanted: seq[GpuType]
   var specializes = false
   for i, p in callee.pParams:
-    # Storage-tagged params keep their var-side space, never specialize:
-    # - a {.smem.} arena or {.const_mem.} var binds by its own space
-    # - an implicit pointer param (a `var T` reference) binds whole
+    # Storage-tagged params ({.smem.}/{.const_mem.}) and implicit `var T`
+    # params bind by their own space, never specialize
     if not p.typ.isNil and p.typ.kind in {gtPtr, gtSpan} and
         not p.typ.implicit and p.addressSpace in {asDevice, asRMEM}:
       let want = p.typ.withAddressSpace(ctx.resolveAddressSpace(call.cArgs[i]))
@@ -77,8 +75,8 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   if not specializes:
     return
 
-  # Identity: the callee's iSym gains the hash of every parameter whose address space changed
-  # like the Nim-level generic instantiation hashing
+  # Identity: the callee's iSym gains the hash of every parameter whose address space changed,
+  # matching Nim's generic instantiation hashing
   var key = call.cName.symbol.iSym
   for i, p in callee.pParams:
     if wanted[i] != p.typ:
@@ -92,9 +90,8 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
 
   var inst = callee.clone()
   inst.pName = instIdent
-  # The clone shares the original's Symbols (a gpuIdent clone shares the ref):
-  # parameters carrying a new address space get fresh symbols and the body rebinds onto them,
-  # the original's parameters stay untouched
+  # The clone shares the original's Symbols (a gpuIdent clone shares the ref),
+  # re-keyed params get fresh symbols and the body rebinds onto them
   var fresh = initTable[string, Symbol]()
   for i, p in inst.pParams.mpairs:
     if wanted[i] != p.typ:
@@ -111,7 +108,6 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   rebindIdents(inst.pBody, fresh)
   ctx.fnTab[instIdent] = inst
   ctx.allFnTab[instIdent] = inst
-  # the instantiated body may nest further space-specialized calls
   ctx.instantiateCallsIn(inst.pBody)
 
 proc rebindIdents(n: var GpuAst, fresh: Table[string, Symbol]) =
@@ -140,9 +136,7 @@ proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc instantiatedStructType(ocType: GpuType, ocFields: seq[GpuFieldInit]): GpuType =
-  ## Instantiated struct type of a construction: the declared type,
-  ## fields carrying the construction's field types
-  ## Returns nil when the construction matches the declared field types
+  ## Instantiated struct type of a construction, nil when it matches the declared field types
   var differs = false
   var fields: seq[GpuTypeField]
   for f in ocType.fields:
@@ -158,9 +152,8 @@ proc instantiatedStructType(ocType: GpuType, ocFields: seq[GpuFieldInit]): GpuTy
 
   result = ocType.clone()
   result.fields = fields
-  # gtObject prints its bare name, the instantiated def needs the type hash
-  # in the name to stay distinct from the declared def and from other
-  # space instantiations. gtGenericInst prints hash-derived names already.
+  # gtObject prints its bare name, the hash keeps the instantiated def distinct
+  # from the declared def; gtGenericInst names are hash-derived already
   if result.kind == gtObject:
     result.name = mangledHashName(ocType.name, $hash(result))
 
