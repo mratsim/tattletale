@@ -51,7 +51,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   let thrID = getLocalThreadID()
   # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
   # per-simdgroup partials uncombined or rows partially written.
-  # Deferred: cross-warp combine via shared memory and barrier.
+  # TODO: cross-warp combine via shared memory and barrier.
   let
     rows = src.sliceAxes(axis).size()
     gridStride = getGridSize()
