@@ -5,12 +5,12 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## lean_pragmas: verification pragmas on kernel procs and their payload language (P3, poc-local)
+## lean_pragmas: verification pragmas on kernel procs and their payload language
 ##
 ## Lean properties cannot be written in Nim, so each pragma payload is a string holding
-## a Lean property expression over the kernel's parameter names,
-## plus the model binders `tid` (thread id) and `n` (buffer bound).
-## The payload is parsed and rendered by `backends/lean_lang.nim`.
+## a Lean property over the kernel's parameter names plus the binders `tid` and `n`.
+## The payload is parsed and rendered by `backends/lean_lang.nim`, whose
+## `specPragmaNames` constant is the pragma vocabulary the macro capture below filters.
 ##
 ## - `{.precondition: "<payload>".}` - assumed at launch, never proved
 ## - `{.invariant: "<payload>".}` - holds whenever the guarded branch is entered, implied by the guard `tid < n`

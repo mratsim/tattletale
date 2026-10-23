@@ -35,7 +35,7 @@ proc statementTail(path: string): string =
   return text[idx .. ^1]
 
 proc runTest() =
-  block: # emission + Lean elaboration + statement match against the P1 module
+  block: # emission + Lean elaboration + statement match against the hand-written reference
     let ir = irLean:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
@@ -59,12 +59,12 @@ proc runTest() =
         let expected = if i < refLines.len: refLines[i] else: "<missing>"
         let actual = if i < genLines.len: genLines[i] else: "<missing>"
         if expected != actual:
-          echo "line ", i + 1, ":\n  P1: ", expected, "\n  P2: ", actual
-      doAssert false, "emitted statements differ from the hand-written P1 module"
-    echo "  emission + elaboration (warningAsError) + P1 statement match: ok"
+          echo "line ", i + 1, ":\n  reference: ", expected, "\n  generated: ", actual
+      doAssert false, "emitted statements differ from the hand-written reference module"
+    echo "  emission + elaboration (warningAsError) + reference statement match: ok"
 
   block: # loud refusal on an out-of-scope construct (while loop)
-    # a `for` over a compile-time constant range is the P4 loop shape.
+    # a `for` over a compile-time constant range is the loop shape.
     # t_lean_loop.nim tests it. A while loop stays out of scope
     let ir = irLean:
       proc whileAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =

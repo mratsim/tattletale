@@ -49,7 +49,7 @@ proc statementSpecPragma(node: NimNode): string =
     for item in pragma:
       let nameNode = if item.kind in {nnkExprColonExpr, nnkCall}: item[0] else: item
       if nameNode.kind in {nnkIdent, nnkSym} and
-          nameNode.strVal in ["precondition", "invariant", "postcondition"]:
+          nameNode.strVal in specPragmaNames:
         return nameNode.strVal
     if node.kind == nnkPragmaExpr:
       result = statementSpecPragma(node[1])
@@ -90,7 +90,7 @@ macro irLeanSpec*(body: typed): untyped =
   for item in procNode.pragma:
     if item.kind in {nnkExprColonExpr, nnkCall} and
         item[0].kind in {nnkIdent, nnkSym} and
-        item[0].strVal in ["precondition", "invariant", "postcondition"]:
+        item[0].strVal in specPragmaNames:
       if item[1].kind != nnkStrLit:
         error "nim_to_lean: pragma '" &
           item[0].strVal & "' payload must be a string literal"

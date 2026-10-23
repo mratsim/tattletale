@@ -8,7 +8,7 @@
 -/
 
 /-!
-# Add kernel, per-thread verification model (P1)
+# Add kernel, per-thread verification model
 
 Hand translation of the crucible add kernel thread function
 (`tests/codegen/vulkan_via_glsl/app/t_vulkan_add.nim`, `addKernel`) into Lean.
@@ -66,7 +66,7 @@ theorem addBody_only_writes_tid {tid n : Nat} {a b out : Nat → UInt32} {i : Na
     · simp [heq] at h
   · simp [addBody, hlt] at h
 
-/-- Worked example matching the host-side test vectors `a = [10, 20]`,
+/-- Worked example over the illustrative vectors `a = [10, 20]`,
 `b = [1, 2]`: thread 0 writes 11. -/
 example : addBody 0 2 (fun _ => (10 : UInt32)) (fun _ => 1) (fun _ => 0) 0 = 11 := by
   decide

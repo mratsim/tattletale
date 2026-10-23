@@ -1,7 +1,10 @@
 # Lean verification backend: toolchain, reference model, and suites
 
 Crucible's Lean verification backend (`src/codegen/backends/lean_lang.nim`) emits a Lean 4
-verification module from a `{.global.}` kernel's post-pass IR.
+verification module from a `{.global.}` kernel's post-pass IR. The model covers two kernel
+shapes only and refuses everything else loudly:
+the guarded thread (buffers `a` and `b` read, `output` written, guard `tid < literal`)
+and the constant-bound loop with one indexed write (the axpy shape adds one uint32 scalar).
 
 This directory holds the locked Lean project plus the suite tests.
 The emitted modules elaborate against the project's lake environment.

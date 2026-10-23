@@ -39,7 +39,7 @@ type
     name*: string    ## one of precondition, invariant, postcondition
     payload*: string ## the string payload verbatim
 
-  SpecTokenKind* = enum
+  SpecTokenKind = enum
     tkIdent  ## `[A-Za-z_][A-Za-z0-9_]*`
     tkUint   ## `[0-9]+`
     tkPlus   ## `+`
@@ -50,7 +50,7 @@ type
     tkAnd    ## `∧`
     tkEof
 
-  SpecToken* = object
+  SpecToken = object
     kind*: SpecTokenKind
     text*: string ## identifier name or literal digits
 
@@ -232,8 +232,8 @@ proc renderSpec*(e: SpecExpr, nameMap: Table[string, string], bareMap: Table[str
 
 type
   KernelKind = enum
-    kkGuardedThread ## let-bound thread id, one guarded write (the P2 add shape)
-    kkLoopRange     ## one `for` over a compile-time constant `[0, n)` range (P4)
+    kkGuardedThread ## let-bound thread id, one guarded write (the add shape)
+    kkLoopRange     ## one `for` over a compile-time constant `[0, n)` range (the loop shape)
 
   KernelModel = object
     kind: KernelKind
@@ -332,7 +332,7 @@ proc isUint32Buffer(p: GpuParam): bool =
 
 proc isAddOfTidReads(v: GpuAst, tidName: string, readBufs: seq[string]): bool =
   ## Whether the stored value is `<buf1> tid + <buf2> tid` over two distinct buffers,
-  ## the shape the hand-written P1 worked examples check
+  ## the shape the hand-written AddKernel.lean worked examples check
   if v.kind != gpuBinOp or v.bOp.symbol.name != "+":
     return false
   for side in [v.bLeft, v.bRight]:
@@ -357,7 +357,7 @@ proc indexedReadBufs(n: GpuAst, bufNames: HashSet[string], found: var HashSet[st
     discard
 
 proc leanBodyName(kernelName: string): string =
-  ## `addKernel` -> `addBody`, the naming of the hand-written P1 module
+  ## `addKernel` -> `addBody`, the naming of the hand-written AddKernel.lean module
   if kernelName.endsWith("Kernel"):
     kernelName[0 ..^ 7] & "Body"
   else:
@@ -583,7 +583,7 @@ proc emitModuleDoc(model: KernelModel): string =
   ## Module docstring of the emitted Lean module, one variant per kernel shape
   const threadDoc = """
 /-!
-# Emitted @KERNEL@ verification module (P2)
+# Emitted @KERNEL@ verification module
 
 Produced by `lean_lang.nim` from the post-pass GpuAst of the crucible kernel
 `@KERNEL@`. `tests/codegen/lean/t_lean_emit.nim` regenerates this file; edit the emitter,
@@ -596,7 +596,7 @@ GPU arithmetic the kernel emits.
 """
   const loopDoc = """
 /-!
-# Emitted @KERNEL@ verification module (P4)
+# Emitted @KERNEL@ verification module
 
 Produced by `lean_lang.nim` from the post-pass GpuAst of the crucible kernel
 `@KERNEL@`. `tests/codegen/lean/t_lean_loop.nim` regenerates this file; edit the emitter,
@@ -768,7 +768,8 @@ proc emitLoopTheorems(model: KernelModel): string =
 
 proc emitTheorems(model: KernelModel): string =
   ## Spec theorems per kernel shape:
-  ## - the guarded-thread shape carries the `simp`-style P1 module proofs
+  ## - the guarded-thread shape carries the `simp`-style proofs of the hand-written
+  ##   AddKernel.lean module
   ## - the loop shape derives its four theorems from the emitted loop-state lemma
   ##
   ## Proofs close for any supported stored value: they depend on the def shape alone.
@@ -808,12 +809,12 @@ theorem @BODY@_only_writes_tid {tid n : Nat} {a b out : Nat → UInt32} {i : Nat
   return tail.replace("@BODY@", model.bodyName).replace("@VALUE@", model.value)
 
 proc emitExamples(model: KernelModel): string =
-  ## Worked `decide` examples over the host-side test vectors
+  ## Worked `decide` examples over the illustrative vectors
   ## `a = [10, 20]`, `b = [1, 2]`. Add shape only
   if not model.isAddShape:
     return ""
   const tail = """
-/-- Worked example matching the host-side test vectors `a = [10, 20]`,
+/-- Worked example over the illustrative vectors `a = [10, 20]`,
 `b = [1, 2]`: thread 0 writes 11. -/
 example : @BODY@ 0 @N@ (fun _ => (10 : UInt32)) (fun _ => 1) (fun _ => 0) 0 = 11 := by
   decide
@@ -826,10 +827,10 @@ example : @BODY@ 0 1 (fun _ => (0xFFFFFFFF : UInt32)) (fun _ => 1) (fun _ => 7) 
 """
   return tail.replace("@BODY@", model.bodyName).replace("@N@", $model.nValue)
 
-# ── Verification scaffold emission (P3) ──────────────────────────────────────
+# ── Verification scaffold emission ──────────────────────────────────────
 
 type
-  SpecKind* = enum
+  SpecKind = enum
     skPrecondition
     skInvariant
     skPostcondition
@@ -843,15 +844,23 @@ type
     attempt: string   ## mechanical proof attempt, downgraded to `sorry` on failure
     startLine: int    ## 1-based line of the scaffold's first line in the module
 
+const specPragmaNames* = ["precondition", "invariant", "postcondition"]
+  ## Verification pragma vocabulary, one single source for the frontend
+  ## capture filter (`frontend/nim_to_lean.nim`) and for `specKindByName`
+
 proc specKindByName(name: string): SpecKind =
   ## Maps a captured pragma name to its kind, refusing anything else
-  case name
-  of "precondition": skPrecondition
-  of "invariant": skInvariant
-  of "postcondition": skPostcondition
-  else:
-    raise leanRefusal(
-      "lean_lang: unsupported spec pragma '" & name & "'")
+  for i, n in specPragmaNames:
+    if n == name:
+      return SpecKind(i)
+  raise leanRefusal(
+    "lean_lang: unsupported spec pragma '" & name & "'")
+
+static:
+  # the array order must match the SpecKind enum order
+  doAssert specKindByName("precondition") == skPrecondition
+  doAssert specKindByName("invariant") == skInvariant
+  doAssert specKindByName("postcondition") == skPostcondition
 
 proc prepareSpec(model: KernelModel, spec: RawSpec): Scaffold =
   ## Parses, validates and renders one captured pragma payload against the kernel model.
@@ -1041,7 +1050,8 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
   ## Emits the Lean 4 verification module for one global kernel, with one spec scaffold per captured verification pragma.
   ##
   ## - writes the module to `outPath` and returns its text
-  ## - with no pragmas the module is byte-identical to the P1/P2 statements
+  ## - with no pragmas the module is byte-identical to the hand-written
+  ##   AddKernel.lean statements
   ## - refuses loudly (ValueError, "lean_lang: ...") on any out-of-scope
   ##   construct or payload
   ## - settles each scaffold's proof attempt with `lake env lean`, downgrading
