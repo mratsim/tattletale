@@ -389,4 +389,23 @@ static:
     $viewVar.vType.addressSpace
   echo "  OK - span view binding decomposes to a device ptr"
 
+# ── 9. A ptr-typed var stamps from its init's storage ──
+static:
+  let ir = toCrucibleAst:
+    proc smemAliasKernel(outp: ptr UncheckedArray[uint32]) {.global.} =
+      var scratch {.smem.}: array[4, uint32]
+      var p: ptr uint32 = addr scratch[0]
+      outp[0] = p[]
+
+  let fn = ir.findProc
+  let pVar = fn.pBody.findVar("p")
+  doAssert not pVar.isNil, "expected the ptr-typed var p"
+  doAssert pVar.vType.kind == gtPtr and pVar.vType.addressSpace == asSMEM,
+    "a declared `ptr uint32` initialized from threadgroup storage stamps asSMEM, got " &
+    $pVar.vType.addressSpace
+  doAssert pVar.vName.symbol.typ.addressSpace == asSMEM,
+    "the var's symbol type follows the stamped init space, got " &
+    $pVar.vName.symbol.typ.addressSpace
+  echo "  OK - a ptr-typed var stamps from its init's storage"
+
 echo "t_ir_spaceStamps: all static assertions passed"

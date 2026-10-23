@@ -214,10 +214,11 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         # __local T*, shared memory
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__local {inner}* {p.ident.ident()}"
-      elif p.typ.kind == gtPtr and p.addressSpace == asDevice:
+      elif p.typ.kind == gtPtr and p.typ.addressSpace == asDevice:
         # __global T* restrict: explicit `ptr T` params
         # bind device buffers, in kernel signatures and device functions alike.
-        # Implicit `var T` pointer params take the plain form below.
+        # the qualifier reads the pointer type's space, an implicit `var T`
+        # pointer param takes the plain form below
         let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
         params.add &"__global {inner}* restrict {p.ident.ident()}"
       else:

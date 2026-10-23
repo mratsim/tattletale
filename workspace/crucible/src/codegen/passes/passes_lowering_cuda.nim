@@ -20,6 +20,7 @@ import ../ir/ast_datatypes
 import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
+import ./passes_instantiations
 import ./passes_optimizations
 
 {.experimental: "codeReordering".}
@@ -34,5 +35,7 @@ const CudaReserved = [
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = true)
   reg.registerSharedLoweringPasses()
+  # Consumes final argument types (post lowerArraysAndViews)
+  reg.registerInstantiateGenerics()
   reg.registerMaterializePassByRefArgs()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)

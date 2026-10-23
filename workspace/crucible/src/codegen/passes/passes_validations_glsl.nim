@@ -17,6 +17,7 @@
 
 import std / [macros, sequtils, strutils, tables]
 import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./pass_datatypes
 import ./pass_registry
 
@@ -53,8 +54,9 @@ proc validateSharedPushConstLayout(ctx: var GpuContext) =
       continue
     var layout: seq[(string, GpuType, AddressSpace)]
     for p in fn.pParams:
+      # the smem exclusion reads the var side: shared storage never joins the push-constant block
       if p.addressSpace != asSMEM:
-        layout.add (p.ident.ident(), p.typ, p.addressSpace)
+        layout.add (p.ident.ident(), p.typ, getTypeAccessedSpace(p.typ))
     if reference.len == 0:
       reference = layout
     elif not sameLayout(layout, reference):
