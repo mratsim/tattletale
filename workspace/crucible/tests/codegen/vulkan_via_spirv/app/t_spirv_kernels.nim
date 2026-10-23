@@ -96,6 +96,19 @@ const ternaryRangeSpv = spirv:
     for i in 0 ..< (if n > 0: 4 else: 8):
       output[i] = float32(i)
 
+const boolEqSpv = spirv:
+  proc boolEqKernel(output: ptr UncheckedArray[uint32], a: int32, b: int32) {.global.} =
+    let eq = a == b
+    if eq == true:
+      output[0] = 1
+    else:
+      output[0] = 2
+
+const fmaxSpv = spirv:
+  proc fmaxKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
+    for i in 0 ..< n:
+      output[i] = max(x[i], 0.0'f32)
+
 proc runTest() =
   validateSpv(vec2Spv, "t_spirv_kernels_vec2",
               @["OpFunctionCall", "OpCompositeConstruct",
@@ -121,6 +134,12 @@ proc runTest() =
   # strands OpLoopMerge in a block with branches
   validateSpv(ternaryRangeSpv, "t_spirv_kernels_ternary_range",
               @["OpLoopMerge", "OpBranchConditional"])
+  # bool equality: OpIEqual requires integer operands, booleans lower to the logical equality opcodes
+  validateSpv(boolEqSpv, "t_spirv_kernels_bool_eq",
+              @["OpLogicalEqual"])
+  # float max/min: the integer compare opcodes are illegal over float operands, floats lower through ordered float comparisons
+  validateSpv(fmaxSpv, "t_spirv_kernels_fmax",
+              @["OpFOrdGreaterThan", "OpSelect"])
 
 when isMainModule:
   runTest()
