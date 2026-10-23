@@ -89,7 +89,7 @@ proc runCase(engine: MetalEngine, L, S: int, Causal: static bool, iters: int) =
     fillPattern(kv)
     fillPattern(vv)
   let
-    scaleVal = 1.0'f32 / sqrt(128.0'f32)
+    scaleVal = 1.0'f32 / sqrt(float32(Dk))
     qTiles = L.ceil_div(MT)
     launchGrid = (qTiles, Hq, B)
 

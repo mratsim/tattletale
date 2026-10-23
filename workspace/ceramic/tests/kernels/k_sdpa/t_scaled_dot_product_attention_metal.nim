@@ -29,6 +29,9 @@ import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_sdpa/sdpa_fixtures
 import workspace/ceramic/src/kernels/k_tile_sdpa
 
+const SdpaTile = 32
+  ## 32x32x32 mma schedule tile, threadgroups step query rows by it
+
 when defined(SdpaLegF16):
   const SdpaFixtureNames = [
     "tiny_f16", "causal_gqa2_f16", "decode_gqa8_f16",
@@ -62,7 +65,7 @@ proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: ty
     vDev = engine.bridge(vh)
     oDev = engine.bridge(oh)
     scaleVal = meta.scale
-    qTiles = (meta.L + 31) div 32
+    qTiles = (meta.L + SdpaTile - 1) div SdpaTile
 
   if meta.mask == "additive":
     let
@@ -74,29 +77,29 @@ proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: ty
       maskDev = engine.bridge(mh)
     if meta.causal:
       engine.launchDeviceFn scaled_dot_product_attention(
-          tiledMma(float32, T, T, 32, 32, 32),
-          tiledMma(float32, T, T, 32, 32, 32),
+          tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
+          tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
           oDev, qDev, kDev, vDev, maskDev, scaleVal, Dk, Dv, true) do:
         grid = (qTiles, meta.Hq, meta.B)
         blk = (32, 1)
     else:
       engine.launchDeviceFn scaled_dot_product_attention(
-          tiledMma(float32, T, T, 32, 32, 32),
-          tiledMma(float32, T, T, 32, 32, 32),
+          tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
+          tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
           oDev, qDev, kDev, vDev, maskDev, scaleVal, Dk, Dv, false) do:
         grid = (qTiles, meta.Hq, meta.B)
         blk = (32, 1)
   elif meta.causal:
     engine.launchDeviceFn scaled_dot_product_attention(
-        tiledMma(float32, T, T, 32, 32, 32),
-        tiledMma(float32, T, T, 32, 32, 32),
+        tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
+        tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
         oDev, qDev, kDev, vDev, scaleVal, Dk, Dv, true) do:
       grid = (qTiles, meta.Hq, meta.B)
       blk = (32, 1)
   else:
     engine.launchDeviceFn scaled_dot_product_attention(
-        tiledMma(float32, T, T, 32, 32, 32),
-        tiledMma(float32, T, T, 32, 32, 32),
+        tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
+        tiledMma(float32, T, T, SdpaTile, SdpaTile, SdpaTile),
         oDev, qDev, kDev, vDev, scaleVal, Dk, Dv) do:
       grid = (qTiles, meta.Hq, meta.B)
       blk = (32, 1)
@@ -127,7 +130,8 @@ proc runFixture(name: string) =
     of 64: replay(engine, meta, dir, T, 64, 64)
     of 128: replay(engine, meta, dir, T, 128, 128)
     else: doAssert false, "no static head-dim case for " & $meta.Dk
-  when defined(SdpaLegF16):
+  
+when defined(SdpaLegF16):
     dispatchD(float16)
   elif defined(SdpaLegBf16):
     dispatchD(bfloat16)

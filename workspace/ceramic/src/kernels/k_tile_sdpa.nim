@@ -38,11 +38,11 @@ import workspace/ceramic/src/hardware/h_mma_properties
 
 {.experimental: "callOperator".}
 
-const NegBigF32* = -3.0e38'f32
+const NegBigF32 = -3.0e38'f32
   ## Finite blocked-score sentinel: `exp2(x − m)` underflows to zero on blocked entries.
   ## The running max never leaves the finite range.
 
-func narrowTo*[T](x: float32): T {.inline.} =
+func narrowTo[T](x: float32): T {.inline.} =
   ## f32 accumulator value narrowed to the mma operand dtype
   when T is float32:
     x
