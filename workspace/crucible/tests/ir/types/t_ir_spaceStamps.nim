@@ -106,6 +106,61 @@ static:
     $inst.pParams[1].typ.addressSpace
   echo "  OK - device span survives span-to-pointer normalization"
 
+# ── 1b. One callee, both pointer params re-typed at different positions:
+#    the two call sites must yield two distinct instantiations ──
+static:
+  let ir = toCrucibleAst:
+    proc copy(dst: ptr float32, src: ptr float32) {.device.} =
+      dst[] = src[]
+    proc twoSites(outp: ptr float32) {.global.} =
+      var tmp: float32
+      copy(addr tmp, outp)   # dst re-typed to thread, src stays device
+      copy(outp, addr tmp)   # dst stays device, src re-typed to thread
+
+  var ctx = GpuContext()
+  var kern: GpuAst = nil
+  for stmt in ir.statements:
+    if stmt.kind == gpuProc:
+      ctx.allFnTab[stmt.pName] = stmt
+      if stmt.pName.symbol.name == "twoSites":
+        kern = stmt
+        ctx.fnTab[stmt.pName] = stmt
+
+  proc findCalls(n: GpuAst, into: var seq[GpuAst]) =
+    if n.isNil:
+      return
+    if n.kind == gpuCall and n.cName.symbol.name == "copy":
+      into.add n
+    for ch in n.items:
+      ch.findCalls(into)
+  var calls: seq[GpuAst]
+  kern.pBody.findCalls(calls)
+  doAssert calls.len == 2, "both call sites specialize, got " & $calls.len
+
+  proc registerInstantiate(reg: var PassRegistry) {.nimcall.} =
+    reg.registerInstantiateImplicitAddressSpaceGenerics()
+  registerInstantiate.runPassPrepared(ctx)
+
+  # the pass retitles the call sites in place, the two sites re-type different
+  # parameters and must not share one instantiation whose qualifiers fit neither
+  let (first, second) = (calls[0], calls[1])
+  doAssert first.cName.symbol.iSym != second.cName.symbol.iSym,
+    "same-type rewrites at different parameters resolve to distinct instantiations, both got: " &
+    first.cName.symbol.iSym
+  let instFirst = ctx.allFnTab[first.cName]
+  let instSecond = ctx.allFnTab[second.cName]
+  doAssert instFirst.pParams[0].typ.addressSpace == asRMEM and
+    instFirst.pParams[1].typ.addressSpace == asDevice,
+    "the first site's instantiation binds dst to thread, got dst=" &
+    $instFirst.pParams[0].typ.addressSpace & " src=" &
+    $instFirst.pParams[1].typ.addressSpace
+  doAssert instSecond.pParams[0].typ.addressSpace == asDevice and
+    instSecond.pParams[1].typ.addressSpace == asRMEM,
+    "the second site's instantiation binds src to thread, got dst=" &
+    $instSecond.pParams[0].typ.addressSpace & " src=" &
+    $instSecond.pParams[1].typ.addressSpace
+  echo "  OK - same-type rewrites at different parameters instantiate separately"
+
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase

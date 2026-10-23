@@ -75,12 +75,11 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   if not specializes:
     return
 
-  # Identity: the callee's iSym gains the hash of every parameter whose address space changed,
-  # matching Nim's generic instantiation hashing
+  # Nim-style generic identity, the position separates same-type rewrites at different parameters
   var key = call.cName.symbol.iSym
   for i, p in callee.pParams:
     if wanted[i] != p.typ:
-      key.add "_" & $hash(wanted[i])
+      key.add "_" & $i & "_" & $hash(wanted[i])
   let instIdent = GpuAst(kind: gpuIdent,
                          symbol: newSymbol(mangledHashName(callee.pName.symbol.name, key),
                                            iSym = key, symKind = gsProc))
