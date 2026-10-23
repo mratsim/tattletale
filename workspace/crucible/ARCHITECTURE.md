@@ -181,7 +181,7 @@ src/
       vulkan_api.nim
       webgpu_api.nim
       metal_api.nim
-    exec/
+    backends/
       cuda_runtime.nim              Platform sessions: library loading, device
       opencl_runtime.nim            discovery, source -> artifact compilation,
       vulkan_common.nim             buffers, raw dispatch. The engine facades
