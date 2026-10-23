@@ -94,12 +94,21 @@ func registerValidateAddressSpaceCasts*(reg: var PassRegistry) =
       ctx.validateAddressSpaceCasts()
   )
 
+func registerValidateConstantWrites*(reg: var PassRegistry) =
+  reg.register("validateConstantWrites", pkValidation, phaseMain,
+    "Rejects assignments into constant storage (read-only program-scope globals)",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      ctx.validateConstantWrites()
+  )
+
 func registerValidationPostPasses*(reg: var PassRegistry) =
   ## Register passes that check IR invariants AFTER all transforms.
   ## Runs just before codegen.
   # Cast validation first: a rejected cross-space cast is the earliest
   # defect to surface, the emitted-source checks below assume sound casts
   reg.registerValidateAddressSpaceCasts()
+  reg.registerValidateConstantWrites()
   reg.register("ensureNoExprBlocks", pkValidation, phaseMain,
     "Rejects gpuBlock(isExpr: true) anywhere in the IR",
     dependsOn = @[],
@@ -215,3 +224,43 @@ proc validateSpaceCast(ctx: var GpuContext, n: GpuAst, fnName: string) =
     # a raised error stays catchable in static test blocks, in the macro
     # pipeline it fails compilation either way
     raise newException(ValueError, rejection)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Constant-storage write validation
+# ═══════════════════════════════════════════════════════════════════════
+
+proc constantWriteRejection(ctx: GpuContext, n: GpuAst, fnName: string): string =
+  ## Rejection message of an assignment into constant storage, empty when the target
+  ## lives in another space
+  if n.kind != gpuAssign:
+    return ""
+  if ctx.resolveAddressSpace(n.aLeft) != asConstant:
+    return ""
+  let target = if n.aLeft.kind == gpuIdent: n.aLeft.ident() else: $n.aLeft.kind
+  result = fnName & ": assignment into constant storage: the target " &
+    target & " lives in read-only program-scope memory. Globals " &
+    "are read-only; pass mutable state as a pointer parameter"
+
+proc validateConstantWritesIn(ctx: var GpuContext, n: GpuAst, fnName: string) =
+  ## Validates every assignment in depth-first pre-order, other kinds pass
+  if n.isNil:
+    return
+  let rejection = ctx.constantWriteRejection(n, fnName)
+  if rejection.len > 0:
+    raise newException(ValueError, rejection)
+  for ch in n:
+    ctx.validateConstantWritesIn(ch, fnName)
+
+proc validateConstantWrites(ctx: var GpuContext) =
+  ## Rejects writes into constant storage, direct or through a pointer: the target's space decides
+  ## in function bodies and in top-level statements alike
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      ctx.validateConstantWritesIn(fn.pBody, fn.pName.ident())
+  for fnKey in ctx.genericInsts.keys:
+    let fn = ctx.genericInsts[fnKey]
+    if fn.kind == gpuProc:
+      ctx.validateConstantWritesIn(fn.pBody, fn.pName.ident())
+  for blk in ctx.globalBlocks.mitems:
+    ctx.validateConstantWritesIn(blk, "global scope")
