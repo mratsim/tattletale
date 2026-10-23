@@ -173,12 +173,28 @@ proc productExpr(shape: NimNode, permPos: seq[int], i: int): NimNode {.compileTi
       let leaf = nnkCall.newTree(bindSym"leafAt", shape, newLit(j))
       result = nnkInfix.newTree(bindSym"*", result, leaf)
 
+func orderedPermPos[O](n: static int, order: O): seq[int] =
+  ## Ranks of the order leaves:
+  ##
+  ## - dynamic entries substituted
+  ## - dimension positions sorted ascending
+  ## - evaluated at compile time, feeding the scheduling macro as a static argument
+  var ranks: array[n, int]
+  staticFor i, 0, n:
+    ranks[i] = orderLeafAt(order, i)
+  compactOrderPermPos(compactOrderDynamicSubstitution(ranks))
+
 macro stridesTuple(shape: typed, permPos: static seq[int]): untyped =
   ## Stride leaves in original dimension order, dimension i taking the product
-  ## of the shape leaves ranked before it, the leaves folded by `concat`.
-  result = productExpr(shape, permPos, 0)
+  ## of the shape leaves ranked before it.
+  ##
+  ## - the scheduling is compile-time macro work and vanishes with the expansion
+  ## - the products are ordinary expressions for the `Int` overload matrix
+  ## - the tuple constructor is emitted directly, a fold through `concat` lowers as a call over the callee's parameter symbols
+  ##   and dies in device code generation
+  result = nnkPar.newTree(productExpr(shape, permPos, 0))
   for i in 1 ..< permPos.len:
-    result = nnkCall.newTree(bindSym"concat", result, productExpr(shape, permPos, i))
+    result.add(productExpr(shape, permPos, i))
 
 func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
   ## Compact strides ranked by `order`, one body over IntOrIntTuple operands.
@@ -195,13 +211,7 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ## - order ranks and product scheduling are compile-time, leaf products are
   ##   ordinary expressions evaluated by overload resolution
   const n: int = Sh.rank()
-  const ordSub = block:
-    var ranks: array[n, int]
-    staticFor i, 0, n:
-      ranks[i] = orderLeafAt(order, i)
-    compactOrderDynamicSubstitution(ranks)
-  const permPos = compactOrderPermPos(ordSub)
-  stridesTuple(shape, permPos)
+  stridesTuple(shape, orderedPermPos(n, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
   ## Compile-time order: the order values rank the shape leaves directly.
