@@ -32,7 +32,7 @@ type
     handle: VkPipeline
     layout: VkPipelineLayout
     setLayout: VkDescriptorSetLayout  ## Set layout from createPipeline, nil on the BDA route
-    pushConstSize: int  ## The push-constant range size from createPipeline, 0 when the kernel takes none
+    pushConstSize: int  ## Push-constant range size from createPipeline, 0 when the kernel takes none
     vkDestroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
     vkDestroyPipelineLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
 

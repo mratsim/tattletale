@@ -416,10 +416,12 @@ proc hoistExpr(ctx: var GpuContext, st: var KernelSplicer, pre: var seq[GpuAst],
     pre.add ctx.inlineCall(st, n, GpuAst(kind: gpuIdent, symbol: tmpSym))
     result = GpuAst(kind: gpuIdent, symbol: tmpSym)
   of gpuBinOp:
+    # `&&`/`||` evaluate their right operand conditionally, a call there
+    # would splice unconditionally ahead of the short-circuit guard
     if not n.bOp.symbol.isNil and n.bOp.symbol.name in ["&&", "||"] and
-        (ctx.containsSpliceableCall(n.bLeft) or ctx.containsSpliceableCall(n.bRight)):
-      error "HLSL: device function call in a short-circuit operand cannot inline, " &
-        "the operand evaluates conditionally"
+        ctx.containsSpliceableCall(n.bRight):
+      error "HLSL: device function call in a short-circuit right operand cannot inline, " &
+        "the right operand evaluates conditionally"
     result = n
     for ch in mitems(result):
       ch = ctx.hoistExpr(st, pre, ch)
