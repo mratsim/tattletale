@@ -167,7 +167,7 @@ workspace/crucible/
         vulkan_api.nim
         webgpu_api.nim
         metal_api.nim
-      exec/
+      backends/
         cuda_runtime.nim          Platform sessions: library loading, device discovery,
         opencl_runtime.nim        source -> artifact compilation, buffers, dispatch
         vulkan_common.nim

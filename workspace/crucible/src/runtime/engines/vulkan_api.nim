@@ -34,7 +34,6 @@ type
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     isHlsl: bool   # HLSL sources emit one module as `main`, every kernel name runs it
-    entryAddressRoute: bool   # ingest-time route of the entry kernel, validation only: the launch path re-derives the route from the SPIR-V about to run
     caches: VulkanCaches
 
 template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
@@ -103,7 +102,6 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.spirv = compileGlslToSpirV(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
-  engine.entryAddressRoute = usesPhysicalStorageBuffer(engine.spirv)
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   ## HLSL ingest: dxc compiles one module per source, entry `main`,
@@ -113,7 +111,6 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.spirv = compileHlslToSpirV(hlsl)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
-  engine.entryAddressRoute = usesPhysicalStorageBuffer(engine.spirv)
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity

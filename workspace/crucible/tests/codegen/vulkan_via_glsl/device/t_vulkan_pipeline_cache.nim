@@ -1,7 +1,6 @@
 ##
 ## Vulkan: pipeline / SPIR-V cache (ingest-once, run-many).
-## Pipeline cache keyed by (kernel, ssboCount, pushConstSize), per-kernel SPIR-V
-## cached by kernel name.
+## Pipeline cache keyed by (kernel, pushConstLen), per-kernel SPIR-V cached by kernel name.
 ##
 ## Coverage:
 ##   - entry kernel run twice with different data (cached pipeline reuse)
