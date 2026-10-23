@@ -132,7 +132,19 @@ proc genLit*(ast: GpuAst): string =
     result = "nullptr"
   else:
     case ast.lType.kind
-    of gtFloat32: result = ast.lValue & "f"
+    of gtFloat32, gtFloat64:
+      # ±Inf and NaN fold into literals whose text form is "inf"/"-inf"/"nan",
+      # no such MSL token exists. INFINITY and NAN are the float-typed MSL macros
+      # for the special values.
+      case ast.lValue
+      of "inf":  result = "INFINITY"
+      of "-inf": result = "-INFINITY"
+      of "nan", "-nan": result = "NAN"
+      else:
+        if ast.lType.kind == gtFloat64:
+          error "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
+        else:
+          result = ast.lValue & "f"
     of gtFloat16: result = ast.lValue & "h"
     of gtBf16:    result = "bfloat(" & ast.lValue & ')'
     of gtUint32: result = ast.lValue & "U"
@@ -140,8 +152,6 @@ proc genLit*(ast: GpuAst): string =
     of gtInt64:  result = ast.lValue & "LL"
     of gtInt16, gtUint16, gtUint8, gtBool:
       result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
-    of gtFloat64:
-      error "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
     else:
       result = ast.lValue
 
