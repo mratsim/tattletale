@@ -23,6 +23,7 @@ import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_hlsl
+from ./backends/hlsl_lang import HlslFlavor, fvD3D12
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
 import ./backends/lang_utils
@@ -216,7 +217,7 @@ macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
-macro codegenHlsl(body: typed): string =
+macro codegenHlsl(flavor: static HlslFlavor, body: typed): string =
   ## Compiles an `hlsl:` block body into HLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -228,12 +229,21 @@ macro codegenHlsl(body: typed): string =
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenHlsl())
+  result = newLit(ctx.codegenHlsl(flavor))
 
-macro hlsl*(body: untyped): string =
-  ## Converts the body of this macro into HLSL compute shader code.
+macro hlsl*(flavor: static HlslFlavor = fvD3D12, body: untyped): string =
+  ## Converts the body of this macro into HLSL compute shader code,
+  ## resource binding per `flavor`, D3D12-native by default.
+  ##
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
   crucibleCompileTarget = ctHlsl
-  result = newCall(bindSym"codegenHlsl", body)
+  # `flavor` is a static macro param, it reads as the value inside the body
+  result = newCall(bindSym"codegenHlsl", newLit(flavor), body)
+
+macro hlsl*(body: untyped): string =
+  ## Converts the body of this macro into HLSL compute shader code,
+  ## D3D12-native resource binding.
+  crucibleCompileTarget = ctHlsl
+  result = newCall(bindSym"codegenHlsl", newLit(fvD3D12), body)
