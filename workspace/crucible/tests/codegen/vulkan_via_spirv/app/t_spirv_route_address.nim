@@ -7,6 +7,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_spirv/app/t_spirv_route_address.nim
 
+import std/[os, osproc]
 import workspace/crucible
 
 const addSpv = spirv:
@@ -15,6 +16,21 @@ const addSpv = spirv:
     output[1] = a[1] + b[1] + z
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+  # spirv-val the module before it reaches the engine: a mis-encoded word
+  # sequence must fail here, not as a driver-side opaque launch error
+  let spirvVal = findExe("spirv-val")
+  doAssert spirvVal.len > 0,
+    "spirv-val not found on PATH, install the SPIRV-Tools (brew install spirv-tools)"
+  let outDir = "build/tests"
+  createDir(outDir)
+  let spvPath = outDir / "t_spirv_route_address.spv"
+  block:
+    var f = open(spvPath, fmWrite)
+    defer: f.close()
+    discard f.writeBuffer(addr addSpv[0], addSpv.len * 4)
+  let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & spvPath)
+  doAssert valCode == 0, "spirv-val rejected the executed module:\n" & valOut
+
   var engine = newEngine(runVulkan)
   engine.ingest(addSpv)
 
