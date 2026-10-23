@@ -13,8 +13,9 @@
 ## - q.bin, k.bin, v.bin, o.bin, all raw little-endian, contiguous row-major
 ## - mask.bin, only for the additive-mask fixtures
 ##
-## The meta checksum is the float64 sum of the expected output.
-## Loader callers use it to verify the byte replay.
+## Meta checksums: `checksum` sums the expected output in float64.
+## `input_checksums` sums each of q/k/v/mask bytes the same way.
+## Loader callers verify the byte replay against them.
 
 import std/[json, os, math]
 import workspace/ceramic/src/int_tuples
@@ -35,6 +36,8 @@ type SdpaFixtureMeta* = object
   causal*: bool
   mask*: string       # "none" | "additive"
   checksum*: float64
+  inputChecksums*: seq[(string, float64)]  # per-file byte checksums
+  maskNegInfCount*: int    # additive masks: blocked entries, excluded from the mask checksum
 
 proc readSdpaMeta*(fixtureDir: string): SdpaFixtureMeta =
   let j = parseFile(fixtureDir / "meta.json")
@@ -51,6 +54,18 @@ proc readSdpaMeta*(fixtureDir: string): SdpaFixtureMeta =
   result.causal = j["causal"].getBool()
   result.mask = j["mask"].getStr()
   result.checksum = j["checksum"].getFloat()
+  if "input_checksums" in j:
+    for name, chk in j["input_checksums"].pairs():
+      result.inputChecksums.add (name, chk.getFloat())
+  if "mask_neg_inf_count" in j:
+    result.maskNegInfCount = j["mask_neg_inf_count"].getInt()
+
+proc inputChecksum*(meta: SdpaFixtureMeta, file: string): float64 =
+  ## Recorded byte checksum of one fixture file, q/k/v/mask/o
+  for (name, chk) in meta.inputChecksums:
+    if name == file:
+      return chk
+  doAssert false, "no recorded checksum for " & file & " in " & meta.name
 
 proc rowMajorStrides4(shape: (int, int, int, int)): (int, int, int, int) =
   # contiguous (B, H, S, D): stride of the first axis covers the tail

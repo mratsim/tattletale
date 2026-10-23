@@ -11,5 +11,10 @@
  "scale": 0.17677669529663687,
  "causal": false,
  "mask": "none",
- "checksum": 147.5178853195852
+ "checksum": 147.5178853195852,
+ "input_checksums": {
+  "q.bin": 135403452.0,
+  "k.bin": 65769722.0,
+  "v.bin": 66039222.0
+ }
 }

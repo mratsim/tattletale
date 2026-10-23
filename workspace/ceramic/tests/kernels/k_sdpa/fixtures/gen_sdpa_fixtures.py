@@ -75,6 +75,18 @@ def sdpa_reference(q, k, v, mask, causal, scale):
     return o5.transpose(0, 2, 1, 3, 4).reshape(B, Hq, L, Dv)
 
 
+def checksum64(arr):
+    """f64 sum over the flat element order, matching the Nim loader.
+
+    - bf16 fixtures store uint16 bits, the values sum as exact integers
+    - the Nim side sums the same bits as float64, both sides exact
+    - float arrays sum through float64 like the Nim checksum64
+    """
+    if arr.dtype == np.uint16:
+        return float(arr.astype(np.uint64).sum())
+    return float(arr.astype(np.float64).sum())
+
+
 def write_bin(path, arr):
     arr.tofile(path)
 
@@ -118,8 +130,6 @@ def make_fixture(name, dtype, B, Hq, Hkv, L, S, Dk, Dv, scale,
         "scale": scale, "causal": causal, "mask": mask_kind,
         "checksum": float(o.sum()),
     }
-    with open(os.path.join(out, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=1)
 
     qOut, kOut, vOut = q, k, v
     if dtype == "float16":
@@ -134,6 +144,22 @@ def make_fixture(name, dtype, B, Hq, Hkv, L, S, Dk, Dv, scale,
     if mask is not None:
         write_bin(os.path.join(out, "mask.bin"), mask.astype(np.float32))
     write_bin(os.path.join(out, "o.bin"), o.astype(np.float32))
+
+    # per-file byte checksums let the Nim roundtrip verify every file,
+    # q/k/v/mask included, not just the expected output
+    inputChecksums = {
+        "q.bin": checksum64(qOut), "k.bin": checksum64(kOut),
+        "v.bin": checksum64(vOut),
+    }
+    if mask is not None:
+        # -inf entries would poison a plain sum, so the checksum covers
+        # finite values only and a separate field records the blocked count
+        finite = mask[np.isfinite(mask)]
+        inputChecksums["mask.bin"] = checksum64(finite)
+        meta["mask_neg_inf_count"] = int(np.sum(np.isneginf(mask)))
+    meta["input_checksums"] = inputChecksums
+    with open(os.path.join(out, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=1)
     print(f"{name}: dtype={dtype} B={B} Hq={Hq} Hkv={Hkv} L={L} S={S} "
           f"Dk={Dk} Dv={Dv} scale={scale} causal={causal} "
           f"mask={mask_kind} checksum={o.sum():.6f}")

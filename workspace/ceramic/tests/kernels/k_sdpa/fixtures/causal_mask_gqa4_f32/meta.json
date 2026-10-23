@@ -11,5 +11,12 @@
  "scale": 0.125,
  "causal": true,
  "mask": "additive",
- "checksum": -111.32743217576203
+ "checksum": -111.32743217576203,
+ "mask_neg_inf_count": 263,
+ "input_checksums": {
+  "q.bin": -11.38976197603995,
+  "k.bin": -19.11058862012578,
+  "v.bin": 26.192636567517184,
+  "mask.bin": 0.0
+ }
 }
