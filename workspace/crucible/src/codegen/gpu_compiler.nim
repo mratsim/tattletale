@@ -74,6 +74,7 @@ proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
     # - WGSL module-scope vars are per-invocation private and keep their own semantics
     for stmt in varBlock.statements.mitems:
       if stmt.kind == gpuVar and stmt.addressSpace == asRMEM:
+        stmt.addressSpace = asConstant
         stmt.vType = stmt.vType.withAddressSpace(asConstant)
         stmt.vName.symbol.typ = stmt.vType
     ctx.globalBlocks.add varBlock
