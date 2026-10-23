@@ -36,20 +36,14 @@ func reduceIdentity*[T](op: static ReduceOp): T =
     result = zero(T)
   elif op == roMax:
     when T is SomeFloat:
-      let s = T(-1)
-      result = s / zero(T)
+      result = T(-Inf)
     else:
       result = low(T)
   else:
     when T is SomeFloat:
-      let s = T(1)
-      result = s / zero(T)
+      result = T(Inf)
     else:
       result = high(T)
-  # The float infinities come from a runtime ±1/0 division:
-  # Nim cannot carry an infinity literal into device code.
-  # `float32(-Inf)` folds to a fp64 literal, the MSL backend rejects it.
-  # The folded `-1.0'f32/0.0'f32` emits the invalid MSL token `inff`.
 
 proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, clear: static bool) {.inline.} =
   ## Two-phase warp-scope reduction of a register tile into `dst`.
