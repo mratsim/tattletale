@@ -198,8 +198,8 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ##
   ## Contract:
   ## - `order[i]` ranks dimension i: smaller value = faster-varying (smaller stride)
-  ## - ties keep left-to-right position
-  ## - dynamic entries rank after every static entry
+  ## - ties keep left-to-right position, dynamic entries rank after every
+  ##   static entry
   ## - the order is compile-time per contract
   ## - shape and order carry equal flat rank, mismatches refuse loudly
   ##   at compile time
@@ -274,9 +274,10 @@ template make_ordered_layout*(shape, order: untyped): auto =
   ##
   ## Expansion happens at the call site. Static promotion rewrites literal
   ## leaves of both operands into `Int[...]` nodes before the algebra runs,
-  ## a runtime leaf stays verbatim.
-  ## Promotion sees literal leaves only. A `const` symbol folds in the VM,
-  ## a `let` symbol is a runtime leaf, values verbatim, strides runtime.
+  ## a runtime leaf stays verbatim:
+  ##
+  ## - a `const` symbol folds in the VM
+  ## - a `let` symbol is a runtime leaf, values verbatim, strides runtime
   make_ordered_layout_impl(makeIntTuple(shape), orderIntTuple(order))
 
 # ═══════════════════════════════════════════════════════════════
