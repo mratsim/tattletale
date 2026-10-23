@@ -87,10 +87,7 @@ const
 
   VK_SUCCESS* = VkResult(0)
 
-  # Structure types: values are the VkStructureType numbering from Vulkan-Headers
-  # vk.xml / vulkan_core.h, Vulkan 1.4 header version 363
-  # (extension structs keep their vendor-range values).
-  # The block lists the constants the runtime uses, not the enum.
+  # VkStructureType values: Vulkan-Headers vk.xml, core 1.4 header 363
   VK_STRUCTURE_TYPE_APPLICATION_INFO* = VkStructureType(0)
   VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO* = VkStructureType(1)
   VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO* = VkStructureType(2)
