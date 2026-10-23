@@ -190,3 +190,66 @@ static:
     ctx.fnTab[fn.pName] = fn
   registerInlineKernelCallees.runPassPrepared(ctx)
   doAssert ctx.fnTab.len == 1, "the unreachable callees drop transitively, got " & $ctx.fnTab.len
+
+proc makeLimitCallee(): GpuAst =
+  ## `proc limit(): uint32` with no parameters
+  GpuAst(kind: gpuProc,
+    pName: GpuAst(kind: gpuIdent, symbol: newSymbol("limit", iSym = "limit")),
+    pRetType: GpuType(kind: gtUint32),
+    pBody: GpuAst(kind: gpuBlock, statements: @[
+      GpuAst(kind: gpuReturn, rValue: lit("4"))]))
+
+proc makeGuardedKernel(calleeName: string): GpuAst =
+  ## `if limit() > 0: output[0] = 0`, the if condition evaluates once, its call hoists legally
+  let output = GpuAst(kind: gpuIdent, symbol: newSymbol("output", iSym = "output",
+    typ = initGpuPtrType(GpuType(kind: gtUncheckedArray, uaTo: GpuType(kind: gtUint32)), implicitPtr = false), symKind = gsGlobalKernelParam))
+  result = GpuAst(kind: gpuProc,
+    pName: GpuAst(kind: gpuIdent, symbol: newSymbol("k", iSym = "k")),
+    pRetType: GpuType(kind: gtVoid),
+    pAttributes: {attGlobal},
+    pParams: @[GpuParam(ident: output.clone(), typ: output.symbol.typ)],
+    pBody: GpuAst(kind: gpuBlock, statements: @[
+      GpuAst(kind: gpuIf,
+        ifCond: binop(">",
+          GpuAst(kind: gpuCall,
+            cName: GpuAst(kind: gpuIdent, symbol: newSymbol(calleeName, iSym = calleeName)),
+            cArgs: @[]),
+          lit("0")),
+        ifThen: GpuAst(kind: gpuBlock, statements: @[
+          GpuAst(kind: gpuAssign, aLeft: GpuAst(kind: gpuIndex,
+                  iArr: output.clone(), iIndex: lit("0")),
+                 aRight: lit("0"))]),
+        ifElse: GpuAst(kind: gpuDiscard))]))
+
+static:
+  # legal boundary: a device call in an if condition evaluates once, it hoists to a temporary before the if, the branch body splices around it
+  var ctx = GpuContext()
+  let callee = makeLimitCallee()
+  let kernel = makeGuardedKernel("limit")
+  for fn in @[callee, kernel]:
+    ctx.allFnTab[fn.pName] = fn
+    ctx.fnTab[fn.pName] = fn
+  registerInlineKernelCallees.runPassPrepared(ctx)
+
+  let stmts = kernel.pBody.statements
+  doAssert stmts.len == 3, "the call hoists to one temp plus its splice, got " & $stmts.len
+  doAssert stmts[0].kind == gpuVar and stmts[0].vName.symbol.name == "call_0",
+    stmts[0].vName.symbol.name
+  doAssert stmts[1].aLeft.symbol.name == "call_0", "the splice targets the temp"
+  doAssert stmts[2].kind == gpuIf, $stmts[2].kind
+  doAssert stmts[2].ifCond.kind == gpuBinOp and stmts[2].ifCond.bLeft.symbol.name == "call_0",
+    "the condition reads the temp, it did not move into a branch"
+  doAssert ctx.fnTab.len == 1, "the spliced callee drops from fnTab"
+
+static:
+  # hazard negative: a short-circuit operand without a device call passes through untouched
+  var ctx = GpuContext()
+  let kernel = makeGuardedKernel("max")
+  ctx.fnTab[kernel.pName] = kernel
+  registerInlineKernelCallees.runPassPrepared(ctx)
+  let ifNode = kernel.pBody.statements[0]
+  doAssert ifNode.kind == gpuIf, $ifNode.kind
+  doAssert ifNode.ifCond.kind == gpuBinOp and ifNode.ifCond.bLeft.kind == gpuCall and
+    ifNode.ifCond.bLeft.cName.symbol.name == "max",
+    "an intrinsic call is not a device call, the condition keeps the call"
+  doAssert ifNode.ifCond.bRight.lValue == "0", "the non-call operand stays untouched"

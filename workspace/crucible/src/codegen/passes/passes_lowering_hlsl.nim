@@ -415,6 +415,22 @@ proc hoistExpr(ctx: var GpuContext, st: var KernelSplicer, pre: var seq[GpuAst],
                    vMutable: true, addressSpace: asRMEM)
     pre.add ctx.inlineCall(st, n, GpuAst(kind: gpuIdent, symbol: tmpSym))
     result = GpuAst(kind: gpuIdent, symbol: tmpSym)
+  of gpuBinOp:
+    if not n.bOp.symbol.isNil and n.bOp.symbol.name in ["&&", "||"] and
+        (ctx.containsSpliceableCall(n.bLeft) or ctx.containsSpliceableCall(n.bRight)):
+      error "HLSL: device function call in a short-circuit operand cannot inline, " &
+        "the operand evaluates conditionally"
+    result = n
+    for ch in mitems(result):
+      ch = ctx.hoistExpr(st, pre, ch)
+  of gpuTernary:
+    # the condition evaluates once, its device calls hoist legally, the branches do not
+    if ctx.containsSpliceableCall(n.tThen) or ctx.containsSpliceableCall(n.tElse):
+      error "HLSL: device function call in a ternary branch cannot inline, " &
+        "the branch evaluates conditionally"
+    result = n
+    for ch in mitems(result):
+      ch = ctx.hoistExpr(st, pre, ch)
   of gpuAddr:
     if ctx.containsSpliceableCall(n.aOf):
       error "HLSL: address-of a device function call cannot inline"
@@ -468,6 +484,10 @@ proc inlineStmts(ctx: var GpuContext, st: var KernelSplicer, stmts: seq[GpuAst])
       var pre: seq[GpuAst]
       s.ifCond = ctx.hoistExpr(st, pre, s.ifCond)
       for el in s.ifElifs.mitems:
+        # an elif condition evaluates only when reached, its device calls cannot hoist before the if
+        if ctx.containsSpliceableCall(el.cond):
+          error "HLSL: device function call in an elif condition cannot inline, " &
+            "the condition evaluates only when reached"
         el.cond = ctx.hoistExpr(st, pre, el.cond)
       result.add pre
       s.ifThen = toBlock(ctx.inlineStmts(st, blockStatements(s.ifThen)))
