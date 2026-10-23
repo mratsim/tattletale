@@ -23,9 +23,7 @@ import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/backends/lean_lang
 import lean_testutils
 
-const genSpecRelPath = leanProjectDir & "/generated/add_spec.lean"
-const genWrongPostRelPath = leanProjectDir & "/generated/add_spec_wrong_post.lean"
-const genWrongInvRelPath = leanProjectDir & "/generated/add_spec_wrong_inv.lean"
+const genDir = leanProjectDir & "/generated"
 
 proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
   ## Manifest scaffold entry of the given kind
@@ -42,12 +40,12 @@ proc runTest() =
         if i < 2:
           output[i] = a[i] + b[i]
 
-    let emitted = emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genSpecRelPath)
+    let emitted = emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genDir, "add_spec.lean")
     doAssert "theorem addBody_invariant" in emitted, "invariant scaffold emitted"
     doAssert "theorem addBody_postcondition" in emitted, "postcondition scaffold emitted"
     doAssert "sorry" notin emitted, "no scaffold needed the downgrade"
 
-    let manifest = parseJson(readFile(genSpecRelPath.changeFileExt("manifest.json")))
+    let manifest = parseJson(readFile(genDir / "add_spec.lean".changeFileExt("manifest.json")))
     doAssert manifest["kernel"].getStr() == "addKernel", "manifest names the kernel"
     doAssert manifest["module"].getStr() == "generated/add_spec.lean"
     let pre = scaffoldEntry(manifest, "precondition")
@@ -74,14 +72,14 @@ proc runTest() =
         if i < 2:
           output[i] = a[i] + b[i]
 
-    discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genWrongPostRelPath)
-    let manifest = parseJson(readFile(genWrongPostRelPath.changeFileExt("manifest.json")))
+    discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genDir, "add_spec_wrong_post.lean")
+    let manifest = parseJson(readFile(genDir / "add_spec_wrong_post.lean".changeFileExt("manifest.json")))
     let post = scaffoldEntry(manifest, "postcondition")
     doAssert post["proven"].getBool() == false, "wrong postcondition recorded unproven"
     doAssert post["error"].getStr().len > 0, "Lean error excerpt recorded"
     echo "  wrong postcondition manifest entry: ", post.pretty
 
-    let emitted = readFile(genWrongPostRelPath)
+    let emitted = readFile(genDir / "add_spec_wrong_post.lean")
     doAssert "sorry" in emitted, "proof downgraded to a sorry-backed scaffold"
     let (_, code) = elaborate("generated/add_spec_wrong_post.lean")
     doAssert code != 0, "the sorry-backed module must fail under warningAsError"
@@ -94,8 +92,8 @@ proc runTest() =
         if i < 2:
           output[i] = a[i] + b[i]
 
-    discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genWrongInvRelPath)
-    let manifest = parseJson(readFile(genWrongInvRelPath.changeFileExt("manifest.json")))
+    discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, genDir, "add_spec_wrong_inv.lean")
+    let manifest = parseJson(readFile(genDir / "add_spec_wrong_inv.lean".changeFileExt("manifest.json")))
     let inv = scaffoldEntry(manifest, "invariant")
     doAssert inv["proven"].getBool() == false, "wrong invariant recorded unproven"
     doAssert inv["error"].getStr().len > 0, "Lean error excerpt recorded"
@@ -204,7 +202,8 @@ exit 1
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: proof settling failed - 1 lean error line(s) carry no " &
             "file:line position", proc() =
-          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath))
+          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs,
+            negDir & "/generated", "add_spec_neg.lean"))
     putEnv("PATH", savedPath)
     doAssert not fileExists(negOutPath),
       "no unverified first-pass module may stay on disk after the refusal"
@@ -244,7 +243,8 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: proof settling failed - lean exited with 1 but no error was " &
             "attributable to a scaffold: ", proc() =
-          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs, negOutPath))
+          discard emitLeanModuleWithSpecs(k.gpu.statements[0], k.specs,
+            negDir & "/generated", "add_spec_neg.lean"))
     doAssert not fileExists(negOutPath),
       "no unverified first-pass module may stay on disk after the refusal"
     doAssert not fileExists(negOutPath.changeFileExt("settling.lean")),
@@ -261,7 +261,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: invalid spec payload - expected an identifier or a uint " &
             "literal, got ''", proc() =
-          discard emitLeanModuleWithSpecs(unparseable.gpu.statements[0], unparseable.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(unparseable.gpu.statements[0], unparseable.specs, genDir))
 
     let unknownIdent = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "bogus tid = a tid".} =
@@ -270,7 +270,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: invalid spec payload - 'bogus tid' is not a read of a kernel " &
             "buffer parameter", proc() =
-          discard emitLeanModuleWithSpecs(unknownIdent.gpu.statements[0], unknownIdent.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(unknownIdent.gpu.statements[0], unknownIdent.specs, genDir))
 
     let badPrecondition = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "n < tid".} =
@@ -279,7 +279,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported precondition payload 'n < tid' - the tracer " &
             "model's launch precondition is `tid < n`", proc() =
-          discard emitLeanModuleWithSpecs(badPrecondition.gpu.statements[0], badPrecondition.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(badPrecondition.gpu.statements[0], badPrecondition.specs, genDir))
 
     let bufferInvariant = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a tid < n".} =
@@ -289,7 +289,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
     expectRefusal("lean_lang: unsupported invariant payload 'a tid < n' - the tracer " &
             "invariant must be implied by the guard `tid < n` and mention both " &
             "`tid` and `n`", proc() =
-          discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0], bufferInvariant.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0], bufferInvariant.specs, genDir))
 
     let plain = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
@@ -298,7 +298,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported spec pragma 'sidecondition'", proc() =
           discard emitLeanModuleWithSpecs(plain.gpu.statements[0],
-            @[RawSpec(name: "sidecondition", payload: "tid < n")], genSpecRelPath))
+            @[RawSpec(name: "sidecondition", payload: "tid < n")], genDir))
     echo "  refusals on out-of-scope payloads: ok"
 
   block: # a pragma-less proc (no `{.global.}`) is refused loudly
@@ -310,7 +310,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
         if i < 2:
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported GpuAst node gpuProc - kernel is not `{.global.}`", proc() =
-          discard emitLeanModuleWithSpecs(plain.gpu.statements[0], plain.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(plain.gpu.statements[0], plain.specs, genDir))
     echo "  refusal on a pragma-less (not `{.global.}`) kernel proc: ok"
 
   block: # a multi-kernel block is refused loudly at expansion time
@@ -355,7 +355,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
     expectRefusal("lean_lang: more than one 'invariant' pragma on the kernel", proc() =
           discard emitLeanModuleWithSpecs(dup.gpu.statements[0], @[
             RawSpec(name: "invariant", payload: "tid < n"),
-            RawSpec(name: "invariant", payload: "tid < n")], genSpecRelPath))
+            RawSpec(name: "invariant", payload: "tid < n")], genDir))
     echo "  refusal on a duplicate pragma of one kind: ok"
 
   block: # refusal on a postcondition not mentioning the written buffer
@@ -366,7 +366,7 @@ generated/add_spec.lean: error: unknown constant 'foo'
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported postcondition payload 'tid < n' - it must " &
             "mention the written buffer 'output'", proc() =
-          discard emitLeanModuleWithSpecs(badPost.gpu.statements[0], badPost.specs, genSpecRelPath))
+          discard emitLeanModuleWithSpecs(badPost.gpu.statements[0], badPost.specs, genDir))
     echo "  refusal on a postcondition not mentioning the written buffer: ok"
 
   block: # refusal on an emission outside any lake project

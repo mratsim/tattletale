@@ -23,7 +23,7 @@ import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/backends/lean_lang
 import lean_testutils
 
-const genAxpyRelPath = leanProjectDir & "/generated/axpy.lean"
+const genDir = leanProjectDir & "/generated"
 const genAxpyExecRelPath = leanProjectDir & "/generated/axpy_exec.lean"
 
 proc runTest() =
@@ -33,13 +33,13 @@ proc runTest() =
         for i in 0 ..< 2:
           output[i] = alpha * a[i] + b[i]
 
-    let emitted = emitLeanModule(ir.statements[0], genAxpyRelPath)
+    let emitted = emitLeanModule(ir.statements[0], genDir)
     doAssert "def axpyLoop " in emitted, "the loop stays a recursive def in Lean"
     doAssert "def axpyBody " in emitted, "entry-point def emitted"
     doAssert "(alpha : UInt32)" in emitted, "the scalar maps to a UInt32 argument"
     doAssert "alpha * a j" in emitted, "the multiply is in the stored value"
 
-    let (outp, code) = elaborate("generated/axpy.lean")
+    let (outp, code) = elaborate("generated/axpy.autogen.lean")
     doAssert code == 0, "Lean rejected the emitted axpy module:\n" & outp
     doAssert "sorry" notin outp, "no sorry under warningAsError"
     echo "  axpy emission + elaboration (warningAsError): ok"
@@ -56,7 +56,7 @@ proc runTest() =
     for j in 0 ..< 2:
       expected[j] = 4'u32 * a[j] + b[j]
 
-    let harness = readFile(genAxpyRelPath) & """
+    let harness = readFile(genDir / "axpy.autogen.lean") & """
 
 def main : IO Unit := do
   let a : Nat → UInt32 := fun i => if i = 0 then 2 else if i = 1 then 3 else 0
@@ -85,7 +85,7 @@ def main : IO Unit := do
           output[i] = alpha * a[i] + b[i] + beta
     expectRefusal("lean_lang: unsupported GpuAst node gpuProc - more than one uint32 scalar " &
             "parameter", proc() =
-          discard emitLeanModule(twoScalars.statements[0], genAxpyRelPath))
+          discard emitLeanModule(twoScalars.statements[0], genDir))
 
     let wrongScalarType = irLean:
       proc wrongScalarType(output, a, b: ptr UncheckedArray[uint32], alpha: int32) {.global.} =
@@ -93,7 +93,7 @@ def main : IO Unit := do
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported GpuAst node gpuProc - parameter 'alpha' is neither " &
             "a ptr UncheckedArray[uint32] buffer nor a uint32 scalar", proc() =
-          discard emitLeanModule(wrongScalarType.statements[0], genAxpyRelPath))
+          discard emitLeanModule(wrongScalarType.statements[0], genDir))
 
     let guardedWithScalar = irLean:
       proc guardedWithScalar(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global.} =
@@ -102,7 +102,7 @@ def main : IO Unit := do
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported GpuAst node gpuProc - scalar parameter 'alpha' on " &
             "the guarded-thread shape", proc() =
-          discard emitLeanModule(guardedWithScalar.statements[0], genAxpyRelPath))
+          discard emitLeanModule(guardedWithScalar.statements[0], genDir))
 
     # a scalar named `j` would be shadowed by the emitted update binder.
     # A loop variable named like the scalar leaves the binder unread.
@@ -113,7 +113,7 @@ def main : IO Unit := do
           output[i] = j * a[i] + b[i]
     expectRefusal("lean_lang: unsupported GpuAst node gpuProc - scalar parameter 'j' collides " &
             "with the emitted update binder 'j' of the loop shape", proc() =
-          discard emitLeanModule(scalarNamedJ.statements[0], genAxpyRelPath))
+          discard emitLeanModule(scalarNamedJ.statements[0], genDir))
 
     let loopVarNamedScalar = irLean:
       proc loopVarNamedScalar(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global.} =
@@ -121,7 +121,7 @@ def main : IO Unit := do
           output[alpha] = a[alpha] + b[alpha]
     expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop variable 'alpha' collides " &
             "with a kernel buffer parameter", proc() =
-          discard emitLeanModule(loopVarNamedScalar.statements[0], genAxpyRelPath))
+          discard emitLeanModule(loopVarNamedScalar.statements[0], genDir))
 
     let withSpec = irLeanSpec:
       proc axpySpec(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global, invariant: "i < 2".} =
@@ -130,7 +130,7 @@ def main : IO Unit := do
     expectRefusal("lean_lang: unsupported spec pragma 'invariant' on kernel 'axpySpec' - the " &
             "scalar-parameter (axpy) shape is outside the scaffold model", proc() =
           discard emitLeanModuleWithSpecs(withSpec.gpu.statements[0], withSpec.specs,
-            genAxpyRelPath))
+            genDir))
     echo "  refusals on kernels outside the axpy shape: ok"
 
 
@@ -140,7 +140,7 @@ def main : IO Unit := do
         for i in alpha ..< 4:
           output[i] = a[i] + b[i]
     expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop start is not a compile-time literal", proc() =
-          discard emitLeanModule(scalarStart.statements[0], genAxpyRelPath))
+          discard emitLeanModule(scalarStart.statements[0], genDir))
     echo "  refusal on a loop bound that starts at the scalar parameter: ok"
 
 when isMainModule:

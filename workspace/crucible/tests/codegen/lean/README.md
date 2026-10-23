@@ -7,6 +7,9 @@ shapes only and refuses everything else loudly:
 - the guarded thread: buffers `a` and `b` read, `output` written, guard `tid < literal`
 - the constant-bound loop with one indexed write (the axpy shape adds one uint32 scalar)
 
+Emitted modules default to the `<kernel>.autogen.lean` name. The suffix marks
+machine-emitted modules against hand-written ones like `AddKernel.lean`.
+
 This directory holds the locked Lean project plus the suite tests.
 The emitted modules elaborate against the project's lake environment.
 

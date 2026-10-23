@@ -10,7 +10,8 @@
 ##   post-pass GpuAst (one `{.global.}` kernel) → this printer → Lean module + JSON manifest
 ##
 ## Walks the GpuAst of one `{.global.}` kernel, emitting the body def plus derived
-## spec theorems. Anything outside the two supported kernel shapes raises a loud `lean_lang: unsupported ...` ValueError:
+## spec theorems. Anything outside the two supported shapes raises a loud
+## `lean_lang: unsupported ...` ValueError:
 ## - guarded thread (the `AddKernel.lean` model): buffers `a`, `b` (read) +
 ##   `output` (written), let-bound `thread_position_in_grid.x` (the Lean `tid`),
 ##   one bare `if` with guard `tidVar < literal`, positive literal `n` (the length)
@@ -22,8 +23,6 @@
 ## - `{.postcondition.}` - stated against the per-thread body, attempted with the derived `simp` scripts (guarded thread only)
 ##
 ## A failed scaffold proof is downgraded to a `sorry`-backed scaffold, recorded unproven in a JSON manifest beside the module.
-## The pragma payloads use the payload language defined
-## in the `lean_pragmas` section below.
 
 import std/[json, macros, os, osproc, sets, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
@@ -1047,10 +1046,10 @@ proc findLakeDir(outPath: string): string =
       "lean_lang: no lakefile.lean above the emitted module " & outPath)
   result = dir
 
-proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: string): string =
+proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], genDir: string, module = ""): string =
   ## Emits the Lean 4 verification module for one global kernel, with one spec scaffold per captured verification pragma.
   ##
-  ## - writes the module to `outPath` and returns its text
+  ## - writes `genDir / module` and returns its text, default name `<kernel>.autogen.lean` (the `Kernel` suffix stripped)
   ## - with no pragmas the module is byte-identical to the hand-written
   ##   AddKernel.lean statements
   ## - refuses loudly (ValueError, "lean_lang: ...") on any out-of-scope
@@ -1062,6 +1061,11 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
   ##   `<module>.settling.lean` and dropped on every refusal, so no unverified
   ##   module and no manifest stay on disk
   let model = analyzeKernel(kernel)
+  let base = if model.kernelName.endsWith("Kernel"):
+      model.kernelName[0 ..< ^6]
+    else:
+      model.kernelName
+  let outPath = genDir / (if module == "": base & ".autogen.lean" else: module)
   createDir(parentDir(outPath))
   result = leanHeader & "\n" & emitModuleDoc(model) & "\n" &
     emitBodyDef(model) & "\n" & emitTheorems(model)
@@ -1181,13 +1185,14 @@ proc emitLeanModuleWithSpecs*(kernel: GpuAst, specs: seq[RawSpec], outPath: stri
   writeFile(outPath.changeFileExt("manifest.json"), manifest.pretty & "\n")
   result = text
 
-proc emitLeanModule*(kernel: GpuAst, outPath: string): string =
+proc emitLeanModule*(kernel: GpuAst, genDir: string, module = ""): string =
   ## Emits the Lean 4 verification module of one global kernel:
   ## the per-thread body def plus derived spec theorems.
-  ## - writes the module to `outPath` and returns its text
+  ## - writes the module to `genDir / module` and returns its text
+  ## - `module` defaults to `<kernel>.autogen.lean` (the `Kernel` suffix stripped)
   ## - refuses loudly (ValueError, "lean_lang: unsupported ...") on any
   ##   construct outside the tracer's scope
-  emitLeanModuleWithSpecs(kernel, @[], outPath)
+  emitLeanModuleWithSpecs(kernel, @[], genDir, module)
 
 # ── Verification pragmas ─────────────────────────────────────────────────────
 
