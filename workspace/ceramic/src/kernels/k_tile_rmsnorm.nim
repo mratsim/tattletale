@@ -24,11 +24,6 @@ proc rmsnormStridedImpl(dst, src, weight: distinct TensorView, eps: float32, axi
   ##   the row strips' own layouts
   ## - rows off the tensor's end stay idle
   ##
-  ## The row map: the non-reduced part's compact order over the runtime rows,
-  ## built inside device code by `make_ordered_layout`. Each flat row index
-  ## decomposes through the map, the coordinates then walk the real strides
-  ## of the strips.
-  ##
   ## Loads and stores coalesce when the non-reduced part's compact order is
   ## memory-consecutive (non-reduced stride 1, the column-major case).
   ## Correct but strided otherwise.
@@ -42,32 +37,30 @@ proc rmsnormStridedImpl(dst, src, weight: distinct TensorView, eps: float32, axi
     gridStride = getGridSize()
     rowSize = src.diceAxes(axis).size()
     rowBlock0 = getLocalTileID(src.shape) * W
-  when nonReduced.rank() == 0:
-    template rowStrips(rowCrd: untyped): untyped =
-      # a rank-1 src keeps no non-reduced dimension, the strip is the full tensor
-      (src, dst)
-  else:
-    const nr: int = nonReduced.rank()
-    const identityOrder = block:
-      var r: array[nr, int]
-      staticFor i, 0, nr:
-        r[i] = i
-      r
-    let
-      rowMap = make_ordered_layout(nonReduced.shape, identityOrder)
-      dstNonReduced = dst.sliceAxes(axis)
-      dstReduced = dst.diceAxes(axis)
-    template rowStrips(rowCrd: untyped): untyped =
-      (make_view(src.data +% crd2idx(nonReduced, rowCrd), reduced), make_view(dst.data +% crd2idx(dstNonReduced, rowCrd), dstReduced))
+  const nr: int = nonReduced.rank()
+  const identityOrder = block:
+    var r: array[nr, int]
+    staticFor i, 0, nr:
+      r[i] = i
+    r
+  let
+    rowMap = make_ordered_layout(nonReduced.shape, identityOrder)
+    dstNonReduced = dst.sliceAxes(axis)
+    dstReduced = dst.diceAxes(axis)
   for blk0 in countup(rowBlock0, rows - 1, gridStride * W):
     let
       rowFlat = blk0 + thrID
       rowActive = rowFlat < rows
       fullEnd = rowSize.round_multiple_down(depthOwn)
     when nonReduced.rank() == 0:
-      let (srcRow, dstRow) = rowStrips(())
+      let
+        srcRow = src
+        dstRow = dst
     else:
-      let (srcRow, dstRow) = rowStrips(idx2crd(rowMap, rowFlat))
+      let
+        rowCrd = idx2crd(rowMap, rowFlat)
+        srcRow = make_view(src.data +% crd2idx(nonReduced, rowCrd), reduced)
+        dstRow = make_view(dst.data +% crd2idx(dstNonReduced, rowCrd), dstReduced)
     var acc = zero(float32)
     if rowActive:
       var accs: array[depthOwn, float32]
