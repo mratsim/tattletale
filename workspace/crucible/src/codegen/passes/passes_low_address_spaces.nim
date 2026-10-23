@@ -211,6 +211,8 @@ proc instantiateStructTypesIn(ctx: var GpuContext, n: var GpuAst) =
     ctx.instantiateStructTypesIn(n.vInit)
   of gpuObjConstr:
     discard ctx.instantiateStructConstr(n)
+    for f in n.ocFields.mitems:
+      ctx.instantiateStructTypesIn(f.value)
   else:
     for ch in n.mitems:
       ctx.instantiateStructTypesIn(ch)

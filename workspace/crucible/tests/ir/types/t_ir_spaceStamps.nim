@@ -255,6 +255,61 @@ static:
     $constr.ocType.fields[0].typ.addressSpace
   echo "  OK - a construction inside an instantiated callee specializes"
 
+# ── 1e. A construction nested inside another construction specializes too ──
+static:
+  let ir = toCrucibleAst:
+    type
+      Inner = object
+        p: ptr float32
+      Outer = object
+        i: Inner
+    proc build(x: ptr float32): Outer {.device.} =
+      result = Outer(i: Inner(p: x))
+    proc kern(outp: ptr float32) {.global.} =
+      var tmp: float32
+      var h = build(addr tmp)
+      outp[] = h.i.p[]
+
+  var ctx = GpuContext()
+  var kern: GpuAst = nil
+  for stmt in ir.statements:
+    if stmt.kind == gpuProc:
+      ctx.allFnTab[stmt.pName] = stmt
+      if stmt.pName.symbol.name == "kern":
+        kern = stmt
+        ctx.fnTab[stmt.pName] = stmt
+
+  proc findBuildCall(n: GpuAst): GpuAst =
+    if n.isNil:
+      return nil
+    if n.kind == gpuCall and n.cName.symbol.name == "build":
+      return n
+    for ch in n.items:
+      let found = ch.findBuildCall()
+      if not found.isNil:
+        return found
+  let buildCall = kern.pBody.findBuildCall()
+
+  proc registerInstantiate(reg: var PassRegistry) {.nimcall.} =
+    reg.registerInstantiateImplicitAddressSpaceGenerics()
+  registerInstantiate.runPassPrepared(ctx)
+
+  let instBuild = ctx.allFnTab[buildCall.cName]
+  proc findConstrs(n: GpuAst, into: var seq[GpuAst]) =
+    if n.isNil:
+      return
+    if n.kind == gpuObjConstr:
+      into.add n
+    for ch in n.items:
+      ch.findConstrs(into)
+  var constrs: seq[GpuAst]
+  instBuild.pBody.findConstrs(constrs)
+  doAssert constrs.len == 2, "outer and nested construction, got " & $constrs.len
+  doAssert constrs[1].ocType.fields[0].typ.addressSpace == asRMEM,
+    "the nested construction binds a thread-space field init, got " &
+    $constrs[1].ocType.fields[0].typ.addressSpace
+  echo "  OK - a nested construction specializes"
+
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
