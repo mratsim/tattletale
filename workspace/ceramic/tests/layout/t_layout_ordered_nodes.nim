@@ -95,6 +95,15 @@ proc runOrderRegimeTests =
     doAssert l === ((2, 3, 4), (4, 8, 1))
     echo "    12. Int-node and runtime order leaves mix: OK"
 
+proc runRefusalTests =
+  block:
+    doAssert not compiles(make_ordered_layout((2, 3, 4), 1))
+    echo "    13. scalar order on a rank-3 shape refuses at compile time: OK"
+
+  block:
+    doAssert not compiles(make_ordered_layout((2, 3), (0, 1, 2)))
+    echo "    14. overlong order tuple refuses at compile time: OK"
+
 proc runTests =
   echo "--- static result types ---"
   runStaticTypeTests()
@@ -102,6 +111,8 @@ proc runTests =
   runRuntimeLeafTests()
   echo "--- order regimes ---"
   runOrderRegimeTests()
+  echo "--- rank refusals ---"
+  runRefusalTests()
 
 when isMainModule:
   runTests()

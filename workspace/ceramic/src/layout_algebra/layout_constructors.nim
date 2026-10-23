@@ -154,6 +154,13 @@ func orderLeafRank(t: typedesc[int]): static int =
 func orderLeafRank[V: static int](t: typedesc[Int[V]]): static int =
   V
 
+template orderFlatRank(order: IntOrIntTuple): static int =
+  ## Flat leaf count of an order operand, nested tuples included.
+  flatten(order).rank()
+
+template orderFlatRank[I: static int, T](order: array[I, T]): static int =
+  order.len
+
 func leafAt[T: tuple](t: T, i: static int): auto =
   t[i]
 
@@ -199,6 +206,8 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ## - ties keep left-to-right position
   ## - dynamic entries rank after every static entry
   ## - the order is compile-time per contract
+  ## - shape and order carry equal flat rank, mismatches refuse loudly
+  ##   at compile time
   ##
   ## - static shape leaves are `Int[...]` nodes, their products fold at compile time
   ## - any runtime leaf turns the strides it touches into plain runtime arithmetic
@@ -206,6 +215,8 @@ func compactOrderStrides*[Sh: IntOrIntTuple](shape: Sh, order: static auto): aut
   ## - order ranks and product scheduling are compile-time, leaf products are
   ##   ordinary expressions evaluated by overload resolution
   const n: int = Sh.rank()
+  static: doAssert orderFlatRank(order) == n,
+    "make_ordered_layout: shape and order of equal flat rank required"
   stridesTuple(shape, orderedPermPos(n, order))
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto): auto =
@@ -213,6 +224,8 @@ func make_ordered_layout_impl[Sh: IntOrIntTuple](shape: Sh, order: static auto):
 
 func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O): auto =
   const n: int = Sh.rank()
+  static: doAssert orderFlatRank(order) == n,
+    "make_ordered_layout: shape and order of equal flat rank required"
   const ranks = block:
     var r: array[n, int]
     staticFor i, 0, n:
