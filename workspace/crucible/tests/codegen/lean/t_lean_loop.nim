@@ -245,6 +245,34 @@ proc runTest() =
             boundInvariant.specs, genLoopInvRelPath))
     echo "  refusals on loop-shape pragma payloads: ok"
 
+
+  block: # refusal on an unsupported binary operator in the loop shape
+    let subKernel = irLean:
+      proc subKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        for i in 0 ..< 4:
+          output[i] = a[i] - b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuBinOp - binary operator '-'", proc() =
+          discard emitLeanModule(subKernel.statements[0], genLoopRelPath))
+    echo "  refusal on an unsupported binary operator in the loop shape: ok"
+
+  block: # refusal on a loop variable colliding with a buffer parameter
+    let loopVarA = irLean:
+      proc loopVarAKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        for a in 0 ..< 4:
+          output[a] = b[a] + b[a]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop variable 'a' collides with a kernel buffer parameter", proc() =
+          discard emitLeanModule(loopVarA.statements[0], genLoopRelPath))
+    echo "  refusal on a loop variable colliding with a buffer parameter: ok"
+
+  block: # refusal on a written buffer other than output in the loop shape
+    let writesA = irLean:
+      proc writesAKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        for i in 0 ..< 4:
+          a[i] = output[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - the written buffer must be `output` - got 'a'", proc() =
+          discard emitLeanModule(writesA.statements[0], genLoopRelPath))
+    echo "  refusal on a written buffer other than output in the loop shape: ok"
+
 when isMainModule:
   runTest()
   echo "t_lean_loop: all checks passed"

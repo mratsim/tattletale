@@ -135,6 +135,16 @@ def main : IO Unit := do
             genAxpyRelPath))
     echo "  refusals on kernels outside the axpy shape: ok"
 
+
+  block: # refusal on a loop bound that starts at the scalar parameter
+    let scalarStart = irLean:
+      proc scalarStartKernel(output, a, b: ptr UncheckedArray[uint32], alpha: uint32) {.global.} =
+        for i in alpha ..< 4:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuFor - loop start is not a compile-time literal", proc() =
+          discard emitLeanModule(scalarStart.statements[0], genAxpyRelPath))
+    echo "  refusal on a loop bound that starts at the scalar parameter: ok"
+
 when isMainModule:
   runTest()
   echo "t_lean_execute: all checks passed"

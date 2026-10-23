@@ -139,6 +139,108 @@ proc runTest() =
       discard emitLeanModule(nested.statements[0], genRelPath))
     echo "  refusal on nested indexing: ok"
 
+
+  block: # refusal on a kernel body with no buffer write
+    let noWrite = irLean:
+      proc noWriteKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - no buffer write found in the kernel body", proc() =
+          discard emitLeanModule(noWrite.statements[0], genRelPath))
+    echo "  refusal on a kernel body with no buffer write: ok"
+
+  block: # refusal on a guard outside the `tidVar < literal` shape
+    let leGuard = irLean:
+      proc leGuardKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i <= 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - guard is not of the shape `tidVar < literal`", proc() =
+          discard emitLeanModule(leGuard.statements[0], genRelPath))
+    echo "  refusal on a guard outside the `tidVar < literal` shape: ok"
+
+  block: # refusal on more than one write per thread
+    let twoWrites = irLean:
+      proc twoWritesKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+          output[i] = b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - more than one write per thread", proc() =
+          discard emitLeanModule(twoWrites.statements[0], genRelPath))
+    echo "  refusal on more than one write per thread: ok"
+
+  block: # refusal on a second local binding
+    let twoBindings = irLean:
+      proc twoBindingsKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        let j = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuVar - more than one local binding", proc() =
+          discard emitLeanModule(twoBindings.statements[0], genRelPath))
+    echo "  refusal on a second local binding: ok"
+
+  block: # refusal on a write index other than the thread id
+    let wrongIndex = irLean:
+      proc wrongIndexKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i + 0] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuAssign - write index is not the thread id", proc() =
+          discard emitLeanModule(wrongIndex.statements[0], genRelPath))
+    echo "  refusal on a write index other than the thread id: ok"
+
+  block: # refusal on a non-assign statement inside the guarded branch
+    let nestedIf = irLean:
+      proc nestedIfKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          if i < 1:
+            output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - statement inside the guarded branch", proc() =
+          discard emitLeanModule(nestedIf.statements[0], genRelPath))
+    echo "  refusal on a non-assign statement inside the guarded branch: ok"
+
+  block: # refusal on an if before the thread-id binding
+    let earlyIf = irLean:
+      proc earlyIfKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        if 0 < 1:
+          output[0] = a[0] + b[0]
+        let i = thread_position_in_grid.x
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - if before the thread-id binding", proc() =
+          discard emitLeanModule(earlyIf.statements[0], genRelPath))
+    echo "  refusal on an if before the thread-id binding: ok"
+
+  block: # refusal on elif/else branches
+    let withElse = irLean:
+      proc withElseKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+        else:
+          output[i] = a[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuIf - elif/else branches (the tracer kernel is a bare if)", proc() =
+          discard emitLeanModule(withElse.statements[0], genRelPath))
+    echo "  refusal on elif/else branches: ok"
+
+  block: # refusal on a let binding that is not the thread id
+    let plainLet = irLean:
+      proc plainLetKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = 4
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported GpuAst node gpuVar - let-binding whose initializer is not `thread_position_in_grid.x`", proc() =
+          discard emitLeanModule(plainLet.statements[0], genRelPath))
+    echo "  refusal on a let binding that is not the thread id: ok"
+
+  block: # refusal on a discard statement at kernel-body top level
+    let noBinding = irLean:
+      proc noBindingKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        discard
+    expectRefusal("lean_lang: unsupported GpuAst node gpuDiscard - statement at kernel-body top level", proc() =
+          discard emitLeanModule(noBinding.statements[0], genRelPath))
+    echo "  refusal on a discard statement at kernel-body top level: ok"
+
 when isMainModule:
   runTest()
   echo "t_lean_emit: all checks passed"

@@ -268,9 +268,15 @@ proc emitExpr(n: GpuAst, idxName: string, idxLean: string, paramNames: HashSet[s
       return idxLean
     if name in paramNames:
       return name
+    # unreachable through `irLean`'s typed frontend. Any identifier reaching
+    # this walk typechecks, so it is a kernel parameter or an index variable.
+    # Anything else failed Nim's typecheck already
     raise unsupported(n.kind, "identifier '" & name &
       "' is not a kernel parameter or the index variable")
   of gpuLit:
+    # the non-uint32 refusal below is unreachable: Nim types an int literal
+    # in a uint32 expression as uint32, and an explicitly typed non-uint32
+    # literal fails the typecheck before this walk runs
     if n.lType.kind == gtUint32:
       return "(" & n.lValue & " : UInt32)"
     raise unsupported(n.kind, "literal of type " & $n.lType.kind &
@@ -298,6 +304,9 @@ proc emitExpr(n: GpuAst, idxName: string, idxLean: string, paramNames: HashSet[s
           "index expression is not the index variable (the model covers reads" &
           " at the thread's own index or the loop variable's index only)")
       return n.iArr.dOf.symbol.name & " " & emitExpr(n.iIndex, idxName, idxLean, paramNames, mulAllowed)
+    # unreachable through `irLean`'s typed frontend: only the buffer
+    # parameters are indexable in a kernel body, any other indexed value
+    # fails the typecheck
     raise unsupported(n.kind, "indexing into anything but a kernel buffer parameter")
   else:
     raise unsupported(n.kind, "expression")
@@ -377,6 +386,9 @@ proc checkWriteTarget(lhs: GpuAst, bufNames: HashSet[string]): string =
     raise unsupported(gpuAssign, "assignment target is not a buffer element")
   let buf = lhs.iArr.dOf.symbol.name
   if buf notin bufNames:
+    # unreachable through `irLean`'s typed frontend. An assignment target
+    # that typechecks indexes a buffer parameter, so any other indexed
+    # target fails the typecheck
     raise unsupported(gpuAssign,
       "assignment to '" & buf & "' which is not a kernel parameter")
   result = buf
@@ -526,6 +538,9 @@ proc analyzeKernel(kernel: GpuAst): KernelModel =
       else:
         raise unsupported(stmt.kind, "statement at kernel-body top level")
     if tidName == "":
+      # unreachable through `irLean`'s typed frontend: every statement kind
+      # above either binds the thread id or refuses, and Nim cannot express
+      # an empty proc body
       raise unsupported(gpuVar, "no `thread_position_in_grid.x` binding found")
     result.kind = kkGuardedThread
     if result.scalarName != "":

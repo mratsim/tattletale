@@ -347,6 +347,43 @@ generated/add_spec.lean: error: unknown constant 'foo'
       )
     echo "  refusal on a statement-level verification pragma: ok"
 
+
+  block: # refusal on a duplicate pragma of one kind
+    let dup = irLeanSpec:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: more than one 'invariant' pragma on the kernel", proc() =
+          discard emitLeanModuleWithSpecs(dup.gpu.statements[0], @[
+            RawSpec(name: "invariant", payload: "tid < n"),
+            RawSpec(name: "invariant", payload: "tid < n")], genSpecRelPath))
+    echo "  refusal on a duplicate pragma of one kind: ok"
+
+  block: # refusal on a postcondition not mentioning the written buffer
+    let badPost = irLeanSpec:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "tid < n".} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: unsupported postcondition payload 'tid < n' - it must " &
+            "mention the written buffer 'output'", proc() =
+          discard emitLeanModuleWithSpecs(badPost.gpu.statements[0], badPost.specs, genSpecRelPath))
+    echo "  refusal on a postcondition not mentioning the written buffer: ok"
+
+  block: # refusal on an emission outside any lake project
+    let orphanDir = getTempDir() & "leanlang_orphan/generated"
+    createDir(orphanDir)
+    let orphan = irLeanSpec:
+      proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid < n".} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          output[i] = a[i] + b[i]
+    expectRefusal("lean_lang: no lakefile.lean above the emitted module", proc() =
+          discard emitLeanModuleWithSpecs(orphan.gpu.statements[0], orphan.specs,
+            orphanDir & "/add_orphan.lean"))
+    echo "  refusal on an emission outside any lake project: ok"
+
 when isMainModule:
   runTest()
   echo "t_lean_pragmas: all checks passed"
