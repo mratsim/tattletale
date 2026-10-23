@@ -2374,6 +2374,10 @@ def changed_set_hygiene(base):
             continue
         f = Path(repo) / rel
         name = rel.rsplit("/", 1)[-1].lower()
+        # lean-toolchain pins the elan toolchain for a lake project, elan
+        # requires that exact extensionless name, the rule stays out of it
+        if name == "lean-toolchain":
+            continue
         if any(w in name for w in ("tmp", "debug", "probe")):
             out.append(Finding(
                 f, 1, "scratch-filename",
