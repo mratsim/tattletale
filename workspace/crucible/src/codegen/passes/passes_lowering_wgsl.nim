@@ -500,7 +500,7 @@ proc hasNonFnPtrParam(fn: GpuAst): bool =
   ## True when a pointer parameter sits outside the `function` address space.
   ## WGSL rejects storage, uniform and workgroup pointers as user-function parameter types.
   for p in fn.pParams:
-    if p.typ != nil and p.typ.kind == gtPtr and p.addressSpace != asRMEM:
+    if p.typ.kind == gtPtr and p.typ.addressSpace != asRMEM:
       return true
 
 proc hasPtrStructParam(fn: GpuAst, ctx: GpuContext): bool =

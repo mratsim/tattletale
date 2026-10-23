@@ -395,7 +395,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       if declaration.len > 2 and declaration[2].kind != nnkEmpty:
         varNode.vInit = ctx.toCrucibleAst(reg, declaration[2])
         if varNode.vType.kind == gtPtr:
-          # an initialized pointer keeps the storage its init accesses
+          # an initialized pointer takes the space of its initializer's storage
           let initSpace = ctx.resolveAddressSpace(varNode.vInit)
           if initSpace != varNode.vType.addressSpace:
             varNode.vType = varNode.vType.withAddressSpace(initSpace)
@@ -868,7 +868,6 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       let idx = findIdx(ocFields, flds[i].name)
       if idx >= 0:
         var f = ocFields[idx]
-        # the field's space is its init value's space, matching the object path
         let valueType = ctx.getOperandType(f.value)
         if not valueType.isNil:
           f.typ = flds[i].typ.withAddressSpace(getTypeAccessedSpace(valueType))
@@ -904,17 +903,14 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
     if convTo.kind in {gtPtr, gtSpan}:
       # the target keeps its operand's space
       let space = ctx.resolveAddressSpace(convExpr)
-      if space != asRMEM:
-        convTo = convTo.withAddressSpace(space)
+      convTo = convTo.withAddressSpace(space)
     result = GpuAst(kind: gpuConv, convTo: convTo, convExpr: convExpr)
   of nnkCast:
     let castExpr = ctx.toCrucibleAst(reg, node[1])
     var castTo = resolveType(reg, node[0])
     if castTo.kind in {gtPtr, gtSpan}:
-      # the target keeps its operand's space, a cross-space cast is validated per backend
       let space = ctx.resolveAddressSpace(castExpr)
-      if space != asRMEM:
-        castTo = castTo.withAddressSpace(space)
+      castTo = castTo.withAddressSpace(space)
     result = GpuAst(kind: gpuCast, cTo: castTo, cExpr: castExpr)
 
   of nnkAddr, nnkHiddenAddr:
