@@ -102,7 +102,7 @@ The data flow runs top-down from an inference goal to emitted GPU code.
    is the GPU kernel code generator: Nim macros consume ceramic layout algebra
    and positron kernel specs and emit native CUDA, OpenCL, Vulkan and WebGPU
    code ([`workspace/crucible/src/codegen/gpu_compiler.nim`](workspace/crucible/src/codegen/gpu_compiler.nim),
-   targets under [`workspace/crucible/src/codegen/targets/`](workspace/crucible/src/codegen/targets/),
+   backends under [`workspace/crucible/src/codegen/backends/`](workspace/crucible/src/codegen/backends/),
    ABIs under [`workspace/crucible/src/abis/`](workspace/crucible/src/abis/)).
 
 ## Repo layout
@@ -139,7 +139,7 @@ its `src/` modules.
 ## Extension points
 
 - **New hardware target**: add a backend under
-  [`workspace/crucible/src/codegen/targets/`](workspace/crucible/src/codegen/targets/)
+  [`workspace/crucible/src/codegen/backends/`](workspace/crucible/src/codegen/backends/)
   and the corresponding ABI under
   [`workspace/crucible/src/abis/`](workspace/crucible/src/abis/). Crucible's
   pass pipeline is registered in

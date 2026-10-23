@@ -9,7 +9,7 @@
 import std/[macros, sequtils, tables]
 
 import ./ir/ast_datatypes
-import ./targets/targets_lang
+import ./backends/backends_api
 import ./passes/passes_lowering
 import ./passes/passes_low_pointers
 import ./passes/passes_low_views
@@ -23,7 +23,7 @@ import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
-import ./targets/lang_utils
+import ./backends/lang_utils
 import workspace/crucible/vendor/wgpu
 import ./passes/pass_datatypes
 import ./passes/pass_registry

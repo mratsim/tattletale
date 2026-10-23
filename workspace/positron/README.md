@@ -28,7 +28,7 @@ GPU kernel compiler framework for Nim. Transpiles Nim code to multiple GPU backe
 |--------|---------|
 | `src/codegen/ir/gpu_types.nim` | IR type system (`GpuType`, `GpuNodeKind`) |
 | `src/codegen/frontend/nim_to_gpu.nim` | Nim → GPU AST transpiler |
-| `src/codegen/targets/*.nim` | Backend-specific code generation |
+| `src/codegen/backends/*.nim` | Backend-specific code generation |
 | `src/codegen/exec/*.nim` | Runtime execution helpers |
 | `src/codegen/nvrtc.nim` | NVRTC JIT compilation wrapper |
 | `src/codegen/builtins/` | Backend builtin functions |

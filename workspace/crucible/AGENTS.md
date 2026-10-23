@@ -35,7 +35,7 @@ helper before writing a new one.
 
 **Nanopass architecture.**
 
-- The frontend (`src/codegen/frontend/`) and the printers (`src/codegen/targets/`) stay
+- The frontend (`src/codegen/frontend/`) and the printers (`src/codegen/backends/`) stay
   as simple as possible, ideally 1:1 with the source and the target.
 - All smartness and complexity is pushed into a pass under `src/codegen/passes/`.
 - A pass is independently testable: build the input IR, run the pass, diff the IR
@@ -245,7 +245,7 @@ so the IR only ever contains canonical names.
 
 - [`src/builtins/builtins_catalog.nim`](src/builtins/builtins_catalog.nim)
   is the source of truth for the alias set.
-- The printers under `src/codegen/targets/` emit the native names below.
+- The printers under `src/codegen/backends/` emit the native names below.
 
 | Canonical (MSL) | CUDA | OpenCL | Vulkan (GLSL) | WGSL |
 |---|---|---|---|---|
