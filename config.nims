@@ -146,10 +146,8 @@ task make_pytttransformers, "Build pytttransformers.so for Python import":
 #   --outdir:build/tests --nimcache:nimcache/tests --hints:off --warnings:off
 
 iterator getTestCommands(path: string; extraFlags = ""; compiler = "nim c"): string =
-  ## Walks `path` recursively and yields one build-and-run command per test
-  ## file under it. Convention: tests start with test_ or t_, everything
-  ## else (manual_ fixtures, helpers) is skipped.
-  for filepath in walkDirRec(path):
+  ## Convention: tests start with test_ or t_
+  for filepath in listFiles(path):
     let filename = filepath.extractFilename()
     if filename.endsWith(".nim") and (
       filename.startsWith("test_") or filename.startsWith("t_")
@@ -529,13 +527,11 @@ task test_toktoktok, "Test workspace/toktoktok":
 
 task test_ceramic, "Test workspace/ceramic":
   withDir(ProjectRoot):
-    # Discovery is recursive per listed dir, so every suite stays listed
-    # explicitly: the tests/ root itself must not be walked or the gpu/
-    # subdir and tile_algebra/ would be picked up. gpu tests are
-    # backend-specific (-d:metal or a CUDA toolchain); nim_compiler_ice/
-    # holds known compiler-bug repros and its files carry no test_ / t_
-    # prefix anyway. Manual kernels tests (m_*) need -d:metal, run directly.
-    for d in ["int_tuples", "kernels/copy_fill", "layout",
+    # The gpu/ and nim_compiler_ice/ dirs stay out: gpu tests are
+    # backend-specific (-d:metal or a CUDA toolchain), the ICE dir holds
+    # known compiler-bug repros that abort the run by design.
+    # Manual kernels tests (m_*) need -d:metal, run directly.
+    for d in ["", "int_tuples", "kernels/copy_fill", "layout",
               "layout_algebra", "tensor"]:
       for cmd in getTestCommands("workspace/ceramic/tests/" & d):
         runCmd(cmd)
@@ -593,7 +589,7 @@ task test_positron_properties, "Test workspace/positron property suites":
 
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/crucible/tests/codegen/cuda"):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/nvrtc"):
       runCmd(cmd)
 
 # Per-file ENV variables configuration for PCRE2

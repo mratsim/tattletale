@@ -84,10 +84,6 @@ Notes:
   WGSL has no `workgroup_size` builtin, only the `@workgroup_size` attribute, so referencing it
   in a `webgpu:` kernel is a loud compile error. `thread_index_in_threadgroup` maps to WGSL's
   native `local_invocation_index` instead of a composed formula.
-HLSL covers the coordinate and barrier vocabulary: coordinate components read
-`SV_DispatchThreadID` / `SV_GroupID` / `SV_GroupIndex` system-value inputs, the barrier emits
-`GroupMemoryBarrierWithGroupSync()`. Subgroup reductions and atomic builtins have no emission,
-an `hlsl:` kernel referencing them fails loudly at compile time.
 
 - **Alias families**, the Nim names that expand to the canonical name:
 
@@ -108,17 +104,6 @@ an `hlsl:` kernel referencing them fails loudly at compile time.
 - The OpenCL work-item names are template aliases in `builtins_catalog.nim`,
   they expand to canonical names during Nim semantic analysis. The name-only registration path never consults the list,
   so no codegen registration exists for them.
-
-## Status
-
-Crucible is under active development.
-
-- CUDA (via NVRTC) is the primary, most-tested target.
-- OpenCL, Vulkan, HLSL, WebGPU, and Metal share the same IR and pipeline but have smaller suites
-  and some backend-specific lowering: WGSL `injectAddressOf`, Vulkan SSBO/push-constant lowering,
-  HLSL's descriptor-route storage buffers and push-constant scalars, compiled by glslangValidator,
-  Metal's dispatch-time threadgroup size and compiler-enforced 31-binding limit.
-- WIP is tracked per-feature, gaps are labelled in the source with `XXX`/`WIP` comments.
 
 ## Source layout
 
@@ -168,7 +153,7 @@ workspace/crucible/
         cuda_lang.nim             Printers: CUDA C++, OpenCL C, GLSL, WGSL, MSL
         opencl_lang.nim
         glsl_lang.nim
-        hlsl_lang.nim             HLSL for glslang's HLSL frontend: [[vk::binding]] buffers, push-constant scalars
+        hlsl_lang.nim             HLSL printer: dxc-compiled, D3D12 register bindings, ConstantBuffer scalars
         wgsl_lang.nim
         msl_lang.nim
         lang_utils.nim            Shared printer helpers
@@ -219,7 +204,6 @@ Requirements:
 - a working Nim
 - NVRTC/glslangValidator for compilation
 - a CUDA/OpenCL/Vulkan/WebGPU/Metal device for `engine.launchKernel()`
-  (HLSL runs on Vulkan, through the descriptor route)
 
 The Metal tests run on any Apple Silicon Mac
 (macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, tested 2026-08-17).
@@ -240,7 +224,7 @@ nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
   workspace/crucible/tests/codegen/vulkan_via_glsl/*/t_vulkan_*.nim
 
-# Vulkan via HLSL (glslangValidator + spirv-val)
+# Vulkan via HLSL (dxc + spirv-val)
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
   workspace/crucible/tests/codegen/vulkan_via_hlsl/*/t_hlsl_*.nim
