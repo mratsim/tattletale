@@ -17,7 +17,7 @@ import workspace/crucible
 
 # Pointer-only multi-kernel source (pointer-only multi-kernel is supported;
 # by-value scalars would trip the multi-kernel guard, see the poc test).
-const code = vulkan:
+const code = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =
@@ -32,7 +32,7 @@ const code = vulkan:
 # Replacement source for the re-ingest (cache invalidation) step: same
 # kernel name as the first source, different body. A stale cached pipeline
 # would return the old addition result instead of the product.
-const codeMul = vulkan:
+const codeMul = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =

@@ -99,11 +99,11 @@ Only engine/runtime tests use the public API (below).
 | Prefix | When to use |
 |--------|-------------|
 | `t_ir_<desc>.nim` | IR-level tests under `tests/ir/`, the INTERNAL codegen API (deep imports), no engine |
-| `t_cuda_<desc>.nim` | Auto-runnable on CUDA: `import workspace/crucible`, `bkCuda.init()` + `engine.ingest()` + `engine.launchKernel()` (or the chevron form) |
-| `t_opencl_<desc>.nim` | Auto-runnable on OpenCL: `import workspace/crucible`, `bkOpenCL.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `t_vulkan_<desc>.nim` | Auto-runnable on Vulkan: `import workspace/crucible`, `bkVulkan.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `t_webgpu_<desc>.nim` | Auto-runnable on WebGPU: `import workspace/crucible`, `bkWebGPU.init()` + `engine.ingest()` + `engine.launchKernel()` |
-| `t_metal_<desc>.nim` | Auto-runnable on Metal (macOS): `import workspace/crucible`, `bkMetal.init()` + `engine.ingest()` + `engine.launchKernel()` (or the chevron form; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
+| `t_cuda_<desc>.nim` | Auto-runnable on CUDA: `import workspace/crucible`, `newEngine(runCuda)` + `engine.ingest()` + `engine.launchKernel()` (or the chevron form) |
+| `t_opencl_<desc>.nim` | Auto-runnable on OpenCL: `import workspace/crucible`, `newEngine(runOpenCL)` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_vulkan_<desc>.nim` | Auto-runnable on Vulkan: `import workspace/crucible`, `newEngine(runVulkan)` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_webgpu_<desc>.nim` | Auto-runnable on WebGPU: `import workspace/crucible`, `newEngine(runWebGPU)` + `engine.ingest()` + `engine.launchKernel()` |
+| `t_metal_<desc>.nim` | Auto-runnable on Metal (macOS): `import workspace/crucible`, `newEngine(runMetal)` + `engine.ingest()` + `engine.launchKernel()` (or the chevron form; tested ABI: macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, 2026-08-17) |
 | `manual_<backend>_<desc>.nim` | **Manual only**: tests expecting a compile-time error, they cannot auto-run. |
 
 ### Test Requirements
@@ -119,8 +119,8 @@ Only engine/runtime tests use the public API (below).
 **One import for everything:** `import workspace/crucible` re-exports the public surface.
 IR tests are the exception, they keep deep internal imports.
 
-- DSL macros: `cuda:`/`opencl:`/`vulkan:`/`hlsl:`/`webgpu:`/`metal:`
-- Engines: `bkCuda`/`bkOpenCL`/`bkVulkan`/`bkWebGPU`/`bkMetal`, `init`, `ingest`,
+- DSL macros: `cuda:`/`opencl:`/`glsl:`/`hlsl:`/`webgpu:`/`metal:`
+- Engines: `newEngine(runCuda)`/`newEngine(runOpenCL)`/`newEngine(runVulkan)`/`newEngine(runWebGPU)`/`newEngine(runMetal)`, `ingest`,
   `getArtifact`, `check`, `deviceName`
 - Launch: `launchKernel`, `launchDeviceFn`
 
@@ -143,14 +143,14 @@ Never declare backend-resource objects (engines, contexts, modules, OpenCL/Vulka
 at module scope via template helpers:
 
 - Nim templates do **not** scope `var` declarations: a module-level `template runKernel(...)`
-  containing `var engine = bkCuda.init()` keeps every `engine` alive until program exit.
+  containing `var engine = newEngine(runCuda)` keeps every `engine` alive until program exit.
 - CUDA contexts are expensive: one live context holds a large device-memory reservation,
   only returned on destruction. N module-scope contexts can exhaust the GPU,
   `CUDA_ERROR_OUT_OF_MEMORY` on tiny allocs, `t_cuda_if_expr` documents the fix.
 - A `proc` scopes its locals naturally: resources are released when the proc returns, so N
   kernels in one test file use one context at a time.
 - Module-scope `const` kernel sources are fine: only runtime objects, engines created via
-  `bkCuda.init()`/`bkOpenCL.init()` etc., must be function-local.
+  `newEngine(runCuda)`/`newEngine(runOpenCL)` etc., must be function-local.
 
 Exception: tests for backends not supported in the current environment.
 For those:
@@ -184,7 +184,7 @@ at 2 lines and 3 one-liner bullets.
 
 ## Engine API, per-target notes
 
-The engine lifecycle: `init()` → `ingest(source)` → `getArtifact()` → `launchKernel`.
+The engine lifecycle: `newEngine(runX)` → `ingest(source)` → `getArtifact()` → `launchKernel`.
 Re-ingest replaces the context, RAII releases the old one.
 The args tuple order matches the kernel params minus the output, scalars are by-value
 (4-byte), pointers become device buffers.
@@ -201,7 +201,7 @@ The args tuple order matches the kernel params minus the output, scalars are by-
 | Metal | buffers, output at index 0 then inputs in order, scalars in one shared constant buffer at 16-byte slots |
 | Metal | more than 31 bindings rejected at ingest via NSError, readback from `contents()` after `waitUntilCompleted`, no staging or map path |
 | Vulkan | by-value params are push constants (`layout(push_constant) uniform KernelParams`), 4-byte only, loud quit otherwise |
-| Vulkan | one kernel per `vulkan:` source with scalars, a multi-kernel source unions params file-scope and misaligns them, pointer-only multi-kernel is fine |
+| Vulkan | one kernel per `glsl:` source with scalars, a multi-kernel source unions params file-scope and misaligns them, pointer-only multi-kernel is fine |
 
 ### Run commands
 
@@ -288,7 +288,7 @@ Every test file must have a header comment:
 A "minimal repro" for a crucible bug:
 
 - Uses ONLY types defined in the test file (no ceramic, no external lib)
-- Has a `cuda:` / `opencl:` / `vulkan:` / `hlsl:` / `webgpu:` / `metal:` block
+- Has a `cuda:` / `opencl:` / `glsl:` / `hlsl:` / `webgpu:` / `metal:` block
 - Demonstrates the failing pattern in the simplest possible way
 - Runs the kernel via `engine.launchKernel()` to verify correctness
 

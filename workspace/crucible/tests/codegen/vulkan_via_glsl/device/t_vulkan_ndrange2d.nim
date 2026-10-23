@@ -10,7 +10,7 @@
 import std/[unittest]
 import workspace/crucible
 
-const kernel2d = vulkan:
+const kernel2d = glsl:
   proc grid2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     # direct builtin use — binding gl_GlobalInvocationID to a local let
     # hits an addr-lowering gap (global-let path), so index it inline

@@ -8,7 +8,7 @@
 
 import workspace/crucible
 
-const code = vulkan:
+const code = glsl:
   proc vec10_add(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
     for i in 0 ..< 10:
       output[i] = a[i] + b[i]

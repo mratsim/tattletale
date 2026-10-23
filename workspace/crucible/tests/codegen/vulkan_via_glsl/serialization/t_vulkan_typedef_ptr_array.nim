@@ -19,7 +19,7 @@ type
 
 proc takeBands(w: Bands): uint32 {.device.} = w.edges[1] + w.band.hi + w.m
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = takeBands(Bands(edges: [10'u32, 20'u32],
                                band: Band(lo: 1'u32, hi: 2'u32), m: 5'u32))

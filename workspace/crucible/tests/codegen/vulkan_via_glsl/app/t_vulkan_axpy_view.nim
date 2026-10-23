@@ -1,4 +1,4 @@
-## launchDeviceFn with a View argument on vulkan: pointer + length in one object.
+## launchDeviceFn with a View argument on glsl: pointer + length in one object.
 ##
 ## Test that a View argument holding DeviceMem handles crosses launchDeviceFn
 ## into the kernel's pointer fields.

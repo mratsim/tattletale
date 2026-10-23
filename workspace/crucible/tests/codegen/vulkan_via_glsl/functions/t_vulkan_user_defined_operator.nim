@@ -11,7 +11,7 @@ import workspace/crucible
 
 # ── Basic types — gpuBinOp ──────────────────────────────────────────────────
 
-const basicVk = vulkan:
+const basicVk = glsl:
   proc basicKernel(output: ptr UncheckedArray[int32];
                    a: ptr UncheckedArray[int32];
                    b: ptr UncheckedArray[int32]) {.global.} =
@@ -57,7 +57,7 @@ proc `and`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val and b.val)
 proc `or`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val or b.val)
 proc `xor`*(a, b: Wrapper2): Wrapper2 = Wrapper2(val: a.val xor b.val)
 
-const structVk = vulkan:
+const structVk = glsl:
   proc structKernel(output: ptr UncheckedArray[int32];
                     a: ptr UncheckedArray[int32];
                     b: ptr UncheckedArray[int32]) {.global.} =
@@ -74,7 +74,7 @@ const structVk = vulkan:
     output[8] = (x or y).val
     output[9] = (x xor y).val
 
-const structVk2 = vulkan:
+const structVk2 = glsl:
   proc structKernel2(output: ptr UncheckedArray[int32];
                      a: ptr UncheckedArray[int32];
                      b: ptr UncheckedArray[int32]) {.global.} =

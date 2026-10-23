@@ -10,7 +10,7 @@
 import std/strutils
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   var scratch {.smem.}: array[8, uint32]
   proc crossVocabSharedKernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     let tid = thread_index_in_threadgroup

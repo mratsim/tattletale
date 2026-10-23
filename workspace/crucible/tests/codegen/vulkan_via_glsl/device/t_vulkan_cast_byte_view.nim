@@ -12,7 +12,7 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(outP: ptr UncheckedArray[uint32]) {.global.} =
     let bytes = cast[ptr UncheckedArray[uint8]](outP)
     bytes[3] = uint8(outP[0] + 1)

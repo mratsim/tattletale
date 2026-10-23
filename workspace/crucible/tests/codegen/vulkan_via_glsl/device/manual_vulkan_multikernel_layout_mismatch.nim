@@ -9,7 +9,7 @@
 
 import workspace/crucible
 
-const code = vulkan:
+const code = glsl:
   proc k1(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = 1'u32
   proc k2(output, extra: ptr UncheckedArray[uint32]) {.global.} =

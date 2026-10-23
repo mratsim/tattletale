@@ -14,7 +14,7 @@ import workspace/crucible
 
 # ── single string literal, injected as raw GLSL ─────────────────────────────
 
-const t1Vk = vulkan:
+const t1Vk = glsl:
   proc t1Kernel(C: ptr UncheckedArray[uint32];
                 A: ptr UncheckedArray[uint32];
                 B: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
@@ -22,14 +22,14 @@ const t1Vk = vulkan:
 
 # ── comma form, one interpolated ident (the `A` param) ──────────────────────
 
-const t2Vk = vulkan:
+const t2Vk = glsl:
   proc t2Kernel(C: ptr UncheckedArray[uint32];
                 A: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     {.emit: ["C.x[0] = ", A, ".x[0] + 1;"].}
 
 # ── comma form, interleaved ident + call + arithmetic ───────────────────────
 
-const t3Vk = vulkan:
+const t3Vk = glsl:
   proc doubleIt(v: uint32): uint32 =
     v * 2
 
@@ -40,7 +40,7 @@ const t3Vk = vulkan:
 
 # ── backtick form on a local variable ───────────────────────────────────────
 
-const t4Vk = vulkan:
+const t4Vk = glsl:
   proc t4Kernel(C: ptr UncheckedArray[uint32];
                 A: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     let tmp: uint32 = A[0] + 1
@@ -48,7 +48,7 @@ const t4Vk = vulkan:
 
 # ── triple-quoted multiline string ──────────────────────────────────────────
 
-const t5Vk = vulkan:
+const t5Vk = glsl:
   proc t5Kernel(C: ptr UncheckedArray[uint32];
                 A: ptr UncheckedArray[uint32];
                 B: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
@@ -57,21 +57,21 @@ C.x[1] = A.x[1] + B.x[1];""".}
 
 # ── not silently dropped — the emit must override the DSL write ─────────────
 
-const t6Vk = vulkan:
+const t6Vk = glsl:
   proc t6Kernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     C[0] = 0
     {.emit: "C.x[0] = 42;".}
 
 # ── backtick form on a kernel parameter ─────────────────────────────────────
 
-const t7Vk = vulkan:
+const t7Vk = glsl:
   proc t7Kernel(C: ptr UncheckedArray[uint32];
                 x: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     {.emit: "C.x[0] = `x`.x[0] + 1;".}
 
 # ── comma form on a kernel parameter ────────────────────────────────────────
 
-const t8Vk = vulkan:
+const t8Vk = glsl:
   proc t8Kernel(C: ptr UncheckedArray[uint32];
                 x: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     {.emit: ["C.x[0] = ", x, ".x[0] + 1;"].}
@@ -79,7 +79,7 @@ const t8Vk = vulkan:
 # ── insertResult exclusion — a non-void device fn with only a trailing emit
 #    must not become `result = <text>` ─────────────────────────────────────────
 
-const t10Vk = vulkan:
+const t10Vk = glsl:
   proc emit42(): uint32 =
     {.emit: "return 42;".}
 
@@ -88,7 +88,7 @@ const t10Vk = vulkan:
 
 # ── call-form emit `{.emit("...").}` is not silently dropped ────────────────
 
-const t12Vk = vulkan:
+const t12Vk = glsl:
   proc t12Kernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     C[0] = 0
     {.emit("C.x[0] = 42;").}
@@ -96,21 +96,21 @@ const t12Vk = vulkan:
 # ── a #define-style directive must pass through byte-exact. A `;` appended by the printer
 #    would corrupt the macro (used below) ──────────────────────────────────────
 
-const t14Vk = vulkan:
+const t14Vk = glsl:
   proc t14Kernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     {.emit: "#define VULKAN_EMIT_TILE 32".}
     {.emit: "C.x[0] = VULKAN_EMIT_TILE + 1;".}
 
 # ── duplicate emit items in one pragma — every item renders, in order ────────
 
-const t15Vk = vulkan:
+const t15Vk = glsl:
   proc t15Kernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     C[0] = 0
     {.emit: "C.x[0] = 1;", emit: "C.x[0] = 2;".}
 
 # ── non-emit statement pragma inside a kernel stays a gpuDiscard ──────────────
 
-const t16Vk = vulkan:
+const t16Vk = glsl:
   proc t16Kernel(C: ptr UncheckedArray[uint32]) {.global, workgroup: (1, 1, 1).} =
     {.warning: "this statement pragma must be discarded, not emitted".}
     C[0] = 42

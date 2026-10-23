@@ -10,13 +10,13 @@
 import std/unittest
 import workspace/crucible
 
-const rmwSpirv = vulkan:
+const rmwSpirv = glsl:
   proc rmwKernel(C: ptr UncheckedArray[int32]) {.global.} =
     for i in 0 ..< 4:
       C[i] += 5
       C[i] *= 2
 
-const hazardSpirv = vulkan:
+const hazardSpirv = glsl:
   proc tick(x: ptr UncheckedArray[int32]): int32 {.device.} =
     result = x[0]
     x[0] = result + 1
@@ -24,7 +24,7 @@ const hazardSpirv = vulkan:
   proc hazardKernel(x: ptr UncheckedArray[int32]) {.global.} =
     x[tick(x) + 1] += 7
 
-const blitSpirv = vulkan:
+const blitSpirv = glsl:
   proc blitKernel(x: ptr UncheckedArray[int32]) {.global.} =
     for i in 0 ..< 2:
       x[block:

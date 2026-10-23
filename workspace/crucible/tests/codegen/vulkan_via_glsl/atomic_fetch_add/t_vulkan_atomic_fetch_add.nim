@@ -13,21 +13,21 @@
 import std/[strutils, unittest, algorithm]
 import workspace/crucible
 
-const addFpVk = vulkan:
+const addFpVk = glsl:
   proc addFp(counter: ptr float32, outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     outBuf[lane] = atomicFetchAdd(counter, float32(lane))
 
-const addFpSameVk = vulkan:
+const addFpSameVk = glsl:
   proc addFpSame(counter: ptr float32, outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     outBuf[lane] = atomicFetchAdd(counter, 1.0'f32)
 
-const addIntVk = vulkan:
+const addIntVk = glsl:
   proc addInt(counter: ptr int32) {.global, workgroup: (32, 1, 1).} =
     discard atomicFetchAdd(counter, int32(1))
 
-const addMultiTgVk = vulkan:
+const addMultiTgVk = glsl:
   proc addMultiTg(counter: ptr float32) {.global, workgroup: (32, 1, 1).} =
     discard atomicFetchAdd(counter, 1.0'f32)
 

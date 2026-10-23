@@ -121,7 +121,7 @@ src/
     builtins_pragmas.nim          global, workgroup, device, smem, ...
     builtins_compilermagic.nim    CompileTarget, ccGetBackend.
   codegen/
-    gpu_compiler.nim                Entry point. The `cuda:`/`opencl:`/`vulkan:`/
+    gpu_compiler.nim                Entry point. The `cuda:`/`opencl:`/`glsl:`/
                                     `webgpu:`/`metal:` macros build a GpuContext +
                                     PassRegistry, run the passes, and call the
                                     backend codegen macro. `toGpuAst` emits the IR
@@ -157,8 +157,9 @@ src/
                                     pruning, memcpy decomposition.
       passes_validations.nim        Pre/post validation (e.g. warnUnassigned).
       passes_cuda.nim               Per-language passes: reserved words,
-      passes_glsl.nim               pointer rules, subgroup emission, SSBO /
-      passes_msl.nim                push-constant lowering, address spaces.
+      passes_glsl.nim               pointer rules, subgroup emission,
+      passes_msl.nim                storage-buffer descriptor / push-constant
+                                    lowering, address spaces.
       passes_opencl.nim
       passes_wgsl.nim
     backends/
@@ -183,8 +184,10 @@ src/
     exec/
       cuda_runtime.nim              Platform sessions: library loading, device
       opencl_runtime.nim            discovery, source -> artifact compilation,
-      vulkan_runtime.nim            buffers, raw dispatch. The engine facades
-      webgpu_runtime.nim            drive these.
+      vulkan_common.nim             buffers, raw dispatch. The engine facades
+      vulkan_descriptor_runtime.nim drive these.
+      vulkan_address_runtime.nim
+      webgpu_runtime.nim
       metal_runtime.nim
       runtime_utils.nim
     launch/
@@ -203,7 +206,7 @@ src/
 
 ## Data-flow walkthrough
 
-1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `vulkan:`, `webgpu:`, or `metal:` block.
+1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `glsl:`, `webgpu:`, or `metal:` block.
    The corresponding macro in `gpu_compiler.nim` calls `ctx.toGpuAst(typeReg, body)`.
 It walks the typed Nim AST and emits a `GpuAst` 1:1, one IR node per AST construct, no semantic rewriting.
 Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `ast_datatypes.nim`).

@@ -14,7 +14,7 @@ type Pair = object
   a: int32
   b: int32
 
-const code = vulkan:
+const code = glsl:
   proc k(output: ptr Pair) {.global.} =
     discard
 

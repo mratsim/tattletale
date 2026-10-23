@@ -1,7 +1,7 @@
 ##
 ## Vulkan: by-value (scalar) kernel params as push constants, anti-regression.
 ## By-value scalars pack into the push-constant range, only pointer args
-## bind as SSBOs, the output stays at binding 0.
+## bind as storage-buffer descriptors, the output stays at binding 0.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -16,12 +16,12 @@ import workspace/crucible
 # Mixing kernels with different scalar signatures in one source misaligns the
 # block (kernel 2's params land after kernel 1's) — a codegen contract caveat;
 # one kernel per ingest is the supported pattern.
-const code1 = vulkan:
+const code1 = glsl:
   proc kernelWithVal(output: ptr UncheckedArray[uint32];
                      val: uint32) {.global.} =
     output[0] = val
 
-const code2 = vulkan:
+const code2 = glsl:
   proc kernelWithTwoVals(output: ptr UncheckedArray[uint32];
                          a: uint32; b: uint32) {.global.} =
     output[0] = a + b

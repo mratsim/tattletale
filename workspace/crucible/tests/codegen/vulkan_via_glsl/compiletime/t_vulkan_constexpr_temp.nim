@@ -23,13 +23,13 @@ template toIntVal*(x: int): int = x
 template toIntVal*[V: static int](x: Int[V]): int = V
 
 # Pattern A
-const kernelA = vulkan:
+const kernelA = glsl:
   proc testA(C: ptr UncheckedArray[uint32]) {.global.} =
     const tmp {.genSym.} = Tuple2[Int[8], Int[16]]()
     let L = tmp; C[0] = 1'u32
 
 # Pattern B
-const kernelB = vulkan:
+const kernelB = glsl:
   proc testB(C: ptr UncheckedArray[uint32]) {.global.} =
     const a {.genSym.} = Int[8](); const b {.genSym.} = Int[16]()
     let x = Int[0]() + a * b; C[0] = uint32(toIntVal x)
@@ -39,19 +39,19 @@ template wrapConst(a, b: untyped): untyped =
   block:
     const tmp {.genSym.} = Tuple2[typeof(a), typeof(b)](f0: a, f1: b)
     tmp
-const kernelC = vulkan:
+const kernelC = glsl:
   proc testC(C: ptr UncheckedArray[uint32]) {.global.} =
     let pair = wrapConst(Int[8](), Int[16]()); C[0] = 1'u32
 
 # Pattern D
-const kernelD = vulkan:
+const kernelD = glsl:
   proc testD(C: ptr UncheckedArray[uint32]) {.global.} =
     let pos = (Int[0](), Int[0]()); let D = (Int[1](), Int[8]())
     let idx = Int[0]() + D[0] * pos[0] + D[1] * pos[1]
     C[0] = uint32(toIntVal idx)
 
 # Pattern E
-const kernelE = vulkan:
+const kernelE = glsl:
   proc testE(C: ptr UncheckedArray[uint32]) {.global.} =
     let idx = block:
       const coord {.genSym.} = (Int[0](), Int[0]())
@@ -60,7 +60,7 @@ const kernelE = vulkan:
     C[0] = uint32(toIntVal idx)
 
 # Pattern F
-const kernelF = vulkan:
+const kernelF = glsl:
   proc testF(C: ptr UncheckedArray[uint32]) {.global.} =
     const tup {.genSym.} = (Int[8](), Int[16]())
     let first = tup[0]; C[0] = uint32(toIntVal first)

@@ -9,7 +9,7 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(outP: ptr UncheckedArray[array[32, byte]]) {.global.} =
     # outP[i][j] = uint8(i + j), the element type is a fixed 32-byte block
     for i in 0 ..< 2:

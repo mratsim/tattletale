@@ -18,16 +18,16 @@ proc vec2Add(a, b: Vec2): Vec2 {.device.} =
   result.x = a.x + b.x
   result.y = a.y + b.y
 
-# ── GLSL generation via `vulkan:` macro ─────────────────────────────────────
+# ── GLSL generation via `glsl:` macro ─────────────────────────────────────
 
-const addVk = vulkan:
+const addVk = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];
                  b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0]
     output[1] = a[1] + b[1]
 
-const vec2Vk = vulkan:
+const vec2Vk = glsl:
   proc vec2AddKernel(output: ptr UncheckedArray[uint32];
                      a: ptr UncheckedArray[uint32];
                      b: ptr UncheckedArray[uint32]) {.global.} =
@@ -37,7 +37,7 @@ const vec2Vk = vulkan:
     output[0] = vr.x
     output[1] = vr.y
 
-const maxVk = vulkan:
+const maxVk = glsl:
   proc maxGeneric[T](a, b: T): T {.device.} =
     if a > b: result = a else: result = b
 

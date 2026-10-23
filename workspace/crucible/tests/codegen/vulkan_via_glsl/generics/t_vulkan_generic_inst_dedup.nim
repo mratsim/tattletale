@@ -2,7 +2,8 @@
 ## emit one body per instantiation.
 ##
 ## - `signatureHash` erases static bindings and would dedup all instantiations
-## - device procs here take scalars and return values: SSBO lowering never applies
+## - device procs here take scalars and return values: storage-buffer descriptor
+##   lowering never applies
 ##   to non-global device procs
 ## - kernels carry `{.workgroup: (32, 1, 1).}` to match the launch `blk`
 ##
@@ -32,7 +33,7 @@ func fscale[Factor: static int](x: float32): float32 {.device.} =
 proc scaleSwap[N: static int, M: static int](x: float32): float32 {.device.} =
   x * float32(N) + float32(M)
 
-const dedupSrc = vulkan:
+const dedupSrc = glsl:
   proc k16(outp, inp: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     outp[0] = scale1[16](inp[0])
   proc k32(outp, inp: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =

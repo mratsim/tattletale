@@ -34,7 +34,7 @@ type
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     caches: VulkanCaches
 
-template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkVulkan
+template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
 
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
@@ -115,7 +115,7 @@ proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = deviceLayout(T, bkVulkan)
+  const lay = deviceLayout(T, bkGlsl)
   if lay.align > 1:
     ctx.pn = roundStepUp(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
@@ -130,12 +130,12 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
-        blob.packFrom(off, f, bkVulkan)
+        blob.packFrom(off, f, bkGlsl)
     off = roundStepUp(off, lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
-    blob.packFrom(off, v, bkVulkan)
+    blob.packFrom(off, v, bkGlsl)
   if lay.size > 0:
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
@@ -219,7 +219,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     entry = kernel
 
   var dctx = SerializationCtx(vctx: engine.ctx)
-  bindArgs(dctx, output, args, store, VulkanBuffer, bkVulkan)
+  bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
   let pushConstLen = dctx.pn
 
   let pipelineKey = (kernel, pushConstLen)

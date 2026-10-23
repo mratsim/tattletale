@@ -11,7 +11,7 @@
 import std/strformat
 import workspace/crucible
 
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc k(sink: ptr UncheckedArray[uint32], ps: array[4, ptr UncheckedArray[uint64]]) {.global.} =
     ps[0][1] = ps[2][3]
     sink[0] = uint32(ps[0][1])

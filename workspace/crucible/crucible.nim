@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, Vulkan, WebGPU, Metal.
+## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
 ##
 ## Public API, one import: `import workspace/crucible`.
 ## The curated surface lives in `src/crucible_public_api.nim`, the GPU builtin vocabulary
@@ -35,7 +35,7 @@
 ## | `reduceMax`                      | `warpReduceMax` (emitted `__forceinline__` template)                         | `sub_group_reduce_max`                                                                                        | `subgroupMax`             | `subgroupMax` (no directive; subgroups device feature) |
 
 ##
-## Backends: cuda: / opencl: / vulkan: / webgpu: / metal:
+## Backends: cuda: / opencl: / glsl: / webgpu: / metal:
 ## - var engine = newEngine(runCuda)
 ## - engine.ingest(kernelCode)
 ## - engine.launchKernel<<grid, blk>>("addKernel", out, (a, b))

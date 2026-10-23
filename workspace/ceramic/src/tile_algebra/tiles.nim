@@ -32,7 +32,8 @@ template getLaneWidth*: int =
   when ccGetBackend() == ctCuda: 32
   elif ccGetBackend() == ctMetal: 32
   elif ccGetBackend() == ctOpenCL: 32
-  elif ccGetBackend() == ctVulkan: 32
+  elif ccGetBackend() == ctGlsl:
+    32
   elif ccGetBackend() == ctWebGPU: 32
 
 template getGridSize*: int =

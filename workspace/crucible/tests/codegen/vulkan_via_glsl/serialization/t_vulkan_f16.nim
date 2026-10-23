@@ -1,4 +1,4 @@
-## Vulkan: fp16 SSBO arithmetic through the GPU DSL, end to end.
+## Vulkan: fp16 storage-buffer arithmetic through the GPU DSL, end to end.
 ## Needs a driver with VK_KHR_shader_float16_int8 + 16-bit storage (MoltenVK on Apple Silicon qualifies).
 ##
 ## Run:
@@ -43,7 +43,7 @@ func f16OfInt(i: int): uint16 =
     bits = bits or 0x8000'u16
   return bits
 
-const f16Vk = vulkan:
+const f16Vk = glsl:
   proc f16MulKernel(C: ptr UncheckedArray[float16];
                     A, B: ptr UncheckedArray[float16]) {.global, workgroup: (64, 1, 1).} =
     let i = int(thread_position_in_grid.x)
@@ -72,7 +72,7 @@ proc runTest() =
     let refVal = f16ToF32(A[i]) * f16ToF32(B[i])
     doAssert f16ToF32(C[i]) == refVal,
       "C[" & $i & "] = " & $f16ToF32(C[i]) & ", expected " & $refVal
-  echo "  OK: fp16 SSBO multiply, 64 lanes, bit-exact vs the f32 reference"
+  echo "  OK: fp16 storage-buffer multiply, 64 lanes, bit-exact vs the f32 reference"
 
 when isMainModule:
   runTest()

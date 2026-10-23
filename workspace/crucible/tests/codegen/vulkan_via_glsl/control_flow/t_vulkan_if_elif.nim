@@ -8,7 +8,7 @@
 import std/[strutils, unittest]
 import workspace/crucible
 
-const elifGlsl = vulkan:
+const elifGlsl = glsl:
   proc elifDispatch(output, x: ptr UncheckedArray[int32]) {.global.} =
     if x[0] == 0:
       output[0] = 10
@@ -19,7 +19,7 @@ const elifGlsl = vulkan:
     else:
       output[0] = 40
 
-const noElseGlsl = vulkan:
+const noElseGlsl = glsl:
   proc elifNoElse(output, x: ptr UncheckedArray[int32]) {.global.} =
     output[0] = 99
     if x[0] == 0:

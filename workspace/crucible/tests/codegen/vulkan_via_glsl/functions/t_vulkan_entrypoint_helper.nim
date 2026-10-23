@@ -15,7 +15,7 @@ import workspace/crucible
 # The kernel calls a void-returning device function: the codegen forward-
 # declares it (`void helper(uint x);`) before the kernel's preamble, which is
 # exactly the shape that breaks a naive first-`void ` entry-point scan.
-const helperVk = vulkan:
+const helperVk = glsl:
   proc helper(x: uint32) {.device.} =
     let y = x + 1
 

@@ -9,26 +9,26 @@
 import std/[strutils, unittest]
 import workspace/crucible
 
-const scalarVk = vulkan:
+const scalarVk = glsl:
   proc sumScalar(outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     let v = float32(lane)
     outBuf[lane] = reduceAdd(v)
 
-const partialsVk = vulkan:
+const partialsVk = glsl:
   proc sumPartials(outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     for j in 0 ..< 4:
       let v = float32(lane) + float32(j)
       outBuf[lane * 4 + j] = reduceAdd(v)
 
-const maxScalarVk = vulkan:
+const maxScalarVk = glsl:
   proc maxScalar(outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     let v = float32(lane)
     outBuf[lane] = reduceMax(v)
 
-const maxPartialsVk = vulkan:
+const maxPartialsVk = glsl:
   proc maxPartials(outBuf: ptr UncheckedArray[float32]) {.global, workgroup: (32, 1, 1).} =
     let lane = thread_index_in_threadgroup
     for j in 0 ..< 4:

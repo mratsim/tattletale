@@ -150,7 +150,7 @@ macro opencl*(body: untyped): string =
   result = newCall(bindSym"codegenOpenCL", body)
 
 macro codegenGLSL(body: typed): string =
-  ## Compiles a `vulkan:` block body into GLSL compute shader code.
+  ## Compiles a `glsl:` block body into GLSL compute shader code.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
@@ -165,12 +165,12 @@ macro codegenGLSL(body: typed): string =
   let src = ctx.codegenGLSL()
   result = newLit(src)
 
-macro vulkan*(body: untyped): string =
+macro glsl*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctVulkan
+  crucibleCompileTarget = ctGlsl
   result = newCall(bindSym"codegenGLSL", body)
 
 macro codegenWebGpu(body: typed): string =

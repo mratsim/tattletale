@@ -14,7 +14,7 @@ type
     bkCuda,   ## CUDA backend
     bkWebGPU,   ## WebGPU WGSL backend
     bkOpenCL, ## OpenCL backend
-    bkVulkan, ## Vulkan (SPIR-V) backend
+    bkGlsl,  ## GLSL backend, executed on Vulkan
     bkMetal,  ## Metal (MSL) backend
     bkHlsl    ## HLSL backend, compiled through the glslang HLSL frontend
 

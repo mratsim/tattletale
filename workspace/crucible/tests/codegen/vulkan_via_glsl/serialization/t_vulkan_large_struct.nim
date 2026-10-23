@@ -12,7 +12,7 @@ type
     data: array[8, uint32]  # 32 bytes > 24 threshold
 
 # Test 1: inline constructor arg to device function
-const code1 = vulkan:
+const code1 = glsl:
   proc takeLarge(s: LargeStruct): uint32 {.device.} =
     result = s.data[0] + s.data[1]
   proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -29,7 +29,7 @@ type
   OtherLarge = object
     x: array[8, float32]
 
-const code2 = vulkan:
+const code2 = glsl:
   proc makeLarge(val: uint32): LargeStruct {.device.} =
     result.data[0] = val
   proc takeLarge(s: LargeStruct): uint32 {.device.} =

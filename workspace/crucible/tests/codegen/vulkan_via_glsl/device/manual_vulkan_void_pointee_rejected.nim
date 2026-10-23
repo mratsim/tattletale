@@ -10,7 +10,7 @@
 
 import workspace/crucible
 
-const code = vulkan:
+const code = glsl:
   proc k(output: ptr void) {.global.} =
     discard
 

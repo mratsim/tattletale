@@ -54,7 +54,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
-  let vulkanCg = bindSym"vulkan"
+  let glslCg = bindSym"glsl"
   let webgpuCg = bindSym"webgpu"
   let t = engine.getTypeInst()
   if sameType(t, bindSym"MetalEngine"):
@@ -64,7 +64,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   elif sameType(t, bindSym"OpenCLEngine"):
     result = openclCg.newCall(node)
   elif sameType(t, bindSym"VulkanEngine"):
-    result = vulkanCg.newCall(node)
+    result = glslCg.newCall(node)
   elif sameType(t, bindSym"WebgpuEngine"):
     result = webgpuCg.newCall(node)
   else:

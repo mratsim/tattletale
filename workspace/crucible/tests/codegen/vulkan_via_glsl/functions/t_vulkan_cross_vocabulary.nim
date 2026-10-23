@@ -11,7 +11,7 @@
 import std/[strutils, unittest]
 import workspace/crucible
 
-const kernel2d = vulkan:
+const kernel2d = glsl:
   proc crossVocab2d(C: ptr UncheckedArray[uint32]) {.global, workgroup: (4, 2).} =
     let gx = blockIdx.x * blockDim.x + threadIdx.x
     let gy = blockIdx.y * blockDim.y + threadIdx.y
@@ -35,7 +35,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "CUDA + OpenCL idioms agree; flat local is native; barrier runs":
       var engine = newEngine(runVulkan)
       engine.ingest(kernel2d)
-      # The generated GLSL source (the `vulkan:` macro output) must carry
+      # The generated GLSL source (the `glsl:` macro output) must carry
       # the native flat-index spelling. The Vulkan engine's getArtifact
       # returns compiled SPIR-V instead of source text, so the source is
       # grepped directly.

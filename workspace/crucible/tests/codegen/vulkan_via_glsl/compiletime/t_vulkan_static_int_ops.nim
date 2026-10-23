@@ -29,7 +29,7 @@ genBinOp(`*`)
 # ── kernel ───────────────────────────────────────────────────────────────
 # This backend binds kernel args in order: output first, then inputs (per CONVENTIONS.md).
 # The dynamic value comes from an input buffer (same shape as CUDA's).
-const kernelCode = vulkan:
+const kernelCode = glsl:
   proc staticIntOps(res: ptr UncheckedArray[int32];
                     dyn: ptr UncheckedArray[int32]) {.global.} =
     let h = int(dyn[0])
