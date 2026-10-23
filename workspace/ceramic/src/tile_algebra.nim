@@ -17,6 +17,7 @@ import
   workspace/ceramic/src/hardware/h_mma_properties,
   workspace/ceramic/src/tile_algebra/tiles,
   workspace/ceramic/src/tile_algebra/tile_foreach,
+  workspace/ceramic/src/tile_algebra/tile_elementary,
   workspace/ceramic/src/tile_algebra/tile_ops_unary,
   workspace/ceramic/src/tile_algebra/tile_ops_binary,
   workspace/ceramic/src/tile_algebra/tile_ops_ternary,
@@ -25,7 +26,7 @@ import
   workspace/ceramic/src/tile_algebra/tile_reduce,
   workspace/ceramic/src/tile_algebra/tile_matmul
 
-export tiles, tile_foreach, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
+export tiles, tile_foreach, tile_elementary, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
        tile_loadstore, tile_reductions, tile_reduce, tile_matmul
 
 # Symbols outside tile_algebra's jurisdiction, re-exported per symbol

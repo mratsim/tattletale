@@ -65,9 +65,9 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## Each output row is x * rsqrt(mean(x²) + eps), times the per-axis weight when withWeight. dst is fully overwritten.
   ##
   ## Sum of squares per row, one register tile at a time:
-  ## - `rowView` cuts the source and destination strips per row, the rank-1 weight strip is the full tensor
+  ## - `atAxisIndex` cuts the source and destination strips per row, the rank-1 weight strip is the full tensor
   ## - tile loads pad past-the-end slots with the `roSum` identity, so short and ragged rows contribute nothing to the sum
-  ## - `reduce(acc, reg, roSum, clear = false)` accumulates each tile's sum of squares onto the accumulator, one subgroup butterfly per tile
+  ## - `acc.reduceAcc(reg, roSum)` accumulates each tile's sum of squares onto the accumulator, one subgroup butterfly per tile
   ##
   ## Mean accumulation in fp32. `rsqrt` is the backend native reciprocal square root.
   ##
@@ -106,22 +106,22 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     gridStride = getGridSize()
   for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
     let
-      srcRow = rowView(src, axis, g)
-      dstRow = rowView(dst, axis, g)
+      srcRow = atAxisIndex(src, axis, g)
+      dstRow = atAxisIndex(dst, axis, g)
       rowSize = srcRow.size()
       tiled = make_layout(rowSize).logical_divide(reg.getLayout())
       stripTiles = tiled.getTileGrid().size()
     # pass 1: sum of squares, one register tile at a time
     var acc = zero(float32)
     for tileID in 0 ..< stripTiles:
-      reg.load(srcRow, thrID, tileID, padWith = reduceIdentity[float32](roSum))
+      reg.load(srcRow, thrID, tileID, padWith = reduceIdentity(roSum, float32))
       for i in 0 ..< owned:
-        reg.data[i] = reg.data[i] * reg.data[i]
-      reduce(acc, reg, roSum, clear = false)
+        reg.data[i] = reg.data[i].square()
+      acc.reduceAcc(reg, roSum)
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:
-      let weightStrip = rowView(weight, 0, 0)
+      let weightStrip = atAxisIndex(weight, 0, 0)
       for r in countup(thrID, rowSize - 1, W):
         dstRow[r] = srcRow[r] * scale * weightStrip[r]
     else:

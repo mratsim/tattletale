@@ -24,7 +24,7 @@ type ReduceOp* = enum
   roMax
   roMin
 
-func reduceIdentity*[T](op: static ReduceOp): T =
+func reduceIdentity*(op: static ReduceOp, T: typedesc): T =
   ## Returns the neutral element of `op` for `T`,
   ## the starting value of the per-lane combine in `reduce`.
   ##
@@ -45,7 +45,7 @@ func reduceIdentity*[T](op: static ReduceOp): T =
     else:
       result = high(T)
 
-proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, clear: static bool) {.inline.} =
+proc reduceImpl[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, accumulate: static bool) {.inline.} =
   ## Two-phase warp-scope reduction of a register tile into `dst`.
   ##
   ## Phase 1 combines each lane's owned tile elements into a per-lane partial, starting from `reduceIdentity(op)`.
@@ -57,9 +57,9 @@ proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, c
   ##
   ## The reduced size lives in the tile map's replicate dimension, the result collapses into it, and every lane ends holding the total.
   ##
-  ## `clear` governs `dst` only:
-  ## - `clear = true`: `dst` becomes the result, `dst` is not read
-  ## - `clear = false`: `dst` combines with the result
+  ## `accumulate` governs `dst` only:
+  ## - `accumulate = false`: `dst` becomes the result, `dst` is not read
+  ## - `accumulate = true`: `dst` combines with the result
   ##
   ## Contract:
   ## - all lanes must call `reduce` unconditionally, subgroup collectives are non-divergent
@@ -67,7 +67,7 @@ proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, c
   ##   lanes of a wider threadgroup hold per-simdgroup partials
   ## - the tile comes from `tile_algebra`'s `load`, a lane's storage holds its owned elements at `data[0 ..< size div lane width]`
   let owned = src.size() div getLaneWidth()
-  var acc = reduceIdentity[T](op)
+  var acc = reduceIdentity(op, T)
   for i in 0 ..< owned:
     when op == roSum:
       acc += src.data[i]
@@ -81,19 +81,25 @@ proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp, c
     let total = reduceMax(acc)
   else:
     let total = -reduceMax(-acc)
-  when clear:
-    dst = total
-  else:
+  when accumulate:
     when op == roSum:
-      # read plus plain assignment, compound assignment on a `var` scalar
-      # parameter lowers to an invalid pointer addition on Metal
-      dst = dst + total
+      dst += total
     elif op == roMax:
       dst = max(dst, total)
     else:
       dst = min(dst, total)
+  else:
+    dst = total
 
-func rowView*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, rowFlat: int): auto =
+proc reduce*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp) {.inline.} =
+  ## Overwrites `dst` with the two-phase warp-scope reduction of `src` per `op`, the total broadcast to every lane.
+  reduceImpl(dst, src, op, accumulate = false)
+
+proc reduceAcc*[T, Sh, St](dst: var T, src: Tile[T, Sh, St], op: static ReduceOp) {.inline.} =
+  ## Combines the two-phase warp-scope reduction of `src` per `op` onto `dst`, `dst` is read before written.
+  reduceImpl(dst, src, op, accumulate = true)
+
+func atAxisIndex*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, rowFlat: int): auto =
   ## View of one strip of `src` along `axis`, the unit `reduce` consumes.
   ##
   ## `rowFlat` is the flat index over the non-reduced coordinates, the other dimensions in `src`'s own order.
@@ -107,7 +113,7 @@ func rowView*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, rowFlat: 
   ## - `offset = crd2idx(nonReduced, rowCrd)` walks the real strides
   ##
   ## The same proc cuts destination strips: a strip of `dst` along `axis` with the same `rowFlat` shares the non-reduced coordinates.
-  ## A rank-1 weight over the reduced axis needs no cut, its strip is the full tensor, `rowView(weight, 0, 0)`.
+  ## A rank-1 weight over the reduced axis needs no cut, its strip is the full tensor, `atAxisIndex(weight, 0, 0)`.
   let
     nonReduced = src.sliceAxes(axis)
     reduced = src.diceAxes(axis)
