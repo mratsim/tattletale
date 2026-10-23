@@ -12,6 +12,7 @@
 # createPipeline carries the set layout, runKernel binds the set.
 
 import workspace/crucible/src/runtime/backends/vulkan_common
+import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, uniformCount: uint32 = 0): VkDescriptorSetLayout =
