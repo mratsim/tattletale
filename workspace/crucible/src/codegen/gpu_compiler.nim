@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, sequtils, tables]
+import std/[macros, sequtils, strutils, tables]
 
 import ./ir/ast_datatypes
 import ./ir/ast_type_constructors
@@ -24,6 +24,8 @@ import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_hlsl
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12
+import ./passes/passes_autodiff
+import ./kernel_pair
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
 import ./backends/lang_utils
@@ -104,6 +106,117 @@ macro toCrucibleAst*(body: typed): GpuAst =
   # Clear scope tables before newLit (can't serialize seq/Symbol refs)
   # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
   newLit(gpuAst)
+
+
+
+proc printSingleProc(ctx: var GpuContext, bk: BackendKind, fn: GpuAst): string =
+  ## Prints one proc as a standalone translation unit of backend `bk`.
+  ##
+  ## The printer sees only this kernel in the function table.
+  ## Each kernel prints with its own type declarations and push-constant blocks.
+  let saved = ctx.fnTab
+  ctx.fnTab = {fn.pName: fn}.toOrderedTable
+  case bk
+  of bkMetal:
+    result = ctx.codegenMetal()
+  of bkGlsl:
+    result = ctx.codegenGLSL()
+  else:
+    discard
+  ctx.fnTab = saved
+
+proc codegenKernelADImpl*(bk: BackendKind, body: NimNode): KernelPair =
+  ## Pipeline of one `bwd_diff` expansion for backend `bk`:
+  ##
+  ##   Nim body → frontend → common passes → transposer → metadata
+  ##           → backend lowering → per-kernel print
+  ##
+  ## - the typed kernel body goes through the frontend, the common passes
+  ##   and the autodiff transposer
+  ## - the signature metadata derives from the transposer's output
+  ## - each kernel prints standalone after the backend lowering
+  ##
+  ## Compile-time only, called from the `bwd_diff` macro.
+  ##
+  ## A `static` backend-kind macro parameter cannot host the pipeline:
+  ##
+  ## - a static parameter makes the macro generic
+  ## - instantiation re-sem-checks the typed kernel body
+  ## - statement pragmas like `{.emit: ... .}` refuse there
+  ## - the differentiable subset must diagnose those pragmas itself
+  var ctx = GpuContext()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
+  ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
+
+  # Stage 1, differentiation: metadata derives from the transposer's output,
+  # before backend lowering renames identifiers.
+  # The ABI keeps Nim-facing names (GLSL renames `out` to `out_nim`).
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.registerAutodiffPasses()
+  runPasses(ctx, reg)
+
+  var fwd: GpuAst = nil
+  var bwd: GpuAst = nil
+  var reduces: seq[GpuAst] = @[]
+  for fn in ctx.allFnTab.values():
+    if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
+      continue
+    if fwd.isNil:
+      fwd = fn
+    elif fn.pName.ident() == fwd.pName.ident() & "_bwd":
+      bwd = fn
+    elif fn.pName.ident().startsWith(fwd.pName.ident() & "_bwd_d_") and
+        fn.pName.ident().endsWith("_reduce"):
+      reduces.add fn
+    else:
+      error "bwd_diff: unexpected global proc '" & fn.pName.ident() &
+        "' in the pair pipeline"
+  if fwd.isNil:
+    error "bwd_diff: no {.global.} kernel to differentiate"
+  if bwd.isNil:
+    error "bwd_diff: no backward kernel was generated for '" &
+      fwd.pName.ident() & "'"
+
+  var reduceNames: seq[string] = @[]
+  for rk in reduces:
+    reduceNames.add rk.pName.ident()
+  let metas = deriveBwdParams(fwd, bwd, reduceNames)
+
+  # Stage 2, backend lowering. The GLSL shared-push-constant-layout
+  # validation does not apply: it guards multi-kernel sources sharing
+  # one block. Each kernel of the pair prints and ingests standalone,
+  # carrying its own push-constant block.
+  var regLow = PassRegistry.new()
+  # Lowering passes carry `dependsOn` edges into the common passes
+  # (e.g. GLSL's insertPointerDeref needs the legalized rewriteIndexDeref).
+  # The dependency set continues across the stages.
+  regLow.donePasses = reg.donePasses
+  case bk
+  of bkMetal:
+    regLow.registerMetalLoweringPasses()
+  of bkGlsl:
+    regLow.registerGlslLoweringPasses()
+  else:
+    discard
+  regLow.registerValidationPostPasses()
+  runPasses(ctx, regLow)
+
+  var reduceSources: seq[tuple[name, source: string]] = @[]
+  for rk in reduces:
+    reduceSources.add (name: rk.pName.ident(),
+                       source: ctx.printSingleProc(bk, rk))
+  let pair = KernelPair(
+    kernelName: fwd.pName.ident(),
+    backend: bk,
+    fwdSource: ctx.printSingleProc(bk, fwd),
+    bwdSource: ctx.printSingleProc(bk, bwd),
+    reduceSources: reduceSources,
+    params: metas,
+    bwdSignature: metas.mirrorSignature())
+  result = pair
 
 macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA code.

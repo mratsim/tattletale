@@ -7,6 +7,7 @@
 
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/codegen/kernel_pair
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/cuda_api
 import workspace/crucible/src/runtime/engines/opencl_api
@@ -16,9 +17,9 @@ import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_kernel {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   DeviceFnSugar*[E: HwEngine] = object
@@ -31,9 +32,9 @@ type
     sharedMem: int
 
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
   DeviceFnSugar[E](engine: engine)
@@ -41,7 +42,8 @@ func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
 func base58(h: int): string =
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   var x = uint64(h)
-  if x == 0: return "1"
+  if x == 0:
+    return "1"
   while x > 0:
     result = alphabet[int(x mod 58)] & result
     x = x div 58
@@ -49,8 +51,8 @@ func base58(h: int): string =
 macro bridge(engine: HwEngine, node: untyped): untyped =
   ## Defers the generated global function generation
   ## so that it happens in a `device` environment.
-  ## This allows functions that depend on `ccGetBackend`
-  ## to correctly resolve the target backend and not resolve the CPU host.
+  ## Functions that depend on `ccGetBackend` resolve the target backend
+  ## inside the expansion, never the CPU host.
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
@@ -82,8 +84,10 @@ func isDeviceMemType(t: NimNode): bool =
 func getElemType(formal: NimNode): NimNode =
   formal.expectKind(nnkPtrTy)
   let p = formal[0]
-  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"): p[1]
-  else: p
+  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"):
+    p[1]
+  else:
+    p
 
 func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
   if formal.kind != nnkPtrTy:
@@ -104,7 +108,8 @@ func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   case impl.kind
   of nnkObjectTy:
     let rec = impl[^1]
-    if rec.kind != nnkRecList: return
+    if rec.kind != nnkRecList:
+      return
     for f in rec:
       f.expectKind(nnkIdentDefs)
       if isDeviceMemType(f[^2]):
@@ -308,9 +313,70 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
     else:
       result.add(a)
 
-# ═════════════════════════════════════════════════════════════════════════
+macro bwd_diff*(bk: BackendKind, sym: typed): untyped =
+  ## Compile-time autodiff entry: `bkGlsl.bwd_diff(axpy)` expands to a const
+  ## `KernelPair` for the Vulkan GLSL backend and `bkMetal.bwd_diff(axpy)`
+  ## for Metal. The kernel takes the launch bridge's ingestion:
+  ##
+  ##   kernel symbol → frontend → common passes → transposer → lowering
+  ##
+  ## and each kernel of the pair prints standalone.
+  ##
+  ## The pair carries:
+  ##
+  ## - both printed sources
+  ## - the scalar-cotangent reduce kernels
+  ## - the backward signature, nothing else
+  ##
+  ## `bk` is the compile-time backend-kind token (`bkGlsl`, `bkMetal`),
+  ## other kinds refuse at expansion.
+  ##
+  ## The kernel:
+  ##
+  ## - is a `{.global.}` proc in the differentiable subset
+  ## - passes as its symbol or inline as the last argument
+  ##
+  ## Every refusal surfaces at this expansion with a `bwd_diff:` prefix.
+  # Call forms:
+  # - `bkGlsl.bwd_diff(axpy)` passes the kernel's symbol
+  # - `bkGlsl.bwd_diff: proc axpy(...) {.global.} = ...` passes the typed definition
+  # The symbol form pulls the impl at expansion, which VM-compiles the body.
+  # The inline form hands the typed body over untouched, the only form
+  # carrying statement pragmas like `{.emit: ... .}`.
+  var impl: NimNode
+  case sym.kind
+  of nnkProcDef:
+    impl = sym
+  of nnkStmtList:
+    if sym.len == 1 and sym[0].kind == nnkProcDef:
+      impl = sym[0]
+    else:
+      error "bwd_diff: expected exactly one kernel definition, got " & sym.repr
+  else:
+    if sym.kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+      impl = sym.getImpl()
+    else:
+      error "bwd_diff: the kernel argument is not a proc, only {.global.} kernels differentiate"
+  if impl.kind != nnkProcDef:
+    error "bwd_diff: " & $sym & " is not a proc, only {.global.} kernels differentiate"
+  # The backend kind travels as the typed enum token, the token name selects
+  # the pipeline. `bk` must not be a `static` macro parameter:
+  # - a static parameter makes the macro generic
+  # - instantiation re-sem-checks the typed kernel body
+  # - statement pragmas like `{.emit: ... .}` refuse there
+  # - the differentiable subset must diagnose those pragmas itself
+  case bk.strVal
+  of "bkGlsl":
+    result = newLit(codegenKernelADImpl(bkGlsl, impl))
+  of "bkMetal":
+    result = newLit(codegenKernelADImpl(bkMetal, impl))
+  else:
+    error "bwd_diff: backend kind " & bk.strVal &
+      " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"
+
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   ## Chevron form accessor for device-fn launches.
