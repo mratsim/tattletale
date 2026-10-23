@@ -122,8 +122,6 @@ proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   engine.source
 
 proc getSpirvWords*(engine: VulkanEngine): seq[uint32] {.inline.} =
-  ## Ingested module words, the ingest-if-differs identity of the words route,
-  ## set by every ingest: a string ingest stores the toolchain-compiled module
   engine.spirv
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
