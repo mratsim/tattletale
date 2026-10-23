@@ -12,7 +12,7 @@ import workspace/crucible/src/abis/opencl_abi
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
-import workspace/crucible/src/runtime/exec/opencl_runtime
+import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 

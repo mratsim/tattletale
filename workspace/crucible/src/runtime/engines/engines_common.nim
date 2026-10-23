@@ -17,8 +17,8 @@ import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/vendor/wgpu
 import workspace/crucible/src/runtime/errors
-import workspace/crucible/src/runtime/exec/opencl_runtime
-import workspace/crucible/src/runtime/exec/vulkan_runtime
+import workspace/crucible/src/runtime/backends/opencl_runtime
+import workspace/crucible/src/runtime/backends/vulkan_runtime
 
 type
   Dim3* = object

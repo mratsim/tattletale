@@ -236,7 +236,7 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
    The printers walk the now-annotated IR and emit native text.
 
 5. **Runtime path.** The compile-time macro result is a source string.
-   - An engine ingests it via `engine.ingest(source)`, the platform session under `runtime/exec/`
+   - An engine ingests it via `engine.ingest(source)`, the platform session under `runtime/backends/`
      compiles it to an executable artifact.
    - `launchKernel` or `launchDeviceFn` dispatches it, packing arguments through
      `launch_serialization.nim`.
@@ -262,7 +262,7 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
 
 1. Add a printer file under `src/codegen/backends/` exposing `preprocess` and `codegen`.
 2. Wire it into `backends_api.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
-3. Add the platform session under `src/runtime/exec/`, the engine facade under `src/runtime/engines/`,
+3. Add the platform session under `src/runtime/backends/`, the engine facade under `src/runtime/engines/`,
    the raw bindings under `src/abis/`, and the `BackendKind` value in `ast_datatypes.nim`.
 4. Add a `tests/codegen/<backend>/` suite obeying the naming convention of [`AGENTS.md`](AGENTS.md).
    Backends that cannot auto-run get a `manual_*` test.

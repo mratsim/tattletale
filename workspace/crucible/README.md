@@ -11,14 +11,14 @@ Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`, `metal`).
 Each macro consumes a kernel body written in that subset of Nim and emits a string of native GPU source code.
 
 - It does not ship a device runtime or a scheduler.
-- It does include minimal host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/):
+- It does include minimal host-side runtimes under [`src/runtime/backends/`](src/runtime/backends/):
   they compile, load, and launch the generated code on each backend.
 
 It is the base layer of the tattletale GPU stack: kernels, layout algebra, tile algebra all call Crucible to compile to GPUs.
 
 - The generated source is handed to an external toolchain to run:
   NVRTC compiles CUDA to PTX, glslangValidator compiles GLSL to SPIR-V.
-- The host-side runtimes under [`src/runtime/exec/`](src/runtime/exec/), backed by the ABIs under
+- The host-side runtimes under [`src/runtime/backends/`](src/runtime/backends/), backed by the ABIs under
   [`src/abis/`](src/abis/), load and launch the results.
 - The Metal runtime compiles MSL on-device via `newLibraryWithSource`, it needs no external CLI.
 
