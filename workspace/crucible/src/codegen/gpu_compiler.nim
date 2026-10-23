@@ -21,6 +21,7 @@ import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_glsl
+import ./passes/passes_lowering_spirv
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_hlsl
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12
@@ -172,6 +173,28 @@ macro glsl*(body: untyped): string =
   # until after crucibleCompileTarget is updated
   crucibleCompileTarget = ctGlsl
   result = newCall(bindSym"codegenGLSL", body)
+
+macro codegenSpirv(body: typed): seq[uint32] =
+  ## Compiles a `spirv:` block body into binary SPIR-V words (Vulkan flavor).
+  var ctx = GpuContext()
+  var reg = PassRegistry.new()
+  reg.registerCommonPasses()
+  reg.registerSpirvLoweringPasses()
+  reg.registerValidationPostPasses()
+  var typeReg = TypeRegistry(types: ctx.types)
+  let gpuAst = ctx.toCrucibleAst(typeReg, body)
+  ctx.types = typeReg.types
+  ctx.ingestTopLevel(gpuAst, typesFirst = true)
+  runPasses(ctx, reg)
+  result = newLit(ctx.codegenSpirv())
+
+macro spirv*(body: untyped): seq[uint32] =
+  ## Converts the body of this macro into binary SPIR-V words (Vulkan flavor).
+  # The untyped -> typed macro delegation dance
+  # allows delaying compileTime const resolution
+  # until after crucibleCompileTarget is updated
+  crucibleCompileTarget = ctVulkan
+  result = newCall(bindSym"codegenSpirv", body)
 
 macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code.
