@@ -207,8 +207,6 @@ proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
 proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType
 
 proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
-  ## Memory a pointer/span/array type accesses
-  ## Returns asRMEM for any other kind, plain values live in per-thread registers
   if not t.isNil and t.kind in {gtPtr, gtSpan, gtArray}:
     result = t.addressSpace
   else:
@@ -217,17 +215,14 @@ proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
 proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## Memory the storage designated by an expression accesses
   ## Returns:
-  ## - the innermost pointer/span/array type's space along the access chain,
-  ##   `p[i]` and `p` resolve to the same space
-  ## - the space a pointer-cast target carries, its operand derives it at birth
+  ## - the address space of the innermost pointer/span/array type along the access chain, `p[i]` and `p` resolve to the same address space
+  ## - the address space a pointer-cast target carries, its operand derives it at birth
   ## - the storage a value-cast (`cast[uint64](p)`) or integer arithmetic over
   ##   one derives from, pointer provenance survives the round-trip
   ## - asRMEM for plain values
   case n.kind
   of gpuIndex:
-    # the indexed container carries the space, `p[i]` accesses what `p` accesses.
-    # a derefed container (`(*p)[i]`, the raw form for pointer indexing) takes
-    # the deref's pointer, the pointee itself carries no space
+    # the indexed container carries the address space, the pointee itself carries none
     var container = n.iArr
     if container.kind == gpuDeref:
       container = container.dOf
@@ -235,10 +230,7 @@ proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   of gpuDeref:
     result = getTypeAccessedSpace(ctx.getOperandType(n.dOf))
   of gpuCast:
-    # a pointer/span/array cast target carries its own space derived from
-    # the operand at birth
-    # a cast to a plain value keeps the operand's storage provenance,
-    # `cast[uint64](p) + off` still derives from p
+    # a pointer/span/array target keeps its own address space, a value cast keeps the operand's storage provenance
     if n.cTo.kind in {gtPtr, gtSpan, gtArray}:
       result = getTypeAccessedSpace(n.cTo)
     else:

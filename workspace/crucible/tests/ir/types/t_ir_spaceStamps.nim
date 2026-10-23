@@ -174,7 +174,7 @@ static:
     "exactly one call arg forwards the threadgroup arena, got " & $arenaArgs
   echo "  OK - smem arena carries asSMEM on the hoisted type"
 
-# ── 3. A ptr-to-array param decays keeping its space ──
+# ── 3. A ptr-to-array param decays keeping its address space ──
 static:
   let ir = toCrucibleAst:
     proc reduce(dst: ptr array[16, float32], src: ptr array[16, float32]) {.device.} =
@@ -201,7 +201,7 @@ static:
       reduceFn.pParams[i].typ.addressSpace == asDevice,
       "the decayed ptr-array param keeps asDevice, got " &
       $reduceFn.pParams[i].typ.addressSpace
-  echo "  OK - ptr-array decay keeps the birth space"
+  echo "  OK - ptr-array decay keeps the birth address space"
 
 # ── 4. A span view binding decomposes keeping the span's space ──
 static:

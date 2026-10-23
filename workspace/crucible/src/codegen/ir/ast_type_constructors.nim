@@ -35,8 +35,8 @@ func initGpuUncheckedArrayType*(to: GpuType): GpuType =
 
 func withAddressSpace*(t: GpuType, space: AddressSpace): GpuType =
   ## Copy-on-write:
-  ## - same space: returns `t` unchanged
-  ## - different space: returns a clone carrying `space`
+  ## - same address space: returns `t` unchanged
+  ## - different address space: returns a clone carrying `space`
   ## Refs are shared (contexts, table keys), writing in place leaks to every sharer.
   if t.isNil or t.addressSpace == space:
     result = t

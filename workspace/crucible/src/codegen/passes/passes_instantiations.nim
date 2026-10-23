@@ -16,7 +16,7 @@
 #
 # - call sites: one callee instantiation per space combination
 # - struct constructions: one type def per field-space combination
-# - identity: callee key + the type hash of each parameter's space,
+# - identity: callee key + the type hash of each parameter's address space,
 #   reusing the existing instantiation hashing
 #
 # A pointer/span parameter is implicitly generic over its space,
@@ -77,7 +77,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   if not specializes:
     return
 
-  # Identity: the callee's iSym gains the hash of every parameter whose space changed
+  # Identity: the callee's iSym gains the hash of every parameter whose address space changed
   # like the Nim-level generic instantiation hashing
   var key = call.cName.symbol.iSym
   for i, p in callee.pParams:
@@ -93,7 +93,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
   var inst = callee.clone()
   inst.pName = instIdent
   # The clone shares the original's Symbols (a gpuIdent clone shares the ref):
-  # parameters carrying a new space get fresh symbols and the body rebinds onto them,
+  # parameters carrying a new address space get fresh symbols and the body rebinds onto them,
   # the original's parameters stay untouched
   var fresh = initTable[string, Symbol]()
   for i, p in inst.pParams.mpairs:
@@ -126,8 +126,8 @@ proc rebindIdents(n: var GpuAst, fresh: Table[string, Symbol]) =
       ch.rebindIdents(fresh)
 
 proc instantiateCallsIn(ctx: var GpuContext, n: var GpuAst) =
-  ## Instantiates every call in `n` whose argument spaces mismatch
-  ## the callee's pointer/span parameter spaces
+  ## Instantiates every call in `n` whose argument address spaces mismatch
+  ## the callee's pointer/span parameter address spaces
   if n.isNil:
     return
   if n.kind == gpuCall:
@@ -202,7 +202,7 @@ proc instantiateStructConstr(ctx: var GpuContext, constr: var GpuAst): bool =
 
 proc instantiateStructTypesIn(ctx: var GpuContext, n: var GpuAst) =
   ## Instantiates every struct construction in `n` whose field inits
-  ## differ from the declared field spaces.
+  ## differ from the declared field address spaces.
   if n.isNil:
     return
   case n.kind
