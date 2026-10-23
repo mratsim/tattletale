@@ -35,7 +35,7 @@ proc statementTail(path: string): string =
 
 proc runTest() =
   block: # emission + Lean elaboration + statement match against the P1 module
-    let ir = irVulkan:
+    let ir = irLean:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -65,7 +65,7 @@ proc runTest() =
   block: # loud refusal on an out-of-scope construct (while loop)
     # a `for` over a compile-time constant range is the P4 loop shape, tested
     # by t_p4_loop.nim. A while loop stays out of scope
-    let ir = irVulkan:
+    let ir = irLean:
       proc whileAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         var i = 0
         while i < 4:
@@ -76,7 +76,7 @@ proc runTest() =
     echo "  refusal on out-of-scope construct: ok"
 
   block: # loud refusal on a buffer-parameter set other than the add shape
-    let copy = irVulkan:
+    let copy = irLean:
       proc copyKernel(dst, src: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -84,7 +84,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(copy.statements[0], genRelPath)
 
-    let renamed = irVulkan:
+    let renamed = irLean:
       proc renamedKernel(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -92,7 +92,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(renamed.statements[0], genRelPath)
 
-    let unreadInput = irVulkan:
+    let unreadInput = irLean:
       proc copyA(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -102,7 +102,7 @@ proc runTest() =
     echo "  refusal on kernels outside the add-shape buffer parameters: ok"
 
   block: # loud refusal on a non-positive guard literal
-    let zeroBound = irVulkan:
+    let zeroBound = irLean:
       proc zeroBoundKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 0:
@@ -110,7 +110,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(zeroBound.statements[0], genRelPath)
 
-    let negativeBound = irVulkan:
+    let negativeBound = irLean:
       proc negativeBoundKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < -1:
@@ -122,7 +122,7 @@ proc runTest() =
   block: # loud refusal on nested indexing
     # the model covers reads at the thread's own index only. A nested index
     # (`a[a[i]]`) would otherwise render an unelaboratable Lean term
-    let nested = irVulkan:
+    let nested = irLean:
       proc nestedKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:

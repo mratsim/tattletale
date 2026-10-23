@@ -19,7 +19,7 @@
 ## - loop (P4): one `for` over the compile-time constant range `0 ..< n`, start 0,
 ##   step 1, exclusive, one indexed write over the loop variable and the buffers
 ##
-## - `irVulkanLean` captures the P3 verification pragmas (payloads in `lean_pragmas.nim`), `emitLeanModuleWithSpecs` emits the scaffolds
+## - `irLeanSpec` captures the verification pragmas (payloads in `lean_pragmas.nim`), `emitLeanModuleWithSpecs` emits the scaffolds
 ## - `{.precondition.}` - an assumption, carried by the scaffolds as hypothesis `h` (guarded thread only)
 ## - `{.invariant.}` - implied by the guard, proved by `exact h` (loop shape: a loop-counter property over the remaining count `k`)
 ## - `{.postcondition.}` - stated against the per-thread body, attempted with the derived `simp` scripts (guarded thread only)
@@ -30,22 +30,27 @@ import std/[json, macros, os, osproc, sets, strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import lean_pragmas
 
-proc toGpuAstVulkan(body: NimNode): GpuAst {.compileTime.} =
-  ## Runs the post-pass GpuAst conversion, the same common + Vulkan pass set
-  ## as the production `codegenVulkan` macro
+proc toPostPassAst(body: NimNode): GpuAst {.compileTime.} =
+  ## Runs the common pass set plus explicit pointer derefs over the kernel body,
+  ## the canonical buffer-access form of the analysis model.
+  ##
+  ## Backend bundles are excluded on purpose. Each backend bundle renames
+  ## source identifiers to satisfy its target's reserved words, so the GLSL
+  ## bundle renames a parameter the kernel names `output` to `output_nim`.
+  ## The model reasons over the kernel's semantic names, not renamed ones.
   var ctx = GpuContext()
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
-  reg.registerVulkanPasses()
+  reg.registerInsertPointerDeref()
   var typeReg = TypeRegistry(types: ctx.types)
-  result = ctx.toGpuAst(typeReg, body)
+  result = ctx.toCrucibleAst(typeReg, body)
   ctx.types = typeReg.types
+  ctx.ingestTopLevel(result, typesFirst = true)
   runPasses(ctx, reg)
 
-macro irVulkan*(body: typed): GpuAst =
-  ## Evaluates to the post-pass GpuAst, the same common + Vulkan pass set
-  ## as the production `codegenVulkan` macro
-  result = newLit(toGpuAstVulkan(body))
+macro irLean*(body: typed): GpuAst =
+  ## Evaluates to the post-pass GpuAst the Lean emitter consumes
+  result = newLit(toPostPassAst(body))
 
 # ── Emission analysis ────────────────────────────────────────────────────────
 
@@ -130,7 +135,7 @@ proc emitGuard(cond: GpuAst, tidName: string): int =
 
 proc isUint32Buffer(p: GpuParam): bool =
   ## A kernel buffer: `ptr UncheckedArray[uint32]`
-  p.typ.kind == gtPtr and p.typ.to.kind == gtUA and p.typ.to.uaTo.kind == gtUint32
+  p.typ.kind == gtPtr and p.typ.to.kind == gtUncheckedArray and p.typ.to.uaTo.kind == gtUint32
 
 proc isAddOfTidReads(v: GpuAst, tidName: string, readBufs: seq[string]): bool =
   ## Whether the stored value is `<buf1> tid + <buf2> tid` over two distinct buffers,
@@ -623,8 +628,8 @@ proc statementSpecPragma(node: NimNode): string =
       if found != "":
         return found
 
-macro irVulkanLean*(body: typed): untyped =
-  ## Like `irVulkan`, plus capture of the verification pragmas on the kernel proc.
+macro irLeanSpec*(body: typed): untyped =
+  ## Like `irLean`, plus capture of the verification pragmas on the kernel proc.
   ## Evaluates to the tuple `(specs, gpu)`.
   ##
   ## - `specs` carries the raw pragma payloads
@@ -671,7 +676,7 @@ macro irVulkanLean*(body: typed): untyped =
   # The empty node also keeps `analyzeKernel`'s own `{.global.}` refusal loud
   stripped.pragma = if kept.len == 0: newEmptyNode() else: kept
   let astIn = if body.kind == nnkStmtList: newStmtList(stripped) else: stripped
-  let gpuAst = toGpuAstVulkan(astIn)
+  let gpuAst = toPostPassAst(astIn)
   result = nnkPar.newTree(
     nnkExprColonExpr.newTree(ident"specs", newLit(specs)),
     nnkExprColonExpr.newTree(ident"gpu", newLit(gpuAst)))

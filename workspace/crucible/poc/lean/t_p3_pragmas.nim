@@ -39,7 +39,7 @@ proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
 
 proc runTest() =
   block: # correct pragmas: proven manifest, module elaborates under warningAsError
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "tid < n", invariant: "tid < n", postcondition: "output tid = a tid + b tid".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -71,7 +71,7 @@ proc runTest() =
     echo "  correct pragmas: proven manifest + warningAsError elaboration: ok"
 
   block: # wrong postcondition: sorry downgrade, unproven manifest, warningAsError rejection
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "tid < n", postcondition: "output tid = a tid + b tid + 1".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -91,7 +91,7 @@ proc runTest() =
     echo "  wrong postcondition: unproven manifest + warningAsError rejection: ok"
 
   block: # wrong invariant (not implied by the guard): same downgrade + rejection
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid ≤ n".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -129,7 +129,7 @@ proc runTest() =
     writeFile(negDir & "/lean-toolchain", "leanprover/lean4:v0.0.0-notinstalled")
     let negOutPath = negDir & "/generated/add_spec_neg.lean"
     removeFile(negOutPath.changeFileExt("manifest.json")) # stale runs
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "tid < n".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -141,7 +141,7 @@ proc runTest() =
     echo "  proof settling refusal on an unattributable lean failure: ok"
 
   block: # loud refusals on out-of-scope payloads
-    let unparseable = irVulkanLean:
+    let unparseable = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "output tid =".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -149,7 +149,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModuleWithSpecs(unparseable.gpu, unparseable.specs, genSpecRelPath)
 
-    let unknownIdent = irVulkanLean:
+    let unknownIdent = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "bogus tid = a tid".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -157,7 +157,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModuleWithSpecs(unknownIdent.gpu, unknownIdent.specs, genSpecRelPath)
 
-    let badPrecondition = irVulkanLean:
+    let badPrecondition = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "n < tid".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -165,7 +165,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModuleWithSpecs(badPrecondition.gpu, badPrecondition.specs, genSpecRelPath)
 
-    let bufferInvariant = irVulkanLean:
+    let bufferInvariant = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a tid < n".} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -173,7 +173,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModuleWithSpecs(bufferInvariant.gpu, bufferInvariant.specs, genSpecRelPath)
 
-    let plain = irVulkanLean:
+    let plain = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -187,7 +187,7 @@ proc runTest() =
     # a proc without `{.global.}` is outside the tracer's scope: the macro
     # hands crucible an empty pragma node, and `analyzeKernel` refuses
     # through the documented channel
-    let plain = irVulkanLean:
+    let plain = irLeanSpec:
       proc addKernel(output, a, b: ptr UncheckedArray[uint32]) =
         let i = thread_position_in_grid.x
         if i < 2:
@@ -201,7 +201,7 @@ proc runTest() =
     # dropping the others and their verification pragmas
     static:
       doAssert not compiles(block:
-        let k = irVulkanLean:
+        let k = irLeanSpec:
           proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
             let i = thread_position_in_grid.x
             if i < 2:
@@ -219,7 +219,7 @@ proc runTest() =
     # `compiles` cannot check the refusal message, only that expansion fails.
     static:
       doAssert not compiles(block:
-        let k = irVulkanLean:
+        let k = irLeanSpec:
           proc addKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
             let i = thread_position_in_grid.x
             {.invariant: "tid < n".}

@@ -40,7 +40,7 @@ proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
 
 proc runTest() =
   block: # loop-kernel emission + Lean elaboration (warningAsError, sorry-free)
-    let ir = irVulkan:
+    let ir = irLean:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -63,35 +63,35 @@ proc runTest() =
     echo "  loop-kernel emission + elaboration (warningAsError): ok"
 
   block: # loud refusals on loop shapes outside the tracer's scope
-    let nonLiteralBound = irVulkan:
+    let nonLiteralBound = irLean:
       proc nonLiteralBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< thread_position_in_grid.x:
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(nonLiteralBound.statements[0], genLoopRelPath)
 
-    let nonzeroStart = irVulkan:
+    let nonzeroStart = irLean:
       proc nonzeroStart(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 1 ..< 4:
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(nonzeroStart.statements[0], genLoopRelPath)
 
-    let inclusiveRange = irVulkan:
+    let inclusiveRange = irLean:
       proc inclusiveRange(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 .. 3:
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(inclusiveRange.statements[0], genLoopRelPath)
 
-    let stepped = irVulkan:
+    let stepped = irLean:
       proc stepped(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in countup(0, 6, 2):
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(stepped.statements[0], genLoopRelPath)
 
-    let nested = irVulkan:
+    let nested = irLean:
       proc nested(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           for j in 0 ..< 4:
@@ -99,21 +99,21 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(nested.statements[0], genLoopRelPath)
 
-    let nonLoopVarWrite = irVulkan:
+    let nonLoopVarWrite = irLean:
       proc nonLoopVarWrite(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[0] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(nonLoopVarWrite.statements[0], genLoopRelPath)
 
-    let nonLoopVarRead = irVulkan:
+    let nonLoopVarRead = irLean:
       proc nonLoopVarRead(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[0] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(nonLoopVarRead.statements[0], genLoopRelPath)
 
-    let stmtBefore = irVulkan:
+    let stmtBefore = irLean:
       proc stmtBefore(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         output[0] = 1
         for i in 0 ..< 4:
@@ -121,7 +121,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(stmtBefore.statements[0], genLoopRelPath)
 
-    let stmtAfter = irVulkan:
+    let stmtAfter = irLean:
       proc stmtAfter(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -129,7 +129,7 @@ proc runTest() =
     doAssertRaises(ValueError):
       discard emitLeanModule(stmtAfter.statements[0], genLoopRelPath)
 
-    let twoWrites = irVulkan:
+    let twoWrites = irLean:
       proc twoWrites(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -140,21 +140,21 @@ proc runTest() =
     echo "  refusals on loop shapes outside the supported shape: ok"
 
   block: # loud refusals carried over from the guarded-thread shape
-    let unsupportedOp = irVulkan:
+    let unsupportedOp = irLean:
       proc unsupportedOp(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           output[i] = a[i] * b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(unsupportedOp.statements[0], genLoopRelPath)
 
-    let zeroBound = irVulkan:
+    let zeroBound = irLean:
       proc zeroBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 0:
           output[i] = a[i] + b[i]
     doAssertRaises(ValueError):
       discard emitLeanModule(zeroBound.statements[0], genLoopRelPath)
 
-    let wrongParams = irVulkan:
+    let wrongParams = irLean:
       proc wrongParams(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 4:
           dst[i] = x[i] + y[i]
@@ -163,7 +163,7 @@ proc runTest() =
     echo "  refusals carried over from the guarded-thread shape: ok"
 
   block: # right loop-guard invariant: proved, manifest `proven: true`, exit 0
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i < 4".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -190,7 +190,7 @@ proc runTest() =
     # attempt `exact h` of the scaffold cannot close it, so the proof downgrades
     # to `sorry` and the manifest records unproven, a proof-status verdict
     # that never judges the truth of the payload
-    let k = irVulkanLean:
+    let k = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i ≤ 4".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -209,7 +209,7 @@ proc runTest() =
     echo "  unprovable-by-the-scaffold loop invariant: unproven manifest + warningAsError rejection: ok"
 
   block: # loud refusals on loop-shape pragma payloads
-    let withPrecondition = irVulkanLean:
+    let withPrecondition = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "tid < n".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -217,7 +217,7 @@ proc runTest() =
       discard emitLeanModuleWithSpecs(withPrecondition.gpu.statements[0],
         withPrecondition.specs, genLoopInvRelPath)
 
-    let withPostcondition = irVulkanLean:
+    let withPostcondition = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "output i = a i + b i".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -225,7 +225,7 @@ proc runTest() =
       discard emitLeanModuleWithSpecs(withPostcondition.gpu.statements[0],
         withPostcondition.specs, genLoopInvRelPath)
 
-    let bufferInvariant = irVulkanLean:
+    let bufferInvariant = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a i < 4".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
@@ -233,7 +233,7 @@ proc runTest() =
       discard emitLeanModuleWithSpecs(bufferInvariant.gpu.statements[0],
         bufferInvariant.specs, genLoopInvRelPath)
 
-    let boundInvariant = irVulkanLean:
+    let boundInvariant = irLeanSpec:
       proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i < n".} =
         for i in 0 ..< 4:
           output[i] = a[i] + b[i]
