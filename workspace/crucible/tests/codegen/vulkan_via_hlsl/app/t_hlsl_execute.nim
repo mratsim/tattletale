@@ -14,7 +14,8 @@
 
 import std/[os, strutils]
 import workspace/crucible
-import workspace/crucible/src/runtime/backends/vulkan_runtime
+import workspace/crucible/src/runtime/backends/vulkan_common
+import workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime
 import workspace/crucible/tests/codegen/vulkan_via_hlsl/hlsl_testutils
 
 const addHlsl = hlsl:

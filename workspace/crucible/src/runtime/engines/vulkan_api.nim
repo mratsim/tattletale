@@ -12,7 +12,8 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
-import workspace/crucible/src/runtime/backends/vulkan_runtime
+import workspace/crucible/src/runtime/backends/vulkan_common
+import workspace/crucible/src/runtime/backends/vulkan_address_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
@@ -109,7 +110,7 @@ proc write8(ctx: var SerializationCtx, x: uint64) =
   inc ctx.pn, 8
 
 proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
-  ctx.write8(vulkan_runtime.deviceAddress(v, ctx.vctx))
+  ctx.write8(deviceAddress(v, ctx.vctx))
 
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
