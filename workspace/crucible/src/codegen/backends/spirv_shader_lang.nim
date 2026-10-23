@@ -283,10 +283,10 @@ proc arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
   doAssert len >= 1
   let elemId = ctx.tyId(elem)
   let lenId = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(len))
-  let key: SpvMemoKey = (spvOpcode("OpTypeArray"), @[elemId, lenId])
+  let key: SpvMemoKey = (OpTypeArray, @[elemId, lenId])
   if key in ctx.builder.memo:
     return ctx.builder.memo[key]
-  result = ctx.builder.memoInst(spvOpcode("OpTypeArray"), @[elemId, lenId])
+  result = ctx.builder.memoInst(OpTypeArray, @[elemId, lenId])
   let e = std430Layout(elem)
   ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
 
@@ -294,10 +294,10 @@ proc runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
   ## Runtime-array type id with its ArrayStride decoration, emitted once per
   ## distinct element type
   let elemId = ctx.tyId(elem)
-  let key: SpvMemoKey = (spvOpcode("OpTypeRuntimeArray"), @[elemId])
+  let key: SpvMemoKey = (OpTypeRuntimeArray, @[elemId])
   if key in ctx.builder.memo:
     return ctx.builder.memo[key]
-  result = ctx.builder.memoInst(spvOpcode("OpTypeRuntimeArray"), @[elemId])
+  result = ctx.builder.memoInst(OpTypeRuntimeArray, @[elemId])
   let e = std430Layout(elem)
   ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
 
@@ -322,7 +322,7 @@ proc structTy*(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint3
   for mid in memberIds:
     words.add mid
   ctx.builder.module.emitInstSeq(ssTypesConstantsGlobals,
-                                 spvOpcode("OpTypeStruct"), words)
+                                 OpTypeStruct, words)
   for i, off in offsets:
     ctx.builder.emitMemberDecorate(result, uint32(i), decOffset, @[uint32(off)])
   if isBlock:
@@ -648,19 +648,27 @@ proc convertValue*(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 
   let fFloat = source.kind in {gtFloat32, gtFloat64}
   let tFloat = to.kind in {gtFloat32, gtFloat64}
   let inst = if fInt and tInt:
-      if scalarByteSize(source) == scalarByteSize(to): "OpBitcast"
-      elif source.kind in spvSignedInts: "OpSConvert"
-      else: "OpUConvert"
+      if scalarByteSize(source) == scalarByteSize(to):
+        OpBitcast
+      elif source.kind in spvSignedInts:
+        OpSConvert
+      else:
+        OpUConvert
     elif fInt and tFloat:
-      if source.kind in spvSignedInts: "OpConvertSToF" else: "OpConvertUToF"
+      if source.kind in spvSignedInts:
+        OpConvertSToF
+      else:
+        OpConvertUToF
     elif fFloat and tInt:
-      if to.kind in spvSignedInts: "OpConvertFToS" else: "OpConvertFToU"
+      if to.kind in spvSignedInts:
+        OpConvertFToS
+      else:
+        OpConvertFToU
     elif fFloat and tFloat:
-      "OpFConvert"
+      OpFConvert
     else:
       error("no SPIR-V scalar conversion " & $source.kind & " -> " & $to.kind)
-  ctx.builder.freshInst(spvOpcodeRt(inst),
-                        @[ctx.tyId(spvScalar(to)), v])
+  ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(to)), v])
 
 proc bdaPointerTy*(ctx: var SpvLangCtx, elem: GpuType): uint32 =
   ## Buffer-reference pointer type over one element type, matching the glslang GL_EXT_buffer_reference lowering:
@@ -728,7 +736,7 @@ func coordComponent(field: GpuAst): int =
   else:
     spvRefuse("coordinate component " & field.symbol.name)
 
-func binopInst(op: GpuAst, resultTy, operandTy: GpuType): string =
+func binopInst(op: GpuAst, resultTy, operandTy: GpuType): SpvOp =
   ## SPIR-V instruction name for a primitive gpuBinOp, float and signedness
   ## taken from the operand type, comparisons yield gtBool
   doAssert op.kind == gpuIdent, "binary operator is not an identifier"
@@ -738,31 +746,42 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): string =
   if isFloat and name in ["==", "!=", "<", "<=", ">", ">="]:
     spvRefuse("float comparison " & name)
   case name
-  of "+": (if isFloat: "OpFAdd" else: "OpIAdd")
-  of "-": (if isFloat: "OpFSub" else: "OpISub")
-  of "*": (if isFloat: "OpFMul" else: "OpIMul")
+  of "+": (if isFloat: OpFAdd else: OpIAdd)
+  of "-": (if isFloat: OpFSub else: OpISub)
+  of "*": (if isFloat: OpFMul else: OpIMul)
   of "/":
-    if isFloat: "OpFDiv"
-    elif signed: "OpSDiv"
-    else: "OpUDiv"
+    if isFloat:
+      OpFDiv
+    elif signed:
+      OpSDiv
+    else:
+      OpUDiv
   of "==":
-    if operandTy.kind == gtBool: "OpLogicalEqual" else: "OpIEqual"
+    if operandTy.kind == gtBool:
+      OpLogicalEqual
+    else:
+      OpIEqual
   of "!=":
-    if operandTy.kind == gtBool: "OpLogicalNotEqual" else: "OpINotEqual"
-  of "<": (if signed: "OpSLessThan" else: "OpULessThan")
-  of "<=": (if signed: "OpSLessThanEqual" else: "OpULessThanEqual")
-  of ">": (if signed: "OpSGreaterThan" else: "OpUGreaterThan")
-  of ">=": (if signed: "OpSGreaterThanEqual" else: "OpUGreaterThanEqual")
+    if operandTy.kind == gtBool:
+      OpLogicalNotEqual
+    else:
+      OpINotEqual
+  of "<": (if signed: OpSLessThan else: OpULessThan)
+  of "<=": (if signed: OpSLessThanEqual else: OpULessThanEqual)
+  of ">": (if signed: OpSGreaterThan else: OpUGreaterThan)
+  of ">=": (if signed: OpSGreaterThanEqual else: OpUGreaterThanEqual)
   of "%":
     # a float `%` refuses: no float-mod opcode exists in the table
     # an OpUMod over float operands is invalid
     # the frontend refuses the same construct as an undeclared identifier
     if isFloat:
       spvRefuse("float modulo %")
-    elif signed: "OpSMod"
-    else: "OpUMod"
-  of "&&": "OpLogicalAnd"
-  of "||": "OpLogicalOr"
+    elif signed:
+      OpSMod
+    else:
+      OpUMod
+  of "&&": OpLogicalAnd
+  of "||": OpLogicalOr
   else:
     spvRefuse("binary operator " & name)
 
@@ -1006,8 +1025,7 @@ proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
     else:
       members.add v
-  ctx.builder.freshInst(spvOpcode("OpCompositeConstruct"),
-                        @[structId] & members)
+  ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
 
 proc emitTernary(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   ## Lazy conditional: each branch evaluates in its own block and stores into
@@ -1049,13 +1067,13 @@ proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): ui
   let isFloat = opTy.kind in {gtFloat32, gtFloat64}
   let cmpOp = if isFloat:
                 # ordered float comparison, the counterpart of the integer compare opcodes
-                (if name == "max": "OpFOrdGreaterThan" else: "OpFOrdLessThan")
+                (if name == "max": OpFOrdGreaterThan else: OpFOrdLessThan)
               elif name == "max":
-                (if signed: "OpSGreaterThan" else: "OpUGreaterThan")
+                (if signed: OpSGreaterThan else: OpUGreaterThan)
               else:
-                (if signed: "OpSLessThan" else: "OpULessThan")
+                (if signed: OpSLessThan else: OpULessThan)
   let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-  let cond = ctx.builder.freshInst(spvOpcodeRt(cmpOp), @[boolTy, a, b])
+  let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
   ctx.builder.opSelect(ctx.tyId(spvScalar(opTy)), cond, a, b)
 
 proc emitLazyBool(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
@@ -1101,10 +1119,8 @@ proc emitReduceAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let resTy = valueType(exprType(fn, n.cArgs[0]))
   doAssert resTy.kind == gtFloat32, "reduceAdd lowers f32 only: " & $resTy.kind
   ctx.caps.incl capGroupNonUniformArithmetic
-  let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-                                       uint64(scopeSubgroup))
-  ctx.builder.freshInst(spvOpcode("OpGroupNonUniformFAdd"),
-                        @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
+  let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeSubgroup))
+  ctx.builder.freshInst(OpGroupNonUniformFAdd, @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
 
 proc emitAtomicFetchAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   ## `atomicFetchAdd(addr, v)`: fp32 atomic add through a buffer device
@@ -1127,12 +1143,9 @@ proc emitAtomicFetchAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint3
   ctx.caps.incl capAtomicFloat32AddEXT
   if "SPV_EXT_shader_atomic_float_add" notin ctx.exts:
     ctx.exts.add "SPV_EXT_shader_atomic_float_add"
-  let scopeDev = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-                                       uint64(scopeDevice))
-  let sem = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-                                  uint64(semUniformMemory or semAcquireRelease))
-  ctx.builder.freshInst(spvOpcode("OpAtomicFAddEXT"),
-                        @[ctx.tyId(spvScalar(elem)), ptrId, scopeDev, sem, value])
+  let scopeDev = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeDevice))
+  let sem = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(semUniformMemory or semAcquireRelease))
+  ctx.builder.freshInst(OpAtomicFAddEXT, @[ctx.tyId(spvScalar(elem)), ptrId, scopeDev, sem, value])
 
 proc emitCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   ## Device-function call:
@@ -1171,8 +1184,7 @@ proc emitCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       let v = emitExpr(ctx, fn, a)
       args.add ctx.convertValue(v, exprType(fn, a), valueType(p.typ))
   let retTyId = fnRetTyId(ctx, procNode.pRetType)
-  ctx.builder.freshInst(spvOpcode("OpFunctionCall"),
-                        @[retTyId, fnId] & args)
+  ctx.builder.freshInst(OpFunctionCall, @[retTyId, fnId] & args)
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   case n.kind
@@ -1192,7 +1204,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
                          exprType(fn, n.bLeft), opTy)
     let r = convertValue(ctx, emitExpr(ctx, fn, n.bRight),
                          exprType(fn, n.bRight), opTy)
-    ctx.builder.freshInst(spvOpcodeRt(binopInst(n.bOp, resTy, opTy)),
+    ctx.builder.freshInst(binopInst(n.bOp, resTy, opTy),
                           @[ctx.tyId(spvScalar(resTy)), l, r])
   of gpuDot:
     emitDotValue(ctx, fn, n)
@@ -1224,11 +1236,10 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     case n.pOp
     of "!":
       doAssert t.kind == gtBool, "logical not of a non-bool operand"
-      ctx.builder.freshInst(spvOpcodeRt("OpLogicalNot"),
-                            @[ctx.tyId(spvScalar(t)), v])
+      ctx.builder.freshInst(OpLogicalNot, @[ctx.tyId(spvScalar(t)), v])
     of "-":
-      let inst = if t.kind in {gtFloat32, gtFloat64}: "OpFNegate" else: "OpSNegate"
-      ctx.builder.freshInst(spvOpcodeRt(inst), @[ctx.tyId(spvScalar(t)), v])
+      let inst = if t.kind in {gtFloat32, gtFloat64}: OpFNegate else: OpSNegate
+      ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(t)), v])
     else:
       spvRefuse("prefix operator " & n.pOp)
   of gpuArrayLit:
@@ -1238,7 +1249,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     for v in n.aValues:
       let e = emitExpr(ctx, fn, v)
       vals.add ctx.convertValue(e, exprType(fn, v), elemTy)
-    ctx.builder.freshInst(spvOpcode("OpCompositeConstruct"), @[arrTy] & vals)
+    ctx.builder.freshInst(OpCompositeConstruct, @[arrTy] & vals)
   else:
     spvRefuse("expression node " & $n.kind)
 
@@ -1385,10 +1396,16 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let cur = ctx.builder.opLoad(indTy, indVar)
   let cmpOp = case n.fRangeKind
               of rkExclusive:
-                if indSym.typ.kind in spvSignedInts: "OpSLessThan" else: "OpULessThan"
+                if indSym.typ.kind in spvSignedInts:
+                  OpSLessThan
+                else:
+                  OpULessThan
               of rkInclusive:
-                if indSym.typ.kind in spvSignedInts: "OpSLessThanEqual" else: "OpULessThanEqual"
-  let cond = ctx.builder.freshInst(spvOpcodeRt(cmpOp), @[boolTy, cur, endV])
+                if indSym.typ.kind in spvSignedInts:
+                  OpSLessThanEqual
+                else:
+                  OpULessThanEqual
+  let cond = ctx.builder.freshInst(cmpOp, @[boolTy, cur, endV])
   # OpLoopMerge must be the second-to-last instruction of its block,
   # immediately before the branch terminator
   ctx.builder.opLoopMerge(mergeLbl, contLbl, lcNone)
@@ -1682,8 +1699,7 @@ proc composeParam(ctx: var SpvLangCtx, t: GpuType, leafVals: seq[uint32], cursor
     var ms: seq[uint32]
     for f in t.fields:
       ms.add composeParam(ctx, f.typ, leafVals, cursor)
-    result = ctx.builder.freshInst(spvOpcode("OpCompositeConstruct"),
-                                   @[ctx.tyId(valueTy(t))] & ms)
+    result = ctx.builder.freshInst(OpCompositeConstruct, @[ctx.tyId(valueTy(t))] & ms)
   of gtPtr, gtUncheckedArray:
     result = leafVals[cursor]
     inc cursor
