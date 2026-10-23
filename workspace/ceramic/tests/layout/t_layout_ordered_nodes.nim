@@ -82,6 +82,19 @@ proc runOrderRegimeTests =
     doAssert typeof(l.stride[0]) is Int[3]
     echo "    10. Int-node order leaves rank as their phantom value: OK"
 
+  block:
+    var dyn = 1
+    let l = make_ordered_layout((2, 3, 4), (0, dyn, 2))
+    doAssert l === ((2, 3, 4), (1, 8, 2))
+    doAssert typeof(l.stride[1]) is Int[8]
+    echo "    11. mixed static/runtime order keeps literal ranks: OK"
+
+  block:
+    var dyn = 2
+    let l = make_ordered_layout((2, 3, 4), (Int[1](), dyn, Int[0]()))
+    doAssert l === ((2, 3, 4), (4, 8, 1))
+    echo "    12. Int-node and runtime order leaves mix: OK"
+
 proc runTests =
   echo "--- static result types ---"
   runStaticTypeTests()

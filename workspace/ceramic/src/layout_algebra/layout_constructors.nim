@@ -220,6 +220,16 @@ func make_ordered_layout_impl[Sh: IntOrIntTuple, O: tuple](shape: Sh, order: O):
     r
   make_layout(shape, compactOrderStrides(shape, ranks))
 
+template orderIntTuple(order: IntOrIntTuple): auto =
+  ## Order promotion at the template boundary, symmetric with makeIntTuple
+  ## over the shape.
+  ## A literal leaf becomes an `Int[V]` node, a runtime leaf stays verbatim.
+  makeIntTuple(order)
+
+template orderIntTuple[I: static int, T](order: array[I, T]): auto =
+  ## An order array is compile-time known, it passes through verbatim.
+  order
+
 template make_ordered_layout*(shape, order: untyped): auto =
   ## Construct a compact layout whose strides are ranked by `order`.
   ##
@@ -254,9 +264,10 @@ template make_ordered_layout*(shape, order: untyped): auto =
   ##   make_ordered_layout((rows, 32), (0,1))  # rows: int
   ##   # → (rows, 32):(Int[1], int)
   ##
-  ## Expansion happens at the call site. Static promotion rewrites literal leaves
-  ## into `Int[...]` nodes before the algebra runs. A runtime leaf stays verbatim.
-  make_ordered_layout_impl(makeIntTuple(shape), order)
+  ## Expansion happens at the call site. Static promotion rewrites literal
+  ## leaves of both operands into `Int[...]` nodes before the algebra runs,
+  ## a runtime leaf stays verbatim.
+  make_ordered_layout_impl(makeIntTuple(shape), orderIntTuple(order))
 
 # ═══════════════════════════════════════════════════════════════
 #  make_layout_like
