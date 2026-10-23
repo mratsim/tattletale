@@ -4,12 +4,6 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-# Descriptor route: buffers bind as STORAGE_BUFFER descriptors, the scalar ConstantBuffer blocks as UNIFORM_BUFFER descriptors.
-# One binding per buffer parameter: binding i is the i-th buffer parameter in declaration order,
-# in descriptor set 0, matching the printer's register(tN/uN, space0) emission.
-# The scalar ConstantBuffer block takes the first ordinal after the buffers,
-# matching the printer's register(bN, space0) emission, as UNIFORM_BUFFER descriptors.
-# createPipeline carries the set layout, runKernel binds the set.
 
 import workspace/crucible/src/runtime/backends/vulkan_common
 import ../errors
