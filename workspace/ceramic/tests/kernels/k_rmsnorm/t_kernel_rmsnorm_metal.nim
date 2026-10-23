@@ -8,7 +8,8 @@
 ## Metal RMSNorm kernel: layout matrix vs the f64 host reference
 ##
 ## Test that the tile-reduce RMSNorm matches the f64 host reference on Metal
-## over the full shape/stride/axis case matrix plus ragged rows, size-1 axes, wide dynamic range, weighted and unweighted.
+## over the full shape/stride/axis case matrix, ragged rows, wide multi-tile rows
+## and strided destinations, size-1 axes, wide dynamic range, weighted and unweighted.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \

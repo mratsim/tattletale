@@ -7,9 +7,9 @@
 
 ## Tile reduce over Metal: strip reductions, accumulation and rowView
 ##
-## Test that the two-phase tile reduce matches an f64 host reference on Metal
-## over compact and ragged strips with clear and accumulate semantics,
-## and that rowView cuts per-row strips end to end.
+## Test that the two-phase tile reduce matches an f64 host reference on Metal.
+## It covers compact, ragged and multi-tile strips with clear and accumulate
+## semantics and checks that rowView cuts per-row strips end to end.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \
@@ -73,11 +73,21 @@ proc checkClose(got, expect: HostTensor, msg: string) =
 proc stripReduceKernel(dst, src: distinct TensorView, op: static ReduceOp, clear: static bool) =
   ## Reduces src's first strip into dst[0], the value dst holds before
   ## the launch enters the accumulator
+  ##
+  ## Strips longer than one tile walk the tile grid, one register tile at a time:
+  ## the first tile honors `clear`, every later tile combines onto the running total.
   let thrID = getLocalThreadID()
   var reg: tile(src.T)
-  reg.load(src, thrID, 0, padWith = reduceIdentity[src.T](op))
   var acc = dst[0]
-  reduce(acc, reg, op, clear)
+  let
+    tiled = make_layout(src.size()).logical_divide(reg.getLayout())
+    stripTiles = tiled.getTileGrid().size()
+  for tileID in 0 ..< stripTiles:
+    reg.load(src, thrID, tileID, padWith = reduceIdentity[src.T](op))
+    if tileID == 0:
+      reduce(acc, reg, op, clear)
+    else:
+      reduce(acc, reg, op, false)
   if thrID == 0:
     dst[0] = acc
 
@@ -167,6 +177,40 @@ proc accumulateCase[E: HwEngine](engine: E) =
   engine.copyToHostFromDevice(addr got.data[0], gotDev.data, 1)
   checkClose(got, expect, "accumulate, strip B onto strip A (clear = false)")
 
+proc combineCase[E: HwEngine](engine: E, op: static ReduceOp) =
+  ## Two strip reductions onto one dst: strip A reduces fresh (clear = true),
+  ## strip B combines onto the same dst with clear = false
+  var a = makeHostTensor(float32, (1, 128), (128, 1))
+  var b = makeHostTensor(float32, (1, 300), (300, 1))
+  var got = makeHostTensor(float32, (1, 1), (1, 1))
+  var expect = makeHostTensor(float32, (1, 1), (1, 1))
+  when op == roMax:
+    # strip A must win the combine, a clear = false launch that ignores
+    # the value dst holds would reduce strip B alone instead
+    fillStrip(a, -64'f32, 8'f32)
+    fillStrip(b, 1'f32, 2'f32)
+    expect[0] = float32(max(refStripMax(a.view()), refStripMax(b.view())))
+  else:
+    fillStrip(a, -64'f32, 1'f32)
+    fillStrip(b, 1'f32, 2'f32)
+    expect[0] = float32(min(refStripMin(a.view()), refStripMin(b.view())))
+  fillHost(got, 12345'f32)
+  let
+    aDev = engine.bridge(a)
+    bDev = engine.bridge(b)
+    gotDev = engine.bridge(got)
+  engine.launchDeviceFn stripReduceKernel(gotDev, aDev, op, true) do:
+    grid = (1, 1)
+    blk = (32, 1)
+  engine.launchDeviceFn stripReduceKernel(gotDev, bDev, op, false) do:
+    grid = (1, 1)
+    blk = (32, 1)
+  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, 1)
+  when op == roMax:
+    checkClose(got, expect, "max, strip B combines onto strip A (clear = false)")
+  else:
+    checkClose(got, expect, "min, strip B combines onto strip A (clear = false)")
+
 proc rowViewCase[E: HwEngine](engine: E, strides: tuple, msg: string) =
   ## Per-row sum and max over (3, 5, 7) along axis 2 at the given strides,
   ## every output slot prefilled at the sentinel 12345 and overwritten
@@ -216,9 +260,15 @@ proc runTest =
       (1, 100), (100, 1), roMax, -1'f32, -1'f32)
   stripCase(engine, "min, ragged strip",
       (1, 100), (100, 1), roMin, 1'f32, 1'f32)
+  stripCase(engine, "sum, 4096-element strip (32 tiles)",
+      (1, 4096), (4096, 1), roSum, -64'f32, 1'f32)
+  stripCase(engine, "max, ragged 300-element strip across the last tile",
+      (1, 300), (300, 1), roMax, -64'f32, 1'f32)
   canaryCase(engine, "canary sentinel 12345, clear = true overwrites it", true)
   canaryCase(engine, "canary sentinel 12345, clear = false keeps it", false)
   accumulateCase(engine)
+  combineCase(engine, roMax)
+  combineCase(engine, roMin)
   rowViewCase(engine, (35, 7, 1), "rowView over (3, 5, 7) row-major")
   rowViewCase(engine, (70, 14, 2), "rowView over (3, 5, 7) with a 2x-scaled stride on axis 2")
   echo "t_tile_reduce_metal: all cases passed"

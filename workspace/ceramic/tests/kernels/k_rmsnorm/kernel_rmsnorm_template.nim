@@ -121,6 +121,9 @@ proc checkRmsnorm*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
   var got = makeHostTensor(float32, shape, dstStrides)
   var expect = makeHostTensor(float32, shape, dstStrides)
   got.fillCanary()
+  # a non-compact dst layout carries gap slots the kernel and the reference
+  # never touch: the sentinel there matches the canary-filled got
+  expect.fillCanary()
   when withWeight:
     var wDims: seq[int]
     for f in fields(shape):
@@ -249,9 +252,26 @@ proc run_rmsnorm_tests*[E: HwEngine](engine: E, moduleName: string) =
   checkRmsnorm(rng, engine, (4, 1), (1, 1), (1, 1), 1e-5'f32, 1, true,
       "size-1 axis, weighted")
 
+  template checkPair(shape, strides, eps, axis, msg: untyped, bounds: HSlice[float32, float32] = 1'f32 .. 2'f32) =
+    checkRmsnorm(rng, engine, shape, strides, strides, eps, axis, false, msg, bounds)
+    checkRmsnorm(rng, engine, shape, strides, strides, eps, axis, true,
+        msg & ", weighted", bounds)
+
   # ── wide dynamic range, and a small eps: the rsqrt must hold
   #    across orders of magnitude ──
-  checkRmsnorm(rng, engine, (2, 64), (64, 1), (64, 1), 1e-6'f32, 1, false,
-      "wide dynamic range, eps 1e-6", srcBounds = -30'f32 .. 30'f32)
-  checkRmsnorm(rng, engine, (2, 64), (64, 1), (64, 1), 1e-6'f32, 1, true,
-      "wide dynamic range, eps 1e-6, weighted", srcBounds = -30'f32 .. 30'f32)
+  checkPair((2, 64), (64, 1), 1e-6'f32, 1, "wide dynamic range, eps 1e-6",
+      -30'f32 .. 30'f32)
+
+  # ── wide rows spanning many tiles: the tile walk across the row
+  #    must cover every tile, ragged last tile included ──
+  checkRmsnorm(rng, engine, (8, 4096), (4096, 1), (4096, 1), 1e-5'f32, 1, false,
+      "wide row (8, 4096)", -3'f32 .. 3'f32)
+  checkPair((4, 300), (300, 1), 1e-5'f32, 1, "ragged wide row (300)",
+      -3'f32 .. 3'f32)
+
+  # ── strided destination: a 2x-scaled stride on the non-reduced axis,
+  #    the kernel writes through the real strides, gap slots untouched ──
+  checkRmsnorm(rng, engine, (4, 16), (16, 1), (32, 1), 1e-5'f32, 1, false,
+      "strided dst, 2x stride on the non-reduced axis")
+  checkRmsnorm(rng, engine, (4, 16), (16, 1), (32, 1), 1e-5'f32, 1, true,
+      "strided dst, 2x stride on the non-reduced axis, weighted")
