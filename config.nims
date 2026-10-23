@@ -604,6 +604,11 @@ task test_crucible_vulkan, "Test workspace/crucible Vulkan codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan_via_glsl"):
       runCmd(cmd)
 
+task test_crucible_hlsl, "Test workspace/crucible HLSL codegen":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/vulkan_via_hlsl"):
+      runCmd(cmd)
+
 task test_crucible_webgpu, "Test workspace/crucible WebGPU codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/webgpu"):

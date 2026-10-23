@@ -1,13 +1,13 @@
 # Crucible
 
-GPU kernel code generator: translates a subset of Nim into native GPU source for five backends:
-CUDA, OpenCL, Vulkan (GLSL), WebGPU (WGSL), and Metal (MSL).
+GPU kernel code generator: translates a subset of Nim into native GPU source for six backends:
+CUDA, OpenCL, Vulkan (GLSL), Vulkan (HLSL), WebGPU (WGSL), and Metal (MSL).
 The allowed subset is everything except `string`, `seq`, memory allocations, and IO/syscalls.
 
 ## What it is / what it isn't
 
 Crucible is primarily a **compile-time code generator**.
-Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `webgpu`, `metal`).
+Its entry points are Nim macros (`cuda`, `opencl`, `vulkan`, `hlsl`, `webgpu`, `metal`).
 Each macro consumes a kernel body written in that subset of Nim and emits a string of native GPU source code.
 
 - It does not ship a device runtime or a scheduler.
@@ -28,20 +28,20 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 ## Architecture in brief
 
-- **One IR, five backends.** [`src/codegen/frontend/nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim)
+- **One IR, six backends.** [`src/codegen/frontend/nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim)
   lowers Nim AST to a backend-neutral IR.
   Each backend under [`src/codegen/backends/`](src/codegen/backends/) prints it:
-  `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
+  `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `hlsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
   run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
   Pass families: normalizations, legalizations, preprocessing, lowering, and validations.
-- **Compile-time codegen.** The `cuda`/`opencl`/`vulkan`/`webgpu`/`metal` macros emit
+- **Compile-time codegen.** The `cuda`/`opencl`/`vulkan`/`hlsl`/`webgpu`/`metal` macros emit
   source at compile time through [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
 - **Tests.** IR-level tests under [`tests/ir/`](tests/ir/) plus auto-runnable suites per backend
-  (`cuda/`, `opencl/`, `vulkan/`, `webgpu/`, `metal/`).
+  (`cuda/`, `opencl/`, `vulkan_via_glsl/`, `vulkan_via_hlsl/`, `webgpu/`, `metal/`).
   Tests must call `engine.launchKernel()`, not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
-## Builtins: one vocabulary, five backends
+## Builtins: one vocabulary, six backends
 
 Kernel bodies write coordinates and synchronization in one canonical vocabulary, the MSL names:
 
@@ -84,6 +84,11 @@ Notes:
   WGSL has no `workgroup_size` builtin, only the `@workgroup_size` attribute, so referencing it
   in a `webgpu:` kernel is a loud compile error. `thread_index_in_threadgroup` maps to WGSL's
   native `local_invocation_index` instead of a composed formula.
+HLSL covers the coordinate and barrier vocabulary: coordinate components read
+`SV_DispatchThreadID` / `SV_GroupID` / `SV_GroupIndex` system-value inputs, the barrier emits
+`GroupMemoryBarrierWithGroupSync()`. Subgroup reductions and atomic builtins have no emission,
+an `hlsl:` kernel referencing them fails loudly at compile time.
+
 - **Alias families**, the Nim names that expand to the canonical name:
 
 | Backend | Alias names |
@@ -93,6 +98,7 @@ Notes:
 | GLSL | `gl_GlobalInvocationID`, `gl_WorkGroupID`, `gl_LocalInvocationID`, `gl_WorkGroupSize`, `gl_NumWorkGroups`, `gl_LocalInvocationIndex` |
 | WGSL | `global_id`, `workgroup_id`, `local_invocation_id`, `num_workgroups`, `local_invocation_index`, `workgroupBarrier` |
 | MSL | the canonical names themselves |
+| HLSL | the canonical names themselves |
 
   `workgroup_barrier(flags)` and `workgroupBarrier()` are one declaration with a defaulted flag.
   `get_global_size` is excluded from the vocabulary, it is OpenCL-only native.
@@ -108,8 +114,9 @@ Notes:
 Crucible is under active development.
 
 - CUDA (via NVRTC) is the primary, most-tested target.
-- OpenCL, Vulkan, WebGPU, and Metal share the same IR and pipeline but have smaller suites
+- OpenCL, Vulkan, HLSL, WebGPU, and Metal share the same IR and pipeline but have smaller suites
   and some backend-specific lowering: WGSL `injectAddressOf`, Vulkan SSBO/push-constant lowering,
+  HLSL's descriptor-route storage buffers and push-constant scalars, compiled by glslangValidator,
   Metal's dispatch-time threadgroup size and compiler-enforced 31-binding limit.
 - WIP is tracked per-feature, gaps are labelled in the source with `XXX`/`WIP` comments.
 
@@ -134,7 +141,7 @@ workspace/crucible/
       builtins_pragmas.nim      Backend pragmas: cudaName, workgroup, builtin, smem, ...
       builtins_compilermagic.nim  CompileTarget, ccGetBackend
     codegen/
-      gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`vulkan:`/`webgpu:`/`metal:` macros
+      gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`vulkan:`/`hlsl:`/`webgpu:`/`metal:` macros
       frontend/
         nim_to_crucible.nim            Frontend: pure 1:1 Nim AST -> IR translator
         nim_type_resolvers.nim  Type/overload resolution
@@ -161,6 +168,7 @@ workspace/crucible/
         cuda_lang.nim             Printers: CUDA C++, OpenCL C, GLSL, WGSL, MSL
         opencl_lang.nim
         glsl_lang.nim
+        hlsl_lang.nim             HLSL for glslang's HLSL frontend: [[vk::binding]] buffers, push-constant scalars
         wgsl_lang.nim
         msl_lang.nim
         lang_utils.nim            Shared printer helpers
@@ -196,7 +204,8 @@ workspace/crucible/
   tests/
     ir/                           IR-level tests (pure Nim, no engine)
     codegen/
-      cuda/ opencl/ vulkan/ webgpu/ metal/  Per-backend auto-runnable tests
+      cuda/ opencl/ vulkan_via_glsl/ vulkan_via_hlsl/ webgpu/ metal/
+                                  Per-backend auto-runnable tests
     runtime/                      Engine/runtime tests (t_launch_device_fn, ...)
   vendor/wgpu/                    Vendored wgpu-native headers/libs
 ```
@@ -210,6 +219,7 @@ Requirements:
 - a working Nim
 - NVRTC/glslangValidator for compilation
 - a CUDA/OpenCL/Vulkan/WebGPU/Metal device for `engine.launchKernel()`
+  (HLSL runs on Vulkan, through the descriptor route)
 
 The Metal tests run on any Apple Silicon Mac
 (macOS 26.6.1, Nim 2.2.10, CLT SDK 26.5, MSL 4.0, tested 2026-08-17).
@@ -225,10 +235,15 @@ nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
   workspace/crucible/tests/codegen/opencl/*/t_opencl_*.nim
 
-# Vulkan
+# Vulkan via GLSL
 nim c -r --hints:off --warnings:off \
   --outdir:build/tests --nimcache:nimcache/tests \
-  workspace/crucible/tests/codegen/vulkan/*/t_vulkan_*.nim
+  workspace/crucible/tests/codegen/vulkan_via_glsl/*/t_vulkan_*.nim
+
+# Vulkan via HLSL (glslangValidator + spirv-val)
+nim c -r --hints:off --warnings:off \
+  --outdir:build/tests --nimcache:nimcache/tests \
+  workspace/crucible/tests/codegen/vulkan_via_hlsl/*/t_hlsl_*.nim
 
 # WebGPU
 nim c -r --hints:off --warnings:off \
