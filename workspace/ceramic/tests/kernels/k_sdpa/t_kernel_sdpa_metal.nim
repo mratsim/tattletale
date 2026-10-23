@@ -30,13 +30,16 @@ import workspace/ceramic/tests/kernels/k_sdpa/sdpa_fixtures
 import workspace/ceramic/src/kernels/k_tile_sdpa
 
 when defined(SdpaLegF16):
-  const SdpaFixtureNames = ["tiny_f16", "causal_gqa2_f16", "decode_gqa8_f16"]
+  const SdpaFixtureNames = [
+    "tiny_f16", "causal_gqa2_f16", "decode_gqa8_f16",
+    "gqa4_f16", "gqa8_causal_f16"]
 elif defined(SdpaLegBf16):
-  const SdpaFixtureNames = ["tiny_bf16"]
+  const SdpaFixtureNames = ["tiny_bf16", "gqa2_bf16"]
 else:
   const SdpaFixtureNames = [
     "tiny_f32", "gqa2_f32", "batched_gqa_f32", "causal_f32",
     "mask_f32", "causal_mask_gqa4_f32", "mask_broadcast_f32",
+    "gqa4_f32", "gqa8_f32", "gqa8_causal_f32", "gqa8_mask_f32",
     "d128_causal_f32", "scale_f32"]
 
 proc replay[E: HwEngine, T](engine: E, meta: SdpaFixtureMeta, dir: string, _: typedesc[T], Dk, Dv: static int) =

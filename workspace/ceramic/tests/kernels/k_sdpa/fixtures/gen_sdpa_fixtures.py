@@ -137,6 +137,13 @@ FIXTURES = [
     dict(name="decode_gqa8_f16", dtype="float16", B=1, Hq=8, Hkv=1, L=32, S=256, Dk=64, Dv=64, scale=None, causal=True, seed=11),
     dict(name="scale_f32", dtype="float32", B=1, Hq=1, Hkv=1, L=32, S=32, Dk=32, Dv=32, scale=0.7, seed=12),
     dict(name="mask_broadcast_f32", dtype="float32", B=1, Hq=4, Hkv=2, L=64, S=64, Dk=32, Dv=32, scale=None, mask_kind="additive", mask_heads=1, seed=13),
+    dict(name="gqa4_f32", dtype="float32", B=1, Hq=4, Hkv=1, L=64, S=64, Dk=64, Dv=64, scale=None, seed=14),
+    dict(name="gqa8_f32", dtype="float32", B=1, Hq=8, Hkv=1, L=64, S=64, Dk=64, Dv=64, scale=None, seed=15),
+    dict(name="gqa8_causal_f32", dtype="float32", B=1, Hq=8, Hkv=1, L=64, S=64, Dk=64, Dv=64, scale=None, causal=True, seed=16),
+    dict(name="gqa8_mask_f32", dtype="float32", B=1, Hq=8, Hkv=1, L=64, S=64, Dk=64, Dv=64, scale=None, mask_kind="additive", seed=17),
+    dict(name="gqa4_f16", dtype="float16", B=1, Hq=4, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, seed=18),
+    dict(name="gqa8_causal_f16", dtype="float16", B=1, Hq=8, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, causal=True, seed=19),
+    dict(name="gqa2_bf16", dtype="bfloat16", B=1, Hq=2, Hkv=1, L=64, S=64, Dk=32, Dv=32, scale=None, seed=20),
 ]
 
 

@@ -1,0 +1,15 @@
+{
+ "name": "gqa4_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 4,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "mask": "none",
+ "checksum": -130.48568939570134
+}

@@ -1,0 +1,15 @@
+{
+ "name": "gqa8_mask_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 8,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 64,
+ "Dv": 64,
+ "scale": 0.125,
+ "causal": false,
+ "mask": "additive",
+ "checksum": 872.5581263270121
+}
