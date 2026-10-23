@@ -207,7 +207,9 @@ proc getDotParentType*(ctx: GpuContext, n: GpuAst): GpuType =
 proc getOperandType*(ctx: GpuContext, n: GpuAst): GpuType
 
 proc getTypeAccessedSpace*(t: GpuType): AddressSpace =
-  if not t.isNil and t.kind in {gtPtr, gtSpan, gtArray}:
+  ## Storage a value of this type lives in, the untagged default reads
+  ## as thread. Scalar types carry a space when written (constant globals)
+  if not t.isNil and t.addressSpace != asRMEM:
     result = t.addressSpace
   else:
     result = asRMEM

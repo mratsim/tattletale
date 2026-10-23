@@ -9,6 +9,7 @@
 import std/[macros, sequtils, tables]
 
 import ./ir/ast_datatypes
+import ./ir/ast_type_constructors
 import ./backends/backends_api
 import ./passes/passes_lowering
 import ./passes/passes_low_pointers
@@ -67,6 +68,14 @@ proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
   when typesFirst:
     for k, typ in ctx.types:
       ctx.globalBlocks.add typ
+    # program-scope storage is read-only on the C-family targets:
+    # - Metal requires the constant space at program scope
+    # - CUDA writes __constant__, OpenCL writes constant
+    # - WGSL module-scope vars are per-invocation private and keep their own semantics
+    for stmt in varBlock.statements.mitems:
+      if stmt.kind == gpuVar and stmt.addressSpace == asRMEM:
+        stmt.vType = stmt.vType.withAddressSpace(asConstant)
+        stmt.vName.symbol.typ = stmt.vType
     ctx.globalBlocks.add varBlock
   else:
     ctx.globalBlocks.add varBlock

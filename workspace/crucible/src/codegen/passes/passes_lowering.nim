@@ -37,7 +37,7 @@ import ./passes_legalizations
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerSharedLoweringPasses*(reg: var PassRegistry) =
-  reg.registerStampPointerLocals()
+  reg.registerTagPointerLocals()
   reg.registerPruneCompileTimeParams()
 
 func registerRenameReservedIdentifiers*(reg: var PassRegistry, name: static string, reserved: static HashSet[string]) =

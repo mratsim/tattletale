@@ -13,6 +13,7 @@ import std/tables
 import workspace/crucible/src/codegen/ir/ast_type_constructors
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering_msl {.all.}
+import workspace/crucible/src/codegen/gpu_compiler {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 proc findVar(n: GpuAst, name: string): GpuAst =
@@ -331,9 +332,9 @@ static:
         kern = stmt
         ctx.fnTab[stmt.pName] = stmt
 
-  proc registerStampLocals(reg: var PassRegistry) {.nimcall.} =
-    reg.registerStampPointerLocals()
-  registerStampLocals.runPassPrepared(ctx)
+  proc registerTagLocals(reg: var PassRegistry) {.nimcall.} =
+    reg.registerTagPointerLocals()
+  registerTagLocals.runPassPrepared(ctx)
 
   # an uninitialized pointer local is untagged at birth, the assignment decides
   # the storage: `addr tmp` is thread, `outp` device
@@ -356,6 +357,38 @@ static:
     "a pointer assigned a device pointer becomes device, got " &
     $qv.vType.addressSpace
   echo "  OK - pointer locals take the assigned storage's space"
+
+# ── 1g. Top-level vars are constant storage on the C-family targets ──
+static:
+  let ir = toCrucibleAst:
+    var counter: int32 = 0
+    proc bump() {.global.} =
+      discard counter
+
+  var ctx = GpuContext()
+  ctx.ingestTopLevel(ir, typesFirst = true)
+
+  # the farmed var block holds the top-level var, its type carries the constant space
+  # program-scope storage is read-only on the C-family targets
+  var globalVar: GpuAst = nil
+  for blk in ctx.globalBlocks:
+    if blk.kind == gpuBlock:
+      for s in blk.statements:
+        if s.kind == gpuVar and s.vName.symbol.name == "counter":
+          globalVar = s
+  doAssert not globalVar.isNil, "expected the farmed global var"
+  doAssert globalVar.vType.addressSpace == asConstant,
+    "a top-level var tags as constant storage, got " &
+    $globalVar.vType.addressSpace
+  # the resolver answers through the type's space, plain values stay thread
+  let globalIdent = GpuAst(kind: gpuIdent, symbol: globalVar.vName.symbol)
+  doAssert ctx.resolveAddressSpace(globalIdent) == asConstant,
+    "a global ident resolves to constant storage, got " &
+    $ctx.resolveAddressSpace(globalIdent)
+  doAssert ctx.resolveAddressSpace(GpuAst(kind: gpuLit, lValue: "1",
+      lType: GpuType(kind: gtInt32))) == asRMEM,
+    "a plain literal stays thread"
+  echo "  OK - top-level vars carry the constant space"
 
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerSmemOnly(reg: var PassRegistry) {.nimcall.} =

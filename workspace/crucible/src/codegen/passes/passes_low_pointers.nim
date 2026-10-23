@@ -20,11 +20,11 @@
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerStampPointerLocals*(reg: var PassRegistry) =
-  reg.register("stampPointerLocals", pkTransform, phaseMain,
+func registerTagPointerLocals*(reg: var PassRegistry) =
+  reg.register("tagPointerLocals", pkTransform, phaseMain,
     "Retypes pointer locals from the storage their assignment designates",
     dependsOn = @[],
-    run = stampPointerLocals
+    run = tagPointerLocals
   )
 
 func registerExpandStructKernelParams*(reg: var PassRegistry) =
@@ -185,7 +185,7 @@ proc explodeGlobalStructWithPtrFields(ctx: var GpuContext) =
 # Pointer local assignment
 # ═══════════════════════════════════════════════════════════════════════
 
-proc stampPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[string, GpuAst]) =
+proc tagPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[string, GpuAst]) =
   ## Retypes pointer locals from their assignments
   if n.isNil:
     return
@@ -206,12 +206,12 @@ proc stampPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[stri
   else:
     discard
   for ch in n.items:
-    ctx.stampPointerLocalsIn(ch, locals)
+    ctx.tagPointerLocalsIn(ch, locals)
 
-proc stampPointerLocals(ctx: var GpuContext) =
+proc tagPointerLocals(ctx: var GpuContext) =
   ## A pointer local declared without an initializer is untagged at birth,
   ## its assignment decides the storage the declaration must carry
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind == gpuProc:
       var locals = initTable[string, GpuAst]()
-      ctx.stampPointerLocalsIn(fn.pBody, locals)
+      ctx.tagPointerLocalsIn(fn.pBody, locals)
