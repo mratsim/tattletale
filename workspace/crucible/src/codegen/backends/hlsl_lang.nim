@@ -236,6 +236,47 @@ proc writesThrough(n: GpuAst, bufISym: string): bool =
   of gpuWhile:
     if n.wBody.writesThrough(bufISym):
       return true
+  of gpuEmit:
+    # expression parts render through the normal printer, so a store inside
+    # an emit takes the same indexed-assignment path
+    for part in n.parts:
+      if part.kind == peExpr and part.expr.writesThrough(bufISym):
+        return true
+  else:
+    discard
+
+proc emitMentions(n: GpuAst, name: string): bool =
+  ## True when a `{.emit.}` anywhere in the tree mentions the identifier `name`.
+  ## Verbatim literal runs are not parsed, so the substring match over-approximates:
+  ## a false positive classifies the buffer read-write, the safe direction.
+  case n.kind
+  of gpuBlock:
+    for s in n.statements:
+      if s.emitMentions(name):
+        return true
+  of gpuIf:
+    if n.ifThen.emitMentions(name):
+      return true
+    for el in n.ifElifs:
+      if el.body.emitMentions(name):
+        return true
+    if n.ifElse.kind != gpuDiscard and n.ifElse.emitMentions(name):
+      return true
+  of gpuFor:
+    if n.fBody.emitMentions(name):
+      return true
+  of gpuWhile:
+    if n.wBody.emitMentions(name):
+      return true
+  of gpuEmit:
+    for part in n.parts:
+      case part.kind
+      of peLiteral:
+        if name in part.literal:
+          return true
+      of peExpr:
+        if part.expr.emitMentions(name):
+          return true
   else:
     discard
 
@@ -748,7 +789,8 @@ proc deviceFnText(ctx: var GpuContext, fn: GpuAst, forwardDeclare: bool): string
   var st = HlslKernel()
   st.classifyParams(fn)
   for iSym in st.buffers.keys:
-    st.buffers[iSym].readOnly = not fn.pBody.writesThrough(iSym)
+    st.buffers[iSym].readOnly = not (fn.pBody.writesThrough(iSym) or
+      fn.pBody.emitMentions(st.buffers[iSym].name))
   result = deviceFnSignature(st, fn)
   if forwardDeclare:
     result.add ';'
@@ -788,7 +830,8 @@ proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   var st = HlslKernel(isKernel: true)
   st.classifyParams(kernel)
   for iSym in st.buffers.keys:
-    st.buffers[iSym].readOnly = not kernel.pBody.writesThrough(iSym)
+    st.buffers[iSym].readOnly = not (kernel.pBody.writesThrough(iSym) or
+      kernel.pBody.emitMentions(st.buffers[iSym].name))
 
   ctx.emitTypeDefs(result)
   result.add "\n"

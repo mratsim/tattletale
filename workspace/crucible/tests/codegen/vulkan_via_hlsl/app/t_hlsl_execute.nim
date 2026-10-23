@@ -110,24 +110,25 @@ proc runTest() =
     oBuf.dealloc()
     zBuf.dealloc()
 
-  block: # Metal comparison: same arithmetic, byte-identical readback
-    var engine = bkMetal.newEngine()
-    engine.ingest(addMsl)
-    var a: array[2, uint32] = [10'u32, 20'u32]
-    var b: array[2, uint32] = [1'u32, 2'u32]
-    let aDev = engine.allocDevice(uint32, a.len)
-    let bDev = engine.allocDevice(uint32, b.len)
-    let oDev = engine.allocDevice(uint32, 2)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
-    engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    var out32: array[2, uint32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
-    doAssert out32[0] == addReadback[0] and out32[1] == addReadback[1],
-      "Metal readback [" & $out32[0] & ", " & $out32[1] &
-      "] differs from the Vulkan descriptor-route readback [" &
-      $addReadback[0] & ", " & $addReadback[1] & "]"
-    echo "  metal add: [", out32[0], ", ", out32[1], "] byte-identical to the vulkan readback"
+  when defined(macosx):
+    block: # Metal comparison: same arithmetic, byte-identical readback
+      var engine = bkMetal.newEngine()
+      engine.ingest(addMsl)
+      var a: array[2, uint32] = [10'u32, 20'u32]
+      var b: array[2, uint32] = [1'u32, 2'u32]
+      let aDev = engine.allocDevice(uint32, a.len)
+      let bDev = engine.allocDevice(uint32, b.len)
+      let oDev = engine.allocDevice(uint32, 2)
+      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.launchKernel("addKernel", oDev, (aDev, bDev))
+      var out32: array[2, uint32]
+      engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+      doAssert out32[0] == addReadback[0] and out32[1] == addReadback[1],
+        "Metal readback [" & $out32[0] & ", " & $out32[1] &
+        "] differs from the Vulkan descriptor-route readback [" &
+        $addReadback[0] & ", " & $addReadback[1] & "]"
+      echo "  metal add: [", out32[0], ", ", out32[1], "] byte-identical to the vulkan readback"
 
 when isMainModule:
   runTest()
