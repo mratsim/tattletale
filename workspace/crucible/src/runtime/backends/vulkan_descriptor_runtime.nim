@@ -47,7 +47,6 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, unifor
   check vkCreateDescriptorSetLayout(ctx.device, slCI.addr, nil, result.addr)
 
 proc destroyDescriptorSetLayout*(ctx: VulkanContext, setLayout: VkDescriptorSetLayout) =
-  ## Releases a set layout from createDescriptorSetLayout, nil skips.
   let vkDestroyDescriptorSetLayout = cast[
     proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
@@ -55,8 +54,6 @@ proc destroyDescriptorSetLayout*(ctx: VulkanContext, setLayout: VkDescriptorSetL
     vkDestroyDescriptorSetLayout(ctx.device, setLayout, nil)
 
 proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32, uniformCount: uint32 = 0): VkDescriptorPool =
-  ## Pool sized to exactly one set of the layout's descriptors:
-  ## bindingCount storage-buffer descriptors and uniformCount uniform-buffer descriptors.
   ## Set lifetime is owned by the pool: destroyDescriptorPool frees the sets.
   let vkCreateDescriptorPool = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorPoolCreateInfo,
@@ -82,7 +79,6 @@ proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32, uniformCoun
   check vkCreateDescriptorPool(ctx.device, poolCI.addr, nil, result.addr)
 
 proc destroyDescriptorPool*(ctx: VulkanContext, pool: VkDescriptorPool) =
-  ## Releases a pool and every set allocated from it, nil skips.
   let vkDestroyDescriptorPool = cast[
     proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
@@ -90,7 +86,6 @@ proc destroyDescriptorPool*(ctx: VulkanContext, pool: VkDescriptorPool) =
     vkDestroyDescriptorPool(ctx.device, pool, nil)
 
 proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayout: VkDescriptorSetLayout): VkDescriptorSet =
-  ## One descriptor set from `pool`, bound against `setLayout`.
   let vkAllocateDescriptorSets = cast[
     proc(device: VkDevice, pAllocateInfo: ptr VkDescriptorSetAllocateInfo, pDescriptorSets: ptr VkDescriptorSet): VkResult {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateDescriptorSets"))

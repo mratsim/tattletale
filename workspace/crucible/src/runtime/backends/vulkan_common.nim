@@ -4,7 +4,6 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-## Shared Vulkan machinery for both routes: instance, device, queues, shader module, pipeline, buffers, dispatch.
 
 import std/[dynlib, os, osproc, hashes, streams, strutils, tempfiles]
 import ../errors
@@ -51,7 +50,6 @@ type
 
 
 proc `=destroy`(p: var VulkanPipelineObj) =
-  ## Releases the pipeline and its layout, nil fields skip.
   if p.device == nil:
     return
   if p.handle != nil and p.vkDestroyPipeline != nil:
@@ -619,7 +617,6 @@ proc createShaderModule*(ctx: VulkanContext, spirv: seq[uint32]): VkShaderModule
   check vkCreateShaderModule(ctx.device, smCI.addr, nil, result.addr)
 
 proc destroyShaderModule*(ctx: VulkanContext, shaderModule: VkShaderModule) =
-  ## Releases a module from createShaderModule, nil skips.
   let vkDestroyShaderModule = cast[
     proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyShaderModule"))
