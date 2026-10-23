@@ -1044,8 +1044,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
 
 proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   doAssert not n.aRequiresMemcpy, "memcpy assignment outside the SPIR-V subset"
-  if n.aOp != "=":
-    spvRefuse("compound assignment " & n.aOp)
+  # compound assignments never reach the backend: the SPIR-V pipeline
+  # rewrites them into plain assignments of the binop
   let rhs = emitExpr(ctx, fn, n.aRight)
   case n.aLeft.kind
   of gpuDot:

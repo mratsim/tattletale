@@ -27,6 +27,7 @@ import ./pass_datatypes
 import ./pass_registry
 import ./passes_lowering
 import ./passes_low_bools
+import ./passes_low_compound_assign
 import ./passes_low_pointers
 import ./passes_low_views
 
@@ -39,6 +40,9 @@ import ./passes_low_views
 func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = false)
   reg.registerSharedLoweringPasses()
+  # Compound assignments rewrite to plain assignments of the binop before
+  # pointer-deref insertion, both copies of the address skeleton retype alike
+  reg.registerLowerCompoundAssign()
   reg.registerInsertPointerDeref()
   # Bool kernel parameters declare i32 in the push-constant interface,
   # loads convert at the use boundary
