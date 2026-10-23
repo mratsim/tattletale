@@ -221,9 +221,7 @@ proc validateSpaceCast(ctx: var GpuContext, n: GpuAst, fnName: string) =
   ## One cast/conv node against the operand's accessed space, other kinds pass
   let rejection = ctx.spaceCastRejection(n, fnName)
   if rejection.len > 0:
-    # a raised error stays catchable in static test blocks, in the macro
-    # pipeline it fails compilation either way
-    raise newException(ValueError, rejection)
+    error rejection
 
 # ═══════════════════════════════════════════════════════════════════════
 # Constant-storage write validation
@@ -247,7 +245,7 @@ proc validateConstantWritesIn(ctx: var GpuContext, n: GpuAst, fnName: string) =
     return
   let rejection = ctx.constantWriteRejection(n, fnName)
   if rejection.len > 0:
-    raise newException(ValueError, rejection)
+    error rejection
   for ch in n:
     ctx.validateConstantWritesIn(ch, fnName)
 

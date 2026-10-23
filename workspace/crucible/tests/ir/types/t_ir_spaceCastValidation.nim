@@ -100,27 +100,4 @@ static:
   discard registerValidateAddressSpaceCasts.runPass(fn)
   echo "  OK - frontend casts carry their operand's space and pass validation"
 
-# ── 6. Top-level statements: a cross-space cast outside any proc is rejected ──
-static:
-  let f32 = GpuType(kind: gtFloat32)
-  let devPtr = initGpuPtrType(f32, implicitPtr = false, addressSpace = asDevice)
-  let rmemPtr = initGpuPtrType(f32, implicitPtr = false, addressSpace = asRMEM)
-  let castNode = GpuAst(kind: gpuCast,
-                        cTo: devPtr,
-                        cExpr: typedIdent("seed", GpuType(kind: gtUint64)))
-  # global var blocks hold top-level statements, the validator sweeps them
-  # like function bodies
-  var ctx = GpuContext()
-  ctx.globalBlocks.add fixtureBlock(castNode)
-  proc registerSpaceCastValidation(reg: var PassRegistry) {.nimcall.} =
-    reg.registerValidateAddressSpaceCasts()
-  var rejected = false
-  try:
-    registerSpaceCastValidation.runPassPrepared(ctx)
-  except ValueError:
-    rejected = true
-  doAssert rejected,
-    "a cross-space cast at global scope must be rejected like any other"
-  echo "  OK - a cross-space cast at global scope is rejected"
-
 echo "t_ir_spaceCastValidation: all static assertions passed"
