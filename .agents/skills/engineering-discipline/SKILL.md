@@ -56,6 +56,22 @@ Two rules follow:
 - A comment that only makes sense after reading the surrounding 200 lines
   carries hidden context. Rewrite it until it stands alone.
 
+### Coursebook sentences
+
+Write like a coursebook, not like a spec lawyer or a press release.
+The style exemplars are Physically-Based Rendering, Crafting Interpreters,
+The Art of Multiprocessor Programming, and Programming Massively Parallel
+Processors (PMPP): plain subjects, active verbs, mechanisms over labels.
+
+- Every sentence carries a subject and a verb. A noun pile that only names
+  ("one global ordinal across all resources in declaration order") is not a sentence.
+- Code and data never act. "The resource identity flows from the call site" is banned.
+  Name the actor: "each call passes the caller's buffer as the argument".
+- No marketing speech ("seamlessly", "elegant", "powerful") and no lawyer
+  speech ("it shall be noted", "as per", hedge stacks).
+- Prefer a mechanism sentence over a category label: say what happens,
+  not what kind of thing it is.
+
 ## No drive-by comment edits
 
 Do not touch comments in code the change does not otherwise modify.
