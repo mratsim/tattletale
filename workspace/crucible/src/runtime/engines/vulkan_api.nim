@@ -11,7 +11,6 @@ import std/[strutils, tables]
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
-import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile
@@ -101,6 +100,7 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
 
 proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
+  const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
     failLoud("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &

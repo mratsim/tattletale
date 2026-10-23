@@ -22,7 +22,7 @@ import std/tables
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvKind* = enum
+  SpvKind = enum
     ## Operand kinds, named after the core grammar's `kind` field
     spvIdResult
     spvIdResultType
@@ -48,26 +48,26 @@ type
     spvMemoryAccess
     spvGroupOperation
 
-  SpvQuant* = enum
+  SpvQuant = enum
     ## Operand quantifier, named after the core grammar's `quantifier` field
     qOne   ## exactly one operand (grammar "")
     qOpt   ## zero or one operand (grammar "?")
     qMany  ## zero or more operands (grammar "*")
 
-  SpvOperand* = object
+  SpvOperand = object
     kind*: SpvKind
     quant*: SpvQuant
 
-func o*(kind: SpvKind): SpvOperand {.inline.} =
+func o(kind: SpvKind): SpvOperand {.inline.} =
   SpvOperand(kind: kind, quant: qOne)
 
-func oOpt*(kind: SpvKind): SpvOperand {.inline.} =
+func oOpt(kind: SpvKind): SpvOperand {.inline.} =
   SpvOperand(kind: kind, quant: qOpt)
 
-func oMany*(kind: SpvKind): SpvOperand {.inline.} =
+func oMany(kind: SpvKind): SpvOperand {.inline.} =
   SpvOperand(kind: kind, quant: qMany)
 
-macro genSpvOpcodeTable*(defs: untyped) =
+macro genSpvOpcodeTable(defs: untyped) =
   ## Declarative opcode table in the glyph style, one row per opcode:
   ##   op OpName: <opcode>: [o(kind1), oOpt(kind2), ...]
   ## - generates the `SpvOp` enum, member value = opcode number
@@ -112,14 +112,14 @@ macro genSpvOpcodeTable*(defs: untyped) =
     enumTy.add nnkEnumFieldDef.newTree(ident(r.name), newLit(r.opcode))
   let typeSection = nnkTypeSection.newTree(
     nnkTypeDef.newTree(
-      nnkPostfix.newTree(ident"*", ident"SpvOp"),
+      ident"SpvOp",
       newEmptyNode(),
       enumTy))
   var table = nnkCaseStmt.newTree(ident"op")
   for r in rows:
     table.add nnkOfBranch.newTree(ident(r.name), nnkCall.newTree(ident"@", r.operands))
   let procSection = nnkProcDef.newTree(
-    nnkPostfix.newTree(ident"*", ident"spvInstOperands"),
+    ident"spvInstOperands",
     newEmptyNode(), newEmptyNode(),
     nnkFormalParams.newTree(
       nnkBracketExpr.newTree(ident"seq", ident"SpvOperand"),
@@ -234,86 +234,86 @@ genSpvOpcodeTable:
 
 const
   ## Capability values (core grammar ValueEnum), compute subset
-  capShader* = 1'u32
-  capFloat16* = 9'u32
-  capFloat64* = 10'u32
-  capInt64* = 11'u32
-  capInt8* = 39'u32
-  capInt16* = 22'u32
-  capPhysicalStorageBufferAddresses* = 5347'u32
-  capGroupNonUniformArithmetic* = 63'u32
-  capAtomicFloat32AddEXT* = 6033'u32
+  capShader = 1'u32
+  capFloat16 = 9'u32
+  capFloat64 = 10'u32
+  capInt64 = 11'u32
+  capInt8 = 39'u32
+  capInt16 = 22'u32
+  capPhysicalStorageBufferAddresses = 5347'u32
+  capGroupNonUniformArithmetic = 63'u32
+  capAtomicFloat32AddEXT = 6033'u32
 
 const
   ## Decoration values (core grammar ValueEnum), buffer subset
-  decBlock* = 2'u32
-  decArrayStride* = 6'u32
-  decBuiltIn* = 11'u32
-  decOffset* = 35'u32
+  decBlock = 2'u32
+  decArrayStride = 6'u32
+  decBuiltIn = 11'u32
+  decOffset = 35'u32
 
 const
   ## BuiltIn values (core grammar ValueEnum), compute subset
-  biNumWorkgroups* = 24'u32
-  biWorkgroupSize* = 25'u32
-  biWorkgroupId* = 26'u32
-  biLocalInvocationId* = 27'u32
-  biGlobalInvocationId* = 28'u32
-  biLocalInvocationIndex* = 29'u32
+  biNumWorkgroups = 24'u32
+  biWorkgroupSize = 25'u32
+  biWorkgroupId = 26'u32
+  biLocalInvocationId = 27'u32
+  biGlobalInvocationId = 28'u32
+  biLocalInvocationIndex = 29'u32
 
 const
   ## StorageClass values (core grammar ValueEnum)
-  scInput* = 1'u32
-  scFunction* = 7'u32
-  scPushConstant* = 9'u32
-  scPhysicalStorageBuffer* = 5349'u32
+  scInput = 1'u32
+  scFunction = 7'u32
+  scPushConstant = 9'u32
+  scPhysicalStorageBuffer = 5349'u32
 
 const
   ## ExecutionModel values (core grammar ValueEnum)
-  emGLCompute* = 5'u32
+  emGLCompute = 5'u32
 
 const
   ## ExecutionMode values (core grammar ValueEnum)
-  modeLocalSize* = 17'u32
+  modeLocalSize = 17'u32
 
 const
   ## MemoryModel values (core grammar ValueEnum)
-  mmGLSL450* = 1'u32
+  mmGLSL450 = 1'u32
 
   ## AddressingModel values (core grammar ValueEnum)
-  amLogical* = 0'u32
-  amPhysicalStorageBuffer64* = 5348'u32
+  amLogical = 0'u32
+  amPhysicalStorageBuffer64 = 5348'u32
 
 const
   ## GroupOperation values (core grammar ValueEnum), OpGroupNonUniform* operands
-  groupOpReduce* = 0'u32
+  groupOpReduce = 0'u32
 
   ## Scope constants (grammar kind IdScope), OpGroupNonUniform* operand words
-  scopeDevice* = 1'u32
-  scopeSubgroup* = 3'u32
+  scopeDevice = 1'u32
+  scopeSubgroup = 3'u32
 
   ## MemoryAccess bit values (core grammar BitEnum), Aligned carries a trailing
   ## literal alignment word the grammar operand list does not model
-  maAligned* = 2'u32
+  maAligned = 2'u32
 
 const
   ## MemorySemantics bit values (core grammar BitEnum), the operand words
   ## for the OpAtomic* instructions
-  semAcquireRelease* = 0x8'u32
-  semUniformMemory* = 0x40'u32
+  semAcquireRelease = 0x8'u32
+  semUniformMemory = 0x40'u32
 
 const
   ## Control bit masks, all-None words for OpFunction / OpSelectionMerge /
   ## OpLoopMerge / memory operands
-  fcNone* = 0'u32
-  selNone* = 0'u32
-  lcNone* = 0'u32
+  fcNone = 0'u32
+  selNone = 0'u32
+  lcNone = 0'u32
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Module sections and word stream
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvSection* = enum
+  SpvSection = enum
     ## Logical-layout sections in SPIR-V §2.4 order
     ssCapabilities
     ssExtensions
@@ -326,12 +326,12 @@ type
     ssTypesConstantsGlobals
     ssFunctions
 
-  SpvModule* = object
+  SpvModule = object
     version*: uint32      ## header version word, e.g. 0x00010300 for SPIR-V 1.3
     nextId*: uint32       ## next unallocated result id, ids start at 1
     sections*: array[SpvSection, seq[uint32]]
 
-const spvMagic* = 0x07230203'u32
+const spvMagic = 0x07230203'u32
 # Module baseline: SPIR-V 1.3, encoded in the spvVersion13 version word.
 # The baseline carries semantics beyond the number:
 # - the entry-point interface lists Input/Output variables only
@@ -341,24 +341,24 @@ const spvMagic* = 0x07230203'u32
 #
 # Bumping the constant to 1.4+ requires the entry-point interface to list
 # every referenced global variable, the push-constant block variable included.
-const spvVersion13* = 0x00010300'u32
-const spvGeneratorNone* = 0'u32
-const spvSchemaNone* = 0'u32
+const spvVersion13 = 0x00010300'u32
+const spvGeneratorNone = 0'u32
+const spvSchemaNone = 0'u32
 
-proc initSpvModule*(): SpvModule =
+proc initSpvModule(): SpvModule =
   SpvModule(version: spvVersion13, nextId: 1)
 
-proc addWord*(m: var SpvModule, section: SpvSection, word: uint32) =
+proc addWord(m: var SpvModule, section: SpvSection, word: uint32) =
   m.sections[section].add word
 
-proc addWords*(m: var SpvModule, section: SpvSection, words: openArray[uint32]) =
+proc addWords(m: var SpvModule, section: SpvSection, words: openArray[uint32]) =
   for w in words:
     m.sections[section].add w
 
-func getStringWords*(s: string): int =
+func getStringWords(s: string): int =
   (s.len + 4) div 4
 
-proc addString*(m: var SpvModule, section: SpvSection, s: string) =
+proc addString(m: var SpvModule, section: SpvSection, s: string) =
   var bytes = newSeq[uint8](s.len + 1)
   for i in 0 ..< s.len:
     bytes[i] = uint8(s[i])
@@ -370,20 +370,20 @@ proc addString*(m: var SpvModule, section: SpvSection, s: string) =
     m.sections[section].add w
     i += 4
 
-proc allocId*(m: var SpvModule): uint32 =
+proc allocId(m: var SpvModule): uint32 =
   result = m.nextId
   inc m.nextId
 
-proc startInst*(m: var SpvModule, section: SpvSection, opcode: SpvOp, operandWords: int) =
+proc startInst(m: var SpvModule, section: SpvSection, opcode: SpvOp, operandWords: int) =
   # string operands and mixed word/non-word operand lists append
   # their operand words manually after the header word
   m.addWord(section, uint32(operandWords + 1) shl 16 or uint32(opcode))
 
-proc emitInstSeq*(m: var SpvModule, section: SpvSection, opcode: SpvOp, operands: openArray[uint32]) =
+proc emitInstSeq(m: var SpvModule, section: SpvSection, opcode: SpvOp, operands: openArray[uint32]) =
   m.startInst(section, opcode, operands.len)
   m.addWords(section, operands)
 
-proc finalize*(m: SpvModule): seq[uint32] =
+proc finalize(m: SpvModule): seq[uint32] =
   # Header words: magic, version, generator (0), bound, schema (0).
   # The bound word is nextId at finalize time, covering all allocated ids.
   result = @[spvMagic, m.version, spvGeneratorNone, m.nextId, spvSchemaNone]
@@ -395,20 +395,20 @@ proc finalize*(m: SpvModule): seq[uint32] =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvMemoKey* = tuple[opcode: SpvOp, words: seq[uint32]]
+  SpvMemoKey = tuple[opcode: SpvOp, words: seq[uint32]]
     ## Dedup key for a type or constant: opcode plus the operand words
 
-  SpvBuilder* = object
+  SpvBuilder = object
     module*: SpvModule
     memo*: Table[SpvMemoKey, uint32]
     scalarWidths*: Table[uint32, int]
       ## Bit width of every emitted OpTypeInt/OpTypeFloat, keyed by type id.
       ## OpConstant literal word counts derive from it
 
-proc initSpvBuilder*(): SpvBuilder =
+proc initSpvBuilder(): SpvBuilder =
   SpvBuilder(module: initSpvModule())
 
-proc memoInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+proc memoInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   ## Emits a result-carrying type or constant instruction, deduplicated on
   ## (opcode, operands), into the types-constants-globals section.
   ## Returns the instruction's result id.
@@ -422,7 +422,7 @@ proc memoInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): u
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
   b.memo[key] = result
 
-proc memoTypedInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+proc memoTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   ## Memoized emission for result-type-carrying instructions:
   ## - opcodes: OpConstant, OpConstantNull, OpUndef
   ## - `operands` leads with the result type, then the fresh result id
@@ -437,7 +437,7 @@ proc memoTypedInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
   b.memo[key] = result
 
-proc freshInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+proc freshInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   ## Emits a result-carrying instruction into the functions section:
   ## - the fresh result id goes after the leading result type in `operands`
   ## - returns the fresh result id
@@ -447,13 +447,13 @@ proc freshInst*(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): 
     words.add operands[i]
   b.module.emitInstSeq(ssFunctions, opcode, words)
 
-proc emitCapability*(b: var SpvBuilder, capability: uint32) =
+proc emitCapability(b: var SpvBuilder, capability: uint32) =
   b.module.emitInstSeq(ssCapabilities, OpCapability, @[capability])
 
-proc emitMemoryModel*(b: var SpvBuilder, addressingModel, memoryModel: uint32) =
+proc emitMemoryModel(b: var SpvBuilder, addressingModel, memoryModel: uint32) =
   b.module.emitInstSeq(ssMemoryModel, OpMemoryModel, @[addressingModel, memoryModel])
 
-proc emitEntryPoint*(b: var SpvBuilder, executionModel, entryPoint: uint32, name: string, iface: openArray[uint32]) =
+proc emitEntryPoint(b: var SpvBuilder, executionModel, entryPoint: uint32, name: string, iface: openArray[uint32]) =
   # The interface lists the global Input/Output variables the entry point reads:
   # - Vulkan requires every such variable listed
   # - an empty list is valid when the entry point reads none
@@ -465,35 +465,35 @@ proc emitEntryPoint*(b: var SpvBuilder, executionModel, entryPoint: uint32, name
   b.module.addString(ssEntryPoints, name)
   b.module.addWords(ssEntryPoints, iface)
 
-proc emitExecutionMode*(b: var SpvBuilder, entryPoint, mode: uint32, literals: openArray[uint32] = []) =
+proc emitExecutionMode(b: var SpvBuilder, entryPoint, mode: uint32, literals: openArray[uint32] = []) =
   var ops = @[entryPoint, mode]
   for w in literals:
     ops.add w
   b.module.emitInstSeq(ssExecutionModes, OpExecutionMode, ops)
 
-proc emitDecorate*(b: var SpvBuilder, target, decoration: uint32, literals: openArray[uint32] = []) =
+proc emitDecorate(b: var SpvBuilder, target, decoration: uint32, literals: openArray[uint32] = []) =
   var ops = @[target, decoration]
   for w in literals:
     ops.add w
   b.module.emitInstSeq(ssAnnotations, OpDecorate, ops)
 
-proc emitMemberDecorate*(b: var SpvBuilder, target, member, decoration: uint32, literals: openArray[uint32] = []) =
+proc emitMemberDecorate(b: var SpvBuilder, target, member, decoration: uint32, literals: openArray[uint32] = []) =
   var ops = @[target, member, decoration]
   for w in literals:
     ops.add w
   b.module.emitInstSeq(ssAnnotations, OpMemberDecorate, ops)
 
-proc opVariable*(b: var SpvBuilder, resultType, storageClass: uint32): uint32 =
+proc opVariable(b: var SpvBuilder, resultType, storageClass: uint32): uint32 =
   result = b.module.allocId()
   b.module.emitInstSeq(ssTypesConstantsGlobals, OpVariable, @[resultType, result, storageClass])
 
-proc tyVoid*(b: var SpvBuilder): uint32 =
+proc tyVoid(b: var SpvBuilder): uint32 =
   b.memoInst(OpTypeVoid, @[])
 
-proc tyBool*(b: var SpvBuilder): uint32 =
+proc tyBool(b: var SpvBuilder): uint32 =
   b.memoInst(OpTypeBool, @[])
 
-proc tyArray*(b: var SpvBuilder, elementType, lengthId: uint32): uint32 =
+proc tyArray(b: var SpvBuilder, elementType, lengthId: uint32): uint32 =
   b.memoInst(OpTypeArray, @[elementType, lengthId])
 
 proc recordScalarWidth(b: var SpvBuilder, ty: uint32, width: int) =
@@ -503,30 +503,30 @@ proc getScalarWidth(b: SpvBuilder, ty: uint32): int =
   doAssert ty in b.scalarWidths, "constant over a type id with no recorded width: " & $ty
   b.scalarWidths[ty]
 
-proc tyInt*(b: var SpvBuilder, width: int, signedness: bool): uint32 =
+proc tyInt(b: var SpvBuilder, width: int, signedness: bool): uint32 =
   result = b.memoInst(OpTypeInt, @[uint32(width), uint32(signedness)])
   b.recordScalarWidth(result, width)
 
-proc tyFloat*(b: var SpvBuilder, width: int): uint32 =
+proc tyFloat(b: var SpvBuilder, width: int): uint32 =
   result = b.memoInst(OpTypeFloat, @[uint32(width)])
   b.recordScalarWidth(result, width)
 
-proc tyVector*(b: var SpvBuilder, componentType: uint32, componentCount: int): uint32 =
+proc tyVector(b: var SpvBuilder, componentType: uint32, componentCount: int): uint32 =
   b.memoInst(OpTypeVector, @[componentType, uint32(componentCount)])
 
-proc tyStruct*(b: var SpvBuilder, memberTypes: openArray[uint32]): uint32 =
+proc tyStruct(b: var SpvBuilder, memberTypes: openArray[uint32]): uint32 =
   b.memoInst(OpTypeStruct, memberTypes)
 
-proc tyPointer*(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
+proc tyPointer(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
   b.memoInst(OpTypePointer, @[storageClass, pointeeType])
 
-proc tyFunction*(b: var SpvBuilder, returnType: uint32, paramTypes: openArray[uint32]): uint32 =
+proc tyFunction(b: var SpvBuilder, returnType: uint32, paramTypes: openArray[uint32]): uint32 =
   var ops = @[returnType]
   for p in paramTypes:
     ops.add p
   b.memoInst(OpTypeFunction, ops)
 
-proc constUint*(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
+proc constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
   ## Emits OpConstant holding the bit pattern of `value`:
   ## - one literal word for 32-bit and narrower types
   ## - two words (low half first) for 64-bit types, even when the bit pattern
@@ -539,7 +539,7 @@ proc constUint*(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
     doAssert value <= mask, "constant bit pattern overflows the " & $width & "-bit type " & $ty
     b.memoTypedInst(OpConstant, @[ty, uint32(value)])
 
-proc constBool*(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
+proc constBool(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
   let op = if value: OpConstantTrue else: OpConstantFalse
   b.memoTypedInst(op, @[ty])
 
@@ -547,65 +547,65 @@ proc constBool*(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
 #  Function body
 # ═══════════════════════════════════════════════════════════════════════
 
-proc opFunction*(b: var SpvBuilder, returnType, functionType: uint32): uint32 =
+proc opFunction(b: var SpvBuilder, returnType, functionType: uint32): uint32 =
   b.freshInst(OpFunction, @[returnType, fcNone, functionType])
 
-proc opFunctionParameter*(b: var SpvBuilder, resultType: uint32): uint32 =
+proc opFunctionParameter(b: var SpvBuilder, resultType: uint32): uint32 =
   b.freshInst(OpFunctionParameter, @[resultType])
 
-proc opLabel*(b: var SpvBuilder): uint32 =
+proc opLabel(b: var SpvBuilder): uint32 =
   result = b.module.allocId()
   b.module.emitInstSeq(ssFunctions, OpLabel, @[result])
 
-proc opBranch*(b: var SpvBuilder, targetLabel: uint32) =
+proc opBranch(b: var SpvBuilder, targetLabel: uint32) =
   b.module.emitInstSeq(ssFunctions, OpBranch, @[targetLabel])
 
-proc opBranchConditional*(b: var SpvBuilder, condition, trueLabel, falseLabel: uint32) =
+proc opBranchConditional(b: var SpvBuilder, condition, trueLabel, falseLabel: uint32) =
   b.module.emitInstSeq(ssFunctions, OpBranchConditional, @[condition, trueLabel, falseLabel])
 
-proc opSelectionMerge*(b: var SpvBuilder, mergeBlock: uint32, selectionControl: uint32) =
+proc opSelectionMerge(b: var SpvBuilder, mergeBlock: uint32, selectionControl: uint32) =
   b.module.emitInstSeq(ssFunctions, OpSelectionMerge, @[mergeBlock, selectionControl])
 
-proc opLoopMerge*(b: var SpvBuilder, mergeBlock, continueTarget: uint32, loopControl: uint32) =
+proc opLoopMerge(b: var SpvBuilder, mergeBlock, continueTarget: uint32, loopControl: uint32) =
   b.module.emitInstSeq(ssFunctions, OpLoopMerge, @[mergeBlock, continueTarget, loopControl])
 
-proc opReturn*(b: var SpvBuilder) =
+proc opReturn(b: var SpvBuilder) =
   b.module.emitInstSeq(ssFunctions, OpReturn, @[])
 
-proc opReturnValue*(b: var SpvBuilder, value: uint32) =
+proc opReturnValue(b: var SpvBuilder, value: uint32) =
   b.module.emitInstSeq(ssFunctions, OpReturnValue, @[value])
 
-proc opFunctionEnd*(b: var SpvBuilder) =
+proc opFunctionEnd(b: var SpvBuilder) =
   b.module.emitInstSeq(ssFunctions, OpFunctionEnd, @[])
 
-proc opLoad*(b: var SpvBuilder, resultType, pointer: uint32): uint32 =
+proc opLoad(b: var SpvBuilder, resultType, pointer: uint32): uint32 =
   b.freshInst(OpLoad, @[resultType, pointer])
 
-proc opStore*(b: var SpvBuilder, pointer, value: uint32) =
+proc opStore(b: var SpvBuilder, pointer, value: uint32) =
   b.module.emitInstSeq(ssFunctions, OpStore, @[pointer, value])
 
-proc opAccessChain*(b: var SpvBuilder, resultType, base: uint32, indices: openArray[uint32]): uint32 =
+proc opAccessChain(b: var SpvBuilder, resultType, base: uint32, indices: openArray[uint32]): uint32 =
   var ops = @[resultType, base]
   for i in indices:
     ops.add i
   b.freshInst(OpAccessChain, ops)
 
-proc opIAdd*(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
+proc opIAdd(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
   b.freshInst(OpIAdd, @[resultType, operand1, operand2])
 
-proc opConvertUToPtr*(b: var SpvBuilder, resultType, source: uint32): uint32 =
+proc opConvertUToPtr(b: var SpvBuilder, resultType, source: uint32): uint32 =
   b.freshInst(OpConvertUToPtr, @[resultType, source])
 
-proc opCompositeExtract*(b: var SpvBuilder, resultType, composite: uint32, indices: openArray[int]): uint32 =
+proc opCompositeExtract(b: var SpvBuilder, resultType, composite: uint32, indices: openArray[int]): uint32 =
   var ops = @[resultType, composite]
   for i in indices:
     ops.add uint32(i)
   b.freshInst(OpCompositeExtract, ops)
 
-proc opSelect*(b: var SpvBuilder, resultType, condition, object1, object2: uint32): uint32 =
+proc opSelect(b: var SpvBuilder, resultType, condition, object1, object2: uint32): uint32 =
   b.freshInst(OpSelect, @[resultType, condition, object1, object2])
 
-proc opVariableFn*(b: var SpvBuilder, resultType: uint32): uint32 =
+proc opVariableFn(b: var SpvBuilder, resultType: uint32): uint32 =
   ## Emits OpVariable in the Function storage class into the functions section:
   ## - Function-scope variables must sit in the entry block, unlike `opVariable`
   ##   this writes into ssFunctions
@@ -613,26 +613,26 @@ proc opVariableFn*(b: var SpvBuilder, resultType: uint32): uint32 =
   result = b.module.allocId()
   b.module.emitInstSeq(ssFunctions, OpVariable, @[resultType, result, scFunction])
 
-proc freshLabel*(b: var SpvBuilder): uint32 =
+proc freshLabel(b: var SpvBuilder): uint32 =
   ## Allocates a label result id without emitting OpLabel:
   ## - for forward references (merge/continue targets) whose defining block
   ##   appears later
   ## - pair with `opLabelAt`
   b.module.allocId()
 
-proc opLabelAt*(b: var SpvBuilder, label: uint32) =
+proc opLabelAt(b: var SpvBuilder, label: uint32) =
   b.module.emitInstSeq(ssFunctions, OpLabel, @[label])
 
-proc emitExtension*(b: var SpvBuilder, name: string) =
+proc emitExtension(b: var SpvBuilder, name: string) =
   b.module.startInst(ssExtensions, OpExtension, getStringWords(name))
   b.module.addString(ssExtensions, name)
 
-proc opLoadAligned*(b: var SpvBuilder, resultType, pointer, alignment: uint32): uint32 =
+proc opLoadAligned(b: var SpvBuilder, resultType, pointer, alignment: uint32): uint32 =
   ## Vulkan requires the Aligned memory access on every load through
   ## PhysicalStorageBuffer pointers:
   ## - `alignment` is the pointee alignment in bytes
   ## - returns the loaded value result id
   b.freshInst(OpLoad, @[resultType, pointer, maAligned, alignment])
 
-proc opStoreAligned*(b: var SpvBuilder, pointer, value, alignment: uint32) =
+proc opStoreAligned(b: var SpvBuilder, pointer, value, alignment: uint32) =
   b.module.emitInstSeq(ssFunctions, OpStore, @[pointer, value, maAligned, alignment])

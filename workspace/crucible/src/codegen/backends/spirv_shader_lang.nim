@@ -15,19 +15,19 @@ import std/sets
 import std/strutils
 import std/tables
 import ../ir/ast_datatypes
-import ./spirv_encoder
+import ./spirv_encoder {.all.}
 
-const spvScalarKinds* = {gtVoid, gtBool, gtUint8, gtUint16, gtInt16, gtUint32,
+const spvScalarKinds = {gtVoid, gtBool, gtUint8, gtUint16, gtInt16, gtUint32,
                          gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64,
                          gtFloat16, gtSize_t}
 
 func uint32Type(): GpuType =
   GpuType(kind: gtUint32)
 
-func roundUp*(x, step: int): int =
+func roundUp(x, step: int): int =
   ((x + step - 1) div step) * step
 
-func getScalarByteSize*(t: GpuType): int =
+func getScalarByteSize(t: GpuType): int =
   case t.kind
   of gtVoid: 0
   of gtUint8: 1
@@ -44,14 +44,14 @@ template spvRefuse(what: string) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvTyKind* = enum
+  SpvTyKind = enum
     stkScalar
     stkArray
     stkRuntimeArray
     stkStruct
     stkPointer
 
-  SpvTy* = ref object
+  SpvTy = ref object
     case kind*: SpvTyKind
     of stkScalar:
       scalar*: GpuType
@@ -66,24 +66,24 @@ type
       storage*: uint32
       pointee*: SpvTy
 
-func spvScalar*(t: GpuType): SpvTy =
+func spvScalar(t: GpuType): SpvTy =
   doAssert t.kind in spvScalarKinds, "not a scalar GpuType: " & $t.kind
   SpvTy(kind: stkScalar, scalar: t)
 
-func spvArray*(elem: SpvTy, len: int): SpvTy =
+func spvArray(elem: SpvTy, len: int): SpvTy =
   doAssert len >= 1, "length 0 means runtime-sized, use spvRuntimeArray"
   SpvTy(kind: stkArray, elem: elem, len: len)
 
-func spvRuntimeArray*(elem: SpvTy): SpvTy =
+func spvRuntimeArray(elem: SpvTy): SpvTy =
   SpvTy(kind: stkRuntimeArray, relem: elem)
 
-func spvStruct*(members: seq[SpvTy]): SpvTy =
+func spvStruct(members: seq[SpvTy]): SpvTy =
   SpvTy(kind: stkStruct, members: members)
 
-func spvPointer*(storage: uint32, pointee: SpvTy): SpvTy =
+func spvPointer(storage: uint32, pointee: SpvTy): SpvTy =
   SpvTy(kind: stkPointer, storage: storage, pointee: pointee)
 
-func spvTy*(t: GpuType): SpvTy =
+func spvTy(t: GpuType): SpvTy =
   case t.kind
   of spvScalarKinds: spvScalar(t)
   of gtArray:
@@ -103,24 +103,24 @@ func spvTy*(t: GpuType): SpvTy =
   else:
     error("GpuType outside the SPIR-V subset: " & $t.kind)
 
-func isStaticInt*(t: GpuType): bool =
+func isStaticInt(t: GpuType): bool =
   t.kind == gtStatic or
       (t.kind == gtGenericInst and t.gName == "Int" and t.gArgs.len == 1 and
        t.gArgs[0].kind == gtStatic)
 
-func staticIntValue*(t: GpuType): int =
+func staticIntValue(t: GpuType): int =
   if t.kind == gtStatic:
     t.sValue
   else:
     t.gArgs[0].sValue
 
-func valueType*(t: GpuType): GpuType =
+func valueType(t: GpuType): GpuType =
   if isStaticInt(t):
     GpuType(kind: gtInt32)
   else:
     t
 
-func valueTy*(t: GpuType): SpvTy =
+func valueTy(t: GpuType): SpvTy =
   case t.kind
   of spvScalarKinds: spvScalar(t)
   of gtStatic: spvScalar(GpuType(kind: gtInt32))
@@ -143,11 +143,11 @@ func valueTy*(t: GpuType): SpvTy =
 #  std430 layout
 # ═══════════════════════════════════════════════════════════════════════
 
-type SpvLayout* = object
+type SpvLayout = object
   size*: int
   align*: int
 
-func std430Layout*(t: SpvTy): SpvLayout =
+func std430Layout(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
     let s = getScalarByteSize(t.scalar)
@@ -170,7 +170,7 @@ func std430Layout*(t: SpvTy): SpvLayout =
   of stkPointer:
     SpvLayout(size: 8, align: 8)
 
-func std430Offsets*(members: seq[SpvTy]): seq[int] =
+func std430Offsets(members: seq[SpvTy]): seq[int] =
   var off = 0
   for m in members:
     let ml = std430Layout(m)
@@ -183,7 +183,7 @@ func std430Offsets*(members: seq[SpvTy]): seq[int] =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvLangCtx* = object
+  SpvLangCtx = object
     builder*: SpvBuilder
     caps*: HashSet[uint32]              ## pending capabilities, flushCapabilities emits them
     structMemo*: Table[seq[uint32], uint32]
@@ -195,11 +195,11 @@ type
     emitting*: HashSet[string]
     exts*: seq[string]
 
-proc initSpvLangCtx*(): SpvLangCtx =
+proc initSpvLangCtx(): SpvLangCtx =
   result.builder = initSpvBuilder()
   result.caps.incl capShader
 
-proc scalarId*(ctx: var SpvLangCtx, t: GpuType): uint32 =
+proc scalarId(ctx: var SpvLangCtx, t: GpuType): uint32 =
   case t.kind
   of gtVoid: ctx.builder.tyVoid()
   of gtBool: ctx.builder.tyBool()
@@ -224,7 +224,7 @@ proc scalarId*(ctx: var SpvLangCtx, t: GpuType): uint32 =
   of gtSize_t: ctx.builder.tyInt(32, false)
   else: error("not a scalar GpuType: " & $t.kind)
 
-proc tyId*(ctx: var SpvLangCtx, t: SpvTy): uint32
+proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32
 
 proc arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
   doAssert len >= 1
@@ -246,7 +246,7 @@ proc runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
   let e = std430Layout(elem)
   ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
 
-proc structTy*(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
+proc structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
   let offsets = std430Offsets(members)
   var memberIds: seq[uint32]
   for m in members:
@@ -270,7 +270,7 @@ proc structTy*(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint3
     ctx.builder.emitDecorate(result, decBlock)
   ctx.structMemo[key] = result
 
-proc tyId*(ctx: var SpvLangCtx, t: SpvTy): uint32 =
+proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   case t.kind
   of stkScalar: ctx.scalarId(t.scalar)
   of stkArray: ctx.arrayTy(t.elem, t.len)
@@ -282,7 +282,7 @@ proc tyId*(ctx: var SpvLangCtx, t: SpvTy): uint32 =
     ctx.builder.tyPointer(t.storage, ctx.tyId(t.pointee))
 
 type
-  SpvPushBlock* = object
+  SpvPushBlock = object
     structTy*: uint32     ## Block-decorated struct type id
     ptrTy*: uint32        ## pointer to the struct in the PushConstant class
     varId*: uint32        ## the block variable
@@ -290,12 +290,12 @@ type
     offsets*: seq[int]    ## std430 offset per member
     byteSize*: int        ## packed block size, the runtime push-blob length
 
-func pushMemberTy*(p: GpuType): SpvTy =
+func pushMemberTy(p: GpuType): SpvTy =
   case p.kind
   of gtPtr, gtVoidPtr: spvScalar(GpuType(kind: gtUint64))
   else: spvTy(p)
 
-proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
+proc buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
   for m in members:
     if m.kind == stkScalar and m.scalar.kind == gtBool:
       spvRefuse("push-constant member bool, OpTypeBool cannot appear in a push-constant block")
@@ -309,7 +309,7 @@ proc buildPushBlockTys*(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock 
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
 
-proc builtinInput*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if builtin in ctx.builtins:
     return ctx.builtins[builtin].varId
   let vecTy = ctx.builder.tyVector(ctx.scalarId(uint32Type()), 3)
@@ -320,12 +320,12 @@ proc builtinInput*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-proc loadBuiltinComponent*(ctx: var SpvLangCtx, builtin: uint32, component: int): uint32 =
+proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int): uint32 =
   let varId = ctx.builtinInput(builtin)
   let v = ctx.builder.opLoad(ctx.builtins[builtin].vecTy, varId)
   ctx.builder.opCompositeExtract(ctx.scalarId(uint32Type()), v, @[component])
 
-func coordBuiltinInput*(k: GpuCoordBuiltinKind): uint32 =
+func coordBuiltinInput(k: GpuCoordBuiltinKind): uint32 =
   case k
   of gbkThreadPositionInGrid: biGlobalInvocationId
   of gbkThreadgroupPositionInGrid: biWorkgroupId
@@ -336,7 +336,7 @@ func coordBuiltinInput*(k: GpuCoordBuiltinKind): uint32 =
   of gbkNone:
     error("not a coordinate builtin")
 
-proc scalarBuiltinInput*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if builtin in ctx.scalarBuiltins:
     return ctx.scalarBuiltins[builtin]
   let u32Ty = ctx.scalarId(uint32Type())
@@ -347,11 +347,11 @@ proc scalarBuiltinInput*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-proc loadScalarBuiltin*(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   let varId = ctx.scalarBuiltinInput(builtin)
   ctx.builder.opLoad(ctx.scalarId(uint32Type()), varId)
 
-proc flushCapabilities*(ctx: var SpvLangCtx) =
+proc flushCapabilities(ctx: var SpvLangCtx) =
   var caps: seq[uint32]
   for c in ctx.caps:
     caps.add c
@@ -364,7 +364,7 @@ proc flushCapabilities*(ctx: var SpvLangCtx) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvFnCtx* = object
+  SpvFnCtx = object
     locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
     paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
     paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
@@ -378,16 +378,16 @@ type
     terminated*: bool                   ## a terminator already ended this fn
     fns*: Table[string, GpuAst]         ## device fn bodies keyed by callee iSym
 
-type ParamExpansionKind* = enum
+type ParamExpansionKind = enum
   pekScalar    ## by-value scalar, one push member
   pekPointer   ## one u64 device-address push member
   pekObject    ## byRef object, one push member per scalar leaf
 
-const spvSignedInts* = {gtInt16, gtInt32, gtInt64}
+const spvSignedInts = {gtInt16, gtInt32, gtInt64}
 
-proc emitStmt*(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst)
+proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst)
 
-func pointeeElem*(t: GpuType): GpuType =
+func pointeeElem(t: GpuType): GpuType =
   case t.kind
   of gtPtr:
     if t.to.kind == gtUncheckedArray:
@@ -402,7 +402,7 @@ func indexBaseSym(n: GpuAst): Symbol =
   doAssert base.kind == gpuIdent, "index base is not a symbol"
   base.symbol
 
-proc fieldEntry*(t: GpuType, name: string): tuple[idx: int, typ: GpuType] =
+proc fieldEntry(t: GpuType, name: string): tuple[idx: int, typ: GpuType] =
   doAssert t.kind in {gtObject, gtGenericInst},
     "field access on non-object type " & $t.kind
   for i, f in t.fields:
@@ -410,21 +410,21 @@ proc fieldEntry*(t: GpuType, name: string): tuple[idx: int, typ: GpuType] =
       return (i, f.typ)
   error("no field " & name & " on type " & t.pretty())
 
-func derefTy*(t: GpuType): GpuType =
+func derefTy(t: GpuType): GpuType =
   case t.kind
   of gtPtr: t.to
   of gtUncheckedArray: t.uaTo
   else:
     error("deref of non-pointer type " & $t.kind)
 
-proc valueTypeOfField*(t: GpuType, name: string): GpuType =
+proc valueTypeOfField(t: GpuType, name: string): GpuType =
   valueType(fieldEntry(t, name).typ)
 
-type DotChain* = object
+type DotChain = object
   root*: GpuAst
   fields*: seq[GpuAst]
 
-func dotChain*(n: GpuAst): DotChain =
+func dotChain(n: GpuAst): DotChain =
   doAssert n.kind == gpuDot, "not a member access"
   var cur = n
   while cur.kind == gpuDot:
@@ -433,7 +433,7 @@ func dotChain*(n: GpuAst): DotChain =
     cur = cur.dParent
   result.root = cur
 
-func chainRootType*(root: GpuAst): GpuType =
+func chainRootType(root: GpuAst): GpuType =
   case root.kind
   of gpuIdent:
     let t = root.symbol.typ
@@ -445,7 +445,7 @@ func chainRootType*(root: GpuAst): GpuType =
   else:
     spvRefuse("member chain root node " & $root.kind)
 
-proc exprGpuType*(n: GpuAst): GpuType =
+proc exprGpuType(n: GpuAst): GpuType =
   case n.kind
   of gpuLit: n.lType
   of gpuIdent:
@@ -495,7 +495,7 @@ proc exprGpuType*(n: GpuAst): GpuType =
   else:
     spvRefuse("result type of expression node " & $n.kind)
 
-proc spvConstLit*(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
+proc spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
   let tyId = ctx.tyId(spvScalar(t))
   case t.kind
   of gtUint32, gtSize_t: ctx.builder.constUint(tyId, uint64(uint32(parseUInt(lValue))))
@@ -507,7 +507,7 @@ proc spvConstLit*(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
   else:
     spvRefuse("literal of type " & $t.kind)
 
-proc convertValue*(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
+proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
   if source.kind == to.kind:
     return v
   let fFloatTy = source.kind in {gtFloat16, gtFloat32, gtFloat64}
@@ -539,7 +539,7 @@ proc convertValue*(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 
       error("no SPIR-V scalar conversion " & $source.kind & " -> " & $to.kind)
   ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(to)), v])
 
-proc bdaPointerTy*(ctx: var SpvLangCtx, elem: GpuType): uint32 =
+proc bdaPointerTy(ctx: var SpvLangCtx, elem: GpuType): uint32 =
   doAssert elem.kind in spvScalarKinds,
     "SPIR-V buffer references address scalar elements only: " & $elem.kind
   ctx.caps.incl capPhysicalStorageBufferAddresses
@@ -639,7 +639,7 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): SpvOp =
   else:
     spvRefuse("binary operator " & name)
 
-proc emitExpr*(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32
+proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32
 
 proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType
 
@@ -1416,11 +1416,11 @@ proc scanTree(n: GpuAst, calls: var seq[string]) =
   else:
     discard
 
-type ParamLeaf* = object
+type ParamLeaf = object
   path*: seq[int]
   typ*: GpuType
 
-proc collectParamLeaves*(t: GpuType, path: seq[int], res: var seq[ParamLeaf]) =
+proc collectParamLeaves(t: GpuType, path: seq[int], res: var seq[ParamLeaf]) =
   case t.kind
   of gtObject, gtGenericInst:
     if isStaticInt(t):
@@ -1454,7 +1454,7 @@ proc composeParam(ctx: var SpvLangCtx, t: GpuType, leafVals: seq[uint32], cursor
   else:
     error("kernel parameter member outside the SPIR-V subset: " & $t.kind)
 
-proc emitDeviceFn*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
+proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   doAssert procNode.kind == gpuProc, "not a function"
   doAssert not procNode.forwardDeclare, "forward declarations do not emit"
   let retTyId = fnRetTyId(ctx, procNode.pRetType)
@@ -1521,7 +1521,7 @@ proc emitDeviceFn*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
 
-proc emitDeviceFnRec*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
+proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   let isym = procNode.pName.symbol.iSym
   if isym in ctx.emittedFns:
     return ctx.emittedFns[isym]
@@ -1539,7 +1539,7 @@ proc emitDeviceFnRec*(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   ctx.emittedFns[isym] = result
   ctx.emitting.excl isym
 
-proc emitKernel*(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]): uint32 =
+proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]): uint32 =
   doAssert kernel.kind == gpuProc, "not a function"
   doAssert attGlobal in kernel.pAttributes, "only global kernels emit"
   doAssert kernel.pRetType.kind == gtVoid, "kernels are void"
