@@ -222,11 +222,19 @@ proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## - asRMEM for plain values
   case n.kind
   of gpuIndex:
-    # the indexed container carries the address space, the pointee itself carries none
     var container = n.iArr
     if container.kind == gpuDeref:
       container = container.dOf
-    result = getTypeAccessedSpace(ctx.getOperandType(container))
+    if container.kind == gpuDot:
+      result = ctx.resolveAddressSpace(container)
+    else:
+      result = getTypeAccessedSpace(ctx.getOperandType(container))
+  of gpuDot:
+    let fieldTyp = ctx.getOperandType(n)
+    if not fieldTyp.isNil and fieldTyp.kind in {gtPtr, gtSpan}:
+      result = getTypeAccessedSpace(fieldTyp)
+    else:
+      result = ctx.resolveAddressSpace(n.dParent)
   of gpuDeref:
     result = getTypeAccessedSpace(ctx.getOperandType(n.dOf))
   of gpuCast:

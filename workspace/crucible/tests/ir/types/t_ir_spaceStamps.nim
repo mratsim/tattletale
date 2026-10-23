@@ -161,6 +161,37 @@ static:
     $instSecond.pParams[1].typ.addressSpace
   echo "  OK - same-type rewrites at different parameters instantiate separately"
 
+# ── 1c. A field address lives in the parent pointer's storage ──
+static:
+  let ir = toCrucibleAst:
+    type
+      Vec = object
+        x: float32
+        arr: array[4, float32]
+    proc fieldAddr(p: ptr Vec) {.global.} =
+      let q = addr p[].x
+      let r = addr p[].arr
+      let t = addr p[].arr[2]
+      discard q
+      discard r
+      discard t
+
+  var fieldKern: GpuAst = nil
+  for stmt in ir.statements:
+    if stmt.kind == gpuProc and stmt.pName.symbol.name == "fieldAddr":
+      fieldKern = stmt
+  doAssert not fieldKern.isNil, "expected the fieldAddr kernel"
+
+  # the addressed storage is the pointee of the device pointer `p`, every field lives there
+  for name in ["q", "r", "t"]:
+    let v = fieldKern.pBody.findVar(name)
+    doAssert not v.isNil, "expected the var " & name
+    doAssert not v.vName.symbol.typ.isNil and v.vName.symbol.typ.kind == gtPtr and
+      v.vName.symbol.typ.addressSpace == asDevice,
+      "addr of a field of a device pointer keeps the device space, got " &
+      $v.vName.symbol.typ.addressSpace & " for " & name
+  echo "  OK - field addresses inherit the parent pointer's storage"
+
 # ── 2. Smem arena: the hoisted threadgroup pointer carries asSMEM ──
 proc registerMetalLowering(reg: var PassRegistry) {.nimcall.} =
   # the bundle's shared lowering passes depend on the early legalization phase
