@@ -16,11 +16,6 @@ import ../../builtins/builtins_gpu_types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
-  ## Resolves the per-backend intrinsic name for a call:
-  ## - the ambiguous numeric builtins `min`/`max`/`abs` per operand type,
-  ##   through NimGpuNumericBuiltinsFnNames
-  ## - the fp16 conversions through NimGpuFp16ConversionBuiltins
-  ## Every other name passes through verbatim.
   let name = call.cName.ident()
   if name in NimGpuNumericBuiltinsFunctions:
     let t = ctx.getOperandType(call.cArgs[0]) # min/max/abs always have 1 or 2 cArgs
