@@ -13,7 +13,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/ceramic/tests/kernels/k_sdpa/t_kernel_sdpa_metal.nim
+##     workspace/ceramic/tests/kernels/k_sdpa/t_scaled_dot_product_attention_metal.nim
 ##
 ## Fixtures regenerate with `fixtures/gen_sdpa_fixtures.py` under `uv run --group test-vectors`.
 

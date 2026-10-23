@@ -24,7 +24,7 @@
 #
 # Run:
 #   nim c -r -d:release --maxLoopIterationsVM:100000000 \
-#     --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_sdpa_metal.nim
+#     --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
 
 import std/[algorithm, math, monotimes, strformat, strutils, times]
 import workspace/crucible
