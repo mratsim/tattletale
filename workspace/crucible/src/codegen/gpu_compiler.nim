@@ -174,7 +174,7 @@ macro glsl*(body: untyped): string =
   crucibleCompileTarget = ctGlsl
   result = newCall(bindSym"codegenGLSL", body)
 
-macro codegenSpirv(body: typed): seq[uint32] =
+macro codegenSpirvShader(body: typed): seq[uint32] =
   ## Compiles a `spirv:` block body into binary SPIR-V words (Vulkan environment).
   var ctx = GpuContext()
   var reg = PassRegistry.new()
@@ -186,15 +186,15 @@ macro codegenSpirv(body: typed): seq[uint32] =
   ctx.types = typeReg.types
   ctx.ingestTopLevel(gpuAst, typesFirst = true)
   runPasses(ctx, reg)
-  result = newLit(ctx.codegenSpirv())
+  result = newLit(ctx.codegenSpirvShader())
 
 macro spirv*(body: untyped): seq[uint32] =
   ## Converts the body of this macro into binary SPIR-V words (Vulkan environment).
   # The untyped -> typed macro delegation dance
   # allows delaying compileTime const resolution
   # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctSpirv
-  result = newCall(bindSym"codegenSpirv", body)
+  crucibleCompileTarget = ctSpirvShader
+  result = newCall(bindSym"codegenSpirvShader", body)
 
 macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code.

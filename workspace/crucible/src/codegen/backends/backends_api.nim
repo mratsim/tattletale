@@ -27,5 +27,5 @@ proc codegenMetal*(ctx: var GpuContext): string =
 proc codegenHlsl*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   hlsl_lang.codegen(ctx, flavor)
 
-proc codegenSpirv*(ctx: var GpuContext): seq[uint32] =
+proc codegenSpirvShader*(ctx: var GpuContext): seq[uint32] =
   spirv_shader_lang.codegen(ctx)
