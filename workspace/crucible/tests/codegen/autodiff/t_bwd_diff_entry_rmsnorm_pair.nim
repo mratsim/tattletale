@@ -23,6 +23,7 @@
 
 import std/strutils
 import workspace/crucible
+import workspace/crucible/src/codegen/autodiff {.all.}
 
 # ── Proof kernel ──────────────────────────────────────────────────────────
 
@@ -52,7 +53,7 @@ const rmsnormPair = bkMetal.bwd_diff(rmsnormPlain)
 
 # ── Pair metadata: mirror ABI and residual slot ───────────────────────────
 
-func paramNamed(ad: KernelPair, name: string): BwdParamMeta =
+func paramNamed(ad: BwdDiffKernels, name: string): BwdParamMeta =
   for m in ad.params:
     if m.name == name:
       return m

@@ -27,7 +27,7 @@
 
 import std/macros
 
-import workspace/crucible/src/codegen/kernel_pair
+import workspace/crucible/src/codegen/autodiff
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/engines/vulkan_api
@@ -36,7 +36,7 @@ import workspace/crucible/src/runtime/engines/vulkan_api
 # ▸ Types
 # ═══════════════════════════════════════════════════════════════════════
 
-type AdHandle*[E: HwEngine; kernels: static KernelPair] = object
+type AdHandle*[E: HwEngine; kernels: static BwdDiffKernels] = object
   ## Runtime handle of one kernel pair.
   ##
   ## - `engine`: the engine that compiled the pair's kernels at `setupAD`
@@ -47,7 +47,7 @@ type AdHandle*[E: HwEngine; kernels: static KernelPair] = object
 # ▸ Setup
 # ═══════════════════════════════════════════════════════════════════════
 
-proc setupAD*[E: HwEngine](engine: E, kernels: static KernelPair): AdHandle[E, kernels] =
+proc setupAD*[E: HwEngine](engine: E, kernels: static BwdDiffKernels): AdHandle[E, kernels] =
   ## Compiles the pair's kernels through the engine's normal compile path
   ## and returns the AD handle. Each kernel ingests as one artifact:
   ##
@@ -139,7 +139,7 @@ func readReduceSource(n: NimNode): ReduceSource =
   result.name = fieldNode(n, "name").strVal
   result.source = fieldNode(n, "source").strVal
 
-func readPair(n: NimNode): KernelPair =
+func readKernels(n: NimNode): BwdDiffKernels =
   ## Reconstructs the pair value of an `AdHandle` type at macro expansion:
   ## the handle type inlines the static pair as an object-constructor node.
   result.kernelName = fieldNode(n, "kernelName").strVal
@@ -254,7 +254,7 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
   ## The launch ABI binds the launch output slot to the kernel's first parameter,
   ## so the printed parameter order is rebuilt here: the caller's output slots into its forward-parameter position,
   ## wherever the pair declares it. The caller keeps every buffer it passes.
-  let kernels = ad.getTypeInst()[2].readPair()
+  let kernels = ad.getTypeInst()[2].readKernels()
   doAssert primals.len == kernels.params.len - 1,
     "ad_handle forward: expected " & $(kernels.params.len - 1) &
     " primals beside the output, got " & $primals.len
@@ -312,7 +312,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   ## Example for `axpy(out, a, b: ptr UncheckedArray[float32], alpha: float32)`:
   ## `ad.backward(d_out, out, a, b, alpha)` returns the gradients
   ## `(d_a, d_b, d_alpha)`.
-  let kernels = ad.getTypeInst()[2].readPair()
+  let kernels = ad.getTypeInst()[2].readKernels()
   result = nnkStmtList.newTree()
 
   var incoming: seq[BwdParamMeta]

@@ -7,7 +7,7 @@
 
 ## bwd_diff compile-time entry: const kernel pairs
 ##
-## Test that `bkGlsl.bwd_diff` / `bkMetal.bwd_diff` expand a `{.global.}` kernel to a const `KernelPair` with mechanically derived artifacts:
+## Test that `bkGlsl.bwd_diff` / `bkMetal.bwd_diff` expand a `{.global.}` kernel to a const `BwdDiffKernels` with derived artifacts:
 ##
 ## - the backward signature of axpy is `(d_out, d_a, d_b, d_alpha, out, a, b, alpha)` exactly
 ## - `d_alpha` records a 1-element gradient buffer, matched by name
@@ -21,6 +21,7 @@
 
 import std/strutils
 import workspace/crucible
+import workspace/crucible/src/codegen/autodiff {.all.}
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ static:
 
 # ── Parameter metadata ────────────────────────────────────────────────────
 
-func paramNamed(ad: KernelPair, name: string): BwdParamMeta =
+func paramNamed(ad: BwdDiffKernels, name: string): BwdParamMeta =
   for m in ad.params:
     if m.name == name:
       return m

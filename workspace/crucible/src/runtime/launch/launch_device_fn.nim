@@ -7,7 +7,7 @@
 
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
-import workspace/crucible/src/codegen/kernel_pair
+import workspace/crucible/src/codegen/autodiff
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/cuda_api
 import workspace/crucible/src/runtime/engines/opencl_api
@@ -342,7 +342,7 @@ func kernelImplArg(node: NimNode, what: string): NimNode =
 
 macro bwd_diff*(bk: BackendKind, sym: typed): untyped =
   ## Compile-time autodiff entry: `bkGlsl.bwd_diff(axpy)` expands to a const
-  ## `KernelPair` for the Vulkan GLSL backend and `bkMetal.bwd_diff(axpy)`
+  ## `BwdDiffKernels` for the Vulkan GLSL backend and `bkMetal.bwd_diff(axpy)`
   ## for Metal. The kernel takes the launch bridge's ingestion:
   ##
   ##   kernel symbol → frontend → common passes → transposer → lowering
@@ -373,9 +373,9 @@ macro bwd_diff*(bk: BackendKind, sym: typed): untyped =
   # - the differentiable subset must diagnose those pragmas itself
   case bk.strVal
   of "bkGlsl":
-    result = newLit(codegenKernelADImpl(bkGlsl, impl))
+    result = newLit(codegenBwdDiffKernels(bkGlsl, impl))
   of "bkMetal":
-    result = newLit(codegenKernelADImpl(bkMetal, impl))
+    result = newLit(codegenBwdDiffKernels(bkMetal, impl))
   else:
     error "bwd_diff: backend kind " & bk.strVal &
       " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"
@@ -419,9 +419,9 @@ macro bwd_diff*(bk: BackendKind, fwd: typed, bwd: typed, rest: varargs[untyped])
   let bwdImpl = bwd.kernelImplArg("the declared backward kernel")
   case bk.strVal
   of "bkGlsl":
-    result = newLit(codegenKernelPairDeclared(bkGlsl, fwdImpl, bwdImpl, saveNames))
+    result = newLit(codegenBwdDiffKernelsDeclared(bkGlsl, fwdImpl, bwdImpl, saveNames))
   of "bkMetal":
-    result = newLit(codegenKernelPairDeclared(bkMetal, fwdImpl, bwdImpl, saveNames))
+    result = newLit(codegenBwdDiffKernelsDeclared(bkMetal, fwdImpl, bwdImpl, saveNames))
   else:
     error "bwd_diff: backend kind " & bk.strVal &
       " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"

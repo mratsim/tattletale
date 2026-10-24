@@ -12,17 +12,17 @@
 ## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Autodiff      | `bwd_diff`, `KernelPair`, `BwdParamMeta`, `BwdParamKind`, `BwdGradKind`, `BwdExtentSource`, `setupAD`, `AdHandle`     |
+## | Autodiff      | `bwd_diff`, `BwdDiffKernels`, `setupAD`, `AdHandle`, `forward`, `backward`                                            |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`)                                                  |
 
 import
   ./codegen/gpu_compiler,
-  ./codegen/kernel_pair,
+  ./codegen/autodiff,
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
   ./runtime/launch/launch_device_fn,
-  ./runtime/ad_handle
+  ./runtime/autodiff_handle
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Engines
@@ -34,11 +34,10 @@ export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn
 export launch_device_fn.bwd_diff
 
-export kernel_pair.KernelPair, kernel_pair.BwdParamMeta, kernel_pair.BwdParamKind,
-       kernel_pair.BwdGradKind, kernel_pair.BwdExtentSource,
-       kernel_pair.ReduceSource, kernel_pair.ScalarWorkspace
+export autodiff.BwdDiffKernels
 
-export ad_handle.AdHandle, ad_handle.setupAD, ad_handle.forward, ad_handle.backward
+export autodiff_handle.AdHandle, autodiff_handle.setupAD,
+       autodiff_handle.forward, autodiff_handle.backward
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Launch sugar

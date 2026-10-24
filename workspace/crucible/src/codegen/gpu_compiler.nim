@@ -6,7 +6,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, sequtils, sets, strutils, tables]
+import std/[macros, sequtils, tables]
 
 import ./ir/ast_datatypes
 import ./ir/ast_type_constructors
@@ -24,8 +24,6 @@ import ./passes/passes_lowering_glsl
 import ./passes/passes_validations_glsl
 import ./passes/passes_lowering_hlsl
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12
-import ./passes/passes_autodiff
-import ./kernel_pair
 import ./passes/passes_lowering_msl
 import ./frontend/nim_to_crucible
 import ./backends/lang_utils
@@ -61,7 +59,7 @@ proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: va
   else:
     discard
 
-proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
+proc ingestTopLevel*(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
   ## Farms the AST into ctx (fnTab, allFnTab, globalBlocks) ahead of runPasses.
   ## typesFirst: C-family block layout plus callee harvest, WGSL the reverse
   ## and no harvest (its callees inline).
@@ -108,180 +106,6 @@ macro toCrucibleAst*(body: typed): GpuAst =
   newLit(gpuAst)
 
 
-
-proc printSingleProc(ctx: var GpuContext, bk: BackendKind, fn: GpuAst): string =
-  ## Prints one proc as a standalone translation unit of backend `bk`.
-  ##
-  ## The printer sees only this kernel in the function table.
-  ## Each kernel prints with its own type declarations and push-constant blocks.
-  let saved = ctx.fnTab
-  ctx.fnTab = {fn.pName: fn}.toOrderedTable
-  case bk
-  of bkMetal:
-    result = ctx.codegenMetal()
-  of bkGlsl:
-    result = ctx.codegenGLSL()
-  else:
-    discard
-  ctx.fnTab = saved
-
-proc lowerAndPrintPair(ctx: var GpuContext, bk: BackendKind, fwd, bwd: GpuAst, reduces: seq[GpuAst], donePasses: HashSet[string]): tuple[fwdSource: string, bwdSource: string, reduceSources: seq[ReduceSource], bwdKernelParams: seq[string]] =
-  ## Stage 2 of the pair pipelines: backend lowering over the pair's kernels and reduce kernels, then per-kernel standalone printing.
-  ##
-  ## The GLSL shared-push-constant-layout validation does not apply.
-  ## It guards multi-kernel sources sharing one block.
-  ## Each kernel of the pair prints and ingests standalone, carrying its own push-constant block.
-  var regLow = PassRegistry.new()
-  # Lowering passes carry `dependsOn` edges into the common passes
-  # (e.g. GLSL's insertPointerDeref needs the legalized rewriteIndexDeref).
-  # The dependency set continues across the stages.
-  regLow.donePasses = donePasses
-  case bk
-  of bkMetal:
-    regLow.registerMetalLoweringPasses()
-  of bkGlsl:
-    regLow.registerGlslLoweringPasses()
-  else:
-    discard
-  regLow.registerValidationPostPasses()
-  runPasses(ctx, regLow)
-
-  for rk in reduces:
-    result.reduceSources.add ReduceSource(name: rk.pName.ident(),
-                                          source: ctx.printSingleProc(bk, rk))
-  for p in bwd.pParams:
-    result.bwdKernelParams.add p.ident.ident()
-  result.fwdSource = ctx.printSingleProc(bk, fwd)
-  result.bwdSource = ctx.printSingleProc(bk, bwd)
-
-proc codegenKernelADImpl*(bk: BackendKind, body: NimNode): KernelPair =
-  ## Pipeline of one `bwd_diff` expansion for backend `bk`:
-  ##
-  ##   Nim body → frontend → common passes → transposer → metadata
-  ##           → backend lowering → per-kernel print
-  ##
-  ## - the typed kernel body goes through the frontend, the common passes
-  ##   and the autodiff transposer
-  ## - the signature metadata derives from the transposer's output
-  ## - each kernel prints standalone after the backend lowering
-  ##
-  ## Compile-time only, called from the `bwd_diff` macro.
-  ##
-  ## A `static` backend-kind macro parameter cannot host the pipeline:
-  ##
-  ## - a static parameter makes the macro generic
-  ## - instantiation re-sem-checks the typed kernel body
-  ## - statement pragmas like `{.emit: ... .}` refuse there
-  ## - the differentiable subset must diagnose those pragmas itself
-  var ctx = GpuContext()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-
-  # Stage 1, differentiation: metadata derives from the transposer's output,
-  # before backend lowering renames identifiers.
-  # The ABI keeps Nim-facing names (GLSL renames `out` to `out_nim`).
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerAutodiffPasses()
-  runPasses(ctx, reg)
-
-  var fwd: GpuAst = nil
-  var bwd: GpuAst = nil
-  var reduces: seq[GpuAst] = @[]
-  for fn in ctx.allFnTab.values():
-    if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
-      continue
-    if fwd.isNil:
-      fwd = fn
-    elif fn.pName.ident() == fwd.pName.ident() & "_bwd":
-      bwd = fn
-    elif fn.pName.ident().startsWith(fwd.pName.ident() & "_bwd_d_") and
-        fn.pName.ident().endsWith("_reduce"):
-      reduces.add fn
-    else:
-      error "bwd_diff: unexpected global proc '" & fn.pName.ident() &
-        "' in the pair pipeline"
-  if fwd.isNil:
-    error "bwd_diff: no {.global.} kernel to differentiate"
-  if bwd.isNil:
-    error "bwd_diff: no backward kernel was generated for '" &
-      fwd.pName.ident() & "'"
-
-  var reduceNames: seq[string] = @[]
-  for rk in reduces:
-    reduceNames.add rk.pName.ident()
-  let metas = deriveBwdParams(fwd, bwd, reduceNames)
-
-  let printed = ctx.lowerAndPrintPair(bk, fwd, bwd, reduces, reg.donePasses)
-  result = KernelPair(
-    kernelName: fwd.pName.ident(),
-    backend: bk,
-    fwdSource: printed.fwdSource,
-    bwdSource: printed.bwdSource,
-    reduceSources: printed.reduceSources,
-    params: metas,
-    scalarWorkspaces: fwd.deriveScalarWorkspaces(metas),
-    bwdSignature: metas.mirrorSignature(),
-    bwdKernelParams: printed.bwdKernelParams,
-    saveNames: @[])
-
-proc codegenKernelPairDeclared*(bk: BackendKind, fwdBody, bwdBody: NimNode, saveNames: seq[string]): KernelPair =
-  ## Pipeline of one declared-backward `bwd_diff(fwd, bwd, save = [...])`
-  ## expansion for backend `bk`:
-  ##
-  ##   Nim bodies → frontend → common passes → mirror validation
-  ##             → backend lowering → per-kernel print
-  ##
-  ## Contract:
-  ##
-  ## - No autodiff pass runs: the hand-written kernel is the pair's backward.
-  ## - The pair's metadata still derives from the forward symbol.
-  ## - A declared backward whose signature deviates from the mirror refuses at expansion with the `bwd_diff:` prefix (`validateDeclaredBwd`).
-  ## - Every save name must be a forward output of the forward kernel (`validateSaveNames`),
-  ##   saved outputs stay alive between forward and backward.
-  ##
-  ## Compile-time only, called from the `bwd_diff` macro.
-  var ctx = GpuContext()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, nnkStmtList.newTree(fwdBody, bwdBody))
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-
-  # Stage 1: common passes only, the declared backward is hand-written, the transposer never runs for the pair.
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  runPasses(ctx, reg)
-
-  # The pair ingests in declaration order, the forward kernel first.
-  var globals: seq[GpuAst]
-  for fn in ctx.allFnTab.values():
-    if fn.kind == gpuProc and attGlobal in fn.pAttributes:
-      globals.add fn
-  if globals.len != 2:
-    error "bwd_diff: the declared pair takes one {.global.} forward kernel " &
-      "and one '<forward>_bwd' backward, got " & $globals.len & " kernels"
-  let fwd = globals[0]
-  let bwd = globals[1]
-
-  # The mirror rule is the only signature authority: validate before deriving.
-  validateDeclaredBwd(fwd, bwd)
-  let metas = deriveBwdParams(fwd, bwd, @[])
-  validateSaveNames(fwd.pName.ident(), metas, saveNames)
-
-  let printed = ctx.lowerAndPrintPair(bk, fwd, bwd, @[], reg.donePasses)
-  result = KernelPair(
-    kernelName: fwd.pName.ident(),
-    backend: bk,
-    fwdSource: printed.fwdSource,
-    bwdSource: printed.bwdSource,
-    reduceSources: printed.reduceSources,
-    params: metas,
-    scalarWorkspaces: @[],
-    bwdSignature: metas.mirrorSignature(),
-    bwdKernelParams: printed.bwdKernelParams,
-    saveNames: saveNames)
 
 macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA code.
