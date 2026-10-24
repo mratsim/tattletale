@@ -82,7 +82,7 @@ proc runTest() =   # private: engines are destroyed at return
     engine.copyToDeviceFromHost(dBDev, addr zeros[0], N)
     engine.copyToDeviceFromHost(dAlphaDev, addr zeros[0], 1)
 
-    ad.backward(dOutDev, outDev, aDev, bDev, alpha, dADev, dBDev, dAlphaDev)
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     var dA: array[N, float32]
     var dB: array[N, float32]
     var dAlpha: array[1, float32]
@@ -101,7 +101,7 @@ proc runTest() =   # private: engines are destroyed at return
 
     # a second launch accumulates into the caller's buffers.
     # The scalar cotangent rewrites from a fresh zeroed scratch, not doubled.
-    ad.backward(dOutDev, outDev, aDev, bDev, alpha, dADev, dBDev, dAlphaDev)
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     engine.copyToHostFromDevice(addr dA[0], dADev, N)
     engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)
     for i in 0 ..< N:

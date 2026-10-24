@@ -330,14 +330,12 @@ proc runTest() =   # private: engines are destroyed at return
     let dTargetDev = engine.allocDevice(float32, SceN)
     engine.copyToDeviceFromHost(dLogitsDev, addr zerosN[0], SceN)
     engine.copyToDeviceFromHost(dTargetDev, addr zerosN[0], SceN)
-    ad.backward(dLossDev, dRowMaxDev, dRowSumexpDev,
-      lossDev, logitsDev, targetDev, rowMaxDev, rowSumexpDev,
-      dLogitsDev, dTargetDev)
+    ad.backward(dLossDev, dLogitsDev, dTargetDev, dRowMaxDev, dRowSumexpDev,
+      lossDev, logitsDev, targetDev, rowMaxDev, rowSumexpDev)
     var primOnce: array[SceN, float32]
     engine.copyToHostFromDevice(addr primOnce[0], dLogitsDev, SceN)
-    ad.backward(dLossDev, dRowMaxDev, dRowSumexpDev,
-      lossDev, logitsDev, targetDev, rowMaxDev, rowSumexpDev,
-      dLogitsDev, dTargetDev)
+    ad.backward(dLossDev, dLogitsDev, dTargetDev, dRowMaxDev, dRowSumexpDev,
+      lossDev, logitsDev, targetDev, rowMaxDev, rowSumexpDev)
     var primTwice: array[SceN, float32]
     engine.copyToHostFromDevice(addr primTwice[0], dLogitsDev, SceN)
     for i in 0 ..< SceN:

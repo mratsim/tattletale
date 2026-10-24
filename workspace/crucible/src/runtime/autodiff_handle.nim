@@ -6,15 +6,16 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Runtime half of kernel-level autodiff.
-## `engine.setupAutoDiff(pair)` returns an AD handle whose macros launch the pair's printed kernels.
+## `engine.setupAutoDiff(kernels)` returns an AD handle whose macros launch the pair's printed kernels.
 ##
 ## - `forward(output, primals...)`: the primal signature, output slot first
-## - `backward(...)`: the pair's backward signature, primitive and convenience overloads by arity
+## - `backward(...)`: the pair's backward signature, the mirror rule verbatim,
+##   primitive and convenience overloads by arity
 ##
-## | Backward overload | Arity                                         | Behavior                                                          |
-## | ----------------- | --------------------------------------------- | ----------------------------------------------------------------- |
-## | primitive         | incoming cotangents + primals + all gradients | caller-owned buffers, the backward kernels accumulate into them   |
-## | convenience       | incoming cotangents + primals                 | allocates and zeroes the gradients, returns them as a named tuple |
+## | Backward overload | Arity                                             | Behavior                                                          |
+## | ----------------- | ------------------------------------------------- | ----------------------------------------------------------------- |
+## | primitive         | all `d_` slots in forward order + the primals     | caller-owned buffers, the backward kernels accumulate into them   |
+## | convenience       | output cotangent(s) + primals, the rest allocated | allocates and zeroes the gradients, returns them as a named tuple |
 ##
 ## Accumulation contracts:
 ##
@@ -299,15 +300,16 @@ func bindMapAt(bindMap: seq[tuple[name: string, node: NimNode, isBuffer: bool]],
 
 macro backward*(ad: typed, args: varargs[typed]): untyped =
   ## Backward pass of the pair in the pair's backward signature.
-  ## Arity selects between the primitive and convenience overloads:
+  ## The mirror rule governs the call site, every `d_` slot in forward order first, then the forward signature.
+  ## Arity selects the overload:
   ##
-  ## - primitive: `(d_<residuals...>, <primals...>, d_<buffers+scalars...>)`.
-  ##   Every gradient is a caller-owned buffer the backward kernels
-  ##   accumulate into. Pre-zero the buffers for fresh-semantics gradients.
-  ## - convenience: `(d_<residuals...>, <primals...>)`. Allocates and zeroes
-  ##   the remaining gradients, returns them as a named tuple of `DeviceMem`.
-  ##   Allocation reads the size off each primal argument.
-  ##   Grad-of-x has x's shape, scalar grads are 1-element device buffers.
+  ## - primitive: the full mirror arity, `(d_dst, d_a, d_b, d_alpha, dst, a, b, alpha)` for axpy.
+  ##   Every gradient is a caller-owned buffer the backward kernels accumulate into.
+  ##   Pre-zero the buffers for fresh-semantics gradients.
+  ## - convenience: output cotangent(s) + primals, `(d_dst, dst, a, b, alpha)` for axpy.
+  ##   The remaining gradients allocate and zero, they return as a named tuple of `DeviceMem`.
+  ##   Allocation reads the size off each primal argument, grad-of-x has x's shape,
+  ##   scalar grads are 1-element device buffers.
   ##
   ## Example for `axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32)`:
   ## `ad.backward(d_dst, dst, a, b, alpha)` returns the gradients
@@ -331,20 +333,18 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
     $nPrimitive & " args (primitive), got " & $args.len
   let isPrimitive = args.len == nPrimitive
 
-  # Argument table, backward-signature order: incoming cotangents, primals,
-  # then caller-owned gradients for the primitive. Name -> call-site expr.
+  # Argument table, the mirror rule verbatim: every d_ slot in forward-parameter order, then the primals in forward order.
+  # Convenience callers skip the non-output d_ slots, the expansion allocates and zeroes them. Name -> call-site expr.
   var ai = 0
   var bindMap: seq[tuple[name: string, node: NimNode, isBuffer: bool]]
-  for m in incoming:
-    bindMap.add (name: m.gradName, node: args[ai], isBuffer: true)
-    inc ai
+  for m in kernels.params:
+    if m.gradKind != gkNone:
+      if m.kind == pkResidual or isPrimitive:
+        bindMap.add (name: m.gradName, node: args[ai], isBuffer: true)
+        inc ai
   for m in kernels.params:
     bindMap.add (name: m.name, node: args[ai], isBuffer: m.kind != pkScalar)
     inc ai
-  for m in allocatable:
-    if isPrimitive:
-      bindMap.add (name: m.gradName, node: args[ai], isBuffer: true)
-      inc ai
 
   let engineN = ad.newDotExpr(ident"engine")
   let impl = bindSym"launchKernelImpl"

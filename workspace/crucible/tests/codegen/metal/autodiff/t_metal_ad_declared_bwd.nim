@@ -134,7 +134,7 @@ proc runTest() =   # private: engines are destroyed at return
     engineD.copyToDeviceFromHost(dBDev, addr zeros[0], N)
     engineD.copyToDeviceFromHost(dAlphaDev, addr zeros[0], 1)
 
-    ad.backward(dOutDev, outDev, aDev, bDev, alpha, dADev, dBDev, dAlphaDev)
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     let dA = engineD.copyBack(dADev, N)
     let dB = engineD.copyBack(dBDev, N)
     let dAlpha = engineD.copyBack(dAlphaDev, 1)
@@ -149,7 +149,7 @@ proc runTest() =   # private: engines are destroyed at return
 
     # Second call: the declared kernel accumulates in-kernel with no scratch rewrite,
     # the caller's buffers double.
-    ad.backward(dOutDev, outDev, aDev, bDev, alpha, dADev, dBDev, dAlphaDev)
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     let dA2 = engineD.copyBack(dADev, N)
     let dAlpha2 = engineD.copyBack(dAlphaDev, 1)
     for i in 0 ..< N:
@@ -172,7 +172,7 @@ proc runTest() =   # private: engines are destroyed at return
     engineT.copyToDeviceFromHost(dBDev, addr zeros[0], N)
     engineT.copyToDeviceFromHost(dAlphaDev, addr zeros[0], 1)
 
-    ad.backward(dOutDev, outDev, aDev, bDev, alpha, dADev, dBDev, dAlphaDev)
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     let dA = engineT.copyBack(dADev, N)
     let dB = engineT.copyBack(dBDev, N)
     let dAlpha = engineT.copyBack(dAlphaDev, 1)

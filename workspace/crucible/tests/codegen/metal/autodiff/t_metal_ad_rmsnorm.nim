@@ -234,8 +234,8 @@ proc runTest() =   # private: engines are destroyed at return
     let zerosC = fillSeq(RmsCols, 0.0'f32)
     engine.copyToDeviceFromHost(dxDev, addr zerosN[0], N)
     engine.copyToDeviceFromHost(dwDev, addr zerosC[0], RmsCols)
-    ad.backward(dYDev, dRrmsDev, yDev, xDev, wDev, rrmsDev, dxDev, dwDev)
-    ad.backward(dYDev, dRrmsDev, yDev, xDev, wDev, rrmsDev, dxDev, dwDev)
+    ad.backward(dYDev, dxDev, dwDev, dRrmsDev, yDev, xDev, wDev, rrmsDev)
+    ad.backward(dYDev, dxDev, dwDev, dRrmsDev, yDev, xDev, wDev, rrmsDev)
     var dxGot: array[N, float32]
     var dwGot: array[RmsCols, float32]
     engine.copyToHostFromDevice(addr dxGot[0], dxDev, N)
