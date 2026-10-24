@@ -79,8 +79,10 @@ type BwdParamMeta* = object
 
 type KernelPair* = object
   ## Const artifact of one `bwd_diff` expansion:
-  ## two printed sources, the reduce kernels of the scalar cotangents,
-  ## the parameter metadata and the derived backward signature.
+  ##
+  ## - two printed sources
+  ## - the reduce kernels of the scalar cotangents
+  ## - the parameter metadata and the derived backward signature
   kernelName*: string                          ## Forward kernel's name
   backend*: BackendKind                        ## Backend the sources target
   fwdSource*: string                           ## Forward kernel source, standalone translation unit
@@ -201,15 +203,25 @@ const PairWideIntKinds = {gtInt64, gtUint64, gtSize_t}
 proc deriveScalarWorkspaces*(fwd: GpuAst, metas: seq[BwdParamMeta]): seq[ScalarWorkspace] =
   ## Derives the reduce-partials scratch records of a pair's scalar cotangents.
   ##
-  ## The trip count is the forward kernel's index-loop bound.
-  ## A literal bound folds to a static trip count.
-  ## An identifier bound names the parameter carrying the trip count.
+  ## The trip count is the forward kernel's index-loop bound:
+  ##
+  ## - a literal bound folds to a static trip count
+  ## - an identifier bound names the parameter carrying the trip count
+  ## - a loop-free kernel has no scalar cotangent: its accumulation
+  ##   degenerates to a single partial, so the pair derives zero workspaces
+  ##   and zero reduce kernels
   ##
   ## Expected input:
   ## - `fwd`: the forward kernel as the pipeline produced it
   ## - `metas`: `deriveBwdParams`' output
   ##
   ## Output: one `ScalarWorkspace` per `gkBuffer1` parameter, forward order.
+  var scalarGrads: seq[BwdParamMeta]
+  for m in metas:
+    if m.gradKind == gkBuffer1:
+      scalarGrads.add m
+  if scalarGrads.len == 0:
+    return
   let bound = fwd.pBody.firstLoopBound()
   doAssert not bound.isNil,
     "scalar cotangent without an index-loop trip count"
@@ -224,11 +236,10 @@ proc deriveScalarWorkspaces*(fwd: GpuAst, metas: seq[BwdParamMeta]): seq[ScalarW
       "the reduce-kernel trip count is neither a literal nor a kernel parameter"
     tripCountParam = bound.symbol.name
     tripCount64 = bound.symbol.typ.kind in PairWideIntKinds
-  for m in metas:
-    if m.gradKind == gkBuffer1:
-      result.add ScalarWorkspace(
-        gradName: m.gradName,
-        workspaceName: "d_" & m.name & "_partials",
-        tripCount: tripCount,
-        tripCountParam: tripCountParam,
-        tripCount64: tripCount64)
+  for m in scalarGrads:
+    result.add ScalarWorkspace(
+      gradName: m.gradName,
+      workspaceName: "d_" & m.name & "_partials",
+      tripCount: tripCount,
+      tripCountParam: tripCountParam,
+      tripCount64: tripCount64)
