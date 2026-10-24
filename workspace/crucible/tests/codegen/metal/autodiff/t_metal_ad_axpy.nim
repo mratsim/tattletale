@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Metal: axpy forward and backward end to end
+## setupAutoDiff on Metal: axpy forward and backward end to end
 ##
-## Test that `engine.setupAD` turns a `bwd_diff` kernel pair into an AD
+## Test that `engine.setupAutoDiff` turns a `bwd_diff` kernel pair into an AD
 ## handle whose launches are exact against the Nim closed form:
 ##
 ## - forward exact: `out = alpha * a + b`
@@ -40,7 +40,7 @@ proc fillSeq[T](n: int, value: T): seq[T] =
 
 proc runTest() =   # private: engines are destroyed at return
   var engine = newEngine(runMetal)
-  let ad = engine.setupAD(axpyPair)
+  let ad = engine.setupAutoDiff(axpyPair)
 
   const N = 8
   let aDev = engine.allocDevice(float32, N)

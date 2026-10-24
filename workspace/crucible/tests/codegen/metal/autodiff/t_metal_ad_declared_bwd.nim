@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Metal: the declared-backward escape hatch end to end
+## setupAutoDiff on Metal: the declared-backward escape hatch end to end
 ##
 ## Test that a hand-written backward declared through `bwd_diff(fwd, bwd)`
 ## launches exactly like the transposed pair and that the save wiring keeps
@@ -116,7 +116,7 @@ proc runTest() =   # private: engines are destroyed at return
     dAlphaWant += dOutHost[i] * aHost[i]
 
   block:   # declared axpy: primitive backward, one call, exact
-    let ad = engineD.setupAD(axpyDeclaredPair)
+    let ad = engineD.setupAutoDiff(axpyDeclaredPair)
     ad.forward(outDev, aDev, bDev, alpha)
     var got: array[N, float32]
     engineD.copyToHostFromDevice(addr got[0], outDev, N)
@@ -162,7 +162,7 @@ proc runTest() =   # private: engines are destroyed at return
     stdout.writeLine("[OK] declared axpy primitive backward exact, accumulates in-kernel")
 
   block:   # transposed axpy: primitive backward, one call, exact
-    let ad = engineT.setupAD(axpyPair)
+    let ad = engineT.setupAutoDiff(axpyPair)
     ad.forward(outDev, aDev, bDev, alpha)
     let dADev = engineT.allocDevice(float32, N)
     let dBDev = engineT.allocDevice(float32, N)
@@ -187,8 +187,8 @@ proc runTest() =   # private: engines are destroyed at return
     stdout.writeLine("[OK] transposed axpy primitive backward exact")
 
   block:   # declared ≡ transposed: convenience backward, element-wise exact
-    let adD = engineD.setupAD(axpyDeclaredPair)
-    let adT = engineT.setupAD(axpyPair)
+    let adD = engineD.setupAutoDiff(axpyDeclaredPair)
+    let adT = engineT.setupAutoDiff(axpyPair)
     adD.forward(outDev, aDev, bDev, alpha)
     adT.forward(outDev, aDev, bDev, alpha)
 
@@ -226,7 +226,7 @@ proc runTest() =   # private: engines are destroyed at return
     stdout.writeLine("[OK] declared convenience backward ≡ transposed, element-wise exact")
 
   block:   # FA-shaped stub: the saved outputs round-trip one buffer set
-    let ad = engineD.setupAD(sdpaPair)
+    let ad = engineD.setupAutoDiff(sdpaPair)
 
     let qDev = engineD.allocDevice(float32, N)
     let kDev = engineD.allocDevice(float32, N)

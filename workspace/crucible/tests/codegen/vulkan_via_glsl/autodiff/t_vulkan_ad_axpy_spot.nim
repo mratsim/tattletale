@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Vulkan GLSL (MoltenVK): axpy spot-check
+## setupAutoDiff on Vulkan GLSL (MoltenVK): axpy spot-check
 ##
 ## Test that the same AD pair setup runs the Vulkan GLSL route end to end
 ## on MoltenVK, exact against the Nim closed form:
@@ -36,7 +36,7 @@ type AxpyBuf[DevMem] = object
 proc runTest() =   # private: engines are destroyed at return
   var engine = newEngine(runVulkan)
   echo "device: ", engine.deviceName()
-  let ad = engine.setupAD(axpyPair)
+  let ad = engine.setupAutoDiff(axpyPair)
 
   const N = 8
   let aDev = engine.allocDevice(float32, N)

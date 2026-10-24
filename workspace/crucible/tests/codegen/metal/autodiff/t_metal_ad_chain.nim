@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Metal: two AD handles chained through a returned gradient
+## setupAutoDiff on Metal: two AD handles chained through a returned gradient
 ##
 ## Test that a convenience backward's returned gradient feeds a second
 ## handle's backward as its incoming cotangent, with no graph machinery:
@@ -35,8 +35,8 @@ type AxpyBuf[DevMem] = object
 
 proc runTest() =   # private: engines are destroyed at return
   var engine = newEngine(runMetal)
-  let h1 = engine.setupAD(axpyPair)
-  let h2 = engine.setupAD(axpyPair)
+  let h1 = engine.setupAutoDiff(axpyPair)
+  let h2 = engine.setupAutoDiff(axpyPair)
 
   const N = 8
   let aDev = engine.allocDevice(float32, N)

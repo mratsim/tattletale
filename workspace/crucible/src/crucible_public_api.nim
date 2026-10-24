@@ -12,7 +12,7 @@
 ## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Autodiff      | `bwd_diff`, `BwdDiffKernels`, `setupAD`, `AdHandle`, `forward`, `backward`                                            |
+## | Autodiff      | `bwd_diff`, `BwdDiffKernels`, `setupAutoDiff`, `AdHandle`, `forward`, `backward`                                      |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`)                                                  |
 
@@ -36,7 +36,7 @@ export launch_device_fn.bwd_diff
 
 export autodiff.BwdDiffKernels
 
-export autodiff_handle.AdHandle, autodiff_handle.setupAD,
+export autodiff_handle.AdHandle, autodiff_handle.setupAutoDiff,
        autodiff_handle.forward, autodiff_handle.backward
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Runtime half of kernel-level autodiff.
-## `engine.setupAD(pair)` returns an AD handle whose macros launch the pair's printed kernels.
+## `engine.setupAutoDiff(pair)` returns an AD handle whose macros launch the pair's printed kernels.
 ##
 ## - `forward(output, primals...)`: the primal signature, output slot first
 ## - `backward(...)`: the pair's backward signature, primitive and convenience overloads by arity
@@ -39,7 +39,7 @@ import workspace/crucible/src/runtime/engines/vulkan_api
 type AdHandle*[E: HwEngine; kernels: static BwdDiffKernels] = object
   ## Runtime handle of one kernel pair.
   ##
-  ## - `engine`: the engine that compiled the pair's kernels at `setupAD`
+  ## - `engine`: the engine that compiled the pair's kernels at `setupAutoDiff`
   ## - `kernels`: static parameter, its metadata drives the launch macros
   engine*: E
 
@@ -47,7 +47,7 @@ type AdHandle*[E: HwEngine; kernels: static BwdDiffKernels] = object
 # ▸ Setup
 # ═══════════════════════════════════════════════════════════════════════
 
-proc setupAD*[E: HwEngine](engine: E, kernels: static BwdDiffKernels): AdHandle[E, kernels] =
+proc setupAutoDiff*[E: HwEngine](engine: E, kernels: static BwdDiffKernels): AdHandle[E, kernels] =
   ## Compiles the pair's kernels through the engine's normal compile path
   ## and returns the AD handle. Each kernel ingests as one artifact:
   ##
@@ -67,7 +67,7 @@ proc setupAD*[E: HwEngine](engine: E, kernels: static BwdDiffKernels): AdHandle[
     for r in kernels.reduceSources:
       engine.ingestADKernel(r.name, r.source)
   else:
-    {.error: "setupAD: this engine has no autodiff pipeline, this op gates Metal and Vulkan GLSL".}
+    {.error: "setupAutoDiff: this engine has no autodiff pipeline, this op gates Metal and Vulkan GLSL".}
   AdHandle[E, kernels](engine: engine)
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Metal: rmsnorm forward and backward end to end
+## setupAutoDiff on Metal: rmsnorm forward and backward end to end
 ##
-## Test that `engine.setupAD` turns the plain-form rmsnorm pair into an AD handle
+## Test that `engine.setupAutoDiff` turns the plain-form rmsnorm pair into an AD handle
 ## whose launches are exact against the analytic closed form and the CPU central
 ## finite differences (h = 1e-3):
 ##
@@ -118,7 +118,7 @@ proc relClose(got, want, rtol, atol: float64): bool =
 
 proc runTest() =   # private: engines are destroyed at return
   var engine = newEngine(runMetal)
-  let ad = engine.setupAD(rmsnormPair)
+  let ad = engine.setupAutoDiff(rmsnormPair)
 
   var xHost: array[N, float32]
   var wHost: array[RmsCols, float32]

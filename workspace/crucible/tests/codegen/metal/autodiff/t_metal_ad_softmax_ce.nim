@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## setupAD on Metal: softmax cross-entropy forward and backward end to end
+## setupAutoDiff on Metal: softmax cross-entropy forward and backward end to end
 ##
-## `engine.setupAD` turns the loop-free softmax-CE pair into an AD handle whose
+## `engine.setupAutoDiff` turns the loop-free softmax-CE pair into an AD handle whose
 ## launches are exact against the analytic closed forms and the CPU central
 ## finite differences (h = 1e-3, float64):
 ##
@@ -187,7 +187,7 @@ proc centralFd64(l: array[SceN, float32], t: array[SceN, float32], dLoss: float3
 
 proc runTest() =   # private: engines are destroyed at return
   var engine = newEngine(runMetal)
-  let ad = engine.setupAD(softmaxCEPair)
+  let ad = engine.setupAutoDiff(softmaxCEPair)
 
   let lossDev = engine.allocDevice(float32, 1)
   let logitsDev = engine.allocDevice(float32, SceN)
