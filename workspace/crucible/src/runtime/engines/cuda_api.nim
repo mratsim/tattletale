@@ -6,8 +6,11 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
+import std/os
 import workspace/crucible/src/abis/c_abi
 import workspace/crucible/src/abis/nvidia_abi
+import workspace/crucible/src/abis/nvidia_paths
+import workspace/crucible/src/runtime/backends/runtime_utils
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
@@ -54,6 +57,11 @@ proc newCudaEngine*(): CudaEngine =
 # ════════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
+  # Debugging aid: TATTLETALE_DUMP_CUDA=1 keeps the generated source
+  # in /tmp/tattletale/cuda/kernel.cu for post-mortem inspection,
+  # covering NVRTC and launch failures alike. Each ingest overwrites.
+  if getEnv("TATTLETALE_DUMP_CUDA").len > 0:
+    writeFile(getKernelDir("cuda") / "kernel.cu", source)
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.getPtx()
@@ -182,6 +190,12 @@ proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) 
     cstring "-default-device",           # namespace-scope vars default to __device__
     # "--fmad=false", # and whatever other options for example
   ]
+  # The half-precision headers ship with the CUDA toolkit:
+  # cuda_fp16.h, cuda_bf16.h, cuda_fp8.h. NVRTC resolves #includes
+  # against the include paths passed here, the builtin headers cover
+  # only the C++ standard library.
+  when CudaHome.len > 0:
+    options.add cstring("--include-path=" & CudaHome / "include")
   let numberOfOptions = cint options.len
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,
                                            cast[cstringArray](addr options[0]))

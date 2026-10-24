@@ -33,6 +33,17 @@ proc getMmaAtom*(TAcc, TA, TB: typedesc): static MmaAtom {.inline.} =
     elif TA is float32: APPLE_8x8x8_F32
     elif TA is bfloat16: APPLE_8x8x8_BF16
     else: {.error: "no Metal MMA atom for the requested element types".}
+  elif ccGetBackend() == ctCuda:
+    # NVIDIA tensor cores: mma.sync m16n8k16, sm_80 and up, Blackwell included
+    when TAcc is float32 and TA is float16 and TB is float16:
+      SM80_16x8x16_F32F16F16F32_TN
+    elif TAcc is float32 and TA is bfloat16 and TB is bfloat16:
+      SM80_16x8x16_F32BF16BF16F32_TN
+    elif TAcc is float32 and TA is float32 and TB is float32:
+      # no plain-f32 mma atom on NVIDIA, the tf32 atom would silently
+      # truncate the mantissa: keep the exact scalar FMA fallback
+      UNIVERSAL_1x1x1_F32F32F32F32
+    else: {.error: "no CUDA MMA atom for the requested element types".}
   else:
     when TAcc is float32 and TA is float16 and TB is float16:
       UNIVERSAL_1x1x1_F32F16F16F32

@@ -58,21 +58,67 @@ func operandClause(names: openArray[string], clause: string): string =
     if i > 0: result.add ", "
     result.add "\"" & clause & "\"(`" & name & "`)"
 
-func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string], accType: string): string =
+func mmaOperandWidth(operandType: string): int {.compileTime.} =
+  ## Elements per .b32 mma.sync operand register, by operand dtype:
+  ## PTX packs 16-bit operands two-per-register, 8-bit four-per-register,
+  ## 32-bit (tf32) one-per-register.
+  case operandType
+  of "tf32": 1
+  of "f16", "bf16": 2
+  of "s8", "e4m3", "e5m2": 4
+  else:
+    error("unsupported mma.sync operand dtype: " & operandType)
+
+func packPairExpr(operandType, lo, hi: string): string =
+  ## CUDA C expression packing two 16-bit scalars into a single
+  ## .b32 mma.sync register, low half first (smaller k element)
+  case operandType
+  of "f16":
+    result = "(unsigned)__half_as_ushort(`" & lo & "`) | ((unsigned)__half_as_ushort(`" & hi & "`) << 16)"
+  of "bf16":
+    result = "(unsigned)__bfloat16_as_ushort(`" & lo & "`) | ((unsigned)__bfloat16_as_ushort(`" & hi & "`) << 16)"
+  else:
+    error("register packing unimplemented for " & operandType)
+
+func packOperands(operandType: string, names: openArray[string]): seq[string] =
+  ## One .b32 register expression per mma.sync operand register
+  let width = mmaOperandWidth(operandType)
+  doAssert names.len mod width == 0,
+    "mma operand values must pack into whole registers, got " & $names.len &
+    " values of width " & $width
+  result = newSeq[string](names.len div width)
+  var r = 0
+  var i = 0
+  while i < names.len:
+    case width
+    of 1:
+      result[r] = "`" & names[i] & "`"
+    of 2:
+      result[r] = packPairExpr(operandType, names[i], names[i+1])
+    else:
+      error("register packing unimplemented for width " & $width)
+    inc r
+    inc i, width
+
+func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string], accType, operandType: string): string =
   ## GCC extended-asm builder for one Nvidia MMA instruction,
   ## D = A·B + D accumulated in place: the C operand is the D registers,
   ## modified ("+" read-write constraint).
   ##
   ## Expected input:
   ##   - `instr`: the mma.sync.aligned.* instruction string
-  ##   - `dNames`/`aNames`/`bNames`: the staged scalars' names, one
-  ##     register per value, in the atom's per-lane value order
-  ##   - `accType`: the accumulator register element type name, the A/B
-  ##     operands are always packed uint32 registers
+  ##   - `dNames`/`aNames`/`bNames`: the staged scalars' names,
+  ##     one per value, in the atom's per-lane value order
+  ##   - `accType`: the accumulator register element type name
+  ##   - `operandType`: the A/B operand dtype ("f16", "bf16", "tf32", ...),
+  ##     the A/B operands are packed into uint32 registers per the PTX
+  ##     operand width (2 values per register for 16-bit dtypes)
   ## Output: one extended-asm statement string.
   let vc = dNames.len
-  let va = aNames.len
-  let vb = bNames.len
+  let aRegs = packOperands(operandType, aNames)
+  let bRegs = packOperands(operandType, bNames)
+  let va = aRegs.len
+  let vb = bRegs.len
 
   # the template part, "<instr> {D}, {A}, {B}, {D-modified}"
   let tpl =
@@ -84,8 +130,8 @@ func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string]
 
   result = tpl &
     " : " & operandClause(dNames, "+" & constraintLetter(accType)) &
-    " : " & operandClause(aNames, constraintLetter("uint32")) &
-    ", " & operandClause(bNames, constraintLetter("uint32"))
+    " : " & operandClause(aRegs, constraintLetter("uint32")) &
+    ", " & operandClause(bRegs, constraintLetter("uint32"))
 
 func recastToMmaType(name, inType: string): string =
   ## Non-native host CPU types need to be reinterpreted
@@ -235,7 +281,7 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
     for i in 0 ..< dV:
       if cNames[i] != dNames[i]:
         result.add nnkAsgn.newTree(scalars[i], scalars[dV + aV + bV + i])
-    let asmStr = buildNvidiaMmaAsm(instr, dNames, aNames, bNames, accType)
+    let asmStr = buildNvidiaMmaAsm(instr, dNames, aNames, bNames, accType, constStr(atom, "aType"))
     result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
   # labeled block: the Metal printer emits braces only for labeled blocks,
   # multiple calls in one function scope must not collide on the staged scalar names

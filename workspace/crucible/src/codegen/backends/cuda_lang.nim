@@ -8,6 +8,7 @@
 import std / [macros, strformat, strutils, sugar, sequtils, tables]
 
 import ../ir/ast_datatypes
+import ../ir/ast_type_resolvers
 import ./lang_utils
 
 proc gpuTypeToString*(t: GpuType,
@@ -35,6 +36,12 @@ proc gpuTypeToString*(t: GpuTypeKind): string =
   of gtInt64: "long long"
   of gtFloat32: "float"
   of gtFloat64: "double"
+  # __half, __nv_bfloat16 and the __nv_fp8 variants come from the CUDA
+  # toolkit headers cuda_fp16.h, cuda_bf16.h and cuda_fp8.h
+  of gtFloat16: "__half"
+  of gtBf16: "__nv_bfloat16"
+  of gtF8E4M3: "__nv_fp8_e4m3"
+  of gtF8E5M2: "__nv_fp8_e5m2"
   of gtVoid: "void"
   of gtSize_t: "size_t"
   of gtPtr: "*"
@@ -179,9 +186,16 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     # Parameters
     var params: seq[string]
     for p in ast.pParams:
-      if p.passByRef:
-        # const Type& name — C++ reference, no body changes needed
+      if p.passByRef and attGlobal notin ast.pAttributes:
+        # const Type& name — C++ reference, no body changes needed.
+        # Device functions only:
+        # - inside device code, references are plain aliases, no ABI
+        # - kernel params cannot use references, the launch ABI gives
+        #   `const T&` a pointer slot while the serializer packs bytes
         params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
+      elif p.passByRef:
+        # __global__ kernel param: by value, matching the packed arg bytes
+        params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
       else:
         # By-value array params decay to pointers. They are read-only
         # (a plain `array[T]` param), so emit `const`: the call site
@@ -444,6 +458,33 @@ proc usesWarpReduce(n: GpuAst, kind: GpuReductionBuiltinKind): bool =
 proc codegen*(ctx: var GpuContext): string =
   ## Generate the actual code for all pieces of the puzzle
   # 1. generate code for the global blocks (types, global vars etc)
+
+  # 1a. emit the CUDA half-precision headers when the module uses those types,
+  # NVRTC resolves cuda_fp16.h/cuda_bf16.h/cuda_fp8.h from its builtin includes.
+  var needsFp16 = false
+  var needsBf16 = false
+  var needsFp8 = false
+  for fnIdent, fn in ctx.fnTab:
+    if fn.pRetType.containsKind(gtFloat16):
+      needsFp16 = true
+    if fn.pRetType.containsKind(gtBf16):
+      needsBf16 = true
+    if fn.pRetType.containsKind(gtF8E4M3) or fn.pRetType.containsKind(gtF8E5M2):
+      needsFp8 = true
+    for p in fn.pParams:
+      if p.typ.containsKind(gtFloat16):
+        needsFp16 = true
+      if p.typ.containsKind(gtBf16):
+        needsBf16 = true
+      if p.typ.containsKind(gtF8E4M3) or p.typ.containsKind(gtF8E5M2):
+        needsFp8 = true
+  if needsFp16:
+    result.add "#include \"cuda_fp16.h\"\n"
+  if needsBf16:
+    result.add "#include \"cuda_bf16.h\"\n"
+  if needsFp8:
+    result.add "#include \"cuda_fp8.h\"\n"
+
   for blk in ctx.globalBlocks:
     result.add ctx.genCuda(blk) & ";\n\n"
 
