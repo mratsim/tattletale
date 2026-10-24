@@ -72,7 +72,7 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 # gpuPrefix      local-rule    `-` negates the cotangent, boolean prefixes carry zero cotangent
 # gpuBlock       local-rule    transparent container in statement position, expression-position blocks refuse
 # gpuReturn      refuse        mid-kernel return has no reverse control flow
-# gpuDot         refuse        member access has no field-wise cotangent in v1, coordinate-builtin reads are primal (no cotangent)
+# gpuDot         refuse        member access has no field-wise cotangent in v1, coordinate-builtin reads imply thread parallelism and refuse (the subset is single-thread)
 # gpuIndex       local-rule    gather/scatter through the shadow adjoint of the indexed buffer
 # gpuTypeDef     pass-through  type definitions live in ctx.types
 # gpuAlias       pass-through  alias declarations carry no values
@@ -260,11 +260,16 @@ proc validateExpr(ctx: var GpuContext, n: GpuAst, env: var AdEnv, path: seq[stri
         "' is outside the differentiable subset; inline the callee before bwd_diff")
     validateExpr(ctx, n.cArgs[0], env, path)
   of gpuDot:
-    if n.dParent.kind == gpuIdent and n.dParent.symbol != nil and
-        n.dParent.symbol.coordBuiltin == gbkNone:
-      adRefuse(n, "gpuDot",
-        "member access '" & n.dParent.ident() & "." & n.dField.ident() &
-        "' has no field-wise cotangent in v1")
+    if n.dParent.kind == gpuIdent and n.dParent.symbol != nil:
+      if n.dParent.symbol.coordBuiltin != gbkNone:
+        adRefuse(n, "gpuDot",
+          "coordinate builtin read '" & n.dParent.ident() & "." &
+          n.dField.ident() & "' implies thread parallelism; the differentiable " &
+          "subset launches one thread, move the traversal into a loop")
+      else:
+        adRefuse(n, "gpuDot",
+          "member access '" & n.dParent.ident() & "." & n.dField.ident() &
+          "' has no field-wise cotangent in v1")
   of gpuDeref:
     adRefuse(n, "gpuDeref",
       "value-position dereference is outside the differentiable subset")

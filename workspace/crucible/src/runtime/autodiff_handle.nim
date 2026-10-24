@@ -140,10 +140,19 @@ func readReduceSource(n: NimNode): ReduceSource =
   result.name = fieldNode(n, "name").strVal
   result.source = fieldNode(n, "source").strVal
 
+func readWorkgroup(n: NimNode): AdWorkgroup =
+  ## Pair node's launch geometry: an `AdWorkgroup` object constructor.
+  doAssert n.kind == nnkObjConstr,
+    "ad_handle: unexpected pair-node shape, expected the workgroup object"
+  result = AdWorkgroup(x: fieldNode(n, "x").intVal.int,
+                       y: fieldNode(n, "y").intVal.int,
+                       z: fieldNode(n, "z").intVal.int)
+
 func readKernels(n: NimNode): BwdDiffKernels =
   ## Reconstructs the pair value of an `AdHandle` type at macro expansion:
   ## the handle type inlines the static pair as an object-constructor node.
   result.kernelName = fieldNode(n, "kernelName").strVal
+  result.workgroup = readWorkgroup(fieldNode(n, "workgroup"))
   for e in seqElems(fieldNode(n, "reduceSources")):
     result.reduceSources.add readReduceSource(e)
   for e in seqElems(fieldNode(n, "params")):
@@ -222,14 +231,17 @@ func bufferLeaf(v: NimNode): BufferLeaf =
     elemT: memField.typ[^1],
     extentExpr: if extentField.name.isNil: nil else: v.newDotExpr(extentField.name))
 
-func adLaunchCfg(): NimNode =
-  ## Single-thread launch config of every AD launch. The scalar cotangents
-  ## accumulate per-index partials without atomics and one thread keeps
-  ## the accumulation race-free.
+func adLaunchCfg(workgroup: AdWorkgroup): NimNode =
+  ## Launch config of every AD launch: one threadgroup sized by the pair's baked workgroup.
+  ##
+  ## - the scalar cotangents accumulate per-index partials without atomics
+  ## - one thread keeps the accumulation race-free
+  ## - the geometry travels in the pair artifact, the launches pass it explicitly
   nnkObjConstr.newTree(
     bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", bindSym"dim3".newCall(newLit(1), newLit(1), newLit(1))),
-    nnkExprColonExpr.newTree(ident"blk", bindSym"dim3".newCall(newLit(1), newLit(1), newLit(1))))
+    nnkExprColonExpr.newTree(ident"blk", bindSym"dim3".newCall(
+      newLit(workgroup.x), newLit(workgroup.y), newLit(workgroup.z))))
 
 func allocAndZero(engine, dev, elemT, len: NimNode): NimNode =
   ## Zero-fill statements for a freshly allocated device buffer.
@@ -284,7 +296,7 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
     else:
       argsN.add n
   let impl = bindSym"launchKernelImpl"
-  let cfgN = adLaunchCfg()
+  let cfgN = adLaunchCfg(kernels.workgroup)
   result = quote do:
     var argsVal = `argsN`
     `impl`(`ad`.engine, `ad`.kernels.kernelName, `outMemN`, argsVal, `cfgN`)
@@ -348,7 +360,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
 
   let engineN = ad.newDotExpr(ident"engine")
   let impl = bindSym"launchKernelImpl"
-  let cfgN = adLaunchCfg()
+  let cfgN = adLaunchCfg(kernels.workgroup)
   let bwdNameN = newLit(kernels.kernelName & "_bwd")
 
   # Name resolution across the whole backward surface.

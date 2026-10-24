@@ -13,6 +13,9 @@
 ## - forward exact: `dst = alpha * a + b`
 ## - convenience backward exact: `(d_dst, dst, a, b, alpha)` allocates the grads at the primals' size, folding `d_alpha` via the reduce kernel.
 ## - `d_alpha` folds from its 1-element device buffer through the reduce kernel.
+## - an unannotated kernel (the GLSL default workgroup 256x1x1) still gradients exactly:
+##   the pair bakes `local_size 1x1x1`, the launch passes that geometry explicitly,
+##   the launcher never substitutes the baked squadron for the AD launches
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
@@ -85,6 +88,35 @@ proc runTest() =   # private: engines are destroyed at return
   doAssert gotAlpha[0] == dAlphaWant,
     "d_alpha: got " & $gotAlpha[0] & " want " & $dAlphaWant
   echo "[OK] backward exact, d_alpha a 1-element device buffer via the reduce kernel"
+
+  block:   # unannotated kernel: the pair bakes local_size 1x1x1, the launch is explicit
+    proc axpyNoWg(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
+      ## No workgroup annotation: without the pair's explicit geometry,
+      ## the backward launch would resolve to the GLSL default 256x1x1
+      ## and race the accumulations.
+      for i in 0 ..< 8:
+        dst[i] = alpha * a[i] + b[i]
+    const axpyNoWgPair = bkGlsl.bwd_diff(axpyNoWg)
+    let ad2 = engine.setupAutoDiff(axpyNoWgPair)
+    ad2.forward(outDev, aDev, bDev, alpha)
+    engine.copyToHostFromDevice(addr got[0], outDev, N)
+    for i in 0 ..< N:
+      doAssert got[i] == alpha * aHost[i] + bHost[i],
+        "unannotated forward: element " & $i & " got " & $got[i]
+    let (d_a2, d_b2, d_alpha2) = ad2.backward(dOutDev, outDev,
+      AxpyBuf[typeof(aDev)](p: aDev, n: N), AxpyBuf[typeof(bDev)](p: bDev, n: N),
+      alpha)
+    engine.copyToHostFromDevice(addr gotA[0], d_a2, N)
+    engine.copyToHostFromDevice(addr gotAlpha[0], d_alpha2, 1)
+    dAlphaWant = 0.0
+    for i in 0 ..< N:
+      doAssert gotA[i] == dOutHost[i] * alpha,
+        "unannotated d_a: element " & $i & " got " & $gotA[i] &
+        " want " & $(dOutHost[i] * alpha)
+      dAlphaWant += dOutHost[i] * aHost[i]
+    doAssert gotAlpha[0] == dAlphaWant,
+      "unannotated d_alpha: got " & $gotAlpha[0] & " want " & $dAlphaWant
+    echo "[OK] unannotated kernel: single-thread geometry explicit, gradients exact"
 
 when isMainModule:
   runTest()

@@ -52,6 +52,13 @@ export ast_datatypes.BackendKind
 # ▸ Types
 # ═══════════════════════════════════════════════════════════════════════
 
+type AdWorkgroup* = object
+  ## Launch geometry of every AD launch, one thread per axis in v1.
+  ##
+  ## A named object, not a tuple: the pair is a `static` parameter value, and Nim instantiates generic handles per static value.
+  ## Structurally equal tuples are distinct types to that machinery.
+  x*, y*, z*: int
+
 type ReduceSource* = object
   ## One generated axis-reduce kernel of the pair: its name and standalone source.
   name*: string
@@ -98,8 +105,10 @@ type BwdDiffKernels* = object
   ## - two printed sources
   ## - the reduce kernels of the scalar cotangents
   ## - the parameter metadata and the derived backward signature
+  ## - the launch geometry the pair's kernels bake and the launches pass
   kernelName*: string                          ## Forward kernel's name
   backend*: BackendKind                        ## Backend the sources target
+  workgroup*: AdWorkgroup                  ## Pair's baked workgroup, the launch geometry of every AD launch
   fwdSource*: string                           ## Forward kernel source, standalone translation unit
   bwdSource*: string                           ## Backward kernel source, `<kernel>_bwd`
   reduceSources*: seq[ReduceSource]                ## One axis-reduce kernel per scalar cotangent
@@ -109,6 +118,23 @@ type BwdDiffKernels* = object
   bwdKernelParams*: seq[string]                ## Printed backward kernel's parameter names, post-lowering, in binding order
   saveNames*: seq[string]                      ## `save = [...]` forward outputs kept alive between forward and backward, declared pairs only
 
+proc enforcePairWorkgroup*(fwd, bwd: GpuAst, reduces: seq[GpuAst]) =
+  ## One-thread launch geometry, the contract the backward's per-index
+  ## accumulations need (no atomics).
+  ##
+  ## - the pair's kernels bake `local_size 1x1x1` and every AD launch passes
+  ##   that geometry explicitly, so the Vulkan launcher's 1-thread resolution
+  ##   never substitutes a baked squadron that the launches did not request
+  ## - a multi-thread workgroup annotation would run those accumulations
+  ##   across N racing threads, so it refuses at expansion
+  for fn in @[fwd, bwd] & reduces:
+    let wg = fn.pWorkgroupSize
+    if wg.x > 1 or wg.y > 1 or wg.z > 1:
+      error "bwd_diff: gpuProc: kernel '" & fn.pName.ident() &
+        "' annotates workgroup (" & $wg.x & ", " & $wg.y & ", " & $wg.z &
+        "); the differentiable subset launches one thread, move the " &
+        "traversal into a loop"
+    fn.pWorkgroupSize = (x: 1, y: 1, z: 1)
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Derivation
 # ═══════════════════════════════════════════════════════════════════════
@@ -486,10 +512,13 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
     reduceNames.add rk.pName.ident()
   let metas = deriveBwdParams(fwd, bwd, reduceNames)
 
+  enforcePairWorkgroup(fwd, bwd, reduces)
+
   let printed = ctx.lowerAndPrintKernels(bk, fwd, bwd, reduces, reg.donePasses)
   result = BwdDiffKernels(
     kernelName: fwd.pName.ident(),
     backend: bk,
+    workgroup: AdWorkgroup(x: fwd.pWorkgroupSize.x, y: fwd.pWorkgroupSize.y, z: fwd.pWorkgroupSize.z),
     fwdSource: printed.fwdSource,
     bwdSource: printed.bwdSource,
     reduceSources: printed.reduceSources,
@@ -542,10 +571,13 @@ proc codegenBwdDiffKernelsDeclared*(bk: BackendKind, fwdBody, bwdBody: NimNode, 
   let metas = deriveBwdParams(fwd, bwd, @[])
   validateSaveNames(fwd.pName.ident(), metas, saveNames)
 
+  enforcePairWorkgroup(fwd, bwd, @[])
+
   let printed = ctx.lowerAndPrintKernels(bk, fwd, bwd, @[], reg.donePasses)
   result = BwdDiffKernels(
     kernelName: fwd.pName.ident(),
     backend: bk,
+    workgroup: AdWorkgroup(x: fwd.pWorkgroupSize.x, y: fwd.pWorkgroupSize.y, z: fwd.pWorkgroupSize.z),
     fwdSource: printed.fwdSource,
     bwdSource: printed.bwdSource,
     reduceSources: printed.reduceSources,
