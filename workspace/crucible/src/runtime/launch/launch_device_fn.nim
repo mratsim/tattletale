@@ -21,40 +21,24 @@ import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 # ═════════════════════════════════════════════════════════════════════════
 
 type
-  LaunchLang* = enum
-    ## Kernel language the Vulkan bridge prints and the engine ingests,
-    ## selected per launch through the `lang =` launch extra.
-    ## llSpirv is the words route and the default.
-    ## llGlsl and llHlsl print text the engine compiles through glslangValidator and dxc.
-    llSpirv
-    llGlsl
-    llHlsl
-
   DeviceFnSugar*[E: HwEngine] = object
     engine: E
 
-  DeviceFnProxy*[E: HwEngine, L: static LaunchLang = llSpirv] = object
+  DeviceFnProxy*[E: HwEngine, L: static string = "spirv"] = object
     engine: E
     grid: Dim3
     blk: Dim3
     sharedMem: int
 
-func toLaunchLang(name: string): LaunchLang =
-  ## `lang =` value, the kernel language ident or its enum symbol
-  case name
-  of "spirv", "llSpirv": llSpirv
-  of "glsl", "llGlsl": llGlsl
-  of "hlsl", "llHlsl": llHlsl
-  else:
+func langName(n: NimNode): string =
+  ## `lang =` launch extra value: a bare language ident matched before sem,
+  ## `spirv` (words route, default), `glsl` (glslangValidator), `hlsl` (dxc)
+  var name = $n
+  if n.kind == nnkStrLit:
+    name = n.strVal
+  if name notin ["spirv", "glsl", "hlsl"]:
     error("launchDeviceFn: lang expects glsl, hlsl or spirv, got " & name)
-
-func langOfType(n: NimNode): LaunchLang =
-  ## Lang static param of an instantiated DeviceFnProxy type, an enum symbol
-  ## or the value's ordinal, both renderings occur
-  if n.kind in {nnkIntLit .. nnkUInt64Lit}:
-    LaunchLang(n.intVal.int)
-  else:
-    toLaunchLang($n)
+  name
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -72,7 +56,7 @@ func base58(h: int): string =
     result = alphabet[int(x mod 58)] & result
     x = x div 58
 
-macro bridge(engine: HwEngine, lang: static LaunchLang, node: untyped): untyped =
+macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
   ## Defers the generated global function generation
   ## so that it happens in a `device` environment.
   ## This allows functions that depend on `ccGetBackend`
@@ -88,25 +72,25 @@ macro bridge(engine: HwEngine, lang: static LaunchLang, node: untyped): untyped 
   let webgpuCg = bindSym"webgpu"
   let t = engine.getTypeInst()
   if sameType(t, bindSym"MetalEngine"):
-    if lang != llSpirv:
-      error("launchDeviceFn: lang = " & $lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
+    if lang != "spirv":
+      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
     result = metalCg.newCall(node)
   elif sameType(t, bindSym"CudaEngine"):
-    if lang != llSpirv:
-      error("launchDeviceFn: lang = " & $lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
+    if lang != "spirv":
+      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
     result = cudaCg.newCall(node)
   elif sameType(t, bindSym"OpenCLEngine"):
-    if lang != llSpirv:
-      error("launchDeviceFn: lang = " & $lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
+    if lang != "spirv":
+      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
     result = openclCg.newCall(node)
   elif sameType(t, bindSym"VulkanEngine"):
     case lang
-    of llSpirv: result = spirvCg.newCall(node)
-    of llGlsl: result = glslCg.newCall(node)
-    of llHlsl: result = hlslCg.newCall(node)
+    of "spirv": result = spirvCg.newCall(node)
+    of "glsl": result = glslCg.newCall(node)
+    of "hlsl": result = hlslCg.newCall(node)
   elif sameType(t, bindSym"WebgpuEngine"):
-    if lang != llSpirv:
-      error("launchDeviceFn: lang = " & $lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
+    if lang != "spirv":
+      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
     result = webgpuCg.newCall(node)
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
@@ -281,7 +265,7 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
     size.add newLit(d)
   nnkExprColonExpr.newTree(ident"workgroup", size)
 
-macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static LaunchLang, values: varargs[typed]): untyped =
+macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
   ## Builds the `{.global.}` proc for the kernel, ingests its lowered source
   ## when it differs and launches it: the first value is the output.
   ## On VulkanEngine `lang` routes the bridge, SPIR-V words by default or GLSL/HLSL text otherwise.
@@ -303,7 +287,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
     argsN.add(values[i])
   let langLit = newLit(lang)
   # words compare on VulkanEngine only, the text routes go through getArtifact
-  let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == llSpirv
+  let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == "spirv"
   let ingestN = if wordsRoute:
     quote do:
       if `engine`.getSpirV() != `bridgeSource`:
@@ -339,7 +323,7 @@ proc resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
     $argCount & " arguments"
   matches[0]
 
-macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN: untyped, lang: static LaunchLang, args: varargs[untyped]): untyped =
+macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN: untyped, lang: static string, args: varargs[untyped]): untyped =
   ## Call an autogenerated {.global.} kernel
   ## This defers arguments so they are inlined in the global function and ccGetBackend resolves properly
   let k = kernel.resolveKernelOverload(args.len)
@@ -378,7 +362,7 @@ macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   result = newCall(bindSym"makeDeviceFnSugar", engine)
 
 func makeDeviceFnProxy[E: HwEngine](engine: E, grid, blk: Dim3, sharedMem: int,
-    lang: static LaunchLang = llSpirv): DeviceFnProxy[E, lang] {.inline.} =
+    lang: static string = "spirv"): DeviceFnProxy[E, lang] {.inline.} =
   DeviceFnProxy[E, lang](engine: engine, grid: grid, blk: blk, sharedMem: sharedMem)
 
 macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
@@ -388,7 +372,7 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
-  var lang = llSpirv
+  var lang = "spirv"
   var c = cfg
   if c.kind in {nnkPar, nnkTupleConstr, nnkBracket} and c.len == 1:
     c = c[0]
@@ -400,7 +384,7 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
         of "grid": gridN = f[1]
         of "blk": blkN = f[1]
         of "sharedMem": sharedMemN = f[1]
-        of "lang": lang = toLaunchLang($f[1])
+        of "lang": lang = langName(f[1])
         else:
           error("launchDeviceFn: chevron schedule expects grid / blk / sharedMem / lang, got " & f.repr)
       else:
@@ -435,7 +419,7 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
-  var lang = llSpirv
+  var lang = "spirv"
   if not schedule.isNil:
     for a in schedule:
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem", "lang"],
@@ -444,7 +428,7 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
       of "grid": gridN = a[1]
       of "blk": blkN = a[1]
       of "sharedMem": sharedMemN = a[1]
-      else: lang = toLaunchLang($a[1])
+      else: lang = langName(a[1])
   let langLit = newLit(lang)
   result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN, sharedMemN, langLit)
   for i in 1 ..< callNode.len:
@@ -455,11 +439,11 @@ macro `>>`*(proxy: DeviceFnProxy, call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  # the lang travels on the proxy type, the `<<` chevron bakes it there
+  # the lang travels on the proxy type as a static string, the `<<` chevron bakes it there
   let t = proxy.getTypeInst()
-  var lang = llSpirv
+  var lang = "spirv"
   if t.len > 2:
-    lang = langOfType(t[2])
+    lang = t[2].strVal
   let langLit = newLit(lang)
   result = bindSym"resolveDeviceCall".newCall(
     proxy.newDotExpr(ident"engine"), callNode[0],

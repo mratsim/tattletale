@@ -42,7 +42,7 @@ func refAxpy[T, ShX, StX, ShY, StY, ShR, StR](
 proc checkAxpy*[E: HwEngine](
     rng: var Rand, engine: E, rows, cols: static int,
     sX, sY: static (int, int), msg: static string,
-    lang: static LaunchLang = llSpirv) =
+    lang: static string = "spirv") =
   ## One axpy launch over random (rows, cols) tensors with the given strides,
   ## the result compared against the host reference.
   ## `lang` selects the Vulkan SPIR-V ingestion language, words route by default.
@@ -56,15 +56,14 @@ proc checkAxpy*[E: HwEngine](
   # the kernel's grid-stride loop completes the tile grid from any launch grid
   let gridX = rng.rand(1 .. 2 * ceil_div(rows * cols div 128, 32) + 1)
   template launch(langLit: untyped) =
-    ## `langLit` pastes as the literal ident the launch parser maps to LaunchLang
     engine.launchDeviceFn axpy(yDev, xDev, 2.5'f32) do:
       grid = (gridX, 1)
       blk = (32, 1)
       lang = `langLit`
-  when lang == llSpirv:
-    launch(spirv)
-  elif lang == llGlsl:
-    launch(glsl)
+  when lang == "spirv":
+    launch("spirv")
+  elif lang == "glsl":
+    launch("glsl")
   else:
     launch(hlsl)
   engine.copyToHostFromDevice(addr y.data[0], yDev.data, y.layout.cosize())
@@ -74,7 +73,7 @@ proc checkAxpy*[E: HwEngine](
 #  The drivers
 # ═══════════════════════════════════════════════════════════════
 
-proc run_axpy_tests*[E: HwEngine](engine: E, moduleName: string, lang: static LaunchLang = llSpirv) =
+proc run_axpy_tests*[E: HwEngine](engine: E, moduleName: string, lang: static string = "spirv") =
   var rng: Rand
   let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
   rng.seed(int64(seed))

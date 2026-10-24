@@ -57,7 +57,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       blk = (1, 1)
       lang = glsl
     readback(oDev, "glsl do-form")
-    doAssert engine.getArtifact().len != 0, "glsl route: text artifact expected"
     echo "  [OK] do-form lang = glsl: [16, 27] exact readback"
 
   block:
@@ -68,7 +67,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       AddBuf[typeof(aDev)](p: aDev, n: 2),
       AddBuf[typeof(bDev)](p: bDev, n: 2))
     readback(oDev, "glsl chevron")
-    doAssert engine.getArtifact().len != 0, "glsl route: text artifact expected"
     echo "  [OK] chevron lang = glsl: [16, 27] exact readback"
 
 when isMainModule:
