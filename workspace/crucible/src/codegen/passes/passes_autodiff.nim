@@ -176,6 +176,7 @@ type AdEnv = object
   localDefPath: Table[string, seq[string]]  ## local iSym -> scope path at definition
   defCounts: Table[string, int]             ## local iSym -> number of defining events
   loopVars: HashSet[string]                 ## loop variable iSyms, exempt from def-use checks
+  loopCount: int                            ## top-level loops seen so far, v1 refuses more than one
   ##
   written: HashSet[string]                  ## buffer param iSyms the kernel writes
   readBufs: HashSet[string]                 ## buffer param iSyms the kernel reads
@@ -358,6 +359,11 @@ proc validateStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, path
     of gpuFor:
       if loopDepth >= 1:
         adRefuse(s, "gpuFor", "nested loops are outside the differentiable subset")
+      env.loopCount += 1
+      if env.loopCount > 1:
+        adRefuse(s, "gpuFor",
+          "the kernel carries more than one top-level loop; the " &
+          "differentiable subset is a single index loop in v1")
       if s.fRangeKind != rkExclusive:
         adRefuse(s, "gpuFor",
           "only exclusive ranges (a ..< b) carry a static trip count")

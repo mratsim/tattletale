@@ -12,6 +12,7 @@
 ##
 ## - coordinate-builtin reads imply thread parallelism, the subset is single-thread
 ## - multi-thread workgroup annotations would race the backward's accumulations
+## - sibling top-level loops mis-size the scalar-cotangent scratch (v1 is one index loop)
 ##
 ## A macro `error()` is a compile error, so each case compiles a standalone
 ## snippet through `nim check` and must fail with the prefix and construct.
@@ -75,4 +76,11 @@ expectRefusal("workgroup_threads", entryBody(
   """  for i in 0 ..< 8:
     dst[i] = alpha * a[i] + b[i]""", "bkMetal", pragmas = "global, workgroup: (4, 4)"), "gpuProc")
 
-echo "[OK] bwd_diff launch-model refusals: 2 cases"
+expectRefusal("sibling_loops", entryBody(
+  "dst, a, b: ptr UncheckedArray[float32], n1, n2: int32, w: float32",
+  """  for i in 0 ..< n1:
+    dst[i] = a[i]
+  for j in 0 ..< n2:
+    dst[j] = b[j] * w""", "bkMetal"), "gpuFor")
+
+echo "[OK] bwd_diff launch-model refusals: 3 cases"
