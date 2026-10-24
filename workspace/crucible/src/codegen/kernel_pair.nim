@@ -21,13 +21,17 @@
 ## | `save:` order  | the forward output order                                                   |
 ## | workspaces     | reduce-partials live only in the backward kernel's IR signature            |
 ##
+## A declared backward (`bwd_diff(fwd, bwd, save = [...])`) skips the transposer.
+## Validation against this mirror runs at expansion: gradient slots in forward order,
+## block 2 the forward signature verbatim, the kernel named `<fwd>_bwd`.
+##
 ## | Section    | Symbols                                                          |
 ## | ---------- | ---------------------------------------------------------------- |
 ## | Pair       | `KernelPair`                                                     |
 ## | Metadata   | `BwdParamMeta`, `BwdParamKind`, `BwdGradKind`, `BwdExtentSource` |
 ## | Derivation | `deriveBwdParams`, `mirrorSignature`                             |
 
-import std/[sets, strutils]
+import std/[macros, sets, strutils]
 
 import ir/ast_datatypes
 
@@ -92,6 +96,7 @@ type KernelPair* = object
   scalarWorkspaces*: seq[ScalarWorkspace]      ## Reduce-partials scratch per scalar cotangent, forward order
   bwdSignature*: seq[string]                   ## Backward signature, see the module header
   bwdKernelParams*: seq[string]                ## Printed backward kernel's parameter names, post-lowering, in binding order
+  saveNames*: seq[string]                      ## `save = [...]` forward outputs kept alive between forward and backward, declared pairs only
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Derivation
@@ -151,17 +156,27 @@ proc deriveBwdParams*(fwd, bwd: GpuAst, reduceNames: seq[string]): seq[BwdParamM
   ##
   ## Expected input:
   ## - `fwd`: the forward kernel as the pipeline produced it
-  ## - `bwd`: its transposed backward kernel, `<fwd>_bwd`
-  ## - `reduceNames`: names of the generated `<fwd>_bwd_d_<scalar>_reduce` kernels
+  ## - `bwd`: its backward kernel, `<fwd>_bwd`, transposed or declared
+  ## - `reduceNames`: names of the generated `<fwd>_bwd_d_<scalar>_reduce` kernels,
+  ##   empty for a declared backward
+  ##
+  ## A float scalar carries `gkBuffer1` when the backward's parameter list has a `d_<name>` slot:
+  ##
+  ## - declared backward: the hand-written kernel writes the 1-element buffer itself
+  ## - transposed backward: a generated reduce kernel fills the buffer
   ##
   ## Output: one `BwdParamMeta` per forward parameter, declaration order.
   doAssert fwd.kind == gpuProc and bwd.kind == gpuProc
   var paramISyms: seq[string]
   for p in fwd.pParams:
     paramISyms.add p.ident.symbol.iSym
-  var bwdParamISyms: HashSet[string]
+  # The backward's gradient slots match by parameter name, never by symbol id:
+  # symbol ids are namespaced per proc.
+  # A declared backward is a proc of its own, so mirror parameters carry different ids across the two procs even with equal names.
+  # The mirror validation already checked the names positionally.
+  var bwdParamNames: HashSet[string]
   for p in bwd.pParams:
-    bwdParamISyms.incl p.ident.symbol.iSym
+    bwdParamNames.incl p.ident.ident()
   var written: HashSet[string]
   fwd.pBody.writtenParamISyms(paramISyms, written)
 
@@ -174,16 +189,22 @@ proc deriveBwdParams*(fwd, bwd: GpuAst, reduceNames: seq[string]): seq[BwdParamM
         meta.kind = pkResidual
       else:
         meta.kind = pkBuffer
-      if "d_" & iSym in bwdParamISyms:
+      if "d_" & name in bwdParamNames:
         meta.gradKind = gkBuffer
         meta.gradName = "d_" & name
       result.add meta
     elif p.typ.kind in PairFloatKinds:
       var meta = BwdParamMeta(name: name, kind: pkScalar)
-      for rn in reduceNames:
-        if rn.endsWith("_bwd_d_" & name & "_reduce"):
-          meta.gradKind = gkBuffer1
-          meta.gradName = "d_" & name
+      if "d_" & name in bwdParamNames:
+        # declared backward: the hand-written kernel carries the scalar's
+        # 1-element gradient slot itself, no reduce kernel exists
+        meta.gradKind = gkBuffer1
+        meta.gradName = "d_" & name
+      else:
+        for rn in reduceNames:
+          if rn.endsWith("_bwd_d_" & name & "_reduce"):
+            meta.gradKind = gkBuffer1
+            meta.gradName = "d_" & name
       result.add meta
     else:
       result.add BwdParamMeta(name: name, kind: pkScalar)
@@ -196,6 +217,112 @@ proc mirrorSignature*(params: seq[BwdParamMeta]): seq[string] =
       result.add m.gradName
   for m in params:
     result.add m.name
+
+# ═══════════════════════════════════════════════════════════════════════
+# ▸ Declared backward
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The declared path of `bwd_diff(fwd, bwd, save = [...])` skips the transposer:
+# the hand-written backward kernel is the backward. The mirror rule still
+# governs its signature, derived from the forward symbol alone, and a mismatch
+# refuses at expansion.
+
+proc referencedParamISyms(n: GpuAst, paramISyms: seq[string], found: var HashSet[string]) =
+  ## Collects the iSyms of forward parameters referenced anywhere in the body,
+  ## write and read positions alike: index chains and bare identifiers.
+  if n.isNil:
+    return
+  if n.kind == gpuIdent and n.symbol != nil and n.symbol.iSym in paramISyms:
+    found.incl n.symbol.iSym
+  for ch in n.items:
+    ch.referencedParamISyms(paramISyms, found)
+
+proc mirrorCotangentNames*(fwd: GpuAst): seq[string] =
+  ## d_-block of the mirror signature, derived from the forward symbol alone.
+  ##
+  ## Expected input:
+  ## - `fwd`: the forward kernel as the pipeline produced it
+  ##
+  ## Output: one `d_<name>` slot per forward parameter the forward body references,
+  ## buffers and float scalars alike, forward order.
+  ##
+  ## The transposer seeds its own d_-block from the same buffer walk,
+  ## plus the scalar cotangents it actually demands, so the two agree for kernels in the differentiable subset.
+  ##
+  ## One narrow case may differ: a float scalar referenced only in a zero-cotangent position,
+  ## say a comparison, carries no transposed slot but does carry a declared slot.
+  var paramISyms: seq[string]
+  for p in fwd.pParams:
+    paramISyms.add p.ident.symbol.iSym
+  var referenced: HashSet[string]
+  fwd.pBody.referencedParamISyms(paramISyms, referenced)
+  for p in fwd.pParams:
+    let iSym = p.ident.symbol.iSym
+    if (p.typ.kind == gtPtr or p.typ.kind in PairFloatKinds) and
+        iSym in referenced:
+      result.add "d_" & p.ident.ident()
+
+proc declaredMirrorSignature*(fwd: GpuAst): seq[string] =
+  ## Full mirror signature a declared backward must reproduce exactly:
+  ## the d_-block of `mirrorCotangentNames`, then the forward signature verbatim.
+  result = fwd.mirrorCotangentNames()
+  for p in fwd.pParams:
+    result.add p.ident.ident()
+
+proc validateDeclaredBwd*(fwd, bwd: GpuAst) =
+  ## Refuses a declared backward that does not mirror its forward.
+  ## The contract, checked in order:
+  ##
+  ## - the backward kernel is named `<fwd>_bwd`, the name the pair's backward
+  ##   launches under
+  ## - its parameters equal `declaredMirrorSignature(fwd)` positionally,
+  ##   the refusal names the first differing position and the rule it breaks
+  let fwdName = fwd.pName.ident()
+  let bwdName = bwd.pName.ident()
+  if bwdName != fwdName & "_bwd":
+    error "bwd_diff: the declared backward '" & bwdName & "' must be named '" &
+      fwdName & "_bwd', the name the pair's backward launches under"
+  let mirror = fwd.declaredMirrorSignature()
+  var declared: seq[string]
+  for p in bwd.pParams:
+    declared.add p.ident.ident()
+  if declared == mirror:
+    return
+  let dBlock = fwd.mirrorCotangentNames().len
+  var i = 0
+  while i < declared.len and i < mirror.len and declared[i] == mirror[i]:
+    i.inc
+  let rule = if i < dBlock:
+    "gradients sit in forward-parameter order"
+  else:
+    "block 2 is the forward signature verbatim"
+  if i < declared.len and i < mirror.len:
+    error "bwd_diff: the declared backward '" & bwdName & "' does not mirror '" &
+      fwdName & "': parameter " & $(i + 1) & " is '" & declared[i] &
+      "', the mirror rule derives '" & mirror[i] & "' (" & rule & ")"
+  elif i < declared.len:
+    error "bwd_diff: the declared backward '" & bwdName & "' does not mirror '" &
+      fwdName & "': parameter " & $(i + 1) & " is '" & declared[i] &
+      "', beyond the mirror (" & rule & ")"
+  else:
+    error "bwd_diff: the declared backward '" & bwdName & "' does not mirror '" &
+      fwdName & "': it stops at parameter " & $declared.len &
+      ", the mirror rule derives '" & mirror[i] & "' (" & rule & ")"
+
+proc validateSaveNames*(fwdName: string, metas: seq[BwdParamMeta], saveNames: seq[string]) =
+  ## Refuses `save = [...]` names that are not forward outputs of the pair's
+  ## forward kernel: a save names a buffer the forward kernel writes.
+  for s in saveNames:
+    var known = false
+    for m in metas:
+      if m.name == s:
+        known = true
+        if m.kind != pkResidual:
+          error "bwd_diff: save name '" & s & "' is not a forward output of '" &
+            fwdName & "', the forward kernel does not write it"
+    if not known:
+      error "bwd_diff: save name '" & s & "' is not a parameter of '" &
+        fwdName & "'"
 
 const PairWideIntKinds = {gtInt64, gtUint64, gtSize_t}
   ## Integer widths the reduce-kernel trip count may carry, grow with the IR's int kinds.

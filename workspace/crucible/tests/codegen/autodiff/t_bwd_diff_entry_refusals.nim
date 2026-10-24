@@ -193,6 +193,61 @@ expectRefusal("scalar_outside_loop", entryBody(
   "y: ptr UncheckedArray[float32], alpha: float32, a: ptr UncheckedArray[float32]",
   """  y[0] = alpha * a[0]"""), "outside the index loop")
 
+
+# ── Declared backward: the escape-hatch entry ─────────────────────────────
+
+proc declaredBody(fwdParams, fwdBody, bwdName, bwdParams, bwdBody, tail: string): string =
+  ## A standalone snippet driving the declared-backward entry over one
+  ## forward kernel and one hand-written backward kernel.
+  result = """
+import workspace/crucible
+
+proc axpy(""" & fwdParams & """) {.global.} =
+""" & fwdBody & "\n\nproc " & bwdName & "(" & bwdParams &
+    ") {.global.} =\n" & bwdBody & "\n" & tail
+
+const axpyFwdParams = "`out`, a, b: ptr UncheckedArray[float32], alpha: float32"
+const axpyFwdBody = """  for i in 0 ..< 8:
+    `out`[i] = alpha * a[i] + b[i]"""
+const axpyMirrorParams = "d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32"
+const axpyMirrorBody = """  for i in 0 ..< 8:
+    d_a[i] += d_out[i] * alpha
+    d_b[i] += d_out[i]
+    d_alpha[0] += d_out[i] * a[i]"""
+
+# the gradients must sit in forward-parameter order: d_a first misorders
+expectRefusal("declared_misordered", declaredBody(
+  axpyFwdParams, axpyFwdBody, "axpy_bwd",
+  "d_a, d_out, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32",
+  axpyMirrorBody,
+  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "mirror")
+
+# block 2 is the forward signature verbatim: dropping b leaves a gap
+expectRefusal("declared_block2_gap", declaredBody(
+  axpyFwdParams, axpyFwdBody, "axpy_bwd",
+  "d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, alpha: float32",
+  """  for i in 0 ..< 8:
+    d_a[i] += d_out[i] * alpha
+    d_b[i] += d_out[i]
+    d_alpha[0] += d_out[i] * a[i]""",
+  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "forward signature")
+
+# the pair launches the backward under '<forward>_bwd'.
+# Another name refuses, the printed kernel and the launch name would diverge.
+expectRefusal("declared_bad_name", declaredBody(
+  axpyFwdParams, axpyFwdBody, "axpyBackward", axpyMirrorParams, axpyMirrorBody,
+  "const pair = bkGlsl.bwd_diff(axpy, axpyBackward)"), "must be named")
+
+# save names forward outputs only: a read-only input buffer is not one
+expectRefusal("declared_save_not_output", declaredBody(
+  axpyFwdParams, axpyFwdBody, "axpy_bwd", axpyMirrorParams, axpyMirrorBody,
+  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [a])"), "forward output")
+
+# save names forward parameters only: an unknown name refuses
+expectRefusal("declared_save_unknown", declaredBody(
+  axpyFwdParams, axpyFwdBody, "axpy_bwd", axpyMirrorParams, axpyMirrorBody,
+  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [zzz])"), "save")
+
 # ── Entry contracts ───────────────────────────────────────────────────────
 
 expectRefusal("not_a_proc", """

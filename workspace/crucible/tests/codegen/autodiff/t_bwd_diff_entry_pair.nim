@@ -46,6 +46,32 @@ proc stat2(`out`, aux, a: ptr UncheckedArray[float32]) {.global.} =
     `out`[i] = a[i] * 2.0'f32
     aux[i] = a[i] + 1.0'f32
 
+proc axpy_bwd(d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
+  # Hand-written mirror of the transposed axpy backward, see the transposed
+  # pair's assertions below: same signature, d_alpha accumulated in-kernel.
+  for i in 0 ..< 8:
+    d_a[i] += d_out[i] * alpha
+    d_b[i] += d_out[i]
+    d_alpha[0] += d_out[i] * a[i]
+
+proc sdpa_fwd(q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global.} =
+  # FA-shaped stub: five forward parameters, out and lse are forward outputs
+  # (the save fixture). Trivial math, no SDPA.
+  for i in 0 ..< 8:
+    `out`[i] = q[i] + k[i] + v[i]
+  lse[0] = `out`[0] + 1.0'f32
+
+proc sdpa_fwd_bwd(d_q, d_k, d_v, d_out, d_lse: ptr UncheckedArray[float32], q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global.} =
+  # Declared backward in mirror order, gradients first:
+  # (d_q, d_k, d_v, d_out, d_lse) in forward-parameter order,
+  # block 2 the forward signature verbatim.
+  # Reads out and lse, the saved outputs, so the save wiring is observable.
+  for i in 0 ..< 8:
+    d_q[i] += d_out[i] * `out`[i] * 0.5'f32
+    d_k[i] += d_out[i] * lse[0]
+    d_v[i] += d_out[i] + d_lse[0]
+  d_lse[0] += d_out[0]
+
 # ── Expansion ─────────────────────────────────────────────────────────────
 
 const axpyGlsl = bkGlsl.bwd_diff(axpy)
@@ -54,6 +80,10 @@ const axpyNPair = bkMetal.bwd_diff(axpyN)
 const axpySPair = bkMetal.bwd_diff(axpyS)
 const stat2Pair = bkMetal.bwd_diff(stat2)
 const rsqrtPair = bkMetal.bwd_diff(rsqrt1)
+const axpyDeclared = bkMetal.bwd_diff(axpy, axpy_bwd)
+const sdpaDeclared = bkMetal.bwd_diff(sdpa_fwd, sdpa_fwd_bwd,
+                                      save = [out, lse])
+const axpyDeclaredGlsl = bkGlsl.bwd_diff(axpy, axpy_bwd)
 
 # ── Mirror-rule signature, verbatim ───────────────────────────────────────
 
@@ -129,3 +159,41 @@ static:
   # the forward source is unchanged by differentiation
   doAssert "alpha * a[i]" in axpyMetal.fwdSource
   doAssert "out[i]" in axpyMetal.fwdSource
+
+
+# ── Declared backward: the escape hatch ───────────────────────────────────
+
+static:
+  # the transposer is skipped, the hand-written kernel is the backward,
+  # and the mirror signature still derives from the forward symbol
+  doAssert axpyDeclared.bwdSignature == axpyMetal.bwdSignature
+  doAssert axpyDeclaredGlsl.bwdSignature == axpyMetal.bwdSignature
+  doAssert axpyDeclared.kernelName == "axpy"
+  doAssert "kernel void axpy_bwd(" in axpyDeclared.bwdSource
+  doAssert "d_a[i] += (d_out[i] * alpha)" in axpyDeclared.bwdSource
+  doAssert "d_alpha[0] += (d_out[i] * a[i])" in axpyDeclared.bwdSource
+  doAssert axpyDeclared.fwdSource == axpyMetal.fwdSource,
+    "the forward source is the same kernel the transposed pair prints"
+
+  # no reduce machinery exists on the declared path.
+  # The hand-written kernel accumulates the scalar cotangent itself.
+  doAssert axpyDeclared.reduceSources.len == 0
+  doAssert axpyDeclared.scalarWorkspaces.len == 0
+  doAssert axpyDeclared.bwdSource notin axpyMetal.bwdSource
+
+  # parameter metadata derives from the forward symbol as on the transposed path
+  doAssert axpyDeclared.paramNamed("out").kind == pkResidual
+  doAssert axpyDeclared.paramNamed("a").gradKind == gkBuffer
+  doAssert axpyDeclared.paramNamed("alpha").gradKind == gkBuffer1
+  doAssert axpyDeclared.paramNamed("alpha").gradName == "d_alpha"
+
+  # FA-shaped stub: five forward parameters, the mirror order is
+  # (d_q, d_k, d_v, d_out, d_lse) then the forward signature verbatim
+  doAssert sdpaDeclared.bwdSignature == @["d_q", "d_k", "d_v", "d_out", "d_lse",
+                                          "q", "k", "v", "out", "lse"]
+  doAssert sdpaDeclared.paramNamed("out").kind == pkResidual
+  doAssert sdpaDeclared.paramNamed("lse").kind == pkResidual
+  doAssert sdpaDeclared.paramNamed("q").kind == pkBuffer
+  doAssert sdpaDeclared.saveNames == @["out", "lse"]
+  doAssert axpyDeclared.saveNames.len == 0
+  doAssert stat2Pair.saveNames.len == 0
