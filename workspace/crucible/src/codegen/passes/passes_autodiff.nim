@@ -712,7 +712,8 @@ proc transposeStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, pat
         let body = transposeStmts(ctx, el.body.statements,
                                   env, path.scopePush("elif" & $i))
         if body.len > 0:
-          elifs.add (cond: el.cond, body: GpuAst(kind: gpuBlock, statements: body))
+          elifs.add (cond: substituteLocals(ctx, el.cond, env, path),
+                     body: GpuAst(kind: gpuBlock, statements: body))
       var elseBody: GpuAst = GpuAst(kind: gpuDiscard)
       if s.ifElse.kind != gpuDiscard:
         let body = transposeStmts(ctx, s.ifElse.statements,
