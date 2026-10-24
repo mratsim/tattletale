@@ -17,11 +17,9 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 type
   MetalCache = object
     ## Two per-engine caches:
@@ -38,11 +36,9 @@ type
 
 template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 when defined(macosx):
 
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
@@ -79,9 +75,9 @@ when defined(macosx):
         cache: MetalCache(psos: initTable[string, objc.ID]())
       )
 
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   # ▸ PUBLIC API
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   proc ingest*(engine: MetalEngine, source: string) =
     objc.withMemPool:
       let opts = compileOptions()
@@ -104,10 +100,16 @@ when defined(macosx):
     ## - `source`: the kernel's standalone translation unit
     ##
     ## Bridge re-ingests keep the autodiff kernels alive.
+    ## Re-ingest under a held launch name drops the cached entries: a cached pipeline state would run the old binary.
+    ## The main `ingest` clears its caches for the same reason.
     objc.withMemPool:
       let opts = compileOptions()
       let library = compileLibrary(engine.ctx.device, source, opts)
       objc.release(opts)
+      # Release the cached pipeline state for this name before its library.
+      if engine.cache.psos.hasKey(kernel):
+        objc.release(engine.cache.psos[kernel])
+        engine.cache.psos.del(kernel)
       if engine.cache.adLibs.hasKey(kernel):
         objc.release(engine.cache.adLibs[kernel])
       engine.cache.adLibs[kernel] = library
@@ -131,9 +133,9 @@ when defined(macosx):
     ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   # ▸ Launch serialization
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   type SerializationCtx = object
     encoder: objc.ID
 
@@ -151,16 +153,16 @@ when defined(macosx):
     discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
                     blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
 
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE constants
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   const
     MTLCommandBufferStatusCompleted = 4
     MTLCommandBufferStatusError = 5
 
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE run path
-  # ════════════════════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════════════════
   proc bufferContents(h: objc.ID): pointer =
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
@@ -237,11 +239,9 @@ when defined(macosx):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Non-macOS entry point
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")

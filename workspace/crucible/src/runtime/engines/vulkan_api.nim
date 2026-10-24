@@ -20,9 +20,9 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   VulkanCaches = object
@@ -47,9 +47,9 @@ proc newVulkanEngine*(): VulkanEngine =
     ctx: vctx,
     caches: VulkanCaches())
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
   ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
@@ -105,6 +105,14 @@ proc ingestADKernel*(engine: VulkanEngine, kernel, source: string) =
   ## - `source`: the kernel's standalone GLSL translation unit
   ##
   ## Bridge re-ingests keep the autodiff kernels alive.
+  ## Re-ingest under a held pipeline-cache name drops the matching entries: a cached pipeline runs the old SPIR-V.
+  ## The main `ingest` clears its caches for the same reason.
+  var staleKeys: seq[(string, int)]
+  for key in engine.caches.pipelineCache.keys:
+    if key[0] == kernel:
+      staleKeys.add key
+  for key in staleKeys:
+    engine.caches.pipelineCache.del(key)
   engine.caches.adSpirv[kernel] = (
     entry: parseEntryPoint(source),
     spirv: compileGlslToSpirvViaGlslang(source, parseEntryPoint(source)),
@@ -129,9 +137,9 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   vctx: VulkanContext
@@ -176,9 +184,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
