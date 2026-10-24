@@ -55,6 +55,7 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
   let glslCg = bindSym"glsl"
+  let spirvCg = bindSym"spirv"
   let webgpuCg = bindSym"webgpu"
   let t = engine.getTypeInst()
   if sameType(t, bindSym"MetalEngine"):
@@ -64,11 +65,12 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   elif sameType(t, bindSym"OpenCLEngine"):
     result = openclCg.newCall(node)
   elif sameType(t, bindSym"VulkanEngine"):
-    result = glslCg.newCall(node)
+    result = spirvCg.newCall(node)
   elif sameType(t, bindSym"WebgpuEngine"):
     result = webgpuCg.newCall(node)
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
+
 
 func isCompileTime(ftype: NimNode): bool =
   ftype.kind == nnkStaticTy or
@@ -257,11 +259,19 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
   var argsN = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
     argsN.add(values[i])
+  let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine")
+  let ingestN = if wordsRoute:
+    quote do:
+      if `engine`.getSpirvWords() != `bridgeSource`:
+        `engine`.ingest(`bridgeSource`)
+  else:
+    quote do:
+      if `engine`.getArtifact() != `bridgeSource`:
+        `engine`.ingest(`bridgeSource`)
   result = quote do:
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `procdef`)
-      if `engine`.getArtifact() != `bridgeSource`:
-        `engine`.ingest(`bridgeSource`)
+      `ingestN`
       var argsVal = `argsN`
       `engine`.launchKernelImpl(`kname`, `outputN`, argsVal,
         LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))

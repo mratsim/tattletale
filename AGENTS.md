@@ -21,8 +21,8 @@ nim install_deps_dev      # dev: zip (vendor libtorch), chronos (download test t
 ### Tests
 
 All test tasks come from `config.nims` (`nim <task>` from this dir). Each task scans a `tests/` dir
-for files named `test_*` or `t_*` and compiles them with `nim c` (C backend) into `build/tests/<file>`, non-recursive:
-GPU tests in `tests/gpu/` subdirs are NOT picked up (run those directly).
+recursively for files named `test_*` or `t_*` and compiles them with `nim c` (C backend) into
+`build/tests/<file>`. Everything else (`manual_` fixtures, helpers) is skipped.
 
 ```bash
 nim test_libtorch
