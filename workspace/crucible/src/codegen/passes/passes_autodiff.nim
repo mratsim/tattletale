@@ -578,12 +578,15 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
           env.scalarLoopCount = env.ambientCount
         if sym.iSym notin env.scalarHits:
           env.scalarHits.add sym.iSym
+        # The partials width authority is the scalar's own type, the reduce kernel and the runtime scratch derive from it too.
+        # The cotangent g is typed at the seed expression's width and converted across.
         let partials = env.partials.mgetOrPut(sym.iSym,
-                                              mkPartialsIdent(sym, elemTyp))
+                                              mkPartialsIdent(sym, sym.typ))
         let slot = mkIndex(partials, env.ambientVar)
         let gSub = substituteLocals(ctx, g, env, path)
+        let gCast = if sym.typ.kind == elemTyp.kind: gSub else: mkConv(sym.typ, gSub)
         into.add mkAssign(slot,
-          mkBinOp("+", mkIndex(partials, env.ambientVar), gSub, elemTyp))
+          mkBinOp("+", mkIndex(partials, env.ambientVar), gCast, sym.typ))
       elif sym.iSym in env.localDefs:
         if not isScopePrefix(env.localDefPath.getOrDefault(sym.iSym, @[]), path):
           adRefuse(e, "gpuIdent",
