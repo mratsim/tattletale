@@ -1055,11 +1055,9 @@ proc emitIfChain(ctx: var SpvLangCtx, fn: var SpvFnCtx, branches: seq[tuple[cond
   let mergeLbl = ctx.builder.freshLabel()
   let thenLbl = ctx.builder.freshLabel()
   let cond = emitExpr(ctx, fn, branches[0].cond)
-  var mergeReachable = false
   if branches.len == 1 and elseBody.kind == gpuDiscard:
     ctx.builder.opSelectionMerge(mergeLbl, selNone)
     ctx.builder.opBranchConditional(cond, thenLbl, mergeLbl)
-    mergeReachable = true
     ctx.builder.opLabelAt(thenLbl)
     fn.terminated = false
     emitStmt(ctx, fn, branches[0].body)
@@ -1074,22 +1072,20 @@ proc emitIfChain(ctx: var SpvLangCtx, fn: var SpvFnCtx, branches: seq[tuple[cond
     emitStmt(ctx, fn, branches[0].body)
     if not fn.terminated:
       ctx.builder.opBranch(mergeLbl)
-      mergeReachable = true
     ctx.builder.opLabelAt(falseLbl)
     fn.terminated = false
     if branches.len == 1:
       emitStmt(ctx, fn, elseBody)
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
-        mergeReachable = true
     else:
       emitIfChain(ctx, fn, branches[1 ..^ 1], elseBody)
       # the nested chain ends on its own merge block as the current block
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
-        mergeReachable = true
-  if not mergeReachable:
-    spvRefuse("if-statement whose every branch returns, the merge block would be unreachable")
+  # an unreachable merge block is legal SPIR-V: both branches returning
+  # leave the merge label without a predecessor, the block still ends
+  # the selection construct and receives the statements after the if
   ctx.builder.opLabelAt(mergeLbl)
   fn.terminated = false
 
