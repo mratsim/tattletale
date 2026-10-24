@@ -591,8 +591,16 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): SpvOp =
   let name = op.symbol.name
   let isFloat = operandTy.kind in {gtFloat32, gtFloat64}
   let signed = operandTy.kind in spvSignedInts
-  if isFloat and name in ["==", "!=", "<", "<=", ">", ">="]:
-    spvRefuse("float comparison " & name)
+  if isFloat:
+    # ordered float comparisons, NaN fails every FOrd predicate
+    case name
+    of "==": return OpFOrdEqual
+    of "!=": return OpFOrdNotEqual
+    of "<": return OpFOrdLessThan
+    of "<=": return OpFOrdLessThanEqual
+    of ">": return OpFOrdGreaterThan
+    of ">=": return OpFOrdGreaterThanEqual
+    else: discard
   case name
   of "+": (if isFloat: OpFAdd else: OpIAdd)
   of "-": (if isFloat: OpFSub else: OpISub)
