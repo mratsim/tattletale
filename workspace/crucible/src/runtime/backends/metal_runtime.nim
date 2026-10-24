@@ -40,10 +40,12 @@ type
 proc `=copy`(dst: var MetalContextObj, src: MetalContextObj) {.error:
     "MetalContext owns its device and queue handles, copy the MetalEngine ref not the ctx".}
 
-proc `=destroy`(ctx: var MetalContextObj) =
-    objc.withMemPool:
-      objc.release(ctx.queue)
-      objc.release(ctx.device)
+when defined(macosx):
+  # withMemPool/release are macOS-only in objc_abi
+  proc `=destroy`(ctx: var MetalContextObj) =
+      objc.withMemPool:
+        objc.release(ctx.queue)
+        objc.release(ctx.device)
 
 # ═════════════════════════════════════════════════
 # macOS-only execution primitives
