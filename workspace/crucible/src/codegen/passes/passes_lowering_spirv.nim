@@ -140,6 +140,10 @@ proc lowerTernaryExpr(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) 
   ## the hoisted [var, if] groups append to `pre` in evaluation order
   case n.kind
   of gpuTernary:
+    # the rewrite assigns the branch expression to the temp, single-statement block wrappers around the branches unwrap first
+    n.tThen = unwrapSingleStmtBlocks(n.tThen)
+    if n.tElse.kind != gpuDiscard:
+      n.tElse = unwrapSingleStmtBlocks(n.tElse)
     let resTy = ctx.ternaryResultType(n)
     ctx.rewriteTernary(n, resTy, pre)
   of gpuBinOp:
@@ -295,7 +299,25 @@ proc lowerTernaryStmt(ctx: var GpuContext, n: var GpuAst) =
   of gpuFor:
     ctx.lowerTernaryExpr(n.fStart, pre)
     ctx.lowerTernaryExpr(n.fEnd, pre)
-    ctx.lowerTernaryExpr(n.fStep, pre)
+    if condNeedsRewrite(n.fStep):
+      # the step re-evaluates per iteration, the emitter computes the step
+      # inside the continue block:
+      #
+      # - the temp storage declares ahead of the loop
+      # - the assignment splices at the body's end
+      # - the continue block reads the fresh value
+      var stepPre: seq[GpuAst]
+      ctx.lowerTernaryExpr(n.fStep, stepPre)
+      var bodyStmts: seq[GpuAst]
+      for h in stepPre:
+        if h.kind == gpuVar:
+          pre.add h
+        else:
+          bodyStmts.add h
+      if n.fBody.kind == gpuBlock:
+        n.fBody.statements = n.fBody.statements & bodyStmts
+      else:
+        n.fBody = GpuAst(kind: gpuBlock, statements: @[n.fBody] & bodyStmts)
     ctx.lowerTernaryStmt(n.fBody)
   of gpuReturn:
     ctx.lowerTernaryExpr(n.rValue, pre)
