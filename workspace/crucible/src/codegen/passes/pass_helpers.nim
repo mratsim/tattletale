@@ -66,8 +66,7 @@ proc collectParamISyms*(n: GpuAst, paramISyms: HashSet[string], found: var HashS
   ## Collects the iSyms of kernel parameters referenced by the tree:
   ##
   ## - default: every parameter-rooted identifier
-  ## - `writeTargetsOnly`: only assignment targets rooted at a parameter index
-  ##   chain, the parameters the kernel writes through
+  ## - `writeTargetsOnly`: only assignment targets rooted at a parameter index chain, the written parameters
   if n.isNil:
     return
   if writeTargetsOnly:

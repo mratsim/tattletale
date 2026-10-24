@@ -99,8 +99,8 @@ proc runTest() =   # private: engines are destroyed at return
     doAssert dAlpha[0] == dAlphaWant,
       "d_alpha: got " & $dAlpha[0] & " want " & $dAlphaWant
 
-    # a second launch accumulates into the caller's buffers, the scalar
-    # cotangent included, the reduce kernel accumulates like the buffers.
+    # a second launch accumulates into the caller's buffers, scalar cotangent
+    # included: the reduce kernel accumulates like the buffer gradients do.
     ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     engine.copyToHostFromDevice(addr dA[0], dADev, N)
     engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)

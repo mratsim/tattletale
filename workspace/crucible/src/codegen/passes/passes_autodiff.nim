@@ -453,8 +453,7 @@ proc mathCall(ctx: var GpuContext, name: string, arg: GpuAst, elemTyp: GpuType):
   result = GpuAst(kind: gpuCall, cName: cName, cArgs: @[arg])
 
 func mkPartialsIdent(sym: Symbol, elemTyp: GpuType): GpuAst =
-  ## Reduce-workspace ident of a scalar cotangent: one element per primal loop
-  ## index, named after the scalar it reduces.
+  ## Reduce-workspace ident of a scalar cotangent: one element per primal loop index, named after the scalar.
   let typ = mkBufferPtr(elemTyp)
   GpuAst(kind: gpuIdent,
          symbol: newSymbol("d_" & sym.name & "_partials",
@@ -766,10 +765,10 @@ func paramISyms(fn: GpuAst): HashSet[string] =
     result.incl p.ident.symbol.iSym
 
 proc recordPairMetas(ctx: var GpuContext, fn: GpuAst, env: AdEnv) =
-  ## The single metadata derivation of a kernel pair, projected from the transposer's own walk:
+  ## Single metadata derivation of a kernel pair, projected from the transposer's own walk:
   ## the same AdEnv that built the backward kernel's parameter list.
-  ## The artifact pipeline consumes this record, nothing re-walks the forward body
-  ## and nothing matches generated names by suffix, so the metadata and the launched kernel cannot desync.
+  ## The artifact pipeline consumes this record, nothing re-walks the forward body and nothing
+  ## matches generated names by suffix, so the metadata and the launched kernel cannot desync.
   var metas: seq[BwdParamMeta]
   let paramSyms = paramISyms(fn)
   for p in fn.pParams:
