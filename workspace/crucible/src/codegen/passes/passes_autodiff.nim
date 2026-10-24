@@ -81,7 +81,7 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 # gpuEmit        refuse        raw target-source injection has no cotangent
 # gpuAddr        refuse        address-of moves the gradient off the differentiated value
 # gpuDeref       local-rule    pointer-peel form of an index parent only, value-position derefs refuse
-# gpuConv        local-rule    float-to-float conversion passes the cotangent through (narrowed back across widths), conversions to int/bool of differentiated values refuse
+# gpuConv        local-rule    float-to-float conversion passes the cotangent through (narrowed back across widths), conversions to int/bool of differentiated values refuse, conversions from int/bool are primal values (loop indices, int params) and carry a zero cotangent
 # gpuCast        refuse        a bitcast reinterprets bits, its cotangent would be garbage, gpuConv is the type-change rule
 # gpuComment     pass-through  comments carry no values
 # gpuConstexpr   pass-through  compile-time constants, lifted before AD
@@ -668,11 +668,8 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
         " of a differentiated value has no gradient")
     let innerT = ctx.getExprType(e.convExpr)
     if innerT.isNil or innerT.kind notin DiffFloatKinds:
-      # rounding an operand through a bool or integer type silently
-      # loses the gradient, no conversion direction repairs it
-      adRefuse(e, "gpuConv",
-        "conversion from " & pretty(innerT) &
-        " through a differentiated value loses the gradient")
+      # the int/bool operand is primal (loop index, int param), zero cotangent
+      return
     let gInner = if innerT.kind == e.convTo.kind: g else: mkConv(innerT, g)
     transposeExpr(ctx, e.convExpr, gInner, elemTyp, env, path, into)
   of gpuMaterialize:
