@@ -365,6 +365,7 @@ func flushCapabilities(ctx: var SpvLangCtx) =
 
 type
   SpvFnCtx = object
+    name*: string                      ## the kernel or device fn being emitted
     locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
     paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
     paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
@@ -569,7 +570,7 @@ func emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   if sym.name == "true" or sym.name == "false":
     let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
     return ctx.builder.constBool(boolTy, sym.name == "true")
-  if sym.iSym in fn.localsBySym or sym.name in fn.locals:
+  if sym.iSym in fn.localsBySym:
     let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
     return ctx.builder.opLoad(ctx.tyId(valueTy(t)), getLocalVarId(fn, sym))
   if sym.iSym in fn.paramVals:
@@ -578,7 +579,8 @@ func emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     return ctx.builder.opLoad(ctx.tyId(valueTy(sym.typ)), fn.addrs[sym.iSym])
   if sym.iSym in fn.paramPtrs:
     spvRefuse("bare pointer value use of parameter " & sym.name)
-  spvRefuse("unknown symbol " & sym.name)
+  error "spirv_shader_lang: unknown symbol `" & sym.name &
+    "` in " & fn.name & ": no local, parameter or constant carries this iSym"
 
 func coordComponent(field: GpuAst): int =
   doAssert field.kind == gpuIdent, "coordinate component is not an identifier"
@@ -1322,7 +1324,7 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
       paramTyIds.add ctx.tyId(valueTy(valueType(p.typ)))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
-  var fn = SpvFnCtx(fns: ctx.fns)
+  var fn = SpvFnCtx(name: "device fn " & procNode.pName.ident(), fns: ctx.fns)
   for i, p in procNode.pParams:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
     let sym = p.ident.symbol
@@ -1420,7 +1422,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   let voidTy = ctx.builder.tyVoid()
   let fnTy = ctx.builder.tyFunction(voidTy, @[])
   result = ctx.builder.opFunction(voidTy, fnTy)
-  var fn = SpvFnCtx(fns: ctx.fns)
+  var fn = SpvFnCtx(name: "kernel " & kernel.pName.ident(), fns: ctx.fns)
   discard ctx.builder.opLabel()
 
   # setup block: Function-storage variables first, then hoisted parameter loads,
