@@ -61,7 +61,7 @@ import workspace/crucible
 proc kernel(""" & params & """) {.global.} =
 """ & body & """
 
-const pair = bkGlsl.bwd_diff(kernel)
+const adPair = bkGlsl.bwd_diff(kernel)
 """
 
 # ── Refused node kinds (one case per reachable refused row) ───────────────
@@ -136,7 +136,7 @@ proc kernel(y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: i
   for i in 0 ..< n:
     y[i] = scale(a[i])
 
-const pair = bkGlsl.bwd_diff(kernel)
+const adPair = bkGlsl.bwd_diff(kernel)
 """, "gpuCall")
 
 expectRefusal("external_math", """
@@ -147,7 +147,7 @@ proc kernel(y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: i
   for i in 0 ..< n:
     y[i] = floor(a[i])
 
-const pair = bkGlsl.bwd_diff(kernel)
+const adPair = bkGlsl.bwd_diff(kernel)
 """, "gpuCall")
 
 expectRefusal("barrier", entryBody(
@@ -227,7 +227,7 @@ expectRefusal("declared_misordered", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpy_bwd",
   "d_a, d_out, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32",
   axpyMirrorBody,
-  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "mirror")
+  "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "mirror")
 
 # block 2 is the forward signature verbatim: dropping b leaves a gap
 expectRefusal("declared_block2_gap", declaredBody(
@@ -237,23 +237,23 @@ expectRefusal("declared_block2_gap", declaredBody(
     d_a[i] += d_out[i] * alpha
     d_b[i] += d_out[i]
     d_alpha[0] += d_out[i] * a[i]""",
-  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "forward signature")
+  "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "forward signature")
 
 # the pair launches the backward under '<forward>_bwd'.
 # Another name refuses, the printed kernel and the launch name would diverge.
 expectRefusal("declared_bad_name", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpyBackward", axpyMirrorParams, axpyMirrorBody,
-  "const pair = bkGlsl.bwd_diff(axpy, axpyBackward)"), "must be named")
+  "const adPair = bkGlsl.bwd_diff(axpy, axpyBackward)"), "must be named")
 
 # save names forward outputs only: a read-only input buffer is not one
 expectRefusal("declared_save_not_output", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpy_bwd", axpyMirrorParams, axpyMirrorBody,
-  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [a])"), "forward output")
+  "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [a])"), "forward output")
 
 # save names forward parameters only: an unknown name refuses
 expectRefusal("declared_save_unknown", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpy_bwd", axpyMirrorParams, axpyMirrorBody,
-  "const pair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [zzz])"), "save")
+  "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd, save = [zzz])"), "save")
 
 # ── Entry contracts ───────────────────────────────────────────────────────
 
@@ -261,7 +261,7 @@ expectRefusal("not_a_proc", """
 import workspace/crucible
 
 const value = 42
-const pair = bkMetal.bwd_diff(value)
+const adPair = bkMetal.bwd_diff(value)
 """, "is not a proc")
 
 expectRefusal("unsupported_backend", """
@@ -271,5 +271,5 @@ proc kernel(y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: i
   for i in 0 ..< n:
     y[i] = a[i]
 
-const pair = bkCuda.bwd_diff(kernel)
+const adPair = bkCuda.bwd_diff(kernel)
 """, "no autodiff pipeline")

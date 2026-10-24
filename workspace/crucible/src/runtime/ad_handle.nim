@@ -36,18 +36,18 @@ import workspace/crucible/src/runtime/engines/vulkan_api
 # ▸ Types
 # ═══════════════════════════════════════════════════════════════════════
 
-type AdHandle*[E: HwEngine; pair: static KernelPair] = object
+type AdHandle*[E: HwEngine; kernels: static KernelPair] = object
   ## Runtime handle of one kernel pair.
   ##
   ## - `engine`: the engine that compiled the pair's kernels at `setupAD`
-  ## - `pair`: static parameter, its metadata drives the launch macros
+  ## - `kernels`: static parameter, its metadata drives the launch macros
   engine*: E
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Setup
 # ═══════════════════════════════════════════════════════════════════════
 
-proc setupAD*[E: HwEngine](engine: E, pair: static KernelPair): AdHandle[E, pair] =
+proc setupAD*[E: HwEngine](engine: E, kernels: static KernelPair): AdHandle[E, kernels] =
   ## Compiles the pair's kernels through the engine's normal compile path
   ## and returns the AD handle. Each kernel ingests as one artifact:
   ##
@@ -57,18 +57,18 @@ proc setupAD*[E: HwEngine](engine: E, pair: static KernelPair): AdHandle[E, pair
   ##
   ## Engines without an autodiff pipeline refuse here at instantiation.
   when E is MetalEngine:
-    engine.ingestADKernel(pair.kernelName, pair.fwdSource)
-    engine.ingestADKernel(pair.kernelName & "_bwd", pair.bwdSource)
-    for r in pair.reduceSources:
+    engine.ingestADKernel(kernels.kernelName, kernels.fwdSource)
+    engine.ingestADKernel(kernels.kernelName & "_bwd", kernels.bwdSource)
+    for r in kernels.reduceSources:
       engine.ingestADKernel(r.name, r.source)
   elif E is VulkanEngine:
-    engine.ingestADKernel(pair.kernelName, pair.fwdSource)
-    engine.ingestADKernel(pair.kernelName & "_bwd", pair.bwdSource)
-    for r in pair.reduceSources:
+    engine.ingestADKernel(kernels.kernelName, kernels.fwdSource)
+    engine.ingestADKernel(kernels.kernelName & "_bwd", kernels.bwdSource)
+    for r in kernels.reduceSources:
       engine.ingestADKernel(r.name, r.source)
   else:
     {.error: "setupAD: this engine has no autodiff pipeline, this op gates Metal and Vulkan GLSL".}
-  AdHandle[E, pair](engine: engine)
+  AdHandle[E, kernels](engine: engine)
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Pair metadata at macro expansion
@@ -254,18 +254,18 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
   ## The launch ABI binds the launch output slot to the kernel's first parameter,
   ## so the printed parameter order is rebuilt here: the caller's output slots into its forward-parameter position,
   ## wherever the pair declares it. The caller keeps every buffer it passes.
-  let pair = ad.getTypeInst()[2].readPair()
-  doAssert primals.len == pair.params.len - 1,
-    "ad_handle forward: expected " & $(pair.params.len - 1) &
+  let kernels = ad.getTypeInst()[2].readPair()
+  doAssert primals.len == kernels.params.len - 1,
+    "ad_handle forward: expected " & $(kernels.params.len - 1) &
     " primals beside the output, got " & $primals.len
   var outSlot = 0
-  for i, m in pair.params:
+  for i, m in kernels.params:
     if m.kind == pkResidual:
       outSlot = i
       break
   var slotArgs: seq[NimNode]
   var pi = 0
-  for i in 0 ..< pair.params.len:
+  for i in 0 ..< kernels.params.len:
     if i == outSlot:
       slotArgs.add output
     else:
@@ -286,7 +286,7 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
   let cfgN = adLaunchCfg()
   result = quote do:
     var argsVal = `argsN`
-    `impl`(`ad`.engine, `ad`.pair.kernelName, `outMemN`, argsVal, `cfgN`)
+    `impl`(`ad`.engine, `ad`.kernels.kernelName, `outMemN`, argsVal, `cfgN`)
 
 func bindMapAt(bindMap: seq[tuple[name: string, node: NimNode, isBuffer: bool]], name: string): tuple[node: NimNode, isBuffer: bool] =
   ## One printed-kernel parameter's bound argument.
@@ -312,19 +312,19 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   ## Example for `axpy(out, a, b: ptr UncheckedArray[float32], alpha: float32)`:
   ## `ad.backward(d_out, out, a, b, alpha)` returns the gradients
   ## `(d_a, d_b, d_alpha)`.
-  let pair = ad.getTypeInst()[2].readPair()
+  let kernels = ad.getTypeInst()[2].readPair()
   result = nnkStmtList.newTree()
 
   var incoming: seq[BwdParamMeta]
   var allocatable: seq[BwdParamMeta]
-  for m in pair.params:
+  for m in kernels.params:
     if m.gradKind != gkNone:
       if m.kind == pkResidual:
         incoming.add m
       else:
         allocatable.add m
 
-  let nConvenience = incoming.len + pair.params.len
+  let nConvenience = incoming.len + kernels.params.len
   let nPrimitive = nConvenience + allocatable.len
   doAssert args.len in {nConvenience, nPrimitive},
     "ad_handle backward: expected " & $nConvenience & " args (convenience) or " &
@@ -338,7 +338,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   for m in incoming:
     bindMap.add (name: m.gradName, node: args[ai], isBuffer: true)
     inc ai
-  for m in pair.params:
+  for m in kernels.params:
     bindMap.add (name: m.name, node: args[ai], isBuffer: m.kind != pkScalar)
     inc ai
   for m in allocatable:
@@ -349,7 +349,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   let engineN = ad.newDotExpr(ident"engine")
   let impl = bindSym"launchKernelImpl"
   let cfgN = adLaunchCfg()
-  let bwdNameN = newLit(pair.kernelName & "_bwd")
+  let bwdNameN = newLit(kernels.kernelName & "_bwd")
 
   # Name resolution across the whole backward surface.
   # Caller arguments resolve first.
@@ -372,7 +372,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # The length is the index-loop trip count, static or a named primal
   # parameter of the kernel.
   var scratchLets: seq[tuple[ws: ScalarWorkspace, letN: NimNode]]
-  for ws in pair.scalarWorkspaces:
+  for ws in kernels.scalarWorkspaces:
     let tripN = if ws.tripCount >= 0:
       newLit(ws.tripCount)
     else:
@@ -421,20 +421,20 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # The first printed slot is the output.
   # Names resolve against the backward signature.
   # Workspace names resolve against the scratch.
-  doAssert pair.bwdKernelParams.len > 0,
-    "ad_handle backward: the pair carries no printed backward signature"
+  doAssert kernels.bwdKernelParams.len > 0,
+    "ad_handle backward: the kernels carries no printed backward signature"
   # The first printed slot may be an allocated gradient of this expansion,
   # a plain DeviceMem let with no type at macro time.
   # Such nodes bind `.mem` directly, caller arguments unwrap through `bufferLeaf`.
-  let bwdOutResolved = resolveName(pair.bwdKernelParams[0])
+  let bwdOutResolved = resolveName(kernels.bwdKernelParams[0])
   let bwdOutput = if bwdOutResolved.isOwned:
     let eN = bwdOutResolved.node
     quote do: `eN`.mem
   else:
     bwdOutResolved.node.bufferLeaf().mem
   var bwdArgsN = nnkTupleConstr.newTree()
-  for i in 1 ..< pair.bwdKernelParams.len:
-    let name = pair.bwdKernelParams[i]
+  for i in 1 ..< kernels.bwdKernelParams.len:
+    let name = kernels.bwdKernelParams[i]
     var boundN: NimNode = nil
     for s in scratchLets:
       if s.ws.workspaceName == name:
@@ -458,9 +458,9 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # Reduce launches: each scratch folds into the scalar's 1-element gradient.
   for s in scratchLets:
     let scalarName = s.ws.gradName[2 ..< s.ws.gradName.len]
-    let reduceName = pair.kernelName & "_bwd_d_" & scalarName & "_reduce"
+    let reduceName = kernels.kernelName & "_bwd_d_" & scalarName & "_reduce"
     var reduceKnown = false
-    for r in pair.reduceSources:
+    for r in kernels.reduceSources:
       if r.name == reduceName:
         reduceKnown = true
     doAssert reduceKnown, "ad_handle backward: no reduce kernel for " & s.ws.gradName

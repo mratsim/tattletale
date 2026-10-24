@@ -52,8 +52,8 @@ const rmsnormPair = bkMetal.bwd_diff(rmsnormPlain)
 
 # ── Pair metadata: mirror ABI and residual slot ───────────────────────────
 
-func paramNamed(pair: KernelPair, name: string): BwdParamMeta =
-  for m in pair.params:
+func paramNamed(ad: KernelPair, name: string): BwdParamMeta =
+  for m in ad.params:
     if m.name == name:
       return m
   doAssert false, "no parameter named " & name
