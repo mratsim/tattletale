@@ -247,18 +247,41 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
   ## Launches the pair's forward kernel, the primal signature with the output
   ## slot first: `ad.forward(out, a, b, alpha)` for `out = alpha * a + b`.
   ##
-  ## - `primals`: forward-parameter order, buffers as device handles, scalars
-  ##   by value
+  ## - `output`: the pair's primary output, its first forward output
+  ## - `primals`: forward-parameter order with the output's own slot skipped,
+  ##   buffers as device handles, scalars by value
   ##
-  ## The caller keeps every buffer it passes.
-  let outMemN = output.bufferLeaf().mem
+  ## The launch ABI binds the launch output slot to the kernel's first parameter,
+  ## so the printed parameter order is rebuilt here: the caller's output slots into its forward-parameter position,
+  ## wherever the pair declares it. The caller keeps every buffer it passes.
+  let pair = ad.getTypeInst()[2].readPair()
+  doAssert primals.len == pair.params.len - 1,
+    "ad_handle forward: expected " & $(pair.params.len - 1) &
+    " primals beside the output, got " & $primals.len
+  var outSlot = 0
+  for i, m in pair.params:
+    if m.kind == pkResidual:
+      outSlot = i
+      break
+  var slotArgs: seq[NimNode]
+  var pi = 0
+  for i in 0 ..< pair.params.len:
+    if i == outSlot:
+      slotArgs.add output
+    else:
+      slotArgs.add primals[pi]
+      pi.inc
+  let outMemN = if slotArgs[0].hasDeviceMemLeaf():
+    slotArgs[0].bufferLeaf().mem
+  else:
+    slotArgs[0]
   var argsN = nnkTupleConstr.newTree()
-  for p in primals:
-    if p.hasDeviceMemLeaf():
-      let memN = p.bufferLeaf().mem
+  for n in slotArgs[1 ..< slotArgs.len]:
+    if n.hasDeviceMemLeaf():
+      let memN = n.bufferLeaf().mem
       argsN.add quote do: `memN`.mem
     else:
-      argsN.add p
+      argsN.add n
   let impl = bindSym"launchKernelImpl"
   let cfgN = adLaunchCfg()
   result = quote do:
@@ -400,7 +423,15 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # Workspace names resolve against the scratch.
   doAssert pair.bwdKernelParams.len > 0,
     "ad_handle backward: the pair carries no printed backward signature"
-  let bwdOutput = resolveName(pair.bwdKernelParams[0]).node.bufferLeaf().mem
+  # The first printed slot may be an allocated gradient of this expansion,
+  # a plain DeviceMem let with no type at macro time.
+  # Such nodes bind `.mem` directly, caller arguments unwrap through `bufferLeaf`.
+  let bwdOutResolved = resolveName(pair.bwdKernelParams[0])
+  let bwdOutput = if bwdOutResolved.isOwned:
+    let eN = bwdOutResolved.node
+    quote do: `eN`.mem
+  else:
+    bwdOutResolved.node.bufferLeaf().mem
   var bwdArgsN = nnkTupleConstr.newTree()
   for i in 1 ..< pair.bwdKernelParams.len:
     let name = pair.bwdKernelParams[i]
