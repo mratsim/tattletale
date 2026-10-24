@@ -62,7 +62,7 @@ func registerMetalLoweringPasses*(reg: var PassRegistry) =
   reg.registerSharedLoweringPasses()
   reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
-  reg.registerExpandStructKernelParams()
+  reg.registerExplodeStructWithPtrFields()
   reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerSmemArena()
   reg.registerMaterializeIndexBuiltinParams()

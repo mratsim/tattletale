@@ -38,6 +38,7 @@ proc runTest() =
 
   engine.launchDeviceFn axpy(AxpyBuf[typeof(yDev)](p: yDev, n: N), 2.5'f32,
                              AxpyBuf[typeof(xDev)](p: xDev, n: N)) do:
+    lang = glsl
     grid = (1, 1)
     blk = (1, 1)
 

@@ -7,7 +7,8 @@
 
 ## Helpers shared by the transform passes.
 
-import std/sets
+import std/[macros, sets]
+# macros: for the `error` builtin (compile-time diagnostics)
 import ../ir/ast_datatypes
 
 func unwrapSingleStmtBlocks*(n: GpuAst): GpuAst =
@@ -28,6 +29,23 @@ func isExprOnlyBranch*(n: GpuAst): bool =
   ## unwrapping single-statement block wrappers.
   unwrapSingleStmtBlocks(n).kind != gpuBlock
 
+func roundUpMultiple*(x, step: int): int =
+  ## Smallest multiple of `step` that is `x` or larger
+  ((x + step - 1) div step) * step
+
+func gpuScalarByteSize*(t: GpuType): int =
+  ## Byte width of a scalar GpuType in the SPIR-V push and storage model.
+  ## Divergences from `size` are deliberate:
+  ## - gtBool is 4 bytes: push members and WGSL storage hold bools as i32
+  ## - gtSize_t is 4 bytes: Nim int/uint lower to 32-bit off-graph
+  case t.kind
+  of gtVoid: 0
+  of gtUint8: 1
+  of gtUint16, gtInt16, gtFloat16: 2
+  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
+  of gtUint64, gtInt64, gtFloat64: 8
+  else: error("not a scalar GpuType: " & $t.kind)
+
 proc containsReturnStmt*(n: GpuAst): bool =
   ## True when a return statement sits anywhere in `n`
   if n.kind == gpuReturn:
@@ -35,6 +53,49 @@ proc containsReturnStmt*(n: GpuAst): bool =
   for ch in n:
     if ch.containsReturnStmt():
       return true
+
+# ═══════════════════════════════════════════════════════════════════════
+# Struct kernel-param expansion
+# ═══════════════════════════════════════════════════════════════════════
+
+func containsPtrDeep*(t: GpuType): bool =
+  case t.kind
+  of gtPtr: true
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      if f.typ.containsPtrDeep:
+        return true
+    false
+  of gtArray: t.aTyp.containsPtrDeep
+  else: false
+
+type KernelParamLeaf* = object
+  name*: string
+  typ*: GpuType
+  isBuffer*: bool
+
+proc kernelParamLeaves*(t: GpuType, name: string): seq[KernelParamLeaf] =
+  ## Leaves of `t` in field order, structs with (nested) pointer fields
+  ## expand depth-first, the Metal/WebGPU/MSL resource model
+  result = newSeq[KernelParamLeaf]()
+  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
+    case t.kind
+    of gtPtr:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
+    of gtObject, gtGenericInst:
+      if t.containsPtrDeep:
+        for f in t.fields:
+          if size(f.typ) > 0:
+            walk(f.typ, name & "_" & f.name, leaves)
+      else:
+        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    else:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+  walk(t, name, result)
 
 proc collectIdentNames*(n: GpuAst, names: var HashSet[string]) =
   ## Every identifier name appearing in `n`, declaration positions included.

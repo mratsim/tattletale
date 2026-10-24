@@ -46,7 +46,7 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   reg.registerSharedLoweringPasses()
   reg.registerDecomposeArrayAssign()
   reg.registerMaterializePassByRefArgs()
-  reg.registerExpandStructKernelParams()
+  reg.registerExplodeStructWithPtrFields()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OclReserved)
   reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerLowerByrefParams()

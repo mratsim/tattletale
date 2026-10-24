@@ -7,14 +7,16 @@
 
 
 import std/[os, osproc, streams, strutils, tempfiles]
+import ../../codegen/backends/spirv_encoder
 import ../errors
+import ../engines/engines_common
 import ./runtime_utils
 
 # ═══════════════════════════════════════════════════════════════════════
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): seq[uint32] =
+proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``
   ## (``libshaderc_shared`` does not support compute shaders on this platform).
   ## Returns SPIR-V words:
@@ -57,7 +59,7 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc compileHlslToSpirvViaDxc*(hlsl: string): seq[uint32] =
+proc compileHlslToSpirvViaDxc(hlsl: string): seq[uint32] =
   ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
   let dxc = findExe("dxc")
   if dxc.len == 0:
@@ -85,11 +87,12 @@ proc compileHlslToSpirvViaDxc*(hlsl: string): seq[uint32] =
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
+func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
   ## True when the SPIR-V module declares the PhysicalStorageBufferAddresses capability (OpCapability 17, capability 5347, spirv-dis-verified).
-  const opCapability = 17
-  const capPhysicalStorageBufferAddresses = 5347
-  # The 5-word module header (magic, version, generator, bound, schema) holds no instructions, the instruction stream starts after it
+  ## The opcode and capability numbers come from the encoder table:
+  ## one source of truth with the writer
+  const opCapability = uint32(OpCapability)
+  # The 5-word module header (magic, version, generator, bound, schema) contains no instructions, the instruction stream starts after it
   var i = 5
   while i < spv.len:
     let wordCount = spv[i] shr 16
@@ -99,4 +102,55 @@ proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
        i + 1 < spv.len and
        spv[i + 1] == capPhysicalStorageBufferAddresses:
       return true
+    inc i, wordCount.int
+
+type
+  SpvSquadron = object
+    ## Launch identity parsed from a SPIR-V module's words
+    name*: string          ## OpEntryPoint literal name, "" when absent
+    id*: uint32            ## OpEntryPoint result id, 0 when absent
+    localSize*: Dim3       ## LocalSize literals of the mode bound to `id`, (0, 0, 0) when absent
+    entryPoints*: int      ## number of OpEntryPoint instructions in the module
+
+func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
+  ## One scan over the module words, returns the launch identity:
+  ## - name, id: the OpEntryPoint literal name and result id
+  ## - localSize: the LocalSize literals of the execution mode bound to id
+  ## - entryPoints: the OpEntryPoint instruction count
+  ## Absent pieces stay zero-valued: name "", id 0, localSize (0, 0, 0)
+  # the opcode words and the LocalSize mode come from the encoder table,
+  # one source of truth with the writer
+  const opEntryPoint = uint32(OpEntryPoint)
+  const opExecutionMode = uint32(OpExecutionMode)
+  # the 5-word header contains no instructions, the stream begins at index 5
+  var i = 5
+  while i < spv.len:
+    let wordCount = spv[i] shr 16
+    if wordCount == 0 or i + wordCount.int > spv.len:
+      break
+    let opcode = spv[i] and 0xFFFF
+    if opcode == opEntryPoint:
+      inc result.entryPoints
+      # the first OpEntryPoint supplies the name. Its word layout:
+      # executionModel, entry-point id, then the literal string
+      # the string is NUL-terminated and padded to the word boundary
+      # interface ids come after the string
+      if result.name.len == 0:
+        result.id = spv[i + 2]
+        var nameDone = false
+        for j in i + 3 ..< i + wordCount.int:
+          if nameDone:
+            break
+          for k in 0 ..< 4:
+            let c = char((spv[j] shr (k * 8)) and 0xFF)
+            if c == '\0':
+              nameDone = true
+              break
+            result.name.add c
+    elif opcode == opExecutionMode and wordCount.int >= 6 and
+         spv[i + 2] == modeLocalSize and spv[i + 1] == result.id:
+      # the LocalSize mode is exactly three literal words
+      # the mode id must match the parsed entry-point id
+      # a mismatched LocalSize must not leak through
+      result.localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int

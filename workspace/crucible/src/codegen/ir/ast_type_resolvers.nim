@@ -114,7 +114,12 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
         else: result = arrType             # scalar pointee: p[i] is the pointee
       else:
         case arrType.kind
-        of gtPtr: result = arrType.to
+        of gtPtr:
+          result = arrType.to
+          if result.kind == gtArray:
+            result = result.aTyp
+          elif result.kind == gtUncheckedArray:
+            result = result.uaTo
         of gtArray: result = arrType.aTyp
         of gtUncheckedArray: result = arrType.uaTo
         else:
@@ -218,7 +223,7 @@ proc resolveAddressSpace*(ctx: GpuContext, n: GpuAst): AddressSpace =
   ## Memory the storage designated by an expression accesses
   ## Returns:
   ## - the address space of the innermost pointer/span/array type along the access chain, `p[i]` and `p` resolve to the same address space
-  ## - the address space a pointer-cast target carries, its operand derives it at birth
+  ## - the address space of a pointer-cast target, its operand derives it at birth
   ## - the storage a value-cast (`cast[uint64](p)`) or integer arithmetic over
   ##   one derives from, pointer provenance survives the round-trip
   ## - asRMEM for plain values

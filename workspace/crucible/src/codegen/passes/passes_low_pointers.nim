@@ -27,7 +27,7 @@ func registerTagPointerLocals*(reg: var PassRegistry) =
     run = tagPointerLocals
   )
 
-func registerExpandStructKernelParams*(reg: var PassRegistry) =
+func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
   ## Metal/WebGPU/MSL expand, CUDA/OpenCL/GLSL cross structs natively
   ## (GLSL pointer fields cross as 64-bit buffer device addresses)
   reg.register(
@@ -102,48 +102,8 @@ proc insertPointerDeref(ctx: var GpuContext) =
 # Reserved keyword renaming
 # ═══════════════════════════════════════════════════════════════════════
 
-func containsPtrDeep(t: GpuType): bool =
-  ## True when a pointer is reachable through the type's fields
-  case t.kind
-  of gtPtr: true
-  of gtObject, gtGenericInst:
-    for f in t.fields:
-      if f.typ.containsPtrDeep:
-        return true
-    false
-  of gtArray: t.aTyp.containsPtrDeep
-  else: false
-
-type KernelParamLeaf = object
-  ## One signature entry of an expanded struct kernel param
-  name: string
-  typ: GpuType
-  isBuffer: bool
-
-proc kernelParamLeaves(t: GpuType, name: string): seq[KernelParamLeaf] =
-  ## Metal/WebGPU reject struct-with-pointer kernel args, the signature expands
-  ## depth-first in field order, matching the serializer binding order
-  result = newSeq[KernelParamLeaf]()
-  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
-    case t.kind
-    of gtPtr:
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
-    of gtObject, gtGenericInst:
-      if t.containsPtrDeep:
-        for f in t.fields:
-          if size(f.typ) > 0:
-            walk(f.typ, name & "_" & f.name, leaves)
-      else:
-        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-    of gtArray:
-      doAssert not t.containsPtrDeep,
-        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-    else:
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-  walk(t, name, result)
-
 proc buildLeafConstr(t: GpuType, name: string): GpuAst =
+  ## Rebuilds the exploded struct over name-keyed leaf idents
   result = GpuAst(kind: gpuObjConstr, ocType: t)
   for f in t.fields:
     if size(f.typ) == 0:
@@ -154,6 +114,8 @@ proc buildLeafConstr(t: GpuType, name: string): GpuAst =
       result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
 
 proc explodeGlobalStructWithPtrFields(ctx: var GpuContext) =
+  ## Structs with (nested) pointer fields expand into ptr/scalar leaves,
+  ## pure-value structs cross whole, leaves via kernelParamLeaves
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
       continue
@@ -209,8 +171,6 @@ proc tagPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[string
     ctx.tagPointerLocalsIn(ch, locals)
 
 proc tagPointerLocals(ctx: var GpuContext) =
-  ## A pointer local declared without an initializer is untagged at birth,
-  ## its assignment decides the storage the declaration must carry
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind == gpuProc:
       var locals = initTable[string, GpuAst]()

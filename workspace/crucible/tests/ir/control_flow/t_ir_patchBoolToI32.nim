@@ -6,6 +6,7 @@
 import std / [sets, tables]
 import workspace/crucible/src/crucible_internal_compiler
 import workspace/crucible/src/codegen/passes/passes_lowering_wgsl
+import workspace/crucible/src/codegen/passes/passes_lowering
 import workspace/crucible/tests/ir/ir_testutils
 
 proc registerWgslChain(reg: var PassRegistry) {.nimcall.} =
@@ -66,9 +67,23 @@ proc kernelFn(stmts: varargs[GpuAst]): GpuAst =
          pRetType: GpuType(kind: gtVoid),
          pBody: body(stmts))
 
-# ═══════════════════════════════════════════════════════════════════════════
+proc globalKernelFn(params: seq[GpuParam], stmts: varargs[GpuAst]): GpuAst =
+  ## A `{.global.}` kernel carrying its params, the SPIR-V shape where params
+  ## stay on the proc and become push-constant members
+  GpuAst(kind: gpuProc,
+         pName: GpuAst(kind: gpuIdent, symbol: newSymbol("gk", iSym = "gk_h0")),
+         pRetType: GpuType(kind: gtVoid),
+         pParams: params,
+         pAttributes: {attGlobal},
+         pBody: body(stmts))
+
+proc boolParam(name: string): GpuParam =
+  GpuParam(ident: ident(newSymbol(name, iSym = name & "_h0", typ = boolTyp())),
+           typ: boolTyp())
+
+# ═══════════════════════════════════════════════════════════════════════
 # 1. bool global: load use wraps in conv(gtBool), storage becomes i32
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 static:
   var ctx = GpuContext()
   let sym = ctx.boolGlobal("flag")
@@ -83,9 +98,9 @@ static:
   doAssert ctx.globals["flag_h0"].typ.kind == gtInt32, "storage type should be i32"
   echo "  OK — bool global load wraps in conv(gtBool), storage becomes i32"
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 2. assignment to a bool global: RHS wraps in conv(gtInt32), target stays bare
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 static:
   var ctx = GpuContext()
   let sym = ctx.boolGlobal("flag")
@@ -100,9 +115,9 @@ static:
     "RHS should wrap in conv(gtInt32)"
   echo "  OK — store site wraps the RHS in conv(gtInt32)"
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 3. ptr bool global: deref load wraps in conv(gtBool), storage becomes i32
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 static:
   var ctx = GpuContext()
   let ptrBool = initGpuPtrType(boolTyp(), implicitPtr = false)
@@ -120,9 +135,9 @@ static:
     "storage type is final after the bundle, the pointer is stripped"
   echo "  OK — ptr bool deref wraps in conv(gtBool), storage becomes i32"
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 4. i32 global untouched
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 static:
   var ctx = GpuContext()
   let sym = newSymbol("val", iSym = "val_h0", typ = initGpuType(gtInt32))
@@ -171,5 +186,40 @@ static:
   doAssert sym.typ.mutable, "mutable stays on the symbol type"
   doAssert sym.typ.implicit, "implicit stays on the symbol type"
   echo "  OK - storage strips to i32, the symbol keeps mutable and implicit"
+
+static:
+  # 5. bool kernel param: param declares i32, use wraps in conv(gtBool)
+  proc boolOnly(reg: var PassRegistry) {.nimcall.} =
+    reg.registerPatchBoolToI32()
+    reg.donePasses.incl("makeCodeValid")
+  var ctx = GpuContext()
+  let p = boolParam("flag")
+  let k = globalKernelFn(@[p], ident(p.ident.symbol))
+  ctx.fnTab[k.pName] = k
+  ctx.allFnTab[k.pName] = k
+  boolOnly.runPassPrepared(ctx)
+  let param = k.pParams[0]
+  doAssert param.typ.kind == gtInt32, "param storage type should be i32"
+  doAssert param.ident.symbol.typ.kind == gtInt32, "param symbol type should be i32"
+  let use = k.pBody.findKind(gpuConv)
+  doAssert use != nil and use.convTo.kind == gtBool, "param load should wrap in conv(gtBool)"
+  doAssert use.convExpr.kind == gpuIdent and use.convExpr.symbol == param.ident.symbol
+  echo "  OK - bool kernel param declares i32, its use wraps in conv(gtBool)"
+
+static:
+  # 6. hazard negative: an i32 kernel param passes through untouched
+  proc boolOnly2(reg: var PassRegistry) {.nimcall.} =
+    reg.registerPatchBoolToI32()
+    reg.donePasses.incl("makeCodeValid")
+  var ctx = GpuContext()
+  let p = GpuParam(ident: ident(newSymbol("n", iSym = "n_h0", typ = initGpuType(gtInt32))),
+                   typ: initGpuType(gtInt32))
+  let k = globalKernelFn(@[p], ident(p.ident.symbol))
+  ctx.fnTab[k.pName] = k
+  ctx.allFnTab[k.pName] = k
+  boolOnly2.runPassPrepared(ctx)
+  doAssert k.pParams[0].typ.kind == gtInt32, "i32 param storage stays i32"
+  doAssert k.pBody.findKind(gpuConv).isNil, "no conv nodes expected"
+  echo "  OK - i32 kernel param untouched"
 
 echo "  OK - t_ir_patchBoolToI32"

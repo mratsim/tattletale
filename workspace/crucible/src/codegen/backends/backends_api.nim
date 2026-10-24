@@ -5,7 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang, ./hlsl_lang
+import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang, ./hlsl_lang,
+       ./spirv_shader_lang
 import ../ir/ast_datatypes
 
 proc codegenCuda*(ctx: var GpuContext): string =
@@ -25,3 +26,6 @@ proc codegenMetal*(ctx: var GpuContext): string =
 
 proc codegenHlsl*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   hlsl_lang.codegen(ctx, flavor)
+
+proc codegenSpirvShader*(ctx: var GpuContext): seq[uint32] =
+  spirv_shader_lang.codegen(ctx)

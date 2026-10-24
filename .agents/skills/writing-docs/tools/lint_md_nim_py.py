@@ -55,6 +55,7 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 
 Golden rules:
@@ -206,6 +207,12 @@ OF_SUFFIX_DECL_RE = re.compile(
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
+
+# The crucible Int-identifier rule. `Int` is a downstream (ceramic) type
+# name: crucible does not know ceramic, gtStatic is the only compile-time
+# value the IR carries. Fires on Nim code with string literals included,
+# the gName == "Int" comparisons are exactly the slop; comments exempt.
+INT_IDENT_RE = re.compile(r"(?<![\w`])Int(?![\w`])")
 
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
@@ -424,6 +431,9 @@ BANNED = [
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
+    (r"\bcarries\b|\bholds\b",
+     None,
+     "state what the thing is or does, name the actor or the mechanism directly"),
 ]
 
 LICENSE_SHAPE = re.compile(
@@ -1814,6 +1824,12 @@ def nim_structure_checks(path, text, header_nos, findings):
         if (i + 1) not in blocked:
             code, comment_only = _strip_comment(line)
             if not comment_only:
+                if "crucible" in path.parts and INT_IDENT_RE.search(code):
+                    findings.append(Finding(
+                        path, i + 1, "crucible-int-ident",
+                        "the downstream type name 'Int' in crucible, crucible "
+                        "does not know ceramic, gtStatic is the only "
+                        "compile-time value"))
                 code = _blank_nim_strings(code)
                 if INBOUNDS_PLAIN_CALL_RE.search(code) \
                         and not INBOUNDS_DECL_RE.match(code):

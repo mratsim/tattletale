@@ -7,13 +7,13 @@
 
 ## Curated public surface of crucible.
 ##
-## | Section       | Symbols                                                                                                               |
-## | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
-## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
+## | Section       | Symbols                                                                                                                             |
+## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                       |
+## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                          |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Geometry      | `Dim3`, `dim3`                                                                                                        |
-## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`)                                                  |
+## | Geometry      | `Dim3`, `dim3`                                                                                                                      |
+## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                       |
 
 import
   ./codegen/gpu_compiler,
@@ -21,32 +21,34 @@ import
   ./runtime/launch/launch_kernel,
   ./runtime/launch/launch_device_fn
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Engines
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export engines_api
 
 export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Launch sugar
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export launch_kernel.LaunchSugar,
        launch_kernel.`<<`, launch_kernel.`>>`
 export launch_device_fn.DeviceFnSugar,
-       launch_device_fn.DeviceFnProxy, launch_device_fn.`<<`, launch_device_fn.`>>`
+       launch_device_fn.DeviceFnProxy,
+       launch_device_fn.`<<`, launch_device_fn.`>>`
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Codegen
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
-       gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl
-# the type export carries the non-pure enum's members to importers by bare name,
+       gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl,
+       gpu_compiler.spirv
+# exporting the type also exports the non-pure enum's members by bare name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
 from ./codegen/backends/hlsl_lang import HlslFlavor
 export HlslFlavor

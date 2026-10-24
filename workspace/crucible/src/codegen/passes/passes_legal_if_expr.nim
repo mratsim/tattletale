@@ -82,6 +82,7 @@ func mapIfExprToTernaryImpl(n: var GpuAst) =
   of gpuFor:
     mapIfExprToTernaryImpl(n.fStart)
     mapIfExprToTernaryImpl(n.fEnd)
+    mapIfExprToTernaryImpl(n.fStep)
     mapIfExprToTernaryImpl(n.fBody)
   of gpuWhile:
     mapIfExprToTernaryImpl(n.wCond)

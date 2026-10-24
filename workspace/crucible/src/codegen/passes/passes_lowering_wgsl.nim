@@ -50,7 +50,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
-  reg.registerExpandStructKernelParams()
+  reg.registerExplodeStructWithPtrFields()
   reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerRecordPtrFieldBindings()
   reg.registerLiftKernelParamsToGlobals()
@@ -59,7 +59,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerAddressOfInjection()
   reg.registerInlinePointerParamCalls()
   reg.registerMakeCodeValid()
-  reg.registerPatchBoolToI32()
+  reg.registerPatchBoolToI32(deps = @["makeCodeValid"])
   reg.registerMarkWrittenGlobals()
   reg.registerStripGlobalPointerTypes()
   reg.registerCheckCodeValidWgsl()
@@ -160,14 +160,6 @@ func registerCheckCodeValidWgsl(reg: var PassRegistry) =
         ctx.checkCodeValidImpl(fn)
   )
 
-func registerPatchBoolToI32(reg: var PassRegistry) =
-  reg.register("patchBoolToI32", pkTransform, phaseMain,
-    "Patches bool globals to i32 storage, conv nodes translate loads and stores",
-    dependsOn = @["makeCodeValid"],
-    run = proc(ctx: var GpuContext): void =
-      ctx.patchBoolToI32()
-  )
-
 # ═══════════════════════════════════════════════════════════════════════
 # WGSL printer helpers
 # ═══════════════════════════════════════════════════════════════════════
@@ -240,47 +232,6 @@ proc collectWrittenGlobals(ctx: var GpuContext, n: GpuAst) =
     ctx.globals[n.symbol.iSym].flavor = kVar
   for ch in n:
     ctx.collectWrittenGlobals(ch)
-
-# ═══════════════════════════════════════════════════════════════════════
-# Bool globals to i32 storage
-# ═══════════════════════════════════════════════════════════════════════
-
-proc patchBoolToI32Impl(n: var GpuAst, boolVals, boolPtrs: HashSet[string]) =
-  ## Symbols keep their bool type, storage is i32: loads wrap in conv(gtBool),
-  ## assignment right-hand sides in conv(gtInt32), the target stays bare.
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym in boolVals:
-      n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
-  of gpuDeref:
-    if n.dOf.kind == gpuIdent and n.dOf.symbol != nil and n.dOf.symbol.iSym in boolPtrs:
-      n = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtBool), convExpr: n)
-  of gpuAssign:
-    let lhs = n.aLeft.determineIdent()
-    if lhs.kind == gpuIdent and lhs.symbol != nil and
-       (lhs.symbol.iSym in boolVals or lhs.symbol.iSym in boolPtrs):
-      n.aRight = GpuAst(kind: gpuConv, convTo: GpuType(kind: gtInt32), convExpr: n.aRight)
-    for ch in n.aLeft.mitems:
-      ch.patchBoolToI32Impl(boolVals, boolPtrs)
-    n.aRight.patchBoolToI32Impl(boolVals, boolPtrs)
-  else:
-    for ch in n.mitems:
-      ch.patchBoolToI32Impl(boolVals, boolPtrs)
-
-proc patchBoolToI32(ctx: var GpuContext) =
-  var boolVals, boolPtrs: HashSet[string]
-  for iSym, g in ctx.globals.mpairs:
-    if g.typ.kind == gtBool:
-      ctx.globals[iSym].typ = GpuType(kind: gtInt32)
-      boolVals.incl iSym
-    elif g.typ.kind == gtPtr and g.typ.to.kind == gtBool:
-      # Mutate in place: a fresh gtPtr drops mutable and implicit
-      g.typ.to.kind = gtInt32
-      boolPtrs.incl iSym
-  for _, fn in ctx.fnTab.mpairs:
-    fn.patchBoolToI32Impl(boolVals, boolPtrs)
-  for blk in ctx.globalBlocks.mitems:
-    blk.patchBoolToI32Impl(boolVals, boolPtrs)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Forward declarations consumed by wgsl_lang.preprocess
@@ -406,7 +357,7 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
       ctx.makeCodeValidImpl(ch, inGlobal)
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS carries a mutability flag.
+      # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS has a mutability flag.
       let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
       let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
       n.vType.mutable = rhsIsPtr and rightTyp.mutable
@@ -512,7 +463,7 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
   ## Calls whose pointer arguments all live in `function` space keep real calls.
   ##
   ## Contracts:
-  ## - callees return void, an inlined call carries no expression value
+  ## - callees return void, an inlined call produces no expression value
   ## - callee bodies hold no `return`, a spliced `return` exits the caller
   var inlCount = 0
   var usedNames = initHashSet[string]()
