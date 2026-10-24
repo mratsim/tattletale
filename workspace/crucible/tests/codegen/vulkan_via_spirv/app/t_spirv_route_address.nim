@@ -1,10 +1,5 @@
-## SPIR-V direct: the address route survives engine route autodetection.
-##
-## Test that a direct `spirv:` module keeps the address route:
-## engine autodetection survives, readback is exact:
-##
-## - bool kernel parameters lower to i32 push-constant members,
-##   nonzero reads true, values check on MoltenVK
+## SPIR-V direct: the address route survives engine route autodetection
+## Test that a direct `spirv:` module keeps the address route and reads back exact values on MoltenVK
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

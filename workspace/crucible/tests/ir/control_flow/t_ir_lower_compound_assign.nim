@@ -2,11 +2,6 @@
 ##
 ## Test that compound assignments lower to plain binop assignments
 ##
-## - `acc += y` over a float32 local rewrites to `acc = acc + y`, `-=` and `/=` map likewise
-## - `a[i] *= y` over an array element keeps the indexed target as the store target
-## - an address-path call hoists into a `_ca_N` temp both the read and store use
-## - a plain `=` assignment passes through untouched
-##
 ## Run:
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \

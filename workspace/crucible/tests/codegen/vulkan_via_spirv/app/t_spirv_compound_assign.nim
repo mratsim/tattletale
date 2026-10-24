@@ -1,11 +1,5 @@
 ## SPIR-V direct: compound assignments lower to load/binop/store
-##
-## Test that compound assignments compile through the SPIR-V pipeline,
-## the disassembly carries one binop per site and the module runs on MoltenVK:
-##
-## - `acc += 2.5'f32` over a local rewrites to `acc = acc + 2.5'f32`
-## - `o[i] += 4.0'f32` over a buffer element keeps single-evaluation semantics
-## - spirv-val accepts every executed module
+## Test that compound assignments compile through the SPIR-V pipeline and run one binop per site on MoltenVK
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
