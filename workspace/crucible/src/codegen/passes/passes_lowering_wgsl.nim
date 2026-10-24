@@ -24,7 +24,6 @@ import ./pass_registry
 import ./pass_helpers
 import ./passes_low_address_spaces
 import ./passes_lowering
-import ./passes_low_bools
 import ./passes_low_pointers
 import ./passes_low_views
 import ./passes_legalizations

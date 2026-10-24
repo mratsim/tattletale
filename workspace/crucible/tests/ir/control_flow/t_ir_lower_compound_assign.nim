@@ -14,7 +14,7 @@
 
 import std/[strutils, tables]
 import workspace/crucible/src/crucible_internal_compiler
-import workspace/crucible/src/codegen/passes/passes_low_compound_assign {.all.}
+import workspace/crucible/src/codegen/passes/passes_lowering_spirv {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 proc findKind(n: GpuAst, kind: GpuNodeKind): GpuAst =
