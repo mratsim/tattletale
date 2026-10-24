@@ -7,6 +7,7 @@
 
 
 import std/[os, osproc, streams, strutils, tempfiles]
+import ../../codegen/backends/spirv_encoder
 import ../errors
 import ../engines/engines_common
 import ./runtime_utils
@@ -88,8 +89,9 @@ proc compileHlslToSpirvViaDxc(hlsl: string): seq[uint32] =
 
 func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
   ## True when the SPIR-V module declares the PhysicalStorageBufferAddresses capability (OpCapability 17, capability 5347, spirv-dis-verified).
-  const opCapability = 17
-  const capPhysicalStorageBufferAddresses = 5347
+  ## The opcode and capability numbers come from the encoder table:
+  ## one source of truth with the writer
+  const opCapability = uint32(OpCapability)
   # The 5-word module header (magic, version, generator, bound, schema) contains no instructions, the instruction stream starts after it
   var i = 5
   while i < spv.len:
@@ -116,9 +118,10 @@ func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
   ## - localSize: the LocalSize literals of the execution mode bound to id
   ## - entryPoints: the OpEntryPoint instruction count
   ## Absent pieces stay zero-valued: name "", id 0, localSize (0, 0, 0)
-  const opEntryPoint = 15
-  const opExecutionMode = 16
-  const modeLocalSize = 17
+  # the opcode words and the LocalSize mode come from the encoder table,
+  # one source of truth with the writer
+  const opEntryPoint = uint32(OpEntryPoint)
+  const opExecutionMode = uint32(OpExecutionMode)
   # the 5-word header contains no instructions, the stream begins at index 5
   var i = 5
   while i < spv.len:

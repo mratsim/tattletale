@@ -50,10 +50,13 @@ proc kernelFn(params: seq[GpuParam], stmts: varargs[GpuAst]): GpuAst =
          pAttributes: {attGlobal},
          pBody: GpuAst(kind: gpuBlock, statements: @stmts))
 
+proc registerFlatExplode(reg: var PassRegistry) =
+  reg.registerExplodeKernelParams()
+
 proc runFlatExplode(k: GpuAst) =
   var ctx = GpuContext()
   ctx.allFnTab[k.pName] = k
-  registerExplodeKernelParams.runPassPrepared(ctx)
+  registerFlatExplode.runPassPrepared(ctx)
 
 proc reconLocal(k: GpuAst, name: string): GpuAst =
   ## Finds the reconstruction local an exploded param leaves at the body top

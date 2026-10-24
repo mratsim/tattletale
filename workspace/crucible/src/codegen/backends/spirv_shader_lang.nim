@@ -15,6 +15,7 @@ import std/sets
 import std/strutils
 import std/tables
 import ../ir/ast_datatypes
+import ../passes/pass_helpers # roundUpMultiple, gpuScalarByteSize
 import ./spirv_encoder {.all.}
 
 const spvScalarKinds = {gtVoid, gtBool, gtUint8, gtUint16, gtInt16, gtUint32,
@@ -23,18 +24,6 @@ const spvScalarKinds = {gtVoid, gtBool, gtUint8, gtUint16, gtInt16, gtUint32,
 
 func uint32Type(): GpuType =
   GpuType(kind: gtUint32)
-
-func roundUp(x, step: int): int =
-  ((x + step - 1) div step) * step
-
-func getScalarByteSize(t: GpuType): int =
-  case t.kind
-  of gtVoid: 0
-  of gtUint8: 1
-  of gtUint16, gtInt16, gtFloat16: 2
-  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
-  of gtUint64, gtInt64, gtFloat64: 8
-  else: error("not a scalar GpuType: " & $t.kind)
 
 template spvRefuse(what: string) =
   error("SPIR-V backend does not support: " & what)
@@ -150,23 +139,23 @@ type SpvLayout = object
 func std430Layout(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
-    let s = getScalarByteSize(t.scalar)
+    let s = gpuScalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
   of stkArray:
     let e = std430Layout(t.elem)
-    let stride = roundUp(e.size, e.align)
+    let stride = roundUpMultiple(e.size, e.align)
     SpvLayout(size: stride * t.len, align: e.align)
   of stkRuntimeArray:
     let e = std430Layout(t.relem)
-    SpvLayout(size: 0, align: roundUp(e.size, e.align))
+    SpvLayout(size: 0, align: roundUpMultiple(e.size, e.align))
   of stkStruct:
     var off = 0
     var align = 1
     for m in t.members:
       let ml = std430Layout(m)
-      off = roundUp(off, ml.align) + ml.size
+      off = roundUpMultiple(off, ml.align) + ml.size
       align = max(align, ml.align)
-    SpvLayout(size: roundUp(off, align), align: align)
+    SpvLayout(size: roundUpMultiple(off, align), align: align)
   of stkPointer:
     SpvLayout(size: 8, align: 8)
 
@@ -174,7 +163,7 @@ func std430Offsets(members: seq[SpvTy]): seq[int] =
   var off = 0
   for m in members:
     let ml = std430Layout(m)
-    off = roundUp(off, ml.align)
+    off = roundUpMultiple(off, ml.align)
     result.add off
     off += ml.size
 
@@ -235,7 +224,7 @@ func arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
     return ctx.builder.memo[key]
   result = ctx.builder.memoInst(OpTypeArray, @[elemId, lenId])
   let e = std430Layout(elem)
-  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
+  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUpMultiple(e.size, e.align))])
 
 func runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
   let elemId = ctx.tyId(elem)
@@ -244,7 +233,7 @@ func runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
     return ctx.builder.memo[key]
   result = ctx.builder.memoInst(OpTypeRuntimeArray, @[elemId])
   let e = std430Layout(elem)
-  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
+  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUpMultiple(e.size, e.align))])
 
 func structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
   let offsets = std430Offsets(members)
@@ -299,7 +288,7 @@ func buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
   # bool members never reach here: the patchBoolToI32 pass retypes bool
   # kernel params to i32 before emission
   for m in members:
-    if m.kind == stkScalar and getScalarByteSize(m.scalar) < 4:
+    if m.kind == stkScalar and gpuScalarByteSize(m.scalar) < 4:
       spvRefuse("push-constant member " & $m.scalar.kind &
         " narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
   result.members = members
@@ -489,7 +478,14 @@ proc exprGpuType(n: GpuAst): GpuType =
 func spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
   let tyId = ctx.tyId(spvScalar(t))
   case t.kind
-  of gtUint32, gtSize_t: ctx.builder.constUint(tyId, uint64(uint32(parseUInt(lValue))))
+  of gtUint32:
+    ctx.builder.constUint(tyId, uint64(uint32(parseUInt(lValue))))
+  of gtSize_t:
+    let v = parseUInt(lValue)
+    if v > uint64(uint32.high):
+      spvRefuse("size_t literal " & lValue &
+        " exceeds the 32-bit device width")
+    ctx.builder.constUint(tyId, v)
   of gtInt32: ctx.builder.constUint(tyId, uint64(uint32(parseBiggestInt(lValue))))
   of gtUint64: ctx.builder.constUint(tyId, parseUInt(lValue))
   of gtInt64: ctx.builder.constUint(tyId, uint64(parseBiggestInt(lValue)))
@@ -513,7 +509,7 @@ func convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
   let fFloat = source.kind in {gtFloat32, gtFloat64}
   let tFloat = to.kind in {gtFloat32, gtFloat64}
   let inst = if fInt and tInt:
-      if getScalarByteSize(source) == getScalarByteSize(to):
+      if gpuScalarByteSize(source) == gpuScalarByteSize(to):
         OpBitcast
       elif to.kind in spvSignedInts:
         # the convert opcode's signedness matches the result type:

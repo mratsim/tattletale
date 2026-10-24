@@ -40,7 +40,7 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
       ctx.explodeKernelParams(deepOnly = true)
   )
 
-func registerExplodeKernelParams*(reg: var PassRegistry) =
+func registerExplodeKernelParams*(reg: var PassRegistry, deps: seq[string] = @[]) =
   ## SPIR-V route, the push block renders flat members only:
   ## every object kernel param expands, pure-value objects included
   reg.register(
@@ -48,7 +48,7 @@ func registerExplodeKernelParams*(reg: var PassRegistry) =
     kind = pkTransform,
     phase = phaseMain,
     description = "Expands every kernel param of object type into ptr/scalar leaf params and rebuilds the struct in the body, leaf writes refuse (push constants are read-only)",
-    dependsOn = @[],
+    dependsOn = deps,
     run = proc(ctx: var GpuContext): void =
       ctx.explodeKernelParams(deepOnly = false)
   )

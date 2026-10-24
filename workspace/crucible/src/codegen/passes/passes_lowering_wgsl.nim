@@ -59,7 +59,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerAddressOfInjection()
   reg.registerInlinePointerParamCalls()
   reg.registerMakeCodeValid()
-  reg.registerPatchBoolToI32()
+  reg.registerPatchBoolToI32(deps = @["makeCodeValid"])
   reg.registerMarkWrittenGlobals()
   reg.registerStripGlobalPointerTypes()
   reg.registerCheckCodeValidWgsl()

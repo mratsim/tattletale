@@ -42,16 +42,18 @@ func registerSharedLoweringPasses*(reg: var PassRegistry) =
   reg.registerTagPointerLocals()
   reg.registerPruneCompileTimeParams()
 
-func registerPatchBoolToI32*(reg: var PassRegistry) =
+func registerPatchBoolToI32*(reg: var PassRegistry, deps: seq[string] = @[]) =
   ## Patches bool storage to i32 while bool uses stay bool.
   ## - `{.global.}`-kernel parameters declare i32 in the push-constant
   ##   interface (SPIR-V) and bool globals declare i32 storage (WGSL)
   ## - loads wrap in conv(gtBool): any nonzero i32 reads true, the WGSL
   ##   bool(i32) truthiness rule
   ## - assignment right-hand sides wrap in conv(gtInt32)
+  ## `deps` names the bundle's ordering edges: WGSL needs makeCodeValid,
+  ## SPIR-V needs the kernel-param explosion before the param retypes
   reg.register("patchBoolToI32", pkTransform, phaseMain,
     "Patches bool globals and kernel params to i32 storage, conv nodes translate loads and stores",
-    dependsOn = @[],
+    dependsOn = deps,
     run = proc(ctx: var GpuContext): void =
       ctx.patchBoolToI32()
   )

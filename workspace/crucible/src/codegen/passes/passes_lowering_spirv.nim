@@ -44,19 +44,19 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerTernaryToIf()
   # Compound assignments rewrite to plain assignments of the binop before
   # pointer-deref insertion, both copies of the address skeleton retype alike
-  reg.registerLowerCompoundAssign()
+  reg.registerLowerCompoundAssign(deps = @["lowerTernaryToIf"])
   reg.registerInsertPointerDeref()
   # Object kernel params explode into leaf params and a reconstruction local,
   # pure-value objects included: the push block renders flat members only.
   # Bool leaves stay gtBool, the next pass retypes them
-  reg.registerExplodeKernelParams()
+  reg.registerExplodeKernelParams(deps = @["insertPointerDeref"])
   # u32 pad members hold the device push block at the offsets the host
   # launch serialization packs: the object head rounds up to the object
   # alignment and the tail to the host-rounded end
-  reg.registerSpirvPushBlockPad()
+  reg.registerSpirvPushBlockPad(deps = @["explodeKernelParams"])
   # Bool kernel parameters declare i32 in the push-constant interface,
   # loads convert at the use boundary
-  reg.registerPatchBoolToI32()
+  reg.registerPatchBoolToI32(deps = @["explodeKernelParams"])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Ternaries and lazy bools to if-statements
@@ -344,11 +344,11 @@ proc lowerTernaryToIf(ctx: var GpuContext) =
 proc lowerCompoundAssignStmts(ctx: var GpuContext, stmts: var seq[GpuAst])
 proc lowerCompoundAssignStmt(ctx: var GpuContext, n: var GpuAst)
 
-func registerLowerCompoundAssign(reg: var PassRegistry) =
+func registerLowerCompoundAssign(reg: var PassRegistry, deps: seq[string] = @[]) =
   ## Rewrites compound assignments into plain assignments of the binop, SPIR-V pipeline only, unregistered element types refuse loudly
   reg.register("lowerCompoundAssign", pkTransform, phaseMain,
     "Rewrites compound assignments (+= -= *= /=) into plain assignments of the binop, the target address evaluates its side effects once",
-    dependsOn = @[],
+    dependsOn = deps,
     run = proc(ctx: var GpuContext): void =
       ctx.lowerCompoundAssign()
   )
@@ -492,33 +492,28 @@ proc lowerCompoundAssign(ctx: var GpuContext) =
 # Push-block padding (SPIR-V launch policy)
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerSpirvPushBlockPad(reg: var PassRegistry) =
-  ## Inserts u32 pad params between the exploded leaves so the device
-  ## push block's member offsets match the host launch serialization.
+func registerSpirvPushBlockPad(reg: var PassRegistry, deps: seq[string] = @[]) =
+  ## Inserts u32 pad params between the exploded leaves so the device push
+  ## block's member offsets match the host launch serialization.
   ## SPIR-V pipeline only: the padding is the SPIR-V launch ABI's policy
   ## and stays out of the shared explode pass
   reg.register("spirvPushBlockPad", pkTransform, phaseMain,
     "Inserts u32 pad params after the exploded leaves so the device push-block offsets match the host serialization's object head and tail rounding",
-    dependsOn = @[],
+    dependsOn = deps,
     run = proc(ctx: var GpuContext): void =
       ctx.spirvPushBlockPad()
   )
 
-func roundUpTo(x, step: int): int =
-  ((x + step - 1) div step) * step
-
 func pushHostWidth(t: GpuType): int =
   ## Byte width of one flat push member under the host launch serialization:
   ##
-  ## - Nim int/uint/bool lower to 4 bytes off-graph
+  ## - scalars read the shared gpuScalarByteSize table
   ## - a pointer crosses as its 8-byte device address
   ## - an array packs at the element width
   case t.kind
-  of gtPtr, gtVoidPtr, gtUncheckedArray, gtUint64, gtInt64, gtFloat64: 8
-  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
-  of gtArray: pushHostWidth(t.aTyp) * t.aLen
-  else:
-    error "spirvPushBlockPad: push member outside the SPIR-V subset: " & $t.kind
+  of gtPtr, gtVoidPtr, gtUncheckedArray: 8
+  of gtArray: gpuScalarByteSize(t.aTyp) * t.aLen
+  else: gpuScalarByteSize(t)
 
 func pushHostAlign(t: GpuType): int =
   ## Byte alignment of one flat push member under the host serialization:
@@ -604,8 +599,8 @@ proc spirvPushBlockPad(ctx: var GpuContext) =
         let (gi, li) = leafOf[name]
         if li == 0:
           # the host rounds the object's head to the object alignment
-          hostOff = roundUpTo(hostOff, objAlign[gi])
-      let hostPlace = roundUpTo(hostOff, a)
+          hostOff = roundUpMultiple(hostOff, objAlign[gi])
+      let hostPlace = roundUpMultiple(hostOff, a)
       # the device rounds flat members to their own alignment.
       # U32 pads advance the device offset to the host placement.
       # All members are at least 32 bits wide, both offsets keep their 4-byte granularity
@@ -620,7 +615,7 @@ proc spirvPushBlockPad(ctx: var GpuContext) =
         params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: padSym),
                             typ: padSym.typ, addressSpace: asRMEM,
                             passByRef: false)
-        devOff = roundUpTo(devOff, 4) + 4
+        devOff = roundUpMultiple(devOff, 4) + 4
         inc padCount
       doAssert devOff == hostPlace,
         "spirvPushBlockPad: device offset " & $devOff & " missed host placement " & $hostPlace
@@ -630,6 +625,6 @@ proc spirvPushBlockPad(ctx: var GpuContext) =
         let (gi, li) = leafOf[name]
         if li == groups[gi].leaves.len - 1:
           # the host rounds the object's packed end to the object alignment
-          hostOff = roundUpTo(hostOff, objAlign[gi])
+          hostOff = roundUpMultiple(hostOff, objAlign[gi])
       params.add p
     fn.pParams = params

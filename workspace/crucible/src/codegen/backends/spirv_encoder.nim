@@ -33,7 +33,6 @@ type
     spvLiteralString
     spvLiteralNumber     ## grammar kind LiteralContextDependentNumber
     spvFPEncoding
-    spvPairLiteralIntegerIdRef
     spvStorageClass
     spvCapability
     spvDecoration
@@ -112,7 +111,7 @@ macro genSpvOpcodeTable(defs: untyped) =
     enumTy.add nnkEnumFieldDef.newTree(ident(r.name), newLit(r.opcode))
   let typeSection = nnkTypeSection.newTree(
     nnkTypeDef.newTree(
-      ident"SpvOp",
+      nnkPostfix.newTree(ident"*", ident"SpvOp"),
       newEmptyNode(),
       enumTy))
   var table = nnkCaseStmt.newTree(ident"op")
@@ -246,7 +245,7 @@ const
   capInt64 = 11'u32
   capInt8 = 39'u32
   capInt16 = 22'u32
-  capPhysicalStorageBufferAddresses = 5347'u32
+  capPhysicalStorageBufferAddresses* = 5347'u32
   capGroupNonUniformArithmetic = 63'u32
   capAtomicFloat32AddEXT = 6033'u32
 
@@ -279,7 +278,7 @@ const
 
 const
   ## ExecutionMode values (core grammar ValueEnum)
-  modeLocalSize = 17'u32
+  modeLocalSize* = 17'u32
 
 const
   ## MemoryModel values (core grammar ValueEnum)
@@ -489,9 +488,6 @@ func tyVoid(b: var SpvBuilder): uint32 =
 func tyBool(b: var SpvBuilder): uint32 =
   b.memoInst(OpTypeBool, @[])
 
-func tyArray(b: var SpvBuilder, elementType, lengthId: uint32): uint32 =
-  b.memoInst(OpTypeArray, @[elementType, lengthId])
-
 func recordScalarWidth(b: var SpvBuilder, ty: uint32, width: int) =
   b.scalarWidths[uint32(ty)] = width
 
@@ -509,9 +505,6 @@ func tyFloat(b: var SpvBuilder, width: int): uint32 =
 
 func tyVector(b: var SpvBuilder, componentType: uint32, componentCount: int): uint32 =
   b.memoInst(OpTypeVector, @[componentType, uint32(componentCount)])
-
-func tyStruct(b: var SpvBuilder, memberTypes: openArray[uint32]): uint32 =
-  b.memoInst(OpTypeStruct, memberTypes)
 
 func tyPointer(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
   b.memoInst(OpTypePointer, @[storageClass, pointeeType])
