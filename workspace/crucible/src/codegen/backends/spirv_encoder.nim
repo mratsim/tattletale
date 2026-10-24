@@ -185,6 +185,8 @@ genSpvOpcodeTable:
   op OpSDiv: 135: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpFDiv: 136: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpUMod: 137: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  # SRem: remainder of the dividend sign, Nim `mod` semantics. SMod: divisor sign
+  op OpSRem: 138: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpSMod: 139: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpConvertFToU: 109: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   op OpConvertFToS: 110: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]

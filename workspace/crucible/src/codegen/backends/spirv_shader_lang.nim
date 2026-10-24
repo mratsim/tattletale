@@ -622,10 +622,11 @@ func binopInst(op: GpuAst, resultTy, operandTy: GpuType): SpvOp =
     # a float `%` refuses: no float-mod opcode exists in the table
     # an OpUMod over float operands is invalid
     # the frontend refuses the same construct as an undeclared identifier
+    # Nim `mod` is dividend-sign remainder, OpSRem. OpSMod is the divisor-sign C %
     if isFloat:
       spvRefuse("float modulo %")
     elif signed:
-      OpSMod
+      OpSRem
     else:
       OpUMod
   of "&&": OpLogicalAnd
