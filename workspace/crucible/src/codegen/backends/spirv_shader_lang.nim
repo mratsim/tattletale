@@ -392,11 +392,6 @@ func pointeeElem(t: GpuType): GpuType =
   else:
     spvRefuse("element type of non-pointer type " & $t.kind)
 
-func indexBaseSym(n: GpuAst): Symbol =
-  let base = if n.iArr.kind == gpuDeref: n.iArr.dOf else: n.iArr
-  doAssert base.kind == gpuIdent, "index base is not a symbol"
-  base.symbol
-
 proc fieldEntry(t: GpuType, name: string): tuple[idx: int, typ: GpuType] =
   doAssert t.kind in {gtObject, gtGenericInst},
     "field access on non-object type " & $t.kind
