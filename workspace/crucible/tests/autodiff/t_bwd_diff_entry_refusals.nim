@@ -25,7 +25,7 @@ import std/[os, osproc, strutils]
 proc repoRoot(): string =
   ## This file lives six levels below the repository root.
   result = currentSourcePath()
-  for i in 0 ..< 6:
+  for i in 0 ..< 5:
     result = result.parentDir()
 
 proc runCase(name, src: string): tuple[output: string, exitCode: int] =
