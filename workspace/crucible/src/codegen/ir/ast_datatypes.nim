@@ -390,6 +390,7 @@ type
     types*: OrderedTable[GpuType, GpuAst] ## All known types from Nim -> GpuAst, key the raw type, value a full `gpuTypeDef`
     symChoices*: HashSet[string] ## Produced function symbol names, a name collision switches the display name from `iName` to `iSym`
     adPairMetas*: Table[string, AdPairMetas] ## Autodiff transposer: forward kernel name -> the pair's metadata, the single derivation the artifact consumes
+    adBwdKernels*: HashSet[string] ## Autodiff transposer: names of the generated backward and reduce kernels, never re-transposed
 
 type
   TypeRegistry* = object

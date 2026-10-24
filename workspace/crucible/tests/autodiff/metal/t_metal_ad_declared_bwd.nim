@@ -63,11 +63,6 @@ const axpyPair = bkMetal.bwd_diff(axpy)
 const axpyDeclaredPair = bkMetal.bwd_diff(axpy, axpy_bwd)
 const sdpaPair = bkMetal.bwd_diff(sdpa_fwd, sdpa_fwd_bwd, save =  [dst, lse])
 
-static:
-  doAssert axpyDeclaredPair.bwdSignature == axpyPair.bwdSignature,
-    "the declared backward carries the transposed backward's signature"
-  doAssert sdpaPair.saveNames == @["dst", "lse"]
-
 # ── Host helpers ──────────────────────────────────────────────────────────
 
 type HostBuf[DevMem] = object

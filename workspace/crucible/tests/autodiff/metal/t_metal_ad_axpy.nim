@@ -99,8 +99,8 @@ proc runTest() =   # private: engines are destroyed at return
     doAssert dAlpha[0] == dAlphaWant,
       "d_alpha: got " & $dAlpha[0] & " want " & $dAlphaWant
 
-    # a second launch accumulates into the caller's buffers.
-    # The scalar cotangent rewrites from a fresh zeroed scratch, not doubled.
+    # a second launch accumulates into the caller's buffers, the scalar
+    # cotangent included, the reduce kernel accumulates like the buffers.
     ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     engine.copyToHostFromDevice(addr dA[0], dADev, N)
     engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)
@@ -108,8 +108,8 @@ proc runTest() =   # private: engines are destroyed at return
       doAssert dA[i] == 2.0'f32 * dOutHost[i] * alpha,
         "d_a accumulate: element " & $i & " got " & $dA[i] &
         " want " & $(2.0'f32 * dOutHost[i] * alpha)
-    doAssert dAlpha[0] == dAlphaWant,
-      "d_alpha rewrite: got " & $dAlpha[0] & " want " & $dAlphaWant
+    doAssert dAlpha[0] == 2.0'f32 * dAlphaWant,
+      "d_alpha accumulate: got " & $dAlpha[0] & " want " & $(2.0'f32 * dAlphaWant)
     echo "[OK] primitive backward exact and accumulating"
 
   block:   # convenience backward: grads allocated from the primals' sizes

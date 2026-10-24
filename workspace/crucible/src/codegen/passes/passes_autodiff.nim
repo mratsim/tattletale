@@ -106,10 +106,10 @@ func isComparisonBinOp(op: string): bool =
   of "<", ">", "<=", ">=", "==", "!=": true
   else: false
 
-const MathBuiltinWhitelist = ["exp", "ln", "log", "sqrt", "rsqrt"]
+const MathBuiltinWhitelist = ["exp", "ln", "sqrt", "rsqrt"]
   ## Mechanical cotangent rules for the whitelisted external math builtins:
-  ## `exp`, `ln` (also `log`), `sqrt`, `rsqrt`, each unary over a float.
-  ## Defined callees and the base-taking `log` overload refuse: inline the callee before bwd_diff.
+  ## `exp`, `ln`, `sqrt`, `rsqrt`, each unary over a float.
+  ## Defined callees refuse: inline the callee before bwd_diff.
 
 func isMathBuiltinCall(n: GpuAst): bool =
   ## True for a unary call to one of the whitelisted math builtins.
@@ -183,7 +183,6 @@ type AdEnv = object
   readBufs: HashSet[string]                 ## buffer param iSyms the kernel reads
   scalarHits: seq[string]                   ## scalar param iSyms with cotangent demand
   scalarLoop: string                        ## loop scope hosting scalar contributions, "" = none
-  scalarLoopVar: GpuAst                     ## that loop's variable
   scalarLoopCount: GpuAst                   ## that loop's trip-count expression
   ambientVar: GpuAst                        ## innermost loop variable, nil outside loops
   ambientCount: GpuAst                      ## innermost loop's trip-count expression
@@ -348,7 +347,12 @@ proc validateStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, path
         adRefuse(s, "gpuVar",
           "local '" & s.vName.ident() & "' of type " & pretty(t) &
           " is outside the differentiable subset; locals are scalars in v1")
-      if s.vInit != nil and s.vInit.kind != gpuDiscard:
+      if s.vInit == nil or s.vInit.kind == gpuDiscard:
+        adRefuse(s, "gpuVar",
+          "local '" & s.vName.ident() &
+          "' declares no initializer; the differentiable subset takes " &
+          "explicitly initialized locals")
+      if s.vInit.kind != gpuDiscard:
         let sym = s.vName.symbol
         env.defCounts[sym.iSym] = env.defCounts.getOrDefault(sym.iSym, 0) + 1
         if env.defCounts[sym.iSym] > 1:
@@ -449,8 +453,8 @@ proc mathCall(ctx: var GpuContext, name: string, arg: GpuAst, elemTyp: GpuType):
   result = GpuAst(kind: gpuCall, cName: cName, cArgs: @[arg])
 
 func mkPartialsIdent(sym: Symbol, elemTyp: GpuType): GpuAst =
-  ## Reduce-workspace ident of a scalar cotangent. It carries one element
-  ## per primal loop index and is named after the scalar it reduces.
+  ## Reduce-workspace ident of a scalar cotangent: one element per primal loop
+  ## index, named after the scalar it reduces.
   let typ = mkBufferPtr(elemTyp)
   GpuAst(kind: gpuIdent,
          symbol: newSymbol("d_" & sym.name & "_partials",
@@ -584,7 +588,6 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
             "' arises in more than one loop")
         if env.scalarLoop.len == 0:
           env.scalarLoop = env.currentLoopScope
-          env.scalarLoopVar = env.ambientVar
           env.scalarLoopCount = env.ambientCount
         if sym.iSym notin env.scalarHits:
           env.scalarHits.add sym.iSym
@@ -622,7 +625,7 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
     case e.cName.ident()
     of "exp":
       transposeExpr(ctx, arg, mkBinOp("*", g, e, elemTyp), elemTyp, env, path, into)
-    of "log", "ln":
+    of "ln":
       transposeExpr(ctx, arg, mkBinOp("/", g, arg, elemTyp), elemTyp, env, path, into)
     of "sqrt":
       let two = GpuAst(kind: gpuLit, lValue: "2.0", lType: elemTyp)
@@ -756,18 +759,6 @@ proc transposeStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, pat
 # Kernel assembly
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectFwdParamUses(n: GpuAst, paramISyms: HashSet[string], found: var HashSet[string]) =
-  ## Collects the iSyms of forward parameters referenced by the backward body.
-  ## Those parameters travel in the second block of the backward signature,
-  ## after the d-block.
-  if n.isNil:
-    return
-  if n.kind == gpuIdent and n.symbol != nil and n.symbol.iSym in paramISyms:
-    found.incl n.symbol.iSym
-    return
-  for ch in n.items:
-    collectFwdParamUses(ch, paramISyms, found)
-
 func paramISyms(fn: GpuAst): HashSet[string] =
   ## iSym set of a kernel's parameters.
   result = initHashSet[string]()
@@ -775,11 +766,10 @@ func paramISyms(fn: GpuAst): HashSet[string] =
     result.incl p.ident.symbol.iSym
 
 proc recordPairMetas(ctx: var GpuContext, fn: GpuAst, env: AdEnv) =
-  ## The single metadata derivation of a kernel pair, projected from the
-  ## transposer's own walk (the same AdEnv that built the backward kernel's
-  ## parameter list). The artifact pipeline consumes this record; nothing
-  ## re-walks the forward body and nothing matches generated names by suffix,
-  ## so the metadata and the launched kernel cannot desync.
+  ## The single metadata derivation of a kernel pair, projected from the transposer's own walk:
+  ## the same AdEnv that built the backward kernel's parameter list.
+  ## The artifact pipeline consumes this record, nothing re-walks the forward body
+  ## and nothing matches generated names by suffix, so the metadata and the launched kernel cannot desync.
   var metas: seq[BwdParamMeta]
   let paramSyms = paramISyms(fn)
   for p in fn.pParams:
@@ -903,7 +893,10 @@ proc makeReduceKernel(ctx: var GpuContext, fn: GpuAst, p: GpuParam, env: AdEnv):
                     mkAssign(mkIndex(outIdent,
                                      GpuAst(kind: gpuLit, lValue: "0",
                                             lType: intTyp)),
-                             accIdent)
+                             mkBinOp("+", mkIndex(outIdent,
+                                     GpuAst(kind: gpuLit, lValue: "0",
+                                            lType: intTyp)),
+                               accIdent, elemTyp))
                   ]),
                   pAttributes: {attGlobal})
 
@@ -941,8 +934,8 @@ proc transposeKernel(ctx: var GpuContext, fn: GpuAst) =
   # Backward signature: the d-block first, gradients of the forward params
   # in forward order, then needed forward params, then reduce workspaces.
   var needed: HashSet[string]
-  collectFwdParamUses(GpuAst(kind: gpuBlock, statements: groups),
-                      paramISyms(fn), needed)
+  collectParamISyms(GpuAst(kind: gpuBlock, statements: groups),
+                    paramISyms(fn), needed)
 
   var params: seq[GpuParam]
   for p in fn.pParams:
@@ -978,14 +971,19 @@ proc transposeKernel(ctx: var GpuContext, fn: GpuAst) =
   for rk in reduceKernels:
     ctx.allFnTab[rk.pName] = rk
     ctx.fnTab[rk.pName] = rk
+  ctx.adBwdKernels.incl bwd.pName.ident()
+  for rk in reduceKernels:
+    ctx.adBwdKernels.incl rk.pName.ident()
   ctx.recordPairMetas(fn, env)
 
 proc autodiffTranspose(ctx: var GpuContext) =
   ## Pass entry: transposes every global kernel in the context.
+  ## The kernels the transposer itself generated (backward and reduce kernels) are
+  ## recorded in `ctx.adBwdKernels` and never re-transposed.
   var kernels: seq[GpuAst]
   for fn in ctx.allFnTab.values():
     if fn.kind == gpuProc and attGlobal in fn.pAttributes and
-        not fn.pName.ident().endsWith("_bwd"):
+        fn.pName.ident() notin ctx.adBwdKernels:
       kernels.add fn
   for fn in kernels:
     ctx.transposeKernel(fn)

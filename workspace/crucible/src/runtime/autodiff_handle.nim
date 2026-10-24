@@ -97,27 +97,19 @@ func seqElems(n: NimNode): seq[NimNode] =
   else:
     doAssert false, "ad_handle: unexpected pair-node shape, expected a sequence literal"
 
-func symOrOrd(n: NimNode): string =
-  ## Name of one enum field of a pair node: the type-embedded constructor
-  ## stores enum values as symbols or as their ordinal literals.
-  case n.kind
-  of nnkSym:
-    result = $n
-  of nnkIntLit:
-    result = $n.intVal
-  else:
-    doAssert false, "ad_handle: unexpected enum node kind " & $n.kind
-
 func parseBwdParamKind(n: NimNode): BwdParamKind =
-  ## One `BwdParamKind` field of a pair node, see `symOrOrd`.
+  ## One `BwdParamKind` field of a pair node: the type-embedded constructor
+  ## stores enum values as symbols or as their ordinal literals.
   result = BwdParamKind(n.intVal)
 
 func parseBwdGradKind(n: NimNode): BwdGradKind =
-  ## One `BwdGradKind` field of a pair node, see `symOrOrd`.
+  ## One `BwdGradKind` field of a pair node: the type-embedded constructor
+  ## stores enum values as symbols or as their ordinal literals.
   result = BwdGradKind(n.intVal)
 
 func parseBwdExtentSource(n: NimNode): BwdExtentSource =
-  ## One `BwdExtentSource` field of a pair node, see `symOrOrd`.
+  ## One `BwdExtentSource` field of a pair node: the type-embedded constructor
+  ## stores enum values as symbols or as their ordinal literals.
   result = BwdExtentSource(n.intVal)
 
 func readBwdParamMeta(n: NimNode): BwdParamMeta =
@@ -159,8 +151,6 @@ func readKernels(n: NimNode): BwdDiffKernels =
     result.params.add readBwdParamMeta(e)
   for e in seqElems(fieldNode(n, "scalarWorkspaces")):
     result.scalarWorkspaces.add readScalarWorkspace(e)
-  for e in seqElems(fieldNode(n, "bwdSignature")):
-    result.bwdSignature.add e.strVal
   for e in seqElems(fieldNode(n, "bwdKernelParams")):
     result.bwdKernelParams.add e.strVal
 
@@ -225,7 +215,7 @@ func bufferLeaf(v: NimNode): BufferLeaf =
         "ad_handle: host wrappers carry exactly one integer length field, got " & t.repr
       extentField = (name: f[0], typ: ftype)
   doAssert not memField.name.isNil,
-    "ad_handle: host wrapper carries no DeviceMem field, got " & t.repr
+    "ad_handle: host wrapper has no DeviceMem field, got " & t.repr
   BufferLeaf(
     mem: v.newDotExpr(memField.name),
     elemT: memField.typ[^1],
@@ -250,7 +240,8 @@ func allocAndZero(engine, dev, elemT, len: NimNode): NimNode =
   ## start at zero.
   result = quote do:
     var zeroVals = newSeq[`elemT`](`len`)
-    `engine`.copyToDeviceFromHost(`dev`, addr zeroVals[0], `len`)
+    if `len` > 0:
+      `engine`.copyToDeviceFromHost(`dev`, addr zeroVals[0], `len`)
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launches
@@ -434,7 +425,7 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # Names resolve against the backward signature.
   # Workspace names resolve against the scratch.
   doAssert kernels.bwdKernelParams.len > 0,
-    "ad_handle backward: the kernels carries no printed backward signature"
+    "ad_handle backward: the pair has no printed backward signature"
   # The first printed slot may be an allocated gradient of this expansion,
   # a plain DeviceMem let with no type at macro time.
   # Such nodes bind `.mem` directly, caller arguments unwrap through `bufferLeaf`.

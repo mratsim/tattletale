@@ -95,7 +95,7 @@ func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
       formal.repr & ", a DeviceMem argument needs a pointer parameter")
   if not sameType(vtype[2], getElemType(formal)):
     error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
-      getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
+      getElemType(formal).repr & ", the DeviceMem argument stores " & vtype[2].repr)
 
 func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   ## DeviceMem fields of the value's type: a top-level DeviceMem yields
@@ -349,7 +349,7 @@ macro bwd_diff*(bk: BackendKind, sym: typed): untyped =
   ##
   ## and each kernel of the pair prints standalone.
   ##
-  ## The pair carries:
+  ## The pair contains:
   ##
   ## - both printed sources
   ## - the scalar-cotangent reduce kernels

@@ -6,20 +6,20 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Compile-time kernel-pair artifact of `bwd_diff`.
-## The artifact carries the printed sources of the pair plus the signature metadata a runtime backend needs, nothing else.
+## The artifact is the printed sources of the pair plus the signature metadata a runtime backend needs, nothing else.
 ## No Nim AST is stored, the compile-time stage is a pure function of the kernel symbol.
 ##
 ## Backward signature rule, the only signature authority of the pair ABI:
 ##
-## | Block          | Content                                                                    |
-## | -------------- | -------------------------------------------------------------------------- |
-## | `bwdSignature` | `<d_-block>, <forward signature verbatim>`                                 |
-## | d_-block       | one gradient slot per forward parameter with a cotangent, forward order    |
-## | buffer grads   | same shape as the primal buffer (`d_<name>`)                               |
-## | scalar grads   | 1-element device buffers (`kind = buffer(1)`), matched by name, never type |
-## | block 2        | the forward signature verbatim, forward outputs at their forward position  |
-## | `save:` order  | the forward output order                                                   |
-## | workspaces     | reduce-partials live only in the backward kernel's IR signature            |
+## | Block         | Content                                                                    |
+## | ------------- | -------------------------------------------------------------------------- |
+## | backward      | `<d_-block>, <forward signature verbatim>`                                 |
+## | d_-block      | one gradient slot per forward parameter with a cotangent, forward order    |
+## | buffer grads  | same shape as the primal buffer (`d_<name>`)                               |
+## | scalar grads  | 1-element device buffers (`kind = buffer(1)`), matched by name, never type |
+## | block 2       | the forward signature verbatim, forward outputs at their forward position  |
+## | `save:` order | the forward output order                                                   |
+## | workspaces    | reduce-partials live only in the backward kernel's IR signature            |
 ##
 ## A declared backward (`bwd_diff(fwd, bwd, save = [...])`) skips the transposer.
 ## Validation against this mirror runs at expansion: gradient slots in forward order,
@@ -29,7 +29,7 @@
 ## | ---------- | ---------------------------------------------------------------- |
 ## | Pair       | `BwdDiffKernels`                                                 |
 ## | Metadata   | `BwdParamMeta`, `BwdParamKind`, `BwdGradKind`, `BwdExtentSource` |
-## | Derivation | `deriveBwdParams`, `mirrorSignature`                             |
+## | Derivation | `deriveBwdParams` (declared pairs)                               |
 ## | Pipeline   | `codegenBwdDiffKernels`, `codegenBwdDiffKernelsDeclared`         |
 
 import std/[macros, sets, strutils, tables]
@@ -39,6 +39,7 @@ import ir/ast_datatypes
 import ./frontend/nim_to_crucible
 import ./gpu_compiler # registerCommonPasses
 import ./passes/pass_datatypes
+import ./passes/pass_helpers
 import ./passes/pass_registry
 import ./passes/passes_autodiff
 import ./passes/passes_lowering_glsl
@@ -74,19 +75,16 @@ type BwdDiffKernels* = object
   ##
   ## - two printed sources
   ## - the reduce kernels of the scalar cotangents
-  ## - the parameter metadata and the derived backward signature
+  ## - the parameter metadata
   ## - the launch geometry the pair's kernels bake and the launches pass
   kernelName*: string                          ## Forward kernel's name
-  backend*: BackendKind                        ## Backend the sources target
   workgroup*: AdWorkgroup                  ## Pair's baked workgroup, the launch geometry of every AD launch
   fwdSource*: string                           ## Forward kernel source, standalone translation unit
   bwdSource*: string                           ## Backward kernel source, `<kernel>_bwd`
   reduceSources*: seq[ReduceSource]                ## One axis-reduce kernel per scalar cotangent
   params*: seq[BwdParamMeta]                   ## Forward parameters in declaration order
   scalarWorkspaces*: seq[ScalarWorkspace]      ## Reduce-partials scratch per scalar cotangent, forward order
-  bwdSignature*: seq[string]                   ## Backward signature, see the module header
   bwdKernelParams*: seq[string]                ## Printed backward kernel's parameter names, post-lowering, in binding order
-  saveNames*: seq[string]                      ## `save = [...]` forward outputs kept alive between forward and backward, declared pairs only
 
 proc enforcePairWorkgroup*(fwd, bwd: GpuAst, reduces: seq[GpuAst]) =
   ## One-thread launch geometry, the contract the backward's per-index
@@ -110,27 +108,13 @@ proc enforcePairWorkgroup*(fwd, bwd: GpuAst, reduces: seq[GpuAst]) =
 # ═══════════════════════════════════════════════════════════════════════
 #
 # The metadata derives mechanically from the post-pass IR procs the pipeline produced, never from hand-written tables:
-# - a buffer parameter carries a gradient when the backward kernel's signature has its `d_<name>` shadow adjoint
-# - a float scalar carries a gradient when the transposer generated its `<kernel>_bwd_d_<name>_reduce` kernel
+# - a buffer parameter gets a gradient when the backward kernel's signature has its `d_<name>` shadow adjoint
+# - a float scalar gets a gradient when the transposer generated its `<kernel>_bwd_d_<name>_reduce` kernel
 # - a buffer is a forward output when the forward body assigns through it
 
 const PairFloatKinds = {gtFloat32, gtFloat64}
   ## Float widths that carry cotangents in the pair ABI, matching the transposer's differentiable float widths.
   ## Grow both together when the subset grows.
-
-proc writtenParamISyms(n: GpuAst, paramISyms: seq[string], found: var HashSet[string]) =
-  ## Collects the iSyms of forward parameters the forward body writes through (assignment targets rooted at a parameter index chain).
-  if n.isNil:
-    return
-  if n.kind == gpuAssign and n.aLeft.kind == gpuIndex:
-    var root = n.aLeft.iArr
-    while root.kind == gpuDeref:
-      root = root.dOf
-    if root.kind == gpuIdent and root.symbol != nil and
-        root.symbol.iSym in paramISyms:
-      found.incl root.symbol.iSym
-  for ch in n.items:
-    ch.writtenParamISyms(paramISyms, found)
 
 proc firstLoopBound(n: GpuAst): GpuAst =
   ## Trip-count expression of the first loop in statement order, nil when the kernel has no loop.
@@ -159,18 +143,16 @@ proc bufferExtent(p: GpuParam, fwd: GpuAst, paramISyms: seq[string]): BwdParamMe
     result.extentParam = bound.symbol.name
 
 proc deriveBwdParams*(fwd, bwd: GpuAst): seq[BwdParamMeta] =
-  ## Derives the backward-signature metadata for a DECLARED pair from the
-  ## two post-pass procs. The transposed path does not run this proc: the
-  ## metadata there is the transposer's own record (`ctx.adPairMetas`),
+  ## Derives the backward-signature metadata for a DECLARED pair from the two post-pass procs.
+  ## The transposed path does not run this proc: its metadata is the transposer's own record (`ctx.adPairMetas`),
   ## derived once from the walk that built the backward kernel.
   ##
   ## Expected input:
   ## - `fwd`: the forward kernel as the pipeline produced it
   ## - `bwd`: the hand-written backward kernel, `<fwd>_bwd`
   ##
-  ## A float scalar carries `gkBuffer1` when the backward's parameter list
-  ## has a `d_<name>` slot: the hand-written kernel writes the 1-element
-  ## buffer itself, no reduce kernel exists.
+  ## A float scalar gets `gkBuffer1` when the backward's parameter list has a `d_<name>` slot.
+  ## The hand-written kernel writes the 1-element buffer itself, no reduce kernel exists.
   ##
   ## Output: one `BwdParamMeta` per forward parameter, declaration order.
   doAssert fwd.kind == gpuProc and bwd.kind == gpuProc
@@ -185,7 +167,10 @@ proc deriveBwdParams*(fwd, bwd: GpuAst): seq[BwdParamMeta] =
   for p in bwd.pParams:
     bwdParamNames.incl p.ident.ident()
   var written: HashSet[string]
-  fwd.pBody.writtenParamISyms(paramISyms, written)
+  var paramSet: HashSet[string]
+  for iSym in paramISyms:
+    paramSet.incl iSym
+  fwd.pBody.collectParamISyms(paramSet, written, writeTargetsOnly = true)
 
   for p in fwd.pParams:
     let name = p.ident.ident()
@@ -209,15 +194,6 @@ proc deriveBwdParams*(fwd, bwd: GpuAst): seq[BwdParamMeta] =
     else:
       result.add BwdParamMeta(name: name, kind: pkScalar)
 
-proc mirrorSignature*(params: seq[BwdParamMeta]): seq[string] =
-  ## Returns the backward signature of a pair.
-  ## Block 1 holds the gradient slots in forward order, block 2 the forward signature verbatim, see the module header.
-  for m in params:
-    if m.gradKind != gkNone:
-      result.add m.gradName
-  for m in params:
-    result.add m.name
-
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Declared backward
 # ═══════════════════════════════════════════════════════════════════════
@@ -226,16 +202,6 @@ proc mirrorSignature*(params: seq[BwdParamMeta]): seq[string] =
 # the hand-written backward kernel is the backward. The mirror rule still
 # governs its signature, derived from the forward symbol alone, and a mismatch
 # refuses at expansion.
-
-proc referencedParamISyms(n: GpuAst, paramISyms: seq[string], found: var HashSet[string]) =
-  ## Collects the iSyms of forward parameters referenced anywhere in the body,
-  ## write and read positions alike: index chains and bare identifiers.
-  if n.isNil:
-    return
-  if n.kind == gpuIdent and n.symbol != nil and n.symbol.iSym in paramISyms:
-    found.incl n.symbol.iSym
-  for ch in n.items:
-    ch.referencedParamISyms(paramISyms, found)
 
 proc mirrorCotangentNames*(fwd: GpuAst): seq[string] =
   ## d_-block of the mirror signature, derived from the forward symbol alone.
@@ -250,12 +216,15 @@ proc mirrorCotangentNames*(fwd: GpuAst): seq[string] =
   ## plus the scalar cotangents it actually demands, so the two agree for kernels in the differentiable subset.
   ##
   ## One narrow case may differ: a float scalar referenced only in a zero-cotangent position,
-  ## say a comparison, carries no transposed slot but does carry a declared slot.
+  ## say a comparison, has no transposed slot but does have a declared slot.
   var paramISyms: seq[string]
   for p in fwd.pParams:
     paramISyms.add p.ident.symbol.iSym
   var referenced: HashSet[string]
-  fwd.pBody.referencedParamISyms(paramISyms, referenced)
+  var paramSet: HashSet[string]
+  for iSym in paramISyms:
+    paramSet.incl iSym
+  fwd.pBody.collectParamISyms(paramSet, referenced)
   for p in fwd.pParams:
     let iSym = p.ident.symbol.iSym
     if (p.typ.kind == gtPtr or p.typ.kind in PairFloatKinds) and
@@ -424,9 +393,8 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
     error "bwd_diff: no backward kernel was generated for '" &
       fwd.pName.ident() & "'"
 
-  # The metadata is the transposer's own record, derived once from the walk
-  # that built the backward kernel: no second body walk, no name-suffix
-  # matching against the generated reduce kernels.
+  # The metadata is the transposer's own record, derived once from the walk that built the backward kernel.
+  # No second body walk, no name-suffix matching against the generated reduce kernels.
   let recorded = ctx.adPairMetas[fwd.pName.ident()]
 
   enforcePairWorkgroup(fwd, bwd, reduces)
@@ -434,16 +402,13 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
   let printed = ctx.lowerAndPrintKernels(bk, fwd, bwd, reduces, reg.donePasses)
   result = BwdDiffKernels(
     kernelName: fwd.pName.ident(),
-    backend: bk,
     workgroup: AdWorkgroup(x: fwd.pWorkgroupSize.x, y: fwd.pWorkgroupSize.y, z: fwd.pWorkgroupSize.z),
     fwdSource: printed.fwdSource,
     bwdSource: printed.bwdSource,
     reduceSources: printed.reduceSources,
     params: recorded.params,
     scalarWorkspaces: recorded.workspaces,
-    bwdSignature: recorded.params.mirrorSignature(),
-    bwdKernelParams: printed.bwdKernelParams,
-    saveNames: @[])
+    bwdKernelParams: printed.bwdKernelParams)
 
 proc codegenBwdDiffKernelsDeclared*(bk: BackendKind, fwdBody, bwdBody: NimNode, saveNames: seq[string]): BwdDiffKernels =
   ## Pipeline of one declared-backward `bwd_diff(fwd, bwd, save = [...])`
@@ -493,14 +458,11 @@ proc codegenBwdDiffKernelsDeclared*(bk: BackendKind, fwdBody, bwdBody: NimNode, 
   let printed = ctx.lowerAndPrintKernels(bk, fwd, bwd, @[], reg.donePasses)
   result = BwdDiffKernels(
     kernelName: fwd.pName.ident(),
-    backend: bk,
     workgroup: AdWorkgroup(x: fwd.pWorkgroupSize.x, y: fwd.pWorkgroupSize.y, z: fwd.pWorkgroupSize.z),
     fwdSource: printed.fwdSource,
     bwdSource: printed.bwdSource,
     reduceSources: printed.reduceSources,
     params: metas,
     scalarWorkspaces: @[],
-    bwdSignature: metas.mirrorSignature(),
-    bwdKernelParams: printed.bwdKernelParams,
-    saveNames: saveNames)
+    bwdKernelParams: printed.bwdKernelParams)
 

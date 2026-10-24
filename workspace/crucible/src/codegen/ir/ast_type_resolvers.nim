@@ -119,7 +119,7 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
           # fixed-size or unchecked, is the element,
           # matching the text backends' type printers,
           # gpuTypeToString peels ptr(UncheckedArray(T)) to T.
-          # A pointer to a scalar passes through, pointer arithmetic
+          # A pointer to a scalar passes through unchanged.
           result = arrType.to
           if result.kind == gtArray:
             result = result.aTyp
