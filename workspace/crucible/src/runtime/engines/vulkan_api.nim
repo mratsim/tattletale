@@ -13,8 +13,8 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
-import workspace/crucible/src/runtime/backends/vulkan_compile
-import workspace/crucible/src/runtime/backends/vulkan_address_runtime
+import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
+import workspace/crucible/src/runtime/backends/vulkan_address_runtime {.all.}
 import workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
@@ -38,7 +38,7 @@ type
     isHlsl: bool
     caches: VulkanCaches
 
-template backendKind*(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
+template backendKind(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
 
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
@@ -119,7 +119,7 @@ proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
   engine.source
 
-proc getSpirvWords*(engine: VulkanEngine): seq[uint32] {.inline.} =
+func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =
   engine.spirv
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =

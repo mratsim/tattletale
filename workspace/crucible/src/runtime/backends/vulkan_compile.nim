@@ -15,7 +15,7 @@ import ./runtime_utils
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): seq[uint32] =
+proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): seq[uint32] =
   ## Compiles GLSL to SPIR-V via ``glslangValidator``
   ## (``libshaderc_shared`` does not support compute shaders on this platform).
   ## Returns SPIR-V words:
@@ -58,7 +58,7 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc compileHlslToSpirvViaDxc*(hlsl: string): seq[uint32] =
+proc compileHlslToSpirvViaDxc(hlsl: string): seq[uint32] =
   ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
   let dxc = findExe("dxc")
   if dxc.len == 0:
@@ -86,7 +86,7 @@ proc compileHlslToSpirvViaDxc*(hlsl: string): seq[uint32] =
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
+func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
   ## True when the SPIR-V module declares the PhysicalStorageBufferAddresses capability (OpCapability 17, capability 5347, spirv-dis-verified).
   const opCapability = 17
   const capPhysicalStorageBufferAddresses = 5347
@@ -103,14 +103,14 @@ proc usesPhysicalStorageBuffer*(spv: seq[uint32]): bool =
     inc i, wordCount.int
 
 type
-  SpvSquadron* = object
+  SpvSquadron = object
     ## Launch identity parsed from a SPIR-V module's words
     name*: string          ## OpEntryPoint literal name, "" when absent
     id*: uint32            ## OpEntryPoint result id, 0 when absent
     localSize*: Dim3       ## LocalSize literals of the mode bound to `id`, (0, 0, 0) when absent
     entryPoints*: int      ## number of OpEntryPoint instructions in the module
 
-proc getSpirvSquadron*(spv: seq[uint32]): SpvSquadron =
+func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
   ## One scan over the module words, returns the launch identity:
   ## - name, id: the OpEntryPoint literal name and result id
   ## - localSize: the LocalSize literals of the execution mode bound to id

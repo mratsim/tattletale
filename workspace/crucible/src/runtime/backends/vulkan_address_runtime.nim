@@ -8,8 +8,8 @@
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-proc deviceAddress*(buf: VulkanBuffer, ctx: VulkanContext): uint64 =
-  ## Shader-visible 64-bit address of a buffer, the value a pointer param carries.
+proc deviceAddress(buf: VulkanBuffer, ctx: VulkanContext): uint64 =
+  ## Shader-visible 64-bit address of a buffer, the value a pointer parameter wraps.
   let vkGetBufferDeviceAddress = cast[
     proc(device: VkDevice, pInfo: ptr VkBufferDeviceAddressInfo): VkDeviceAddress {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkGetBufferDeviceAddress"))

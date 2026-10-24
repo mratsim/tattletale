@@ -510,7 +510,7 @@ func flatScalarKinds(t: GpuType): bool =
   t.kind in {gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32,
              gtUint64, gtInt64, gtFloat32, gtFloat64, gtFloat16, gtSize_t}
 
-proc collectFlattenLeaves(t: GpuType, path: seq[string], res: var seq[FlattenLeaf]) =
+func collectFlattenLeaves(t: GpuType, path: seq[string], res: var seq[FlattenLeaf]) =
   ## Depth-first leaf collection in field order: the flattened params replace
   ## the object param at its position, the push-blob member order the backend
   ## renders stays field order.
@@ -536,7 +536,7 @@ type FlattenState = object
   leaves: seq[FlattenLeaf]
   written: seq[int]  ## indexes into leaves of scalar leaves assigned in the body
 
-proc findFlatLeaf(st: FlattenState, fields: seq[string]): int =
+func findFlatLeaf(st: FlattenState, fields: seq[string]): int =
   ## Leaf index for a field path, -1 when the path names an interior object
   ## (a whole sub-object use) or nothing.
   for i, l in st.leaves:
@@ -544,7 +544,7 @@ proc findFlatLeaf(st: FlattenState, fields: seq[string]): int =
       return i
   -1
 
-proc flatChain(n: GpuAst): tuple[root: GpuAst, fields: seq[string]] =
+func flatChain(n: GpuAst): tuple[root: GpuAst, fields: seq[string]] =
   ## Splits a member-access chain into its root node and the field names.
   doAssert n.kind == gpuDot, "not a member access"
   var cur = n
@@ -553,7 +553,7 @@ proc flatChain(n: GpuAst): tuple[root: GpuAst, fields: seq[string]] =
     cur = cur.dParent
   result.root = cur
 
-proc flatRefuse(st: FlattenState, msg: string) =
+func flatRefuse(st: FlattenState, msg: string) =
   error "flattenObjectParams: " & msg & " (kernel `" & st.kernelName &
     "`, parameter `" & st.paramName & "`)"
 

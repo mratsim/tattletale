@@ -195,11 +195,11 @@ type
     emitting*: HashSet[string]
     exts*: seq[string]
 
-proc initSpvLangCtx(): SpvLangCtx =
+func initSpvLangCtx(): SpvLangCtx =
   result.builder = initSpvBuilder()
   result.caps.incl capShader
 
-proc scalarId(ctx: var SpvLangCtx, t: GpuType): uint32 =
+func scalarId(ctx: var SpvLangCtx, t: GpuType): uint32 =
   case t.kind
   of gtVoid: ctx.builder.tyVoid()
   of gtBool: ctx.builder.tyBool()
@@ -224,9 +224,9 @@ proc scalarId(ctx: var SpvLangCtx, t: GpuType): uint32 =
   of gtSize_t: ctx.builder.tyInt(32, false)
   else: error("not a scalar GpuType: " & $t.kind)
 
-proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32
+func tyId(ctx: var SpvLangCtx, t: SpvTy): uint32
 
-proc arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
+func arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
   doAssert len >= 1
   let elemId = ctx.tyId(elem)
   let lenId = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(len))
@@ -237,7 +237,7 @@ proc arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
   let e = std430Layout(elem)
   ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
 
-proc runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
+func runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
   let elemId = ctx.tyId(elem)
   let key: SpvMemoKey = (OpTypeRuntimeArray, @[elemId])
   if key in ctx.builder.memo:
@@ -246,7 +246,7 @@ proc runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
   let e = std430Layout(elem)
   ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUp(e.size, e.align))])
 
-proc structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
+func structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
   let offsets = std430Offsets(members)
   var memberIds: seq[uint32]
   for m in members:
@@ -270,7 +270,7 @@ proc structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32
     ctx.builder.emitDecorate(result, decBlock)
   ctx.structMemo[key] = result
 
-proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
+func tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   case t.kind
   of stkScalar: ctx.scalarId(t.scalar)
   of stkArray: ctx.arrayTy(t.elem, t.len)
@@ -295,7 +295,7 @@ func pushMemberTy(p: GpuType): SpvTy =
   of gtPtr, gtVoidPtr: spvScalar(GpuType(kind: gtUint64))
   else: spvTy(p)
 
-proc buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
+func buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
   # bool members never reach here: the patchBoolToI32 pass retypes bool
   # kernel params to i32 before emission
   for m in members:
@@ -309,7 +309,7 @@ proc buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
 
-proc builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+func builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if builtin in ctx.builtins:
     return ctx.builtins[builtin].varId
   let vecTy = ctx.builder.tyVector(ctx.scalarId(uint32Type()), 3)
@@ -320,7 +320,7 @@ proc builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int): uint32 =
+func loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int): uint32 =
   let varId = ctx.builtinInput(builtin)
   let v = ctx.builder.opLoad(ctx.builtins[builtin].vecTy, varId)
   ctx.builder.opCompositeExtract(ctx.scalarId(uint32Type()), v, @[component])
@@ -336,7 +336,7 @@ func coordBuiltinInput(k: GpuCoordBuiltinKind): uint32 =
   of gbkNone:
     error("not a coordinate builtin")
 
-proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+func scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if builtin in ctx.scalarBuiltins:
     return ctx.scalarBuiltins[builtin]
   let u32Ty = ctx.scalarId(uint32Type())
@@ -347,11 +347,11 @@ proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-proc loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+func loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   let varId = ctx.scalarBuiltinInput(builtin)
   ctx.builder.opLoad(ctx.scalarId(uint32Type()), varId)
 
-proc flushCapabilities(ctx: var SpvLangCtx) =
+func flushCapabilities(ctx: var SpvLangCtx) =
   var caps: seq[uint32]
   for c in ctx.caps:
     caps.add c
@@ -484,7 +484,7 @@ proc exprGpuType(n: GpuAst): GpuType =
   else:
     spvRefuse("result type of expression node " & $n.kind)
 
-proc spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
+func spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
   let tyId = ctx.tyId(spvScalar(t))
   case t.kind
   of gtUint32, gtSize_t: ctx.builder.constUint(tyId, uint64(uint32(parseUInt(lValue))))
@@ -496,7 +496,7 @@ proc spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
   else:
     spvRefuse("literal of type " & $t.kind)
 
-proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
+func convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
   if source.kind == to.kind:
     return v
   let fFloatTy = source.kind in {gtFloat16, gtFloat32, gtFloat64}
@@ -533,28 +533,28 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
       error("no SPIR-V scalar conversion " & $source.kind & " -> " & $to.kind)
   ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(to)), v])
 
-proc bdaPointerTy(ctx: var SpvLangCtx, elem: GpuType): uint32 =
+func bdaPointerTy(ctx: var SpvLangCtx, elem: GpuType): uint32 =
   doAssert elem.kind in spvScalarKinds,
     "SPIR-V buffer references address scalar elements only: " & $elem.kind
   ctx.caps.incl capPhysicalStorageBufferAddresses
   let refStruct = ctx.structTy(@[spvRuntimeArray(spvScalar(elem))], isBlock = true)
   ctx.builder.tyPointer(scPhysicalStorageBuffer, refStruct)
 
-proc getLocalVarId(fn: SpvFnCtx, sym: Symbol): uint32 =
+func getLocalVarId(fn: SpvFnCtx, sym: Symbol): uint32 =
   if sym.iSym in fn.localsBySym:
     return fn.localsBySym[sym.iSym]
   if sym.name in fn.locals:
     return fn.locals[sym.name]
   spvRefuse("unknown local symbol " & sym.name)
 
-proc getLocalType(fn: SpvFnCtx, sym: Symbol): GpuType =
+func getLocalType(fn: SpvFnCtx, sym: Symbol): GpuType =
   if sym.iSym in fn.localTysBySym:
     return fn.localTysBySym[sym.iSym]
   if sym.name in fn.localTys:
     return fn.localTys[sym.name]
   spvRefuse("unknown local symbol " & sym.name)
 
-proc emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
+func emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let sym = n.symbol
   case sym.coordBuiltin
   of gbkThreadIndexInThreadgroup:
@@ -637,7 +637,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32
 
 proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType
 
-proc resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool] =
+func resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool] =
   case root.kind
   of gpuIdent:
     let sym = root.symbol
@@ -810,7 +810,7 @@ proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType =
     return valueType(argTy)
   return exprGpuType(n)
 
-proc fnRetTyId(ctx: var SpvLangCtx, retTy: GpuType): uint32 =
+func fnRetTyId(ctx: var SpvLangCtx, retTy: GpuType): uint32 =
   if retTy.kind == gtVoid:
     ctx.builder.tyVoid()
   elif retTy.kind in spvScalarKinds:
@@ -1130,7 +1130,7 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   ctx.builder.opLabelAt(mergeLbl)
   fn.terminated = false
 
-proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
+func hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   case n.kind
   of gpuBlock:
     for s in n.statements:
@@ -1209,7 +1209,7 @@ proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   else:
     spvRefuse("statement node " & $n.kind)
 
-proc scanTree(n: GpuAst, calls: var seq[string]) =
+func scanTree(n: GpuAst, calls: var seq[string]) =
   case n.kind
   of gpuCall:
     calls.add n.cName.symbol.iSym

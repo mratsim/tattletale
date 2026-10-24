@@ -261,7 +261,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
   let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine")
   let ingestN = if wordsRoute:
     quote do:
-      if `engine`.getSpirvWords() != `bridgeSource`:
+      if `engine`.getSpirV() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
   else:
     quote do:
