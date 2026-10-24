@@ -13,6 +13,7 @@
 ## - coordinate-builtin reads imply thread parallelism, the subset is single-thread
 ## - multi-thread workgroup annotations would race the backward's accumulations
 ## - sibling top-level loops mis-size the scalar-cotangent scratch (v1 is one index loop)
+## - a computed loop bound leaves the reduce trip count underivable
 ##
 ## A macro `error()` is a compile error, so each case compiles a standalone
 ## snippet through `nim check` and must fail with the prefix and construct.
@@ -83,4 +84,8 @@ expectRefusal("sibling_loops", entryBody(
   for j in 0 ..< n2:
     dst[j] = b[j] * w""", "bkMetal"), "gpuFor")
 
-echo "[OK] bwd_diff launch-model refusals: 3 cases"
+expectRefusal("binop_bound", entryBody(
+  "dst: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], alpha: float32, n: int32",
+  "  for i in 0 ..< (2 * n):\n    dst[i] = alpha * a[i]", "bkMetal"), "gpuFor")
+
+echo "[OK] bwd_diff launch-model refusals: 4 cases"

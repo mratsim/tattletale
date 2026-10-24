@@ -368,6 +368,13 @@ proc validateStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, path
         adRefuse(s, "gpuFor",
           "only exclusive ranges (a ..< b) carry a static trip count")
       env.loopVars.incl s.fVar.symbol.iSym
+      let boundOk = s.fEnd.kind == gpuLit or
+        (s.fEnd.kind == gpuIdent and s.fEnd.symbol != nil and
+         s.fEnd.symbol.symKind in {gsGlobalKernelParam, gsDeviceKernelParam})
+      if not boundOk:
+        adRefuse(s, "gpuFor",
+          "the loop bound must be a literal or a kernel parameter; the " &
+          "differentiable subset derives the reduce trip count from it")
       validateExpr(ctx, s.fStart, env, path)
       validateExpr(ctx, s.fEnd, env, path)
       validateExpr(ctx, s.fStep, env, path)
