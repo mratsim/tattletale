@@ -20,8 +20,9 @@
 ##     --outdir:build/tests/autodiff --nimcache:nimcache/tests/autodiff \
 ##     workspace/crucible/tests/codegen/autodiff/t_ir_softmax_ce_backward_structure.nim
 
-import std/[math, strutils]
+import std/[math, strutils, tables]
 import workspace/crucible
+import workspace/crucible/src/codegen/backends/lang_utils
 
 # ── Proof kernel ──────────────────────────────────────────────────────────
 
@@ -136,9 +137,12 @@ static:
     doAssert "d_target[" & $k & "] = (d_target[" & $k &
       "] + (-(d_loss[0] / 2.0f) * logits[" & $k & "]));" in bwd
 
-  # The broadcast factor reaches both rows: 16 softmax terms,
-  # the argmax-gated scatters, and the 32 target terms.
-  doAssert bwd.count("d_loss[0] / 2.0f") >= 64
+  # The broadcast factor occurs exactly 192 times in the printed backward:
+  # 144 softmax-form occurrences, 32 one-hot occurrences and 16 argmax-gated
+  # direct scatters. Each softmax term repeats the factor 9 times through
+  # ternary duplication of the sumexp recompute. The exact count catches
+  # regression in any term family.
+  doAssert bwd.count("d_loss[0] / 2.0f") == 192
 
 # ── Forward structure: the backend's natural-log name ─────────────────────
 
@@ -151,3 +155,9 @@ static:
   doAssert "ln(" notin fwd
 
 echo "  OK — softmax-CE pair: zero reduce kernels, (d_loss/2) broadcast, one-hot target terms"
+
+# The natural-log name map covers every backend: Nim names the callee `ln`,
+# every GPU target names the natural log `log`.
+static:
+  for bk in [bkCuda, bkWebGPU, bkOpenCL, bkGlsl, bkMetal, bkHlsl]:
+    doAssert GpuMathBuiltinNameMap[(bk, "ln")] == "log", $bk
