@@ -296,8 +296,8 @@ func pushMemberTy(p: GpuType): SpvTy =
   else: spvTy(p)
 
 proc buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
-  # bool members never reach here: the patchBoolToI32 pass lowers bool kernel
-  # params and the pekObject leaf collection lowers bool leaves to i32
+  # bool members never reach here: the patchBoolToI32 pass retypes bool
+  # kernel params to i32 before emission
   for m in members:
     if m.kind == stkScalar and getScalarByteSize(m.scalar) < 4:
       spvRefuse("push-constant member " & $m.scalar.kind &
@@ -377,11 +377,6 @@ type
     addrPointee*: Table[string, GpuType]
     terminated*: bool                   ## a terminator already ended this fn
     fns*: Table[string, GpuAst]         ## device fn bodies keyed by callee iSym
-
-type ParamExpansionKind = enum
-  pekScalar    ## by-value scalar, one push member
-  pekPointer   ## one u64 device-address push member
-  pekObject    ## byRef object, one push member per scalar leaf
 
 const spvSignedInts = {gtInt16, gtInt32, gtInt64}
 
@@ -697,12 +692,7 @@ proc emitDotValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     return ctx.loadBuiltinComponent(
       coordBuiltinInput(ch.root.symbol.coordBuiltin),
       coordComponent(ch.fields[0]))
-  # a by-value object parameter has no pointer: its member chains extract
-  # from the OpFunctionParameter value (device fns receive tuples by value)
-  let valueRoot = ch.root.kind == gpuIdent and
-    ch.root.symbol.iSym in fn.paramVals and
-    ch.root.symbol.typ.kind in {gtObject, gtGenericInst}
-  if not valueRoot and ch.root.kind in {gpuIdent, gpuAddr, gpuDeref}:
+  if ch.root.kind in {gpuIdent, gpuAddr, gpuDeref}:
     let (ptrId, pointee) = emitChainPtr(ctx, fn, ch.root, ch.fields)
     return ctx.builder.opLoad(ctx.tyId(valueTy(pointee)), ptrId)
   var v = emitExpr(ctx, fn, ch.root)
@@ -1290,44 +1280,6 @@ proc scanTree(n: GpuAst, calls: var seq[string]) =
   else:
     discard
 
-type ParamLeaf = object
-  path*: seq[int]
-  typ*: GpuType
-
-proc collectParamLeaves(t: GpuType, path: seq[int], res: var seq[ParamLeaf]) =
-  case t.kind
-  of gtObject, gtGenericInst:
-    if isStaticInt(t):
-      res.add ParamLeaf(path: path, typ: t)
-      return
-    for i, f in t.fields:
-      collectParamLeaves(f.typ, path & i, res)
-  of gtPtr, gtUncheckedArray, gtStatic:
-    res.add ParamLeaf(path: path, typ: t)
-  of spvScalarKinds:
-    res.add ParamLeaf(path: path, typ: t)
-  else:
-    error("kernel parameter member outside the SPIR-V subset: " & $t.kind)
-
-proc composeParam(ctx: var SpvLangCtx, t: GpuType, leafVals: seq[uint32], cursor: var int): uint32 =
-  if isStaticInt(t):
-    return ctx.builder.constUint(ctx.tyId(spvScalar(GpuType(kind: gtInt32))),
-                                 uint64(uint32(staticIntValue(t))))
-  case t.kind
-  of gtObject, gtGenericInst:
-    var ms: seq[uint32]
-    for f in t.fields:
-      ms.add composeParam(ctx, f.typ, leafVals, cursor)
-    result = ctx.builder.freshInst(OpCompositeConstruct, @[ctx.tyId(valueTy(t))] & ms)
-  of gtPtr, gtUncheckedArray:
-    result = leafVals[cursor]
-    inc cursor
-  of spvScalarKinds:
-    result = leafVals[cursor]
-    inc cursor
-  else:
-    error("kernel parameter member outside the SPIR-V subset: " & $t.kind)
-
 proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   doAssert procNode.kind == gpuProc, "not a function"
   doAssert not procNode.forwardDeclare, "forward declarations do not emit"
@@ -1419,42 +1371,23 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   doAssert not kernel.forwardDeclare, "forward declarations do not emit"
 
   ctx.fns = fns
+  # every kernel parameter is flat by now: the flattenObjectParams pass
+  # decomposed object params into one scalar/pointer param per leaf.
+  # The push block holds one member per parameter in parameter order
   var memberTys: seq[SpvTy]
-  var expansions: seq[tuple[kind: ParamExpansionKind, leaves: seq[ParamLeaf], memberStart: int]]
   var hasBda = false
   for p in kernel.pParams:
     doAssert p.addressSpace != asSMEM,
       "shared-memory params are outside the SPIR-V subset"
     if p.typ.kind == gtVoidPtr:
       spvRefuse("void ptr params")
-    if p.typ.kind == gtPtr:
+    if p.typ.kind in {gtPtr, gtUncheckedArray}:
       hasBda = true
       memberTys.add spvScalar(GpuType(kind: gtUint64))
-      expansions.add (pekPointer, @[], memberTys.len - 1)
-    elif p.passByRef or p.typ.kind in {gtObject, gtGenericInst}:
-      # byRef objects and by-value object parameters alike rebuild from push-block leaves.
-      # A by-value copy into Function storage preserves semantics, stores go through
-      # the object's pointer fields
-      doAssert p.typ.kind in {gtObject, gtGenericInst},
-        "byRef scalar params are outside the SPIR-V subset"
-      var leaves: seq[ParamLeaf]
-      collectParamLeaves(p.typ, @[], leaves)
-      let start = memberTys.len
-      for leaf in leaves:
-        if isStaticInt(leaf.typ):
-          continue
-        if leaf.typ.kind in {gtPtr, gtUncheckedArray}:
-          memberTys.add spvScalar(GpuType(kind: gtUint64))
-        elif leaf.typ.kind == gtBool:
-          # OpTypeBool cannot appear in a push-constant block.
-          # The leaf declares i32, the load converts at the use boundary.
-          memberTys.add spvScalar(GpuType(kind: gtInt32))
-        else:
-          memberTys.add spvScalar(leaf.typ)
-      expansions.add (pekObject, leaves, start)
     else:
+      doAssert not p.passByRef,
+        "by-reference kernel params are flattened to leaves before emission"
       memberTys.add pushMemberTy(p.typ)
-      expansions.add (pekScalar, @[], memberTys.len - 1)
 
   let push = ctx.buildPushBlockTys(memberTys)
 
@@ -1474,59 +1407,23 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   # setup block: Function-storage variables first, then hoisted parameter loads,
   # all later blocks are dominated by the entry block
   hoistLocals(ctx, fn, kernel.pBody)
-  # Function-storage reconstruction variables for byRef object parameters are
-  # declarations too: every OpVariable in a function must precede any load,
-  # so they are all declared here and filled by the parameter loop below
-  for i, p in kernel.pParams:
-    if expansions[i].kind == pekObject:
-      let varId = ctx.builder.opVariableFn(
-        ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(p.typ))))
-      fn.addrs[p.ident.symbol.iSym] = varId
-      fn.addrPointee[p.ident.symbol.iSym] = p.typ
-      fn.addrNames[p.ident.symbol.name] = varId
-      fn.addrNamePointees[p.ident.symbol.name] = p.typ
   for i, p in kernel.pParams:
     let sym = p.ident.symbol
-    case expansions[i].kind
-    of pekPointer:
+    if p.typ.kind in {gtPtr, gtUncheckedArray}:
       # u64 device address in the push block, converted to a buffer pointer
       let u64Ty = ctx.tyId(spvScalar(GpuType(kind: gtUint64)))
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, u64Ty)
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-        uint64(expansions[i].memberStart))
+      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
       fn.paramPtrs[sym.iSym] =
         ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(pointeeElem(p.typ)), devAddr)
-    of pekScalar:
-      let memberTy = push.members[expansions[i].memberStart]
+    else:
+      let memberTy = memberTys[i]
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-        uint64(expansions[i].memberStart))
+      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       fn.paramVals[sym.iSym] = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
-    of pekObject:
-      # load the leaves, then rebuild the object into the Function-storage
-      # variable declared in the hoist pass above
-      var leafVals: seq[uint32]
-      var memberIdx = expansions[i].memberStart
-      for leaf in expansions[i].leaves:
-        if isStaticInt(leaf.typ):
-          continue
-        let memberTy = push.members[memberIdx]
-        let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
-        let idxConst = ctx.builder.constUint(ctx.scalarId(uint32Type()),
-          uint64(memberIdx))
-        let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[idxConst])
-        let loaded = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
-        if leaf.typ.kind == gtBool:
-          leafVals.add ctx.convertValue(loaded, GpuType(kind: gtInt32), leaf.typ)
-        else:
-          leafVals.add loaded
-        inc memberIdx
-      var cursor = 0
-      let objVal = composeParam(ctx, p.typ, leafVals, cursor)
-      ctx.builder.opStore(fn.addrs[sym.iSym], objVal)
 
   emitStmt(ctx, fn, kernel.pBody)
   if not fn.terminated:
