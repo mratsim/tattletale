@@ -12,27 +12,36 @@
 ## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
+## | Autodiff      | `bwd_diff`, `BwdDiffKernels`, `setupAutoDiff`, `AdHandle`, `forward`, `backward`                                      |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`)                                                  |
 
 import
   ./codegen/gpu_compiler,
+  ./codegen/autodiff,
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
-  ./runtime/launch/launch_device_fn
+  ./runtime/launch/launch_device_fn,
+  ./runtime/autodiff_handle
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Engines
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export engines_api
 
 export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn
+export launch_device_fn.bwd_diff
 
-# ═══════════════════════════════════════════════════════════════
+export autodiff.BwdDiffKernels
+
+export autodiff_handle.AdHandle, autodiff_handle.setupAutoDiff,
+       autodiff_handle.forward, autodiff_handle.backward
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Launch sugar
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export launch_kernel.LaunchSugar,
        launch_kernel.`<<`, launch_kernel.`>>`
@@ -40,9 +49,9 @@ export launch_device_fn.DeviceFnSugar,
        launch_device_fn.DeviceFnProxy, launch_device_fn.`<<`, launch_device_fn.`>>`
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Codegen
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl

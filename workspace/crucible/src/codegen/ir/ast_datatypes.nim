@@ -320,6 +320,46 @@ type
     retType*: GpuType
     staticParamPositions*: seq[int] = @[] ## original arg-order positions of dropped static VALUE params (compile-time only, no CUDA value)
 
+  BwdParamKind* = enum
+    pkBuffer    ## Read-only input buffer, gradient is a same-shape buffer
+    pkScalar    ## Scalar parameter (integer or float), integer scalars carry no gradient
+    pkResidual  ## Forward-output buffer the forward kernel writes, available to the backward kernel at its block-2 position
+
+  BwdGradKind* = enum
+    gkNone    ## No gradient slot in the backward signature
+    gkBuffer  ## Gradient buffer, same shape as the primal argument
+    gkBuffer1 ## 1-element gradient device buffer, the scalar cotangent written by the generated reduce kernel
+
+  BwdExtentSource* = enum
+    xeWrapperField ## Buffer length lives on the caller's host wrapper, `DeviceMem` carries no sizes
+    xeStaticShape  ## Pointer to a static array, the length is compile-time
+    xeLenParam     ## A separate integer kernel parameter carries the length
+
+  BwdParamMeta* = object
+    ## Signature record of one forward parameter.
+    name*: string            ## Forward parameter name
+    kind*: BwdParamKind
+    gradName*: string        ## `d_<name>`, empty when `gradKind == gkNone`
+    gradKind*: BwdGradKind
+    extent*: BwdExtentSource ## Buffer-length source, buffers only, unused for scalars
+    extentParam*: string     ## `xeLenParam`: the integer parameter's name
+    staticLen*: int          ## `xeStaticShape`: the compile-time element count
+
+  ScalarWorkspace* = object
+    ## Reduce-partials scratch of one scalar cotangent: the backward kernel
+    ## accumulates per-index partials into it, the reduce kernel folds it into
+    ## the scalar's 1-element gradient buffer.
+    gradName*: string        ## `d_<name>`, the 1-element gradient buffer
+    workspaceName*: string   ## `d_<name>_partials`, the backward kernel's scratch
+    tripCount*: int          ## Static index-loop trip count, -1 when runtime-derived
+    tripCountParam*: string  ## Name of the kernel parameter carrying the trip count, runtime-derived
+    tripCount64*: bool       ## Trip count is a 64-bit value, else 32-bit
+
+  AdPairMetas* = object
+    ## Transposer's single metadata derivation of one kernel pair: one signature record per forward parameter, plus the reduce-partials workspaces.
+    params*: seq[BwdParamMeta]
+    workspaces*: seq[ScalarWorkspace]
+
   GpuContext* = object
     ## XXX: generic invocation table missing, call-site types must map to the instantiated version.
     skipSemicolon*: bool # when true, block statements emit without trailing semicolons
@@ -349,10 +389,15 @@ type
     builtinFns*: OrderedTable[GpuAst, GpuAst] ## Builtin/importc functions encountered, consulted for value-return at `gpuCall` sites
     types*: OrderedTable[GpuType, GpuAst] ## All known types from Nim -> GpuAst, key the raw type, value a full `gpuTypeDef`
     symChoices*: HashSet[string] ## Produced function symbol names, a name collision switches the display name from `iName` to `iSym`
+    adPairMetas*: Table[string, AdPairMetas] ## Autodiff transposer: forward kernel name -> the pair's metadata, the single derivation the artifact consumes
+    adBwdKernels*: HashSet[string] ## Autodiff transposer: names of the generated backward and reduce kernels, never re-transposed
 
 type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
+
+const PairWideIntKinds* = {gtInt64, gtUint64, gtSize_t}
+  ## Integer widths the reduce-kernel trip count may carry, grow with the IR's int kinds.
 
 ## Canonical coordinate name -> IR kind, the printers case on the kind alone.
 ## A static assertion cross-checks the table against the catalog's canonical declarations, a catalog rename fails at compile time.

@@ -61,3 +61,23 @@ proc collectIdentNames*(n: GpuAst, names: var HashSet[string]) =
     discard
   for ch in n:
     ch.collectIdentNames(names)
+
+proc collectParamISyms*(n: GpuAst, paramISyms: HashSet[string], found: var HashSet[string], writeTargetsOnly = false) =
+  ## Collects the iSyms of kernel parameters referenced by the tree:
+  ##
+  ## - default: every parameter-rooted identifier
+  ## - `writeTargetsOnly`: only assignment targets rooted at a parameter index chain, the written parameters
+  if n.isNil:
+    return
+  if writeTargetsOnly:
+    if n.kind == gpuAssign and n.aLeft.kind == gpuIndex:
+      var root = n.aLeft.iArr
+      while root.kind == gpuDeref:
+        root = root.dOf
+      if root.kind == gpuIdent and root.symbol != nil and
+          root.symbol.iSym in paramISyms:
+        found.incl root.symbol.iSym
+  elif n.kind == gpuIdent and n.symbol != nil and n.symbol.iSym in paramISyms:
+    found.incl n.symbol.iSym
+  for ch in n.items:
+    collectParamISyms(ch, paramISyms, found, writeTargetsOnly)

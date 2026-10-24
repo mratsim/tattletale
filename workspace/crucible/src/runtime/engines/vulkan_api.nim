@@ -20,14 +20,15 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   VulkanCaches = object
     spirvCache: Table[string, seq[uint32]]
     pipelineCache: Table[(string, int), VulkanPipeline]
+    adSpirv: Table[string, tuple[entry: string, spirv: seq[uint32], squadron: Dim3]]
 
   VulkanEngine* = ref object
     source: string
@@ -46,9 +47,9 @@ proc newVulkanEngine*(): VulkanEngine =
     ctx: vctx,
     caches: VulkanCaches())
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: VulkanEngine, source: string) =
   ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
@@ -95,6 +96,28 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
+proc ingestADKernel*(engine: VulkanEngine, kernel, source: string) =
+  ## Compiles one standalone autodiff-kernel GLSL source, a dedicated
+  ## SPIR-V module per kernel, cached by kernel name.
+  ## The engine's main artifact survives.
+  ##
+  ## - `kernel`: the launch name that selects the cached SPIR-V module
+  ## - `source`: the kernel's standalone GLSL translation unit
+  ##
+  ## Bridge re-ingests keep the autodiff kernels alive.
+  ## Re-ingest under a held pipeline-cache name drops the matching entries: a cached pipeline runs the old SPIR-V.
+  ## The main `ingest` clears its caches for the same reason.
+  var staleKeys: seq[(string, int)]
+  for key in engine.caches.pipelineCache.keys:
+    if key[0] == kernel:
+      staleKeys.add key
+  for key in staleKeys:
+    engine.caches.pipelineCache.del(key)
+  engine.caches.adSpirv[kernel] = (
+    entry: parseEntryPoint(source),
+    spirv: compileGlslToSpirvViaGlslang(source, parseEntryPoint(source)),
+    squadron: parseShaderSquadron(source))
+
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
   engine.source
@@ -114,9 +137,9 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   vctx: VulkanContext
@@ -161,9 +184,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(glsl: string): Dim3 =
   ## Extract the shader-baked squadron from the GLSL preamble:
@@ -242,23 +265,15 @@ proc parseEntryPoint(glsl: string): string =
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
-              engine.shaderSquadron
-            else:
-              cfg.blk
-
-  if engine.shaderSquadron.x == 0 or
-     squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
-     squadron.z != engine.shaderSquadron.z:
-    failLoud("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
-         " != baked squadron " & $engine.shaderSquadron.x & "x" & $engine.shaderSquadron.y &
-         "x" & $engine.shaderSquadron.z &
-         ": launch config mismatch, squadron is shader-baked on Vulkan)")
-
-  # Entrypoint caching
+  # Entrypoint resolution: autodiff kernels first, the main artifact otherwise.
+  # The autodiff cache carries each kernel's own baked squadron and the main
+  # artifact's squadron is invalid for them.
   var entry = engine.entryPoint
   var spirv: seq[uint32]
-  if engine.isHlsl:
+  var baked = engine.shaderSquadron
+  if engine.caches.adSpirv.hasKey(kernel):
+    (entry, spirv, baked) = engine.caches.adSpirv[kernel]
+  elif engine.isHlsl:
     spirv = engine.spirv
     entry = "main"
   elif kernel == engine.entryPoint:
@@ -268,6 +283,19 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
+
+  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+              baked
+            else:
+              cfg.blk
+
+  if baked.x == 0 or
+     squadron.x != baked.x or squadron.y != baked.y or
+     squadron.z != baked.z:
+    failLoud("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
+         " != baked squadron " & $baked.x & "x" & $baked.y &
+         "x" & $baked.z &
+         ": launch config mismatch, squadron is shader-baked on Vulkan)")
 
   if usesPhysicalStorageBuffer(spirv):
     launchAddressRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)

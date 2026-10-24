@@ -59,7 +59,7 @@ proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: va
   else:
     discard
 
-proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
+proc ingestTopLevel*(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
   ## Farms the AST into ctx (fnTab, allFnTab, globalBlocks) ahead of runPasses.
   ## typesFirst: C-family block layout plus callee harvest, WGSL the reverse
   ## and no harvest (its callees inline).
@@ -104,6 +104,8 @@ macro toCrucibleAst*(body: typed): GpuAst =
   # Clear scope tables before newLit (can't serialize seq/Symbol refs)
   # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
   newLit(gpuAst)
+
+
 
 macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA code.

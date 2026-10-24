@@ -55,6 +55,7 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| pair-identifier      | the identifier `pair` in Nim code, name what the value pairs                                      | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 
 Golden rules:
@@ -206,6 +207,11 @@ OF_SUFFIX_DECL_RE = re.compile(
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
+
+# The pair-identifier rule. The identifier `pair` in Nim code names nothing:
+# naming a value "pair" is as lazy as naming a variable "variable". Backticked
+# identifiers match too, the boundary excludes word characters and backticks.
+PAIR_IDENT_RE = re.compile(r"(?<![\w`])pair(?![\w`])")
 
 NIM_EXPORTED_TYPE_RE = re.compile(
     r"^\s*(?:type\s+)?(\w+)\*\s*=\s*(?:object|ref|distinct)\b")
@@ -1821,6 +1827,11 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if PAIR_IDENT_RE.search(code):
+                    findings.append(Finding(
+                        path, i + 1, "pair-identifier",
+                        "the identifier 'pair' in code, name what the value "
+                        "pairs instead (adPair, bwdKernels, ...)"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)

@@ -114,7 +114,17 @@ proc getExprType*(ctx: GpuContext, n: GpuAst): GpuType =
         else: result = arrType             # scalar pointee: p[i] is the pointee
       else:
         case arrType.kind
-        of gtPtr: result = arrType.to
+        of gtPtr:
+          # Nim pointer indexing: `p[i]` over a pointer to an array,
+          # fixed-size or unchecked, is the element,
+          # matching the text backends' type printers,
+          # gpuTypeToString peels ptr(UncheckedArray(T)) to T.
+          # A pointer to a scalar passes through unchanged.
+          result = arrType.to
+          if result.kind == gtArray:
+            result = result.aTyp
+          elif result.kind == gtUncheckedArray:
+            result = result.uaTo
         of gtArray: result = arrType.aTyp
         of gtUncheckedArray: result = arrType.uaTo
         else:

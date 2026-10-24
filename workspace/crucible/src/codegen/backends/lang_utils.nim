@@ -15,13 +15,24 @@ import ../../builtins/builtins_gpu_types
 # Builtin function names
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getFnName*(ctx: GpuContext; backend: BackendKind; call: GpuAst): string =
+# Natural-log callee: Nim names it `ln`, every GPU target names it `log`
+# (MSL, GLSL, HLSL, WGSL, CUDA, OpenCL all take `log` as the natural log).
+let GpuMathBuiltinNameMap* {.compileTime.}: Table[(BackendKind, string), string] =
+  {(bkCuda, "ln"): "log",
+   (bkWebGPU, "ln"): "log",
+   (bkOpenCL, "ln"): "log",
+   (bkGlsl, "ln"): "log",
+   (bkMetal, "ln"): "log",
+   (bkHlsl, "ln"): "log"}.toTable()
+
+proc getFnName*(ctx: GpuContext, backend: BackendKind, call: GpuAst): string =
   let name = call.cName.ident()
   if name in NimGpuNumericBuiltinsFunctions:
     let t = ctx.getOperandType(call.cArgs[0]) # min/max/abs always have 1 or 2 cArgs
     if not t.isNil:
       return getMaxMinAbsBuiltinFnName(backend, name, t.kind)
-  NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name)
+  GpuMathBuiltinNameMap.getOrDefault((backend, name),
+    NimGpuFp16ConversionBuiltins.getOrDefault((backend, name), name))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Raw statement rendering
@@ -43,8 +54,7 @@ func genAsmStmt*(ast: GpuAst): string =
       result.add s[i]
       inc i
 
-proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
-                  renderExpr: proc(ctx: var GpuContext; n: GpuAst): string): string =
+proc genEmitStmt*(ctx: var GpuContext, ast: GpuAst, renderExpr: proc(ctx: var GpuContext, n: GpuAst): string): string =
   for part in ast.parts:
     case part.kind
     of peLiteral:
@@ -58,3 +68,20 @@ proc genEmitStmt*(ctx: var GpuContext; ast: GpuAst;
 
 func isSelfTerminating*(el: GpuAst): bool =
   result = el.kind in {gpuBlock, gpuEmit}
+
+func floatLiteralText*(lValue: string, suffix: string): string =
+  ## Returns the target text of one float literal.
+  ##
+  ## Args:
+  ## - `lValue`: the literal's digits as the IR carries them, e.g. `0` or `2.5`
+  ## - `suffix`: the target's float suffix, e.g. `f` or `h`
+  ##
+  ## C-family targets refuse integer-shaped float literals like `0f`.
+  ## The decimal point inserts before the suffix whenever the digits carry
+  ## no fractional part.
+  if lValue.len > 0 and lValue[0] in {'-', '+'}:
+    return lValue[0] & floatLiteralText(lValue[1 ..< lValue.len], suffix)
+  if '.' notin lValue and 'e' notin lValue and 'E' notin lValue:
+    result = lValue & ".0" & suffix
+  else:
+    result = lValue & suffix

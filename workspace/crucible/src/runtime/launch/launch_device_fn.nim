@@ -7,6 +7,7 @@
 
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/codegen/autodiff
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/cuda_api
 import workspace/crucible/src/runtime/engines/opencl_api
@@ -16,9 +17,9 @@ import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_kernel {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   DeviceFnSugar*[E: HwEngine] = object
@@ -31,9 +32,9 @@ type
     sharedMem: int
 
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
   DeviceFnSugar[E](engine: engine)
@@ -41,7 +42,8 @@ func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
 func base58(h: int): string =
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   var x = uint64(h)
-  if x == 0: return "1"
+  if x == 0:
+    return "1"
   while x > 0:
     result = alphabet[int(x mod 58)] & result
     x = x div 58
@@ -49,8 +51,8 @@ func base58(h: int): string =
 macro bridge(engine: HwEngine, node: untyped): untyped =
   ## Defers the generated global function generation
   ## so that it happens in a `device` environment.
-  ## This allows functions that depend on `ccGetBackend`
-  ## to correctly resolve the target backend and not resolve the CPU host.
+  ## Functions that depend on `ccGetBackend` resolve the target backend
+  ## inside the expansion, never the CPU host.
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
@@ -82,8 +84,10 @@ func isDeviceMemType(t: NimNode): bool =
 func getElemType(formal: NimNode): NimNode =
   formal.expectKind(nnkPtrTy)
   let p = formal[0]
-  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"): p[1]
-  else: p
+  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"):
+    p[1]
+  else:
+    p
 
 func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
   if formal.kind != nnkPtrTy:
@@ -91,7 +95,7 @@ func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
       formal.repr & ", a DeviceMem argument needs a pointer parameter")
   if not sameType(vtype[2], getElemType(formal)):
     error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
-      getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
+      getElemType(formal).repr & ", the DeviceMem argument stores " & vtype[2].repr)
 
 func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   ## DeviceMem fields of the value's type: a top-level DeviceMem yields
@@ -104,7 +108,8 @@ func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   case impl.kind
   of nnkObjectTy:
     let rec = impl[^1]
-    if rec.kind != nnkRecList: return
+    if rec.kind != nnkRecList:
+      return
     for f in rec:
       f.expectKind(nnkIdentDefs)
       if isDeviceMemType(f[^2]):
@@ -308,9 +313,122 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
     else:
       result.add(a)
 
-# ═════════════════════════════════════════════════════════════════════════
+func kernelImplArg(node: NimNode, what: string): NimNode =
+  ## Typed kernel argument as a proc definition.
+  ##
+  ## Call forms:
+  ## - `bwd_diff(kernel)` passes the kernel's symbol
+  ## - `bwd_diff: proc kernel(...) {.global.} = ...` passes the typed definition
+  ## The symbol form pulls the impl at expansion, which VM-compiles the body.
+  ## The inline form hands the typed body over untouched, the only form
+  ## carrying statement pragmas like `{.emit: ... .}`.
+  var impl: NimNode
+  case node.kind
+  of nnkProcDef:
+    impl = node
+  of nnkStmtList:
+    if node.len == 1 and node[0].kind == nnkProcDef:
+      impl = node[0]
+    else:
+      error "bwd_diff: expected exactly one kernel definition, got " & node.repr
+  else:
+    if node.kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+      impl = node.getImpl()
+    else:
+      error "bwd_diff: " & what & " is not a proc, only {.global.} kernels differentiate"
+  if impl.kind != nnkProcDef:
+    error "bwd_diff: " & what & " is not a proc, only {.global.} kernels differentiate"
+  result = impl
+
+macro bwd_diff*(bk: BackendKind, sym: typed): untyped =
+  ## Compile-time autodiff entry: `bkGlsl.bwd_diff(axpy)` expands to a const
+  ## `BwdDiffKernels` for the Vulkan GLSL backend and `bkMetal.bwd_diff(axpy)`
+  ## for Metal. The kernel takes the launch bridge's ingestion:
+  ##
+  ##   kernel symbol → frontend → common passes → transposer → lowering
+  ##
+  ## and each kernel of the pair prints standalone.
+  ##
+  ## The pair contains:
+  ##
+  ## - both printed sources
+  ## - the scalar-cotangent reduce kernels
+  ## - the backward signature, nothing else
+  ##
+  ## `bk` is the compile-time backend-kind token (`bkGlsl`, `bkMetal`),
+  ## other kinds refuse at expansion.
+  ##
+  ## The kernel:
+  ##
+  ## - is a `{.global.}` proc in the differentiable subset
+  ## - passes as its symbol or inline as the last argument
+  ##
+  ## Every refusal surfaces at this expansion with a `bwd_diff:` prefix.
+  let impl = sym.kernelImplArg("the kernel argument")
+  # The backend kind travels as the typed enum token, the token name selects
+  # the pipeline. `bk` must not be a `static` macro parameter:
+  # - a static parameter makes the macro generic
+  # - instantiation re-sem-checks the typed kernel body
+  # - statement pragmas like `{.emit: ... .}` refuse there
+  # - the differentiable subset must diagnose those pragmas itself
+  case bk.strVal
+  of "bkGlsl":
+    result = newLit(codegenBwdDiffKernels(bkGlsl, impl))
+  of "bkMetal":
+    result = newLit(codegenBwdDiffKernels(bkMetal, impl))
+  else:
+    error "bwd_diff: backend kind " & bk.strVal &
+      " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"
+
+macro bwd_diff*(bk: BackendKind, fwd: typed, bwd: typed, rest: varargs[untyped]): untyped =
+  ## Declared-backward escape hatch, contract:
+  ##
+  ## - builds the kernel pair from the hand-written backward `bwd` without running the transposer,
+  ##   the pair's metadata derives from the forward symbol
+  ## - `save = [<forward outputs>]` names auxiliary forward outputs kept alive between forward and backward
+  ## - the declared backward must reproduce the mirror signature exactly, else the expansion refuses with the `bwd_diff:` prefix:
+  ##   gradient slots in forward-parameter order, block 2 the forward signature verbatim, the kernel named `<fwd>_bwd`
+  ## - other arguments than `save = [...]` refuse at expansion
+  ##
+  ## Saved outputs are block-2 primals: the declared backward takes them explicitly,
+  ## `.backward` binds them by name.
+  ##
+  ## Example:
+  ##
+  ##   bkMetal.bwd_diff(sdpa, sdpa_bwd, save =  [dst, lse])
+  var saveNames: seq[string] = @[]
+  for a in rest:
+    if a.kind == nnkExprEqExpr and $a[0] == "save":
+      let list = a[1]
+      if list.kind != nnkBracket:
+        error "bwd_diff: save takes a list of forward-output names, got " &
+          list.repr
+      for e in list:
+        # Nim keywords like dst reach the untyped varargs as an empty nnkOutTy node,
+        # without strVal, their text only in repr.
+        if e.kind == nnkOutTy:
+          saveNames.add e.repr
+        elif e.kind in {nnkIdent, nnkSym}:
+          saveNames.add e.strVal
+        else:
+          error "bwd_diff: save takes forward-output names, got " & e.repr
+    else:
+      error "bwd_diff: unexpected argument " & a.repr &
+        ", only save = [<forward outputs>] is supported"
+  let fwdImpl = fwd.kernelImplArg("the forward kernel")
+  let bwdImpl = bwd.kernelImplArg("the declared backward kernel")
+  case bk.strVal
+  of "bkGlsl":
+    result = newLit(codegenBwdDiffKernelsDeclared(bkGlsl, fwdImpl, bwdImpl, saveNames))
+  of "bkMetal":
+    result = newLit(codegenBwdDiffKernelsDeclared(bkMetal, fwdImpl, bwdImpl, saveNames))
+  else:
+    error "bwd_diff: backend kind " & bk.strVal &
+      " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"
+
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   ## Chevron form accessor for device-fn launches.

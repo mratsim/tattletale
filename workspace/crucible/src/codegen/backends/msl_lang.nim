@@ -144,8 +144,8 @@ proc genLit*(ast: GpuAst): string =
         if ast.lType.kind == gtFloat64:
           error "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
         else:
-          result = ast.lValue & "f"
-    of gtFloat16: result = ast.lValue & "h"
+          result = floatLiteralText(ast.lValue, "f")
+    of gtFloat16: result = floatLiteralText(ast.lValue, "h")
     of gtBf16:    result = "bfloat(" & ast.lValue & ')'
     of gtUint32: result = ast.lValue & "U"
     of gtUint64: result = ast.lValue & "ULL"
