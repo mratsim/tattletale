@@ -36,6 +36,10 @@ proc axpyS(y, a: ptr array[8, float32]) {.global.} =
   for i in 0 ..< 8:
     y[i] = a[i] * 2.0'f32
 
+proc rsqrt1(y, a: ptr UncheckedArray[float32]) {.global.} =
+  for i in 0 ..< 8:
+    y[i] = rsqrt(a[i])
+
 proc stat2(`out`, aux, a: ptr UncheckedArray[float32]) {.global.} =
   # Stub exporting two forward outputs: the residual-slot fixture.
   for i in 0 ..< 8:
@@ -49,6 +53,7 @@ const axpyMetal = bkMetal.bwd_diff(axpy)
 const axpyNPair = bkMetal.bwd_diff(axpyN)
 const axpySPair = bkMetal.bwd_diff(axpyS)
 const stat2Pair = bkMetal.bwd_diff(stat2)
+const rsqrtPair = bkMetal.bwd_diff(rsqrt1)
 
 # ── Mirror-rule signature, verbatim ───────────────────────────────────────
 
@@ -114,6 +119,12 @@ static:
   doAssert "d_out" in axpyMetal.bwdSource and "d_a" in axpyMetal.bwdSource
   doAssert "d_out" in axpyGlsl.bwdSource
   doAssert "axpy_bwd" in axpyGlsl.bwdSource
+
+  # the math whitelist transposes at the entry: the rsqrt cotangent
+  # re-emits sqrt, the primal callee, over the argument
+  doAssert "rsqrt(" in rsqrtPair.fwdSource
+  doAssert "sqrt(" in rsqrtPair.bwdSource
+  doAssert "2.0f" in rsqrtPair.bwdSource
 
   # the forward source is unchanged by differentiation
   doAssert "alpha * a[i]" in axpyMetal.fwdSource

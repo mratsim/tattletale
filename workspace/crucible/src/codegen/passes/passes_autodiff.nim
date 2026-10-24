@@ -58,7 +58,7 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 # -------------  ------------  ------------------------------------------
 # gpuDiscard     pass-through  empty statement, no gradient semantics
 # gpuProc        refuse        nested proc definition in a kernel body
-# gpuCall        refuse        pure defined callees refuse in v1, inline the callee before bwd_diff, inline-before-AD is the caller's contract, barrier/atomic/reduction builtins refuse with their own message
+# gpuCall        local-rule    external math builtins {exp, ln/log, sqrt, rsqrt} transpose with mechanical cotangent rules, kernel-defined callees and every other call refuse (inline the callee before bwd_diff), barrier/atomic/reduction builtins refuse with their own message
 # gpuIf          local-rule    branch-only cotangents, each branch body transposes under the matching condition, the condition itself stays primal
 # gpuTernary     local-rule    then-cotangent gated by the condition, else-cotangent gated by its negation
 # gpuFor         local-rule    loop structure reused verbatim, bodies are iteration-independent by contract (loop-carried overwrites refuse), cotangent sums are order-independent
@@ -105,6 +105,17 @@ func isComparisonBinOp(op: string): bool =
   case op
   of "<", ">", "<=", ">=", "==", "!=": true
   else: false
+
+const MathBuiltinWhitelist = ["exp", "ln", "log", "sqrt", "rsqrt"]
+  ## Mechanical cotangent rules for the whitelisted external math builtins:
+  ## `exp`, `ln` (also `log`), `sqrt`, `rsqrt`, each unary over a float.
+  ## Defined callees and the base-taking `log` overload refuse: inline the callee before bwd_diff.
+
+func isMathBuiltinCall(n: GpuAst): bool =
+  ## True for a unary call to one of the whitelisted math builtins.
+  if n.cName.kind != gpuIdent or n.cArgs.len != 1:
+    return false
+  result = n.cName.ident() in MathBuiltinWhitelist
 
 # ═══════════════════════════════════════════════════════════════════════
 # Refusals
@@ -243,9 +254,11 @@ proc validateExpr(ctx: var GpuContext, n: GpuAst, env: var AdEnv, path: seq[stri
         adRefuse(n, "gpuCall",
           "atomic builtin '" & nameIdent.symbol.name &
           "' is outside the differentiable subset (no atomics)")
-    adRefuse(n, "gpuCall",
-      "call to '" & nameIdent.ident() &
-      "' is outside the differentiable subset; inline the callee before bwd_diff")
+    if not isMathBuiltinCall(n):
+      adRefuse(n, "gpuCall",
+        "call to '" & nameIdent.ident() &
+        "' is outside the differentiable subset; inline the callee before bwd_diff")
+    validateExpr(ctx, n.cArgs[0], env, path)
   of gpuDot:
     if n.dParent.kind == gpuIdent and n.dParent.symbol != nil and
         n.dParent.symbol.coordBuiltin == gbkNone:
@@ -404,6 +417,16 @@ func mkBufferPtr(elemTyp: GpuType): GpuType =
           to: GpuType(kind: gtUncheckedArray, uaTo: elemTyp),
           addressSpace: asDevice)
 
+proc mathCall(ctx: var GpuContext, name: string, arg: GpuAst, elemTyp: GpuType): GpuAst =
+  ## Re-emits one whitelisted math builtin inside a cotangent expression,
+  ## over `arg`. Registers the callee so type queries resolve.
+  let cName = GpuAst(kind: gpuIdent,
+                     symbol: newSymbol(name, iSym = name, symKind = gsProc))
+  if cName notin ctx.builtinFns:
+    ctx.builtinFns[cName] = GpuAst(kind: gpuProc, pName: cName,
+                                   pRetType: elemTyp, pAttributes: {attDevice})
+  result = GpuAst(kind: gpuCall, cName: cName, cArgs: @[arg])
+
 func mkPartialsIdent(sym: Symbol, elemTyp: GpuType): GpuAst =
   ## Reduce-workspace ident of a scalar cotangent. It carries one element
   ## per primal loop index and is named after the scalar it reduces.
@@ -448,6 +471,10 @@ proc substituteLocals(ctx: var GpuContext, n: GpuAst, env: AdEnv, path: seq[stri
                     tElse: substituteLocals(ctx, n.tElse, env, path))
   of gpuConv:
     result = mkConv(n.convTo, substituteLocals(ctx, n.convExpr, env, path))
+  of gpuCall:
+    result = GpuAst(kind: gpuCall, cName: n.cName)
+    for a in n.cArgs:
+      result.cArgs.add substituteLocals(ctx, a, env, path)
   of gpuLit, gpuDeref:
     result = n
   else:
@@ -459,14 +486,18 @@ proc substituteLocals(ctx: var GpuContext, n: GpuAst, env: AdEnv, path: seq[stri
 
 proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, env: var AdEnv, path: seq[string], into: var seq[GpuAst]) =
   ## Emits the cotangent statements that propagate the adjoint `g` of `e`
-  ## into `e`'s differentiable inputs:
+  ## into `e`'s differentiable inputs. Shadow buffers start zero-filled,
+  ## so the statements accumulate additively:
   ##
-  ## - buffer reads scatter additively into their shadow adjoint,
-  ##   `d_x[i] = d_x[i] + g`, shadow buffers are zero-filled by contract
-  ## - scalar params accumulate per-index partials for the generated
-  ##   reduce kernel
-  ## - single-assignment locals substitute their definition
-  ## - int/bool subexpressions carry an identically zero cotangent
+  ## | Expression               | Cotangent                                                |
+  ## | ------------------------ | -------------------------------------------------------- |
+  ## | buffer read `x[i]`       | scatter-add, `d_x[i] = d_x[i] + g`                       |
+  ## | scalar param             | per-index partial for the generated reduce kernel        |
+  ## | whitelisted math builtin | transpose the argument by the builtin's mechanical rule, |
+  ## |                          | recomputing the primal call in the cotangent expression  |
+  ## | single-assignment local  | substitute the definition, also inside cotangent         |
+  ## |                          | expressions; the backward declares no forward locals     |
+  ## | int/bool subexpression   | identically zero cotangent                               |
   case e.kind
   of gpuBinOp:
     let op = e.bOp.ident()
@@ -539,8 +570,9 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
         let partials = env.partials.mgetOrPut(sym.iSym,
                                               mkPartialsIdent(sym, elemTyp))
         let slot = mkIndex(partials, env.ambientVar)
+        let gSub = substituteLocals(ctx, g, env, path)
         into.add mkAssign(slot,
-          mkBinOp("+", mkIndex(partials, env.ambientVar), g, elemTyp))
+          mkBinOp("+", mkIndex(partials, env.ambientVar), gSub, elemTyp))
       elif sym.iSym in env.localDefs:
         if not isScopePrefix(env.localDefPath.getOrDefault(sym.iSym, @[]), path):
           adRefuse(e, "gpuIdent",
@@ -558,6 +590,29 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
     else:
       adRefuse(e, "gpuIdent",
         "value of type " & pretty(sym.typ) & " is outside the differentiable subset")
+  of gpuCall:
+    let t = ctx.getExprType(e)
+    if t.isNil or t.kind notin DiffFloatKinds:
+      return
+    let arg = e.cArgs[0]
+    case e.cName.ident()
+    of "exp":
+      transposeExpr(ctx, arg, mkBinOp("*", g, e, elemTyp), elemTyp, env, path, into)
+    of "log", "ln":
+      transposeExpr(ctx, arg, mkBinOp("/", g, arg, elemTyp), elemTyp, env, path, into)
+    of "sqrt":
+      let two = GpuAst(kind: gpuLit, lValue: "2.0", lType: elemTyp)
+      let denom = mkBinOp("*", two, ctx.mathCall("sqrt", arg, elemTyp), elemTyp)
+      transposeExpr(ctx, arg, mkBinOp("/", g, denom, elemTyp), elemTyp, env, path, into)
+    of "rsqrt":
+      let two = GpuAst(kind: gpuLit, lValue: "2.0", lType: elemTyp)
+      let twoX = mkBinOp("*", two, arg, elemTyp)
+      let twoXSqrtX = mkBinOp("*", twoX, ctx.mathCall("sqrt", arg, elemTyp), elemTyp)
+      let rule = mkPrefix("-", mkBinOp("/", g, twoXSqrtX, elemTyp))
+      transposeExpr(ctx, arg, rule, elemTyp, env, path, into)
+    else:
+      adRefuse(e, "gpuCall",
+        "call to '" & e.cName.ident() & "' is outside the differentiable subset")
   of gpuIndex:
     # Memory read: scatter-add the adjoint into the buffer's shadow adjoint.
     let t = ctx.getExprType(e)
@@ -571,17 +626,19 @@ proc transposeExpr(ctx: var GpuContext, e: GpuAst, g: GpuAst, elemTyp: GpuType, 
       adRefuse(e, "gpuIndex",
         "no shadow adjoint for buffer '" & root.symbol.name & "'")
     let idx = substituteLocals(ctx, e.iIndex, env, path)
+    let gSub = substituteLocals(ctx, g, env, path)
     let lhs = mkIndex(dIdent, idx)
-    into.add mkAssign(lhs, mkBinOp("+", mkIndex(dIdent, idx), g, elemTyp))
+    into.add mkAssign(lhs, mkBinOp("+", mkIndex(dIdent, idx), gSub, elemTyp))
   of gpuTernary:
     let t = ctx.getExprType(e)
     if t.isNil or t.kind notin DiffFloatKinds:
       return
+    let cond = substituteLocals(ctx, e.tCond, env, path)
     transposeExpr(ctx, e.tThen,
-      GpuAst(kind: gpuTernary, tCond: e.tCond, tThen: g, tElse: mkZeroLit(elemTyp)),
+      GpuAst(kind: gpuTernary, tCond: cond, tThen: g, tElse: mkZeroLit(elemTyp)),
       elemTyp, env, path, into)
     transposeExpr(ctx, e.tElse,
-      GpuAst(kind: gpuTernary, tCond: e.tCond, tThen: mkZeroLit(elemTyp), tElse: g),
+      GpuAst(kind: gpuTernary, tCond: cond, tThen: mkZeroLit(elemTyp), tElse: g),
       elemTyp, env, path, into)
   of gpuConv:
     if e.convTo.kind notin DiffFloatKinds:

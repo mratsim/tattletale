@@ -132,6 +132,17 @@ proc kernel(y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: i
 const pair = bkGlsl.bwd_diff(kernel)
 """, "gpuCall")
 
+expectRefusal("external_math", """
+import workspace/crucible
+import std/math
+
+proc kernel(y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: int32) {.global.} =
+  for i in 0 ..< n:
+    y[i] = floor(a[i])
+
+const pair = bkGlsl.bwd_diff(kernel)
+""", "gpuCall")
+
 expectRefusal("barrier", entryBody(
   "y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: int32",
   """  threadgroup_barrier()
