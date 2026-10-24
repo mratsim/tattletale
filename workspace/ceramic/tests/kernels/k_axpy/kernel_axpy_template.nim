@@ -41,9 +41,11 @@ func refAxpy[T, ShX, StX, ShY, StY, ShR, StR](
 
 proc checkAxpy*[E: HwEngine](
     rng: var Rand, engine: E, rows, cols: static int,
-    sX, sY: static (int, int), msg: static string) =
+    sX, sY: static (int, int), msg: static string,
+    lang: static LaunchLang = llSpirv) =
   ## One axpy launch over random (rows, cols) tensors with the given strides,
-  ## the result compared against the host reference
+  ## the result compared against the host reference.
+  ## `lang` selects the Vulkan SPIR-V ingestion language, words route by default.
   var x = rng.randomHostTensor( float32, (rows, cols), sX)
   var y = rng.randomHostTensor( float32, (rows, cols), sY)
   var expect = makeHostTensor(float32, (rows, cols), (cols, 1))
@@ -53,9 +55,18 @@ proc checkAxpy*[E: HwEngine](
     yDev = engine.bridge(y)
   # the kernel's grid-stride loop completes the tile grid from any launch grid
   let gridX = rng.rand(1 .. 2 * ceil_div(rows * cols div 128, 32) + 1)
-  engine.launchDeviceFn axpy(yDev, xDev, 2.5'f32) do:
-    grid = (gridX, 1)
-    blk = (32, 1)
+  template launch(langLit: untyped) =
+    ## `langLit` pastes as the literal ident the launch parser maps to LaunchLang
+    engine.launchDeviceFn axpy(yDev, xDev, 2.5'f32) do:
+      grid = (gridX, 1)
+      blk = (32, 1)
+      lang = `langLit`
+  when lang == llSpirv:
+    launch(spirv)
+  elif lang == llGlsl:
+    launch(glsl)
+  else:
+    launch(hlsl)
   engine.copyToHostFromDevice(addr y.data[0], yDev.data, y.layout.cosize())
   assertAllClose(y.view(), expect.view(), rtol = 1e-5, abstol = 1e-4, msg = msg)
 
@@ -63,7 +74,7 @@ proc checkAxpy*[E: HwEngine](
 #  The drivers
 # ═══════════════════════════════════════════════════════════════
 
-proc run_axpy_tests*[E: HwEngine](engine: E, moduleName: string) =
+proc run_axpy_tests*[E: HwEngine](engine: E, moduleName: string, lang: static LaunchLang = llSpirv) =
   var rng: Rand
   let seed = uint32(getTime().toUnix() and (1'i64 shl 32 - 1)) # unixTime mod 2^32
   rng.seed(int64(seed))
@@ -73,8 +84,8 @@ proc run_axpy_tests*[E: HwEngine](engine: E, moduleName: string) =
   const rows = 8
   const cols = 128
 
-  rng.checkAxpy(engine, rows, cols, (cols, 1), (cols, 1), "row-major")
-  rng.checkAxpy(engine, rows, cols, (1, rows), (1, rows), "col-major")
-  rng.checkAxpy(engine, rows, cols, (2*cols, 2), (2*cols, 2), "stride-2")
-  rng.checkAxpy(engine, rows, cols, (1, cols), (1, cols), "inverted strides")
-  rng.checkAxpy(engine, rows, cols, (cols, 1), (1, rows), "row-major x, col-major y")
+  rng.checkAxpy(engine, rows, cols, (cols, 1), (cols, 1), "row-major", lang)
+  rng.checkAxpy(engine, rows, cols, (1, rows), (1, rows), "col-major", lang)
+  rng.checkAxpy(engine, rows, cols, (2*cols, 2), (2*cols, 2), "stride-2", lang)
+  rng.checkAxpy(engine, rows, cols, (1, cols), (1, cols), "inverted strides", lang)
+  rng.checkAxpy(engine, rows, cols, (cols, 1), (1, rows), "row-major x, col-major y", lang)
