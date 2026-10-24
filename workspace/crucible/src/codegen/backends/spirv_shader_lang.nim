@@ -132,6 +132,8 @@ func valueTy(t: GpuType): SpvTy =
 #  std430 layout
 # ═══════════════════════════════════════════════════════════════════════
 
+# Member offsets are the host deviceLayout C numbers
+
 type SpvLayout = object
   size*: int
   align*: int
@@ -282,21 +284,20 @@ type
 func pushMemberTy(p: GpuType): SpvTy =
   case p.kind
   of gtPtr, gtVoidPtr: spvScalar(GpuType(kind: gtUint64))
+  of gtObject, gtGenericInst: valueTy(p)
   else: spvTy(p)
 
 func buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
   # bool members never reach here: the patchBoolToI32 pass retypes bool
   # kernel params to i32 before emission
-  for m in members:
-    if m.kind == stkScalar and gpuScalarByteSize(m.scalar) < 4:
-      spvRefuse("push-constant member " & $m.scalar.kind &
-        " narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
   result.members = members
   result.offsets = std430Offsets(result.members)
   result.byteSize = std430Layout(spvStruct(result.members)).size
   result.structTy = ctx.structTy(result.members, isBlock = true)
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
+  # PushConstant interface entries are invalid in SPIR-V 1.3,
+  # the OpTypeStruct signature alone binds the block
 
 func builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if builtin in ctx.builtins:
@@ -358,7 +359,8 @@ type
     locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
     paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
     paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
-    paramAddrs*: Table[string, uint32] ## pointer param iSym to the raw u64 push address
+    paramMembers*: Table[string, tuple[ptrId: uint32, t: GpuType]]
+      ## object kernel param iSym to its in-place push-block member pointer
     addrs*: Table[string, uint32]
     addrNames*: Table[string, uint32]
     addrNamePointees*: Table[string, GpuType]
@@ -370,6 +372,22 @@ type
     fns*: Table[string, GpuAst]         ## device fn bodies keyed by callee iSym
 
 const spvSignedInts = {gtInt16, gtInt32, gtInt64}
+
+proc refuseNarrowPushMembers(t: GpuType, path: string) =
+  ## Push members are 32-bit or wider, narrower leaves refuse
+  ## (8/16-bit members need the SPIR-V 1.5 storage capabilities)
+  case t.kind
+  of gtUint8, gtUint16, gtInt16, gtFloat16:
+    spvRefuse("push-constant member " & path & " (" & $t.kind &
+      ") is narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
+  of gtArray: refuseNarrowPushMembers(t.aTyp, path)
+  of gtObject, gtGenericInst:
+    if isStaticInt(t):
+      return
+    for f in t.fields:
+      refuseNarrowPushMembers(f.typ, path & "." & f.name)
+  else:
+    discard
 
 proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst)
 
@@ -571,6 +589,9 @@ func emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     return ctx.builder.opLoad(ctx.tyId(valueTy(t)), getLocalVarId(fn, sym))
   if sym.iSym in fn.paramVals:
     return fn.paramVals[sym.iSym]
+  if sym.iSym in fn.paramMembers:
+    let pm = fn.paramMembers[sym.iSym]
+    return ctx.builder.opLoad(ctx.tyId(valueTy(pm.t)), pm.ptrId)
   if sym.iSym in fn.addrs:
     return ctx.builder.opLoad(ctx.tyId(valueTy(sym.typ)), fn.addrs[sym.iSym])
   if sym.iSym in fn.paramPtrs:
@@ -647,36 +668,39 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32
 
 proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType
 
-func resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool] =
+func resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
   case root.kind
   of gpuIdent:
     let sym = root.symbol
     if sym.iSym in fn.localsBySym or sym.name in fn.locals:
       let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
-      return (getLocalVarId(fn, sym), t, false)
+      return (getLocalVarId(fn, sym), t, false, false)
+    if sym.iSym in fn.paramMembers:
+      let pm = fn.paramMembers[sym.iSym]
+      return (pm.ptrId, pm.t, false, true)
     if sym.iSym in fn.addrs:
       # pointer params address their pointee, a chain root through them
       # starts at the pointee type, an implicit-ptr parameter's declared type
       # names only the element
       let t = fn.addrPointee.getOrDefault(sym.iSym, sym.typ)
       let pt = if t.kind in {gtPtr, gtUncheckedArray}: derefTy(t) else: t
-      return (fn.addrs[sym.iSym], pt, false)
+      return (fn.addrs[sym.iSym], pt, false, false)
     if sym.iSym in fn.paramPtrs:
-      return (fn.paramPtrs[sym.iSym], pointeeElem(sym.typ), true)
+      return (fn.paramPtrs[sym.iSym], pointeeElem(sym.typ), true, false)
     if sym.name in fn.addrNames:
       # re-symbol'd assign target over a parameter: the name survives,
       # the type comes from the registration site
       let t = fn.addrNamePointees.getOrDefault(sym.name, sym.typ)
       let pt = if t.kind in {gtPtr, gtUncheckedArray}: derefTy(t) else: t
-      return (fn.addrNames[sym.name], pt, false)
+      return (fn.addrNames[sym.name], pt, false, false)
     spvRefuse("member chain root is not a local or parameter: " & sym.name)
   of gpuAddr: result = resolvePtrRoot(ctx, fn, root.aOf)
   of gpuDeref: result = resolvePtrRoot(ctx, fn, root.dOf)
   else:
     spvRefuse("member chain root node " & $root.kind)
 
-proc emitChainPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst, fields: seq[GpuAst]): tuple[ptrId: uint32, pointee: GpuType] =
-  let (base, baseTy, isBda) = resolvePtrRoot(ctx, fn, root)
+proc emitChainPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst, fields: seq[GpuAst]): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
+  let (base, baseTy, isBda, isPush) = resolvePtrRoot(ctx, fn, root)
   if isBda:
     spvRefuse("member access through a buffer device address parameter")
   var t = baseTy
@@ -685,9 +709,12 @@ proc emitChainPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst, fields: s
     let (i, fty) = fieldEntry(t, f.symbol.name)
     idxs.add ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
     t = fty
-  let ptrTy = ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(t)))
+  # the access chain preserves the base's storage class (PushConstant or Function)
+  let sc = if isPush: scPushConstant else: scFunction
+  let ptrTy = ctx.builder.tyPointer(sc, ctx.tyId(valueTy(t)))
   result.ptrId = ctx.builder.opAccessChain(ptrTy, base, idxs)
   result.pointee = t
+  result.isPush = isPush
 
 proc emitDotValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let ch = dotChain(n)
@@ -698,7 +725,7 @@ proc emitDotValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       coordBuiltinInput(ch.root.symbol.coordBuiltin),
       coordComponent(ch.fields[0]))
   if ch.root.kind in {gpuIdent, gpuAddr, gpuDeref}:
-    let (ptrId, pointee) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    let (ptrId, pointee, _, _) = emitChainPtr(ctx, fn, ch.root, ch.fields)
     return ctx.builder.opLoad(ctx.tyId(valueTy(pointee)), ptrId)
   var v = emitExpr(ctx, fn, ch.root)
   var idxs: seq[int]
@@ -711,7 +738,7 @@ proc emitDotValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     t = valueType(fty)
   return ctx.builder.opCompositeExtract(ctx.tyId(valueTy(t)), v, idxs)
 
-proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: GpuAst): tuple[ptrId: uint32, elem: GpuType, isBda: bool] =
+proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: GpuAst): tuple[ptrId: uint32, elem: GpuType, isBda: bool, isPush: bool] =
   let inner = if base.kind == gpuDeref: base.dOf else: base
   let idxVal = emitExpr(ctx, fn, index)
   if inner.kind == gpuIdent:
@@ -764,11 +791,10 @@ proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: G
     memberIdxs.add ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
     t = fty
   if t.kind in {gtPtr, gtUncheckedArray}:
-    # device memory through the u64 address member
     result.elem = if t.kind == gtUncheckedArray: t.uaTo else: pointeeElem(t)
     doAssert result.elem.kind in spvScalarKinds,
       "SPIR-V buffer references address scalar elements only: " & $result.elem.kind
-    let (addrPtr, _) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    let (addrPtr, _, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
     let u64Ty = ctx.tyId(spvScalar(GpuType(kind: gtUint64)))
     let addrVal = ctx.builder.opLoad(u64Ty, addrPtr)
     ctx.caps.incl capPhysicalStorageBufferAddresses
@@ -780,26 +806,27 @@ proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: G
                                              @[member0, idxVal])
     result.isBda = true
   else:
-    # Function-storage composite member: the member chain already exists
-    # (emitChainPtr), the element chain adds the array index alone
+    # the member chain exists (emitChainPtr), the element chain adds the index
     doAssert t.kind == gtArray, "indexed member is not an array: " & $t.kind
     result.elem = valueType(t.aTyp)
     doAssert result.elem.kind in spvScalarKinds,
       "composite element stores address scalar elements only"
-    let (basePtr, _) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    let elemPtrTy = ctx.builder.tyPointer(scFunction,
+    let (basePtr, _, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    let sc = if isPush: scPushConstant else: scFunction
+    let elemPtrTy = ctx.builder.tyPointer(sc,
                                           ctx.tyId(spvScalar(result.elem)))
     result.ptrId = ctx.builder.opAccessChain(elemPtrTy, basePtr, @[idxVal])
     result.isBda = false
+    result.isPush = isPush
 
-proc emitAddr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool] =
+proc emitAddr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
   case n.kind
   of gpuIdent, gpuAddr, gpuDeref:
     result = resolvePtrRoot(ctx, fn, n)
   of gpuDot:
     let ch = dotChain(n)
-    let (ptrId, pointee) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    result = (ptrId, pointee, false)
+    let (ptrId, pointee, isBda, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    result = (ptrId, pointee, isBda, isPush)
   else:
     spvRefuse("address of node " & $n.kind)
 
@@ -839,14 +866,6 @@ proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       # a static field contributes its compile-time value, no runtime read
       members.add ctx.builder.constUint(ctx.tyId(spvScalar(GpuType(kind: gtInt32))),
                                         uint64(uint32(staticIntValue(f.typ))))
-    elif f.value.kind == gpuDiscard:
-      # an all-static composite field (e.g. a static layout member) crosses
-      # no runtime bytes, the storage slot is never read
-      members.add ctx.builder.opUndef(ctx.tyId(valueTy(f.typ)))
-    elif f.value.kind == gpuIdent and f.value.symbol.iSym in fn.paramAddrs:
-      # a pointer leaf field of a reconstruction local: the push block
-      # member is the raw u64 device address
-      members.add fn.paramAddrs[f.value.symbol.iSym]
     else:
       let v = emitExpr(ctx, fn, f.value)
       if f.typ.kind in spvScalarKinds or isStaticInt(f.typ):
@@ -892,8 +911,8 @@ proc emitAtomicFetchAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint3
   let addrNode = n.cArgs[0]
   doAssert addrNode.kind == gpuAddr and addrNode.aOf.kind == gpuIndex,
     "atomicFetchAdd address is not addr(index(...))"
-  let (ptrId, elem, isBda) = emitAccessPtr(ctx, fn, addrNode.aOf.iArr,
-                                           addrNode.aOf.iIndex)
+  let (ptrId, elem, isBda, _) = emitAccessPtr(ctx, fn, addrNode.aOf.iArr,
+                                              addrNode.aOf.iIndex)
   doAssert isBda, "atomicFetchAdd lowers through a buffer device address only"
   doAssert elem.kind == gtFloat32, "atomicFetchAdd lowers f32 only: " & $elem.kind
   let v = emitExpr(ctx, fn, n.cArgs[1])
@@ -928,10 +947,14 @@ proc emitCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   var args: seq[uint32]
   for i, a in n.cArgs:
     let p = procNode.pParams[i]
-    if p.passByRef or p.typ.kind in {gtPtr, gtVoidPtr}:
-      let (ptrId, _, isBda) = emitAddr(ctx, fn, a)
+    if p.typ.kind in {gtPtr, gtVoidPtr}:
+      let (ptrId, _, isBda, isPush) = emitAddr(ctx, fn, a)
       doAssert not isBda,
         "buffer device address pointers are not call arguments in the SPIR-V subset"
+      if isPush:
+        let what = if a.kind == gpuIdent: a.symbol.name else: $a.kind
+        spvRefuse("push-constant member `" & what &
+          "` cannot cross by reference, push constants are read-only")
       args.add ptrId
     else:
       let v = emitExpr(ctx, fn, a)
@@ -960,7 +983,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   of gpuDot:
     emitDotValue(ctx, fn, n)
   of gpuIndex:
-    let (ptrId, elem, isBda) = emitAccessPtr(ctx, fn, n.iArr, n.iIndex)
+    let (ptrId, elem, isBda, _) = emitAccessPtr(ctx, fn, n.iArr, n.iIndex)
     if isBda:
       let elemAlign = uint32(std430Layout(spvScalar(elem)).align)
       ctx.builder.opLoadAligned(ctx.tyId(spvScalar(elem)), ptrId, elemAlign)
@@ -975,7 +998,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
     let src = if n.kind == gpuConv: n.convExpr else: n.cExpr
     convertValue(ctx, emitExpr(ctx, fn, src), exprType(fn, src), target)
   of gpuDeref:
-    let (ptrId, pointee, isBda) = resolvePtrRoot(ctx, fn, n.dOf)
+    let (ptrId, pointee, isBda, _) = resolvePtrRoot(ctx, fn, n.dOf)
     doAssert not isBda,
       "deref load through a buffer device address is outside the SPIR-V subset"
     ctx.builder.opLoad(ctx.tyId(valueTy(pointee)), ptrId)
@@ -1010,17 +1033,31 @@ proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   case n.aLeft.kind
   of gpuDot:
     let ch = dotChain(n.aLeft)
-    let (ptrId, pointee) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    let (ptrId, pointee, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
+    if isPush:
+      # a store updates only an unreachable copy, push constants are read-only
+      var path = ch.root.symbol.name
+      for f in ch.fields:
+        path.add "."
+        path.add f.symbol.name
+      spvRefuse("assignment to push-constant member `" & path &
+        "` (" & fn.name & "): push constants are read-only")
     let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(pointee))
     ctx.builder.opStore(ptrId, value)
   of gpuDeref:
-    let (ptrId, pointee, isBda) = resolvePtrRoot(ctx, fn, n.aLeft)
+    let (ptrId, pointee, isBda, isPush) = resolvePtrRoot(ctx, fn, n.aLeft)
     doAssert not isBda,
       "deref store through a buffer device address is outside the SPIR-V subset"
+    if isPush:
+      spvRefuse("assignment through push-constant storage (" & fn.name &
+        "): push constants are read-only")
     let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(pointee))
     ctx.builder.opStore(ptrId, value)
   of gpuIndex:
-    let (ptrId, elem, isBda) = emitAccessPtr(ctx, fn, n.aLeft.iArr, n.aLeft.iIndex)
+    let (ptrId, elem, isBda, isPush) = emitAccessPtr(ctx, fn, n.aLeft.iArr, n.aLeft.iIndex)
+    if isPush:
+      spvRefuse("assignment through push-constant storage (" & fn.name &
+        "): push constants are read-only")
     let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(elem))
     if isBda:
       let elemAlign = uint32(std430Layout(spvScalar(elem)).align)
@@ -1029,6 +1066,9 @@ proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
       ctx.builder.opStore(ptrId, value)
   of gpuIdent:
     let sym = n.aLeft.symbol
+    if sym.iSym in fn.paramMembers:
+      spvRefuse("assignment to the whole parameter object `" & sym.name &
+        "` (" & fn.name & "): push constants are read-only")
     # iSym first: same-name sibling locals (two `total`, two `accs`) carry
     # distinct iSyms, name-keyed lookup would hit the wrong one.
     # The name fallback covers assign targets whose symbols the passes
@@ -1311,7 +1351,7 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
     elif p.passByRef:
       doAssert p.typ.kind in {gtObject, gtGenericInst},
         "byRef scalar params are outside the SPIR-V subset"
-      paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(p.typ)))
+      paramTyIds.add ctx.tyId(valueTy(p.typ))
     else:
       paramTyIds.add ctx.tyId(valueTy(valueType(p.typ)))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
@@ -1320,21 +1360,14 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   for i, p in procNode.pParams:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
     let sym = p.ident.symbol
-    if p.typ.kind == gtPtr or p.passByRef:
+    if p.typ.kind == gtPtr:
       fn.addrs[sym.iSym] = pid
       fn.addrNames[sym.name] = pid
-      if p.typ.kind == gtPtr:
-        if p.typ.implicit:
-          fn.addrPointee[sym.iSym] = p.typ.to
-        else:
-          fn.addrPointee[sym.iSym] = pointeeElem(p.typ)
+      if p.typ.implicit:
+        fn.addrPointee[sym.iSym] = p.typ.to
       else:
-        fn.addrPointee[sym.iSym] = p.typ
-        fn.addrNamePointees[sym.name] = p.typ
+        fn.addrPointee[sym.iSym] = pointeeElem(p.typ)
     elif p.typ.kind in {gtObject, gtGenericInst}:
-      # by-value object parameter: remembered here, then copied into one Function-storage
-      # variable right after the entry label, which gives member chains an address.
-      # Stores still go through its pointer fields
       objParams.add (sym, pid, p.typ)
     else:
       fn.paramVals[sym.iSym] = pid
@@ -1384,9 +1417,8 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   doAssert not kernel.forwardDeclare, "forward declarations do not emit"
 
   ctx.fns = fns
-  # every kernel parameter is flat by now: the flattenObjectParams pass
-  # decomposed object params into one scalar/pointer param per leaf.
-  # The push block has one member per parameter in parameter order
+  # One OpTypeStruct push block in parameter order,
+  # offsets are the host deviceLayout C numbers, object params bind in place
   var memberTys: seq[SpvTy]
   var hasBda = false
   for p in kernel.pParams:
@@ -1396,11 +1428,9 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
       spvRefuse("void ptr params")
     if p.typ.kind in {gtPtr, gtUncheckedArray}:
       hasBda = true
-      memberTys.add spvScalar(GpuType(kind: gtUint64))
     else:
-      doAssert not p.passByRef,
-        "by-reference kernel params are flattened to leaves before emission"
-      memberTys.add pushMemberTy(p.typ)
+      refuseNarrowPushMembers(p.typ, p.ident.symbol.name)
+    memberTys.add pushMemberTy(p.typ)
 
   let push = ctx.buildPushBlockTys(memberTys)
 
@@ -1417,8 +1447,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   var fn = SpvFnCtx(name: "kernel " & kernel.pName.ident(), fns: ctx.fns)
   discard ctx.builder.opLabel()
 
-  # setup block: Function-storage variables first, then hoisted parameter loads,
-  # all later blocks are dominated by the entry block
+  # setup block: Function-storage variables first, then hoisted parameter bindings, all later blocks dominated by the entry block
   hoistLocals(ctx, fn, kernel.pBody)
   for i, p in kernel.pParams:
     let sym = p.ident.symbol
@@ -1429,9 +1458,14 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
       let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
-      fn.paramAddrs[sym.iSym] = devAddr
       fn.paramPtrs[sym.iSym] =
         ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(pointeeElem(p.typ)), devAddr)
+    elif p.typ.kind in {gtObject, gtGenericInst} and not isStaticInt(p.typ):
+      let memberTy = memberTys[i]
+      let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
+      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
+      let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
+      fn.paramMembers[sym.iSym] = (slot, p.typ)
     else:
       let memberTy = memberTys[i]
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))

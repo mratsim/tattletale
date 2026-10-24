@@ -54,6 +54,49 @@ proc containsReturnStmt*(n: GpuAst): bool =
     if ch.containsReturnStmt():
       return true
 
+# ═══════════════════════════════════════════════════════════════════════
+# Struct kernel-param expansion
+# ═══════════════════════════════════════════════════════════════════════
+
+func containsPtrDeep*(t: GpuType): bool =
+  case t.kind
+  of gtPtr: true
+  of gtObject, gtGenericInst:
+    for f in t.fields:
+      if f.typ.containsPtrDeep:
+        return true
+    false
+  of gtArray: t.aTyp.containsPtrDeep
+  else: false
+
+type KernelParamLeaf* = object
+  name*: string
+  typ*: GpuType
+  isBuffer*: bool
+
+proc kernelParamLeaves*(t: GpuType, name: string): seq[KernelParamLeaf] =
+  ## Leaves of `t` in field order, structs with (nested) pointer fields
+  ## expand depth-first, the Metal/WebGPU/MSL resource model
+  result = newSeq[KernelParamLeaf]()
+  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
+    case t.kind
+    of gtPtr:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
+    of gtObject, gtGenericInst:
+      if t.containsPtrDeep:
+        for f in t.fields:
+          if size(f.typ) > 0:
+            walk(f.typ, name & "_" & f.name, leaves)
+      else:
+        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    of gtArray:
+      doAssert not t.containsPtrDeep,
+        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+    else:
+      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
+  walk(t, name, result)
+
 proc collectIdentNames*(n: GpuAst, names: var HashSet[string]) =
   ## Every identifier name appearing in `n`, declaration positions included.
   ## Fresh names must not collide with any name the body already uses.

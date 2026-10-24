@@ -52,10 +52,14 @@ proc kernelFn(stmts: varargs[GpuAst]): GpuAst =
          pRetType: GpuType(kind: gtVoid),
          pBody: GpuAst(kind: gpuBlock, statements: @stmts))
 
+proc registerShippedPipeline(reg: var PassRegistry) =
+  reg.registerLegalizationPasses()
+  reg.registerSpirvLoweringPasses()
+
 proc runLower(ctx: var GpuContext, k: GpuAst) =
   ctx.fnTab[k.pName] = k
   ctx.allFnTab[k.pName] = k
-  registerLowerCompoundAssign.runPassPrepared(ctx)
+  registerShippedPipeline.runPassPrepared(ctx)
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. `acc += y` over a float32 local rewrites to `acc = acc + y`
@@ -118,7 +122,8 @@ static:
   let fooFn = GpuAst(kind: gpuProc,
                      pName: GpuAst(kind: gpuIdent, symbol: newSymbol("foo", iSym = "foo_h2")),
                      pRetType: f32t,
-                     pBody: GpuAst(kind: gpuBlock, statements: @[]))
+                     pBody: GpuAst(kind: gpuBlock, statements: @[
+                       GpuAst(kind: gpuReturn, rValue: lit(f32t, "0.0"))]))
   ctx.allFnTab[fooFn.pName] = fooFn
   let arrT = GpuType(kind: gtArray, aTyp: f32t, aLen: 8)
   let arrSym = newSymbol("a", iSym = "a_h2", typ = arrT, symKind = gsLocal)
@@ -127,7 +132,7 @@ static:
   let k = kernelFn(GpuAst(kind: gpuAssign, aLeft: callIdx, aOp: "+=", aRight: lit(f32t, "1.0")))
   ctx.allFnTab[k.pName] = k
   ctx.fnTab[k.pName] = k
-  registerLowerCompoundAssign.runPassPrepared(ctx)
+  registerShippedPipeline.runPassPrepared(ctx)
   doAssert k.pBody.statements.len == 2,
     "the hoisted temp precedes the rewritten assignment"
   let decl = k.pBody.statements[0]

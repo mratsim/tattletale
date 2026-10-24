@@ -15,17 +15,14 @@
 # The bundle registers the SPIR-V pipeline's passes.
 
 import std/macros # for the `error` builtin (compile-time diagnostics)
-import std/sets # pad-name collision check over body identifiers
-import std/strutils # leaf param naming joins the field path
-import std/tables # the reconstruction-local table
+import std/tables # allFnTab key iteration
 import ../ir/ast_datatypes
-import ../ir/ast_type_constructors # initGpuPtrType
 import ../ir/ast_type_resolvers # getExprType
 import ./pass_datatypes
-import ./pass_helpers # collectIdentNames
+import ./pass_helpers # roundUpMultiple, gpuScalarByteSize
 import ./pass_registry
 import ./passes_lowering
-import ./passes_low_pointers
+import ./passes_low_pointers # registerInsertPointerDeref
 import ./passes_low_views
 
 {.experimental: "codeReordering".}
@@ -46,17 +43,10 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   # pointer-deref insertion, both copies of the address skeleton retype alike
   reg.registerLowerCompoundAssign(deps = @["lowerTernaryToIf"])
   reg.registerInsertPointerDeref()
-  # Object kernel params explode into leaf params and a reconstruction local,
-  # pure-value objects included: the push block renders flat members only.
-  # Bool leaves stay gtBool, the next pass retypes them
-  reg.registerExplodeKernelParams(deps = @["insertPointerDeref"])
-  # u32 pad members hold the device push block at the offsets the host
-  # launch serialization packs: the object head rounds up to the object
-  # alignment and the tail to the host-rounded end
-  reg.registerSpirvPushBlockPad(deps = @["explodeKernelParams"])
   # Bool kernel parameters declare i32 in the push-constant interface,
-  # loads convert at the use boundary
-  reg.registerPatchBoolToI32(deps = @["explodeKernelParams"])
+  # loads convert at the use boundary. Object kernel params need no pass:
+  # the emitter binds them in place as nested push-block struct members
+  reg.registerPatchBoolToI32(deps = @["lowerTernaryToIf"])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Ternaries and lazy bools to if-statements
@@ -390,9 +380,6 @@ const compoundElemKinds = {gtUint8, gtUint16, gtInt16, gtUint32, gtInt32,
   ## the OpIAdd/OpFAdd families over binopInst. Everything else refuses.
 
 proc hoistAddressCalls(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) =
-  ## Hoists every call inside an lvalue address path into a scalar temp
-  ## assigned before the statement, the address expression evaluates
-  ## each side effect exactly once and the rewritten assignment reads the temp
   case n.kind
   of gpuCall:
     # inner calls hoist first, the temp initializer stays call-free
@@ -509,144 +496,3 @@ proc lowerCompoundAssign(ctx: var GpuContext) =
   for blk in ctx.globalBlocks.mitems:
     if blk.kind == gpuBlock:
       ctx.lowerCompoundAssignStmts(blk.statements)
-
-# ═══════════════════════════════════════════════════════════════════════
-# Push-block padding (SPIR-V launch policy)
-# ═══════════════════════════════════════════════════════════════════════
-
-func registerSpirvPushBlockPad(reg: var PassRegistry, deps: seq[string] = @[]) =
-  ## Inserts u32 pad params between the exploded leaves so the device push
-  ## block's member offsets match the host launch serialization.
-  ## SPIR-V pipeline only: the padding is the SPIR-V launch ABI's policy
-  ## and stays out of the shared explode pass
-  reg.register("spirvPushBlockPad", pkTransform, phaseMain,
-    "Inserts u32 pad params after the exploded leaves so the device push-block offsets match the host serialization's object head and tail rounding",
-    dependsOn = deps,
-    run = proc(ctx: var GpuContext): void =
-      ctx.spirvPushBlockPad()
-  )
-
-func pushHostWidth(t: GpuType): int =
-  ## Byte width of one flat push member under the host launch serialization:
-  ##
-  ## - scalars read the shared gpuScalarByteSize table
-  ## - a pointer crosses as its 8-byte device address
-  ## - an array packs at the element width
-  case t.kind
-  of gtPtr, gtVoidPtr, gtUncheckedArray: 8
-  of gtArray: gpuScalarByteSize(t.aTyp) * t.aLen
-  else: gpuScalarByteSize(t)
-
-func pushHostAlign(t: GpuType): int =
-  ## Byte alignment of one flat push member under the host serialization:
-  ## arrays align at the element width
-  case t.kind
-  of gtArray: pushHostWidth(t.aTyp)
-  else: pushHostWidth(t)
-
-type PadGroup = object
-  ## Leaf params one exploded object contributed, in field order
-  leaves: seq[tuple[name: string, typ: GpuType]]
-
-proc collectLeafIdents(fn: GpuAst, n: GpuAst, leaves: var seq[tuple[name: string, typ: GpuType]]) =
-  ## Collects the leaf param references of a reconstruction construction
-  ## in field order, nested sub-object constructions recurse.
-  ## Types come from the kernel's param list: its idents carry none
-  case n.kind
-  of gpuObjConstr:
-    for f in n.ocFields:
-      fn.collectLeafIdents(f.value, leaves)
-  of gpuIdent:
-    for p in fn.pParams:
-      if p.ident.symbol.name == n.symbol.name:
-        leaves.add (n.symbol.name, p.typ)
-        return
-    error "spirvPushBlockPad: kernel `" & fn.pName.ident() &
-      "`: reconstruction references non-parameter `" & n.symbol.name & "`"
-  else:
-    discard
-
-proc collectPadGroups(fn: GpuAst, groups: var seq[PadGroup]) =
-  ## Explode leaves one reconstruction local per exploded param:
-  ## a global-kernel-param-named var whose initializer is an object
-  ## construction over the leaf params. Its fields name the group's
-  ## leaves in field order
-  if fn.pBody.kind != gpuBlock:
-    return
-  for st in fn.pBody.statements:
-    if st.kind == gpuVar and st.vInit.kind == gpuObjConstr and
-        st.vName.symbol.symKind == gsGlobalKernelParam:
-      var g = PadGroup()
-      fn.collectLeafIdents(st.vInit, g.leaves)
-      groups.add g
-
-proc spirvPushBlockPad(ctx: var GpuContext) =
-  ## Rebuilds every `{.global.}` kernel's params with u32 pads interleaved.
-  ##
-  ## - the host packs each object at roundUp(off, objAlign) head and tail
-  ## - the device push block rounds flat members to their own alignment
-  ## - the pads equalize the two offsets
-  ##
-  ## objAlign is the max leaf alignment, matching the host serializer's deviceLayout for the object
-  for fnKey in ctx.allFnTab.keys:
-    let fn = ctx.allFnTab[fnKey]
-    if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
-      continue
-    var groups: seq[PadGroup]
-    fn.collectPadGroups(groups)
-    if groups.len == 0:
-      continue
-    var leafOf = initTable[string, tuple[g, l: int]]()
-    var objAlign: seq[int]
-    for gi, g in groups:
-      for li, leaf in g.leaves:
-        leafOf[leaf.name] = (gi, li)
-      var a = 1
-      for leaf in g.leaves:
-        a = max(a, pushHostAlign(leaf.typ))
-      objAlign.add a
-    var used: HashSet[string]
-    for p in fn.pParams:
-      used.incl p.ident.symbol.name
-    fn.pBody.collectIdentNames(used)
-    var params: seq[GpuParam]
-    var hostOff = 0
-    var devOff = 0
-    var padCount = 0
-    for p in fn.pParams:
-      let name = p.ident.symbol.name
-      let w = pushHostWidth(p.typ)
-      let a = pushHostAlign(p.typ)
-      if name in leafOf:
-        let (gi, li) = leafOf[name]
-        if li == 0:
-          # the host rounds the object's head to the object alignment
-          hostOff = roundUpMultiple(hostOff, objAlign[gi])
-      let hostPlace = roundUpMultiple(hostOff, a)
-      # the device rounds flat members to their own alignment.
-      # U32 pads advance the device offset to the host placement.
-      # All members are at least 32 bits wide, both offsets keep their 4-byte granularity
-      while devOff < hostPlace:
-        let padName = name & "_pad" & $padCount
-        if padName in used:
-          error "spirvPushBlockPad: padding member name `" & padName &
-            "` collides with an existing name in kernel `" & fn.pName.ident() & "`"
-        used.incl padName
-        let padSym = newSymbol(padName, typ = GpuType(kind: gtUint32),
-                               symKind = gsGlobalKernelParam)
-        params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: padSym),
-                            typ: padSym.typ, addressSpace: asRMEM,
-                            passByRef: false)
-        devOff = roundUpMultiple(devOff, 4) + 4
-        inc padCount
-      doAssert devOff == hostPlace,
-        "spirvPushBlockPad: device offset " & $devOff & " missed host placement " & $hostPlace
-      devOff = hostPlace + w
-      hostOff = hostPlace + w
-      if name in leafOf:
-        let (gi, li) = leafOf[name]
-        if li == groups[gi].leaves.len - 1:
-          # the host rounds the object's packed end to the object alignment
-          hostOff = roundUpMultiple(hostOff, objAlign[gi])
-      params.add p
-    fn.pParams = params

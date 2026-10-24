@@ -36,25 +36,10 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
     phase = phaseMain,
     description = "Expands kernel params of structs carrying (nested) pointer fields into ptr/scalar leaves and rebuilds the struct in the body",
     dependsOn = @["ensureBlock", "pruneCompileTimeParams"],
-    run = proc(ctx: var GpuContext): void =
-      ctx.explodeKernelParams(deepOnly = true)
+    run = explodeGlobalStructWithPtrFields
   )
 
-func registerExplodeKernelParams*(reg: var PassRegistry, deps: seq[string] = @[]) =
-  ## SPIR-V route, the push block renders flat members only:
-  ## every object kernel param expands, pure-value objects included
-  reg.register(
-    name = "explodeKernelParams",
-    kind = pkTransform,
-    phase = phaseMain,
-    description = "Expands every kernel param of object type into ptr/scalar leaf params and rebuilds the struct in the body, leaf writes refuse (push constants are read-only)",
-    dependsOn = deps,
-    run = proc(ctx: var GpuContext): void =
-      ctx.explodeKernelParams(deepOnly = false)
-  )
-
-import std / [hashes, macros, sequtils, sets, strutils, tables]
-# macros: for the `error` builtin (compile-time diagnostics)
+import std / [hashes, sequtils, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers
 import ../ir/ast_type_constructors
@@ -117,223 +102,45 @@ proc insertPointerDeref(ctx: var GpuContext) =
 # Reserved keyword renaming
 # ═══════════════════════════════════════════════════════════════════════
 
-func containsPtrDeep(t: GpuType): bool =
-  ## True when a pointer is reachable through the type's fields
-  case t.kind
-  of gtPtr: true
-  of gtObject, gtGenericInst:
-    for f in t.fields:
-      if f.typ.containsPtrDeep:
-        return true
-    false
-  of gtArray: t.aTyp.containsPtrDeep
-  else: false
-
-type KernelParamLeaf = object
-  ## One signature entry of an expanded struct kernel param
-  name: string
-  typ: GpuType
-  isBuffer: bool
-
-proc kernelParamLeaves(t: GpuType, name: string, deepOnly: static bool): seq[KernelParamLeaf] =
-  ## Metal/WebGPU reject struct-with-pointer kernel args, the signature expands
-  ## depth-first in field order, matching the serializer binding order.
-  ## `deepOnly` expands only structs carrying pointers, the flat route
-  ## (SPIR-V push block) expands every object into flat leaves and refuses
-  ## leaves narrower than 32 bits at pass time
-  result = newSeq[KernelParamLeaf]()
-  proc walk(t: GpuType, name: string, leaves: var seq[KernelParamLeaf]) =
-    case t.kind
-    of gtPtr:
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: true)
-    of gtObject, gtGenericInst:
-      when deepOnly:
-        if t.containsPtrDeep:
-          for f in t.fields:
-            if size(f.typ) > 0:
-              walk(f.typ, name & "_" & f.name, leaves)
-        else:
-          leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-      else:
-        for f in t.fields:
-          if size(f.typ) > 0:
-            walk(f.typ, name & "_" & f.name, leaves)
-    of gtArray:
-      doAssert not t.containsPtrDeep,
-        "kernelParamLeaves: array field '" & name & "' carries pointers, not supported as a kernel param leaf"
-      leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-    else:
-      when deepOnly:
-        leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-      else:
-        if t.kind in {gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t,
-                      gtUint64, gtInt64, gtFloat64}:
-          leaves.add KernelParamLeaf(name: name, typ: t, isBuffer: false)
-        else:
-          error "explodeKernelParams: kernel parameter member `" & name &
-            "` is outside the SPIR-V push subset: " & $t.kind &
-            " (push members are 32-bit scalars, pointers and arrays of them)"
-  walk(t, name, result)
-
-proc buildLeafConstr(t: GpuType, name: string, deepOnly: static bool, leafIdents: Table[string, GpuAst]): GpuAst =
-  ## Builds the reconstruction construction over the leaf params.
-  ##
-  ## Flat route: field values reuse the leaf params' symbol nodes.
-  ## Each node stores the leaf type, resolution keys on iSym.
-  ## Deep route: fresh name-only idents, text printers key on names.
+proc buildLeafConstr(t: GpuType, name: string): GpuAst =
+  ## Rebuilds the exploded struct over name-keyed leaf idents
   result = GpuAst(kind: gpuObjConstr, ocType: t)
   for f in t.fields:
     if size(f.typ) == 0:
       result.ocFields.add GpuFieldInit(name: f.name, value: GpuAst(kind: gpuDiscard), typ: f.typ)
-    elif f.typ.kind in {gtObject, gtGenericInst}:
-      when deepOnly:
-        if f.typ.containsPtrDeep:
-          result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name, deepOnly, leafIdents), typ: f.typ)
-        else:
-          result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
-      else:
-        # the flat route expands every object field, recursing to the leaves the walk produced
-        result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name, deepOnly, leafIdents), typ: f.typ)
+    elif f.typ.kind in {gtObject, gtGenericInst} and f.typ.containsPtrDeep:
+      result.ocFields.add GpuFieldInit(name: f.name, value: buildLeafConstr(f.typ, name & "_" & f.name), typ: f.typ)
     else:
-      when deepOnly:
-        result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
-      else:
-        let ident = leafIdents.getOrDefault(name & "_" & f.name, nil)
-        doAssert not ident.isNil,
-          "buildLeafConstr: leaf `" & (name & "_" & f.name) & "` has no param"
-        result.ocFields.add GpuFieldInit(name: f.name, value: ident, typ: f.typ)
+      result.ocFields.add GpuFieldInit(name: f.name, value: newGpuIdent(name & "_" & f.name), typ: f.typ)
 
-proc refuseLeafWrites(n: GpuAst, locals: Table[string, GpuType], kernel: string) =
-  ## Refuses assignments that write an exploded param's storage.
-  ## The reconstruction local is a copy and the push storage is read-only.
-  ## A field write updates only the copy and silently drops the value.
-  ## Pointer-leaf writes reach device memory
-
-  proc refuseTarget(n: GpuAst) =
-    case n.kind
-    of gpuIdent:
-      if n.symbol != nil and n.symbol.iSym in locals:
-        error "explodeKernelParams: assignment to the whole parameter object `" &
-          n.symbol.name & "` (kernel `" & kernel &
-          "`): push constants are read-only"
-    of gpuDot:
-      if n.dParent.kind == gpuIdent and n.dParent.symbol != nil and
-          n.dParent.symbol.iSym in locals:
-        error "explodeKernelParams: assignment to the field `" &
-          n.dParent.symbol.name & "." & n.dField.symbol.name &
-          "` (kernel `" & kernel & "`): push constants are read-only"
-      refuseTarget(n.dParent)
-    of gpuIndex:
-      # a store through a pointer leaf member reaches device memory,
-      # a store through a value leaf member (scalar or array) drops
-      if n.iArr.kind == gpuDot:
-        var chain = n.iArr
-        var fields: seq[string]
-        while chain.kind == gpuDot:
-          fields.insert(chain.dField.symbol.name)
-          chain = chain.dParent
-        if chain.kind == gpuIdent and chain.symbol != nil and
-            chain.symbol.iSym in locals:
-          var t = locals[chain.symbol.iSym]
-          var resolved = true
-          for f in fields:
-            var found = false
-            for fld in t.fields:
-              if fld.name == f:
-                t = fld.typ
-                found = true
-                break
-            if not found:
-              resolved = false
-              break
-          if resolved and t.kind notin {gtPtr, gtUncheckedArray, gtVoidPtr}:
-            error "explodeKernelParams: assignment through the value member `" &
-              chain.symbol.name & "." & fields.join(".") & "` (kernel `" & kernel &
-              "`): push constants are read-only"
-    else:
-      discard
-  case n.kind
-  of gpuBlock:
-    for s in n.statements:
-      s.refuseLeafWrites(locals, kernel)
-  of gpuAssign:
-    n.aLeft.refuseTarget()
-  of gpuIf:
-    n.ifThen.refuseLeafWrites(locals, kernel)
-    for el in n.ifElifs:
-      el.body.refuseLeafWrites(locals, kernel)
-    if n.ifElse.kind != gpuDiscard:
-      n.ifElse.refuseLeafWrites(locals, kernel)
-  of gpuFor:
-    n.fBody.refuseLeafWrites(locals, kernel)
-  of gpuWhile:
-    n.wBody.refuseLeafWrites(locals, kernel)
-  else:
-    discard
-
-proc explodeKernelParams(ctx: var GpuContext, deepOnly: static bool) =
-  ## One shared core, monomorphized per route:
-  ## - deepOnly: only structs carrying (nested) pointer fields expand,
-  ##   the Metal/WebGPU/MSL behavior
-  ## - flat route: every object param expands, the SPIR-V push block
-  ##   renders flat members only
-  ## - the reconstruction local reuses the param's symbol so body idents
-  ##   resolve by iSym without name lookups
+proc explodeGlobalStructWithPtrFields(ctx: var GpuContext) =
+  ## Structs with (nested) pointer fields expand into ptr/scalar leaves,
+  ## pure-value structs cross whole, leaves via kernelParamLeaves
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
       continue
     var taken: seq[string]
     for p in fn.pParams:
       taken.add p.ident.ident()
-    when not deepOnly:
-      # leaf names must not collide with any name the body uses,
-      # declarations included: a colliding leaf loads a stale local,
-      # misreading the kernel
-      var used: HashSet[string]
-      for name in taken:
-        used.incl name
-      fn.pBody.collectIdentNames(used)
-    var expansionLocals = initTable[string, GpuType]()
     var params: seq[GpuParam]
     for p in fn.pParams:
-      if p.typ.kind notin {gtObject, gtGenericInst}:
-        params.add p
-        continue
-      when deepOnly:
-        if not p.typ.containsPtrDeep:
-          params.add p
-          continue
-      let leaves = p.typ.kernelParamLeaves(p.ident.ident(), deepOnly)
-      var leafIdents = initTable[string, GpuAst]()
-      for leaf in leaves:
-        when deepOnly:
+      if p.typ.kind in {gtObject, gtGenericInst} and p.typ.containsPtrDeep:
+        let leaves = p.typ.kernelParamLeaves(p.ident.ident())
+        for leaf in leaves:
           doAssert leaf.name notin taken,
-            "explodeKernelParams: leaf '" & leaf.name & "' collides with an existing kernel parameter"
-        else:
-          if leaf.name in used:
-            error "explodeKernelParams: leaf `" & leaf.name &
-              "` collides with an existing name in kernel `" & fn.pName.ident() & "`"
-        let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
-        let space = if leaf.isBuffer: asDevice else: asRMEM
-        when not deepOnly:
-          leafIdents[leaf.name] = GpuAst(kind: gpuIdent, symbol: sym)
-        params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
-                            typ: leaf.typ, addressSpace: space)
-      let constr = buildLeafConstr(p.typ, p.ident.ident(), deepOnly, leafIdents)
-      when deepOnly:
+            "explodeGlobalStructWithPtrFields: leaf '" & leaf.name & "' collides with an existing kernel parameter"
+          let sym = newSymbol(leaf.name, typ = leaf.typ, symKind = gsGlobalKernelParam)
+          let space = if leaf.isBuffer: asDevice else: asRMEM
+          params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: sym),
+                              typ: leaf.typ, addressSpace: space)
+        let constr = buildLeafConstr(p.typ, p.ident.ident())
         let local = GpuAst(kind: gpuVar, vName: newGpuIdent(p.ident.ident()),
                            vType: p.typ, vInit: constr, vMutable: false,
                            addressSpace: asRMEM)
+        doAssert fn.pBody.kind == gpuBlock, "explodeGlobalStructWithPtrFields: kernel body is not a block"
+        fn.pBody.statements.insert(local, 0)
       else:
-        let local = GpuAst(kind: gpuVar, vName: p.ident,
-                           vType: p.typ, vInit: constr, vMutable: false,
-                           addressSpace: asRMEM)
-        expansionLocals[p.ident.symbol.iSym] = p.typ
-      doAssert fn.pBody.kind == gpuBlock, "explodeKernelParams: kernel body is not a block"
-      fn.pBody.statements.insert(local, 0)
-    when not deepOnly:
-      if expansionLocals.len > 0:
-        fn.pBody.refuseLeafWrites(expansionLocals, fn.pName.ident())
+        params.add p
     fn.pParams = params
 
 # ═══════════════════════════════════════════════════════════════════════

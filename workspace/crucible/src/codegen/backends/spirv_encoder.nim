@@ -585,9 +585,6 @@ func opIAdd(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
 func opConvertUToPtr(b: var SpvBuilder, resultType, source: uint32): uint32 =
   b.freshInst(OpConvertUToPtr, @[resultType, source])
 
-func opUndef(b: var SpvBuilder, resultType: uint32): uint32 =
-  b.freshInst(OpUndef, @[resultType])
-
 func opCompositeExtract(b: var SpvBuilder, resultType, composite: uint32, indices: openArray[int]): uint32 =
   var ops = @[resultType, composite]
   for i in indices:
