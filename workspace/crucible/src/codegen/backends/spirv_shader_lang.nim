@@ -848,27 +848,6 @@ proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       members.add v
   ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
 
-proc emitTernary(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let resTy = exprType(fn, n.tThen)
-  let tmpName = "spvTernaryTmp" & $ctx.tyId(valueTy(resTy))
-  doAssert tmpName in fn.locals, "ternary temp was not hoisted"
-  let cond = emitExpr(ctx, fn, n.tCond)
-  let thenLbl = ctx.builder.freshLabel()
-  let elseLbl = ctx.builder.freshLabel()
-  let mergeLbl = ctx.builder.freshLabel()
-  ctx.builder.opSelectionMerge(mergeLbl, selNone)
-  ctx.builder.opBranchConditional(cond, thenLbl, elseLbl)
-  ctx.builder.opLabelAt(thenLbl)
-  let a = emitExpr(ctx, fn, n.tThen)
-  ctx.builder.opStore(fn.locals[tmpName], a)
-  ctx.builder.opBranch(mergeLbl)
-  ctx.builder.opLabelAt(elseLbl)
-  let b = emitExpr(ctx, fn, n.tElse)
-  ctx.builder.opStore(fn.locals[tmpName], b)
-  ctx.builder.opBranch(mergeLbl)
-  ctx.builder.opLabelAt(mergeLbl)
-  ctx.builder.opLoad(ctx.tyId(valueTy(resTy)), fn.locals[tmpName])
-
 proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let name = n.cName.symbol.name
   if name notin ["max", "min"]:
@@ -891,28 +870,6 @@ proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): ui
   let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
   let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
   ctx.builder.opSelect(ctx.tyId(spvScalar(opTy)), cond, a, b)
-
-proc emitLazyBool(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let boolTyId = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-  let tmpName = "spvTernaryTmp" & $boolTyId
-  doAssert tmpName in fn.locals, "lazy bool temp was not hoisted"
-  let isAnd = n.bOp.symbol.name == "&&"
-  let l = emitExpr(ctx, fn, n.bLeft)
-  let neutral = ctx.builder.constBool(boolTyId, not isAnd)
-  ctx.builder.opStore(fn.locals[tmpName], neutral)
-  let evalLbl = ctx.builder.freshLabel()
-  let mergeLbl = ctx.builder.freshLabel()
-  ctx.builder.opSelectionMerge(mergeLbl, selNone)
-  if isAnd:
-    ctx.builder.opBranchConditional(l, evalLbl, mergeLbl)
-  else:
-    ctx.builder.opBranchConditional(l, mergeLbl, evalLbl)
-  ctx.builder.opLabelAt(evalLbl)
-  let r = emitExpr(ctx, fn, n.bRight)
-  ctx.builder.opStore(fn.locals[tmpName], r)
-  ctx.builder.opBranch(mergeLbl)
-  ctx.builder.opLabelAt(mergeLbl)
-  ctx.builder.opLoad(boolTyId, fn.locals[tmpName])
 
 proc emitReduceAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   doAssert n.cArgs.len == 1, "reduceAdd takes one argument"
@@ -984,8 +941,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   of gpuIdent:
     emitIdentRef(ctx, fn, n)
   of gpuBinOp:
-    if n.bOp.symbol.name == "&&" or n.bOp.symbol.name == "||":
-      return emitLazyBool(ctx, fn, n)
     # comparisons yield gtBool and operate on the operand type, arithmetic on the self-carried result type
     let resTy = n.bType
     let opTy = if resTy.kind == gtBool: exprType(fn, n.bLeft) else: resTy
@@ -1004,8 +959,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
       ctx.builder.opLoadAligned(ctx.tyId(spvScalar(elem)), ptrId, elemAlign)
     else:
       ctx.builder.opLoad(ctx.tyId(spvScalar(valueType(elem))), ptrId)
-  of gpuTernary:
-    emitTernary(ctx, fn, n)
   of gpuObjConstr:
     emitObjConstr(ctx, fn, n)
   of gpuCall:
@@ -1150,8 +1103,7 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let startV = convertValue(ctx, emitExpr(ctx, fn, n.fStart),
                             exprType(fn, n.fStart), indSym.typ)
   ctx.builder.opStore(indVar, startV)
-  # the bound computes in the pre-header block, keeping the header block
-  # to OpLabel + load + condition + OpLoopMerge + branch
+  # the bound evaluates once, in the pre-header block
   let endV = convertValue(ctx, emitExpr(ctx, fn, n.fEnd),
                           exprType(fn, n.fEnd), indSym.typ)
   let headerLbl = ctx.builder.freshLabel()
@@ -1193,84 +1145,6 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   ctx.builder.opBranch(headerLbl)
   ctx.builder.opLabelAt(mergeLbl)
   fn.terminated = false
-
-proc hoistTernaryTemps(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  case n.kind
-  of gpuTernary:
-    let resTy = exprType(fn, n.tThen)
-    let tmpName = "spvTernaryTmp" & $ctx.tyId(valueTy(resTy))
-    if tmpName notin fn.locals:
-      fn.locals[tmpName] = ctx.builder.opVariableFn(
-        ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(resTy))))
-      fn.localTys[tmpName] = resTy
-    hoistTernaryTemps(ctx, fn, n.tThen)
-    hoistTernaryTemps(ctx, fn, n.tElse)
-    hoistTernaryTemps(ctx, fn, n.tCond)
-  of gpuBlock:
-    for s in n.statements:
-      hoistTernaryTemps(ctx, fn, s)
-  of gpuVar:
-    hoistTernaryTemps(ctx, fn, n.vInit)
-  of gpuAssign:
-    hoistTernaryTemps(ctx, fn, n.aLeft)
-    hoistTernaryTemps(ctx, fn, n.aRight)
-  of gpuIf:
-    hoistTernaryTemps(ctx, fn, n.ifCond)
-    hoistTernaryTemps(ctx, fn, n.ifThen)
-    for el in n.ifElifs:
-      hoistTernaryTemps(ctx, fn, el.cond)
-      hoistTernaryTemps(ctx, fn, el.body)
-    if n.ifElse.kind != gpuDiscard:
-      hoistTernaryTemps(ctx, fn, n.ifElse)
-  of gpuFor:
-    hoistTernaryTemps(ctx, fn, n.fStart)
-    hoistTernaryTemps(ctx, fn, n.fEnd)
-    hoistTernaryTemps(ctx, fn, n.fStep)
-    hoistTernaryTemps(ctx, fn, n.fBody)
-  of gpuWhile:
-    hoistTernaryTemps(ctx, fn, n.wCond)
-    hoistTernaryTemps(ctx, fn, n.wBody)
-  of gpuReturn:
-    hoistTernaryTemps(ctx, fn, n.rValue)
-  of gpuCall:
-    for a in n.cArgs:
-      hoistTernaryTemps(ctx, fn, a)
-  of gpuBinOp:
-    if n.bOp.symbol.name == "&&" or n.bOp.symbol.name == "||":
-      let boolTyId = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-      let tmpName = "spvTernaryTmp" & $boolTyId
-      if tmpName notin fn.locals:
-        fn.locals[tmpName] = ctx.builder.opVariableFn(
-          ctx.builder.tyPointer(scFunction, boolTyId))
-        fn.localTys[tmpName] = GpuType(kind: gtBool)
-    hoistTernaryTemps(ctx, fn, n.bLeft)
-    hoistTernaryTemps(ctx, fn, n.bRight)
-  of gpuDot:
-    hoistTernaryTemps(ctx, fn, n.dParent)
-    hoistTernaryTemps(ctx, fn, n.dField)
-  of gpuIndex:
-    hoistTernaryTemps(ctx, fn, n.iArr)
-    hoistTernaryTemps(ctx, fn, n.iIndex)
-  of gpuPrefix:
-    hoistTernaryTemps(ctx, fn, n.pVal)
-  of gpuAddr:
-    hoistTernaryTemps(ctx, fn, n.aOf)
-  of gpuDeref:
-    hoistTernaryTemps(ctx, fn, n.dOf)
-  of gpuConv:
-    hoistTernaryTemps(ctx, fn, n.convExpr)
-  of gpuCast:
-    hoistTernaryTemps(ctx, fn, n.cExpr)
-  of gpuObjConstr:
-    for f in n.ocFields:
-      hoistTernaryTemps(ctx, fn, f.value)
-  of gpuArrayLit:
-    for v in n.aValues:
-      hoistTernaryTemps(ctx, fn, v)
-  of gpuMaterialize:
-    hoistTernaryTemps(ctx, fn, n.mExpr)
-  else:
-    discard
 
 proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   case n.kind
@@ -1505,7 +1379,6 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
     else:
       fn.paramVals[sym.iSym] = pid
   discard ctx.builder.opLabel()
-  hoistTernaryTemps(ctx, fn, procNode.pBody)
   hoistLocals(ctx, fn, procNode.pBody)
   # by-value object parameter copies: every OpVariable in a function must
   # precede any load, so they declare here before the copies store
@@ -1605,7 +1478,6 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
 
   # setup block: Function-storage variables first, then hoisted parameter loads,
   # all later blocks are dominated by the entry block
-  hoistTernaryTemps(ctx, fn, kernel.pBody)
   hoistLocals(ctx, fn, kernel.pBody)
   # Function-storage reconstruction variables for byRef object parameters are
   # declarations too: every OpVariable in a function must precede any load,

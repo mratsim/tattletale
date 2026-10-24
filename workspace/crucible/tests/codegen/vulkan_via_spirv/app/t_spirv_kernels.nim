@@ -129,9 +129,8 @@ proc runTest() =
                 "OpExtension \"SPV_EXT_shader_atomic_float_add\"",
                 "%uint_72",
                 "OpMemoryModel PhysicalStorageBuffer64 GLSL450"])
-  # a selection expression as the loop range end: the bound must compute
-  # in the pre-header block, a bound computed inside the header block
-  # strands OpLoopMerge in a block with branches
+  # a selection expression as the loop range end: the bound evaluates once
+  # in the pre-header block, the pass hoists its selection into a temp
   validateSpv(ternaryRangeSpv, "t_spirv_kernels_ternary_range",
               @["OpLoopMerge", "OpBranchConditional"])
   # bool equality: OpIEqual requires integer operands, booleans lower to the logical equality opcodes

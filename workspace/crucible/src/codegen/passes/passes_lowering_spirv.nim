@@ -22,9 +22,9 @@
 #   its gpuIndex retyping over pointers yields the container type
 #   struct constructions then grow unchecked-array fields
 #   the emitted composites mismatch the member types
-# - lowerCompoundAssign lives here:
-#   SPIR-V is the only backend without compound-assignment support,
-#   the rewrite replaces what would otherwise be an emit-time refusal
+# - lowerTernaryToIf and lowerCompoundAssign live here:
+#   binary SPIR-V has no expression-level selection and no compound-assignment support,
+#   both rewrites replace what would otherwise be emission-time machinery
 
 import std/macros # for the `error` builtin (compile-time diagnostics)
 import std/tables # OrderedTable keys iterator
@@ -45,6 +45,11 @@ import ./passes_low_views
 func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerArraysAndViews(decayArrays = false)
   reg.registerSharedLoweringPasses()
+  # The ternary rewrite registers before compound assignments and bool patching.
+  # patchBoolToI32 wraps bool assignment right-hand sides in conv(gtInt32):
+  # registering first keeps the rewrite free of conv nodes to see through.
+  # The fresh bool temps it introduces stay plain locals that patch ignores.
+  reg.registerLowerTernaryToIf()
   # Compound assignments rewrite to plain assignments of the binop before
   # pointer-deref insertion, both copies of the address skeleton retype alike
   reg.registerLowerCompoundAssign()
@@ -52,6 +57,229 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   # Bool kernel parameters declare i32 in the push-constant interface,
   # loads convert at the use boundary
   reg.registerPatchBoolToI32()
+
+# ═══════════════════════════════════════════════════════════════════════
+# Ternaries and lazy bools to if-statements
+# ═══════════════════════════════════════════════════════════════════════
+
+proc lowerTernaryExpr(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst])
+proc lowerTernaryStmts(ctx: var GpuContext, stmts: var seq[GpuAst])
+proc lowerTernaryStmt(ctx: var GpuContext, n: var GpuAst)
+
+func registerLowerTernaryToIf(reg: var PassRegistry) =
+  ## Rewrites ternaries and lazy bools into if-statements over hoisted temps,
+  ## SPIR-V pipeline only, non-scalar ternary results refuse loudly
+  reg.register("lowerTernaryToIf", pkTransform, phaseMain,
+    "Rewrites gpuTernary nodes and lazy &&/|| into if-statements over hoisted scalar temps, only the taken branch evaluates",
+    dependsOn = @[],
+    run = proc(ctx: var GpuContext): void =
+      ctx.lowerTernaryToIf()
+  )
+
+const ternaryTempKinds = {gtBool, gtInt32, gtUint32, gtInt64, gtUint64,
+                          gtFloat32, gtFloat64, gtSize_t}
+  ## Scalar kinds a ternary temp can hold, everything else refuses.
+  ## Narrower widths refuse too: their zero literals have no emitter path,
+  ## composites have no zero literal at all.
+
+proc ternaryResultType(ctx: GpuContext, n: GpuAst): GpuType =
+  ## Result type of a gpuTernary: the then-branch type.
+  ## `true`/`false` read gtBool: the frontend emits bool literals as idents.
+  ## Those idents carry no symbol type.
+  if n.tThen.kind == gpuIdent and
+      (n.tThen.symbol.name == "true" or n.tThen.symbol.name == "false"):
+    return GpuType(kind: gtBool)
+  result = ctx.getExprType(n.tThen)
+  if result.isNil or result.kind notin ternaryTempKinds:
+    let kindStr = if result.isNil: "untyped" else: $result.kind
+    error "passes_lowering_spirv: ternary result type " & kindStr &
+      " has no scalar temp representation"
+
+proc zeroLiteral(t: GpuType): GpuAst =
+  ## Neutral initializer of a ternary temp: `false` for bools, `0` otherwise.
+  ## Bools literalize as idents: the frontend emits `true`/`false` as idents
+  ## and the emitter constBools them, a gtBool gpuLit refuses at emission.
+  if t.kind == gtBool:
+    return GpuAst(kind: gpuIdent, symbol: newSymbol("false"))
+  GpuAst(kind: gpuLit, lValue: "0", lType: t)
+
+proc rewriteTernary(ctx: var GpuContext, n: var GpuAst, resTy: GpuType, pre: var seq[GpuAst]) =
+  ## Replaces one gpuTernary with a fresh temp: the temp declares zeroed
+  ## ahead of the statement, the if-statement assigns the taken branch only,
+  ## and the expression reads the temp.
+  ##
+  ## Before (IR):   x = c ? a : b
+  ## After (IR):    var _tn_N: T = <zero>
+  ##                if c: _tn_N = a else: _tn_N = b
+  ##                x = _tn_N
+  ##
+  ## Ternaries nested in the condition hoist ahead of the group,
+  ## ternaries nested in a branch hoist inside that branch
+  ctx.lowerTernaryExpr(n.tCond, pre)
+  let tempName = "_tn_" & $ctx.genSymCount
+  inc ctx.genSymCount
+  let tempIdent = GpuAst(kind: gpuIdent,
+                         symbol: newSymbol(tempName, iSym = tempName,
+                                           typ = resTy, symKind = gsLocal))
+  var thenStmts = @[GpuAst(kind: gpuAssign, aLeft: tempIdent.clone(), aOp: "=",
+                           aRight: n.tThen)]
+  var elseStmts = @[GpuAst(kind: gpuAssign, aLeft: tempIdent.clone(), aOp: "=",
+                           aRight: n.tElse)]
+  ctx.lowerTernaryStmts(thenStmts)
+  ctx.lowerTernaryStmts(elseStmts)
+  let thenBody = if thenStmts.len == 1: thenStmts[0]
+                 else: GpuAst(kind: gpuBlock, statements: thenStmts)
+  let elseBody = if elseStmts.len == 1: elseStmts[0]
+                 else: GpuAst(kind: gpuBlock, statements: elseStmts)
+  pre.add GpuAst(kind: gpuVar, vName: tempIdent.clone(), vType: resTy,
+                 vInit: zeroLiteral(resTy), vMutable: true)
+  pre.add GpuAst(kind: gpuIf, ifCond: n.tCond, ifThen: thenBody,
+                 ifElifs: @[], ifElse: elseBody, ifIsExpr: false)
+  n = tempIdent
+
+proc rewriteLazyBool(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) =
+  ## Normalizes a lazy bool to a ternary and rewrites it:
+  ## `a && b` reads ternary(a, b, false), `a || b` reads ternary(a, true, b),
+  ## the untaken branch never evaluates
+  let isAnd = n.bOp.symbol.name == "&&"
+  let taken = if isAnd: n.bRight
+              else: GpuAst(kind: gpuIdent, symbol: newSymbol("true"))
+  let untaken = if isAnd: GpuAst(kind: gpuIdent, symbol: newSymbol("false"))
+                else: n.bRight
+  var ternary = GpuAst(kind: gpuTernary, tCond: n.bLeft,
+                       tThen: taken, tElse: untaken)
+  ctx.rewriteTernary(ternary, GpuType(kind: gtBool), pre)
+  n = ternary
+
+proc lowerTernaryExpr(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) =
+  ## Walks one expression subtree, rewriting every ternary and lazy bool,
+  ## the hoisted [var, if] groups append to `pre` in evaluation order
+  case n.kind
+  of gpuTernary:
+    let resTy = ctx.ternaryResultType(n)
+    ctx.rewriteTernary(n, resTy, pre)
+  of gpuBinOp:
+    if n.bOp.symbol.name == "&&" or n.bOp.symbol.name == "||":
+      ctx.rewriteLazyBool(n, pre)
+    else:
+      ctx.lowerTernaryExpr(n.bLeft, pre)
+      ctx.lowerTernaryExpr(n.bRight, pre)
+  of gpuCall:
+    for i in 0 ..< n.cArgs.len:
+      ctx.lowerTernaryExpr(n.cArgs[i], pre)
+  of gpuIndex:
+    ctx.lowerTernaryExpr(n.iArr, pre)
+    ctx.lowerTernaryExpr(n.iIndex, pre)
+  of gpuDot:
+    ctx.lowerTernaryExpr(n.dParent, pre)
+  of gpuDeref:
+    ctx.lowerTernaryExpr(n.dOf, pre)
+  of gpuAddr:
+    ctx.lowerTernaryExpr(n.aOf, pre)
+  of gpuPrefix:
+    ctx.lowerTernaryExpr(n.pVal, pre)
+  of gpuConv:
+    ctx.lowerTernaryExpr(n.convExpr, pre)
+  of gpuCast:
+    ctx.lowerTernaryExpr(n.cExpr, pre)
+  of gpuObjConstr:
+    for f in n.ocFields.mitems:
+      ctx.lowerTernaryExpr(f.value, pre)
+  of gpuArrayLit:
+    for i in 0 ..< n.aValues.len:
+      ctx.lowerTernaryExpr(n.aValues[i], pre)
+  of gpuMaterialize:
+    ctx.lowerTernaryExpr(n.mExpr, pre)
+  of gpuBlock:
+    ctx.lowerTernaryStmts(n.statements)
+  of gpuConstexpr:
+    ctx.lowerTernaryExpr(n.cValue, pre)
+  of gpuIdent, gpuLit, gpuDiscard:
+    discard
+  else:
+    error "passes_lowering_spirv: unsupported expression node " & $n.kind
+
+proc lowerTernaryBranch(ctx: var GpuContext, body: var GpuAst) =
+  ## Lowers one if-branch body: a block lowers its statement list in place,
+  ## a bare statement lowers alone and rewraps when the rewrite hoists
+  if body.kind == gpuBlock:
+    ctx.lowerTernaryStmts(body.statements)
+  else:
+    var stmts = @[body]
+    ctx.lowerTernaryStmts(stmts)
+    if stmts.len == 1:
+      body = stmts[0]
+    else:
+      body = GpuAst(kind: gpuBlock, statements: stmts)
+
+proc lowerTernaryStmt(ctx: var GpuContext, n: var GpuAst) =
+  ## Rewrites one statement: expression-level ternaries hoist into
+  ## a `_ternary` block ahead of the statement, the caller's list walker
+  ## flattens it back into the list
+  var pre: seq[GpuAst]
+  case n.kind
+  of gpuBlock:
+    ctx.lowerTernaryStmts(n.statements)
+  of gpuVar:
+    ctx.lowerTernaryExpr(n.vInit, pre)
+  of gpuAssign:
+    ctx.lowerTernaryExpr(n.aLeft, pre)
+    ctx.lowerTernaryExpr(n.aRight, pre)
+  of gpuIf:
+    ctx.lowerTernaryExpr(n.ifCond, pre)
+    ctx.lowerTernaryBranch(n.ifThen)
+    for el in n.ifElifs.mitems:
+      ctx.lowerTernaryExpr(el.cond, pre)
+      ctx.lowerTernaryBranch(el.body)
+    if n.ifElse.kind != gpuDiscard:
+      ctx.lowerTernaryBranch(n.ifElse)
+  of gpuFor:
+    ctx.lowerTernaryExpr(n.fStart, pre)
+    ctx.lowerTernaryExpr(n.fEnd, pre)
+    ctx.lowerTernaryExpr(n.fStep, pre)
+    ctx.lowerTernaryStmt(n.fBody)
+  of gpuWhile:
+    ctx.lowerTernaryExpr(n.wCond, pre)
+    ctx.lowerTernaryStmt(n.wBody)
+  of gpuReturn:
+    ctx.lowerTernaryExpr(n.rValue, pre)
+  of gpuCall:
+    for i in 0 ..< n.cArgs.len:
+      ctx.lowerTernaryExpr(n.cArgs[i], pre)
+  of gpuConstexpr:
+    ctx.lowerTernaryExpr(n.cValue, pre)
+  of gpuDiscard:
+    discard
+  else:
+    error "passes_lowering_spirv: unsupported statement node " & $n.kind
+  if pre.len > 0:
+    n = GpuAst(kind: gpuBlock, blockLabel: "_ternary", statements: pre & @[n])
+
+proc lowerTernaryStmts(ctx: var GpuContext, stmts: var seq[GpuAst]) =
+  ## Walks a statement list in order, flattening `_ternary` splice blocks
+  ## back into the list
+  var outStmts: seq[GpuAst]
+  for i in 0 ..< stmts.len:
+    var st = stmts[i]
+    ctx.lowerTernaryStmt(st)
+    if st.kind == gpuBlock and st.blockLabel == "_ternary":
+      for s in st.statements:
+        outStmts.add s
+    else:
+      outStmts.add st
+  stmts = outStmts
+
+proc lowerTernaryToIf(ctx: var GpuContext) =
+  ## Rewrites ternaries and lazy bools over every fn body and global block.
+  ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
+  ## globalBlocks carries the program-scope statements
+  for fnKey in ctx.allFnTab.keys:
+    let fn = ctx.allFnTab[fnKey]
+    if fn.kind == gpuProc:
+      ctx.lowerTernaryStmt(fn.pBody)
+  for blk in ctx.globalBlocks.mitems:
+    if blk.kind == gpuBlock:
+      ctx.lowerTernaryStmts(blk.statements)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Compound assignment to plain assignment
