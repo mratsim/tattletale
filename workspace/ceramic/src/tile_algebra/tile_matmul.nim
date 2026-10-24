@@ -67,6 +67,21 @@ proc tiledMma*[TAcc, TA, TB](
   else:
     {.error: "the tile dimensions are not multiples of the resolved atom's cell dimensions".}
 
+proc tiledMma*[TAcc, TA, TB](
+      _: typedesc[TAcc], _: typedesc[TA], _: typedesc[TB],
+      atom: static MmaAtom, MT, NT, KT: static int
+    ): TiledMma[TAcc, TA, TB, MT, NT, KT] {.inline.} =
+  ## Explicit-atom construction.
+  ##
+  ## Args:
+  ##   - `atom`: caller-picked atom, no backend autodetection, the coopmat
+  ##     tiers resolve per device capability
+  ##   - `MT, NT, KT`: tile shape, each a multiple of the atom's cell
+  when MT mod atom.getM() == 0 and NT mod atom.getN() == 0 and KT mod atom.getK() == 0:
+    result = TiledMma[TAcc, TA, TB, MT, NT, KT](atom: atom)
+  else:
+    {.error: "the tile dimensions are not multiples of the given atom's cell dimensions".}
+
 # ═══════════════════════════════════════════════════════════════
 #  Per-operand register tiles and thread->value maps
 # ═══════════════════════════════════════════════════════════════

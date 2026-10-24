@@ -62,6 +62,14 @@ func initGpuSpanType*(elemTyp: GpuType, addressSpace = asRMEM): GpuType =
     result = GpuType(kind: gtSpan, sElemTyp: elemTyp)
     result.addressSpace = addressSpace
 
+func initGpuCoopmatType*(elemTyp: GpuType, M, N: int, use: GpuCoopmatUse): GpuType =
+  ## SPIR-V cooperative matrix `coopmat<T, gl_ScopeSubgroup, M, N, Use>`
+  ## with subgroup scope, Vulkan KHR only, not valid on the other backends.
+  if elemTyp.kind == gtInvalid:
+    result = GpuType(kind: gtInvalid)
+  else:
+    result = GpuType(kind: gtCoopmat, cElem: elemTyp, cM: M, cN: N, cUse: use)
+
 proc toTypeDef*(typ: GpuType): GpuAst =
   # store the type instantiation
   result = GpuAst(kind: gpuTypeDef, tTyp: typ)

@@ -57,13 +57,35 @@ func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
 func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
+func glslStaticPadding[T](_: typedesc[T]): int {.compileTime.} =
+  ## Bytes the GLSL backend reserves for a static (phantom) value:
+  ## the printer renders each fieldless static object as a 4-byte
+  ## `struct IntN { uint _padding; }` and the push-constant packing
+  ## must reserve the same, or the member offsets diverge.
+  when T is object|tuple:
+    var n = 0
+    for f in fields(default(T)):
+      n += glslStaticPadding(typeof(f))
+    when T is object:
+      result = if n == 0: 4 else: n
+    else:
+      result = n
+  elif T is array:
+    result = default(T).len * glslStaticPadding(typeof(default(T)[0]))
+  else:
+    result = 0
+
 func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment, phantom/static types excluded,
   ##  Nim int/uint lowered to 4 bytes
   when T is DeviceMem: result = (8, 8)  # the device address slot
   elif T is object|tuple:
     when isStaticArg(T):
-      result = (0, 1)
+      when backend == bkGlsl:
+        let pad = glslStaticPadding(T)
+        result = (pad, if pad > 0: 4 else: 1)
+      else:
+        result = (0, 1)
     else:
       result.align = 1
       for f in fields(default(T)):
@@ -119,7 +141,18 @@ proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
 proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static BackendKind) {.inline.} =
   ## Packs one value at its device layout, aligned, ints lowered to 32-bit
   when T is object|tuple:
-    when not isStaticArg(T):
+    when isStaticArg(T):
+      when backend == bkGlsl:
+        # the GLSL printer renders static-int leaves as 4-byte padding structs
+        # reserve the same bytes: zeros, the shader never reads these
+        # the kernels fold the static values at compile time
+        const pad = glslStaticPadding(T)
+        if pad > 0:
+          off = round_multiple_up(off, 4)
+          for i in 0 ..< pad:
+            dst[off + i] = 0
+          off += pad
+    else:
       let a = deviceLayout(T, backend).align
       off = round_multiple_up(off, a)
       for f in fields(v):

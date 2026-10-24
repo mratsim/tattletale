@@ -45,11 +45,12 @@ const AtomPropKeys* = ["m", "n", "k", "vpt", "threadCount",
   ## The property keys every atom must declare, in declaration order.
   ## The generated const name is `NAME_key`.
 
-const OptionalAtomPropKeys = ["aType", "bType", "cType"]
+const OptionalAtomPropKeys = ["aType", "bType", "cType", "family"]
   ## Optional property keys, declared only by the atoms that need them:
   ## Per-operand datatypes (A, B, accumulator/C), the Apple simdgroup
   ## atoms' MSL element names.
   ## Absent keys generate a default const ("" for string keys).
+  ## `family` defaults to "threadmap".
 
 const DtypePropKeys = ["aType", "bType", "cType"]
   ## Optional per-operand datatype keys.
@@ -59,6 +60,19 @@ const DtypePropKeys = ["aType", "bType", "cType"]
 
 const IntPropKeys = ["m", "n", "k", "vpt", "threadCount"]
   ## The scalar keys whose values must be positive int literals.
+
+const LayoutPropKeys = ["aLayout", "bLayout", "cLayout"]
+  ## Fragment layout keys for the (T, V) per-lane maps.
+  ##
+  ## Required for the threadmap family, absent for the coopmat_khr family:
+  ## the generated const then holds the `NoLayout` sentinel and every
+  ## layout consumer becomes a compile error.
+
+const AtomFamilies* = ["threadmap", "coopmat_khr"]
+  ## - threadmap: per-lane register tiles via the atom's `(T, V)` layouts,
+  ##   the mma.sync/Apple simdgroup/universal atoms
+  ## - coopmat_khr: per-subgroup opaque `coopmat` objects,
+  ##   no per-lane layouts, the Vulkan KHR cooperative-matrix atoms
 
 type
   AtomParams = object
@@ -112,9 +126,17 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
         let v = valNode[0]
         v.expectKind(nnkStrLit)
         doAssert v.strVal == "" or v.strVal == "simdgroup_multiply_accumulate" or
+                 v.strVal == "coopMatMulAdd" or
                  v.strVal.startsWith("mma.sync.aligned."),
           "declareAtoms: invalid instruction `" & v.strVal & "` on atom `" & $name &
-          "` (expected \"\", \"simdgroup_multiply_accumulate\", or an mma.sync.aligned.* mnemonic)"
+          "` (expected \"\", \"simdgroup_multiply_accumulate\", \"coopMatMulAdd\", " &
+          "or an mma.sync.aligned.* mnemonic)"
+      elif keyStr == "family":
+        let v = valNode[0]
+        v.expectKind(nnkStrLit)
+        doAssert v.strVal in AtomFamilies,
+          "declareAtoms: invalid family `" & v.strVal & "` on atom `" & $name &
+          "` (expected one of " & $AtomFamilies & ")"
       elif keyStr in DtypePropKeys:
         let v = valNode[0]
         v.expectKind(nnkStrLit)
@@ -125,7 +147,19 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
           "` (expected an MSL element name \"float\"/\"half\"/\"bfloat\" or a PTX " &
           "mnemonic \"f32\"/\"f16\"/\"bf16\"/\"tf32\"/\"s8\"/\"s32\"/\"e4m3\"/\"e5m2\")"
       params.props.add (keyStr, valNode[0])
+    let family = block:
+      var f = "threadmap"
+      for (k, v) in params.props:
+        if k == "family":
+          f = v.strVal
+      f
     for key in AtomPropKeys:
+      if key in LayoutPropKeys and family == "coopmat_khr":
+        # opaque fragments have no per-lane layouts. The sentinel keeps
+        # the property consts total, every layout consumer a compile error
+        doAssert key notin seen,
+          "declareAtoms: coopmat atom `" & $name & "` must not declare `" & key & "`"
+        continue
       doAssert key in seen,
         "declareAtoms: atom `" & $name & "` is missing property `" & key & "`"
     defs.add params
@@ -152,11 +186,23 @@ proc genAtomDecls(defs: seq[AtomParams]): NimNode =
     for key in OptionalAtomPropKeys:
       var declared = false
       for (k, _) in d.props:
-        if k == key: declared = true
+        if k == key:
+          declared = true
       if not declared:
+        let default = if key == "family": "threadmap" else: ""
         result.add newConstStmt(
           nnkPostfix.newTree(ident"*", ident(base & "_" & key)),
-          newLit(""))
+          newLit(default))
+    for key in LayoutPropKeys:
+      var declared = false
+      for (k, _) in d.props:
+        if k == key:
+          declared = true
+      if not declared:
+        # the coopmat_khr family gets the NoLayout sentinel
+        result.add newConstStmt(
+          nnkPostfix.newTree(ident"*", ident(base & "_" & key)),
+          ident"NoLayout".newCall())
 
 macro declareAtoms*(body: untyped): untyped =
   ## Parses the YAML-like atom registry block and expands to the enum

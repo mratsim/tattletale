@@ -43,6 +43,16 @@ proc getFnParams*(ctx: GpuContext, fn: GpuAst): seq[GpuParam] =
     result = ctx.builtinFns[fn].pParams
   elif fn in ctx.processedProcs:
     result = ctx.processedProcs[fn].params
+  else:
+    result = @[]
+  if result.len == 0 and fn.symbol != nil:
+    # externals and builtins carry no body and their registration-time ident
+    # can differ in symbol type from the call-site one: match the registered
+    # instantiation signature by iSym so static args drop against it
+    for k, v in ctx.processedProcs:
+      if k.symbol != nil and k.symbol.iSym == fn.symbol.iSym:
+        result = v.params
+        break
 
 proc getFnReturnType*(ctx: GpuContext, fn: GpuAst): GpuType =
   ## Look up the return type of a function by its identifier.

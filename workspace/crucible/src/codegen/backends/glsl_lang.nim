@@ -103,6 +103,46 @@ proc collectRefPointees(t: GpuType, pointees: var seq[GpuType]) =
   else:
     discard
 
+func glslCoopmatUse*(u: GpuCoopmatUse): string =
+  ## GLSL `gl_MatrixUse*` template parameter for the operand role.
+  case u
+  of cmA: "gl_MatrixUseA"
+  of cmB: "gl_MatrixUseB"
+  of cmAcc: "gl_MatrixUseAccumulator"
+
+proc collectSmemVars*(n: GpuAst, acc: var seq[GpuAst]) =
+  ## Collects the `{.smem.}` variable declarations for the GLSL module-scope
+  ## hoist (GLSL admits `shared` only at global scope).
+  if n.kind == gpuVar:
+    if n.addressSpace == asSMEM and n.vType != nil:
+      acc.add n
+    return
+  for ch in n:
+    ch.collectSmemVars(acc)
+
+func isBuiltinProc*(fn: GpuAst): bool =
+  ## True for `{.builtin.}` procs: they lower at their call sites and are
+  ## never emitted as functions, an emission would shadow the real builtin.
+  attBuiltin in fn.pAttributes
+
+func coopmatFrag(t: GpuType): GpuType =
+  ## Peels implicit pointers off a fragment argument, asserts a coopmat remains.
+  var b = t
+  while not b.isNil and b.kind == gtPtr:
+    b = b.to
+  doAssert not b.isNil and b.kind == gtCoopmat
+  b
+
+proc usesCoopmatBuiltin(n: GpuAst): bool =
+  ## True when the AST contains a cooperative-matrix builtin call, which needs
+  ## GL_KHR_cooperative_matrix (and SPIR-V 1.3) at module scope.
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.coopmatBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if usesCoopmatBuiltin(ch):
+      return true
+
 proc gpuTypeToString*(t: GpuTypeKind): string =
   case t
   of gtBool: "bool"
@@ -161,6 +201,9 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false, a
     elif t.gArgs.len > 1:
       # 2+ args collapse to a short hash
       result.add mangledHashName("", $hash(t))
+  of gtCoopmat:
+    result = "coopmat<" & gpuTypeToString(t.cElem) & ", gl_ScopeSubgroup, " &
+             $t.cM & ", " & $t.cN & ", " & glslCoopmatUse(t.cUse) & '>'
   of gtObject: result = t.name
   of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
   of gtStatic: result = "int"
@@ -284,7 +327,12 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     if ast.blockLabel.len > 0:
       result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
     for i, el in ast.statements:
-      result.add ctx.genGLSL(el, indent)
+      let stmtStr = ctx.genGLSL(el, indent)
+      if stmtStr.len == 0:
+        # the statement lowered to nothing: a hoisted or discarded node.
+        # Emit no stub, a module-level `;` is invalid GLSL
+        continue
+      result.add stmtStr
       if not el.isSelfTerminating() and not ctx.skipSemicolon:
         result.add ';'
       if i < ast.statements.high:
@@ -298,7 +346,9 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
     var typeStr: string
     case ast.addressSpace
     of asSMEM:
-      typeStr = "shared " & gpuTypeToString(ast.vType, ast.vName.ident())
+      # hoisted to module scope (GLSL admits `shared` only at global scope),
+      # the declaration site emits nothing
+      return
     of asRMEM, asConstant, asDevice:
       typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
 
@@ -307,8 +357,19 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       result &= " = " & ctx.genGLSL(ast.vInit)
 
   of gpuAssign:
-    result = indentStr & ctx.genGLSL(ast.aLeft) & ' ' & ast.aOp & ' ' &
-             ctx.genGLSL(ast.aRight)
+    if ast.aRight.kind == gpuCall and ast.aRight.cName.symbol != nil and
+        ast.aRight.cName.symbol.coopmatBuiltin == gbkCoopMatLoad and ast.aOp == "=":
+      # `coopMatLoad` is void with an out param on the target:
+      # - lower at the assignment, the lhs is the loaded fragment
+      # - the source pointer's ref-block member is the runtime array
+      # - the static shape args are gpuDiscard placeholders, skip them
+      let c = ast.aRight
+      result = indentStr & "coopMatLoad(" & ctx.genGLSL(ast.aLeft) & ", " &
+               ctx.genGLSL(c.cArgs[0]) & ".x, " & ctx.genGLSL(c.cArgs[1]) & ", " &
+               ctx.genGLSL(c.cArgs[2]) & ", " & ctx.genGLSL(c.cArgs[3]) & ')'
+    else:
+      result = indentStr & ctx.genGLSL(ast.aLeft) & ' ' & ast.aOp & ' ' &
+               ctx.genGLSL(ast.aRight)
   of gpuIf:
     ctx.withoutSemicolon:
       result = indentStr & "if (" & ctx.genGLSL(ast.ifCond) & ") {\n"
@@ -389,10 +450,43 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           result = indentStr & "atomicAdd(" & ctx.genGLSL(ast.cArgs[0]) &
                    ".x[0], " & ctx.genGLSL(ast.cArgs[1]) & ')'
         of gbkNone:
-          var vkArgs: seq[string]
-          for arg in ast.cArgs:
-            vkArgs.add ctx.genGLSL(arg)
-          result = indentStr & ctx.getFnName(bkGlsl, ast) & '(' & vkArgs.join(", ") & ')'
+          case ast.cName.symbol.coopmatBuiltin
+          of gbkCoopMatLoad:
+            # `coopMatLoad(dst, src.x, element, stride, matrixLayout)`:
+            # the source pointer's ref-block member is the runtime array
+            # the builtin reads, the layout is a runtime int (0 row, 1 col).
+            result = indentStr & "coopMatLoad(" & ctx.genGLSL(ast.cArgs[0]) & ", " &
+                     ctx.genGLSL(ast.cArgs[1]) & ".x, " & ctx.genGLSL(ast.cArgs[2]) & ", " &
+                     ctx.genGLSL(ast.cArgs[3]) & ", " & ctx.genGLSL(ast.cArgs[4]) & ')'
+          of gbkCoopMatStore:
+            result = indentStr & "coopMatStore(" & ctx.genGLSL(ast.cArgs[0]) & ", " &
+                     ctx.genGLSL(ast.cArgs[1]) & ".x, " & ctx.genGLSL(ast.cArgs[2]) & ", " &
+                     ctx.genGLSL(ast.cArgs[3]) & ", " & ctx.genGLSL(ast.cArgs[4]) & ')'
+          of gbkCoopMatMulAdd:
+            # the target's builtin takes the same argument list
+            var vkArgs: seq[string]
+            for arg in ast.cArgs:
+              vkArgs.add ctx.genGLSL(arg)
+            result = indentStr & "coopMatMulAdd(" & vkArgs.join(", ") & ')'
+          of gbkCoopMatFill:
+            let frag = coopmatFrag(ctx.getFnReturnType(ast.cName))
+            result = indentStr & "coopmat<" &
+                     gpuTypeToString(frag.cElem) & ", gl_ScopeSubgroup, " & $frag.cM &
+                     ", " & $frag.cN & ", " & glslCoopmatUse(frag.cUse) & ">(" &
+                     ctx.genGLSL(ast.cArgs[0]) & ')'
+          of gbkCoopMatScale:
+            # the GLSL scalar·matrix fragment operator, OpMatrixTimesScalar
+            result = indentStr & "(" & ctx.genGLSL(ast.cArgs[1]) & " * " &
+                     ctx.genGLSL(ast.cArgs[0]) & ')'
+          of gbkCoopMatAdd:
+            # the GLSL matrix+matrix fragment operator, OpFAdd
+            result = indentStr & "(" & ctx.genGLSL(ast.cArgs[0]) & " + " &
+                     ctx.genGLSL(ast.cArgs[1]) & ')'
+          of gbkNone:
+            var vkArgs: seq[string]
+            for arg in ast.cArgs:
+              vkArgs.add ctx.genGLSL(arg)
+            result = indentStr & ctx.getFnName(bkGlsl, ast) & '(' & vkArgs.join(", ") & ')'
 
 
   of gpuBinOp:
@@ -565,6 +659,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsAtomicFloat = false
   var needsInt8 = false
   var needsInt64 = false
+  var needsCoopmat = false
   for fnIdent, fn in ctx.fnTab:
     if fn.pRetType.containsKind(gtFloat64):
       needsFp64 = true
@@ -591,6 +686,8 @@ proc codegen*(ctx: var GpuContext): string =
       needsSubgroup = true
     if ctx.usesFloatAtomic(fn.pBody):
       needsAtomicFloat = true
+    if usesCoopmatBuiltin(fn.pBody):
+      needsCoopmat = true
   for pt in refPointees:
     var b = pt
     while b.kind in {gtArray, gtUncheckedArray}:
@@ -626,6 +723,12 @@ proc codegen*(ctx: var GpuContext): string =
     result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
   if needsAtomicFloat:
     result.add "#extension GL_EXT_shader_atomic_float : enable\n"
+  if needsCoopmat:
+    # the subgroup scope enum and the explicit arithmetic types the coopmat
+    # template parameters reference come from these two extensions
+    result.add "#extension GL_KHR_memory_scope_semantics : enable\n"
+    result.add "#extension GL_EXT_shader_explicit_arithmetic_types : enable\n"
+    result.add "#extension GL_KHR_cooperative_matrix : enable\n"
   result.add "\n"
 
   # ── Step 1b: Emit reference block typedefs, before the structs using them ──
@@ -663,25 +766,41 @@ proc codegen*(ctx: var GpuContext): string =
       result.add blkStr
       result.add "\n"
 
+  # ── Step 3b: Hoist `{.smem.}` variables to module scope ──
+  # GLSL admits `shared` declarations only at global scope, the body sites
+  # are skipped by the gpuVar printer once hoisted.
+  var smemVars: seq[GpuAst]
+  for fnIdent, fn in ctx.fnTab:
+    fn.collectSmemVars(smemVars)
+  for blk in ctx.globalBlocks:
+    blk.collectSmemVars(smemVars)
+  var seenSmem: seq[string]
+  for v in smemVars:
+    let name = v.vName.ident()
+    if name in seenSmem:
+      continue
+    seenSmem.add name
+    result.add "shared " & gpuTypeToString(v.vType, name) & ";\n"
+  if smemVars.len > 0:
+    result.add "\n"
+
   # 4. Forward declarations (only for device functions, not kernels)
   let fns = toSeq(ctx.fnTab.pairs)
   for (fnIdent, fn) in fns:
-    if not fn.isGlobal():
+    if not fn.isGlobal() and not isBuiltinProc(fn):
       let fnC = fn.clone()
       fnC.forwardDeclare = true
       result.add ctx.genGLSL(fnC) & '\n'
-  if fns.anyIt(not it[1].isGlobal()):
+  if fns.anyIt(not it[1].isGlobal() and not isBuiltinProc(it[1])):
     result.add "\n"
 
-  # 5. Device function definitions, before the kernels calling them
-  for fnIdent, fn in ctx.fnTab:
-    if not fn.isGlobal():
-      result.add ctx.genGLSL(fn) & "\n\n"
-
-  # 6. Full kernel definitions
+  # 5. Workgroup layouts, before the kernels and the device functions:
+  # - `gl_WorkGroupSize` reads inside device functions need the fixed
+  #   workgroup size to sit above them
+  # - the entry point is a kernel: the Vulkan ingest parses the first
+  #   `void` definition after the layout marker
   for fnIdent, fn in ctx.fnTab:
     if fn.isGlobal():
-      # Kernel functions: place layout qualifier before entry point.
       # Workgroup size from the `{.workgroup: (X, Y, Z).}` annotation.
       # Default 256×1×1.
       let wg = fn.pWorkgroupSize
@@ -690,4 +809,15 @@ proc codegen*(ctx: var GpuContext): string =
       let wz = if wg.z > 0: wg.z else: 1
       result.add "layout(local_size_x = " & $wx & ", local_size_y = " & $wy &
                  ", local_size_z = " & $wz & ") in;\n"
+
+  # 6. Kernel definitions: the entry point sits right after the layout marker.
+  # The device functions come last, the forward declarations
+  # cover their calls
+  for fnIdent, fn in ctx.fnTab:
+    if fn.isGlobal():
+      result.add ctx.genGLSL(fn) & "\n\n"
+
+  # 7. Device function definitions
+  for fnIdent, fn in ctx.fnTab:
+    if not fn.isGlobal() and not isBuiltinProc(fn):
       result.add ctx.genGLSL(fn) & "\n\n"

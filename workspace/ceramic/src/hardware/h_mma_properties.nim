@@ -79,7 +79,17 @@ macro getInstr*(A: static MmaAtom): untyped =
   ##
   ##   - the `mma.sync…` asm string for the NVIDIA atoms
   ##   - `"simdgroup_multiply_accumulate"` for the Apple simdgroup atoms
+  ##   - `"coopMatMulAdd"` for the Vulkan KHR cooperative-matrix atoms
   ##   - `""` for the universal FMA atoms (plain arithmetic, no instruction)
   ##
   ## Kind checks dispatch on this value.
   result = bindSym($A & "_instr")
+
+macro getFamily*(A: static MmaAtom): untyped =
+  ## Returns the atom's fragment family:
+  ##
+  ##   - `"threadmap"`: per-lane register tiles through the atom's thread layouts,
+  ##     plugs at `gemm_mma`
+  ##   - `"coopmat_khr"`: per-subgroup opaque `coopmat` fragments
+  ##     for `gemm_via_khr_coopmat`
+  result = bindSym($A & "_family")

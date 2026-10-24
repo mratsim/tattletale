@@ -83,6 +83,8 @@ proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmpt
       else:
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
+  of gtCoopmat:
+    error "Cooperative-matrix fragments are Vulkan-only (GL_KHR_cooperative_matrix)"
   of gtGenericInst:
     result = "struct " & t.gName
     if t.gArgs.len == 1:
@@ -371,6 +373,8 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
                    ctx.genOpenCL(ast.cArgs[0]) & ", " &
                    ctx.genOpenCL(ast.cArgs[1]) & ')'
         of gbkNone:
+          if ast.cName.symbol.coopmatBuiltin != gbkNone:
+            error "Cooperative-matrix builtins are Vulkan-only (GL_KHR_cooperative_matrix)"
           var clArgs: seq[string]
           for arg in ast.cArgs:
             clArgs.add ctx.genOpenCL(arg)

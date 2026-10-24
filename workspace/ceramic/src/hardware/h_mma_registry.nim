@@ -324,3 +324,49 @@ declareAtoms:
     aType: "e5m2"
     bType: "e4m3"
     cType: "f16"
+
+  # Vulkan KHR cooperative-matrix atoms, the opaque-fragment path.
+  #
+  # One fragment is a per-subgroup `coopmat<T, gl_ScopeSubgroup, M, N, Use>` object:
+  # - the component distribution is driver-defined
+  # - no (T, V) layouts, no per-lane staging, no packing
+  # - the layout consts hold the NoLayout sentinel, so every layout
+  #   consumer is a compile error
+  # - vpt and threadCount are inert (1/1), the fragment shape comes
+  #   from m/n/k alone
+  #
+  # 16x16x16 f16/bf16 with f32 accumulation is the portable classic-KHR
+  # combo (NVIDIA, AMD, Intel). 8x8x8 f16 is what llvmpipe exposes for CI.
+  atom KHR_16x16x16_F32F16F16F32:
+    m: 16
+    n: 16
+    k: 16
+    vpt: 1
+    threadCount: 1
+    instr: "coopMatMulAdd"
+    family: "coopmat_khr"
+    aType: "f16"
+    bType: "f16"
+    cType: "f32"
+  atom KHR_16x16x16_F32BF16BF16F32:
+    m: 16
+    n: 16
+    k: 16
+    vpt: 1
+    threadCount: 1
+    instr: "coopMatMulAdd"
+    family: "coopmat_khr"
+    aType: "bf16"
+    bType: "bf16"
+    cType: "f32"
+  atom KHR_8x8x8_F32F16F16F32:
+    m: 8
+    n: 8
+    k: 8
+    vpt: 1
+    threadCount: 1
+    instr: "coopMatMulAdd"
+    family: "coopmat_khr"
+    aType: "f16"
+    bType: "f16"
+    cType: "f32"

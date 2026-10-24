@@ -37,6 +37,7 @@ import
   ./builtins/builtins_gpu_types,
   ./builtins/builtins_warp_sync_reductions,
   ./builtins/builtins_atomics,
+  ./builtins/builtins_matmul,
   ./builtins/builtins_pragmas,
   ./builtins/builtins_compilermagic
 
@@ -52,6 +53,8 @@ export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
 export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax
 
 export builtins_atomics
+
+export builtins_matmul
 
 export builtins_pragmas
 

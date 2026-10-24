@@ -238,6 +238,22 @@ proc resolveInstantiatedType*(reg: var TypeRegistry, t: NimNode): GpuType =
     if isAliasBase(t[0]):
       # keeps the emitted type name equal to the canonical instantiation's
       return resolveAliasExpansion(reg, t, substituteAliasArgs(t[0].getImpl(), t))
+    if t[0].kind in {nnkSym, nnkIdent} and
+        t[0].strVal in ["coopmatA", "coopmatB", "coopmatAcc"]:
+      # cooperative-matrix builtin generics: the role is the type name,
+      # the GLSL `gl_MatrixUse*` template parameter. `T` may be float32,
+      # float16 or bfloat16, `M`/`N` are static ints.
+      doAssert t.len == 4, "coopmat types take (T, M, N), got: " & $t.treerepr
+      let elem = resolveType(reg, t[1])
+      let m = resolveType(reg, t[2])
+      let n = resolveType(reg, t[3])
+      doAssert m.kind == gtStatic and n.kind == gtStatic,
+        "coopmat M and N must be static ints, got: " & $t.treerepr
+      let use = case t[0].strVal
+                of "coopmatA": cmA
+                of "coopmatB": cmB
+                else: cmAcc
+      return initGpuCoopmatType(elem, m.sValue, n.sValue, use)
     result = initGpuGenericInstType(getGenericTypeName(t))
     for i in 1 ..< t.len:
       result.gArgs.add resolveType(reg, t[i])

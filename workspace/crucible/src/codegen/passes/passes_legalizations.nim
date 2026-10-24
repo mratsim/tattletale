@@ -107,6 +107,9 @@ proc insertResult(ctx: var GpuContext, fn: GpuAst) =
 
   proc lastIsReturn(n: GpuAst): bool =
     doAssert n.kind == gpuBlock
+    if n.statements.len == 0:
+      # builtins carry an empty body, nothing to legalize
+      return false
     if n.statements[^1].kind == gpuReturn:
       return true
 

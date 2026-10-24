@@ -89,6 +89,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): 
       else:
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
+  of gtCoopmat:
+    error "Cooperative-matrix fragments are Vulkan-only (GL_KHR_cooperative_matrix)"
   of gtGenericInst:
     # NOTE: `foo[float32, uint32]` becomes `foo_f32_u32`,
     # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
@@ -375,6 +377,8 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
                    ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
                    ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
         of gbkNone:
+          if ast.cName.symbol.coopmatBuiltin != gbkNone:
+            error "Cooperative-matrix builtins are Vulkan-only (GL_KHR_cooperative_matrix)"
           var args: seq[string]
           for a in ast.cArgs:
             args.add ctx.genMetalImpl(a, 0)

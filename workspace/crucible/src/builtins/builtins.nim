@@ -14,6 +14,7 @@ import ./builtins_functions
 import ./builtins_gpu_types
 import ./builtins_warp_sync_reductions
 import ./builtins_atomics
+import ./builtins_matmul
 
 export builtins_pragmas
 export builtins_catalog
@@ -21,3 +22,4 @@ export builtins_functions
 export builtins_gpu_types
 export builtins_warp_sync_reductions
 export builtins_atomics
+export builtins_matmul

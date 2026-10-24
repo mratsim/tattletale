@@ -65,6 +65,7 @@ type
     gtVoidPtr      # Opaque void pointer
     gtInvalid      # Can be returned to indicate a call to `nimToGpuType` failed to determine a type
     gtCompileTimeValue  # the parameter's type slot holds the compile-time argument, not a type
+    gtCoopmat      # SPIR-V cooperative matrix `coopmat<T, gl_ScopeSubgroup, M, N, Use>` (Vulkan KHR)
 
 
   GpuTypeField* = object
@@ -95,6 +96,10 @@ type
       sValue*: int  # The actual static integer value
     of gtSpan:
       sElemTyp*: GpuType   # element type T
+    of gtCoopmat:
+      cElem*: GpuType      # component type T
+      cM*, cN*: int        # fragment rows and columns
+      cUse*: GpuCoopmatUse # A operand, B operand or accumulator
     of gtGenericInst:
       gName*: string # name of the generic type
       gArgs*: seq[GpuType] # list of the instantiated generic arguments e.g. `vec3<f32>` on WGSL backend
@@ -126,6 +131,7 @@ type
     attDevice = "__device__"
     attGlobal = "__global__"
     attForceInline = "__forceinline__"
+    attBuiltin = ""            # `{.builtin.}` magic: lowered at call sites, never emitted
 
   GpuEmitPartKind* = enum
     peLiteral  ## Verbatim raw text run
@@ -278,6 +284,19 @@ type
     gbkNone,              ## Not an atomics builtin
     gbkAtomicFetchAdd     ## Canonical `atomicFetchAdd`: atomic add through a device pointer
 
+  GpuCoopmatUse* = enum
+    ## Operand role of a cooperative matrix, the GLSL `gl_MatrixUse*` template parameter.
+    cmA, cmB, cmAcc
+
+  GpuCoopmatBuiltinKind* = enum
+    gbkNone,              ## Not a cooperative-matrix builtin
+    gbkCoopMatLoad,       ## Canonical `coopMatLoad`: load a tile into an opaque fragment
+    gbkCoopMatStore,      ## Canonical `coopMatStore`: store an opaque fragment to memory
+    gbkCoopMatMulAdd,     ## Canonical `coopMatMulAdd`: D = A·B + C on opaque fragments
+    gbkCoopMatFill,       ## Canonical `coopMatFill`: splat-construct a fragment from a scalar
+    gbkCoopMatScale,      ## Canonical `coopMatScale`: dst = s·m, the scalar·matrix operator
+    gbkCoopMatAdd         ## Canonical `coopMatAdd`: dst = a + b, the matrix+matrix operator
+
   Symbol* = ref object
     name*: string       ## Display name -- may be mangled for collision safety
     iSym*: string       ## IMMUTABLE fingerprint -- used as FnTable key (stays forever)
@@ -287,6 +306,7 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
     atomicsBuiltin*: GpuAtomicsBuiltinKind ## Atomics builtin kind -> gbkNone when not an atomic intrinsic
+    coopmatBuiltin*: GpuCoopmatBuiltinKind ## Cooperative-matrix builtin kind -> gbkNone when not a coopmat intrinsic
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -355,7 +375,6 @@ type
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
 
 ## Canonical coordinate name -> IR kind, the printers case on the kind alone.
-## A static assertion cross-checks the table against the catalog's canonical declarations, a catalog rename fails at compile time.
 let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKind] = {
   "thread_position_in_grid": gbkThreadPositionInGrid,
   "threadgroup_position_in_grid": gbkThreadgroupPositionInGrid,
@@ -365,21 +384,33 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
   "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
 }.toTable()
 
-## Canonical synchronization name -> IR kind, same catalog cross-check as the coordinate table.
+## Canonical synchronization name -> IR kind.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
   "threadgroup_barrier_device": gbkThreadgroupBarrierDevice,
 }.toTable()
 
-## Canonical reduction intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
+## Canonical reduction intrinsic name -> IR kind.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
   "reduceAdd": gbkReduceAdd,
   "reduceMax": gbkReduceMax,
 }.toTable()
 
-## Canonical atomics intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
+## Canonical atomics intrinsic name -> IR kind.
 let GpuAtomicsBuiltinKindByName* {.compileTime.}: Table[string, GpuAtomicsBuiltinKind] = {
   "atomicFetchAdd": gbkAtomicFetchAdd,
+}.toTable()
+
+## Canonical cooperative-matrix intrinsic name -> IR kind.
+let GpuCoopmatBuiltinKindByName* {.compileTime.}: Table[string, GpuCoopmatBuiltinKind] = {
+  "coopMatLoadA": gbkCoopMatLoad,
+  "coopMatLoadB": gbkCoopMatLoad,
+  "coopMatLoadAcc": gbkCoopMatLoad,
+  "coopMatStore": gbkCoopMatStore,
+  "coopMatMulAdd": gbkCoopMatMulAdd,
+  "coopMatFill": gbkCoopMatFill,
+  "coopMatScale": gbkCoopMatScale,
+  "coopMatAdd": gbkCoopMatAdd,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
@@ -397,6 +428,10 @@ proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
 proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
   ## Returns the IR kind of a canonical atomics intrinsic name, unmapped names resolve to `gbkNone`.
   GpuAtomicsBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc coopmatBuiltinKind*(name: string): GpuCoopmatBuiltinKind =
+  ## Returns the IR kind of a canonical cooperative-matrix intrinsic name, unmapped names resolve to `gbkNone`.
+  GpuCoopmatBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
@@ -455,6 +490,11 @@ func clone*(typ: GpuType): GpuType =
     result.sValue = typ.sValue
   of gtSpan:
     result.sElemTyp = typ.sElemTyp.clone()
+  of gtCoopmat:
+    result.cElem = typ.cElem.clone()
+    result.cM = typ.cM
+    result.cN = typ.cN
+    result.cUse = typ.cUse
   of gtGenericInst:
     result.gName = typ.gName
     for g in typ.gArgs:
@@ -658,6 +698,12 @@ func hash*(t: GpuType): Hash =
   of gtSpan:
     h = h !& hash(t.sElemTyp)
     h = h !& hash(t.addressSpace)
+  of gtCoopmat:
+    h = h !& hash(t.cElem)
+    h = h !& hash(t.cM)
+    h = h !& hash(t.cN)
+    h = h !& hash(t.cUse)
+    h = h !& hash(t.addressSpace)
   of gtInvalid: h = h !& hash("gtInvalid")
   else: discard
   result = !$ h
@@ -701,6 +747,8 @@ proc `==`*(a, b: GpuType): bool =
     of gtArray: result = a.aTyp == b.aTyp and a.aLen == b.aLen and
       a.addressSpace == b.addressSpace
     of gtSpan: result = a.sElemTyp == b.sElemTyp and a.addressSpace == b.addressSpace
+    of gtCoopmat: result = a.cElem == b.cElem and a.cM == b.cM and a.cN == b.cN and
+      a.cUse == b.cUse and a.addressSpace == b.addressSpace
     of gtStatic: result = a.sValue == b.sValue
     of gtInvalid: result = false
     else: discard

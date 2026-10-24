@@ -98,6 +98,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
       else:
         result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
     skipIdent = true
+  of gtCoopmat:
+    error "Cooperative-matrix fragments are Vulkan-only (GL_KHR_cooperative_matrix)"
   of gtGenericInst:
     # NOTE: WGSL does not support actual custom generic types. And as we only anyway deal with generic instantiations
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
@@ -330,6 +332,8 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
           result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
                    ctx.genCuda(ast.cArgs[1]) & ')'
         of gbkNone:
+          if ast.cName.symbol.coopmatBuiltin != gbkNone:
+            error "Cooperative-matrix builtins are Vulkan-only (GL_KHR_cooperative_matrix)"
           var cudaArgs: seq[string]
           for i, arg in ast.cArgs:
             cudaArgs.add ctx.genCuda(arg)

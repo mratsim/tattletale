@@ -317,7 +317,11 @@ func filterPragmasImpl(n: var GpuAst) =
     of "device": attrs.incl attDevice
     of "global": attrs.incl attGlobal
     of "inline", "forceinline": attrs.incl attForceInline
-    of "builtin", "importc", "magic":
+    of "builtin":
+      # `{.builtin.}` magic: lowered at call sites, never emitted,
+      # an emission would shadow the real builtin
+      attrs.incl attBuiltin
+    of "importc", "magic":
       # treated as builtin, no body needed
       discard
     of "varargs":

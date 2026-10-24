@@ -91,6 +91,8 @@ proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
     else:
       result = &"{identPrefix}array<{typ}, {t.aLen}>"
     skipIdent = true
+  of gtCoopmat:
+    error "Cooperative-matrix fragments are Vulkan-only (GL_KHR_cooperative_matrix)"
   of gtGenericInst:
     # NOTE: WGSL does not support actual custom generic types. And as we only anyway deal with generic instantiations
     # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
@@ -374,6 +376,8 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         ctx.withoutSemicolon:
           result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
       of gbkNone:
+        if ast.cName.symbol.coopmatBuiltin != gbkNone:
+          error "Cooperative-matrix builtins are Vulkan-only (GL_KHR_cooperative_matrix)"
         ctx.withoutSemicolon:
           result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
                    ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'

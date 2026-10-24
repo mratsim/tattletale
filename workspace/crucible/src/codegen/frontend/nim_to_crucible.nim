@@ -359,8 +359,18 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
         result.pAttributes = collectProcAttributes(node.pragma)
         result.pWorkgroupSize = parseWorkgroupSize(node.pragma)
         if result.pAttributes.len == 0: # means a `builtin` pragma was applied
-          ctx.builtinFns[name] = result # store in builtinFns, so that we know if it returns a value when called
+          # builtins carry no body:
+          # - the params still parse here
+          # - the call sites prune compile-time args like every other proc
+          result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamsPositions)
+          result.pBody = GpuAst(kind: gpuBlock) # no body, keeps the allFnTab walks well-defined
+          result.pAttributes.incl attBuiltin # the emission would shadow the real builtin
+          # store in builtinFns: the call sites check whether it returns a value
+          ctx.builtinFns[name] = result
           ctx.addToFnTable(name, result, {fkBuiltin})
+          # the passes (compile-time param pruning among them) walk allFnTab
+          if result.pName notin ctx.allFnTab:
+            ctx.allFnTab[result.pName] = result
           return GpuAst(kind: gpuDiscard)
       # Process parameters
       result.pParams = ctx.parseProcParameters(reg, params, result.pAttributes, staticParamsPositions)
@@ -766,6 +776,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
       result.symbol.reductionBuiltin = reductionBuiltinKind(result.symbol.name)
       result.symbol.atomicsBuiltin = atomicsBuiltinKind(result.symbol.name)
+      result.symbol.coopmatBuiltin = coopmatBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkPrefix:

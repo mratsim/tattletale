@@ -33,13 +33,19 @@ proc compileGlslToSpirvViaGlslang*(glsl: string, entryPoint: string = "main"): s
   let spvPath = genTempPath(sanitizePath(entryPoint) & "_", ".spv", tmpDir)
 
   writeFile(srcPath, glsl)
+  if existsEnv("TATTLETALE_DUMP_VULKAN"):
+    # debug facility like TATTLETALE_DUMP_CUDA: keep the generated source
+    # next to the kernel dir for offline inspection
+    let dumpPath = tmpDir / (sanitizePath(entryPoint) & "_dump.comp")
+    writeFile(dumpPath, glsl)
   defer:
     if fileExists(srcPath):
       removeFile(srcPath)
     if fileExists(spvPath):
       removeFile(spvPath)
   var args = @["-V", "-e", entryPoint, "--source-entrypoint", "main"]
-  if "GL_KHR_shader_subgroup" in glsl:
+  if "GL_KHR_shader_subgroup" in glsl or "GL_KHR_cooperative_matrix" in glsl:
+    # subgroup ops and cooperative matrices need SPIR-V 1.3
     args.add "--target-env"
     args.add "vulkan1.1"
   args.add "-o"
