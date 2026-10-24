@@ -21,7 +21,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/metal/autodiff/t_metal_ad_declared_bwd.nim
+##     workspace/crucible/tests/autodiff/metal/t_metal_ad_declared_bwd.nim
 
 import workspace/crucible
 

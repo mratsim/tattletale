@@ -19,7 +19,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests/autodiff --nimcache:nimcache/tests/autodiff \
-##     workspace/crucible/tests/codegen/autodiff/t_bwd_diff_entry_loopfree_pair.nim
+##     workspace/crucible/tests/autodiff/t_bwd_diff_entry_loopfree_pair.nim
 
 import std/strutils
 import workspace/crucible

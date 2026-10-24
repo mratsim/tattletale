@@ -18,7 +18,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-##     workspace/crucible/tests/codegen/autodiff/t_ir_bwd_diff_refusals.nim
+##     workspace/crucible/tests/autodiff/t_ir_bwd_diff_refusals.nim
 
 import std/[os, osproc, strutils]
 
@@ -53,7 +53,7 @@ proc expectRefusal(name, src, construct: string) =
 proc kernelBody(params: string, body: string): string =
   ## A standalone snippet that runs the full AD pipeline over one kernel.
   result = """
-import workspace/crucible/tests/codegen/autodiff/ad_ir_testutils
+import workspace/crucible/tests/autodiff/ad_ir_testutils
 
 static:
   discard adKernels:
@@ -157,7 +157,7 @@ expectRefusal("array_literal", kernelBody(
 # ── gpuCall policy: pure callees, barriers, atomics ───────────────────────
 
 expectRefusal("pure_callee", """
-import workspace/crucible/tests/codegen/autodiff/ad_ir_testutils
+import workspace/crucible/tests/autodiff/ad_ir_testutils
 
 static:
   discard adKernels:

@@ -17,7 +17,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/vulkan_via_glsl/autodiff/t_vulkan_ad_axpy_spot.nim
+##     workspace/crucible/tests/autodiff/vulkan_via_glsl/t_vulkan_ad_axpy_spot.nim
 
 import workspace/crucible
 

@@ -18,7 +18,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/autodiff/t_metal_a1_scatter.nim
+##     workspace/crucible/tests/autodiff/t_metal_a1_scatter.nim
 
 import workspace/crucible
 
