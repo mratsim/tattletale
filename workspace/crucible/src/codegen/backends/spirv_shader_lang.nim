@@ -459,7 +459,6 @@ proc exprGpuType(n: GpuAst): GpuType =
   of gpuConv: n.convTo
   of gpuCast: n.cTo
   of gpuObjConstr: valueType(n.ocType)
-  of gpuTernary: exprGpuType(n.tThen)
   of gpuDot:
     let ch = dotChain(n)
     if ch.root.kind == gpuIdent and ch.root.symbol.coordBuiltin != gbkNone:
@@ -1259,10 +1258,6 @@ proc scanTree(n: GpuAst, calls: var seq[string]) =
     scanTree(n.wBody, calls)
   of gpuReturn:
     scanTree(n.rValue, calls)
-  of gpuTernary:
-    scanTree(n.tCond, calls)
-    scanTree(n.tThen, calls)
-    scanTree(n.tElse, calls)
   of gpuBinOp:
     scanTree(n.bLeft, calls)
     scanTree(n.bRight, calls)

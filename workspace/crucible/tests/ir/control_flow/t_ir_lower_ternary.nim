@@ -2,11 +2,10 @@
 ##
 ## Test that ternaries and lazy short-circuit bools lower to if-statements over hoisted temps
 ##
-## - `x = c ? a : b` splices `var _tn_N: T = <zero>` + `if c: _tn_N = a else: _tn_N = b`
-##   ahead of the statement, the expression reads the temp
-## - `a && b` and `a || b` normalize to ternaries and rewrite likewise
-## - a ternary nested in a condition or an assignment RHS eliminates completely
-## - a ternary-free fn passes through structurally identical
+## - `x = c ? a : b` splices `var _tn_N: T` + `if c: _tn_N = a else: _tn_N = b`, `a && b` / `a || b` normalize likewise
+## - a ternary nested in a condition, an assignment RHS, a return value, a call argument, or a branch body eliminates at its own position
+## - an elif chain whose elif condition carries a rewrite nests into `if c1: B1 else: (if c2: B2 else: B3)`, the elif temp joins the else
+## - a ternary-free fn passes through structurally identical, globalBlocks entries lower like fn bodies
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -20,49 +19,15 @@ import workspace/crucible/tests/ir/ir_testutils
 
 proc findKind(n: GpuAst, kind: GpuNodeKind): GpuAst =
   ## First node of `kind` in the tree, nil when absent.
-  ## Iterates the known child fields directly, the items iterator segfaults
-  ## when it resumes on a node whose iterImpl variant is empty under recursion.
+  ## The nil guard covers the child fields iterImpl yields unchecked.
+  if n.isNil:
+    return nil
   if n.kind == kind:
     return n
-  template walk(ch: GpuAst): untyped =
-    if not ch.isNil:
-      let hit = ch.findKind(kind)
-      if hit != nil:
-        return hit
-  case n.kind
-  of gpuProc:
-    walk(n.pBody)
-  of gpuBlock:
-    for st in n.statements:
-      walk(st)
-  of gpuVar:
-    walk(n.vName)
-    walk(n.vInit)
-  of gpuAssign:
-    walk(n.aLeft)
-    walk(n.aRight)
-  of gpuIf:
-    walk(n.ifCond)
-    walk(n.ifThen)
-    for el in n.ifElifs:
-      walk(el.cond)
-      walk(el.body)
-    walk(n.ifElse)
-  of gpuFor:
-    walk(n.fVar)
-    walk(n.fStart)
-    walk(n.fEnd)
-    walk(n.fStep)
-    walk(n.fBody)
-  of gpuTernary:
-    walk(n.tCond)
-    walk(n.tThen)
-    walk(n.tElse)
-  of gpuBinOp:
-    walk(n.bOp)
-    walk(n.bLeft)
-    walk(n.bRight)
-  else: discard
+  for ch in n.items:
+    let hit = ch.findKind(kind)
+    if hit != nil:
+      return hit
 
 proc ident(sym: Symbol): GpuAst = GpuAst(kind: gpuIdent, symbol: sym)
 
@@ -162,8 +127,8 @@ static:
   let decl = k.pBody.statements[0]
   doAssert decl.kind == gpuVar, "the temp declares first"
   doAssert decl.vType.kind == gtInt32, "the temp carries the ternary result type"
-  doAssert decl.vInit.kind == gpuLit and decl.vInit.lValue == "0",
-    "the temp initializes to the zero literal"
+  doAssert decl.vInit.kind == gpuDiscard,
+    "the temp declares uninitialized, both branches store it"
   doAssert decl.vMutable, "the temp is mutable, both branches store it"
   doAssert decl.vName.symbol.name.startsWith("_tn_"),
     "the temp carries the pass's fresh-name prefix"
@@ -214,8 +179,8 @@ static:
   let decl = k.pBody.statements[0]
   doAssert decl.kind == gpuVar and decl.vType.kind == gtBool,
     "the temp carries gtBool"
-  doAssert decl.vInit.kind == gpuIdent and decl.vInit.symbol.name == "false",
-    "the temp initializes to false, bools literalize as idents"
+  doAssert decl.vInit.kind == gpuDiscard,
+    "the temp declares uninitialized, both branches store it"
   let branchIf = k.pBody.statements[1]
   doAssert branchIf.kind == gpuIf
   doAssert branchIf.ifCond.kind == gpuIdent and branchIf.ifCond.symbol.iSym == "a",
@@ -377,8 +342,8 @@ static:
   let decl = k.pBody.statements[0]
   doAssert decl.kind == gpuVar and decl.vType.kind == gtBool,
     "true/false branches type the temp gtBool"
-  doAssert decl.vInit.kind == gpuIdent and decl.vInit.symbol.name == "false",
-    "the temp initializes to the false ident"
+  doAssert decl.vInit.kind == gpuDiscard,
+    "the temp declares uninitialized, both branches store it"
   let branchIf = k.pBody.statements[1]
   doAssert branchIf.ifThen.aRight.symbol.name == "true" and
     branchIf.ifElse.aRight.symbol.name == "false",
@@ -414,5 +379,245 @@ static:
   doAssert sameNode(k.pBody, snapshot.pBody),
     "a ternary-free fn passes through structurally identical"
   echo "  OK — a ternary-free fn passes through structurally identical"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 9. an elif cond carrying a rewrite nests the chain so its temp joins the else branch
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let ySym = local("y", boolt)
+  let zSym = local("z", boolt)
+  let rSym = local("r", i32t)
+  let elifCond = GpuAst(kind: gpuBinOp, bOp: op("||"),
+                        bLeft: ident(ySym), bRight: ident(zSym),
+                        bIsOverloaded: false, bType: boolt)
+  let stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
+                      ifCond: ident(cSym),
+                      ifThen: GpuAst(kind: gpuAssign, aLeft: ident(ySym),
+                                     aOp: "=", aRight: lit(boolt, "false")),
+                      ifElifs: @[(cond: elifCond,
+                                  body: GpuAst(kind: gpuAssign,
+                                               aLeft: ident(rSym), aOp: "=",
+                                               aRight: lit(i32t, "1")))],
+                      ifElse: GpuAst(kind: gpuDiscard))
+  let k = kernelFn(stmtIf)
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 1,
+    "nothing hoists ahead of the whole if, the elif cond evaluates later"
+  let outer = k.pBody.statements[0]
+  doAssert outer.kind == gpuIf and outer.ifElifs.len == 0,
+    "the flat elif chain rewrites into nested two-way ifs"
+  doAssert outer.ifThen.kind == gpuAssign and outer.ifThen.aLeft.symbol.iSym == "y",
+    "the then-branch keeps writing y first"
+  doAssert outer.ifThen.aRight.kind == gpuLit and outer.ifThen.aRight.lValue == "false",
+    "the then-branch stores the original then-value"
+  doAssert outer.ifElse.kind == gpuBlock,
+    "the elif cond's temps splice into the else branch"
+  doAssert outer.ifElse.statements.len == 3,
+    "the else branch carries [var, lazy-bool if, elif if]"
+  let decl = outer.ifElse.statements[0]
+  doAssert decl.kind == gpuVar and decl.vType.kind == gtBool,
+    "the elif cond temp declares inside the else branch"
+  doAssert decl.vName.symbol.name.startsWith("_tn_"),
+    "the elif cond temp carries the pass's fresh-name prefix"
+  let lazyIf = outer.ifElse.statements[1]
+  doAssert lazyIf.kind == gpuIf and lazyIf.ifCond.kind == gpuIdent and
+    lazyIf.ifCond.symbol.iSym == "y",
+    "the lazy bool's left operand evaluates after the then-branch wrote y"
+  doAssert lazyIf.ifThen.aRight.kind == gpuIdent and
+    lazyIf.ifThen.aRight.symbol.name == "true",
+    "the taken branch stores the neutral true"
+  doAssert lazyIf.ifElse.aRight.kind == gpuIdent and
+    lazyIf.ifElse.aRight.symbol.iSym == "z",
+    "the untaken branch evaluates the right operand"
+  let elifIf = outer.ifElse.statements[2]
+  doAssert elifIf.kind == gpuIf and elifIf.ifCond.kind == gpuIdent and
+    elifIf.ifCond.symbol.name == decl.vName.symbol.name,
+    "the elif condition reads its temp"
+  doAssert elifIf.ifThen.kind == gpuAssign and elifIf.ifThen.aLeft.symbol.iSym == "r",
+    "the elif body assigns in its own branch"
+  echo "  OK — an elif cond carrying a rewrite nests the chain, its temp joins the else branch"
+
+static:
+  # two rewriting elif conds: the chain nests two deep, each temp sits
+  # inside its own else branch at its own evaluation position
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let aSym = local("a", boolt)
+  let bSym = local("b", boolt)
+  let rSym = local("r", i32t)
+  let cond2 = GpuAst(kind: gpuBinOp, bOp: op("&&"),
+                     bLeft: ident(aSym), bRight: ident(bSym),
+                     bIsOverloaded: false, bType: boolt)
+  let cond3 = GpuAst(kind: gpuTernary,
+                     tCond: ident(aSym),
+                     tThen: lit(boolt, "true"),
+                     tElse: ident(bSym))
+  let branch = GpuAst(kind: gpuAssign, aLeft: ident(rSym), aOp: "=",
+                      aRight: lit(i32t, "1"))
+  let stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
+                      ifCond: ident(cSym),
+                      ifThen: GpuAst(kind: gpuAssign, aLeft: ident(rSym),
+                                     aOp: "=", aRight: lit(i32t, "2")),
+                      ifElifs: @[(cond: cond2, body: branch.clone()),
+                                 (cond: cond3, body: branch.clone())],
+                      ifElse: GpuAst(kind: gpuDiscard))
+  let k = kernelFn(stmtIf)
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 1,
+    "nothing hoists ahead of the whole if with two rewriting elifs"
+  let outer = k.pBody.statements[0]
+  doAssert outer.kind == gpuIf and outer.ifElifs.len == 0,
+    "the outer chain flattens to a two-way if"
+  doAssert outer.ifElse.kind == gpuBlock and outer.ifElse.statements.len == 3,
+    "the first elif's temps splice into the first else branch"
+  let midIf = outer.ifElse.statements[2]
+  doAssert midIf.kind == gpuIf and midIf.ifElifs.len == 0,
+    "the second elif nests one level deeper, the chain terminates"
+  doAssert midIf.ifElse.kind == gpuBlock and midIf.ifElse.statements.len == 3,
+    "the second elif's temps splice into the second else branch"
+  let innerIf = midIf.ifElse.statements[2]
+  doAssert innerIf.kind == gpuIf and innerIf.ifElifs.len == 0,
+    "the nesting bottoms out at a two-way if"
+  doAssert innerIf.ifThen.kind == gpuAssign and
+    innerIf.ifThen.aRight.kind == gpuLit and innerIf.ifThen.aRight.lValue == "1",
+    "the last elif body keeps its original assignment"
+  echo "  OK — two rewriting elifs nest two deep, each temp at its own position"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 10. a ternary in a return value hoists ahead of the return
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let ternary = GpuAst(kind: gpuTernary,
+                       tCond: ident(cSym),
+                       tThen: lit(i32t, "1"),
+                       tElse: lit(i32t, "2"))
+  let k = kernelFn(GpuAst(kind: gpuReturn, rValue: ternary))
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 3,
+    "the rewrite splices [var, if] ahead of the return"
+  doAssert k.pBody.statements[0].kind == gpuVar,
+    "the temp declares first"
+  let ret = k.pBody.statements[2]
+  doAssert ret.kind == gpuReturn, "the return survives the pass"
+  doAssert ret.rValue.kind == gpuIdent and
+    ret.rValue.symbol.name == k.pBody.statements[0].vName.symbol.name,
+    "the return reads the temp"
+  echo "  OK — a ternary in a return value hoists ahead of the return"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 11. a ternary in a call argument hoists ahead of the call
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let ternary = GpuAst(kind: gpuTernary,
+                       tCond: ident(cSym),
+                       tThen: lit(i32t, "1"),
+                       tElse: lit(i32t, "2"))
+  let call = GpuAst(kind: gpuCall,
+                    cName: GpuAst(kind: gpuIdent,
+                                  symbol: newSymbol("foo", iSym = "foo")),
+                    cArgs: @[ternary])
+  let k = kernelFn(call)
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 3,
+    "the rewrite splices [var, if] ahead of the call"
+  let decl = k.pBody.statements[0]
+  doAssert decl.kind == gpuVar, "the temp declares first"
+  let outCall = k.pBody.statements[2]
+  doAssert outCall.kind == gpuCall and outCall.cName.symbol.iSym == "foo",
+    "the call survives the pass"
+  doAssert outCall.cArgs.len == 1 and outCall.cArgs[0].kind == gpuIdent and
+    outCall.cArgs[0].symbol.name == decl.vName.symbol.name,
+    "the call argument reads the temp"
+  echo "  OK — a ternary in a call argument hoists ahead of the call"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 12. a ternary inside a branch body rewraps the branch into a block
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let dSym = local("d", boolt)
+  let xSym = local("x", i32t)
+  let ternary = GpuAst(kind: gpuTernary,
+                       tCond: ident(dSym),
+                       tThen: lit(i32t, "1"),
+                       tElse: lit(i32t, "2"))
+  let stmtIf = GpuAst(kind: gpuIf, ifIsExpr: false,
+                      ifCond: ident(cSym),
+                      ifThen: GpuAst(kind: gpuAssign, aLeft: ident(xSym),
+                                     aOp: "=", aRight: ternary),
+                      ifElifs: @[],
+                      ifElse: GpuAst(kind: gpuDiscard))
+  let k = kernelFn(stmtIf)
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 1,
+    "the branch-internal rewrite stays inside the branch"
+  let stmtIfOut = k.pBody.statements[0]
+  doAssert stmtIfOut.kind == gpuIf and stmtIfOut.ifElifs.len == 0,
+    "the statement if survives the pass"
+  doAssert stmtIfOut.ifThen.kind == gpuBlock,
+    "the bare then-branch rewraps into a block"
+  doAssert stmtIfOut.ifThen.blockLabel == "",
+    "no splice-block label leaks into the branch body"
+  doAssert stmtIfOut.ifThen.statements.len == 3,
+    "the branch body carries [var, if, assign]"
+  let decl = stmtIfOut.ifThen.statements[0]
+  doAssert decl.kind == gpuVar and decl.vType.kind == gtInt32,
+    "the temp declares inside the branch"
+  let assign = stmtIfOut.ifThen.statements[2]
+  doAssert assign.kind == gpuAssign and assign.aLeft.symbol.iSym == "x",
+    "the original assignment survives in the branch"
+  doAssert assign.aRight.kind == gpuIdent and
+    assign.aRight.symbol.name == decl.vName.symbol.name,
+    "the assignment reads the branch-local temp"
+  echo "  OK — a ternary inside a branch body rewraps the branch into a block"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 13. the globalBlocks entry path lowers like a fn body
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let i32t = initGpuType(gtInt32)
+  let boolt = GpuType(kind: gtBool)
+  let cSym = local("c", boolt)
+  let xSym = local("x", i32t)
+  let ternary = GpuAst(kind: gpuTernary,
+                       tCond: ident(cSym),
+                       tThen: lit(i32t, "1"),
+                       tElse: lit(i32t, "2"))
+  ctx.globalBlocks.add GpuAst(kind: gpuBlock, statements: @[
+    GpuAst(kind: gpuAssign, aLeft: ident(xSym), aOp: "=", aRight: ternary)])
+  registerLowerTernaryToIf.runPassPrepared(ctx)
+  let blk = ctx.globalBlocks[0]
+  doAssert blk.kind == gpuBlock and blk.statements.len == 3,
+    "the global block splices [var, if] ahead of the assignment"
+  doAssert blk.statements[0].kind == gpuVar and blk.statements[0].vType.kind == gtInt32,
+    "the temp declares first in the global block"
+  doAssert blk.statements[1].kind == gpuIf,
+    "the selection is a statement if in the global block"
+  let assign = blk.statements[2]
+  doAssert assign.kind == gpuAssign and assign.aLeft.symbol.iSym == "x",
+    "the original assignment survives in the global block"
+  doAssert assign.aRight.kind == gpuIdent and
+    assign.aRight.symbol.name == blk.statements[0].vName.symbol.name,
+    "the global assignment reads the temp"
+  echo "  OK — the globalBlocks entry path lowers like a fn body"
 
 echo "  OK - t_ir_lower_ternary"
