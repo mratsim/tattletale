@@ -510,6 +510,20 @@ func staticIntTyValue(t: GpuType): int =
   else:
     t.gArgs[0].sValue
 
+func pushLeafWidth(t: GpuType): int =
+  ## Byte width of one flattened push-block leaf in host packing units.
+  ## Nim int/uint/bool lower to 4 bytes off-graph.
+  ## A 0 marks a phantom static-int leaf with no push member.
+  case t.kind
+  of gtPtr, gtUncheckedArray, gtUint64, gtInt64, gtFloat64: 8
+  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
+  of gtUint8: 1
+  of gtUint16, gtInt16, gtFloat16: 2
+  else: 0
+
+func roundUpTo(x, step: int): int =
+  ((x + step - 1) div step) * step
+
 type FlattenLeaf = object
   path: seq[string]  ## field names from the param root, declaration order
   typ: GpuType
@@ -787,6 +801,35 @@ proc flattenKernelObjectParam(fn: GpuAst, pIdx: int): int =
                         addressSpace: p.addressSpace, passByRef: false,
                         flavor: p.flavor)
     inc inserted
+  # The host serialization pads an object's packed end to its alignment.
+  # The device push block renders the leaves flat with no tail padding,
+  # so u32 members appended after the leaves hold the next member
+  # at the host-rounded offset and appending keeps the expansions
+  # leaf indexes untouched
+  block padTail:
+    var tailOff = 0
+    var tailAlign = 1
+    for leaf in st.leaves:
+      let w = pushLeafWidth(leaf.typ)
+      if w == 0:
+        continue
+      tailOff = roundUpTo(tailOff, w) + w
+      tailAlign = max(tailAlign, w)
+    let padBytes = roundUpTo(tailOff, tailAlign) - tailOff
+    doAssert padBytes mod 4 == 0,
+      "object tail padding is not u32-granular"
+    for k in 0 ..< padBytes div 4:
+      let padName = p.ident.symbol.name & "_pad" & $k
+      if padName in taken:
+        error "flattenObjectParams: padding member name `" & padName &
+          "` collides with an existing name in kernel `" & kernelName & "`"
+      taken.add padName
+      let padSym = newSymbol(padName, typ = GpuType(kind: gtUint32),
+                             symKind = gsGlobalKernelParam)
+      params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: padSym),
+                          typ: padSym.typ, addressSpace: p.addressSpace,
+                          passByRef: false, flavor: p.flavor)
+      inc inserted
   for i in pIdx + 1 ..< fn.pParams.len:
     params.add fn.pParams[i]
   fn.pParams = params
