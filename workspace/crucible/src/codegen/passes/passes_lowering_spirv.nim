@@ -15,12 +15,14 @@
 # The bundle registers the SPIR-V pipeline's passes.
 
 import std/macros # for the `error` builtin (compile-time diagnostics)
+import std/sets # pad-name collision check over body identifiers
 import std/strutils # leaf param naming joins the field path
-import std/tables # OrderedTable keys iterator
+import std/tables # the reconstruction-local table
 import ../ir/ast_datatypes
 import ../ir/ast_type_constructors # initGpuPtrType
 import ../ir/ast_type_resolvers # getExprType
 import ./pass_datatypes
+import ./pass_helpers # collectIdentNames
 import ./pass_registry
 import ./passes_lowering
 import ./passes_low_pointers
@@ -44,10 +46,14 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   # pointer-deref insertion, both copies of the address skeleton retype alike
   reg.registerLowerCompoundAssign()
   reg.registerInsertPointerDeref()
-  # Object kernel params flatten to one scalar/pointer param per leaf.
-  # The push block renders flat members only, bool leaves stay gtBool
-  # here and the next pass retypes them.
-  reg.registerFlattenObjectParams()
+  # Object kernel params explode into leaf params and a reconstruction local,
+  # pure-value objects included: the push block renders flat members only.
+  # Bool leaves stay gtBool, the next pass retypes them
+  reg.registerExplodeKernelParams()
+  # u32 pad members hold the device push block at the offsets the host
+  # launch serialization packs: the object head rounds up to the object
+  # alignment and the tail to the host-rounded end
+  reg.registerSpirvPushBlockPad()
   # Bool kernel parameters declare i32 in the push-constant interface,
   # loads convert at the use boundary
   reg.registerPatchBoolToI32()
@@ -483,382 +489,147 @@ proc lowerCompoundAssign(ctx: var GpuContext) =
       ctx.lowerCompoundAssignStmts(blk.statements)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Object kernel params flatten to one param per leaf
+# Push-block padding (SPIR-V launch policy)
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerFlattenObjectParams(reg: var PassRegistry) =
-  ## Replaces object-typed kernel params with one scalar/pointer param per
-  ## field leaf and rewrites the body's field chains to the leaf params,
-  ## SPIR-V pipeline only, whole-object uses refuse loudly
-  reg.register("flattenObjectParams", pkTransform, phaseMain,
-    "Decomposes object kernel params into leaf params in field order, body field chains read the leaf params, whole-object uses refuse",
+func registerSpirvPushBlockPad(reg: var PassRegistry) =
+  ## Inserts u32 pad params between the exploded leaves so the device
+  ## push block's member offsets match the host launch serialization.
+  ## SPIR-V pipeline only: the padding is the SPIR-V launch ABI's policy
+  ## and stays out of the shared explode pass
+  reg.register("spirvPushBlockPad", pkTransform, phaseMain,
+    "Inserts u32 pad params after the exploded leaves so the device push-block offsets match the host serialization's object head and tail rounding",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
-      ctx.flattenObjectParams()
+      ctx.spirvPushBlockPad()
   )
-
-func isStaticIntTy(t: GpuType): bool =
-  ## Static-integer values: `static int` and instantiated `Int[static]`.
-  ## They carry their value in the type, no push member and no param.
-  t.kind == gtStatic or
-      (t.kind == gtGenericInst and t.gName == "Int" and t.gArgs.len == 1 and
-       t.gArgs[0].kind == gtStatic)
-
-func staticIntTyValue(t: GpuType): int =
-  if t.kind == gtStatic:
-    t.sValue
-  else:
-    t.gArgs[0].sValue
-
-func pushLeafWidth(t: GpuType): int =
-  ## Byte width of one flattened push-block leaf in host packing units.
-  ## Nim int/uint/bool lower to 4 bytes off-graph.
-  ## A 0 marks a phantom static-int leaf with no push member.
-  case t.kind
-  of gtPtr, gtUncheckedArray, gtUint64, gtInt64, gtFloat64: 8
-  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
-  of gtUint8: 1
-  of gtUint16, gtInt16, gtFloat16: 2
-  else: 0
 
 func roundUpTo(x, step: int): int =
   ((x + step - 1) div step) * step
 
-type FlattenLeaf = object
-  path: seq[string]  ## field names from the param root, declaration order
-  typ: GpuType
-  param: GpuAst      ## the flattened param ident, nil for static-int leaves
-  shadow: GpuAst     ## Function-storage shadow for a written scalar leaf, nil otherwise
-
-func flatScalarKinds(t: GpuType): bool =
-  ## Leaf scalar kinds the SPIR-V push block renders, gtVoid cannot be a leaf
-  t.kind in {gtBool, gtUint8, gtUint16, gtInt16, gtUint32, gtInt32,
-             gtUint64, gtInt64, gtFloat32, gtFloat64, gtFloat16, gtSize_t}
-
-func collectFlattenLeaves(t: GpuType, path: seq[string], res: var seq[FlattenLeaf]) =
-  ## Depth-first leaf collection in field order: the flattened params replace
-  ## the object param at its position, the push-blob member order the backend
-  ## renders stays field order.
+func pushHostWidth(t: GpuType): int =
+  ## Byte width of one flat push member under the host launch serialization:
+  ##
+  ## - Nim int/uint/bool lower to 4 bytes off-graph
+  ## - a pointer crosses as its 8-byte device address
+  ## - an array packs at the element width
   case t.kind
-  of gtObject, gtGenericInst:
-    if isStaticIntTy(t):
-      res.add FlattenLeaf(path: path, typ: t)
-      return
-    for f in t.fields:
-      collectFlattenLeaves(f.typ, path & f.name, res)
-  of gtPtr, gtUncheckedArray, gtStatic:
-    res.add FlattenLeaf(path: path, typ: t)
+  of gtPtr, gtVoidPtr, gtUncheckedArray, gtUint64, gtInt64, gtFloat64: 8
+  of gtBool, gtUint32, gtInt32, gtFloat32, gtSize_t: 4
+  of gtArray: pushHostWidth(t.aTyp) * t.aLen
   else:
-    if flatScalarKinds(t):
-      res.add FlattenLeaf(path: path, typ: t)
-    else:
-      error "flattenObjectParams: kernel parameter member outside the SPIR-V subset: " & $t.kind
+    error "spirvPushBlockPad: push member outside the SPIR-V subset: " & $t.kind
 
-type FlattenState = object
-  kernelName: string
-  paramISym: string
-  paramName: string
-  leaves: seq[FlattenLeaf]
-  written: seq[int]  ## indexes into leaves of scalar leaves assigned in the body
+func pushHostAlign(t: GpuType): int =
+  ## Byte alignment of one flat push member under the host serialization:
+  ## arrays align at the element width
+  case t.kind
+  of gtArray: pushHostWidth(t.aTyp)
+  else: pushHostWidth(t)
 
-func findFlatLeaf(st: FlattenState, fields: seq[string]): int =
-  ## Leaf index for a field path, -1 when the path names an interior object
-  ## (a whole sub-object use) or nothing.
-  for i, l in st.leaves:
-    if l.path == fields:
-      return i
-  -1
+type PadGroup = object
+  ## Leaf params one exploded object contributed, in field order
+  leaves: seq[tuple[name: string, typ: GpuType]]
 
-func flatChain(n: GpuAst): tuple[root: GpuAst, fields: seq[string]] =
-  ## Splits a member-access chain into its root node and the field names.
-  doAssert n.kind == gpuDot, "not a member access"
-  var cur = n
-  while cur.kind == gpuDot:
-    result.fields.insert(cur.dField.symbol.name)
-    cur = cur.dParent
-  result.root = cur
-
-func flatRefuse(st: FlattenState, msg: string) =
-  error "flattenObjectParams: " & msg & " (kernel `" & st.kernelName &
-    "`, parameter `" & st.paramName & "`)"
-
-proc markFlatWrite(n: GpuAst, st: var FlattenState, marks: bool) =
-  ## Records which scalar leaves the body assigns. Only a bare member chain
-  ## on the left of `=` writes a leaf. Pointer-leaf and deref-target stores
-  ## write device memory, never the parameter
+proc collectLeafIdents(fn: GpuAst, n: GpuAst, leaves: var seq[tuple[name: string, typ: GpuType]]) =
+  ## Collects the leaf param references of a reconstruction construction
+  ## in field order, nested sub-object constructions recurse.
+  ## Types come from the kernel's param list: its idents carry none
   case n.kind
-  of gpuDot:
-    let (root, fields) = flatChain(n)
-    if root.kind == gpuIdent and root.symbol.iSym == st.paramISym:
-      if not marks:
-        return
-      let idx = st.findFlatLeaf(fields)
-      if idx < 0:
-        st.flatRefuse("whole-object use of the parameter's sub-value `" &
-          st.paramName & "." & fields.join(".") & "`")
-      let lt = st.leaves[idx].typ
-      if isStaticIntTy(lt):
-        st.flatRefuse("assignment to the static field `" &
-          st.paramName & "." & fields.join(".") & "`: it holds no runtime storage")
-      if lt.kind in {gtPtr, gtUncheckedArray}:
-        st.flatRefuse("assignment to the pointer leaf parameter `" &
-          st.paramName & "_" & fields.join("_") &
-          "`: device-address parameters are read-only")
-      if idx notin st.written:
-        st.written.add idx
-    else:
-      markFlatWrite(n.dParent, st, marks)
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym == st.paramISym and marks:
-      st.flatRefuse("assignment of the whole object")
-  of gpuDeref:
-    markFlatWrite(n.dOf, st, false)
-  of gpuIndex:
-    markFlatWrite(n.iArr, st, false)
-  of gpuAddr:
-    markFlatWrite(n.aOf, st, false)
-  else:
-    discard
-
-proc markFlatWrites(n: GpuAst, st: var FlattenState) =
-  case n.kind
-  of gpuBlock:
-    for s in n.statements:
-      markFlatWrites(s, st)
-  of gpuAssign:
-    markFlatWrite(n.aLeft, st, true)
-  of gpuIf:
-    markFlatWrites(n.ifThen, st)
-    for el in n.ifElifs:
-      markFlatWrites(el.body, st)
-    if n.ifElse.kind != gpuDiscard:
-      markFlatWrites(n.ifElse, st)
-  of gpuFor:
-    markFlatWrites(n.fBody, st)
-  of gpuWhile:
-    markFlatWrites(n.wBody, st)
-  else:
-    discard
-
-proc rewriteFlatUses(n: var GpuAst, st: FlattenState, underAddr: bool) =
-  ## Rewrites every use of the object parameter. Member chains rooted at it
-  ## consume their whole chain into the leaf param, the shadow of a written
-  ## scalar leaf or the literal of a static leaf. Any other occurrence is
-  ## a whole-object use and refuses
-  case n.kind
-  of gpuDot:
-    let (root, fields) = flatChain(n)
-    if root.kind == gpuIdent and root.symbol.iSym == st.paramISym:
-      let idx = st.findFlatLeaf(fields)
-      if idx < 0:
-        st.flatRefuse("whole-object use of the parameter's sub-value `" &
-          st.paramName & "." & fields.join(".") & "`")
-      let leaf = st.leaves[idx]
-      if isStaticIntTy(leaf.typ):
-        n = GpuAst(kind: gpuLit, lType: GpuType(kind: gtInt32),
-                   lValue: $staticIntTyValue(leaf.typ))
-      elif underAddr and leaf.typ.kind notin {gtPtr, gtUncheckedArray}:
-        st.flatRefuse("address of the scalar leaf parameter `" &
-          st.paramName & "_" & fields.join("_") &
-          "`: a push-constant scalar has no address")
-      elif not leaf.shadow.isNil:
-        n = leaf.shadow
-      else:
-        n = leaf.param
-    else:
-      rewriteFlatUses(n.dParent, st, underAddr)
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.iSym == st.paramISym:
-      st.flatRefuse("whole-object use of the parameter")
-  of gpuAddr:
-    rewriteFlatUses(n.aOf, st, true)
-  of gpuDeref:
-    rewriteFlatUses(n.dOf, st, underAddr)
-  of gpuIndex:
-    rewriteFlatUses(n.iArr, st, underAddr)
-    rewriteFlatUses(n.iIndex, st, underAddr)
-  of gpuBinOp:
-    rewriteFlatUses(n.bLeft, st, underAddr)
-    rewriteFlatUses(n.bRight, st, underAddr)
-  of gpuCall:
-    for i in 0 ..< n.cArgs.len:
-      rewriteFlatUses(n.cArgs[i], st, underAddr)
-  of gpuConv:
-    rewriteFlatUses(n.convExpr, st, underAddr)
-  of gpuCast:
-    rewriteFlatUses(n.cExpr, st, underAddr)
-  of gpuPrefix:
-    rewriteFlatUses(n.pVal, st, underAddr)
   of gpuObjConstr:
-    for f in n.ocFields.mitems:
-      rewriteFlatUses(f.value, st, underAddr)
-  of gpuArrayLit:
-    for i in 0 ..< n.aValues.len:
-      rewriteFlatUses(n.aValues[i], st, underAddr)
-  of gpuMaterialize:
-    rewriteFlatUses(n.mExpr, st, underAddr)
-  of gpuConstexpr:
-    rewriteFlatUses(n.cValue, st, underAddr)
-  of gpuLit, gpuDiscard:
-    discard
-  # statements
-  of gpuBlock:
-    for s in n.statements.mitems:
-      rewriteFlatUses(s, st, underAddr)
-  of gpuAssign:
-    rewriteFlatUses(n.aLeft, st, false)
-    rewriteFlatUses(n.aRight, st, underAddr)
-  of gpuVar:
-    rewriteFlatUses(n.vInit, st, underAddr)
-  of gpuIf:
-    rewriteFlatUses(n.ifCond, st, underAddr)
-    rewriteFlatUses(n.ifThen, st, underAddr)
-    for el in n.ifElifs.mitems:
-      rewriteFlatUses(el.cond, st, underAddr)
-      rewriteFlatUses(el.body, st, underAddr)
-    if n.ifElse.kind != gpuDiscard:
-      rewriteFlatUses(n.ifElse, st, underAddr)
-  of gpuFor:
-    rewriteFlatUses(n.fStart, st, underAddr)
-    rewriteFlatUses(n.fEnd, st, underAddr)
-    rewriteFlatUses(n.fStep, st, underAddr)
-    rewriteFlatUses(n.fBody, st, underAddr)
-  of gpuWhile:
-    rewriteFlatUses(n.wCond, st, underAddr)
-    rewriteFlatUses(n.wBody, st, underAddr)
-  of gpuReturn:
-    rewriteFlatUses(n.rValue, st, underAddr)
+    for f in n.ocFields:
+      fn.collectLeafIdents(f.value, leaves)
+  of gpuIdent:
+    for p in fn.pParams:
+      if p.ident.symbol.name == n.symbol.name:
+        leaves.add (n.symbol.name, p.typ)
+        return
+    error "spirvPushBlockPad: kernel `" & fn.pName.ident() &
+      "`: reconstruction references non-parameter `" & n.symbol.name & "`"
   else:
-    error "flattenObjectParams: unsupported node " & $n.kind
+    discard
 
-proc scanBodyIdents(n: GpuAst, taken: var seq[string]) =
-  ## Collects every identifier name the body already uses, leaf param names
-  ## must not collide with them
-  if n.isNil:
+proc collectPadGroups(fn: GpuAst, groups: var seq[PadGroup]) =
+  ## Explode leaves one reconstruction local per exploded param:
+  ## a global-kernel-param-named var whose initializer is an object
+  ## construction over the leaf params. Its fields name the group's
+  ## leaves in field order
+  if fn.pBody.kind != gpuBlock:
     return
-  if n.kind == gpuIdent and n.symbol != nil:
-    taken.add n.symbol.name
-  for ch in n.items:
-    scanBodyIdents(ch, taken)
+  for st in fn.pBody.statements:
+    if st.kind == gpuVar and st.vInit.kind == gpuObjConstr and
+        st.vName.symbol.symKind == gsGlobalKernelParam:
+      var g = PadGroup()
+      fn.collectLeafIdents(st.vInit, g.leaves)
+      groups.add g
 
-proc flattenKernelObjectParam(fn: GpuAst, pIdx: int): int =
-  ## Flattens the object param at `pIdx` into leaf params, rewrites the body
-  ## to read them. Returns the number of params inserted in its place.
-  let kernelName = fn.pName.ident()
-  let p = fn.pParams[pIdx]
-  var st = FlattenState(kernelName: kernelName,
-                        paramISym: p.ident.symbol.iSym,
-                        paramName: p.ident.symbol.name)
-  st.leaves = @[]
-  collectFlattenLeaves(p.typ, @[], st.leaves)
-  # names must be collision-free: against the remaining params and every
-  # identifier the body already uses, the emitter keys storage by name
-  var taken: seq[string]
-  for q in fn.pParams:
-    taken.add q.ident.symbol.name
-  scanBodyIdents(fn.pBody, taken)
-  for i, leaf in st.leaves.mpairs:
-    if isStaticIntTy(leaf.typ):
-      # no runtime storage: the leaf value substitutes as a literal,
-      # no push member and no param, like the backend's member loop skip
-      continue
-    let name = p.ident.symbol.name & "_" & leaf.path.join("_")
-    if name in taken:
-      error "flattenObjectParams: flattened leaf name `" & name &
-        "` collides with an existing name in kernel `" & kernelName & "`"
-    taken.add name
-    var paramTy = leaf.typ
-    if paramTy.kind == gtUncheckedArray:
-      # a flexible-array leaf crosses as a device buffer, the ptr type
-      # the emitter's address route renders as one u64 push member
-      paramTy = initGpuPtrType(paramTy.uaTo, implicitPtr = false)
-    let sym = newSymbol(name, typ = paramTy, symKind = gsGlobalKernelParam)
-    leaf.param = GpuAst(kind: gpuIdent, symbol: sym)
-    st.leaves[i] = leaf
-  markFlatWrites(fn.pBody, st)
-  # a scalar leaf the body assigns needs Function storage: the emitter can
-  # store only through locals, so the shadow var initializes from the push load
-  for idx in st.written:
-    var leaf = st.leaves[idx]
-    let shadowName = leaf.param.symbol.name & "_shadow"
-    if shadowName in taken:
-      error "flattenObjectParams: shadow variable name `" & shadowName &
-        "` collides with an existing name in kernel `" & kernelName & "`"
-    taken.add shadowName
-    let shadowSym = newSymbol(shadowName, typ = leaf.typ, symKind = gsLocal)
-    leaf.shadow = GpuAst(kind: gpuIdent, symbol: shadowSym)
-    st.leaves[idx] = leaf
-  # splice the leaf params in at the object param's position so the push
-  # block member order stays the backend's field-order expansion
-  var params: seq[GpuParam]
-  for i in 0 ..< pIdx:
-    params.add fn.pParams[i]
-  var inserted = 0
-  for leaf in st.leaves:
-    if leaf.param.isNil:
-      continue
-    params.add GpuParam(ident: leaf.param, typ: leaf.param.symbol.typ,
-                        addressSpace: p.addressSpace, passByRef: false,
-                        flavor: p.flavor)
-    inc inserted
-  # The host serialization pads an object's packed end to its alignment.
-  # The device push block renders the leaves flat with no tail padding,
-  # so u32 members appended after the leaves hold the next member
-  # at the host-rounded offset and appending keeps the expansions
-  # leaf indexes untouched
-  block padTail:
-    var tailOff = 0
-    var tailAlign = 1
-    for leaf in st.leaves:
-      let w = pushLeafWidth(leaf.typ)
-      if w == 0:
-        continue
-      tailOff = roundUpTo(tailOff, w) + w
-      tailAlign = max(tailAlign, w)
-    let padBytes = roundUpTo(tailOff, tailAlign) - tailOff
-    doAssert padBytes mod 4 == 0,
-      "object tail padding is not u32-granular"
-    for k in 0 ..< padBytes div 4:
-      let padName = p.ident.symbol.name & "_pad" & $k
-      if padName in taken:
-        error "flattenObjectParams: padding member name `" & padName &
-          "` collides with an existing name in kernel `" & kernelName & "`"
-      taken.add padName
-      let padSym = newSymbol(padName, typ = GpuType(kind: gtUint32),
-                             symKind = gsGlobalKernelParam)
-      params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: padSym),
-                          typ: padSym.typ, addressSpace: p.addressSpace,
-                          passByRef: false, flavor: p.flavor)
-      inc inserted
-  for i in pIdx + 1 ..< fn.pParams.len:
-    params.add fn.pParams[i]
-  fn.pParams = params
-  # shadow declarations hoist to the emitter's setup block, they are body
-  # var statements and the initializer reads the leaf param's push load
-  if st.written.len > 0:
-    if fn.pBody.kind != gpuBlock:
-      fn.pBody = GpuAst(kind: gpuBlock, statements: @[fn.pBody])
-    for leaf in st.leaves:
-      if not leaf.shadow.isNil:
-        fn.pBody.statements.insert(
-          GpuAst(kind: gpuVar, vName: leaf.shadow, vType: leaf.typ,
-                 vInit: leaf.param, vMutable: true, addressSpace: asRMEM),
-          0)
-  rewriteFlatUses(fn.pBody, st, false)
-  result = inserted
-
-proc flattenObjectParams(ctx: var GpuContext) =
-  ## Flattens object-typed kernel params over every `{.global.}` kernel.
-  ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
-  ## device fns keep their object params: only kernel signatures flatten.
+proc spirvPushBlockPad(ctx: var GpuContext) =
+  ## Rebuilds every `{.global.}` kernel's params with u32 pads interleaved.
+  ##
+  ## - the host packs each object at roundUp(off, objAlign) head and tail
+  ## - the device push block rounds flat members to their own alignment
+  ## - the pads equalize the two offsets
+  ##
+  ## objAlign is the max leaf alignment, matching the host serializer's deviceLayout for the object
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.kind != gpuProc or attGlobal notin fn.pAttributes:
       continue
-    var i = 0
-    while i < fn.pParams.len:
-      let t = fn.pParams[i].typ
-      if t.kind in {gtObject, gtGenericInst} and not isStaticIntTy(t):
-        i += flattenKernelObjectParam(fn, i)
-      else:
-        inc i
+    var groups: seq[PadGroup]
+    fn.collectPadGroups(groups)
+    if groups.len == 0:
+      continue
+    var leafOf = initTable[string, tuple[g, l: int]]()
+    var objAlign: seq[int]
+    for gi, g in groups:
+      for li, leaf in g.leaves:
+        leafOf[leaf.name] = (gi, li)
+      var a = 1
+      for leaf in g.leaves:
+        a = max(a, pushHostAlign(leaf.typ))
+      objAlign.add a
+    var used: HashSet[string]
+    for p in fn.pParams:
+      used.incl p.ident.symbol.name
+    fn.pBody.collectIdentNames(used)
+    var params: seq[GpuParam]
+    var hostOff = 0
+    var devOff = 0
+    var padCount = 0
+    for p in fn.pParams:
+      let name = p.ident.symbol.name
+      let w = pushHostWidth(p.typ)
+      let a = pushHostAlign(p.typ)
+      if name in leafOf:
+        let (gi, li) = leafOf[name]
+        if li == 0:
+          # the host rounds the object's head to the object alignment
+          hostOff = roundUpTo(hostOff, objAlign[gi])
+      let hostPlace = roundUpTo(hostOff, a)
+      # the device rounds flat members to their own alignment.
+      # U32 pads advance the device offset to the host placement.
+      # All members are at least 32 bits wide, both offsets keep their 4-byte granularity
+      while devOff < hostPlace:
+        let padName = name & "_pad" & $padCount
+        if padName in used:
+          error "spirvPushBlockPad: padding member name `" & padName &
+            "` collides with an existing name in kernel `" & fn.pName.ident() & "`"
+        used.incl padName
+        let padSym = newSymbol(padName, typ = GpuType(kind: gtUint32),
+                               symKind = gsGlobalKernelParam)
+        params.add GpuParam(ident: GpuAst(kind: gpuIdent, symbol: padSym),
+                            typ: padSym.typ, addressSpace: asRMEM,
+                            passByRef: false)
+        devOff = roundUpTo(devOff, 4) + 4
+        inc padCount
+      doAssert devOff == hostPlace,
+        "spirvPushBlockPad: device offset " & $devOff & " missed host placement " & $hostPlace
+      devOff = hostPlace + w
+      hostOff = hostPlace + w
+      if name in leafOf:
+        let (gi, li) = leafOf[name]
+        if li == groups[gi].leaves.len - 1:
+          # the host rounds the object's packed end to the object alignment
+          hostOff = roundUpTo(hostOff, objAlign[gi])
+      params.add p
+    fn.pParams = params

@@ -368,6 +368,7 @@ type
     locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
     paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
     paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
+    paramAddrs*: Table[string, uint32] ## pointer param iSym to the raw u64 push address
     addrs*: Table[string, uint32]
     addrNames*: Table[string, uint32]
     addrNamePointees*: Table[string, GpuType]
@@ -513,7 +514,9 @@ func convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
   let inst = if fInt and tInt:
       if getScalarByteSize(source) == getScalarByteSize(to):
         OpBitcast
-      elif source.kind in spvSignedInts:
+      elif to.kind in spvSignedInts:
+        # the convert opcode's signedness matches the result type:
+        # OpSConvert declares a signed result, OpUConvert an unsigned one
         OpSConvert
       else:
         OpUConvert
@@ -834,11 +837,24 @@ proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let structId = ctx.tyId(valueTy(n.ocType))
   var members: seq[uint32]
   for f in n.ocFields:
-    let v = emitExpr(ctx, fn, f.value)
-    if f.typ.kind in spvScalarKinds or isStaticInt(f.typ):
-      members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
+    if isStaticInt(f.typ):
+      # a static field contributes its compile-time value, no runtime read
+      members.add ctx.builder.constUint(ctx.tyId(spvScalar(GpuType(kind: gtInt32))),
+                                        uint64(uint32(staticIntValue(f.typ))))
+    elif f.value.kind == gpuDiscard:
+      # an all-static composite field (e.g. a static layout member) crosses
+      # no runtime bytes, the storage slot is never read
+      members.add ctx.builder.opUndef(ctx.tyId(valueTy(f.typ)))
+    elif f.value.kind == gpuIdent and f.value.symbol.iSym in fn.paramAddrs:
+      # a pointer leaf field of a reconstruction local: the push block
+      # member is the raw u64 device address
+      members.add fn.paramAddrs[f.value.symbol.iSym]
     else:
-      members.add v
+      let v = emitExpr(ctx, fn, f.value)
+      if f.typ.kind in spvScalarKinds or isStaticInt(f.typ):
+        members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
+      else:
+        members.add v
   ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
 
 proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
@@ -1419,6 +1435,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
       let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
+      fn.paramAddrs[sym.iSym] = devAddr
       fn.paramPtrs[sym.iSym] =
         ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(pointeeElem(p.typ)), devAddr)
     else:

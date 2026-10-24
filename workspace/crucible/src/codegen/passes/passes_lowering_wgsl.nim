@@ -50,7 +50,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   reg.registerSharedLoweringPasses()
   # Struct params carrying pointers explode to leaves before the passes below reshape pointer code.
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved)
-  reg.registerExpandStructKernelParams()
+  reg.registerExplodeStructWithPtrFields()
   reg.registerInstantiateImplicitAddressSpaceGenerics()
   reg.registerRecordPtrFieldBindings()
   reg.registerLiftKernelParamsToGlobals()
