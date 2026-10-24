@@ -102,6 +102,13 @@ expectRefusal("bitcast", entryBody(
   """  let t = cast[int32](a[0])
   y[0] = t.float32"""), "gpuCast")
 
+expectRefusal("nested_proc", entryBody(
+  "y: ptr UncheckedArray[float32], a: ptr UncheckedArray[float32], n: int32",
+  """  for i in 0 ..< n:
+    proc twice(x: float32): float32 =
+      x * 2.0'f32
+    y[i] = twice(a[i])"""), "gpuProc")
+
 # ── Member and aggregate rows (objects come from the snippet prelude) ─────
 
 const objPrelude = """

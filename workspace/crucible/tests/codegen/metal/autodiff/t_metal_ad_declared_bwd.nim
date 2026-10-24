@@ -260,9 +260,8 @@ proc runTest() =   # private: engines are destroyed at return
     doAssert lseGot[0] == outGot[0] + 1.0'f32,
       "stub forward lse: got " & $lseGot[0] & " want " & $(outGot[0] + 1.0'f32)
 
-    # Incoming cotangents: d_out distinctive, d_lse pre-zeroed for fresh semantics,
-    # the declared backward accumulates into it.
-    var dLseHost: array[1, float32] = [0.0'f32]
+    # Incoming cotangents: d_out distinctive, d_lse seeded nonzero, keeping d_v cotangent terms value-visible
+    var dLseHost: array[1, float32] = [0.5'f32]
     let dLseDev = engineD.allocDevice(float32, 1)
     engineD.copyToDeviceFromHost(dLseDev, addr dLseHost[0], 1)
 
@@ -288,8 +287,8 @@ proc runTest() =   # private: engines are destroyed at return
       doAssert dV[i] == dOutHost[i] + dLseHost[0],
         "stub d_v: element " & $i & " got " & $dV[i] &
         " want " & $(dOutHost[i] + dLseHost[0])
-    doAssert dLse[0] == dOutHost[0],
-      "stub d_lse: got " & $dLse[0] & " want " & $dOutHost[0]
+    doAssert dLse[0] == dOutHost[0] + dLseHost[0],
+      "stub d_lse: got " & $dLse[0] & " want " & $(dOutHost[0] + dLseHost[0])
     stdout.writeLine("[OK] FA-shaped stub: saved outputs round-trip through the handle")
 
 when isMainModule:
