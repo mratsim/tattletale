@@ -389,6 +389,17 @@ proc hoistAddressCalls(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst])
     ctx.hoistAddressCalls(n.dParent, pre)
   of gpuDeref:
     ctx.hoistAddressCalls(n.dOf, pre)
+  of gpuBinOp:
+    # pure-expression nodes have no side effects of their own, the walk only
+    # descends into children and the gpuCall variant hoists the temp
+    ctx.hoistAddressCalls(n.bLeft, pre)
+    ctx.hoistAddressCalls(n.bRight, pre)
+  of gpuConv:
+    ctx.hoistAddressCalls(n.convExpr, pre)
+  of gpuCast:
+    ctx.hoistAddressCalls(n.cExpr, pre)
+  of gpuPrefix:
+    ctx.hoistAddressCalls(n.pVal, pre)
   of gpuIdent, gpuLit:
     discard
   else:

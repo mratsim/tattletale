@@ -192,4 +192,40 @@ static:
   doAssert k.pBody.findKind(gpuBinOp).isNil, "no binop introduced"
   echo "  OK — a plain = assignment passes through untouched"
 
+# ═══════════════════════════════════════════════════════════════════════
+# 6. an arithmetic index is a pure expression, no temp hoists
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  var ctx = GpuContext()
+  let f32t = initGpuType(gtFloat32)
+  let i32t = initGpuType(gtInt32)
+  let arrT = GpuType(kind: gtArray, aTyp: f32t, aLen: 8)
+  let arrSym = newSymbol("a", iSym = "a_h5", typ = arrT, symKind = gsLocal)
+  let iSym = newSymbol("i", iSym = "i_h5", typ = i32t, symKind = gsLocal)
+  let nSym = newSymbol("n", iSym = "n_h5", typ = i32t, symKind = gsLocal)
+  let jSym = newSymbol("j", iSym = "j_h5", typ = i32t, symKind = gsLocal)
+  proc arithBinop(op: string, l, r: GpuAst): GpuAst =
+    GpuAst(kind: gpuBinOp, bOp: GpuAst(kind: gpuIdent, symbol: newSymbol(op)),
+           bLeft: l, bRight: r, bIsOverloaded: false, bType: i32t)
+  let arithIdx = arithBinop("+", arithBinop("*", ident(iSym), ident(nSym)), ident(jSym))
+  let k = kernelFn(GpuAst(kind: gpuAssign,
+                          aLeft: GpuAst(kind: gpuIndex, iArr: ident(arrSym),
+                                       iIndex: arithIdx),
+                          aOp: "+=", aRight: lit(f32t, "1.0")))
+  ctx.runLower(k)
+  doAssert k.pBody.statements.len == 1,
+    "a pure-expression index hoists no temp"
+  let assign = k.pBody.statements[0]
+  doAssert assign.kind == gpuAssign and assign.aOp == "="
+  doAssert assign.aLeft.kind == gpuIndex and assign.aLeft.iIndex.kind == gpuBinOp,
+    "the store target keeps the arithmetic index"
+  doAssert assign.aLeft.iIndex.bOp.symbol.name == "+"
+  let binop = assign.aRight
+  doAssert binop.kind == gpuBinOp and binop.bOp.symbol.name == "+"
+  doAssert binop.bLeft.kind == gpuIndex and binop.bLeft.iIndex.kind == gpuBinOp,
+    "the binop read clones the same arithmetic index"
+  doAssert binop.bLeft.iIndex.bLeft.bOp.symbol.name == "*",
+    "the nested i*n product survives the clone"
+  echo "  OK — a[i*n + j] += y rewrites in place, the arithmetic index needs no temp"
+
 echo "  OK - t_ir_lower_compound_assign"
