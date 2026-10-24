@@ -171,8 +171,6 @@ proc tagPointerLocalsIn(ctx: var GpuContext, n: GpuAst, locals: var Table[string
     ctx.tagPointerLocalsIn(ch, locals)
 
 proc tagPointerLocals(ctx: var GpuContext) =
-  ## A pointer local declared without an initializer is untagged at birth,
-  ## its assignment decides the storage the declaration must carry
   for _, fn in ctx.allFnTab.mpairs:
     if fn.kind == gpuProc:
       var locals = initTable[string, GpuAst]()

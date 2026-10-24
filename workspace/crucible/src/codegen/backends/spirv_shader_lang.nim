@@ -92,19 +92,12 @@ func spvTy(t: GpuType): SpvTy =
   else:
     error("GpuType outside the SPIR-V subset: " & $t.kind)
 
-func isStaticInt(t: GpuType): bool =
-  t.kind == gtStatic or
-      (t.kind == gtGenericInst and t.gName == "Int" and t.gArgs.len == 1 and
-       t.gArgs[0].kind == gtStatic)
 
 func staticIntValue(t: GpuType): int =
-  if t.kind == gtStatic:
-    t.sValue
-  else:
-    t.gArgs[0].sValue
+  t.sValue
 
 func valueType(t: GpuType): GpuType =
-  if isStaticInt(t):
+  if t.kind == gtStatic:
     GpuType(kind: gtInt32)
   else:
     t
@@ -115,12 +108,10 @@ func valueTy(t: GpuType): SpvTy =
   of gtStatic: spvScalar(GpuType(kind: gtInt32))
   of gtPtr, gtUncheckedArray: spvScalar(GpuType(kind: gtUint64))
   of gtArray:
-    doAssert t.aTyp.kind in spvScalarKinds or isStaticInt(t.aTyp),
+    doAssert t.aTyp.kind in spvScalarKinds or t.aTyp.kind == gtStatic,
       "array elements outside the SPIR-V subset: " & $t.aTyp.kind
     spvArray(spvScalar(valueType(t.aTyp)), t.aLen)
   of gtObject, gtGenericInst:
-    if isStaticInt(t):
-      return spvScalar(GpuType(kind: gtInt32))
     var ms: seq[SpvTy]
     for f in t.fields:
       ms.add valueTy(f.typ)
@@ -377,13 +368,15 @@ proc refuseNarrowPushMembers(t: GpuType, path: string) =
   ## Push members are 32-bit or wider, narrower leaves refuse
   ## (8/16-bit members need the SPIR-V 1.5 storage capabilities)
   case t.kind
+  of gtBool:
+    spvRefuse("push-constant member " & path & " is gtBool, OpTypeBool is " &
+      "invalid in PushConstant storage, patchBoolToI32 rewrites plain bool " &
+      "kernel parameters only")
   of gtUint8, gtUint16, gtInt16, gtFloat16:
     spvRefuse("push-constant member " & path & " (" & $t.kind &
       ") is narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
   of gtArray: refuseNarrowPushMembers(t.aTyp, path)
   of gtObject, gtGenericInst:
-    if isStaticInt(t):
-      return
     for f in t.fields:
       refuseNarrowPushMembers(f.typ, path & "." & f.name)
   else:
@@ -856,22 +849,14 @@ func fnRetTyId(ctx: var SpvLangCtx, retTy: GpuType): uint32 =
     ctx.tyId(valueTy(valueType(retTy)))
 
 proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  if isStaticInt(n.ocType):
-    return ctx.builder.constUint(ctx.tyId(spvScalar(GpuType(kind: gtInt32))),
-                                 uint64(uint32(staticIntValue(n.ocType))))
   let structId = ctx.tyId(valueTy(n.ocType))
   var members: seq[uint32]
   for f in n.ocFields:
-    if isStaticInt(f.typ):
-      # a static field contributes its compile-time value, no runtime read
-      members.add ctx.builder.constUint(ctx.tyId(spvScalar(GpuType(kind: gtInt32))),
-                                        uint64(uint32(staticIntValue(f.typ))))
+    let v = emitExpr(ctx, fn, f.value)
+    if f.typ.kind in spvScalarKinds:
+      members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
     else:
-      let v = emitExpr(ctx, fn, f.value)
-      if f.typ.kind in spvScalarKinds or isStaticInt(f.typ):
-        members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
-      else:
-        members.add v
+      members.add v
   ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
 
 proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
@@ -1069,10 +1054,6 @@ proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
     if sym.iSym in fn.paramMembers:
       spvRefuse("assignment to the whole parameter object `" & sym.name &
         "` (" & fn.name & "): push constants are read-only")
-    # iSym first: same-name sibling locals (two `total`, two `accs`) carry
-    # distinct iSyms, name-keyed lookup would hit the wrong one.
-    # The name fallback covers assign targets whose symbols the passes
-    # re-symbol, their iSym keys change.
     let varId = if sym.iSym in fn.localsBySym:
                   fn.localsBySym[sym.iSym]
                 elif sym.name in fn.locals:
@@ -1083,7 +1064,7 @@ proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
             elif sym.typ.kind == gtVoid and sym.name in fn.localTys:
               fn.localTys[sym.name]
             else: sym.typ
-    if t.kind in spvScalarKinds or isStaticInt(t):
+    if t.kind in spvScalarKinds:
       let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(t))
       ctx.builder.opStore(varId, value)
     else:
@@ -1242,7 +1223,7 @@ proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
     let varId = getLocalVarId(fn, sym)
     if n.vInit.kind != gpuDiscard:
       let v = emitExpr(ctx, fn, n.vInit)
-      if n.vType.kind in spvScalarKinds or isStaticInt(n.vType):
+      if n.vType.kind in spvScalarKinds:
         let value = ctx.convertValue(v, exprType(fn, n.vInit), valueType(n.vType))
         ctx.builder.opStore(varId, value)
       else:
@@ -1460,7 +1441,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
       fn.paramPtrs[sym.iSym] =
         ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(pointeeElem(p.typ)), devAddr)
-    elif p.typ.kind in {gtObject, gtGenericInst} and not isStaticInt(p.typ):
+    elif p.typ.kind in {gtObject, gtGenericInst}:
       let memberTy = memberTys[i]
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
       let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))

@@ -12,17 +12,16 @@
 # ############################################################
 #
 # Lowers the crucible IR for direct SPIR-V binary emission.
-# The bundle registers the SPIR-V pipeline's passes.
 
 import std/macros # for the `error` builtin (compile-time diagnostics)
-import std/tables # allFnTab key iteration
+import std/tables
 import ../ir/ast_datatypes
 import ../ir/ast_type_resolvers # getExprType
 import ./pass_datatypes
-import ./pass_helpers # roundUpMultiple, gpuScalarByteSize
+import ./pass_helpers
 import ./pass_registry
 import ./passes_lowering
-import ./passes_low_pointers # registerInsertPointerDeref
+import ./passes_low_pointers
 import ./passes_low_views
 
 {.experimental: "codeReordering".}
@@ -44,8 +43,7 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   reg.registerLowerCompoundAssign(deps = @["lowerTernaryToIf"])
   reg.registerInsertPointerDeref()
   # Bool kernel parameters declare i32 in the push-constant interface,
-  # loads convert at the use boundary. Object kernel params need no pass:
-  # the emitter binds them in place as nested push-block struct members
+  # loads convert at the use boundary
   reg.registerPatchBoolToI32(deps = @["lowerTernaryToIf"])
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -78,9 +76,7 @@ proc ternaryResultType(ctx: GpuContext, n: GpuAst): GpuType =
     error "passes_lowering_spirv: ternary result type is untyped"
 
 proc rewriteTernary(ctx: var GpuContext, n: var GpuAst, resTy: GpuType, pre: var seq[GpuAst]) =
-  ## Replaces one gpuTernary with a fresh temp: the temp declares
-  ## uninitialized ahead of the statement, the if-statement assigns
-  ## the taken branch only, and the expression reads the temp.
+  ## Replaces one gpuTernary with a fresh temp:
   ##
   ## Before (IR):   x = c ? a : b
   ## After (IR):    var _tn_N: T
@@ -126,8 +122,7 @@ proc rewriteLazyBool(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) =
   n = ternary
 
 proc lowerTernaryExpr(ctx: var GpuContext, n: var GpuAst, pre: var seq[GpuAst]) =
-  ## Walks one expression subtree, rewriting every ternary and lazy bool,
-  ## the hoisted [var, if] groups append to `pre` in evaluation order
+  ## Hoisted [var, if] groups append to `pre` in evaluation order
   case n.kind
   of gpuTernary:
     # the rewrite assigns the branch expression to the temp, single-statement block wrappers around the branches unwrap first
@@ -324,8 +319,6 @@ proc lowerTernaryStmt(ctx: var GpuContext, n: var GpuAst) =
     n = GpuAst(kind: gpuBlock, blockLabel: "_ternary", statements: pre & @[n])
 
 proc lowerTernaryStmts(ctx: var GpuContext, stmts: var seq[GpuAst]) =
-  ## Walks a statement list in order, flattening `_ternary` splice blocks
-  ## back into the list
   var outStmts: seq[GpuAst]
   for i in 0 ..< stmts.len:
     var st = stmts[i]
@@ -338,9 +331,6 @@ proc lowerTernaryStmts(ctx: var GpuContext, stmts: var seq[GpuAst]) =
   stmts = outStmts
 
 proc lowerTernaryToIf(ctx: var GpuContext) =
-  ## Rewrites ternaries and lazy bools over every fn body and global block.
-  ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
-  ## globalBlocks is the program-scope statement list
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
@@ -452,8 +442,6 @@ proc rewriteCompoundAssign(ctx: var GpuContext, n: var GpuAst) =
     n = GpuAst(kind: gpuBlock, blockLabel: "_compound", statements: pre & @[n])
 
 proc lowerCompoundAssignStmts(ctx: var GpuContext, stmts: var seq[GpuAst]) =
-  ## Walks a statement list in order, splicing hoisted-temp preambles
-  ## before their statement.
   var outStmts: seq[GpuAst]
   for i in 0 ..< stmts.len:
     var st = stmts[i]
@@ -486,9 +474,6 @@ proc lowerCompoundAssignStmt(ctx: var GpuContext, n: var GpuAst) =
     discard
 
 proc lowerCompoundAssign(ctx: var GpuContext) =
-  ## Rewrites compound assignments over every fn body and global block.
-  ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
-  ## globalBlocks is the program-scope statement list
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
