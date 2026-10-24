@@ -71,7 +71,6 @@ macro bridge(engine: HwEngine, node: untyped): untyped =
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
 
-
 func isCompileTime(ftype: NimNode): bool =
   ftype.kind == nnkStaticTy or
     (ftype.kind in {nnkIdent, nnkSym} and ftype.eqIdent("typedesc")) or

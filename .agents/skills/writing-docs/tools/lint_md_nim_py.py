@@ -424,6 +424,9 @@ BANNED = [
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
+    (r"\bcarries\b|\bholds\b",
+     None,
+     "state what the thing is or does, name the actor or the mechanism directly"),
 ]
 
 LICENSE_SHAPE = re.compile(

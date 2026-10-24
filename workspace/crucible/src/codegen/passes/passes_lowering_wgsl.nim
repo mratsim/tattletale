@@ -357,7 +357,7 @@ proc makeCodeValidImpl(ctx: var GpuContext, n: var GpuAst, inGlobal: bool) =
       ctx.makeCodeValidImpl(ch, inGlobal)
     if n.vType.kind == gtPtr:
       let rightId = n.vInit.determineIdent()
-      # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS carries a mutability flag.
+      # The RHS ident's own type may be a non-pointer such as `addr arr[0]`: only a pointer RHS has a mutability flag.
       let rightTyp = if rightId.symbol != nil: rightId.symbol.typ else: nil
       let rhsIsPtr = not rightTyp.isNil and rightTyp.kind == gtPtr
       n.vType.mutable = rhsIsPtr and rightTyp.mutable
@@ -463,7 +463,7 @@ proc inlinePointerParamCalls(ctx: var GpuContext) =
   ## Calls whose pointer arguments all live in `function` space keep real calls.
   ##
   ## Contracts:
-  ## - callees return void, an inlined call carries no expression value
+  ## - callees return void, an inlined call produces no expression value
   ## - callee bodies hold no `return`, a spliced `return` exits the caller
   var inlCount = 0
   var usedNames = initHashSet[string]()

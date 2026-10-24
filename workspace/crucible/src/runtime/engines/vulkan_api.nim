@@ -51,7 +51,6 @@ proc newVulkanEngine*(): VulkanEngine =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resetCaches(engine: VulkanEngine) =
-  ## Drops the cached pipelines and SPIR-V variants, the ingest identity changes
   if engine.spirv.len > 0 or engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
@@ -59,7 +58,6 @@ proc resetCaches(engine: VulkanEngine) =
   engine.caches.spirvCache.clear()
 
 proc ingest*(engine: VulkanEngine, source: string) =
-  ## GLSL sources start with `#version`, HLSL sources carry the `[numthreads]` attribute, anything else fails loudly.
   resetCaches(engine)
   engine.source = source
   if source.startsWith("#version"):
@@ -107,7 +105,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
              "magic as word 0 and the 5-word header, got " &
              (if spirv.len == 0: "an empty module"
               else: $spirv.len & " words, word 0 = " & spirv[0].toHex()))
-  let sq = spirvSquadron(spirv)
+  let sq = getSpirvSquadron(spirv)
   if sq.entryPoints != 1:
     failLoud("Vulkan ingest: a direct SPIR-V module carries exactly one " &
              "OpEntryPoint, got " & $sq.entryPoints)

@@ -1298,7 +1298,6 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
   var fn = SpvFnCtx(fns: ctx.fns)
-  # parameters come first, the entry label opens the body block
   for i, p in procNode.pParams:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
     let sym = p.ident.symbol
@@ -1368,7 +1367,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst])
   ctx.fns = fns
   # every kernel parameter is flat by now: the flattenObjectParams pass
   # decomposed object params into one scalar/pointer param per leaf.
-  # The push block holds one member per parameter in parameter order
+  # The push block has one member per parameter in parameter order
   var memberTys: seq[SpvTy]
   var hasBda = false
   for p in kernel.pParams:

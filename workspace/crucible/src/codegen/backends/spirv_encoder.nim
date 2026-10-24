@@ -291,7 +291,7 @@ const
   scopeDevice = 1'u32
   scopeSubgroup = 3'u32
 
-  ## MemoryAccess bit values (core grammar BitEnum), Aligned carries a trailing
+  ## MemoryAccess bit values (core grammar BitEnum), Aligned takes a trailing
   ## literal alignment word the grammar operand list does not model
   maAligned = 2'u32
 
@@ -333,7 +333,7 @@ type
 
 const spvMagic = 0x07230203'u32
 # Module baseline: SPIR-V 1.3, encoded in the spvVersion13 version word.
-# The baseline carries semantics beyond the number:
+# The baseline implies semantics beyond the number:
 # - the entry-point interface lists Input/Output variables only
 # - OpTypeFloat omits the FPEncoding operand, the 1.3 form
 # - PhysicalStorageBufferAddresses is extension-gated
@@ -409,9 +409,6 @@ proc initSpvBuilder(): SpvBuilder =
   SpvBuilder(module: initSpvModule())
 
 proc memoInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  ## Emits a result-carrying type or constant instruction, deduplicated on
-  ## (opcode, operands), into the types-constants-globals section.
-  ## Returns the instruction's result id.
   let key: SpvMemoKey = (opcode, @operands)
   if key in b.memo:
     return b.memo[key]
@@ -423,10 +420,6 @@ proc memoInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): ui
   b.memo[key] = result
 
 proc memoTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  ## Memoized emission for result-type-carrying instructions:
-  ## - opcodes: OpConstant, OpConstantNull, OpUndef
-  ## - `operands` leads with the result type, then the fresh result id
-  ## - dedup key: opcode + operands, like `memoInst`
   let key: SpvMemoKey = (opcode, @operands)
   if key in b.memo:
     return b.memo[key]
@@ -438,9 +431,6 @@ proc memoTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]
   b.memo[key] = result
 
 proc freshInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  ## Emits a result-carrying instruction into the functions section:
-  ## - the fresh result id goes after the leading result type in `operands`
-  ## - returns the fresh result id
   result = b.module.allocId()
   var words = @[operands[0], result]
   for i in 1 ..< operands.len:
@@ -606,18 +596,11 @@ proc opSelect(b: var SpvBuilder, resultType, condition, object1, object2: uint32
   b.freshInst(OpSelect, @[resultType, condition, object1, object2])
 
 proc opVariableFn(b: var SpvBuilder, resultType: uint32): uint32 =
-  ## Emits OpVariable in the Function storage class into the functions section:
-  ## - Function-scope variables must sit in the entry block, unlike `opVariable`
-  ##   this writes into ssFunctions
-  ## - returns the variable result id
+  ## Function-scope variables must sit in the entry block
   result = b.module.allocId()
   b.module.emitInstSeq(ssFunctions, OpVariable, @[resultType, result, scFunction])
 
 proc freshLabel(b: var SpvBuilder): uint32 =
-  ## Allocates a label result id without emitting OpLabel:
-  ## - for forward references (merge/continue targets) whose defining block
-  ##   appears later
-  ## - pair with `opLabelAt`
   b.module.allocId()
 
 proc opLabelAt(b: var SpvBuilder, label: uint32) =
@@ -628,10 +611,7 @@ proc emitExtension(b: var SpvBuilder, name: string) =
   b.module.addString(ssExtensions, name)
 
 proc opLoadAligned(b: var SpvBuilder, resultType, pointer, alignment: uint32): uint32 =
-  ## Vulkan requires the Aligned memory access on every load through
-  ## PhysicalStorageBuffer pointers:
-  ## - `alignment` is the pointee alignment in bytes
-  ## - returns the loaded value result id
+  ## Vulkan requires the Aligned memory access on every load through PhysicalStorageBuffer pointers
   b.freshInst(OpLoad, @[resultType, pointer, maAligned, alignment])
 
 proc opStoreAligned(b: var SpvBuilder, pointer, value, alignment: uint32) =

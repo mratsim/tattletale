@@ -12,22 +12,7 @@
 # ############################################################
 #
 # Lowers the crucible IR for direct SPIR-V binary emission.
-# The bundle registers the SPIR-V pipeline's passes:
-# - the shared lowering trio plus insertPointerDeref
-# - no text passes:
-#   binary output has no keyword collisions
-#   composite stores come from the printer itself
-#   Function storage is the native pointer ABI, no inout workaround needed
-# - no instantiateImplicitAddressSpaceGenerics:
-#   its gpuIndex retyping over pointers yields the container type
-#   struct constructions then grow unchecked-array fields
-#   the emitted composites mismatch the member types
-# - lowerTernaryToIf and lowerCompoundAssign live here:
-#   binary SPIR-V has no expression-level selection and no compound-assignment support,
-#   both rewrites replace what would otherwise be emission-time machinery
-# - flattenObjectParams:
-#   kernel object params decompose into one scalar/pointer param per field leaf,
-#   the push block renders flat members only, no composite machinery remains
+# The bundle registers the SPIR-V pipeline's passes.
 
 import std/macros # for the `error` builtin (compile-time diagnostics)
 import std/strutils # leaf param naming joins the field path
@@ -276,7 +261,7 @@ proc lowerTernaryStmt(ctx: var GpuContext, n: var GpuAst) =
     ctx.lowerTernaryBranch(n.ifThen)
     # elif conditions evaluate after the then-branch (the backend emits the
     # chain in order), their hoisted temps must splice into the else branch,
-    # never ahead of the whole if. When an elif condition carries a rewrite,
+    # never ahead of the whole if. When an elif condition needs a rewrite,
     # the chain nests into plain two-way ifs, each elif condition lowering
     # at its own evaluation position:
     #   if c1: B1 elif c2: B2 else: B3
@@ -337,7 +322,7 @@ proc lowerTernaryStmts(ctx: var GpuContext, stmts: var seq[GpuAst]) =
 proc lowerTernaryToIf(ctx: var GpuContext) =
   ## Rewrites ternaries and lazy bools over every fn body and global block.
   ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
-  ## globalBlocks carries the program-scope statements
+  ## globalBlocks is the program-scope statement list
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
@@ -477,7 +462,7 @@ proc lowerCompoundAssignStmt(ctx: var GpuContext, n: var GpuAst) =
 proc lowerCompoundAssign(ctx: var GpuContext) =
   ## Rewrites compound assignments over every fn body and global block.
   ## Kernels and device fns live in allFnTab, fnTab aliases those entries,
-  ## globalBlocks carries the program-scope statements
+  ## globalBlocks is the program-scope statement list
   for fnKey in ctx.allFnTab.keys:
     let fn = ctx.allFnTab[fnKey]
     if fn.kind == gpuProc:
