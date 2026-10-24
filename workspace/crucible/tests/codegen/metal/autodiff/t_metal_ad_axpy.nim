@@ -10,7 +10,7 @@
 ## Test that `engine.setupAutoDiff` turns a `bwd_diff` kernel pair into an AD
 ## handle whose launches are exact against the Nim closed form:
 ##
-## - forward exact: `out = alpha * a + b`
+## - forward exact: `dst = alpha * a + b`
 ## - primitive backward exact and accumulating on caller-owned pre-zeroed buffers
 ## - convenience backward exact: allocated grads sized off the primals, `d_alpha` a 1-element reduce-kernel buffer
 ##
@@ -21,9 +21,9 @@
 
 import workspace/crucible
 
-proc axpy(`out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
   for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
 const axpyPair = bkMetal.bwd_diff(axpy)
 
@@ -66,7 +66,7 @@ proc runTest() =   # private: engines are destroyed at return
         "forward: element " & $i & " got " & $got[i] & " want " & $expected
     echo "[OK] forward exact"
 
-  # backward inputs: the incoming cotangent d_out
+  # backward inputs: the incoming cotangent d_dst
   let dOutDev = engine.allocDevice(float32, N)
   var dOutHost: array[N, float32]
   for i in 0 ..< N:

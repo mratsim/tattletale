@@ -14,7 +14,7 @@
 ## - declared axpy backward ≡ transposed axpy backward, exact, primitive and convenience, same backward signature
 ## - the declared backward accumulates the scalar cotangent in-kernel, its primitive doubles on a second call,
 ##   the transposed rewrites from a fresh scratch, the documented accumulation-contract difference
-## - FA-shaped stub (q, k, v, out, lse): the forward writes out and lse,
+## - FA-shaped stub (q, k, v, dst, lse): the forward writes dst and lse,
 ##   the convenience backward reads those same device buffers and produces the closed-form d_q/d_k/d_v,
 ##   the save wiring round-trips one buffer set
 ##
@@ -27,46 +27,46 @@ import workspace/crucible
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
-proc axpy(`out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
   for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
-proc axpy_bwd(d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32],
-              `out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+proc axpy_bwd(d_dst, d_a, d_b, d_alpha: ptr UncheckedArray[float32],
+              dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
   # Hand-written mirror of the transposed axpy backward: same signature,
   # the scalar cotangent accumulated in-kernel, no scratch and no reduce kernel.
   for i in 0 ..< 8:
-    d_a[i] += d_out[i] * alpha
-    d_b[i] += d_out[i]
-    d_alpha[0] += d_out[i] * a[i]
+    d_a[i] += d_dst[i] * alpha
+    d_b[i] += d_dst[i]
+    d_alpha[0] += d_dst[i] * a[i]
 
-proc sdpa_fwd(q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
-  # FA-shaped stub: five forward parameters, out and lse are the saved
+proc sdpa_fwd(q, k, v, dst, lse: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
+  # FA-shaped stub: five forward parameters, dst and lse are the saved
   # forward outputs. Trivial math, no SDPA.
   for i in 0 ..< 8:
-    `out`[i] = q[i] + k[i] + v[i]
-  lse[0] = `out`[0] + 1.0'f32
+    dst[i] = q[i] + k[i] + v[i]
+  lse[0] = dst[0] + 1.0'f32
 
-proc sdpa_fwd_bwd(d_q, d_k, d_v, d_out, d_lse: ptr UncheckedArray[float32],
-                  q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
+proc sdpa_fwd_bwd(d_q, d_k, d_v, d_dst, d_lse: ptr UncheckedArray[float32],
+                  q, k, v, dst, lse: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
   # Declared backward in mirror order, gradients first:
-  # (d_q, d_k, d_v, d_out, d_lse) in forward-parameter order,
+  # (d_q, d_k, d_v, d_dst, d_lse) in forward-parameter order,
   # block 2 the forward signature verbatim.
-  # Reads out and lse, the saved outputs, so the save wiring is observable.
+  # Reads dst and lse, the saved outputs, so the save wiring is observable.
   for i in 0 ..< 8:
-    d_q[i] += d_out[i] * `out`[i] * 0.5'f32
-    d_k[i] += d_out[i] * lse[0]
-    d_v[i] += d_out[i] + d_lse[0]
-  d_lse[0] += d_out[0]
+    d_q[i] += d_dst[i] * dst[i] * 0.5'f32
+    d_k[i] += d_dst[i] * lse[0]
+    d_v[i] += d_dst[i] + d_lse[0]
+  d_lse[0] += d_dst[0]
 
 const axpyPair = bkMetal.bwd_diff(axpy)
 const axpyDeclaredPair = bkMetal.bwd_diff(axpy, axpy_bwd)
-const sdpaPair = bkMetal.bwd_diff(sdpa_fwd, sdpa_fwd_bwd, save = [out, lse])
+const sdpaPair = bkMetal.bwd_diff(sdpa_fwd, sdpa_fwd_bwd, save =  [dst, lse])
 
 static:
   doAssert axpyDeclaredPair.bwdSignature == axpyPair.bwdSignature,
     "the declared backward carries the transposed backward's signature"
-  doAssert sdpaPair.saveNames == @["out", "lse"]
+  doAssert sdpaPair.saveNames == @["dst", "lse"]
 
 # ── Host helpers ──────────────────────────────────────────────────────────
 
@@ -255,12 +255,12 @@ proc runTest() =   # private: engines are destroyed at return
     for i in 0 ..< N:
       let expected = qHost[i] + kHost[i] + vHost[i]
       doAssert outGot[i] == expected,
-        "stub forward out: element " & $i & " got " & $outGot[i] &
+        "stub forward dst: element " & $i & " got " & $outGot[i] &
         " want " & $expected
     doAssert lseGot[0] == outGot[0] + 1.0'f32,
       "stub forward lse: got " & $lseGot[0] & " want " & $(outGot[0] + 1.0'f32)
 
-    # Incoming cotangents: d_out distinctive, d_lse seeded nonzero, keeping d_v cotangent terms value-visible
+    # Incoming cotangents: d_dst distinctive, d_lse seeded nonzero, keeping d_v cotangent terms value-visible
     var dLseHost: array[1, float32] = [0.5'f32]
     let dLseDev = engineD.allocDevice(float32, 1)
     engineD.copyToDeviceFromHost(dLseDev, addr dLseHost[0], 1)
@@ -276,7 +276,7 @@ proc runTest() =   # private: engines are destroyed at return
     let dV = engineD.copyBack(grads.d_v, N)
     let dLse = engineD.copyBack(dLseDev, 1)
     for i in 0 ..< N:
-      # d_q reads out[i], the saved forward output of these exact buffers
+      # d_q reads dst[i], the saved forward output of these exact buffers
       doAssert dQ[i] == dOutHost[i] * outGot[i] * 0.5'f32,
         "stub d_q: element " & $i & " got " & $dQ[i] &
         " want " & $(dOutHost[i] * outGot[i] * 0.5'f32)

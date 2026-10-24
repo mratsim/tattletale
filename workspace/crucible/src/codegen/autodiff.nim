@@ -453,7 +453,7 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
 
   # Stage 1, differentiation: metadata derives from the transposer's output,
   # before backend lowering renames identifiers.
-  # The ABI keeps Nim-facing names (GLSL renames `out` to `out_nim`).
+  # The ABI keeps Nim-facing names (GLSL renames dst to `out_nim`).
   var reg = PassRegistry.new()
   reg.registerCommonPasses()
   reg.registerAutodiffPasses()

@@ -395,7 +395,7 @@ macro bwd_diff*(bk: BackendKind, fwd: typed, bwd: typed, rest: varargs[untyped])
   ##
   ## Example:
   ##
-  ##   bkMetal.bwd_diff(sdpa, sdpa_bwd, save = [out, lse])
+  ##   bkMetal.bwd_diff(sdpa, sdpa_bwd, save =  [dst, lse])
   var saveNames: seq[string] = @[]
   for a in rest:
     if a.kind == nnkExprEqExpr and $a[0] == "save":
@@ -404,7 +404,7 @@ macro bwd_diff*(bk: BackendKind, fwd: typed, bwd: typed, rest: varargs[untyped])
         error "bwd_diff: save takes a list of forward-output names, got " &
           list.repr
       for e in list:
-        # Nim keywords like `out` reach the untyped varargs as an empty nnkOutTy node,
+        # Nim keywords like dst reach the untyped varargs as an empty nnkOutTy node,
         # without strVal, their text only in repr.
         if e.kind == nnkOutTy:
           saveNames.add e.repr

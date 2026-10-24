@@ -9,7 +9,7 @@
 ##
 ## Test that `bkGlsl.bwd_diff` / `bkMetal.bwd_diff` expand a `{.global.}` kernel to a const `BwdDiffKernels` with derived artifacts:
 ##
-## - the backward signature of axpy is `(d_out, d_a, d_b, d_alpha, out, a, b, alpha)` exactly
+## - the backward signature of axpy is `(d_dst, d_a, d_b, d_alpha, dst, a, b, alpha)` exactly
 ## - `d_alpha` records a 1-element gradient buffer, matched by name
 ## - buffer lengths record their source, forward outputs keep their block-2 position
 ## - both backend kinds yield independent artifacts, derived kernels named `<kernel>_bwd`
@@ -25,13 +25,13 @@ import workspace/crucible/src/codegen/autodiff {.all.}
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
-proc axpy(`out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
   for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
-proc axpyN(`out`, a, b: ptr UncheckedArray[float32], alpha: float32, n: int32) {.global.} =
+proc axpyN(dst, a, b: ptr UncheckedArray[float32], alpha: float32, n: int32) {.global.} =
   for i in 0 ..< n:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
 proc axpyS(y, a: ptr array[8, float32]) {.global.} =
   for i in 0 ..< 8:
@@ -41,37 +41,37 @@ proc rsqrt1(y, a: ptr UncheckedArray[float32]) {.global.} =
   for i in 0 ..< 8:
     y[i] = rsqrt(a[i])
 
-proc stat2(`out`, aux, a: ptr UncheckedArray[float32]) {.global.} =
-  # Stub exporting two forward outputs: the residual-slot fixture.
+proc stat2(dst, aux, a: ptr UncheckedArray[float32]) {.global.} =
+ # Stub exporting two forward outputs: the residual-slot fixture.
   for i in 0 ..< 8:
-    `out`[i] = a[i] * 2.0'f32
+    dst[i] = a[i] * 2.0'f32
     aux[i] = a[i] + 1.0'f32
 
-proc axpy_bwd(d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
+proc axpy_bwd(d_dst, d_a, d_b, d_alpha: ptr UncheckedArray[float32], dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global.} =
   # Hand-written mirror of the transposed axpy backward, see the transposed
   # pair's assertions below: same signature, d_alpha accumulated in-kernel.
   for i in 0 ..< 8:
-    d_a[i] += d_out[i] * alpha
-    d_b[i] += d_out[i]
-    d_alpha[0] += d_out[i] * a[i]
+    d_a[i] += d_dst[i] * alpha
+    d_b[i] += d_dst[i]
+    d_alpha[0] += d_dst[i] * a[i]
 
-proc sdpa_fwd(q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global.} =
-  # FA-shaped stub: five forward parameters, out and lse are forward outputs
+proc sdpa_fwd(q, k, v, dst, lse: ptr UncheckedArray[float32]) {.global.} =
+  # FA-shaped stub: five forward parameters, dst and lse are forward outputs
   # (the save fixture). Trivial math, no SDPA.
   for i in 0 ..< 8:
-    `out`[i] = q[i] + k[i] + v[i]
-  lse[0] = `out`[0] + 1.0'f32
+    dst[i] = q[i] + k[i] + v[i]
+  lse[0] = dst[0] + 1.0'f32
 
-proc sdpa_fwd_bwd(d_q, d_k, d_v, d_out, d_lse: ptr UncheckedArray[float32], q, k, v, `out`, lse: ptr UncheckedArray[float32]) {.global.} =
+proc sdpa_fwd_bwd(d_q, d_k, d_v, d_dst, d_lse: ptr UncheckedArray[float32], q, k, v, dst, lse: ptr UncheckedArray[float32]) {.global.} =
   # Declared backward in mirror order, gradients first:
-  # (d_q, d_k, d_v, d_out, d_lse) in forward-parameter order,
+  # (d_q, d_k, d_v, d_dst, d_lse) in forward-parameter order,
   # block 2 the forward signature verbatim.
-  # Reads out and lse, the saved outputs, so the save wiring is observable.
+  # Reads dst and lse, the saved outputs, so the save wiring is observable.
   for i in 0 ..< 8:
-    d_q[i] += d_out[i] * `out`[i] * 0.5'f32
-    d_k[i] += d_out[i] * lse[0]
-    d_v[i] += d_out[i] + d_lse[0]
-  d_lse[0] += d_out[0]
+    d_q[i] += d_dst[i] * dst[i] * 0.5'f32
+    d_k[i] += d_dst[i] * lse[0]
+    d_v[i] += d_dst[i] + d_lse[0]
+  d_lse[0] += d_dst[0]
 
 # ── Expansion ─────────────────────────────────────────────────────────────
 
@@ -83,15 +83,15 @@ const stat2Pair = bkMetal.bwd_diff(stat2)
 const rsqrtPair = bkMetal.bwd_diff(rsqrt1)
 const axpyDeclared = bkMetal.bwd_diff(axpy, axpy_bwd)
 const sdpaDeclared = bkMetal.bwd_diff(sdpa_fwd, sdpa_fwd_bwd,
-                                      save = [out, lse])
+                                      save =  [dst, lse])
 const axpyDeclaredGlsl = bkGlsl.bwd_diff(axpy, axpy_bwd)
 
 # ── Mirror-rule signature, verbatim ───────────────────────────────────────
 
 static:
   doAssert axpyMetal.kernelName == "axpy"
-  doAssert axpyMetal.bwdSignature == @["d_out", "d_a", "d_b", "d_alpha",
-                                       "out", "a", "b", "alpha"]
+  doAssert axpyMetal.bwdSignature == @["d_dst", "d_a", "d_b", "d_alpha",
+                                       "dst", "a", "b", "alpha"]
   doAssert axpyGlsl.bwdSignature == axpyMetal.bwdSignature
 
 # ── Parameter metadata ────────────────────────────────────────────────────
@@ -113,12 +113,12 @@ static:
   doAssert "axpy_bwd_d_alpha_reduce" in axpyMetal.reduceSources[0].source
 
   # buffers: same-shape gradients, length source per parameter
-  for name in ["out", "a", "b"]:
+  for name in ["dst", "a", "b"]:
     let m = axpyMetal.paramNamed(name)
     doAssert m.gradKind == gkBuffer and m.gradName == "d_" & name
     doAssert m.extent == xeWrapperField, name & ": the kernel states no length"
 
-  for name in ["out", "a", "b"]:
+  for name in ["dst", "a", "b"]:
     let m = axpyNPair.paramNamed(name)
     doAssert m.extent == xeLenParam and m.extentParam == "n", name
 
@@ -127,13 +127,13 @@ static:
     doAssert m.extent == xeStaticShape and m.staticLen == 8, name
 
   # forward outputs: residual kind, forward positions in block 2
-  doAssert stat2Pair.paramNamed("out").kind == pkResidual
+  doAssert stat2Pair.paramNamed("dst").kind == pkResidual
   doAssert stat2Pair.paramNamed("aux").kind == pkResidual
   doAssert stat2Pair.paramNamed("a").kind == pkBuffer
-  doAssert stat2Pair.bwdSignature == @["d_out", "d_aux", "d_a", "out", "aux", "a"]
+  doAssert stat2Pair.bwdSignature == @["d_dst", "d_aux", "d_a", "dst", "aux", "a"]
   # block 2 starts after the d_-block, the residuals keep their forward order
   let block2 = stat2Pair.bwdSignature[3 ..< stat2Pair.bwdSignature.len]
-  doAssert block2 == @["out", "aux", "a"]
+  doAssert block2 == @["dst", "aux", "a"]
 
 # ── Pair artifacts ────────────────────────────────────────────────────────
 
@@ -147,8 +147,8 @@ static:
   doAssert "kernel void axpy(" in axpyMetal.fwdSource
   doAssert "_bwd" notin axpyMetal.fwdSource
   doAssert "kernel void axpy_bwd(" in axpyMetal.bwdSource
-  doAssert "d_out" in axpyMetal.bwdSource and "d_a" in axpyMetal.bwdSource
-  doAssert "d_out" in axpyGlsl.bwdSource
+  doAssert "d_dst" in axpyMetal.bwdSource and "d_a" in axpyMetal.bwdSource
+  doAssert "d_dst" in axpyGlsl.bwdSource
   doAssert "axpy_bwd" in axpyGlsl.bwdSource
 
   # the math whitelist transposes at the entry: the rsqrt cotangent
@@ -159,7 +159,7 @@ static:
 
   # the forward source is unchanged by differentiation
   doAssert "alpha * a[i]" in axpyMetal.fwdSource
-  doAssert "out[i]" in axpyMetal.fwdSource
+  doAssert "dst[i]" in axpyMetal.fwdSource
 
 
 # ── Declared backward: the escape hatch ───────────────────────────────────
@@ -171,8 +171,8 @@ static:
   doAssert axpyDeclaredGlsl.bwdSignature == axpyMetal.bwdSignature
   doAssert axpyDeclared.kernelName == "axpy"
   doAssert "kernel void axpy_bwd(" in axpyDeclared.bwdSource
-  doAssert "d_a[i] += (d_out[i] * alpha)" in axpyDeclared.bwdSource
-  doAssert "d_alpha[0] += (d_out[i] * a[i])" in axpyDeclared.bwdSource
+  doAssert "d_a[i] += (d_dst[i] * alpha)" in axpyDeclared.bwdSource
+  doAssert "d_alpha[0] += (d_dst[i] * a[i])" in axpyDeclared.bwdSource
   doAssert axpyDeclared.fwdSource == axpyMetal.fwdSource,
     "the forward source is the same kernel the transposed pair prints"
 
@@ -183,18 +183,18 @@ static:
   doAssert axpyDeclared.bwdSource notin axpyMetal.bwdSource
 
   # parameter metadata derives from the forward symbol as on the transposed path
-  doAssert axpyDeclared.paramNamed("out").kind == pkResidual
+  doAssert axpyDeclared.paramNamed("dst").kind == pkResidual
   doAssert axpyDeclared.paramNamed("a").gradKind == gkBuffer
   doAssert axpyDeclared.paramNamed("alpha").gradKind == gkBuffer1
   doAssert axpyDeclared.paramNamed("alpha").gradName == "d_alpha"
 
   # FA-shaped stub: five forward parameters, the mirror order is
-  # (d_q, d_k, d_v, d_out, d_lse) then the forward signature verbatim
-  doAssert sdpaDeclared.bwdSignature == @["d_q", "d_k", "d_v", "d_out", "d_lse",
-                                          "q", "k", "v", "out", "lse"]
-  doAssert sdpaDeclared.paramNamed("out").kind == pkResidual
+  # (d_q, d_k, d_v, d_dst, d_lse) then the forward signature verbatim
+  doAssert sdpaDeclared.bwdSignature == @["d_q", "d_k", "d_v", "d_dst", "d_lse",
+                                          "q", "k", "v", "dst", "lse"]
+  doAssert sdpaDeclared.paramNamed("dst").kind == pkResidual
   doAssert sdpaDeclared.paramNamed("lse").kind == pkResidual
   doAssert sdpaDeclared.paramNamed("q").kind == pkBuffer
-  doAssert sdpaDeclared.saveNames == @["out", "lse"]
+  doAssert sdpaDeclared.saveNames == @["dst", "lse"]
   doAssert axpyDeclared.saveNames.len == 0
   doAssert stat2Pair.saveNames.len == 0

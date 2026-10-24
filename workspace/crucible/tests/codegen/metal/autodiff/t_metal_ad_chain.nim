@@ -21,9 +21,9 @@
 
 import workspace/crucible
 
-proc axpy(`out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
   for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
 const axpyPair = bkMetal.bwd_diff(axpy)
 
@@ -125,7 +125,7 @@ proc runTest() =   # private: engines are destroyed at return
     dAlpha2Want += dA1Host[i] * cHost[i]
   doAssert dAlpha2Host[0] == dAlpha2Want,
     "stage 2 d_alpha2: got " & $dAlpha2Host[0] & " want " & $dAlpha2Want
-  echo "[OK] stage 2: returned grad feeds the second handle's d_out, chain exact"
+  echo "[OK] stage 2: returned grad feeds the second handle's d_dst, chain exact"
 
 when isMainModule:
   runTest()

@@ -213,30 +213,30 @@ proc axpy(""" & fwdParams & """) {.global.} =
 """ & fwdBody & "\n\nproc " & bwdName & "(" & bwdParams &
     ") {.global.} =\n" & bwdBody & "\n" & tail
 
-const axpyFwdParams = "`out`, a, b: ptr UncheckedArray[float32], alpha: float32"
+const axpyFwdParams = "dst, a, b: ptr UncheckedArray[float32], alpha: float32"
 const axpyFwdBody = """  for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]"""
-const axpyMirrorParams = "d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32"
+    dst[i] = alpha * a[i] + b[i]"""
+const axpyMirrorParams = "d_dst, d_a, d_b, d_alpha: ptr UncheckedArray[float32], dst, a, b: ptr UncheckedArray[float32], alpha: float32"
 const axpyMirrorBody = """  for i in 0 ..< 8:
-    d_a[i] += d_out[i] * alpha
-    d_b[i] += d_out[i]
-    d_alpha[0] += d_out[i] * a[i]"""
+    d_a[i] += d_dst[i] * alpha
+    d_b[i] += d_dst[i]
+    d_alpha[0] += d_dst[i] * a[i]"""
 
 # the gradients must sit in forward-parameter order: d_a first misorders
 expectRefusal("declared_misordered", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpy_bwd",
-  "d_a, d_out, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, b: ptr UncheckedArray[float32], alpha: float32",
+  "d_a, d_dst, d_b, d_alpha: ptr UncheckedArray[float32], dst, a, b: ptr UncheckedArray[float32], alpha: float32",
   axpyMirrorBody,
   "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "mirror")
 
 # block 2 is the forward signature verbatim: dropping b leaves a gap
 expectRefusal("declared_block2_gap", declaredBody(
   axpyFwdParams, axpyFwdBody, "axpy_bwd",
-  "d_out, d_a, d_b, d_alpha: ptr UncheckedArray[float32], `out`, a, alpha: float32",
+  "d_dst, d_a, d_b, d_alpha: ptr UncheckedArray[float32], dst, a, alpha: float32",
   """  for i in 0 ..< 8:
-    d_a[i] += d_out[i] * alpha
-    d_b[i] += d_out[i]
-    d_alpha[0] += d_out[i] * a[i]""",
+    d_a[i] += d_dst[i] * alpha
+    d_b[i] += d_dst[i]
+    d_alpha[0] += d_dst[i] * a[i]""",
   "const adPair = bkGlsl.bwd_diff(axpy, axpy_bwd)"), "forward signature")
 
 # the pair launches the backward under '<forward>_bwd'.

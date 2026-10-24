@@ -10,8 +10,8 @@
 ## Test that the same AD pair setup runs the Vulkan GLSL route end to end
 ## on MoltenVK, exact against the Nim closed form:
 ##
-## - forward exact: `out = alpha * a + b`
-## - convenience backward exact: `(d_out, out, a, b, alpha)` allocates the grads at the primals' size, folding `d_alpha` via the reduce kernel.
+## - forward exact: `dst = alpha * a + b`
+## - convenience backward exact: `(d_dst, dst, a, b, alpha)` allocates the grads at the primals' size, folding `d_alpha` via the reduce kernel.
 ## - `d_alpha` folds from its 1-element device buffer through the reduce kernel.
 ##
 ## Run:
@@ -21,9 +21,9 @@
 
 import workspace/crucible
 
-proc axpy(`out`, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
   for i in 0 ..< 8:
-    `out`[i] = alpha * a[i] + b[i]
+    dst[i] = alpha * a[i] + b[i]
 
 const axpyPair = bkGlsl.bwd_diff(axpy)
 

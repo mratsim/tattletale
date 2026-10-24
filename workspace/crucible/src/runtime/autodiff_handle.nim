@@ -245,7 +245,7 @@ func allocAndZero(engine, dev, elemT, len: NimNode): NimNode =
 
 macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
   ## Launches the pair's forward kernel, the primal signature with the output
-  ## slot first: `ad.forward(out, a, b, alpha)` for `out = alpha * a + b`.
+  ## slot first: `ad.forward(dst, a, b, alpha)` for `dst = alpha * a + b`.
   ##
   ## - `output`: the pair's primary output, its first forward output
   ## - `primals`: forward-parameter order with the output's own slot skipped,
@@ -309,8 +309,8 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   ##   Allocation reads the size off each primal argument.
   ##   Grad-of-x has x's shape, scalar grads are 1-element device buffers.
   ##
-  ## Example for `axpy(out, a, b: ptr UncheckedArray[float32], alpha: float32)`:
-  ## `ad.backward(d_out, out, a, b, alpha)` returns the gradients
+  ## Example for `axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32)`:
+  ## `ad.backward(d_dst, dst, a, b, alpha)` returns the gradients
   ## `(d_a, d_b, d_alpha)`.
   let kernels = ad.getTypeInst()[2].readKernels()
   result = nnkStmtList.newTree()
