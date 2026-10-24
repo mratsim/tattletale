@@ -47,6 +47,11 @@ import ./passes/passes_validations
 import ./backends/backends_api
 
 export ast_datatypes.BackendKind
+export ast_datatypes.BwdParamKind
+export ast_datatypes.BwdGradKind
+export ast_datatypes.BwdExtentSource
+export ast_datatypes.BwdParamMeta
+export ast_datatypes.ScalarWorkspace
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -63,41 +68,6 @@ type ReduceSource* = object
   ## One generated axis-reduce kernel of the pair: its name and standalone source.
   name*: string
   source*: string
-
-type ScalarWorkspace* = object
-  ## Reduce-partials scratch of one scalar cotangent: the backward kernel
-  ## accumulates per-index partials into it, the reduce kernel folds it into
-  ## the scalar's 1-element gradient buffer.
-  gradName*: string        ## `d_<name>`, the 1-element gradient buffer
-  workspaceName*: string   ## `d_<name>_partials`, the backward kernel's scratch
-  tripCount*: int          ## Static index-loop trip count, -1 when runtime-derived
-  tripCountParam*: string  ## Name of the kernel parameter carrying the trip count, runtime-derived
-  tripCount64*: bool       ## Trip count is a 64-bit value, else 32-bit
-
-type BwdParamKind* = enum
-  pkBuffer    ## Read-only input buffer, gradient is a same-shape buffer
-  pkScalar    ## Scalar parameter (integer or float), integer scalars carry no gradient
-  pkResidual  ## Forward-output buffer the forward kernel writes, available to the backward kernel at its block-2 position
-
-type BwdGradKind* = enum
-  gkNone    ## No gradient slot in the backward signature
-  gkBuffer  ## Gradient buffer, same shape as the primal argument
-  gkBuffer1 ## 1-element gradient device buffer, the scalar cotangent written by the generated reduce kernel
-
-type BwdExtentSource* = enum
-  xeWrapperField ## Buffer length lives on the caller's host wrapper, `DeviceMem` carries no sizes
-  xeStaticShape  ## Pointer to a static array, the length is compile-time
-  xeLenParam     ## A separate integer kernel parameter carries the length
-
-type BwdParamMeta* = object
-  ## Signature record of one forward parameter.
-  name*: string            ## Forward parameter name
-  kind*: BwdParamKind
-  gradName*: string        ## `d_<name>`, empty when `gradKind == gkNone`
-  gradKind*: BwdGradKind
-  extent*: BwdExtentSource ## Buffer-length source, buffers only, unused for scalars
-  extentParam*: string     ## `xeLenParam`: the integer parameter's name
-  staticLen*: int          ## `xeStaticShape`: the compile-time element count
 
 type BwdDiffKernels* = object
   ## Const artifact of one `bwd_diff` expansion:
@@ -188,19 +158,19 @@ proc bufferExtent(p: GpuParam, fwd: GpuAst, paramISyms: seq[string]): BwdParamMe
     result.extent = xeLenParam
     result.extentParam = bound.symbol.name
 
-proc deriveBwdParams*(fwd, bwd: GpuAst, reduceNames: seq[string]): seq[BwdParamMeta] =
-  ## Derives the backward-signature metadata from the post-pass procs of one kernel.
+proc deriveBwdParams*(fwd, bwd: GpuAst): seq[BwdParamMeta] =
+  ## Derives the backward-signature metadata for a DECLARED pair from the
+  ## two post-pass procs. The transposed path does not run this proc: the
+  ## metadata there is the transposer's own record (`ctx.adPairMetas`),
+  ## derived once from the walk that built the backward kernel.
   ##
   ## Expected input:
   ## - `fwd`: the forward kernel as the pipeline produced it
-  ## - `bwd`: its backward kernel, `<fwd>_bwd`, transposed or declared
-  ## - `reduceNames`: names of the generated `<fwd>_bwd_d_<scalar>_reduce` kernels,
-  ##   empty for a declared backward
+  ## - `bwd`: the hand-written backward kernel, `<fwd>_bwd`
   ##
-  ## A float scalar carries `gkBuffer1` when the backward's parameter list has a `d_<name>` slot:
-  ##
-  ## - declared backward: the hand-written kernel writes the 1-element buffer itself
-  ## - transposed backward: a generated reduce kernel fills the buffer
+  ## A float scalar carries `gkBuffer1` when the backward's parameter list
+  ## has a `d_<name>` slot: the hand-written kernel writes the 1-element
+  ## buffer itself, no reduce kernel exists.
   ##
   ## Output: one `BwdParamMeta` per forward parameter, declaration order.
   doAssert fwd.kind == gpuProc and bwd.kind == gpuProc
@@ -233,15 +203,8 @@ proc deriveBwdParams*(fwd, bwd: GpuAst, reduceNames: seq[string]): seq[BwdParamM
     elif p.typ.kind in PairFloatKinds:
       var meta = BwdParamMeta(name: name, kind: pkScalar)
       if "d_" & name in bwdParamNames:
-        # declared backward: the hand-written kernel carries the scalar's
-        # 1-element gradient slot itself, no reduce kernel exists
         meta.gradKind = gkBuffer1
         meta.gradName = "d_" & name
-      else:
-        for rn in reduceNames:
-          if rn.endsWith("_bwd_d_" & name & "_reduce"):
-            meta.gradKind = gkBuffer1
-            meta.gradName = "d_" & name
       result.add meta
     else:
       result.add BwdParamMeta(name: name, kind: pkScalar)
@@ -361,52 +324,6 @@ proc validateSaveNames*(fwdName: string, metas: seq[BwdParamMeta], saveNames: se
       error "bwd_diff: save name '" & s & "' is not a parameter of '" &
         fwdName & "'"
 
-const PairWideIntKinds = {gtInt64, gtUint64, gtSize_t}
-  ## Integer widths the reduce-kernel trip count may carry, grow with the IR's int kinds.
-
-proc deriveScalarWorkspaces*(fwd: GpuAst, metas: seq[BwdParamMeta]): seq[ScalarWorkspace] =
-  ## Derives the reduce-partials scratch records of a pair's scalar cotangents.
-  ##
-  ## The trip count is the forward kernel's index-loop bound:
-  ##
-  ## - a literal bound folds to a static trip count
-  ## - an identifier bound names the parameter carrying the trip count
-  ## - a loop-free kernel has no scalar cotangent: its accumulation
-  ##   degenerates to a single partial, so the pair derives zero workspaces
-  ##   and zero reduce kernels
-  ##
-  ## Expected input:
-  ## - `fwd`: the forward kernel as the pipeline produced it
-  ## - `metas`: `deriveBwdParams`' output
-  ##
-  ## Output: one `ScalarWorkspace` per `gkBuffer1` parameter, forward order.
-  var scalarGrads: seq[BwdParamMeta]
-  for m in metas:
-    if m.gradKind == gkBuffer1:
-      scalarGrads.add m
-  if scalarGrads.len == 0:
-    return
-  let bound = fwd.pBody.firstLoopBound()
-  doAssert not bound.isNil,
-    "scalar cotangent without an index-loop trip count"
-  var tripCount = -1
-  var tripCountParam = ""
-  var tripCount64 = false
-  if bound.kind == gpuLit:
-    tripCount = bound.lValue.parseInt()
-    tripCount64 = bound.lType.kind in PairWideIntKinds
-  else:
-    doAssert bound.kind == gpuIdent and bound.symbol != nil,
-      "the reduce-kernel trip count is neither a literal nor a kernel parameter"
-    tripCountParam = bound.symbol.name
-    tripCount64 = bound.symbol.typ.kind in PairWideIntKinds
-  for m in scalarGrads:
-    result.add ScalarWorkspace(
-      gradName: m.gradName,
-      workspaceName: "d_" & m.name & "_partials",
-      tripCount: tripCount,
-      tripCountParam: tripCountParam,
-      tripCount64: tripCount64)
 proc printSingleProc(ctx: var GpuContext, bk: BackendKind, fn: GpuAst): string =
   ## Prints one proc as a standalone translation unit of backend `bk`.
   ##
@@ -507,10 +424,10 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
     error "bwd_diff: no backward kernel was generated for '" &
       fwd.pName.ident() & "'"
 
-  var reduceNames: seq[string] = @[]
-  for rk in reduces:
-    reduceNames.add rk.pName.ident()
-  let metas = deriveBwdParams(fwd, bwd, reduceNames)
+  # The metadata is the transposer's own record, derived once from the walk
+  # that built the backward kernel: no second body walk, no name-suffix
+  # matching against the generated reduce kernels.
+  let recorded = ctx.adPairMetas[fwd.pName.ident()]
 
   enforcePairWorkgroup(fwd, bwd, reduces)
 
@@ -522,9 +439,9 @@ proc codegenBwdDiffKernels*(bk: BackendKind, body: NimNode): BwdDiffKernels =
     fwdSource: printed.fwdSource,
     bwdSource: printed.bwdSource,
     reduceSources: printed.reduceSources,
-    params: metas,
-    scalarWorkspaces: fwd.deriveScalarWorkspaces(metas),
-    bwdSignature: metas.mirrorSignature(),
+    params: recorded.params,
+    scalarWorkspaces: recorded.workspaces,
+    bwdSignature: recorded.params.mirrorSignature(),
     bwdKernelParams: printed.bwdKernelParams,
     saveNames: @[])
 
@@ -568,7 +485,7 @@ proc codegenBwdDiffKernelsDeclared*(bk: BackendKind, fwdBody, bwdBody: NimNode, 
 
   # The mirror rule is the only signature authority: validate before deriving.
   validateDeclaredBwd(fwd, bwd)
-  let metas = deriveBwdParams(fwd, bwd, @[])
+  let metas = deriveBwdParams(fwd, bwd)
   validateSaveNames(fwd.pName.ident(), metas, saveNames)
 
   enforcePairWorkgroup(fwd, bwd, @[])

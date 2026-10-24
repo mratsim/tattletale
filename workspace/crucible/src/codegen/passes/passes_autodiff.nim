@@ -177,6 +177,7 @@ type AdEnv = object
   defCounts: Table[string, int]             ## local iSym -> number of defining events
   loopVars: HashSet[string]                 ## loop variable iSyms, exempt from def-use checks
   loopCount: int                            ## top-level loops seen so far, v1 refuses more than one
+  loopBound: GpuAst                         ## the kernel's index-loop bound, nil when the kernel has no loop
   ##
   written: HashSet[string]                  ## buffer param iSyms the kernel writes
   readBufs: HashSet[string]                 ## buffer param iSyms the kernel reads
@@ -368,6 +369,8 @@ proc validateStmts(ctx: var GpuContext, stmts: seq[GpuAst], env: var AdEnv, path
         adRefuse(s, "gpuFor",
           "only exclusive ranges (a ..< b) carry a static trip count")
       env.loopVars.incl s.fVar.symbol.iSym
+      if env.loopBound.isNil:
+        env.loopBound = s.fEnd
       let boundOk = s.fEnd.kind == gpuLit or
         (s.fEnd.kind == gpuIdent and s.fEnd.symbol != nil and
          s.fEnd.symbol.symKind in {gsGlobalKernelParam, gsDeviceKernelParam})
@@ -771,6 +774,66 @@ func paramISyms(fn: GpuAst): HashSet[string] =
   for p in fn.pParams:
     result.incl p.ident.symbol.iSym
 
+proc recordPairMetas(ctx: var GpuContext, fn: GpuAst, env: AdEnv) =
+  ## The single metadata derivation of a kernel pair, projected from the
+  ## transposer's own walk (the same AdEnv that built the backward kernel's
+  ## parameter list). The artifact pipeline consumes this record; nothing
+  ## re-walks the forward body and nothing matches generated names by suffix,
+  ## so the metadata and the launched kernel cannot desync.
+  var metas: seq[BwdParamMeta]
+  let paramSyms = paramISyms(fn)
+  for p in fn.pParams:
+    let name = p.ident.ident()
+    let iSym = p.ident.symbol.iSym
+    if p.typ.kind == gtPtr:
+      var meta = BwdParamMeta(name: name)
+      meta.kind = if iSym in env.written: pkResidual else: pkBuffer
+      if iSym in env.dIdents:
+        meta.gradKind = gkBuffer
+        meta.gradName = "d_" & name
+      if p.typ.to.kind == gtArray:
+        meta.extent = xeStaticShape
+        meta.staticLen = p.typ.to.aLen
+      elif not env.loopBound.isNil and env.loopBound.kind == gpuIdent and
+          env.loopBound.symbol != nil and
+          env.loopBound.symbol.iSym in paramSyms:
+        meta.extent = xeLenParam
+        meta.extentParam = env.loopBound.symbol.name
+      else:
+        meta.extent = xeWrapperField
+      metas.add meta
+    elif p.typ.kind in DiffFloatKinds:
+      var meta = BwdParamMeta(name: name, kind: pkScalar)
+      if iSym in env.scalarHits:
+        meta.gradKind = gkBuffer1
+        meta.gradName = "d_" & name
+      metas.add meta
+    else:
+      metas.add BwdParamMeta(name: name, kind: pkScalar)
+
+  var workspaces: seq[ScalarWorkspace]
+  if metas.anyIt(it.gradKind == gkBuffer1):
+    doAssert not env.loopBound.isNil,
+      "scalar cotangent without an index-loop bound"
+    var tripCount = -1
+    var tripCountParam = ""
+    var tripCount64 = false
+    if env.loopBound.kind == gpuLit:
+      tripCount = env.loopBound.lValue.parseInt()
+      tripCount64 = env.loopBound.lType.kind in PairWideIntKinds
+    else:
+      tripCountParam = env.loopBound.symbol.name
+      tripCount64 = env.loopBound.symbol.typ.kind in PairWideIntKinds
+    for m in metas:
+      if m.gradKind == gkBuffer1:
+        workspaces.add ScalarWorkspace(
+          gradName: m.gradName,
+          workspaceName: "d_" & m.name & "_partials",
+          tripCount: tripCount,
+          tripCountParam: tripCountParam,
+          tripCount64: tripCount64)
+  ctx.adPairMetas[fn.pName.ident()] = AdPairMetas(params: metas, workspaces: workspaces)
+
 proc makeReduceKernel(ctx: var GpuContext, fn: GpuAst, p: GpuParam, env: AdEnv): GpuAst =
   ## Generates the axis-reduce kernel of one scalar cotangent:
   ##
@@ -915,6 +978,7 @@ proc transposeKernel(ctx: var GpuContext, fn: GpuAst) =
   for rk in reduceKernels:
     ctx.allFnTab[rk.pName] = rk
     ctx.fnTab[rk.pName] = rk
+  ctx.recordPairMetas(fn, env)
 
 proc autodiffTranspose(ctx: var GpuContext) =
   ## Pass entry: transposes every global kernel in the context.
