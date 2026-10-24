@@ -41,7 +41,7 @@ template wrapConst(a, b: untyped): untyped =
     tmp
 const kernelC = glsl:
   proc testC(C: ptr UncheckedArray[uint32]) {.global.} =
-    let temps = wrapConst(Int[8](), Int[16]()); C[0] = 1'u32
+    let pair = wrapConst(Int[8](), Int[16]()); C[0] = 1'u32
 
 # Pattern D
 const kernelD = glsl:

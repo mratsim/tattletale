@@ -47,7 +47,7 @@ template wrapConst(a, b: untyped): untyped =
 
 const kernelC = cuda:
   proc kernel(C: ptr UncheckedArray[float32]) {.global.} =
-    let temps = wrapConst(Int[8](), Int[16]())
+    let pair = wrapConst(Int[8](), Int[16]())
     C[0] = 1.0'f32
 
 # Pattern E: constexpr default-initialized tuple used as expression

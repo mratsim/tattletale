@@ -43,8 +43,8 @@ template wrapConst(a, b: untyped): untyped =
 
 const kernelC = metal:
   proc testC(C: ptr UncheckedArray[uint32]) {.global.} =
-    let temps = wrapConst(Int[8](), Int[16]())
-    C[0] = uint32(toIntVal temps.f0)
+    let pair = wrapConst(Int[8](), Int[16]())
+    C[0] = uint32(toIntVal pair.f0)
 
 # Pattern D
 const kernelD = metal:

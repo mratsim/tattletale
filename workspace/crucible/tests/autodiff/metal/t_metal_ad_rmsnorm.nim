@@ -26,7 +26,6 @@ import workspace/crucible
 
 proc rmsnormPlain(y, x, w, rrms: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
   ## One thread normalizes two rows of eight columns.
-  ## The pair-level contract lives in t_bwd_diff_entry_rmsnorm_pair.nim
   for r in 0 ..< 2:
     let b = r * 8
     let ssq = x[b + 0] * x[b + 0] + x[b + 1] * x[b + 1] +
