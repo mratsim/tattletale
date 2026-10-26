@@ -84,6 +84,17 @@ proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
     offset: originOffset(layout),
     layout: layout)
 
+proc makeHostTensor*[T, Sh, St](_: typedesc[T], L: Layout[Sh, St]): HostTensor[T, Sh, St] =
+  ## Layout-taking overload, static shapes/strides survive as Int-typed
+  ## leaves (the KHR coopmat tier needs statically-contiguous strides).
+  ##
+  ## Args:
+  ##   - `L`: layout from `make_layout` with literal shape/strides
+  HostTensor[T, Sh, St](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(L.cosize()) * sizeof(T))),
+    offset: originOffset(L),
+    layout: L)
+
 template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
   # Workaround `..` or Slice[T](...) not resolving T as a default value
   Slice[T](a: T(start), b: T(stopIncl))
@@ -101,6 +112,19 @@ proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, 
     else:
       result.data[result.offset + toInt crd2idx(layout, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
 
+proc randomHostTensor*[T, Sh, St](rng: var Rand, _: typedesc[T], L: Layout[Sh, St], bounds = bounds[float32](1, 2)): HostTensor[T, Sh, St] =
+  ## Layout-taking overload, static shapes/strides preserved, see makeHostTensor
+  result = HostTensor[T, Sh, St](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(L.cosize()) * sizeof(T))),
+    offset: originOffset(L),
+    layout: L)
+  for i in 0 ..< toInt(L.size()):
+    let crd = idx2crd(L.shape, i)
+    when T is float32 or T is float64:
+      result.data[result.offset + toInt crd2idx(L, crd)] = rng.rand(bounds)
+    else:
+      result.data[result.offset + toInt crd2idx(L, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
+
 func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
   toInt(ht.layout.cosize())
 
@@ -108,7 +132,7 @@ func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
   TensorView[T, Sh, St](data: ht.data +% ht.offset, layout: ht.layout)
 
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
-  let n = ht.layout.cosize()
+  let n = toInt(ht.layout.cosize())
   let dev = engine.allocDevice(T, n)
   engine.copyToDeviceFromHost(dev, ht.data +% ht.offset, n)
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)

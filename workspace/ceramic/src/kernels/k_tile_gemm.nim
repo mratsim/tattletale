@@ -191,18 +191,9 @@ proc gemm_via_khr_coopmat*(mma: static TiledMma, D: distinct TensorView, alpha: 
     fragsN = mma.NT div an
     kFrags = mma.KT div ak
 
-  # per-operand strides for the element addressing, constants when static
-  let
-    aS0 = coopDimStride(A, 0)
-    aS1 = coopDimStride(A, 1)
-    bS0 = coopDimStride(B, 0)
-    bS1 = coopDimStride(B, 1)
-    dS0 = coopDimStride(D, 0)
-    dS1 = coopDimStride(D, 1)
-    cS0 = coopDimStride(C, 0)
-    cS1 = coopDimStride(C, 1)
   # the fragment is (rows, cols): A (m, k), B (k, n) over (n, k) storage,
-  # D (m, n). The layout constants fold from the stride types
+  # D (m, n). The layout constants fold from the stride types.
+  # The origin elements evaluate the operand layouts through crd2idx
   const aLoadLayout = coopFragmentLayout(A, 0, 1)
   const bLoadLayout = coopFragmentLayout(B, 1, 0)
   const dStoreLayout = coopFragmentLayout(D, 0, 1)
@@ -237,13 +228,13 @@ proc gemm_via_khr_coopmat*(mma: static TiledMma, D: distinct TensorView, alpha: 
         for fm in 0 ..< fragsM:
           let
             row = tm * mma.MT + fm * am
-            element = row * aS0 + kCol * aS1
+            element = crd2idx(A.getLayout(), (row, kCol))
           var matA: coopmatA[A.T, am, ak]
           matA = coopMatLoadA(am, ak, A.data, element, aLoadStride, aLoadLayout)
           for fn in 0 ..< fragsN:
             let
               brow = tn * mma.NT + fn * an
-              belement = brow * bS0 + kCol * bS1
+              belement = crd2idx(B.getLayout(), (brow, kCol))
             var matBload: coopmatB[B.T, ak, an]
             matBload = coopMatLoadB(ak, an, B.data, belement, bLoadStride, bLoadLayout)
             rD[fm * fragsN + fn] = coopMatMulAdd(matA, matBload, rD[fm * fragsN + fn])
@@ -258,7 +249,7 @@ proc gemm_via_khr_coopmat*(mma: static TiledMma, D: distinct TensorView, alpha: 
           let
             row = tm * mma.MT + fm * am
             col = tn * mma.NT + fn * an
-            element = row * dS0 + col * dS1
+            element = crd2idx(C.getLayout(), (row, col))
           var rC: coopmatAcc[D.T, am, an]
           rC = coopMatLoadAcc(am, an, C.data, element, dStoreStride, dStoreLayout)
           rC = coopMatScale(rC, beta)
@@ -269,5 +260,5 @@ proc gemm_via_khr_coopmat*(mma: static TiledMma, D: distinct TensorView, alpha: 
         let
           row = tm * mma.MT + fm * am
           col = tn * mma.NT + fn * an
-          element = row * dS0 + col * dS1
+          element = crd2idx(D.getLayout(), (row, col))
         coopMatStore(rD[fm * fragsN + fn], D.data, element, dStoreStride, dStoreLayout)

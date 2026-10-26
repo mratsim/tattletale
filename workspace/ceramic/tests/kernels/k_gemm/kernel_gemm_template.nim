@@ -111,6 +111,80 @@ proc runGemmFuzz*[E: HwEngine, TAcc, TIn](
   for cs in cases:
     rng.checkGemm(engine, TAcc, TIn, MT, NT, KT, cs)
 
+template checkGemmAtomKhr*[E: HwEngine, TAcc, TA, TB, MT, NT, KT,
+    ShA, StA, ShB, StB, ShC, StC](rng: var Rand, engine: E,
+    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
+    cs: tuple[alpha: float32, A: Layout[ShA, StA], B: Layout[ShB, StB],
+              beta: float32, C: Layout[ShC, StC]],
+    subgroupSize: static int = 32) =
+  ## One KHR-coopmat GEMM check through an explicitly-picked atom.
+  ##
+  ## Cases carry static layouts:
+  ## - the KHR SPIR-V load/store layout operand must come from a constant
+  ##   instruction
+  ## - the orientation is picked from the statically-typed strides
+  ##   (see `gemm_via_khr_coopmat`)
+  let (M, N, K) = (toInt(cs.A.shape[0]), toInt(cs.B.shape[0]), toInt(cs.A.shape[1]))
+  when TA is float16:
+    type Stg = float16
+  elif TA is bfloat16:
+    type Stg = bfloat16
+  else:
+    type Stg = TA
+  var
+    aHost = rng.randomHostTensor(Stg, cs.A)
+    bHost = rng.randomHostTensor(Stg, cs.B)
+    cHost = rng.randomHostTensor(float32, cs.C)
+    dHost = makeHostTensor(float32, cs.C)
+    refHost = makeHostTensor(float32, make_layout((M, N), (N, 1)))
+  var dView = dHost.view()
+  fillWith_cpu(dView, -12345.0'f32) # every D cell must be written
+  let
+    aDev = engine.bridge(aHost)
+    bDev = engine.bridge(bHost)
+    cDev = engine.bridge(cHost)
+    dDev = engine.bridge(dHost)
+  # one squadron per workgroup, the tile grid iterated by workgroup ID
+  engine.launchDeviceFn gemm(mma,
+      dDev, cs.alpha, aDev, bDev, cs.beta, cDev) do:
+    grid = (rng.rand(1 .. 2 * ceil_div(M, MT)),
+            rng.rand(1 .. 2 * ceil_div(N, NT)))
+    blk = (subgroupSize, 1)
+  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
+  gemm_ref(refHost, cs.alpha, aHost, bHost, cs.beta, cHost)
+  assertAllClose(dHost.view(), refHost.view(), rtol = 1e-5, abstol = 1e-3,
+    msg = "gemm " & $M & "x" & $N & "x" & $K & " strides " & $cs.A.stride &
+          " " & $cs.B.stride & " " & $cs.C.stride)
+
+template runGemmChecksAtomKhr*[E: HwEngine, TAcc, TA, TB, MT, NT, KT,
+    Cases](rng: var Rand, engine: E,
+    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
+    cases: static Cases, Iters: static int, subgroupSize: static int = 32) =
+  ## Random checks over one static case tuple, one operand leg.
+  ##
+  ## Args:
+  ##   - `cases`: static case tuple, the unroll is compile-time per case
+  ##     and the layouts keep their static stride types
+  ##   - `subgroupSize`: the launch block's x size, one squadron per
+  ##     workgroup
+  for iter in 0 ..< Iters:
+    for cs in fields(cases):
+      rng.checkGemmAtomKhr(engine, mma, cs, subgroupSize)
+
+template runGemmFuzzAtomKhr*[E: HwEngine, TAcc, TA, TB, MT, NT, KT,
+    Cases](rng: var Rand, engine: E,
+    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
+    cases: static Cases, subgroupSize: static int = 32) =
+  ## Random checks over the static nested case tuple with an explicit atom.
+  ##
+  ## Args:
+  ##   - `cases`: one 8-tuple of stride permutations per shape
+  ##   - `subgroupSize`: the launch block's x size, one squadron per
+  ##     workgroup
+  for shapeCases in fields(cases):
+    for cs in fields(shapeCases):
+      rng.checkGemmAtomKhr(engine, mma, cs, subgroupSize)
+
 # ═══════════════════════════════════════════════════════════════
 #  Case generation
 # ═══════════════════════════════════════════════════════════════

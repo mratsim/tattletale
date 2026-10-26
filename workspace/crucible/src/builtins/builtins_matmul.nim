@@ -26,11 +26,11 @@ type
     cmB
     cmAcc
 
-  coopmatA*[T, M, N: static int] {.builtin.} = object
+  coopmatA*[T; M, N: static int] {.builtin.} = object
     ## (M, N) fragment of the A operand, `gl_MatrixUseA`.
-  coopmatB*[T, M, N: static int] {.builtin.} = object
+  coopmatB*[T; M, N: static int] {.builtin.} = object
     ## (M, N) fragment of the B operand, `gl_MatrixUseB`.
-  coopmatAcc*[T, M, N: static int] {.builtin.} = object
+  coopmatAcc*[T; M, N: static int] {.builtin.} = object
     ## (M, N) accumulator fragment, `gl_MatrixUseAccumulator`.
 
 const
@@ -68,14 +68,14 @@ func coopMatLoadAcc*[T](
     ): coopmatAcc[T, M, N] {.builtin.} = discard
   ## Loads an (M, N) accumulator fragment, same lowering as the A overload.
 
-proc coopMatStore*[T, M, N: static int](
+proc coopMatStore*[T, M, N](
       src: coopmatAcc[T, M, N], dst: ptr UncheckedArray[T],
       element, stride: int, matrixLayout: int) {.builtin.} = discard
   ## Stores an accumulator fragment to memory.
   ##
   ## GLSL: `coopMatStore(src, dst.x, element, stride, matrixLayout)`.
 
-func coopMatMulAdd*[TA, TB, TC, M, N, K: static int](
+func coopMatMulAdd*[TA, TB, TC, M, N, K](
       a: coopmatA[TA, M, K], b: coopmatB[TB, K, N], c: coopmatAcc[TC, M, N]
     ): coopmatAcc[TC, M, N] {.builtin.} = discard
   ## D = A·B + C on opaque fragments, the only arithmetic a fragment supports.
@@ -92,12 +92,12 @@ func coopMatFill*[T](M, N: static int, v: T): coopmatAcc[T, M, N] {.builtin.} = 
   ##
   ## GLSL: `coopmat<T, gl_ScopeSubgroup, M, N, gl_MatrixUseAccumulator>(v)`.
 
-func coopMatScale*[T, M, N: static int](
+func coopMatScale*[T, M, N](
       m: coopmatAcc[T, M, N], s: T): coopmatAcc[T, M, N] {.builtin.} = discard
   ## s·m, the GLSL scalar·matrix fragment operator
   ## (glslang lowers to OpMatrixTimesScalar). The alpha leg of the epilogue.
 
-func coopMatAdd*[T, M, N: static int](
+func coopMatAdd*[T, M, N](
       a, b: coopmatAcc[T, M, N]): coopmatAcc[T, M, N] {.builtin.} = discard
   ## a + b, the GLSL matrix+matrix fragment operator
   ## (glslang lowers to OpFAdd). The beta leg of the epilogue.
