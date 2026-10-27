@@ -275,6 +275,11 @@ type
     gbkReduceAdd,         ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
     gbkReduceMax          ## Canonical `reduceMax`: cross-lane max, broadcast to all lanes
 
+  GpuShuffleBuiltinKind* = enum
+    gbkNone
+    gbkSimdShuffle
+    gbkSimdShuffleXor
+
   GpuAtomicsBuiltinKind* = enum
     gbkNone,              ## Not an atomics builtin
     gbkAtomicFetchAdd     ## Canonical `atomicFetchAdd`: atomic add through a device pointer
@@ -288,6 +293,7 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
     atomicsBuiltin*: GpuAtomicsBuiltinKind ## Atomics builtin kind -> gbkNone when not an atomic intrinsic
+    shuffleBuiltin*: GpuShuffleBuiltinKind ## Shuffle builtin kind -> gbkNone when not a shuffle intrinsic
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -355,8 +361,6 @@ type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
 
-## Canonical coordinate name -> IR kind, the printers case on the kind alone.
-## A static assertion cross-checks the table against the catalog's canonical declarations, a catalog rename fails at compile time.
 let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKind] = {
   "thread_position_in_grid": gbkThreadPositionInGrid,
   "threadgroup_position_in_grid": gbkThreadgroupPositionInGrid,
@@ -366,21 +370,23 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
   "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
 }.toTable()
 
-## Canonical synchronization name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
   "threadgroup_barrier_device": gbkThreadgroupBarrierDevice,
 }.toTable()
 
-## Canonical reduction intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
   "reduceAdd": gbkReduceAdd,
   "reduceMax": gbkReduceMax,
 }.toTable()
 
-## Canonical atomics intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuAtomicsBuiltinKindByName* {.compileTime.}: Table[string, GpuAtomicsBuiltinKind] = {
   "atomicFetchAdd": gbkAtomicFetchAdd,
+}.toTable()
+
+let GpuShuffleBuiltinKindByName* {.compileTime.}: Table[string, GpuShuffleBuiltinKind] = {
+  "simd_shuffle": gbkSimdShuffle,
+  "simd_shuffle_xor": gbkSimdShuffleXor,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
@@ -392,12 +398,13 @@ proc synchroBuiltinKind*(name: string): GpuSynchroBuiltinKind =
   GpuSynchroBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
-  ## Returns the IR kind of a canonical reduction intrinsic name, unmapped names resolve to `gbkNone`.
   GpuReductionBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
-  ## Returns the IR kind of a canonical atomics intrinsic name, unmapped names resolve to `gbkNone`.
   GpuAtomicsBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc shuffleBuiltinKind*(name: string): GpuShuffleBuiltinKind =
+  GpuShuffleBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,

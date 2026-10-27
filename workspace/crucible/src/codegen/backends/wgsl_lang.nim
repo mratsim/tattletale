@@ -374,9 +374,19 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         ctx.withoutSemicolon:
           result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
       of gbkNone:
-        ctx.withoutSemicolon:
-          result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
-                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # `subgroupShuffle` takes the subgroup-relative source index as `u32`, cast.
+          ctx.withoutSemicolon:
+            result = indentStr & "subgroupShuffle(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
+        of gbkSimdShuffleXor:
+          # `subgroupShuffleXor` takes the xor mask as `u32`, cast.
+          ctx.withoutSemicolon:
+            result = indentStr & "subgroupShuffleXor(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
+        of gbkNone:
+          ctx.withoutSemicolon:
+            result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
+                     ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
 
 

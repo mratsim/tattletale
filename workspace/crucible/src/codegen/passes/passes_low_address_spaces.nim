@@ -101,6 +101,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
       sym.synchroBuiltin = old.synchroBuiltin
       sym.reductionBuiltin = old.reductionBuiltin
       sym.atomicsBuiltin = old.atomicsBuiltin
+      sym.shuffleBuiltin = old.shuffleBuiltin
       fresh[old.iSym] = sym
       p.ident = GpuAst(kind: gpuIdent, symbol: sym)
       p.typ = wanted[i]

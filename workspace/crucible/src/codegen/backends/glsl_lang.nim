@@ -189,9 +189,15 @@ proc usesReductionBuiltin(n: GpuAst): bool =
     if usesReductionBuiltin(ch):
       return true
 
+proc usesShuffleBuiltin(n: GpuAst): bool =
+  if n.kind == gpuCall and n.cName.symbol != nil and
+     n.cName.symbol.shuffleBuiltin != gbkNone:
+    return true
+  for ch in n:
+    if usesShuffleBuiltin(ch):
+      return true
+
 proc usesExplicitUnroll(n: GpuAst): bool =
-  ## True when the AST contains a loop marked fUnroll, needing the
-  ## GL_EXT_control_flow_attributes extension at module scope.
   if n.kind == gpuFor and n.fUnroll:
     return true
   for ch in n:
@@ -392,19 +398,22 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkReduceMax:
         result = indentStr & "subgroupMax(" & ctx.genGLSL(ast.cArgs[0]) & ')'
       of gbkNone:
-        case ast.cName.symbol.atomicsBuiltin
-        of gbkAtomicFetchAdd:
-          # fp needs GL_EXT_shader_atomic_float, emitted at module scope
-          # when the AST contains an fp atomicFetchAdd, int is core.
-          # Pointers are GL_EXT_buffer_reference handles, dereference
-          # the first element of the reference's member array.
-          result = indentStr & "atomicAdd(" & ctx.genGLSL(ast.cArgs[0]) &
-                   ".x[0], " & ctx.genGLSL(ast.cArgs[1]) & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # uint(...) compiles without extensions, the (uint) cast syntax requires GL_NV_explicit_typecast
+          result = indentStr & "subgroupShuffle(" & ctx.genGLSL(ast.cArgs[0]) & ", uint(" & ctx.genGLSL(ast.cArgs[1]) & "))"
+        of gbkSimdShuffleXor:
+          result = indentStr & "subgroupShuffleXor(" & ctx.genGLSL(ast.cArgs[0]) & ", uint(" & ctx.genGLSL(ast.cArgs[1]) & "))"
         of gbkNone:
-          var vkArgs: seq[string]
-          for arg in ast.cArgs:
-            vkArgs.add ctx.genGLSL(arg)
-          result = indentStr & ctx.getFnName(bkGlsl, ast) & '(' & vkArgs.join(", ") & ')'
+          case ast.cName.symbol.atomicsBuiltin
+          of gbkAtomicFetchAdd:
+            result = indentStr & "atomicAdd(" & ctx.genGLSL(ast.cArgs[0]) &
+                     ".x[0], " & ctx.genGLSL(ast.cArgs[1]) & ')'
+          of gbkNone:
+            var vkArgs: seq[string]
+            for arg in ast.cArgs:
+              vkArgs.add ctx.genGLSL(arg)
+            result = indentStr & ctx.getFnName(bkGlsl, ast) & '(' & vkArgs.join(", ") & ')'
 
 
   of gpuBinOp:
@@ -574,6 +583,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsFp16 = false
   var needsBf16 = false
   var needsSubgroup = false
+  var needsSubgroupShuffle = false
   var needsControlFlowAttrs = false
   var needsAtomicFloat = false
   var needsInt8 = false
@@ -602,6 +612,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsInt64 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
+    if usesShuffleBuiltin(fn.pBody):
+      needsSubgroupShuffle = true
     if usesExplicitUnroll(fn.pBody):
       needsControlFlowAttrs = true
     if ctx.usesFloatAtomic(fn.pBody):
@@ -641,6 +653,9 @@ proc codegen*(ctx: var GpuContext): string =
   if needsSubgroup:
     result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
+  if needsSubgroupShuffle:
+    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
+    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
   if needsAtomicFloat:
     result.add "#extension GL_EXT_shader_atomic_float : enable\n"
   result.add "\n"

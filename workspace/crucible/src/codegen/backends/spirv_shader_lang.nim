@@ -891,6 +891,18 @@ proc emitReduceAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeSubgroup))
   ctx.builder.freshInst(OpGroupNonUniformFAdd, @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
 
+proc emitShuffle(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst, op: SpvOp): uint32 =
+  doAssert n.cArgs.len == 2, "simd_shuffle takes a value and a lane index"
+  let v = emitExpr(ctx, fn, n.cArgs[0])
+  let lane = emitExpr(ctx, fn, n.cArgs[1])
+  let resTy = valueType(exprType(fn, n.cArgs[0]))
+  doAssert resTy.kind in spvScalarKinds, "simd_shuffle lowers scalars only: " & $resTy.kind
+  # Invocation Id and Mask take the unsigned width the grammar demands (Signedness 0)
+  let laneU = ctx.convertValue(lane, exprType(fn, n.cArgs[1]), uint32Type())
+  ctx.caps.incl capGroupNonUniformShuffle
+  let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeSubgroup))
+  ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
+
 proc emitAtomicFetchAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   doAssert n.cArgs.len == 2, "atomicFetchAdd takes a pointer and a value"
   let addrNode = n.cArgs[0]
@@ -917,6 +929,12 @@ proc emitCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
   of gbkNone: discard
   else:
     spvRefuse("reduction builtin " & $n.cName.symbol.reductionBuiltin)
+  case n.cName.symbol.shuffleBuiltin
+  of gbkSimdShuffle:
+    return emitShuffle(ctx, fn, n, OpGroupNonUniformShuffle)
+  of gbkSimdShuffleXor:
+    return emitShuffle(ctx, fn, n, OpGroupNonUniformShuffleXor)
+  of gbkNone: discard
   case n.cName.symbol.atomicsBuiltin
   of gbkAtomicFetchAdd:
     return emitAtomicFetchAdd(ctx, fn, n)

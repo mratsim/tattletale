@@ -358,26 +358,30 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkReduceMax:
         result = indentStr & "sub_group_reduce_max(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
       of gbkNone:
-        case ast.cName.symbol.atomicsBuiltin
-        of gbkAtomicFetchAdd:
-          # fp needs cl_ext_float_atomics, the pragma is emitted at
-          # module scope when the AST contains an fp atomicFetchAdd.
-          # int atomic_fetch_add is OpenCL 2.0 core.
-          # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
-          # __global pointer at the call site.
-          let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
-                         of gtFloat32: "atomic_float"
-                         of gtInt32: "atomic_int"
-                         of gtUint32: "atomic_uint"
-                         else: error "OpenCL atomicFetchAdd: unsupported pointee type"
-          result = indentStr & "atomic_fetch_add((volatile __global " & atomicTy & "*)" &
-                   ctx.genOpenCL(ast.cArgs[0]) & ", " &
-                   ctx.genOpenCL(ast.cArgs[1]) & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # `sub_group_shuffle` takes the subgroup-relative index as `uint`, cast.
+          result = indentStr & "sub_group_shuffle(" & ctx.genOpenCL(ast.cArgs[0]) & ", (uint)(" & ctx.genOpenCL(ast.cArgs[1]) & "))"
+        of gbkSimdShuffleXor:
+          # `sub_group_shuffle_xor` takes the xor mask as `uint`, cast.
+          result = indentStr & "sub_group_shuffle_xor(" & ctx.genOpenCL(ast.cArgs[0]) & ", (uint)(" & ctx.genOpenCL(ast.cArgs[1]) & "))"
         of gbkNone:
-          var clArgs: seq[string]
-          for arg in ast.cArgs:
-            clArgs.add ctx.genOpenCL(arg)
-          result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
+          case ast.cName.symbol.atomicsBuiltin
+          of gbkAtomicFetchAdd:
+            # fp atomics need cl_ext_float_atomics (module scope), int atomic_fetch_add is OpenCL 2.0 core
+            let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
+                           of gtFloat32: "atomic_float"
+                           of gtInt32: "atomic_int"
+                           of gtUint32: "atomic_uint"
+                           else: error "OpenCL atomicFetchAdd: unsupported pointee type"
+            result = indentStr & "atomic_fetch_add((volatile __global " & atomicTy & "*)" &
+                     ctx.genOpenCL(ast.cArgs[0]) & ", " &
+                     ctx.genOpenCL(ast.cArgs[1]) & ')'
+          of gbkNone:
+            var clArgs: seq[string]
+            for arg in ast.cArgs:
+              clArgs.add ctx.genOpenCL(arg)
+            result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
 
 
   of gpuBinOp:

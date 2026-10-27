@@ -443,25 +443,31 @@ proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
     of gbkThreadgroupBarrierDevice:
       result = "DeviceMemoryBarrierWithGroupSync()"
     of gbkNone:
-      if n.cName.symbol.reductionBuiltin != gbkNone:
-        error "HLSL: subgroup reductions have no emission, wave intrinsics are outside this backend"
-      if n.cName.symbol.atomicsBuiltin != gbkNone:
-        error "HLSL: atomic builtins have no emission in this backend"
-      if isFp16ConversionCall(n):
-        error "HLSL: call to `" & n.cName.ident() & "` has no emission, float16 types are outside the HLSL subset"
-      # materialized min/max/abs wrappers pass through under their mangled names like on every backend,
-      # other plain names (exp2, rsqrt, device calls) emit verbatim
-      var parts: seq[string]
-      for arg in n.cArgs:
-        if arg.kind == gpuIdent and arg.symbol.iSym in st.buffers:
-          # a buffer resource passes by name, its identity flows from the call site
-          parts.add arg.symbol.name
-        elif arg.kind == gpuMaterialize:
-          # a hidden const-reference argument unwraps to the value it materializes
-          parts.add ctx.genHlslExpr(st, arg.mExpr)
-        else:
-          parts.add ctx.genHlslExpr(st, arg)
-      result = ctx.getFnName(bkHlsl, n) & "(" & parts.join(", ") & ")"
+      case n.cName.symbol.shuffleBuiltin
+      of gbkSimdShuffle:
+        # WaveReadLaneAt requires a dynamically uniform lane
+        result = "WaveReadLaneAt(" & ctx.genHlslExpr(st, n.cArgs[0]) & ", " & ctx.genHlslExpr(st, n.cArgs[1]) & ")"
+      of gbkSimdShuffleXor:
+        error "HLSL: `simd_shuffle_xor` has no wave-intrinsic spelling, no HLSL intrinsic exchanges with a lane-index xor"
+      of gbkNone:
+        if n.cName.symbol.reductionBuiltin != gbkNone:
+          error "HLSL: subgroup reductions have no emission, wave intrinsics are outside this backend"
+        if n.cName.symbol.atomicsBuiltin != gbkNone:
+          error "HLSL: atomic builtins have no emission in this backend"
+        if isFp16ConversionCall(n):
+          error "HLSL: call to `" & n.cName.ident() & "` has no emission, float16 types are outside the HLSL subset"
+        # materialized min/max/abs wrappers pass through under their mangled names like on every backend,
+        # other plain names (exp2, rsqrt, device calls) emit verbatim
+        var parts: seq[string]
+        for arg in n.cArgs:
+          if arg.kind == gpuIdent and arg.symbol.iSym in st.buffers:
+            # HLSL buffer parameters are resource handles: the call passes the handle
+            parts.add arg.symbol.name
+          elif arg.kind == gpuMaterialize:
+            parts.add ctx.genHlslExpr(st, arg.mExpr)
+          else:
+            parts.add ctx.genHlslExpr(st, arg)
+        result = ctx.getFnName(bkHlsl, n) & "(" & parts.join(", ") & ")"
   of gpuObjConstr:
     error "HLSL: object constructor outside a declaration initializer or member-wise assignment"
   of gpuAddr:

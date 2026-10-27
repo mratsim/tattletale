@@ -313,16 +313,24 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkReduceMax:
         result = indentStr & "warpReduceMax(" & ctx.genCuda(ast.cArgs[0]) & ')'
       of gbkNone:
-        case ast.cName.symbol.atomicsBuiltin
-        of gbkAtomicFetchAdd:
-          # atomicAdd overloads on the pointee type, no cast needed
-          result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
-                   ctx.genCuda(ast.cArgs[1]) & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # Full mask: every warp lane participates and receives the result.
+          result = indentStr & "__shfl_sync(0xffffffffu, " & ctx.genCuda(ast.cArgs[0]) & ", " & ctx.genCuda(ast.cArgs[1]) & ')'
+        of gbkSimdShuffleXor:
+          # Full mask: every warp lane participates, the exchange pairs lanes bitwise.
+          result = indentStr & "__shfl_xor_sync(0xffffffffu, " & ctx.genCuda(ast.cArgs[0]) & ", " & ctx.genCuda(ast.cArgs[1]) & ')'
         of gbkNone:
-          var cudaArgs: seq[string]
-          for i, arg in ast.cArgs:
-            cudaArgs.add ctx.genCuda(arg)
-          result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+          case ast.cName.symbol.atomicsBuiltin
+          of gbkAtomicFetchAdd:
+            # atomicAdd overloads on the pointee type, no cast needed
+            result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
+                     ctx.genCuda(ast.cArgs[1]) & ')'
+          of gbkNone:
+            var cudaArgs: seq[string]
+            for i, arg in ast.cArgs:
+              cudaArgs.add ctx.genCuda(arg)
+            result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:

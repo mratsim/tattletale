@@ -356,6 +356,7 @@ BANNED = [
      "use sit on, carry, or restate the mechanism"),
     (r"\bbite\b|\bbites\b", None, "use chunk, step, or case"),
     (r"\bmissions?\b", None, "use the module's real name or path"),
+    (r"\blegs?\b", None, "name the compilation stage or the artifact directly"),
     (r"\bdigests?\b",
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
@@ -2285,12 +2286,17 @@ def _diff_added_map(base):
     cmd = ["git", "diff", "--find-renames", "--unified=0"]
     if base:
         cmd.append(base)
-    out = subprocess.run(cmd, capture_output=True, text=True)
+    out = subprocess.run(cmd, capture_output=True)
     if out.returncode != 0:
         return None
+    # binary content (git diffs files without NUL bytes in the first 8KB
+    # as text) must not crash the decode, such chunks are not lintable
+    stdout = out.stdout.decode("utf-8", errors="surrogateescape")
     added = {}
-    for chunk in out.stdout.split("diff --git "):
+    for chunk in stdout.split("diff --git "):
         if not chunk.strip():
+            continue
+        if any("\udc80" <= c <= "\udcff" for c in chunk):
             continue
         path = None
         for line in chunk.split("\n"):

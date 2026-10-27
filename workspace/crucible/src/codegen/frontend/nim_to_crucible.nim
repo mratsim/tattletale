@@ -766,6 +766,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       result.symbol.synchroBuiltin = synchroBuiltinKind(result.symbol.name)
       result.symbol.reductionBuiltin = reductionBuiltinKind(result.symbol.name)
       result.symbol.atomicsBuiltin = atomicsBuiltinKind(result.symbol.name)
+      result.symbol.shuffleBuiltin = shuffleBuiltinKind(result.symbol.name)
 
   # literal types
   of nnkPrefix:
