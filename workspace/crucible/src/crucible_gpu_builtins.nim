@@ -47,7 +47,10 @@ export builtins_functions.exp2, builtins_functions.rsqrt
 export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
        builtins_gpu_types.fp8e4m3, builtins_gpu_types.fp8e5m2,
        builtins_gpu_types.toFp16, builtins_gpu_types.toFp32,
-       builtins_gpu_types.asFp16, builtins_gpu_types.asU16
+       builtins_gpu_types.toBf16, builtins_gpu_types.toBf32,
+       builtins_gpu_types.toFp8e4m3, builtins_gpu_types.toFp8e5m2,
+       builtins_gpu_types.asFp16, builtins_gpu_types.asU16,
+       builtins_gpu_types.to
 
 export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax,
        builtins_warp_sync_reductions.simd_shuffle, builtins_warp_sync_reductions.simd_shuffle_xor,

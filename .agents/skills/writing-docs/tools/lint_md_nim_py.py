@@ -56,6 +56,7 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 
@@ -544,6 +545,11 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "dump-identifier": Rule("dump-identifier", True,
+                            "an identifier carrying dump in crucible or ceramic Nim code, "
+                            "dump mechanisms are for debugging only and do not make it "
+                            "into commits, debugEcho the value inline, write the file at "
+                            "the call site, a macro can debugEcho result.toStrLit()"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "stmt-inline": Rule("stmt-inline", True,
@@ -2460,6 +2466,7 @@ def lint(paths, base=None):
             passes_export_hygiene(f, text, findings, added)
         if f.suffix == ".nim":
             stmt_inline(f, text, findings, added)
+            scan_dump_identifier(f, text, findings, added)
             diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
@@ -3783,6 +3790,9 @@ def scan_doc_shape(path, proc, lines, findings, exempt_file):
 
 
 DECL_T_SUFFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*T$")
+DUMP_IDENT_RE = re.compile(r"\b[A-Za-z_]*[dD]ump[A-Za-z0-9_]*\b")
+
+
 TYPE_SUFFIX_RE = re.compile(
     r"^\s*(?:type\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b"
     r"|([A-Za-z_][A-Za-z0-9_]*)\s*\*?\s*=\s*"
@@ -4538,6 +4548,39 @@ def scan_explicit_generics(path, lines, ds, generic_map, findings):
                 "the call %s[%s] spells generic arguments the compiler "
                 "infers from the value arguments, drop the bracket list"
                 % (callee, ", ".join(args))))
+
+
+def scan_dump_identifier(path, text, findings, added):
+    """Flags identifiers carrying dump in crucible or ceramic Nim code.
+
+    Contract:
+
+    - code identifiers only, comments and string literals sit outside the scan
+    - a dedicated dump proc, hook or compile-time switch is banned
+    - dump mechanisms are for debugging only and do not make it into commits
+    - the alternatives: debugEcho the value inline, write the file at the
+      call site when a file is genuinely needed, a macro can
+      debugEcho result.toStrLit()
+    """
+    if not ("crucible" in path.parts or "ceramic" in path.parts):
+        return
+    blocked = nim_block_comment_lines(text)
+    for i, raw in enumerate(text.splitlines()):
+        if (i + 1) in blocked:
+            continue
+        code, comment_only = _strip_comment(raw)
+        if comment_only or not code:
+            continue
+        code = _blank_nim_strings(code)
+        for m in DUMP_IDENT_RE.finditer(code):
+            if added is not None and (i + 1) not in added:
+                continue
+            findings.append(Finding(
+                path, i + 1, "dump-identifier",
+                "identifier '%s' carries dump, dumping is for debugging only "
+                "and does not make it into commits, debugEcho the value inline, "
+                "write the file at the call site, a macro can "
+                "debugEcho result.toStrLit()" % m.group(0)))
 
 
 def tile_scan(path, text, findings, consts, builtins, generic_map=None):
