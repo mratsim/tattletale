@@ -318,7 +318,10 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(int " & ast.fVar.ident() & " = " &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "#pragma clang loop unroll(full)\n"
+    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0) & "; " &
              ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0) & "; " &
              ast.fVar.ident() & " += " & ctx.genMetalImpl(ast.fStep, 0) & ") {\n"

@@ -23,6 +23,7 @@ Rule table (rule | trigger | severity):
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
 | severed-tail         | a continuing sentence ends its line on a 1-2 word tail after the last clause boundary              | counted  |
+| comma-stub           | a 1-2 word line ends on a comma, the clause belongs at the end of the previous line                | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
@@ -110,6 +111,7 @@ writing the fixed text back.
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
 | severed-tail                | rewrap so a continuing sentence's line ends 3+ words past its last clause boundary                               |
+| comma-stub                  | move the stub clause to the end of the previous line or finish the thought on this line                           |
 | quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
@@ -480,6 +482,8 @@ RULES = {
                        "a line opens on a severed one-word continuation"),
     "severed-tail": Rule("severed-tail", True,
                          "a continuing sentence ends its line on a 1-2 word tail after the last clause boundary"),
+    "comma-stub": Rule("comma-stub", True,
+                       "a 1-2 word line ends on a comma, the clause belongs at the end of the previous line"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
@@ -2214,6 +2218,13 @@ def scan(path, text, findings):
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
+            # a 1-2 word line ending on a comma is a severed clause stub,
+            # the clause belongs at the end of the previous line
+            if wc <= 2 and c.endswith(","):
+                findings.append(Finding(
+                    path, n, "comma-stub",
+                    "a %d-word line ends on a comma, the clause belongs "
+                    "on the previous line" % wc))
             # a continuing sentence must not end its line on a 1-2 word
             # orphan after the last clause boundary, the semantic unit
             # continues on the next line

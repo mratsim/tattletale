@@ -168,6 +168,7 @@ type
       fStep*: GpuAst ## The loop increment; always set (1 for ranges, the countup step)
       fBody*: GpuAst
       fRangeKind*: GpuRangeKind
+      fUnroll*: bool ## unroll-hinted loop, backends emit an unroll pragma
     of gpuWhile:
       wCond*: GpuAst
       wBody*: GpuAst
@@ -509,6 +510,7 @@ func clone*(ast: GpuAst): GpuAst =
     result.fStart = ast.fStart.clone()
     result.fEnd = ast.fEnd.clone()
     result.fStep = ast.fStep.clone()
+    result.fUnroll = ast.fUnroll
     result.fBody = ast.fBody.clone()
     result.fRangeKind = ast.fRangeKind
   of gpuWhile:

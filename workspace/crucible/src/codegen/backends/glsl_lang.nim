@@ -189,6 +189,15 @@ proc usesReductionBuiltin(n: GpuAst): bool =
     if usesReductionBuiltin(ch):
       return true
 
+proc usesExplicitUnroll(n: GpuAst): bool =
+  ## True when the AST contains a loop marked fUnroll, needing the
+  ## GL_EXT_control_flow_attributes extension at module scope.
+  if n.kind == gpuFor and n.fUnroll:
+    return true
+  for ch in n:
+    if usesExplicitUnroll(ch):
+      return true
+
 proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
   ## True when the AST contains an fp `atomicFetchAdd` call, which needs
   ## GL_EXT_shader_atomic_float at module scope. int atomicAdd is core.
@@ -332,7 +341,10 @@ proc genGLSL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(int " & ast.fVar.ident() & " = " &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "[[unroll]]\n"
+    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genGLSL(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genGLSL(ast.fEnd) & "; " &
              ast.fVar.ident() & " += " & ctx.genGLSL(ast.fStep) & ") {\n"
@@ -562,6 +574,7 @@ proc codegen*(ctx: var GpuContext): string =
   var needsFp16 = false
   var needsBf16 = false
   var needsSubgroup = false
+  var needsControlFlowAttrs = false
   var needsAtomicFloat = false
   var needsInt8 = false
   var needsInt64 = false
@@ -589,6 +602,8 @@ proc codegen*(ctx: var GpuContext): string =
         needsInt64 = true
     if usesReductionBuiltin(fn.pBody):
       needsSubgroup = true
+    if usesExplicitUnroll(fn.pBody):
+      needsControlFlowAttrs = true
     if ctx.usesFloatAtomic(fn.pBody):
       needsAtomicFloat = true
   for pt in refPointees:
@@ -604,6 +619,8 @@ proc codegen*(ctx: var GpuContext): string =
   result = "#version 450\n"
   result.add "#extension GL_EXT_buffer_reference : enable\n"
   result.add "#extension GL_EXT_buffer_reference2 : enable\n"
+  if needsControlFlowAttrs:
+    result.add "#extension GL_EXT_control_flow_attributes : require\n"
   if needsFp64:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
   if needsFp16:

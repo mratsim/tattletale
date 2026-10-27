@@ -310,7 +310,10 @@ proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(int " & ast.fVar.ident() & " = " &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "#pragma unroll\n"
+    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genOpenCL(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genOpenCL(ast.fEnd) & "; " &
              ast.fVar.ident() & " += " & ctx.genOpenCL(ast.fStep) & ") {\n"

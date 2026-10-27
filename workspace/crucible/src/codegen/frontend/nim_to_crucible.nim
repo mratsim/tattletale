@@ -967,8 +967,7 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
          child[0].strVal == "emit":
         emitArgs.add child[1]
     if emitArgs.len == 0:
-      # compile-time annotations like {.warning.}, no meaning for the emitted source
-      result = GpuAst(kind: gpuDiscard)
+      result = GpuAst(kind: gpuComment, comment: node.repr.strip())
     elif emitArgs.len == 1:
       result = ctx.buildEmitStmt(reg, emitArgs[0])
     else:

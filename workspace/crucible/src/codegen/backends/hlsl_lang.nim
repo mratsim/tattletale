@@ -618,7 +618,10 @@ proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): stri
     let i = ast.fVar.ident()
     let indTyp = gpuTypeToString(ast.fVar.symbol.typ, allowEmptyIdent = true)
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(" & indTyp & ' ' & i & " = " & ctx.genHlslExpr(st, ast.fStart) &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "[unroll]\n"
+    result &= indentStr & "for(" & indTyp & ' ' & i & " = " & ctx.genHlslExpr(st, ast.fStart) &
              "; " & i & cmp & ctx.genHlslExpr(st, ast.fEnd) & "; " &
              i & " += " & ctx.genHlslExpr(st, ast.fStep) & ") {\n"
     result &= ctx.genHlsl(st, ast.fBody, indent + 1) & '\n'

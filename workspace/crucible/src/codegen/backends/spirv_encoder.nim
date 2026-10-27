@@ -312,6 +312,7 @@ const
   fcNone = 0'u32
   selNone = 0'u32
   lcNone = 0'u32
+  lcUnroll = 1'u32 ## LoopControlUnroll bit
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Module sections and word stream

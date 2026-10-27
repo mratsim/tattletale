@@ -1151,7 +1151,7 @@ proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   let cond = ctx.builder.freshInst(cmpOp, @[boolTy, cur, endV])
   # OpLoopMerge must be the second-to-last instruction of its block,
   # immediately before the branch terminator
-  ctx.builder.opLoopMerge(mergeLbl, contLbl, lcNone)
+  ctx.builder.opLoopMerge(mergeLbl, contLbl, if n.fUnroll: lcUnroll else: lcNone)
   ctx.builder.opBranchConditional(cond, bodyLbl, mergeLbl)
   ctx.builder.opLabelAt(bodyLbl)
   fn.terminated = false

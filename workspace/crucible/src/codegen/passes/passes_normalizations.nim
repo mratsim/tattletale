@@ -63,17 +63,19 @@ func registerMapOperators(reg: var PassRegistry) =
 
 func registerFilterPragmas(reg: var PassRegistry) =
   reg.register("filterPragmas", pkTransform, phaseEarly,
-    "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
+    "Filters Nim-specific pragmas: gpuProc pRawPragmas into pAttributes, statement pragmas into their GPU meaning (unroll marks the enclosing loop)",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
         if fn.kind == gpuProc:
           filterPragmasImpl(fn)
+          markExplicitUnrollsImpl(fn.pBody)
       for fnKey in ctx.genericInsts.keys:
         var fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           filterPragmasImpl(fn)
+          markExplicitUnrollsImpl(fn.pBody)
   )
 
 func registerResolveOverloadedOperators(reg: var PassRegistry) =
@@ -329,6 +331,21 @@ func filterPragmasImpl(n: var GpuAst) =
     else:
       discard
   n.pAttributes = attrs
+
+func markExplicitUnrollsImpl(n: var GpuAst) =
+  if n.kind == gpuFor:
+    var unroll = false
+    var kept: seq[GpuAst]
+    for stmt in n.fBody.statements:
+      if stmt.kind == gpuComment and stmt.comment == "{.unroll.}":
+        unroll = true
+      else:
+        kept.add stmt
+    if unroll:
+      n.fUnroll = true
+      n.fBody.statements = kept
+  for child in n.mitems:
+    markExplicitUnrollsImpl(child)
 
 # ═══════════════════════════════════════════════════════════════════════
 # resolveOverloadedOperators
