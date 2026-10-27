@@ -22,12 +22,11 @@ import
   workspace/ceramic/src/tile_algebra/tile_ops_binary,
   workspace/ceramic/src/tile_algebra/tile_ops_ternary,
   workspace/ceramic/src/tile_algebra/tile_loadstore,
-  workspace/ceramic/src/tile_algebra/tile_reductions,
-  workspace/ceramic/src/tile_algebra/tile_reduce,
+  workspace/ceramic/src/tile_algebra/tile_tvm_reductions,
   workspace/ceramic/src/tile_algebra/tile_matmul
 
 export tiles, tile_foreach, tile_elementary, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
-       tile_loadstore, tile_reductions, tile_reduce, tile_matmul
+       tile_loadstore, tile_tvm_reductions, tile_matmul
 
 # Symbols outside tile_algebra's jurisdiction, re-exported per symbol
 # for the single-import surface of the kernels and the macro emissions:
@@ -42,7 +41,7 @@ export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
        layout_algebra.crd2idx, layout_algebra.idx2crd,
        layout_algebra.logical_divide, layout_algebra.diceAxes,
        layout_algebra.sliceAxes
-export tensors.diceAxes, tensors.sliceAxes,
+export tensors.atAxisIndex, tensors.diceAxes, tensors.sliceAxes,
        tensors.getLayout
 export h_mma_configgen, h_mma_properties
 export crucible_gpu_builtins.atomicFetchAdd

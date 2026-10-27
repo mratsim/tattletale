@@ -65,10 +65,12 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     # pass 1: sum of squares, one register tile at a time
     var acc = zero(float32)
     for tileID in 0 ..< stripTiles:
-      reg.load(srcRow, thrID, tileID, padWith = reduceIdentity(roSum, float32))
+      reg.load(srcRow, thrID, tileID, padWith = zero(float32))
+      var tileSum = zero(float32)
       for i in 0 ..< owned:
         reg.data[i] = reg.data[i].square()
-      acc.reduceAcc(reg, roSum)
+        tileSum += reg.data[i]
+      acc += reduceAdd(tileSum)
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:

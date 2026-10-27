@@ -76,7 +76,14 @@ func originOffset[Sh, St](layout: Layout[Sh, St]): int =
       result += (toInt(f) - 1) * (-strides[i])
     i.inc
 
-proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
+func makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
+  let layout = make_layout(shape, order)
+  HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
+    layout: layout)
+
+func makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
   HostTensor[T, typeof(shape), typeof(strides)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),

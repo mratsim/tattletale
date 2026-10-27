@@ -18,9 +18,9 @@ import ./tile_foreach
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Backend magic functions
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template getLaneWidth*: int =
   ## Returns the width of the lanes of one co-executing group
@@ -61,9 +61,9 @@ template getDefaultTileLayout*(T: typedesc): untyped =
   const chunk = max(1, 16 div sizeof(T))
   make_layout((getLaneWidth(), chunk), (chunk, 1))
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile datatype
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type Tile*[T, Sh, St] = TensorOwned[T, Sh, St]
 
@@ -88,22 +88,34 @@ template tile*(T: typedesc, shape: tuple): typedesc =
   ## - tile maps stay composable without hand-written strides
   tile(T, make_layout(shape))
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Initialization
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
-proc zero*(T: typedesc): T {.inline.} =
-  when T is float16: cast[T](0'u16)
-  elif T is bfloat16: cast[T](0'u16)
-  else: T(0)
+func zero*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0'u16)
+  elif T is bfloat16:
+    cast[T](0'u16)
+  else:
+    T(0)
 
-proc negInf*(T: typedesc): T {.inline.} =
+func negInf*(T: typedesc): T {.inline.} =
   when T is float16:
     cast[T](0xFC00'u16)
   elif T is bfloat16:
     cast[T](0xFF80'u16)
   else:
     T(-Inf)
+
+func posInf*(T: typedesc): T {.inline.} =
+  ## Plus-infinity fill value of `T`
+  when T is float16:
+    cast[T](0x7C00'u16)
+  elif T is bfloat16:
+    cast[T](0x7F80'u16)
+  else:
+    T(Inf)
 
 func zeros*(a: var Tile) {.inline.} =
   forEach var d in a:
@@ -113,19 +125,19 @@ func negInf*(a: var Tile) {.inline.} =
   forEach var d in a:
     d = negInf(a.T)
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile constructors
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
-proc zeros*(T: typedesc[Tile]): T {.inline.} =
+func zeros*(T: typedesc[Tile]): T {.inline.} =
   zero(result)
 
-proc negInf*(T: typedesc[Tile]): T {.inline.} =
+func negInf*(T: typedesc[Tile]): T {.inline.} =
   negInf(result)
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile geometry
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template tileWith*(v: TensorView, tiler: static tuple): auto =
   ## Tile geometry of `v`: its layout zipped-divided by the tiler,
@@ -136,9 +148,9 @@ template getTileGrid*(geom: Layout): auto =
   ## Tile grid of the geometry, the tile coordinates covering the tensor.
   geom.shape[1]
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Launch mapping
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc getLocalTileID*(gridShape: IntOrIntTuple): auto {.inline.} =
   ## Squadron position mapped to a flat index over the tile grid
