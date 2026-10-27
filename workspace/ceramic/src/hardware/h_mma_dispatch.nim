@@ -7,7 +7,6 @@
 
 import std/[macros, strutils]
 import workspace/crucible
-import workspace/fp_conv/fp_conv
 import ./h_mma_registry
 
 {.experimental: "dynamicBindSym".}

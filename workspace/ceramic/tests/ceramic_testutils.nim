@@ -19,7 +19,6 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing_slicedice
-import workspace/fp_conv/fp_conv
 
 # ═══════════════════════════════════════════════════════════════
 #  Randomness
