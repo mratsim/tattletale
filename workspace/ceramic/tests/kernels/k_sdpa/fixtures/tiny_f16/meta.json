@@ -1,0 +1,20 @@
+{
+ "name": "tiny_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 1,
+ "Hkv": 1,
+ "L": 32,
+ "S": 32,
+ "Dk": 16,
+ "Dv": 16,
+ "scale": 0.25,
+ "causal": false,
+ "window_size": 0,
+ "checksum": 49814159,
+ "xorhash_checksums": {
+  "q.bin": 33831,
+  "k.bin": 49945,
+  "v.bin": 52832
+ }
+}

@@ -76,14 +76,23 @@ func originOffset[Sh, St](layout: Layout[Sh, St]): int =
       result += (toInt(f) - 1) * (-strides[i])
     i.inc
 
-func makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
+proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U, Sh, St] =
+  let layout = src.layout
+  result = HostTensor[U, Sh, St](
+    data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
+    offset: originOffset(layout),
+    layout: layout)
+  for i in 0 ..< toInt(layout.cosize()):
+    result.data[i] = src.data[i].to(U)
+
+proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
   let layout = make_layout(shape, order)
   HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
     offset: originOffset(layout),
     layout: layout)
 
-func makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
+proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
   HostTensor[T, typeof(shape), typeof(strides)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),

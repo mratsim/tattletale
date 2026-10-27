@@ -112,7 +112,8 @@ proc scaled_dot_product_attention*(
 
   var qk = zeros(tile(float32, qkCLayout))      # S = Q·Kᵀ scores, (MT × NT)
   const rowStatsL = reducedLayout(qkMap.layout, 1)
-  var m_i = negInf(tile(float32, rowStatsL))    # running row max, (MT × 1)
+  var m_i = finiteFloor(tile(float32, rowStatsL)) # running row max, (MT × 1)
+    # init to a finite floor, not -inf: a fully-masked kv tile would NaN alpha through -inf - -inf and poison the row
   var l_i = zeros(tile(float32, rowStatsL))     # running row sum, (MT × 1)
   var acc = zeros(tile(float32, pvCLayout))     # (MT × Dv) accumulator
 

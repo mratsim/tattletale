@@ -108,6 +108,14 @@ func negInf*(T: typedesc): T {.inline.} =
   else:
     T(-Inf)
 
+func finiteFloor*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0xFBFF'u16)
+  elif T is bfloat16:
+    cast[T](0xFF7F'u16)
+  else:
+    T(-1e30'f32)
+
 func posInf*(T: typedesc): T {.inline.} =
   ## Plus-infinity fill value of `T`
   when T is float16:
@@ -125,6 +133,10 @@ func negInf*(a: var Tile) {.inline.} =
   forEach var d in a:
     d = negInf(a.T)
 
+func finiteFloor*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = finiteFloor(a.T)
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Tile constructors
 # ═══════════════════════════════════════════════════════════════════════
@@ -134,6 +146,9 @@ func zeros*(T: typedesc[Tile]): T {.inline.} =
 
 func negInf*(T: typedesc[Tile]): T {.inline.} =
   negInf(result)
+
+func finiteFloor*(T: typedesc[Tile]): T {.inline.} =
+  finiteFloor(result)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tile geometry

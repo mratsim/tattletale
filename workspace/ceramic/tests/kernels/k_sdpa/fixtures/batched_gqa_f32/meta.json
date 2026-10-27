@@ -1,0 +1,20 @@
+{
+ "name": "batched_gqa_f32",
+ "dtype": "float32",
+ "B": 2,
+ "Hq": 4,
+ "Hkv": 2,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "window_size": 0,
+ "checksum": 2405042120,
+ "xorhash_checksums": {
+  "q.bin": 1999202759,
+  "k.bin": 2242439658,
+  "v.bin": 4268002984
+ }
+}

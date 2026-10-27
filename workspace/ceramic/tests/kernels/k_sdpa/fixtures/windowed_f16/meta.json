@@ -1,0 +1,20 @@
+{
+ "name": "windowed_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 4,
+ "Hkv": 2,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "window_size": 21,
+ "checksum": 2262967273,
+ "xorhash_checksums": {
+  "q.bin": 46607,
+  "k.bin": 55862,
+  "v.bin": 62082
+ }
+}

@@ -1,0 +1,20 @@
+{
+ "name": "gqa4_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 4,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "window_size": 0,
+ "checksum": 2169638678,
+ "xorhash_checksums": {
+  "q.bin": 29331,
+  "k.bin": 21279,
+  "v.bin": 41949
+ }
+}

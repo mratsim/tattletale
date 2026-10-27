@@ -1,0 +1,20 @@
+{
+ "name": "windowed_gqa8_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 8,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 64,
+ "Dv": 64,
+ "scale": 0.125,
+ "causal": true,
+ "window_size": 13,
+ "checksum": 1916904081,
+ "xorhash_checksums": {
+  "q.bin": 39044,
+  "k.bin": 46069,
+  "v.bin": 44952
+ }
+}

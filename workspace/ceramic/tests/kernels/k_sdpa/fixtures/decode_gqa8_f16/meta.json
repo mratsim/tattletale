@@ -1,0 +1,20 @@
+{
+ "name": "decode_gqa8_f16",
+ "dtype": "float16",
+ "B": 1,
+ "Hq": 8,
+ "Hkv": 1,
+ "L": 32,
+ "S": 256,
+ "Dk": 64,
+ "Dv": 64,
+ "scale": 0.125,
+ "causal": true,
+ "window_size": 0,
+ "checksum": 135741418,
+ "xorhash_checksums": {
+  "q.bin": 41164,
+  "k.bin": 31850,
+  "v.bin": 49909
+ }
+}
