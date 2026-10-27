@@ -338,6 +338,8 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"\bmint(s|ed)?\b",
+     None, "minting jargon, name the actor that defines or writes the specialized type"),
     (r"\bpast the\b",
      None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
@@ -790,6 +792,7 @@ def nim_prose_lines(text):
     """
     out = []
     in_block_comment = False
+    nim_fence = False
     raws = text.splitlines()
 
     def banner_rule(s):
@@ -814,6 +817,16 @@ def nim_prose_lines(text):
                 # `#` prefixed only, a `##` banner is a violation reported
                 # through check_line's `license` kind
                 out.append((i, "license banner must be `#` prefixed, not `##`", "license", 0, False))
+                continue
+            if s[2:].strip().startswith("```"):
+                # a ## doc comment can carry a fenced example, the same
+                # contract as markdown: fenced lines are code-with-layout,
+                # the vocabulary rules apply, the prose-structure rules do not
+                nim_fence = not nim_fence
+                out.append((i, s[2:].strip(), "fence", 0, False))
+                continue
+            if nim_fence:
+                out.append((i, s[2:].strip(), "fence", comment_indent(s[2:]), False))
                 continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
