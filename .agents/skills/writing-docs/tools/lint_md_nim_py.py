@@ -424,6 +424,10 @@ BANNED = [
      r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
      None, "lawyer and justification prose is banned, state the contract "
            "(what the surface exports, not why the choice is defensible)"),
+    (r"\bnot (?:the |a |an )?[\w`-]+ itself\b", None,
+     "state what the thing is, the 'not X itself' emphasis carries no information"),
+    (r"\bright here\b|\bright there\b", None,
+     "name the site or stage directly, the location deictic adds nothing"),
     (r"\bfam\b",
      lambda l: bool(re.search(r"gmmfamily|gmmbf16|gmmf16|gmmwiden", l)),
      "name the type directly (the GmmFamily value surface keeps its names)"),

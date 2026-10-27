@@ -87,20 +87,16 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
           result = ctx.toCrucibleAst(reg, n)
       else:
         result = ctx.toCrucibleAst(reg, n)
-      # patch operator names (`+` -> `add`) into valid C++ identifiers before iSym generation
-      if result.symbol.name in ["+", "-", "*", "/"]:
-        let oldName = result.symbol.name
-        case result.symbol.name
-        of "+": result.symbol.name = "add"
-        of "-": result.symbol.name = "sub"
-        of "*": result.symbol.name = "mul"
-        of "/": result.symbol.name = "div"
-        else: discard
-        result.symbol.iSym = result.symbol.iSym.replace(oldName, result.symbol.name)
       if n.strVal in ctx.symChoices:
         if not hasPragma(n.getImpl(), "magic") and not hasPragma(n.getImpl(), "builtin"):
           let id = ctx.sigTab[sig]
-          id.symbol.name = id.symbol.iSym
+          # Overload call sites emit the iSym to stay unique.
+          # `*=` is a legal Nim name but no backend identifier.
+          # Operator overloads take their name from getOperatorMangledName.
+          if id.symbol.name.isPlainIdentifier:
+            id.symbol.name = id.symbol.iSym
+          else:
+            id.symbol.name = getOperatorMangledName(id.symbol.name, id.symbol.iSym)
       else:
         ctx.symChoices.incl result.symbol.name
   else:
@@ -109,12 +105,16 @@ proc getFnName(ctx: var GpuContext, reg: var TypeRegistry, n: NimNode): GpuAst =
 
 proc addToFnTable(ctx: var GpuContext, ident: GpuAst, body: GpuAst, kind: set[FunctionKind]) =
   let key = ident.symbol.iSym
+  # Operator overloads get their emitted name at registration:
+  # - this ident is the sigTab cache entry that every call site receives
+  # - renaming it here renames every call site at once
+  if not ident.symbol.name.isPlainIdentifier:
+    ident.symbol.name = getOperatorMangledName(ident.symbol.name, ident.symbol.iSym)
   # last writer wins
   ctx.fnTable[key] = FnTableEntry(
     ident: ident,
     body: body,
-    kind: kind,
-    namePolicy: npUnassigned
+    kind: kind
   )
 
 proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, name: GpuAst) =
@@ -180,9 +180,10 @@ proc registerGenericInstOrExternalProc(ctx: var GpuContext, reg: var TypeRegistr
     return
   fn.pAttributes.incl attDevice
   fn.pName = name
-  # Display name gets the 7-char hash suffix (npHashSuffix shape), one
-  # distinct iSym per generic instantiation
-  fn.pName.symbol.name = mangledHashName(fn.pName.symbol.name, fn.pName.symbol.iSym)
+  fn.pName.symbol.name = mangledHashName(
+    if name.symbol.name.isPlainIdentifier: name.symbol.name
+    else: mangleGpuName(name.symbol.name),
+    fn.pName.symbol.iSym)
   name.symbol.name = fn.pName.symbol.name
   ctx.genericInsts[fn.pName] = fn
   # Iterating passes like `ensureBlock` only see instantiations in `allFnTab`.
@@ -233,6 +234,8 @@ proc toConstDefName(ctx: var GpuContext, identNode: NimNode): GpuAst =
     result = newGpuIdent()
     result.symbol.name = sanitized
     result.symbol.iSym = s
+    if not result.symbol.name.isPlainIdentifier:
+      result.symbol.name = getOperatorMangledName(result.symbol.name, s)
     if result.symbol.name == "_":
       result.symbol.name = "underscore"
     elif result.symbol.name.startsWith("tmpTuple_"):
@@ -644,13 +647,17 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
       result = (t.kind in gtBool .. gtSize_t)
       if allowPtrLhs:
         result = result or ((t.kind == gtPtr) and t.implicit and t.to.kind in gtBool .. gtSize_t)
+    # Basic-type operands emit inline operator syntax.
+    # Overloaded operands emit a function call which needs an identifier.
     if not leftTyp.ofBasicType(true) or not rightTyp.ofBasicType(false):
       result.bIsOverloaded = true
       let name = ctx.getFnName(reg, node[0])
-      result.bOp.symbol = newSymbol(name.symbol.name, symKind = gsProc)
-      result.bOp.symbol.iSym = name.symbol.iSym
+      # registration finalizes the display name on the shared ident,
+      # the callee name copies after it
       if node[0].repr in ctx.generics or name notin ctx.allFnTab:
         ctx.registerGenericInstOrExternalProc(reg, node, name)
+      result.bOp.symbol = newSymbol(name.symbol.name, symKind = gsProc)
+      result.bOp.symbol.iSym = name.symbol.iSym
     else:
       result.bIsOverloaded = false
       let isBoolean = leftTyp.kind == gtBool
@@ -770,6 +777,10 @@ proc toCrucibleAst*(ctx: var GpuContext, reg: var TypeRegistry, node: NimNode, s
 
   # literal types
   of nnkPrefix:
+    if node[0].strVal notin NimGpuBooleanOperators and
+        node[0].strVal notin NimGpuNumericBuiltinsOperators:
+      error("User-defined prefix operator '" & node[0].strVal &
+            "' is not supported on the GPU: spell the operation out as a named proc.", node)
     result = GpuAst(kind: gpuPrefix,
                     pVal: ctx.toCrucibleAst(reg, node[1]))
     result.pOp = NimGpuBooleanOperators.getOrDefault(node[0].strVal, node[0].strVal)

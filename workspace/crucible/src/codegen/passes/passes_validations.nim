@@ -79,9 +79,6 @@ func registerValidationPrePasses*(reg: var PassRegistry) =
         if fkDefined in entry.kind or fkGenericInst in entry.kind:
           if entry.body.isNil:
             error "fnTable entry '" & key & "' marked as defined/generic but has nil body"
-        if fkBuiltin in entry.kind:
-          if entry.namePolicy != npUnassigned:
-            error "fnTable entry '" & key & "' builtin should not have namePolicy assigned"
     )
 
 func registerValidateAddressSpaceCasts*(reg: var PassRegistry) =

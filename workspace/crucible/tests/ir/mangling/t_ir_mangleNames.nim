@@ -1,10 +1,12 @@
-## mangleNames pass
+## mangleNames pass and operator display names
 ##
-## Test that namePolicy drives symbol renaming per FnTableEntry policy
+## - plain fkDefined names keep their name, on collision every entry after
+##   the first gets an iSym hash (7 base58 chars) appended
+## - fkBuiltin entries emit as-is
+## - operator overloads finalize at registration (getOperatorMangledName)
+## - the mangleNames pass skips them
 ##
-## - npClean keeps the name, npHashSuffix appends a 7-char base58 suffix
-## - npPatch renames `+` to `add` and patches `iSym` alongside
-## - npUnassigned maps `fkGenericInst` entries to npHashSuffix
+## mangleGpuName applies Nim's compiler/mangleutils.nim word mapping
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -17,97 +19,123 @@ import workspace/crucible/src/codegen/passes/passes_normalizations {.all.}
 import workspace/crucible/tests/ir/ir_testutils
 
 # ═══════════════════════════════════════════════════════════════════════
-# 1. npClean — plain name unchanged
+# 1. Plain name unchanged
 # ═══════════════════════════════════════════════════════════════════════
 static:
   let fnSym = newSymbol("myFunc", iSym = "myFunc_h1", symKind = gsProc)
   let fnIdent = GpuAst(kind: gpuIdent, symbol: fnSym)
   var ctx = GpuContext()
   ctx.fnTable["myFunc_h1"] = FnTableEntry(
-    ident: fnIdent, body: nil, kind: {fkDefined}, namePolicy: npClean)
+    ident: fnIdent, body: nil, kind: {fkDefined})
 
   registerMangleNames.runPassPrepared(ctx)
 
   doAssert fnIdent.symbol.name == "myFunc",
-    "npClean should not change name, got: " & fnIdent.symbol.name
-  echo "  OK — npClean: name unchanged"
+    "plain name should not change, got: " & fnIdent.symbol.name
+  echo "  OK — plain name unchanged"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 2. npHashSuffix — base58 suffix appended
+# 2. Collision: the second entry gets the iSym hash
 # ═══════════════════════════════════════════════════════════════════════
 static:
-  let fnSym = newSymbol("genFunc", iSym = "genFunc_X7yQz9", symKind = gsProc)
+  let symA = newSymbol("genFunc", iSym = "genFunc_AAA", symKind = gsProc)
+  let identA = GpuAst(kind: gpuIdent, symbol: symA)
+  let symB = newSymbol("genFunc", iSym = "genFunc_BBB", symKind = gsProc)
+  let identB = GpuAst(kind: gpuIdent, symbol: symB)
+  var ctx = GpuContext()
+  ctx.fnTable["genFunc_AAA"] = FnTableEntry(
+    ident: identA, body: nil, kind: {fkDefined})
+  ctx.fnTable["genFunc_BBB"] = FnTableEntry(
+    ident: identB, body: nil, kind: {fkDefined})
+
+  registerMangleNames.runPassPrepared(ctx)
+
+  doAssert identA.symbol.name == "genFunc",
+    "first entry keeps the plain name, got: " & identA.symbol.name
+  doAssert identB.symbol.name.startsWith("genFunc_"),
+    "second entry gets the hash suffix, got: " & identB.symbol.name
+  doAssert identB.symbol.name.len == "genFunc_".len + 7,
+    "suffix is the 7-char base58 hash, got: " & identB.symbol.name
+  doAssert identB.symbol.iSym == "genFunc_BBB",
+    "iSym is never mangled, got: " & identB.symbol.iSym
+  echo "  OK — collision: second entry gets the iSym hash"
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. fkBuiltin entries emit as-is
+# ═══════════════════════════════════════════════════════════════════════
+static:
+  let fnSym = newSymbol("toOpenArray", iSym = "toOpenArray_h3", symKind = gsProc)
   let fnIdent = GpuAst(kind: gpuIdent, symbol: fnSym)
   var ctx = GpuContext()
-  ctx.fnTable["genFunc_X7yQz9"] = FnTableEntry(
-    ident: fnIdent, body: nil, kind: {fkGenericInst}, namePolicy: npHashSuffix)
+  ctx.fnTable["toOpenArray_h3"] = FnTableEntry(
+    ident: fnIdent, body: nil, kind: {fkBuiltin})
 
   registerMangleNames.runPassPrepared(ctx)
 
-  doAssert fnIdent.symbol.name.len > "genFunc_".len,
-    "npHashSuffix should append suffix, got: " & fnIdent.symbol.name
-  doAssert fnIdent.symbol.name.startsWith("genFunc_"),
-    "Name should start with 'genFunc_', got: " & fnIdent.symbol.name
-  # Should be genFunc_ + 7 base58 chars
-  doAssert fnIdent.symbol.name.len == "genFunc_".len + 7,
-    "Name should have 7-char suffix, got: " & fnIdent.symbol.name
-  echo "  OK — npHashSuffix: base58 suffix appended"
+  doAssert fnIdent.symbol.name == "toOpenArray",
+    "builtin name should not change, got: " & fnIdent.symbol.name
+  echo "  OK — fkBuiltin emits as-is"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 3. npPatch — operator renamed
+# 4. Operator-named entries are skipped (finalized at registration)
 # ═══════════════════════════════════════════════════════════════════════
 static:
-  let fnSym = newSymbol("+", iSym = "+_h3", symKind = gsProc)
+  let fnSym = newSymbol("star_eq_1AbCdeF", iSym = "*=_h4", symKind = gsProc)
   let fnIdent = GpuAst(kind: gpuIdent, symbol: fnSym)
   var ctx = GpuContext()
-  ctx.fnTable["+_h3"] = FnTableEntry(
-    ident: fnIdent, body: nil, kind: {fkDefined}, namePolicy: npPatch)
+  ctx.fnTable["*=_h4"] = FnTableEntry(
+    ident: fnIdent, body: nil, kind: {fkDefined})
 
   registerMangleNames.runPassPrepared(ctx)
 
-  doAssert fnIdent.symbol.name == "add",
-    "npPatch should rename '+' to 'add', got: " & fnIdent.symbol.name
-  doAssert fnIdent.symbol.iSym == "add_h3",
-    "iSym should also be patched, got: " & fnIdent.symbol.iSym
-  echo "  OK — npPatch: + renamed to add"
+  doAssert fnIdent.symbol.name == "star_eq_1AbCdeF",
+    "finalized operator display name must not be re-suffixed, got: " & fnIdent.symbol.name
+  echo "  OK — operator-named entries skipped"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 4. npPatch for all operators
+# 5. getOperatorMangledName — spelled-out name + iSym hash
 # ═══════════════════════════════════════════════════════════════════════
 static:
-  let ops = {"+": "add", "-": "sub", "*": "mul", "/": "div", "..": "range"}
-  for (op, expected) in ops:
-    let fnSym = newSymbol(op, iSym = op & "_h4", symKind = gsProc)
-    let fnIdent = GpuAst(kind: gpuIdent, symbol: fnSym)
-    var ctx = GpuContext()
-    ctx.fnTable[op & "_h4"] = FnTableEntry(
-      ident: fnIdent, body: nil, kind: {fkDefined}, namePolicy: npPatch)
-
-    registerMangleNames.runPassPrepared(ctx)
-
-    doAssert fnIdent.symbol.name == expected,
-      "npPatch should rename '" & op & "' to '" & expected & "', got: " & fnIdent.symbol.name
-  echo "  OK — npPatch: all operators renamed correctly"
+  for op in ["+", "-", "*", "/", "+=", "-=", "*=", "/=", "%"]:
+    let display = getOperatorMangledName(op, op & "_sig")
+    doAssert display.isPlainIdentifier,
+      "operator display name must be a valid identifier: '" & display & "'"
+    doAssert display != op,
+      "the raw operator must not survive into the display name"
+    doAssert getOperatorMangledName(op, op & "_sig") == display,
+      "display name is deterministic in (name, iSym)"
+    let other = getOperatorMangledName(op, op & "_otherSig")
+    doAssert other != display,
+      "distinct overloads get distinct display names: " & display & " vs " & other
+  doAssert getOperatorMangledName("+", "x").startsWith("plus_"),
+    "'+' spells out to plus_, got: " & getOperatorMangledName("+", "x")
+  doAssert getOperatorMangledName("*=", "x").startsWith("star_eq_"),
+    "'*=' spells out to star_eq_, got: " & getOperatorMangledName("*=", "x")
+  doAssert getOperatorMangledName("+=", "x").startsWith("plus_eq_"),
+    "'+=' spells out to plus_eq_, got: " & getOperatorMangledName("+=", "x")
+  echo "  OK — getOperatorMangledName: spelled out, hashed, deterministic"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 5. npUnassigned — automatic policy assignment
+# 6. mangleGpuName — Nim's compiler/mangleutils.nim mapping
 # ═══════════════════════════════════════════════════════════════════════
 static:
-  # fkGenericInst should get npHashSuffix
-  let genSym = newSymbol("gen", iSym = "gen_h5", symKind = gsProc)
-  let genIdent = GpuAst(kind: gpuIdent, symbol: genSym)
-  var ctx = GpuContext()
-  ctx.fnTable["gen_h5"] = FnTableEntry(
-    ident: genIdent, body: nil, kind: {fkGenericInst}, namePolicy: npUnassigned)
-
-  registerMangleNames.runPassPrepared(ctx)
-
-  doAssert genIdent.symbol.name.len > "gen_".len,
-    "npUnassigned for generic inst should produce hash suffix"
-  echo "  OK — npUnassigned: generic inst gets hash suffix"
+  doAssert mangleGpuName("+") == "plus"
+  doAssert mangleGpuName("-") == "minus"
+  doAssert mangleGpuName("*") == "star"
+  doAssert mangleGpuName("/") == "slash"
+  doAssert mangleGpuName("=") == "eq"
+  doAssert mangleGpuName("+=") == "plus_eq"
+  doAssert mangleGpuName("*=") == "star_eq"
+  doAssert mangleGpuName("<") == "lt"
+  doAssert mangleGpuName(">") == "gt"
+  doAssert mangleGpuName("..") == "dot_dot"
+  doAssert mangleGpuName("$") == "dollar"
+  doAssert mangleGpuName("myProc") == "myProc"
+  doAssert mangleGpuName("9lives") == "X9lives"
+  echo "  OK — mangleGpuName: Nim's per-character mapping"
 
 # ═══════════════════════════════════════════════════════════════════════
-# 6. mangledHashName — chars 8 positions apart must not collide
+# 7. mangledHashName — chars 8 positions apart must not collide
 # ═══════════════════════════════════════════════════════════════════════
 static:
   # the old XOR-into-byte-lanes hash mapped both to the same value
