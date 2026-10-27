@@ -10,6 +10,7 @@ import std/typetraits
 import workspace/crucible
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import ./tile_foreach
 
 # ############################################################
 #
@@ -88,6 +89,41 @@ template tile*(T: typedesc, shape: tuple): typedesc =
   tile(T, make_layout(shape))
 
 # ═══════════════════════════════════════════════════════════════
+#  Initialization
+# ═══════════════════════════════════════════════════════════════
+
+proc zero*(T: typedesc): T {.inline.} =
+  when T is float16: cast[T](0'u16)
+  elif T is bfloat16: cast[T](0'u16)
+  else: T(0)
+
+proc negInf*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0xFC00'u16)
+  elif T is bfloat16:
+    cast[T](0xFF80'u16)
+  else:
+    T(-Inf)
+
+func zeros*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = zero(a.T)
+
+func negInf*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = negInf(a.T)
+
+# ═══════════════════════════════════════════════════════════════
+#  Tile constructors
+# ═══════════════════════════════════════════════════════════════
+
+proc zeros*(T: typedesc[Tile]): T {.inline.} =
+  zero(result)
+
+proc negInf*(T: typedesc[Tile]): T {.inline.} =
+  negInf(result)
+
+# ═══════════════════════════════════════════════════════════════
 #  Tile geometry
 # ═══════════════════════════════════════════════════════════════
 
@@ -101,19 +137,10 @@ template getTileGrid*(geom: Layout): auto =
   geom.shape[1]
 
 # ═══════════════════════════════════════════════════════════════
-#  Sizes and fill values
-# ═══════════════════════════════════════════════════════════════
-
-template zero*(T: typedesc): untyped =
-  when T is float16: cast[T](0'u16)
-  elif T is bfloat16: cast[T](0'u16)
-  else: T(0)
-
-# ═══════════════════════════════════════════════════════════════
 #  Launch mapping
 # ═══════════════════════════════════════════════════════════════
 
-template getLocalTileID*(gridShape: IntOrIntTuple): auto =
+proc getLocalTileID*(gridShape: IntOrIntTuple): auto {.inline.} =
   ## Squadron position mapped to a flat index over the tile grid
   ## through the fleet layout.
   let (w, h, d) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
