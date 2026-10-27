@@ -130,7 +130,7 @@ func negInf*(a: var Tile) {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 func zeros*(T: typedesc[Tile]): T {.inline.} =
-  zero(result)
+  zeros(result)
 
 func negInf*(T: typedesc[Tile]): T {.inline.} =
   negInf(result)

@@ -227,7 +227,7 @@ proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layo
       {.unroll.}
       dst.data[i] = partial[keptRank(l, axis, i)]
 
-proc sum*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc sum*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Sums one axis of the register tile `src` into `dst`, one axis sum per kept coordinate per lane.
   ##
   ## Precondition:
@@ -248,7 +248,7 @@ proc sum*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St],
   reduceIntoPartials(`+`, zero, partial, src, l, axis, kc, span)
   finalReduce(dst, l, axis, kc, partial)
 
-proc max*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc max*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Takes the maximum of one axis of the register tile `src` into `dst`, one axis maximum per kept
   ## coordinate per lane.
   ##
@@ -291,3 +291,16 @@ proc min*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St],
   var partial: array[kc, T]
   reduceIntoPartials(min, posInf, partial, src, l, axis, kc, span)
   finalReduce(dst, l, axis, kc, partial)
+
+func reducedLayout*(l: static Layout, axis: static int): static auto =
+  ## Collapsed stats layout of the axis reduce over the thread->value map layout
+  ## `l` at `axis`, one value per kept coordinate per lane:
+  ## - axis 1: (1, (kept, 1))
+  ## - axis 0: (1, (1, kept))
+  ##
+  ## Example: the attention's running row stats over the QK map:
+  ##   const rowStatsL = reducedLayout(qkMap.layout, 1)
+  when axis == 1:
+    make_layout((1, (Int[keptCount(l, axis)](), 1)))
+  else:
+    make_layout((1, (1, Int[keptCount(l, axis)]())))

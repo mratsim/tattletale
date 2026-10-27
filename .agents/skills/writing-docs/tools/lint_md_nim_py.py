@@ -211,6 +211,17 @@ INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
 
+# The reduction-call-syntax rule. Tile axis reductions read on their source:
+# qk.max(dst, axis = 1, map). A plain dst-first call hides which operand
+# reduces, a positional int hides which axis collapses. The three-arg shape
+# keeps scalar max(a, b) and clamp forms (x.max(0)) exempt.
+REDUCE_PLAIN_CALL_RE = re.compile(
+    r"(?<![.\w])(?:max|sum)\s*\(\s*[\w.`\[\]]+\s*,\s*[\w.`\[\]]+\s*,\s*\d")
+REDUCE_POS_AXIS_RE = re.compile(
+    r"\.\s*(?:max|sum)\s*\([^,()]+,\s*\d+\s*,")
+REDUCE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+(?:max|sum)\*?\s*[\(\[=:]")
+
 # The crucible Int-identifier rule. `Int` is a downstream (ceramic) type
 # name: crucible does not know ceramic, gtStatic is the only compile-time
 # value the IR carries. Fires on Nim code with string literals included,
@@ -527,6 +538,10 @@ RULES = {
                             "a multi-step flow described in prose or bullets with no diagram"),
     "how-narration": Rule("how-narration", False,
                           "a doc narrates the how: \"This function...\", \"we iterate\", \"make sure\""),
+    "comment-the": Rule("comment-the", True,
+                         "a comment opens on the definite article, the article is warranted only for a unique noun, clear from context, open on the noun"),
+    "comma-the": Rule("comma-the", False,
+                       "a comma-the appositive, the definite article is warranted only for a unique noun, clear from context"),
     "hidden-context": Rule("hidden-context", False,
                            "an advisory hidden-context word (\"mirrors\"), the audience is a CS undergraduate that just cloned the repo and want to understand usage"),
     "module-header-length": Rule("module-header-length", False,
@@ -551,6 +566,8 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "reduction-call-syntax": Rule("reduction-call-syntax", True,
+                                  "a tile axis reduction in plain dst-first call syntax or with a positional axis, use src.max(dst, axis = <axis>, map)"),
     "dump-identifier": Rule("dump-identifier", True,
                             "an identifier carrying dump in crucible or ceramic Nim code, "
                             "dump mechanisms are for debugging only and do not make it "
@@ -1202,6 +1219,12 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             "prose line is %d chars, cap is %d" % (len(c), PROSE_CAP)))
     if ";" in bare:
         findings.append(Finding(path, n, "semicolon", "semicolon in prose"))
+    if kind == "hash" and COMMENT_THE_OPEN_RE.match(c):
+        findings.append(Finding(
+            path, n, "comment-the",
+            "a comment opens on the definite article, open on the noun, "
+            "the article is warranted only for a unique noun, clear from "
+            "context"))
     if "—" in c or "–" in c:
         findings.append(Finding(path, n, "em-dash", "em-dash in prose"))
     low = bare.lower()
@@ -1220,6 +1243,8 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     _pattern_findings(path, n, c, HOW_NARRATION_RE, "how-narration",
                       findings, warning=True)
     _pattern_findings(path, n, c, HIDDEN_CONTEXT_RE, "hidden-context",
+                      findings, warning=True)
+    _pattern_findings(path, n, c, COMMA_THE_RE, "comma-the",
                       findings, warning=True)
     if ESCAPE_SEQ.search(bare):
         findings.append(Finding(
@@ -1733,6 +1758,18 @@ DESIGN_NARRATION_RE = re.compile(
     r"\b(?:because|instead of|rather than|which is why)\b"
     r"|\b(?:declared|defined)\s+(?:ahead|before|after|above|below)\b"
     r"|\band not\b|\bbut not\b", re.IGNORECASE)
+COMMA_THE = [
+    (r",\s+the\b",
+     "the definite article is warranted only for a unique noun, clear "
+     "from context"),
+]
+COMMA_THE_RE = _compile_table(COMMA_THE, True)
+
+# A comment opening on the definite article presumes a uniqueness the
+# reader cannot verify, open on the noun instead. The content arrives
+# stripped of the # marks. Doc lines open on The via the-opener already,
+# this covers hash comments.
+COMMENT_THE_OPEN_RE = re.compile(r"^[Tt]he\b")
 
 
 def nim_block_comment_lines(text):
@@ -1865,6 +1902,18 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if REDUCE_PLAIN_CALL_RE.search(code) \
+                        and not REDUCE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "reduction-call-syntax",
+                        "axis reduction in plain dst-first call syntax, use "
+                        "the method call src.max(dst, axis = <axis>, map)"))
+                if REDUCE_POS_AXIS_RE.search(code) \
+                        and not REDUCE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "reduction-call-syntax",
+                        "the axis argument is positional, name it: "
+                        "axis = <axis>"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)

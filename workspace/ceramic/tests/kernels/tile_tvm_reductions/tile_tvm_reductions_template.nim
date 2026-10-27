@@ -82,7 +82,7 @@ proc sumKernel*(dst, src: distinct TensorView, mma: static TiledMma, axis: stati
     acc.zeros()
     for t in 0 ..< tiles:
       reg.load(mat, tvm, thrID, (mT, t), padWith = zero(float32))
-      sum(part, reg, 1, tvm)
+      reg.sum(part, axis = 1, tvm)
       for i in 0 ..< tileLen:
         {.unroll.}
         acc.data[i] += part.data[i]
@@ -118,7 +118,7 @@ proc maxKernel*(dst, src: distinct TensorView, mma: static TiledMma, axis: stati
     acc.negInf()
     for t in 0 ..< tiles:
       reg.load(mat, tvm, thrID, (mT, t), padWith = negInf(float32))
-      max(part, reg, 1, tvm)
+      reg.max(part, axis = 1, tvm)
       for i in 0 ..< tileLen:
         {.unroll.}
         acc.data[i] = max(acc.data[i], part.data[i])
