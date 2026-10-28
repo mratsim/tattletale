@@ -27,7 +27,6 @@ const SdpaTile = 32
   ## 32x32x32 mma schedule tile, threadgroups step query rows by it
 
 proc sdpaCheckMeta(meta: SdpaFixtureMetadata, dtype: string, headDim: int, isCausal, windowed: bool) =
-  # fixture metadata must name the combination the caller instantiates
   doAssert meta.dtype == dtype, meta.name & ": dtype " & meta.dtype
   doAssert meta.Dk == headDim and meta.Dv == headDim, meta.name & ": head dim mismatch"
   doAssert meta.causal == isCausal, meta.name & ": causal flag mismatch"
@@ -36,12 +35,10 @@ proc sdpaCheckMeta(meta: SdpaFixtureMetadata, dtype: string, headDim: int, isCau
     "fixture " & meta.name & ": Hq " & $meta.Hq & " is not a multiple of Hkv " & $meta.Hkv
 
 proc sdpaCompare(got, expected: auto, msg: string, lowPrec: bool) =
-  # comparison is f64 against the f32 truth
   let (rtol, abstol) = if lowPrec: (1e-3'f64, 1e-2'f64) else: (1e-5'f64, 1e-4'f64)
   assertAllClose(got.view(), expected.view(), rtol = rtol, abstol = abstol, msg = msg)
 
 proc sdpaLoadAndBridge[E](engine: E, Elem: typedesc, meta: SdpaFixtureMetadata): auto =
-  ## Loads the four fixture tensors of `meta` in `Elem`, verifies the recorded checksums and bridges them to the engine
   let
     qh = loadFixtureTensor(SdpaFixturesDir / meta.name, "q.bin",
                            (meta.B, meta.Hq, meta.L, meta.Dk), Elem)
@@ -52,46 +49,39 @@ proc sdpaLoadAndBridge[E](engine: E, Elem: typedesc, meta: SdpaFixtureMetadata):
     oh = makeHostTensor(Elem, (meta.B, meta.Hq, meta.L, meta.Dv), LayoutRight)
     expected = loadFixtureTensor(SdpaFixturesDir / meta.name, "o.bin",
                                  meta.expectedShape, float32)
-  # loaded bytes match the generator's recorded per-file checksums
   doAssert xorHash(qh) == meta.xorhashChecksum("q.bin"), meta.name & ": q.bin xorhash mismatch"
   doAssert xorHash(kh) == meta.xorhashChecksum("k.bin"), meta.name & ": k.bin xorhash mismatch"
   doAssert xorHash(vh) == meta.xorhashChecksum("v.bin"), meta.name & ": v.bin xorhash mismatch"
   doAssert xorHash(expected) == meta.checksum, meta.name & ": o.bin checksum mismatch"
   (engine.bridge(qh), engine.bridge(kh), engine.bridge(vh), engine.bridge(oh), oh, expected)
 
-proc replayFixture*(Elem: typedesc, HeadDim: static int, isCausal, windowed: static bool, names: openArray[string]) =
-  ## Bridges, launches and compares each fixture of one combination
-  var ran = 0
-  block:
-    var engine = newEngine(runMetal)
-    for name in names:
-      let meta = parseSdpaMetadata(SdpaFixturesDir / name)
-      sdpaCheckMeta(meta, $Elem, HeadDim, isCausal, windowed)
-      let (qDev, kDev, vDev, oDev, oh, expected) = sdpaLoadAndBridge(engine, Elem, meta)
-      let
-        scaleVal = meta.scale
-        qTiles = ceil_div(meta.L, SdpaTile)
+proc sdpaCombo*(o, q, k, v: distinct TensorView, scale: float32, Dk, Dv: static int, isCausal, windowed: static bool, windowSize: int = low(int32)) =
+  # Requires export: the launch machinery re-emits the callee name into the importing module.
+  scaled_dot_product_attention(
+    tiledMma(float32, q.T, k.T, SdpaTile, SdpaTile, SdpaTile),
+    tiledMma(float32, o.T, v.T, SdpaTile, SdpaTile, SdpaTile),
+    o, q, k, v, scale, Dk, Dv, isCausal, windowed, windowSize)
 
-      when windowed:
-        engine.launchDeviceFn scaled_dot_product_attention(
-            tiledMma(float32, Elem, Elem, SdpaTile, SdpaTile, SdpaTile),
-            tiledMma(float32, Elem, Elem, SdpaTile, SdpaTile, SdpaTile),
-            oDev, qDev, kDev, vDev, scaleVal, HeadDim, HeadDim, isCausal, windowed,
-            meta.windowSize) do:
-          grid = (qTiles, meta.Hq, meta.B)
-          blk = (32, 1)
-      else:
-        engine.launchDeviceFn scaled_dot_product_attention(
-            tiledMma(float32, Elem, Elem, SdpaTile, SdpaTile, SdpaTile),
-            tiledMma(float32, Elem, Elem, SdpaTile, SdpaTile, SdpaTile),
-            oDev, qDev, kDev, vDev, scaleVal, HeadDim, HeadDim, isCausal, windowed) do:
-          grid = (qTiles, meta.Hq, meta.B)
-          blk = (32, 1)
+proc sdpaReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, isCausal, windowed: static bool, name: string) =
+  let meta = parseSdpaMetadata(SdpaFixturesDir / name)
+  sdpaCheckMeta(meta, $Elem, HeadDim, isCausal, windowed)
+  let (qDev, kDev, vDev, oDev, oh, expected) = sdpaLoadAndBridge(engine, Elem, meta)
+  let
+    scaleVal = meta.scale
+    qTiles = ceil_div(meta.L, SdpaTile)
 
-      engine.copyToHostFromDevice(addr oh.data[0], oDev.data, oh.len())
-      let got = oh.to(float32)
-      sdpaCompare(got, expected, "fixture " & meta.name & " (" & $Elem & ")",
-                  not (Elem is float32))
-      echo "replay ok: ", meta.name, " (", $Elem, ")"
-      ran += 1
-  doAssert ran == names.len
+  engine.launchDeviceFn sdpaCombo(
+      oDev, qDev, kDev, vDev, scaleVal, HeadDim, HeadDim, isCausal, windowed,
+      when windowed: meta.windowSize else: low(int32)) do:
+    grid = (qTiles, meta.Hq, meta.B)
+    blk = (32, 1)
+
+  engine.copyToHostFromDevice(addr oh.data[0], oDev.data, oh.len())
+  let got = oh.to(float32)
+  sdpaCompare(got, expected, "fixture " & meta.name & " (" & $Elem & ")",
+              not (Elem is float32))
+  echo "replay ok: ", meta.name, " (", $Elem, ")"
+
+proc replayFixture*(engine: MetalEngine, Elem: typedesc, HeadDim: static int, isCausal, windowed: static bool, names: openArray[string]) =
+  for name in names:
+    sdpaReplayCase(engine, Elem, HeadDim, isCausal, windowed, name)

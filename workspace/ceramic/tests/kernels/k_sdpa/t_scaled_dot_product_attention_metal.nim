@@ -16,26 +16,27 @@
 import workspace/crucible
 import workspace/ceramic/tests/kernels/k_sdpa/kernel_sdpa_template
 
-proc main() =
-  replayFixture(float32, 16, false, false, ["tiny_f32"])
-  replayFixture(float32, 32, false, false,
+proc replayAllFixtures() =
+  var engine = newEngine(runMetal)
+  engine.replayFixture(float32, 16, false, false, ["tiny_f32"])
+  engine.replayFixture(float32, 32, false, false,
     ["gqa2_f32", "batched_gqa_f32", "cross_attn_f32", "scale_f32"])
-  replayFixture(float32, 64, false, false, ["gqa4_f32", "gqa8_f32"])
-  replayFixture(float32, 32, true, false, ["causal_f32"])
-  replayFixture(float32, 64, true, false, ["gqa8_causal_f32"])
-  replayFixture(float32, 128, true, false, ["d128_causal_f32"])
-  replayFixture(float32, 32, false, true, ["windowed_f32"])
-  replayFixture(float32, 64, true, true, ["causal_window_f32"])
-  replayFixture(float16, 16, false, false, ["tiny_f16"])
-  replayFixture(float16, 32, false, false, ["gqa4_f16"])
-  replayFixture(float16, 64, true, false, ["decode_gqa8_f16"])
-  replayFixture(float16, 32, true, false,
+  engine.replayFixture(float32, 64, false, false, ["gqa4_f32", "gqa8_f32"])
+  engine.replayFixture(float32, 32, true, false, ["causal_f32"])
+  engine.replayFixture(float32, 64, true, false, ["gqa8_causal_f32"])
+  engine.replayFixture(float32, 128, true, false, ["d128_causal_f32"])
+  engine.replayFixture(float32, 32, false, true, ["windowed_f32"])
+  engine.replayFixture(float32, 64, true, true, ["causal_window_f32"])
+  engine.replayFixture(float16, 16, false, false, ["tiny_f16"])
+  engine.replayFixture(float16, 32, false, false, ["gqa4_f16"])
+  engine.replayFixture(float16, 64, true, false, ["decode_gqa8_f16"])
+  engine.replayFixture(float16, 32, true, false,
     ["causal_gqa2_f16", "gqa8_causal_f16"])
-  replayFixture(float16, 32, false, true, ["windowed_f16"])
-  replayFixture(float16, 64, true, true, ["windowed_gqa8_f16"])
-  replayFixture(float16, 64, false, true, ["windowed_decode_f16"])
-  replayFixture(bfloat16, 16, false, false, ["tiny_bf16"])
-  replayFixture(bfloat16, 32, false, false, ["gqa2_bf16"])
+  engine.replayFixture(float16, 32, false, true, ["windowed_f16"])
+  engine.replayFixture(float16, 64, true, true, ["windowed_gqa8_f16"])
+  engine.replayFixture(float16, 64, false, true, ["windowed_decode_f16"])
+  engine.replayFixture(bfloat16, 16, false, false, ["tiny_bf16"])
+  engine.replayFixture(bfloat16, 32, false, false, ["gqa2_bf16"])
   echo "all SDPA fixture replays pass (17 combos, 22 fixtures)"
 
-main()
+replayAllFixtures()
