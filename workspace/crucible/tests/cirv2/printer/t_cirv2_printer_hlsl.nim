@@ -200,7 +200,7 @@ suite "HLSL printer fixtures":
 
   test "push block with a value struct and a scalar, reads through push":
     check abiSrc.contains("struct Push {")
-    check abiSrc.contains("Layout2 ly;")
+    check abiSrc.contains("Layout2_H9W9nAf ly;")
     check abiSrc.contains("float alpha;")
     check abiSrc.contains("push.ly.F0")
     check abiSrc.contains("push.alpha")
