@@ -152,7 +152,7 @@ proc scaled_dot_product_attention*(
       qk.where(band, negInf(float32), qk)        # masked keys read -inf
 
       var m_ij: tile(float32, rowStatsL)         # (MT × 1) row max
-      qk.max(m_ij, axis = 1, qkMap)
+      m_ij.max(qk, axis = 1, qkMap)
       m_ij = max(m_i, m_ij)                      # running row max
       var alpha: tile(float32, rowStatsL)        # rescale factor (MT × 1)
       alpha = m_i - m_ij
@@ -162,7 +162,7 @@ proc scaled_dot_product_attention*(
       qk.exp2()
       l_i *= alpha                               # row-sum rescale
       var l_ij: tile(float32, rowStatsL)         # (MT × 1) row sum
-      qk.sum(l_ij, axis = 1, qkMap)
+      l_ij.sum(qk, axis = 1, qkMap)
       l_i += l_ij
 
       let p = qk.downcast(Q.T)                   # P.to(Q.T), (MT × NT), layout preserved

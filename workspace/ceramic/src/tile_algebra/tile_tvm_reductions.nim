@@ -67,12 +67,12 @@ import ./tile_matmul
 #      │
 #      │ fold: each lane combines the slots that share a kept coordinate
 #      ▼
-#   partial[k] = Σₐ src.data[slot at kept rank k, axis rank a]
+#   partials[k] = Σₐ src.data[slot at kept rank k, axis rank a]
 #      │
 #      │ butterfly: one xor-shuffle pass per tree delta, the lane
 #      │ groups merge pairwise until every lane has every total
 #      ▼
-#   partial[k] = the axis total of kept coordinate k (same on all lanes)
+#   partials[k] = the axis total of kept coordinate k (same on all lanes)
 #      │
 #      │ write: the destination stores one entry per kept coordinate
 #      ▼ dst = the collapsed stats tile or the keepdims register tile
@@ -194,9 +194,9 @@ func checkReduceMap[Sh, St](l: Layout[Sh, St], axis: static int) =
   doAssert slotCount(l) === keptCount(l, axis) * axisSpan(l, axis),
     "axis reduce: the kept and axis coordinates must cover the slots"
 
-template reduceIntoPartials(op, identity: untyped, partial: var array, src: Tile,
+template reducePartials(partials: var array, op, identity: untyped, src: Tile,
     l: static Layout, axis: static int, keptCount, axisSpan: static int) =
-  ## Folds the register tile `src` into the per-lane partials `partial`.
+  ## Folds the register tile `src` into the per-lane partials `partials`.
   ## Phase 1 combines the lane's slots that share a kept coordinate.
   ## Phase 2 merges lane groups pairwise through xor shuffles.
   ## Every lane must call it unconditionally, the merge is a subgroup collective.
@@ -208,14 +208,14 @@ template reduceIntoPartials(op, identity: untyped, partial: var array, src: Tile
   ## Runtime loop variables would emit them as standalone functions rescanning the slots per element.
   const passes = treePasses(l, axis)
   staticFor k, 0, keptCount:
-    partial[k] = identity(typeof(partial[0]))
+    partials[k] = identity(typeof(partials[0]))
     staticFor a, 0, axisSpan:
-      partial[k] = op(partial[k], src.data[static(reduceSlot(l, axis, k, a))])
+      partials[k] = op(partials[k], src.data[static(reduceSlot(l, axis, k, a))])
   staticFor x, 0, passes:
     staticFor k, 0, keptCount:
-      partial[k] = op(partial[k], simd_shuffle_xor(partial[k], static(treeDelta(l, axis, x))))
+      partials[k] = op(partials[k], simd_shuffle_xor(partials[k], static(treeDelta(l, axis, x))))
 
-proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layout[Sh, St], axis: static int, keptCount: static int, partial: array[keptCount, T]) =
+proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layout[Sh, St], axis: static int, keptCount: static int, partials: array[keptCount, T]) =
   ## Stores the per-lane partials into `dst`.
   ## A collapsed stats tile stores one slot per kept coordinate.
   ## A keepdims register tile stores every slot's kept coordinate's total
@@ -223,12 +223,12 @@ proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layo
   when dstLen == keptCount:
     for k in 0 ..< keptCount:
       {.unroll.}
-      dst.data[k] = partial[k]
+      dst.data[k] = partials[k]
   else:
     staticFor i, 0, dstLen:
-      dst.data[i] = partial[static(keptRank(l, axis, i))]
+      dst.data[i] = partials[static(keptRank(l, axis, i))]
 
-proc sum*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc sum*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Sums one axis of the register tile `src` into `dst`, one axis sum per kept coordinate per lane.
   ##
   ## Precondition:
@@ -245,11 +245,11 @@ proc sum*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD],
   static:
     doAssert kc * span == src.data.len,
       "axis reduce: src must be the register tile of map's operand"
-  var partial: array[kc, T]
-  reduceIntoPartials(`+`, zero, partial, src, l, axis, kc, span)
-  finalReduce(dst, l, axis, kc, partial)
+  var partials: array[kc, T]
+  partials.reducePartials(`+`, zero, src, l, axis, kc, span)
+  dst.finalReduce(l, axis, kc, partials)
 
-proc max*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc max*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Takes the maximum of one axis of the register tile `src` into `dst`, one axis maximum per kept
   ## coordinate per lane.
   ##
@@ -267,9 +267,9 @@ proc max*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD],
   static:
     doAssert kc * span == src.data.len,
       "axis reduce: src must be the register tile of map's operand"
-  var partial: array[kc, T]
-  reduceIntoPartials(max, negInf, partial, src, l, axis, kc, span)
-  finalReduce(dst, l, axis, kc, partial)
+  var partials: array[kc, T]
+  partials.reducePartials(max, negInf, src, l, axis, kc, span)
+  dst.finalReduce(l, axis, kc, partials)
 
 proc min*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Takes the minimum of one axis of the register tile `src` into `dst`, one axis minimum per kept
@@ -289,9 +289,9 @@ proc min*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St],
   static:
     doAssert kc * span == src.data.len,
       "axis reduce: src must be the register tile of map's operand"
-  var partial: array[kc, T]
-  reduceIntoPartials(min, posInf, partial, src, l, axis, kc, span)
-  finalReduce(dst, l, axis, kc, partial)
+  var partials: array[kc, T]
+  partials.reducePartials(min, posInf, src, l, axis, kc, span)
+  dst.finalReduce(l, axis, kc, partials)
 
 func reducedLayout*(l: static Layout, axis: static int): static auto =
   ## Collapsed stats layout of the axis reduce over the thread->value map layout
