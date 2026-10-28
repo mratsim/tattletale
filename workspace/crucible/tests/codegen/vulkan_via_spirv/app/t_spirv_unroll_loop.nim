@@ -69,7 +69,7 @@ proc runTest() =
       for line in disOut.splitLines():
         if "OpLoopMerge" in line:
           inc mergeCount
-          doAssert line.contains(pair.control),
+          doAssert line.splitWhitespace().contains(pair.control),
             pair.name & ": expected LoopControl " & pair.control & ", got: " & line
       doAssert mergeCount > 0,
         pair.name & ": no OpLoopMerge in the disassembly:\n" & disOut
