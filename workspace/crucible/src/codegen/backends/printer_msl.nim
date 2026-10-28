@@ -14,10 +14,11 @@
 ## - coordinate builtins: attributed `uint3`/`uint` params, no slot
 ##
 ## Other emission rules:
-## - `{.smem.}` kernel locals become trailing `threadgroup` parameters through the MSL lowering pass, no buffer slot
+## - `{.smem.}` kernel locals stay in-body: the MSL lowering pass keeps them.
+##   The printer emits the kernel-scope `threadgroup` storage Metal allocates per threadgroup
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
 ##   program-scope `constant` output, a const_mem survivor refuses at the printer,
-##   a surviving smem local drops, the Metal compiler rejects the dangling read
+##   a smem local outside a kernel body drops, Metal rejects the dangling read
 ## - `jmp` to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
 ## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
@@ -220,6 +221,39 @@ proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
+proc spellMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
+  ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
+  ##
+  ## Shared by expression- and statement-position calls: the statement path
+  ## bypasses `printExpr`, so a barrier printed as a bare name would lose
+  ## its memory flags, text MSL refuses to compile.
+  ##
+  ## `args` contains the already-printed argument texts.
+  if callee.kind != eSym:
+    return ""
+  # builtin vocabulary dispatches on the typed kinds, never on names
+  case callee.synchroBuiltin
+  of sbkThreadgroupBarrier:
+    return "threadgroup_barrier(mem_flags::mem_threadgroup)"
+  of sbkThreadgroupBarrierDevice:
+    return "threadgroup_barrier(mem_flags::mem_device)"
+  of sbkNone: discard
+  case callee.reductionBuiltin
+  of rbkReduceAdd:
+    return "simd_sum(" & args.join(", ") & ")"
+  of rbkReduceMax:
+    return "simd_max(" & args.join(", ") & ")"
+  of rbkNone: discard
+  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+    # device float atomics: the pointer casts to the atomic type
+    # device address space implies the scope, relaxed order
+    return "atomic_fetch_add_explicit((volatile device atomic_float*)" &
+      "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
+  if callee.builtin and MslConversionBuiltinNames.hasKey(callee.name):
+    return MslConversionBuiltinNames.getOrDefault(callee.name) % args.join(", ")
+  return ""
+
+
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   if ctx.failing():
     return ""
@@ -329,28 +363,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     var args: seq[string]
     for a in e.args:
       args.add ctx.printExpr(a)
-    if e.callee.kind == eSym:
-      # builtin vocabulary dispatches on the typed kinds, never on names
-      case e.callee.synchroBuiltin
-      of sbkThreadgroupBarrier:
-        return "threadgroup_barrier(mem_flags::mem_threadgroup)"
-      of sbkThreadgroupBarrierDevice:
-        return "threadgroup_barrier(mem_flags::mem_device)"
-      of sbkNone: discard
-      case e.callee.reductionBuiltin
-      of rbkReduceAdd:
-        return "simd_sum(" & args.join(", ") & ")"
-      of rbkReduceMax:
-        return "simd_max(" & args.join(", ") & ")"
-      of rbkNone: discard
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        # device float atomics: the pointer casts to the atomic type
-        # device address space implies the scope, relaxed order
-        return "atomic_fetch_add_explicit((volatile device atomic_float*)" &
-          "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-      if e.callee.builtin and MslConversionBuiltinNames.hasKey(e.callee.name):
-        return MslConversionBuiltinNames.getOrDefault(e.callee.name) %
-          args.join(", ")
+    let builtinTxt = spellMslBuiltinCall(e.callee, args)
+    if builtinTxt.len > 0:
+      return builtinTxt
     return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -368,9 +383,13 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   case s.kind
   of sVar:
     if s.space == caThreadgroup:
-      # a smem local outside the pass's top-level walk drops, MSL has no
-      # function-scope threadgroup storage
-      return ""
+      # kernel-scope threadgroup storage: the MSL lowering pass keeps the kernel's
+      # top-level locals here, deeper survivors drop
+      result = pad & "threadgroup " & spellMslType(s.declType, s.name, false)
+      if s.init != nil:
+        result &= " = " & ctx.printExpr(s.init)
+      result &= ";"
+      return
     if s.space == caConstant:
       # MSL lowering pass relocates const_mem locals at every scope,
       # a survivor here was never relocated
@@ -435,11 +454,17 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sDiscard:
     result = ""
   of sCall:
-    var parts: seq[string]
-    parts.add ctx.printExpr(s.callCallee)
+    let calleeName =
+      if s.callCallee.kind == eSym: s.callCallee.name
+      else: ctx.printExpr(s.callCallee)
+    var args: seq[string]
     for a in s.callArgs:
-      parts.add ctx.printExpr(a)
-    result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+      args.add ctx.printExpr(a)
+    let builtinTxt = spellMslBuiltinCall(s.callCallee, args)
+    if builtinTxt.len > 0:
+      result = pad & builtinTxt & ";"
+    else:
+      result = pad & calleeName & "(" & args.join(", ") & ");"
   of sAsm:
     # inline assembly: the verbatim template spliced with the CIRv2 names
     var text = ""

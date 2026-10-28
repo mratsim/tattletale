@@ -7,7 +7,8 @@
 
 ## MSL lowering fixtures: hand-built CIRv2 modules run through the registered
 ## Metal pipeline (the registry `codegenMetal` builds), the per-target lowering
-## transform relocates `{.smem.}` kernel locals into trailing `threadgroup` parameters.
+## transform keeps `{.smem.}` kernel locals in-body as kernel-scope `threadgroup`
+## storage and drops device-function smem locals.
 ##
 ## Like the printer fixtures, the modules build and run at compile time:
 ## the pipeline and the printer are the same VM code the `metal:` macro runs.
@@ -15,7 +16,7 @@
 ## Without the MSL lowering pass the emission fixtures fail, the bare pipeline tests check the raw output the pass replaces.
 ##
 ## No refusal lives in the pass, today's smem handling discards an initializer
-## on a relocated local and drops a device-function smem local without any parameter.
+## on a kept local and drops a device-function smem local without any parameter.
 ## Device-function output has a dedicated same-text test.
 ##
 ## - Run: `nim c -r --outdir:build/tests tests/cirv2/printer/t_cirv2_lowering_msl.nim`
@@ -57,7 +58,7 @@ proc mslPipeline(m: CirModule): tuple[src: string, err: string] =
 
 proc barePipeline(m: CirModule): tuple[src: string, err: string] =
   ## Pipeline with the MSL lowering pass skipped, what the printer alone
-  ## does with the smem shapes the pass relocates.
+  ## does with the smem shapes the pass rewrites.
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
@@ -77,7 +78,7 @@ proc barePipeline(m: CirModule): tuple[src: string, err: string] =
 
 proc buildSmemModule(): CirModule =
   ## kernel: a smem scratch array and a smem scalar, read and written by the kernel body,
-  ## both destined for trailing `threadgroup` parameters
+  ## both kept in-body as kernel-scope `threadgroup` storage
   let f32 = tFloat(32)
   let i32 = tInt(32)
   let aptrD = tAptr(caDevice, f32)
@@ -96,9 +97,12 @@ proc buildSmemModule(): CirModule =
   moduleD("lower_smem", @[], @[kern])
 
 proc buildSmemBuiltinModule(): CirModule =
-  ## kernel: a smem array plus a coordinate builtin read, the signature order
-  ## is regular parameters with buffer slots, the threadgroup parameters,
-  ## then the builtin attributed parameters
+  ## kernel: a smem array plus a coordinate builtin read.
+  ##
+  ## Signature order:
+  ## - regular parameters with buffer slots
+  ## - then the builtin attributed parameters
+  ## - no threadgroup parameter is appended
   let f32 = tFloat(32)
   let u32 = tUint(32)
   let i32 = tInt(32)
@@ -161,24 +165,24 @@ const
 
 suite "MSL lowering fixtures":
 
-  test "smem locals relocate into trailing threadgroup parameters":
+  test "smem locals stay in-body as kernel-scope threadgroup storage":
     check smemPipe.err == ""
-    # array local takes the pointer form, the scalar local the reference form,
-    # both trail the regular parameter and take no buffer slot
-    check "kernel void kern_lower_smem(device float* dst [[buffer(0)]]," &
-      " threadgroup float* scratch, threadgroup float& scale)" in smemPipe.src
-    # declarations left the kernel body, the reads stay
-    check "threadgroup float" notin smemPipe.src.replace(
-      "threadgroup float* scratch, threadgroup float& scale", "")
+    # only the regular parameter is kept, no threadgroup parameter is appended
+    check "kernel void kern_lower_smem(device float* dst [[buffer(0)]])" in smemPipe.src
+    # smem declarations stay in the kernel body, Metal allocates the storage
+    check "threadgroup float scratch[8];" in smemPipe.src
+    check "threadgroup float scale;" in smemPipe.src
     check "scratch[0] = (scale * 3.0f);" in smemPipe.src
     check "dst[0] = scratch[0];" in smemPipe.src
     check smemVerified == ""
 
-  test "threadgroup parameters sit before the builtin attributed parameters":
+  test "no threadgroup parameter is appended, builtins follow the regular parameters":
     check smemBuiltinPipe.err == ""
-    check "device float* dst [[buffer(0)]], threadgroup uint* scratch," &
+    check "device float* dst [[buffer(0)]]," &
       " uint3 thread_position_in_grid [[thread_position_in_grid]])" in
       smemBuiltinPipe.src
+    # smem declaration prints in the body, not in the signature
+    check "threadgroup uint scratch[4];" in smemBuiltinPipe.src
 
   test "device function smem handling matches the bare printer":
     ## Pass output on a device function: the smem declaration drops and no
@@ -187,10 +191,11 @@ suite "MSL lowering fixtures":
     check deviceSmemPipe.src == deviceSmemBare
     check "threadgroup" notin deviceSmemPipe.src
 
-  test "bare pipeline leaves no threadgroup parameter behind":
-    ## Control for the transform: without the pass the smem declarations drop
-    ## at the printer and the kernel signature keeps only the regular parameter.
-    check "threadgroup" notin bareSmemSrc
+  test "bare pipeline prints the smem local, the pass only discards its initializer":
+    ## Control for the transform: without the pass the printer alone already
+    ## emits the kernel-scope threadgroup storage. The pass discards any
+    ## initializer a relocated local must not carry.
+    check "threadgroup float scratch[8];" in bareSmemSrc
     check "kernel void kern_lower_smem(device float* dst [[buffer(0)]])" in
       bareSmemSrc
 

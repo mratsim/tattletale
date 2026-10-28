@@ -138,18 +138,35 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
       let elseKnown = elseTgt.len > 0 and ctx.labPos.hasKey(elseTgt)
 
       if thenTgt.len == 0 and elseTgt.len == 0:
-        # both sides real (or empty): plain if/else, the bodies restructure
         var ite = s
-        if s.thenBody.len > 0:
+        if s.elseBody.len == 0 and s.thenBody.len > 0 and
+            s.thenBody[^1].kind == sJmp and
+            s.thenBody[^1].jmpTarget != ctx.exitL and
+            s.thenBody[^1].jmpTarget != ctx.contL:
+          # elif chain shape: a real then side ending in the shared merge jump.
+          # Everything after it is the else side.
+          # Its merge label sits later in this list (its lab closes the chain),
+          # or outside it for a nested chain slice closed by the enclosing list.
+          let m = s.thenBody[^1].jmpTarget
+          let eElse = if ctx.labPos.hasKey(m): ctx.labPos[m] else: stmts.len
           var sub = ctx
-          ite.thenBody = sub.structurizeList(s.thenBody)
+          ite.thenBody = sub.structurizeList(s.thenBody[0 ..< s.thenBody.len - 1])
           ctx.err = sub.err
-        if s.elseBody.len > 0:
-          var sub = ctx
-          ite.elseBody = sub.structurizeList(s.elseBody)
-          ctx.err = sub.err
-        result.add ite
-        i.inc
+          ite.elseBody = ctx.structurizeBlock(stmts, i + 1, eElse)
+          result.add ite
+          i = if eElse < stmts.len: eElse + 1 else: eElse
+        else:
+          # both sides real (or empty): plain if/else, each body restructures
+          if s.thenBody.len > 0:
+            var sub = ctx
+            ite.thenBody = sub.structurizeList(s.thenBody)
+            ctx.err = sub.err
+          if s.elseBody.len > 0:
+            var sub = ctx
+            ite.elseBody = sub.structurizeList(s.elseBody)
+            ctx.err = sub.err
+          result.add ite
+          i.inc
       elif thenKnown and elseKnown:
         # Cx test: two jump targets, both labels in this list. One block is
         # exactly the rest of the condition chain ending at the other branch's
@@ -220,31 +237,6 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
           continue
         result.add s  # guard's break, named at emission
         i.inc
-      else:
-        # a real body over an empty side: if / if-not, or an elif chain
-        var ite = s
-        if s.elseBody.len == 0 and s.thenBody.len > 0 and
-            s.thenBody[^1].kind == sJmp and ctx.labPos.hasKey(s.thenBody[^1].jmpTarget):
-          # chain shape: the rest of the list up to the merge is the else
-          let m = s.thenBody[^1].jmpTarget
-          let eElse = ctx.labPos[m]
-          var sub = ctx
-          ite.thenBody = sub.structurizeList(s.thenBody[0 ..< s.thenBody.len - 1])
-          ctx.err = sub.err
-          ite.elseBody = ctx.structurizeBlock(stmts, i + 1, eElse)
-          result.add ite
-          i = eElse + 1
-        else:
-          if s.thenBody.len > 0:
-            var sub = ctx
-            ite.thenBody = sub.structurizeList(s.thenBody)
-            ctx.err = sub.err
-          if s.elseBody.len > 0:
-            var sub = ctx
-            ite.elseBody = sub.structurizeList(s.elseBody)
-            ctx.err = sub.err
-          result.add ite
-          i.inc
     of sLoop:
       # exit label sits right after the loop, the continue label inside
       if i + 1 >= stmts.len or stmts[i + 1].kind != sLab:

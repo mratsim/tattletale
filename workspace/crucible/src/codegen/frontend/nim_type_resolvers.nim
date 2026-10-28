@@ -51,6 +51,49 @@ func sanitizeIdent*(s: string): string =
   for c in s:
     result.add(if c in {'a'..'z', 'A'..'Z', '0'..'9', '_'}: c else: '_')
 
+func mangleOperatorName*(s: string): string =
+  ## Returns `s` with operator punctuation replaced by words:
+  ## `*=` becomes `star_eq`, `+` becomes `plus`.
+  ##
+  ## Identifier characters pass through unchanged, any other character
+  ## becomes `X` plus its two-digit hex code.
+  ##
+  ## Callee names use this mapping: an operator is not a legal identifier
+  ## in any target language, and distinct operator overloads over the same
+  ## operand types keep distinct callee names.
+  result = newStringOfCap(s.len)
+  if result.len > 0 and s[0] in Digits:
+    result.add "X"
+  template special(word: string) =
+    if result.len > 0 and result[^1] != '_':
+      result.add '_'
+    result.add word
+  for c in s:
+    case c
+    of 'a'..'z', '0'..'9', 'A'..'Z', '_':
+      result.add c
+    of '$': special "dollar"
+    of '%': special "percent"
+    of '&': special "amp"
+    of '^': special "roof"
+    of '!': special "emark"
+    of '?': special "qmark"
+    of '*': special "star"
+    of '+': special "plus"
+    of '-': special "minus"
+    of '/': special "slash"
+    of '\\': special "backslash"
+    of '=': special "eq"
+    of '<': special "lt"
+    of '>': special "gt"
+    of '~': special "tilde"
+    of ':': special "colon"
+    of '.': special "dot"
+    of '@': special "at"
+    of '|': special "bar"
+    else:
+      special "X" & toHex(ord(c), 2)
+
 func deriveStructName*(n: NimNode): string =
   ## Returns the readable base of a struct name: a generic instantiation
   ## contributes its base name and each argument's name.
@@ -68,7 +111,11 @@ func deriveStructName*(n: NimNode): string =
   of nnkBracketExpr:
     result = deriveStructName(n[0])
     for i in 1 ..< n.len:
-      result.add("_" & deriveStructName(n[i]))
+      if n[i].kind in nnkIntLit .. nnkUInt64Lit:
+        # v1 name compatibility: static integer arguments join without a separator, `FixMe[8]` derives `FixMe8`
+        result.add(deriveStructName(n[i]))
+      else:
+        result.add("_" & deriveStructName(n[i]))
   of nnkObjectTy, nnkTupleTy, nnkTupleConstr:
     result = sanitizeIdent(n.repr)
   else:

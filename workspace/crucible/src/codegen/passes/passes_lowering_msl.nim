@@ -12,22 +12,18 @@
 ##
 ##   kernel body → mslHoistProgramScopeConstants → mslRewriteSmemLocals → printed MSL source
 ##
-## Metal has no function-scope threadgroup storage: a kernel's `{.smem.}`
-## local becomes a trailing `threadgroup` parameter, staged by the launch
-## through the threadgroup memory argument, not a buffer slot.
-##
 ## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
 ##   `CirModule.globals` in encounter order, every proc and scope depth covered,
 ##   the printer emits the relocated declarations as program-scope `constant`
 ##   variables
 ## - program-scope `constant` storage is visible to all functions, a device
 ##   function reads the constants of the kernels it serves
-## - `mslRewriteSmemLocals`: top-level `{.smem.}` locals leave every proc body,
-##   a kernel gains one `threadgroup` parameter per local in body order while
-##   a device function gains none
-## - the signature order is regular parameters, threadgroup parameters,
-##   builtin attributed parameters, and only the regular parameters take
-##   buffer slots
+## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays
+##   in-body, Metal allocates the kernel-scope `threadgroup` storage,
+##   no launch-time staging
+## - a device function's top-level `{.smem.}` local drops: the inline splice
+##   already merged the callee's body into the calling kernel
+## - an initializer on a `{.smem.}` local is discarded
 ##
 ## Refusal homes:
 ## - a const_mem local without an initializer refuses in the pass, the printer
@@ -58,7 +54,7 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
     run = mslHoistProgramScopeConstants
   )
   reg.register("mslRewriteSmemLocals", pkTransform, phaseMain,
-    "Relocates smem kernel locals into trailing threadgroup kernel parameters",
+    "Keeps kernel smem locals in-body as threadgroup storage, drops device-fn smem locals",
     run = mslRewriteSmemLocals
   )
 
@@ -83,29 +79,30 @@ proc mslHoistProgramScopeConstants(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =
-  ## Relocates the top-level `{.smem.}` locals of every proc, one trailing
-  ## `threadgroup` parameter per relocated local:
+  ## Rewrites the top-level `{.smem.}` locals of every proc:
   ##
-  ## - kernels gain one parameter per local in body order, a threadgroup
-  ##   pointer to the local's declared type
-  ## - the printer reads the pointee's array-ness to emit the pointer form
-  ##   for an array local and the reference form otherwise
-  ## - device functions lose the declaration without gaining a parameter,
-  ##   their body keeps referencing the dropped name
-  ## - an initializer on a relocated local is discarded
+  ## - a kernel keeps the local in its body: the printer emits kernel-scope
+  ##   `threadgroup` storage Metal allocates per threadgroup,
+  ##   no launch-time staging and no parameter
+  ## - a device function loses the declaration without gaining a parameter:
+  ##   the inline splice already merged the callee's body into the calling kernel,
+  ##   which owns the arena
+  ## - an initializer on a `{.smem.}` local is discarded
   ##
-  ## - the relocation covers top-level body locals only, a nested one refuses
+  ## - the rewrite covers top-level body locals only, a nested one refuses
   ##   at the printer
-  ## - the pass runs after the reserved-word rename, the appended parameters
-  ##   use the renamed names their body already references
+  ## - the pass runs after the reserved-word rename: the kept locals carry
+  ##   the renamed names their body already references
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:
       let s = fn.body[i]
       if s.kind == sVar and s.space == caThreadgroup:
         if fn.isKernel:
-          fn.params.add CirParam(name: s.name, typ: tPtr(caThreadgroup, s.declType))
-        fn.body.delete i
+          s.init = nil
+          i.inc
+        else:
+          fn.body.delete i
       else:
         i.inc
   return ""

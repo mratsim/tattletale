@@ -787,7 +787,10 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
     ctx.indent.dec
     result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
+    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte:
+      # an else side of one ite is the elif chain, printed as `else if`
+      result &= " else " & ctx.printStmt(s.elseBody[0], exitL, contL)
+    elif s.elseBody.len > 0:
       ctx.indent.inc
       let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
       ctx.indent.dec
@@ -849,6 +852,25 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""
 
+proc exprHasCall(e: CirExpr): bool =
+  ## True when any subexpression of `e` is a call.
+  ##
+  ## A call may write memory. A conditional expression can evaluate
+  ## both variants on some hardware, so only call-free variants may take
+  ## the conditional form.
+  if e == nil:
+    return false
+  if e.kind == eCall:
+    return true
+  for c in e.getExprChildren():
+    if exprHasCall(c):
+      return true
+
+proc isSelectArm(s: CirStmt, name: string): bool =
+  ## True when `s` assigns the local `name` exactly once from a plain expression,
+  ## matching one variant of a hoisted if-expression.
+  s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.name == name and s.rhs != nil
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
   ## Prints one statement list. Plain statements take the caller's loop context,
   ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
@@ -873,6 +895,28 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed
+    elif s.kind == sVar and s.init == nil and
+        s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and
+        i + 1 < stmts.len and stmts[i + 1].kind == sIte and
+        stmts[i + 1].thenBody.len == 1 and stmts[i + 1].elseBody.len == 1 and
+        stmts[i + 1].thenBody[0].isSelectArm(s.name) and
+        stmts[i + 1].elseBody[0].isSelectArm(s.name) and
+        not exprHasCall(stmts[i + 1].cond) and
+        not exprHasCall(stmts[i + 1].thenBody[0].rhs) and
+        not exprHasCall(stmts[i + 1].elseBody[0].rhs):
+      # a hoisted if-expression temp with one assignment per variant prints
+      # as the conditional expression the source wrote
+      ctx.indent.inc
+      let condTxt = ctx.printExpr(stmts[i + 1].cond)
+      let thenTxt = ctx.printExpr(stmts[i + 1].thenBody[0].rhs)
+      let elseTxt = ctx.printExpr(stmts[i + 1].elseBody[0].rhs)
+      ctx.indent.dec
+      if ctx.failing():
+        txt = ""
+      else:
+        txt = spaces(ctx.indent * 2) & ctx.spellHlslDecl(s.declType, s.name) &
+          " = " & condTxt & " ? " & thenTxt & " : " & elseTxt & ";"
+      i.inc  # consumes the ite with the temp it assigns
     else:
       txt = ctx.printStmt(s, exitL, contL)
     if txt.len > 0:

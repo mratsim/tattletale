@@ -107,10 +107,12 @@ static:
   doAssert "(add (f +32)" notin productBody
 
 static:
-  # both operator callees harvest their own proc: `++` and `--` erase to one
-  # signature and sanitize to one base `__`, only the callee's definition
-  # identity separates the names
-  let opSecs = opTrace.procSections("(proc __")
+  # both operator callees harvest their own proc: `++` and `--` erase to one signature.
+  # Callee names plus_plus_<hash> and minus_minus_<hash> keep the harvests distinct.
+  var opSecs: seq[ProcSection] = @[]
+  for s in opTrace.procSections("(proc "):
+    if s.name.startsWith("plus_plus_") or s.name.startsWith("minus_minus_"):
+      opSecs.add(s)
   doAssert opSecs.len == 2,
     "expected two harvested operator procs, got: " & $opSecs
   doAssert opSecs[0].name != opSecs[1].name,
@@ -121,10 +123,12 @@ static:
   var targets: seq[string]
   var i = 0
   while true:
-    i = opTrace.find("(call __", i)
+    i = opTrace.find("(call ", i)
     if i < 0:
       break
-    targets.add(opTrace.identAfter(i, "(call "))
+    let target = opTrace.identAfter(i, "(call ")
+    if target.startsWith("plus_plus_") or target.startsWith("minus_minus_"):
+      targets.add(target)
     i = i + 1
   doAssert targets.len == 2,
     "expected two operator calls, got: " & $targets

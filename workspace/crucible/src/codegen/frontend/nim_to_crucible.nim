@@ -389,12 +389,13 @@ proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
   ##
   ## - the signature alone cannot separate callees: the `ProcTy` repr
   ##   erases bound static formals
-  ## - distinct operator overloads over the same operand types share one
-  ##   erased signature and sanitize to one base name (`__`), so the hash
-  ##   folds the callee's name and definition site to separate them
+  ## - the base maps operator callees to word names: `+` becomes `plus`.
+  ##   An operator is not a legal identifier in the targets.
+  ##   The hash folds the callee's name and definition site,
+  ##   separating overloads that share one erased signature
   ## - two call sites of one proc instantiation produce the same name,
   ##   the harvest dedup keeps one body per instantiation
-  let base = sanitizeIdent(callee.strVal)
+  let base = mangleOperatorName(callee.strVal)
   let formals = getFormalParams(callee.getTypeInst())
   var sigRepr = callee.getTypeInst().repr
   if not formals.isNil:
@@ -624,7 +625,7 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## `and`/`or` materialize into a temp through `ite` statements.
   let op = n[0].strVal
   case op
-  of "+", "-", "*", "div", "mod", "shl", "shr", "/":
+  of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
     if not (ctx.isLatticeScalar(n[1]) and ctx.isLatticeScalar(n[2])):
       # overloaded operator over non-scalar operands: the lattice resolution
       # picks the proc, lowered here as the call it is.
@@ -1625,9 +1626,8 @@ proc lowerConstSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   for defs in n:
     defs.expectKind(nnkConstDef)
     let nameNode = defs[0]
-    var nimName = nameNode.strVal
-    if nameNode.kind == nnkPragmaExpr:
-      nimName = nameNode[0].strVal
+    var nimName = if nameNode.kind == nnkPragmaExpr: nameNode[0].strVal
+                  else: nameNode.strVal
     let typeNode = defs[1]
     let valueNode = defs[2]
     if valueNode.kind in {nnkCall, nnkCommand}:
