@@ -163,7 +163,8 @@ func reduceSlot[Sh, St](l: Layout[Sh, St], axis: static int, k: int, a: int): in
   for i in 0 ..< slotCount(l):
     if keptRank(l, axis, i) == k and axisRank(l, axis, i) == a:
       return i
-  return 0
+  error "axis reduce: the map has no register slot for kept coordinate " & $k &
+    ", axis coordinate " & $a
 
 func treePasses[Sh, St](l: Layout[Sh, St], axis: static int): int =
   ## Butterfly xor passes, the lane bits whose flip stays within one kept-coordinate group
@@ -181,7 +182,8 @@ func treeDelta[Sh, St](l: Layout[Sh, St], axis: static int, x: int): int =
       if passed == x:
         return 1 shl bit
       passed = passed + 1
-  return 0
+  error "axis reduce: butterfly pass " & $x & " requested but the map has " &
+    $treePasses(l, axis) & " passes"
 
 func checkReduceMap[Sh, St](l: Layout[Sh, St], axis: static int) =
   ## Map contract for the axis reduce: the lane's registers scatter over distinct kept/axis coordinate pairs covering the full slot set

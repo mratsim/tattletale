@@ -49,6 +49,17 @@ func refMax[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
       acc = max(acc, float64(src[srcCrd]))
     dst[crd] = float32(acc)
 
+func refMin[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
+  ## Axis min over `src` into the keepdims tile `dst`
+  for i in 0 ..< toInt(dst.size()):
+    var crd = idx2crd(dst.shape, i)
+    var acc = Inf
+    for a in 0 ..< toInt(src.shape[axis]):
+      var srcCrd = crd
+      srcCrd[axis] = a
+      acc = min(acc, float64(src[srcCrd]))
+    dst[crd] = float32(acc)
+
 proc sumKernel*(dst, src: distinct TensorView, mma: static TiledMma, axis: static int) =
   ## Axis reduce of `src` into the keepdims `dst`:
   ## - the tensor is contiguous, the reduce axis first or last
@@ -125,13 +136,49 @@ proc maxKernel*(dst, src: distinct TensorView, mma: static TiledMma, axis: stati
     for t in 0 ..< tiles:
       outMat.store(acc, tvm, thrID, (mT, t))
 
+proc minKernel*(dst, src: distinct TensorView, mma: static TiledMma, axis: static int) =
+  ## Axis min of `src` into the keepdims `dst`, same contract as `sumKernel`.
+  let
+    sizeS = toInt(src.shape[axis])
+    kept = toInt(src.size()) div sizeS
+  when axis == 0:
+    var
+      mat = make_view(src.data, make_layout((kept, sizeS), (1, kept)))
+      outMat = make_view(dst.data, make_layout((kept, sizeS), (1, kept)))
+  else:
+    var
+      mat = make_view(src.data, make_layout((kept, sizeS), (sizeS, 1)))
+      outMat = make_view(dst.data, make_layout((kept, sizeS), (sizeS, 1)))
+  const tvm = mma.getThreadValueMap(opC)
+  let thrID = getLocalThreadID()
+  var reg: tile(float32, mma.getMmaLayout(opC))
+  var part: tile(float32, mma.getMmaLayout(opC))
+  const tileLen = toInt(mma.getMmaLayout(opC).cosize())
+  const
+    mt = mma.MT
+    nt = mma.NT
+  let
+    keptTiles = (kept + mt - 1) div mt
+    tiles = (sizeS + nt - 1) div nt
+  for mT in 0 ..< keptTiles:
+    var acc: tile(float32, mma.getMmaLayout(opC))
+    acc.posInf()
+    for t in 0 ..< tiles:
+      reg.load(mat, tvm, thrID, (mT, t), padWith = posInf(float32))
+      part.min(reg, axis = 1, tvm)
+      for i in 0 ..< tileLen:
+        {.unroll.}
+        acc.data[i] = min(acc.data[i], part.data[i])
+    for t in 0 ..< tiles:
+      outMat.store(acc, tvm, thrID, (mT, t))
+
 proc checkSum[E: HwEngine](engine: E, axis: static int, shape: tuple) =
   ## Sum against the host reference over `shape`:
   ## - the reduce axis is first or last
   ## - one threadgroup reduces the whole flattened view
   var src = makeHostTensor(float32, shape, LayoutRight)
   for i in 0 ..< src.len:
-    src.data[i] = float32(i) - 64.0'f32
+    src.data[i] = float32((i * 7) mod 16) - 8.0'f32
   var
     got = makeHostTensor(float32, shape, LayoutRight)
     expect = makeHostTensor(float32, shape, LayoutRight)
@@ -153,7 +200,7 @@ proc checkMax[E: HwEngine](engine: E, axis: static int, shape: tuple) =
   ## - one threadgroup reduces the whole flattened view
   var src = makeHostTensor(float32, shape, LayoutRight)
   for i in 0 ..< src.len:
-    src.data[i] = float32(i) - 64.0'f32
+    src.data[i] = float32((i * 7) mod 16) - 8.0'f32
   var
     got = makeHostTensor(float32, shape, LayoutRight)
     expect = makeHostTensor(float32, shape, LayoutRight)
@@ -168,6 +215,28 @@ proc checkMax[E: HwEngine](engine: E, axis: static int, shape: tuple) =
     blk = (32, 1)
   engine.copyToHostFromDevice(addr got.data[0], gotDev.data, got.len)
   assertAllClose(got.view(), expect.view(), msg = "max " & $shape)
+
+proc checkMin[E: HwEngine](engine: E, axis: static int, shape: tuple) =
+  ## Min against the host reference over `shape`:
+  ## - the reduce axis is first or last
+  ## - one threadgroup reduces the whole flattened view
+  var src = makeHostTensor(float32, shape, LayoutRight)
+  for i in 0 ..< src.len:
+    src.data[i] = float32((i * 7) mod 16) - 8.0'f32
+  var
+    got = makeHostTensor(float32, shape, LayoutRight)
+    expect = makeHostTensor(float32, shape, LayoutRight)
+  refMin(expect.view(), src.view(), axis)
+  let
+    srcDev = engine.bridge(src)
+    gotDev = engine.bridge(got)
+
+  engine.launchDeviceFn minKernel(gotDev, srcDev,
+      tiledMma(float32, float32, float32, 32, 32, 32), axis) do:
+    grid = (1, 1)
+    blk = (32, 1)
+  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, got.len)
+  assertAllClose(got.view(), expect.view(), msg = "min " & $shape)
 
 proc run_tile_reduce_tests*[E: HwEngine](engine: E, moduleName: string) =
   checkSum(engine, 1, (32, 32))
@@ -184,4 +253,11 @@ proc run_tile_reduce_tests*[E: HwEngine](engine: E, moduleName: string) =
   checkMax(engine, 2, (2, 32, 100))
   checkMax(engine, 3, (3, 2, 32, 32))
   checkMax(engine, 3, (2, 2, 32, 100))
+  checkMin(engine, 1, (32, 32))
+  checkMin(engine, 1, (32, 100))
+  checkMin(engine, 0, (32, 32))
+  checkMin(engine, 2, (2, 32, 32))
+  checkMin(engine, 2, (2, 32, 100))
+  checkMin(engine, 3, (3, 2, 32, 32))
+  checkMin(engine, 3, (2, 2, 32, 100))
   echo moduleName & ": all cases passed"

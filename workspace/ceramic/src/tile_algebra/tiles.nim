@@ -133,6 +133,10 @@ func negInf*(a: var Tile) {.inline.} =
   forEach var d in a:
     d = negInf(a.T)
 
+func posInf*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = posInf(a.T)
+
 func finiteFloor*(a: var Tile) {.inline.} =
   forEach var d in a:
     d = finiteFloor(a.T)
@@ -146,6 +150,9 @@ func zeros*(T: typedesc[Tile]): T {.inline.} =
 
 func negInf*(T: typedesc[Tile]): T {.inline.} =
   negInf(result)
+
+func posInf*(T: typedesc[Tile]): T {.inline.} =
+  posInf(result)
 
 func finiteFloor*(T: typedesc[Tile]): T {.inline.} =
   finiteFloor(result)
