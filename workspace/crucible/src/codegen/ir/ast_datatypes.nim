@@ -111,17 +111,10 @@ type
     fkDefined        # Defined in GPU block (body available)
     fkInstantiated   # Generic that has been instantiated
 
-  NamePolicy* = enum
-    npUnassigned    # Not yet processed
-    npClean         # Emit plain name (C++ mangling handles disambiguation)
-    npHashSuffix    # Append base58 short hash
-    npPatch         # Operator rename (+ → add, etc.)
-
   FnTableEntry* = object
     ident*: GpuAst        # call-site identifier (iSym)
     body*: GpuAst          # function definition AST (nil for externals/builtins)
     kind*: set[FunctionKind]
-    namePolicy*: NamePolicy  # set by mangleNames pass later
   GpuAttribute* = enum
     attDevice = "__device__"
     attGlobal = "__global__"
@@ -168,6 +161,7 @@ type
       fStep*: GpuAst ## The loop increment; always set (1 for ranges, the countup step)
       fBody*: GpuAst
       fRangeKind*: GpuRangeKind
+      fUnroll*: bool ## unroll-hinted loop, backends emit an unroll pragma
     of gpuWhile:
       wCond*: GpuAst
       wBody*: GpuAst
@@ -274,6 +268,11 @@ type
     gbkReduceAdd,         ## Canonical `reduceAdd`: cross-lane sum, broadcast to all lanes
     gbkReduceMax          ## Canonical `reduceMax`: cross-lane max, broadcast to all lanes
 
+  GpuShuffleBuiltinKind* = enum
+    gbkNone
+    gbkSimdShuffle
+    gbkSimdShuffleXor
+
   GpuAtomicsBuiltinKind* = enum
     gbkNone,              ## Not an atomics builtin
     gbkAtomicFetchAdd     ## Canonical `atomicFetchAdd`: atomic add through a device pointer
@@ -287,6 +286,7 @@ type
     synchroBuiltin*: GpuSynchroBuiltinKind ## Synchronization builtin kind -> gbkNone when not a barrier
     reductionBuiltin*: GpuReductionBuiltinKind ## Reduction builtin kind -> gbkNone when not a reduction intrinsic
     atomicsBuiltin*: GpuAtomicsBuiltinKind ## Atomics builtin kind -> gbkNone when not an atomic intrinsic
+    shuffleBuiltin*: GpuShuffleBuiltinKind ## Shuffle builtin kind -> gbkNone when not a shuffle intrinsic
 
   AddressSpace* = enum
     ## Per-target spellings:
@@ -354,8 +354,6 @@ type
   TypeRegistry* = object
     types*: OrderedTable[GpuType, GpuAst]  ## type definition dedup
 
-## Canonical coordinate name -> IR kind, the printers case on the kind alone.
-## A static assertion cross-checks the table against the catalog's canonical declarations, a catalog rename fails at compile time.
 let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKind] = {
   "thread_position_in_grid": gbkThreadPositionInGrid,
   "threadgroup_position_in_grid": gbkThreadgroupPositionInGrid,
@@ -365,21 +363,23 @@ let GpuCoordBuiltinKindByName* {.compileTime.}: Table[string, GpuCoordBuiltinKin
   "thread_index_in_threadgroup": gbkThreadIndexInThreadgroup,
 }.toTable()
 
-## Canonical synchronization name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuSynchroBuiltinKindByName* {.compileTime.}: Table[string, GpuSynchroBuiltinKind] = {
   "threadgroup_barrier": gbkThreadgroupBarrier,
   "threadgroup_barrier_device": gbkThreadgroupBarrierDevice,
 }.toTable()
 
-## Canonical reduction intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuReductionBuiltinKindByName* {.compileTime.}: Table[string, GpuReductionBuiltinKind] = {
   "reduceAdd": gbkReduceAdd,
   "reduceMax": gbkReduceMax,
 }.toTable()
 
-## Canonical atomics intrinsic name -> IR kind, same catalog cross-check as the coordinate table.
 let GpuAtomicsBuiltinKindByName* {.compileTime.}: Table[string, GpuAtomicsBuiltinKind] = {
   "atomicFetchAdd": gbkAtomicFetchAdd,
+}.toTable()
+
+let GpuShuffleBuiltinKindByName* {.compileTime.}: Table[string, GpuShuffleBuiltinKind] = {
+  "simd_shuffle": gbkSimdShuffle,
+  "simd_shuffle_xor": gbkSimdShuffleXor,
 }.toTable()
 
 proc coordBuiltinKind*(name: string): GpuCoordBuiltinKind =
@@ -391,12 +391,13 @@ proc synchroBuiltinKind*(name: string): GpuSynchroBuiltinKind =
   GpuSynchroBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc reductionBuiltinKind*(name: string): GpuReductionBuiltinKind =
-  ## Returns the IR kind of a canonical reduction intrinsic name, unmapped names resolve to `gbkNone`.
   GpuReductionBuiltinKindByName.getOrDefault(name, gbkNone)
 
 proc atomicsBuiltinKind*(name: string): GpuAtomicsBuiltinKind =
-  ## Returns the IR kind of a canonical atomics intrinsic name, unmapped names resolve to `gbkNone`.
   GpuAtomicsBuiltinKindByName.getOrDefault(name, gbkNone)
+
+proc shuffleBuiltinKind*(name: string): GpuShuffleBuiltinKind =
+  GpuShuffleBuiltinKindByName.getOrDefault(name, gbkNone)
 
 const GpuNumericTypes* = {gtBool, gtUint8, gtUint16, gtInt16,
                          gtUint32, gtInt32, gtUint64, gtInt64,
@@ -509,6 +510,7 @@ func clone*(ast: GpuAst): GpuAst =
     result.fStart = ast.fStart.clone()
     result.fEnd = ast.fEnd.clone()
     result.fStep = ast.fStep.clone()
+    result.fUnroll = ast.fUnroll
     result.fBody = ast.fBody.clone()
     result.fRangeKind = ast.fRangeKind
   of gpuWhile:
@@ -1169,10 +1171,55 @@ func shortHash*(sigHash: int64): string =
         result[j] = '1'
       break
 
+func isPlainIdentifier*(name: string): bool =
+  ## True when `name` can be emitted as-is in every backend language.
+  result = name.len > 0
+  for c in name:
+    if c notin {'a'..'z', 'A'..'Z', '0'..'9', '_'}:
+      return false
+
+func mangleGpuName*(name: string): string =
+  result = newStringOfCap(name.len)
+  if name.len > 0 and name[0] in Digits:
+    result.add "X"
+  template special(word: string) =
+    if result.len > 0 and result[^1] != '_':
+      result.add '_'
+    result.add word
+  for c in name:
+    case c
+    of 'a'..'z', '0'..'9', 'A'..'Z', '_':
+      result.add c
+    of '$': special "dollar"
+    of '%': special "percent"
+    of '&': special "amp"
+    of '^': special "roof"
+    of '!': special "emark"
+    of '?': special "qmark"
+    of '*': special "star"
+    of '+': special "plus"
+    of '-': special "minus"
+    of '/': special "slash"
+    of '\\': special "backslash"
+    of '=': special "eq"
+    of '<': special "lt"
+    of '>': special "gt"
+    of '~': special "tilde"
+    of ':': special "colon"
+    of '.': special "dot"
+    of '@': special "at"
+    of '|': special "bar"
+    else:
+      special "X" & toHex(ord(c), 2)
+
 func mangledHashName*(name, iSym: string): string =
-  ## npHashSuffix display name, `name` + the 7-char base58 hash of `iSym`
-  ## FNV-1a accumulation plus a splitmix64 finalizer: XOR into byte lanes
-  ## let chars 8 positions apart cancel out
+  ## Display name, `name` + the 7-char base58 hash of `iSym`.
+  ##
+  ## The hash is FNV-1a accumulation plus a splitmix64 finalizer.
+  ## XOR into byte lanes lets chars 8 positions apart cancel out.
+  ##
+  ## Returns:
+  ##   `name` suffixed with `_` and the 7-char base58 hash.
   var h: uint64 = 0xcbf29ce484222325'u64
   for c in iSym:
     h = (h xor uint64(ord(c))) * 0x100000001b3'u64
@@ -1182,6 +1229,9 @@ func mangledHashName*(name, iSym: string): string =
   if h == 0:
     h = 1
   result = name & "_" & shortHash(cast[int64](h))
+
+func getOperatorMangledName*(name, iSym: string): string =
+  mangledHashName(mangleGpuName(name), iSym)
 
 func gpuTypeToShortString*(t: GpuType): string =
   ## Short, space-free type name for use in generic struct identifiers.

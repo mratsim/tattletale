@@ -8,6 +8,7 @@
 import std/math
 import ./tiles
 import ./tile_foreach
+import workspace/crucible
 
 # ############################################################
 #
@@ -77,3 +78,72 @@ func exp*(a: Tile): Tile {.inline.} =
 
 func log*(a: Tile): Tile {.inline.} =
   result.log(a)
+
+# In place
+# --------
+
+func neg*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = -d
+
+func abs*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = abs(d)
+
+func sqrt*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = sqrt(d)
+
+func rsqrt*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = rsqrt(d)
+
+func exp2*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = exp2(d)
+
+func log2*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = log2(d)
+
+func exp*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = exp(d)
+
+func log*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = ln(d)
+
+template downcast*[TIn: SomeFloat, TOut: float16 or bfloat16 or fp8e4m3 or fp8e5m2, Sh, St](
+    src: Tile[TIn, Sh, St],
+    _: typedesc[TOut]): auto =
+  var outTile: tile(TOut, src.getLayout())
+  forEach var d in outTile, x in src:
+    when TOut is float16:
+      d = toFp16(x)
+    elif TOut is bfloat16:
+      d = toBf16(x)
+    elif TOut is fp8e4m3:
+      d = toFp8e4m3(x)
+    else:
+      d = toFp8e5m2(x)
+  outTile
+
+template downcast*[T: SomeFloat, Sh, St](src: Tile[T, Sh, St], _: typedesc[T]): Tile[T, Sh, St] =
+  src
+
+template upcast*[TIn: float16 or bfloat16 or fp8e4m3 or fp8e5m2, Sh, St](
+    src: Tile[TIn, Sh, St],
+    _: typedesc[float32]): auto =
+  var outTile: tile(float32, src.getLayout())
+  forEach var d in outTile, x in src:
+    when TIn is float16:
+      d = toFp32(x)
+    elif TIn is bfloat16:
+      d = toBf32(x)
+    elif TIn is fp8e4m3:
+      d = toFp32(x)
+    else:
+      d = toFp32(x)
+  outTile
+

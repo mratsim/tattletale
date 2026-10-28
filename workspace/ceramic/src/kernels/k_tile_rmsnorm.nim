@@ -21,8 +21,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ##
   ## Sum of squares per row, one register tile at a time:
   ## - `atAxisIndex` cuts the source and destination strips per row, the rank-1 weight strip is the full tensor
-  ## - tile loads pad past-the-end slots with the `roSum` identity, so short and ragged rows contribute nothing to the sum
-  ## - `acc.reduceAcc(reg, roSum)` accumulates each tile's sum of squares onto the accumulator, one subgroup butterfly per tile
+  ## - tile loads pad past-the-end slots with zero, so short and ragged rows contribute nothing to the sum
+  ## - `tileSum += reg.data[i]` per element, `acc += reduceAdd(tileSum)` folds each tile onto the accumulator, one subgroup butterfly per tile
   ##
   ## Mean accumulation in fp32. `rsqrt` is the backend native reciprocal square root.
   ##
@@ -65,10 +65,12 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     # pass 1: sum of squares, one register tile at a time
     var acc = zero(float32)
     for tileID in 0 ..< stripTiles:
-      reg.load(srcRow, thrID, tileID, padWith = reduceIdentity(roSum, float32))
+      reg.load(srcRow, thrID, tileID, padWith = zero(float32))
+      var tileSum = zero(float32)
       for i in 0 ..< owned:
         reg.data[i] = reg.data[i].square()
-      acc.reduceAcc(reg, roSum)
+        tileSum += reg.data[i]
+      acc += reduceAdd(tileSum)
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:

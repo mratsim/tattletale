@@ -168,23 +168,56 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     aBits = aTile.shape[0].toInt() * sizeof(typeof(aTile.data[0]))
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
-  staticFor k, 0, KR:
-    let addend = when k == 0: cTile else: dTile
-    when aBits == 8:
-      staticFor m, 0, MR:
-        staticFor n, 0, NR:
-          let ns = (when (m and 1) == 1: NR - 1 - n else: n)
-          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), addend, (m, ns))
-    elif bBits == 8:
-      staticFor n, 0, NR:
-        staticFor m, 0, MR:
-          let ms = (when (n and 1) == 1: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), addend, (ms, n))
-    else:
-      staticFor n, 0, (NR + 1) div 2:
-        staticFor m, 0, MR:
+  # For k = 0: d = a0·b0 + c, where c may alias d.
+  # Then d += a0·b0
+  when aBits == 8:
+    for m in 0 ..< MR:
+      {.unroll.}
+      for n in 0 ..< NR:
+        {.unroll.}
+        let ns = if (m and 1) == 1: NR - 1 - n else: n
+        mma.gemm_atom_at(dTile, (m, ns), aTile, (m, 0), bTile, (ns, 0), cTile, (m, ns))
+    for k in 1 ..< KR:
+      {.unroll.}
+      for m in 0 ..< MR:
+        {.unroll.}
+        for n in 0 ..< NR:
+          {.unroll.}
+          let ns = if (m and 1) == 1: NR - 1 - n else: n
+          mma.gemm_atom_at(dTile, (m, ns), aTile, (m, k), bTile, (ns, k), dTile, (m, ns))
+  elif bBits == 8:
+    for n in 0 ..< NR:
+      {.unroll.}
+      for m in 0 ..< MR:
+        {.unroll.}
+        let ms = if (n and 1) == 1: MR - 1 - m else: m
+        mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, 0), bTile, (n, 0), cTile, (ms, n))
+    for k in 1 ..< KR:
+      {.unroll.}
+      for n in 0 ..< NR:
+        {.unroll.}
+        for m in 0 ..< MR:
+          {.unroll.}
+          let ms = if (n and 1) == 1: MR - 1 - m else: m
+          mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, k), bTile, (n, k), dTile, (ms, n))
+  else:
+    for n in 0 ..< (NR + 1) div 2:
+      {.unroll.}
+      for m in 0 ..< MR:
+        {.unroll.}
+        let n0 = n * 2
+        let ms = if (n * 2 and 2) == 2: MR - 1 - m else: m
+        mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, 0), bTile, (n0, 0), cTile, (ms, n0))
+        if n0 + 1 < NR:
+          mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, 0), bTile, (n0 + 1, 0), cTile, (ms, n0 + 1))
+    for k in 1 ..< KR:
+      {.unroll.}
+      for n in 0 ..< (NR + 1) div 2:
+        {.unroll.}
+        for m in 0 ..< MR:
+          {.unroll.}
           let n0 = n * 2
-          let ms = (when (n * 2 and 2) == 2: MR - 1 - m else: m)
-          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), addend, (ms, n0))
-          when n * 2 + 1 < NR:
-            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), addend, (ms, n0 + 1))
+          let ms = if (n * 2 and 2) == 2: MR - 1 - m else: m
+          mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, k), bTile, (n0, k), dTile, (ms, n0))
+          if n * 2 + 1 < NR:
+            mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, k), bTile, (n0 + 1, k), dTile, (ms, n0 + 1))

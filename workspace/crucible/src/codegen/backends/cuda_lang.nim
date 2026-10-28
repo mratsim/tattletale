@@ -261,7 +261,10 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(int " & ast.fVar.ident() & " = " &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "#pragma unroll\n"
+    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genCuda(ast.fStart) & "; " &
              ast.fVar.ident() & cmp & ctx.genCuda(ast.fEnd) & "; " &
              ast.fVar.ident() & " += " & ctx.genCuda(ast.fStep) & ") {\n"
@@ -310,16 +313,24 @@ proc genCuda*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
       of gbkReduceMax:
         result = indentStr & "warpReduceMax(" & ctx.genCuda(ast.cArgs[0]) & ')'
       of gbkNone:
-        case ast.cName.symbol.atomicsBuiltin
-        of gbkAtomicFetchAdd:
-          # atomicAdd overloads on the pointee type, no cast needed
-          result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
-                   ctx.genCuda(ast.cArgs[1]) & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # Full mask: every warp lane participates and receives the result.
+          result = indentStr & "__shfl_sync(0xffffffffu, " & ctx.genCuda(ast.cArgs[0]) & ", " & ctx.genCuda(ast.cArgs[1]) & ')'
+        of gbkSimdShuffleXor:
+          # Full mask: every warp lane participates, the exchange pairs lanes bitwise.
+          result = indentStr & "__shfl_xor_sync(0xffffffffu, " & ctx.genCuda(ast.cArgs[0]) & ", " & ctx.genCuda(ast.cArgs[1]) & ')'
         of gbkNone:
-          var cudaArgs: seq[string]
-          for i, arg in ast.cArgs:
-            cudaArgs.add ctx.genCuda(arg)
-          result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
+          case ast.cName.symbol.atomicsBuiltin
+          of gbkAtomicFetchAdd:
+            # atomicAdd overloads on the pointee type, no cast needed
+            result = indentStr & "atomicAdd(" & ctx.genCuda(ast.cArgs[0]) & ", " &
+                     ctx.genCuda(ast.cArgs[1]) & ')'
+          of gbkNone:
+            var cudaArgs: seq[string]
+            for i, arg in ast.cArgs:
+              cudaArgs.add ctx.genCuda(arg)
+            result = indentStr & ctx.getFnName(bkCuda, ast) & '(' & cudaArgs.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:

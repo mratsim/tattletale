@@ -73,6 +73,9 @@ Processors (PMPP): plain subjects, active verbs, mechanisms over labels.
   speech ("it shall be noted", "as per", hedge stacks).
 - Prefer a mechanism sentence over a category label: say what happens,
   not what kind of thing it is.
+- No reduced relative clauses: the connective `that`/`which`/`who` is never omitted.
+  Broken: "the register slots its thread coordinates own" is a telegraphic noun pile.
+  Fix: restore the connective ("the register slots that the thread coordinates own") or split into plain subject-verb-object sentences.
 
 ## No drive-by comment edits
 

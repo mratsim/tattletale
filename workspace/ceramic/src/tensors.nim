@@ -32,7 +32,8 @@ import
   ./ptr_arithmetic,
   workspace/ceramic/src/tensors/tensor_datatypes,
   workspace/ceramic/src/tensors/tensor_selectors,
-  workspace/ceramic/src/tensors/tensor_algebra
+  workspace/ceramic/src/tensors/tensor_algebra,
+  workspace/ceramic/src/tensors/tensor_extras
 
 # ═══════════════════════════════════════════════════════════════
 #  Datatypes, construction, accessors
@@ -44,6 +45,7 @@ import
 export tensor_datatypes
 export tensor_selectors
 export tensor_algebra
+export tensor_extras
 
 # Re-exported for the generic sandwich: template and generic bodies bind
 # `+%` in their defining scope, kernels offset gmem pointers without

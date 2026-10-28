@@ -230,6 +230,10 @@ genSpvOpcodeTable:
   # The GroupOperation enumerant (Reduce/InclusiveScan/ExclusiveScan) sits
   # between Scope and the value, the optional trailing IdRef is the ClusterSize
   op OpGroupNonUniformFAdd: 350: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvGroupOperation), o(spvIdRef), oOpt(spvIdRef)]
+  # Shuffle ops carry no GroupOperation word: the last operand is the lane id
+  # (Shuffle) or the xor mask (ShuffleXor), both plain IdRef
+  op OpGroupNonUniformShuffle: 345: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
+  op OpGroupNonUniformShuffleXor: 346: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string pairs with the AtomicFloat32AddEXT capability
   op OpAtomicFAddEXT: 6035: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdScope), o(spvIdMemorySemantics), o(spvIdRef)]
 
@@ -247,6 +251,7 @@ const
   capInt16 = 22'u32
   capPhysicalStorageBufferAddresses* = 5347'u32
   capGroupNonUniformArithmetic = 63'u32
+  capGroupNonUniformShuffle = 65'u32
   capAtomicFloat32AddEXT = 6033'u32
 
 const
@@ -312,6 +317,7 @@ const
   fcNone = 0'u32
   selNone = 0'u32
   lcNone = 0'u32
+  lcUnroll = 1'u32 ## LoopControlUnroll bit
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Module sections and word stream

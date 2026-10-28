@@ -1,6 +1,6 @@
 ## HLSL test utilities:
-## - DXC two-leg compile of emitted kernel source (compileToSpirV, compileCheck):
-##   the DXIL leg, then the SPIR-V leg through spirv-val
+## - DXC compiles emitted kernel source twice (compileToSpirV, compileCheck):
+##   DXIL output, then SPIR-V through spirv-val
 ## - SPIR-V binding reflection for the descriptor-route tests (assertHlslBindings)
 ##
 ## Shared by the tests under `tests/codegen/vulkan_via_hlsl/`,
@@ -12,8 +12,8 @@ type BindingExpectation* = tuple[name: string, ordinal: int, readOnly: bool]
 
 proc compileToSpirV*(name, source: string): seq[uint32] =
   ## Compiles one emitted kernel through the validated DXC route:
-  ## - dxc -T cs_6_4 -E main -Fo, the DXIL leg
-  ## - dxc -T cs_6_4 -E main -spirv -Fo, the SPIR-V leg
+  ## - dxc -T cs_6_4 -E main -Fo, the DXIL output
+  ## - dxc -T cs_6_4 -E main -spirv -Fo, the SPIR-V module
   ## - spirv-val --target-env vulkan1.1
   ## Returns the SPIR-V words for vkCreateShaderModule.
   ## Artifacts go to `build/tests/hlsl/<name>.hlsl(.cso)(.spv)`.
@@ -32,9 +32,12 @@ proc compileToSpirV*(name, source: string): seq[uint32] =
   let (dxilOut, dxilCode) = execCmdEx(
     dxc & " -T cs_6_4 -E main -Fo " & path & ".cso " & path)
   doAssert dxilCode == 0,
-    "dxc DXIL leg failed (exit " & $dxilCode & ") for " & name & ":\n" & dxilOut
+    "dxc DXIL compilation failed (exit " & $dxilCode & ") for " & name & ":\n" & dxilOut
+  # The HLSL shuffle builtin needs a Vulkan target env on the SPIR-V module,
+  # DXC refuses it under the default env. vulkan1.1 keeps the emitted
+  # SPIR-V at version 1.3, the version spirv-val validates under.
   let (spvOut, spvCode) = execCmdEx(
-    dxc & " -T cs_6_4 -E main -spirv -Fo " & path & ".spv " & path)
+    dxc & " -T cs_6_4 -E main -spirv -fspv-target-env=vulkan1.1 -Fo " & path & ".spv " & path)
   doAssert spvCode == 0,
     "dxc SPIR-V leg failed (exit " & $spvCode & ") for " & name & ":\n" & spvOut
   let (valOut, valCode) = execCmdEx(

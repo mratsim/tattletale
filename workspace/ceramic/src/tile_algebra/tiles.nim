@@ -10,6 +10,7 @@ import std/typetraits
 import workspace/crucible
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
+import ./tile_foreach
 
 # ############################################################
 #
@@ -17,9 +18,9 @@ import workspace/ceramic/src/tensors
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Backend magic functions
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template getLaneWidth*: int =
   ## Returns the width of the lanes of one co-executing group
@@ -60,9 +61,9 @@ template getDefaultTileLayout*(T: typedesc): untyped =
   const chunk = max(1, 16 div sizeof(T))
   make_layout((getLaneWidth(), chunk), (chunk, 1))
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile datatype
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type Tile*[T, Sh, St] = TensorOwned[T, Sh, St]
 
@@ -87,9 +88,78 @@ template tile*(T: typedesc, shape: tuple): typedesc =
   ## - tile maps stay composable without hand-written strides
   tile(T, make_layout(shape))
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+#  Initialization
+# ═══════════════════════════════════════════════════════════════════════
+
+func zero*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0'u16)
+  elif T is bfloat16:
+    cast[T](0'u16)
+  else:
+    T(0)
+
+func negInf*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0xFC00'u16)
+  elif T is bfloat16:
+    cast[T](0xFF80'u16)
+  else:
+    T(-Inf)
+
+func finiteFloor*(T: typedesc): T {.inline.} =
+  when T is float16:
+    cast[T](0xFBFF'u16)
+  elif T is bfloat16:
+    cast[T](0xFF7F'u16)
+  else:
+    cast[T](0xFF7FFFFF'u32)
+
+func posInf*(T: typedesc): T {.inline.} =
+  ## Plus-infinity fill value of `T`
+  when T is float16:
+    cast[T](0x7C00'u16)
+  elif T is bfloat16:
+    cast[T](0x7F80'u16)
+  else:
+    T(Inf)
+
+func zeros*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = zero(a.T)
+
+func negInf*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = negInf(a.T)
+
+func posInf*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = posInf(a.T)
+
+func finiteFloor*(a: var Tile) {.inline.} =
+  forEach var d in a:
+    d = finiteFloor(a.T)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Tile constructors
+# ═══════════════════════════════════════════════════════════════════════
+
+func zeros*(T: typedesc[Tile]): T {.inline.} =
+  zeros(result)
+
+func negInf*(T: typedesc[Tile]): T {.inline.} =
+  negInf(result)
+
+func posInf*(T: typedesc[Tile]): T {.inline.} =
+  posInf(result)
+
+func finiteFloor*(T: typedesc[Tile]): T {.inline.} =
+  finiteFloor(result)
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile geometry
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template tileWith*(v: TensorView, tiler: static tuple): auto =
   ## Tile geometry of `v`: its layout zipped-divided by the tiler,
@@ -100,20 +170,11 @@ template getTileGrid*(geom: Layout): auto =
   ## Tile grid of the geometry, the tile coordinates covering the tensor.
   geom.shape[1]
 
-# ═══════════════════════════════════════════════════════════════
-#  Sizes and fill values
-# ═══════════════════════════════════════════════════════════════
-
-template zero*(T: typedesc): untyped =
-  when T is float16: cast[T](0'u16)
-  elif T is bfloat16: cast[T](0'u16)
-  else: T(0)
-
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Launch mapping
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
-template getLocalTileID*(gridShape: IntOrIntTuple): auto =
+proc getLocalTileID*(gridShape: IntOrIntTuple): auto {.inline.} =
   ## Squadron position mapped to a flat index over the tile grid
   ## through the fleet layout.
   let (w, h, d) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)

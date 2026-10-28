@@ -1,0 +1,20 @@
+{
+ "name": "gqa8_causal_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 8,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 64,
+ "Dv": 64,
+ "scale": 0.125,
+ "causal": true,
+ "window_size": 0,
+ "checksum": 4031544411,
+ "xorhash_checksums": {
+  "q.bin": 2200784015,
+  "k.bin": 79010849,
+  "v.bin": 2101020416
+ }
+}

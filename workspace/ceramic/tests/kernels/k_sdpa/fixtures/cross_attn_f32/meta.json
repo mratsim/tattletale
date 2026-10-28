@@ -1,0 +1,20 @@
+{
+ "name": "cross_attn_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 2,
+ "Hkv": 1,
+ "L": 48,
+ "S": 72,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": false,
+ "window_size": 0,
+ "checksum": 2181045589,
+ "xorhash_checksums": {
+  "q.bin": 2117128131,
+  "k.bin": 2112088433,
+  "v.bin": 2045595616
+ }
+}

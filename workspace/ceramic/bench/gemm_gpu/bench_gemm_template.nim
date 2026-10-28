@@ -5,6 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+# Benchmark: GEMM on Metal, effective TFLOP/s.
+#
+# Flops: 2*M*N*K, one multiply-add per output element.
+#
 # Run:
 #   nim c -r -d:release --outdir:build/bench \
 #     workspace/ceramic/bench/gemm_gpu/bench_gemm_metal.nim (from tattletale)
@@ -23,7 +27,6 @@ import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/bench/gemm_gpu/bench_blueprint
 import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
-import workspace/fp_conv/fp_conv
 
 export bench_blueprint
 export int_tuples
@@ -31,7 +34,6 @@ export layout_algebra
 export tensors
 export tile_algebra
 export ceramic_testutils
-export fp_conv
 
 proc fillGemmInputs*[TVa, TVb](aTV: TVa, bTV: TVb, M, N, K: int) =
   for m in 0 ..< M:
@@ -45,10 +47,14 @@ proc gemmLoop*(mma: static TiledMma, C, A, B: distinct TensorView, iters: int) =
   for _ in 0 ..< iters:
     matmul(mma, C, A, B)
 
+func computeGemmFlops*(M, N, K: int): float64 =
+  ## 2*M*N*K, one multiply-add per output element
+  2.0 * M.float * N.float * K.float
+
 template benchGemm*(op: string, M, N, K, iters: int, body: untyped) =
   let
     config = $M & "x" & $N & "x" & $K
-    flops = 2.0 * M.float * N.float * K.float
+    flops = computeGemmFlops(M, N, K)
     benchStart = getMonoTime()
   body
   let benchStop = getMonoTime()

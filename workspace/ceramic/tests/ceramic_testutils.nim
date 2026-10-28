@@ -19,7 +19,6 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing_slicedice
-import workspace/fp_conv/fp_conv
 
 # ═══════════════════════════════════════════════════════════════
 #  Randomness
@@ -76,6 +75,22 @@ func originOffset[Sh, St](layout: Layout[Sh, St]): int =
     if strides[i] < 0:
       result += (toInt(f) - 1) * (-strides[i])
     i.inc
+
+proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U, Sh, St] =
+  let layout = src.layout
+  result = HostTensor[U, Sh, St](
+    data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
+    offset: originOffset(layout),
+    layout: layout)
+  for i in 0 ..< toInt(layout.cosize()):
+    result.data[i] = src.data[i].to(U)
+
+proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
+  let layout = make_layout(shape, order)
+  HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
+    layout: layout)
 
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)

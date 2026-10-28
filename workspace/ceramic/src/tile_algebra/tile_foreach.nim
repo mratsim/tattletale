@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mamy André-Ratsimbazafy
 # Licensed and distributed under either of
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+#   * Apache v2 license (license terms in the root directory or at http://opensource.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/[macros, algorithm]
@@ -27,13 +27,15 @@ func strideSortedDims(shape, strides: seq[int]): seq[int] =
       result.add d
   result.sort(proc(a, b: int): int = cmp(strides[a], strides[b]))
 
-func elemAccess(access: NimNode, filteredDims: seq[int], fullRank: int): NimNode =
-  result = nnkBracketExpr.newTree(access)
+func elemAccess(access: NimNode, shape, strides: seq[int], fullRank: int): NimNode =
+  var off: NimNode = nil
   for d in 0 ..< fullRank:
-    if d in filteredDims:
-      result.add ident("_i" & $d)
-    else:
-      result.add newLit 0
+    if shape[d] != 1:
+      let term = ident("_i" & $d) * newLit(strides[d])
+      off = if off.isNil: term
+            else: off + term
+  let data = nnkDotExpr.newTree(access, ident("data"))
+  result = nnkBracketExpr.newTree(data, if off.isNil: newLit(0) else: off)
 
 func unwrapTensorType(tensor: NimNode): NimNode =
   var ty = tensor.getTypeInst()
@@ -44,7 +46,7 @@ func unwrapTensorType(tensor: NimNode): NimNode =
     error "forEach: expected a Tile (TensorOwned), got " & ty.repr, tensor
   ty
 
-macro forEachImpl(index: untyped, values: untyped, tensors: varargs[typed],body: untyped): untyped =
+template forEachBody(broadcast: static bool): untyped {.dirty.} =
   var
     aliasesStmt = newStmtList()
     elems = nnkBracket.newTree()
@@ -73,7 +75,17 @@ macro forEachImpl(index: untyped, values: untyped, tensors: varargs[typed],body:
         aliasesStmt.add bindSym"evalOnceAs".newCall(ti, tensor)
         ti
 
-    elems.add elemAccess(accessor, filteredDims, shape.len)
+    let shapeI = toSeqStaticInts(tensor.unwrapTensorType()[2])
+    let stridesI = toSeqStaticInts(tensor.unwrapTensorType()[3])
+    doAssert shapeI.len == shape.len, "forEach: same rank"
+    when broadcast:
+      for d in 0 ..< shape.len:
+        doAssert shapeI[d] == 1 or shapeI[d] == shape[d], "forEachBroadcast: mode exceeds the target's mode"
+    else:
+      for d in 0 ..< shape.len:
+        doAssert shapeI[d] == shape[d], "forEach: same-shape only"
+
+    elems.add elemAccess(accessor, shapeI, stridesI, shape.len)
 
   # Substitute the bindings with indexed access.
   var targets: seq[tuple[what: string, by: NimNode]]
@@ -82,7 +94,6 @@ macro forEachImpl(index: untyped, values: untyped, tensors: varargs[typed],body:
     targets.add ($v, elems[j])
   let newBody = body.replaceNodes(targets)
 
-  # The optional leading index binds the flat data offset
   var indexedBody = newStmtList()
   if index.kind != nnkEmpty:
     var off: NimNode = nil
@@ -108,18 +119,13 @@ macro forEachImpl(index: untyped, values: untyped, tensors: varargs[typed],body:
   result.add aliasesStmt
   result.add loop
 
-macro forEach*(args: varargs[untyped]): untyped =
-  ## Iterate over same-shape tiles, element by element.
-  ##
-  ## Example: fused-multiply-add
-  ##
-  ##   forEach i, var r in result, x in a, y in b, z in c:
-  ##     r = x * y + z
-  ##
-  ## - the optional leading `i` binds the flat data offset
-  ## - `var r` for write access
-  ## - tiles must be same-shape and assumed same-strides,
-  ##   enforced by generic instantiation of the caller
+macro forEachImpl(index: untyped, values: untyped, tensors: varargs[typed], body: untyped): untyped =
+  forEachBody(false)
+
+macro forEachBroadcastImpl(index: untyped, values: untyped, tensors: varargs[typed], body: untyped): untyped =
+  forEachBody(true)
+
+template forEachAll(broadcast: static bool): untyped {.dirty.} =
   var params = args
   let body = params.pop()
 
@@ -150,6 +156,36 @@ macro forEach*(args: varargs[untyped]): untyped =
     else:
       error "forEach: unexpected argument form #" & $i, arg
 
-  result = quote do:
-    forEachImpl(`index`, `values`, `tensors`):
-      `body`
+  when broadcast:
+    result = quote do:
+      forEachBroadcastImpl(`index`, `values`, `tensors`):
+        `body`
+  else:
+    result = quote do:
+      forEachImpl(`index`, `values`, `tensors`):
+        `body`
+
+macro forEach*(args: varargs[untyped]): untyped =
+  ## Iterate over same-shape tiles, element by element.
+  ## A smaller operand fails to compile: broadcasting is forEachBroadcast.
+  ##
+  ## Example: fused-multiply-add
+  ##
+  ##   forEach i, var r in result, x in a, y in b, z in c:
+  ##     r = x * y + z
+  ##
+  ## - you can add a loop iteration variable
+  ## - `var r` for write access
+  ## - tiles must be same-shape and assumed same-strides,
+  ##   the generic instantiation enforces the contract
+  forEachAll(false)
+
+macro forEachBroadcast*(args: varargs[untyped]): untyped =
+  ## Example: broadcast a (M, 1) column over an (M, N) tile
+  ##
+  ##   forEachBroadcast var r in result, x in a, y in col:
+  ##     r = x + y
+  ##
+  ## - you can add a loop iteration variable
+  ## - `var r` for write access
+  forEachAll(true)

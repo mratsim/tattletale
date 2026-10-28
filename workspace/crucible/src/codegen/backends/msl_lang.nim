@@ -318,7 +318,10 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
 
   of gpuFor:
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(int " & ast.fVar.ident() & " = " &
+    result = ""
+    if ast.fUnroll:
+      result &= indentStr & "#pragma clang loop unroll(full)\n"
+    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
              ctx.genMetalImpl(ast.fStart, 0) & "; " &
              ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0) & "; " &
              ast.fVar.ident() & " += " & ctx.genMetalImpl(ast.fStep, 0) & ") {\n"
@@ -361,24 +364,30 @@ proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
       of gbkReduceMax:
         result = indentStr & "simd_max(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
       of gbkNone:
-        case ast.cName.symbol.atomicsBuiltin
-        of gbkAtomicFetchAdd:
-          # MSL atomics act on `atomic_*` pointees: cast the raw device
-          # pointer at the call site. The only permitted order is relaxed.
-          # fp32 needs Metal 3+ (__HAVE_ATOMIC_FLOAT__).
-          let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
-                         of gtFloat32: "atomic_float"
-                         of gtInt32: "atomic_int"
-                         of gtUint32: "atomic_uint"
-                         else: error "Metal atomicFetchAdd: unsupported pointee type"
-          result = indentStr & "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
-                   ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                   ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # Metal's simd_shuffle takes a `ushort` lane id, the int argument casts to it
+          result = indentStr & "simd_shuffle(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ", (ushort)(" & ctx.genMetalImpl(ast.cArgs[1], 0) & "))"
+        of gbkSimdShuffleXor:
+          # MSL takes the xor mask as `ushort`, the canonical Nim type is int, cast.
+          result = indentStr & "simd_shuffle_xor(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ", (ushort)(" & ctx.genMetalImpl(ast.cArgs[1], 0) & "))"
         of gbkNone:
-          var args: seq[string]
-          for a in ast.cArgs:
-            args.add ctx.genMetalImpl(a, 0)
-          result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
+          case ast.cName.symbol.atomicsBuiltin
+          of gbkAtomicFetchAdd:
+            # cast to the `atomic_*` pointee, relaxed order only, fp32 needs Metal 3+
+            let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
+                           of gtFloat32: "atomic_float"
+                           of gtInt32: "atomic_int"
+                           of gtUint32: "atomic_uint"
+                           else: error "Metal atomicFetchAdd: unsupported pointee type"
+            result = indentStr & "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
+                     ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
+                     ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
+          of gbkNone:
+            var args: seq[string]
+            for a in ast.cArgs:
+              args.add ctx.genMetalImpl(a, 0)
+            result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
 
   of gpuBinOp:
     ctx.withoutSemicolon:

@@ -1,0 +1,20 @@
+{
+ "name": "causal_f32",
+ "dtype": "float32",
+ "B": 1,
+ "Hq": 1,
+ "Hkv": 1,
+ "L": 64,
+ "S": 64,
+ "Dk": 32,
+ "Dv": 32,
+ "scale": 0.17677669529663687,
+ "causal": true,
+ "window_size": 0,
+ "checksum": 10567916,
+ "xorhash_checksums": {
+  "q.bin": 2035611562,
+  "k.bin": 2126677480,
+  "v.bin": 2216982067
+ }
+}

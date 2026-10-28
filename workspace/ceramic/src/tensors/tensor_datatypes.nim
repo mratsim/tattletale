@@ -6,6 +6,7 @@
 ## at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layouts
 import workspace/ceramic/src/int_tuples
 
 # ═════════════════════════════════════════════════════════════════════════

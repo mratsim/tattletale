@@ -8,7 +8,6 @@
 
 import std/[random, times]
 import workspace/crucible
-import workspace/fp_conv/fp_conv
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
 

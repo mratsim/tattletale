@@ -78,6 +78,9 @@ A CS undergraduate is the comprehension floor.
 - Comments explain invariants, intent, and non-obvious constraints, never change history.
 - Every prose sentence carries a subject and a verb. A noun pile that only names is not a sentence.
   Titles, headers, and label bullets are exempt.
+- No reduced relative clauses: the connective `that`/`which`/`who` is never omitted.
+  Broken: "the register slots its thread coordinates own" is a telegraphic noun pile.
+  Fix: restore the connective ("the register slots that the thread coordinates own") or split into plain subject-verb-object sentences.
 - Code and data never act. Banned: "Scalar reads render `push.<name>`".
   Write who does what: "Reading a scalar parameter emits `push.<name>`".
 - TODOs name the missing condition and the removal criterion.

@@ -101,6 +101,7 @@ proc instantiateCall(ctx: var GpuContext, call: var GpuAst) =
       sym.synchroBuiltin = old.synchroBuiltin
       sym.reductionBuiltin = old.reductionBuiltin
       sym.atomicsBuiltin = old.atomicsBuiltin
+      sym.shuffleBuiltin = old.shuffleBuiltin
       fresh[old.iSym] = sym
       p.ident = GpuAst(kind: gpuIdent, symbol: sym)
       p.typ = wanted[i]
@@ -183,13 +184,23 @@ proc registerStructTypeDef(ctx: var GpuContext, t: GpuType) =
   ctx.globalBlocks.insert(def, insertIdx)
 
 proc instantiateStructConstr(ctx: var GpuContext, constr: var GpuAst): bool =
-  ## Rewrites a construction onto its instantiated struct type
-  ## Returns true on specialization, the caller retypes the variable holding it
+  ## ```
+  ##   type RowState = object
+  ##     acc: float32
+  ##     vals: ptr UncheckedArray[float32]
+  ##
+  ##   var s = RowState(acc: 0.0'f32, vals: aPtrOverDeviceMemory)
+  ## ```
+  ## - the vals argument points into device memory.
+  ##   The pass rewrites the construction's type to a RowState whose vals
+  ##   field is a device pointer and returns true.
+  ## - a value argument keeps the declared field type, only pointer and span
+  ##   arguments trigger the rewrite.
   if constr.ocType.kind notin {gtObject, gtGenericInst}:
     return false
   for f in constr.ocFields.mitems:
     let valueTyp = ctx.getOperandType(f.value)
-    if not valueTyp.isNil:
+    if not valueTyp.isNil and f.typ.kind in {gtPtr, gtSpan}:
       f.typ = valueTyp
   let inst = instantiatedStructType(constr.ocType, constr.ocFields)
   if inst.isNil:

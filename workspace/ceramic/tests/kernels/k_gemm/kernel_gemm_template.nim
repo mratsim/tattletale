@@ -21,7 +21,6 @@ import workspace/ceramic/src/hardware/h_mma_dispatch
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/src/kernels/k_tile_gemm
 import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
-import workspace/fp_conv/fp_conv
 
 export int_tuples, int_tuples_streams
 export layout_algebra

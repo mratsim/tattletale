@@ -23,6 +23,7 @@ Rule table (rule | trigger | severity):
 | colon-break          | a colon orphaned at line start or split from its lead phrase                                      | counted  |
 | unit-split           | a line opens on a severed 1-word or 2-word continuation ("apply,", "any arity,", "instead.")       | counted  |
 | severed-tail         | a continuing sentence ends its line on a 1-2 word tail after the last clause boundary              | counted  |
+| comma-stub           | a 1-2 word line ends on a comma, the clause belongs at the end of the previous line                | counted  |
 | paren-split          | a line ends inside an open parenthesis                                                            | counted  |
 | quote-split          | a line ends inside a quoted string, splitting the quoted phrase                                   | counted  |
 | single-word-eol      | a 1-2 word stub line with reflow room on the previous line                                        | counted  |
@@ -55,6 +56,7 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 
@@ -110,6 +112,7 @@ writing the fixed text back.
 | single-word-eol             | merge the stub line into the reflow, the last line keeps 3+ words                                                |
 | unit-split                  | rewrap when a pure rewrap heals the severed `word,` continuation                                                 |
 | severed-tail                | rewrap so a continuing sentence's line ends 3+ words past its last clause boundary                               |
+| comma-stub                  | move the stub clause to the end of the previous line or finish the thought on this line                           |
 | quote-split                 | rewrap so the quoted phrase sits on one line                                                                     |
 | wall-no-air                 | one-sentence blocks merge to 3 or fewer lines; everything else needs judgment                                    |
 
@@ -207,6 +210,17 @@ OF_SUFFIX_DECL_RE = re.compile(
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
+
+# The reduction-call-syntax rule. Tile axis reductions read on their source:
+# qk.max(dst, axis = 1, map). A plain dst-first call hides which operand
+# reduces, a positional int hides which axis collapses. The three-arg shape
+# keeps scalar max(a, b) and clamp forms (x.max(0)) exempt.
+REDUCE_PLAIN_CALL_RE = re.compile(
+    r"(?<![.\w])(?:max|sum)\s*\(\s*[\w.`\[\]]+\s*,\s*[\w.`\[\]]+\s*,\s*\d")
+REDUCE_POS_AXIS_RE = re.compile(
+    r"\.\s*(?:max|sum)\s*\([^,()]+,\s*\d+\s*,")
+REDUCE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+(?:max|sum)\*?\s*[\(\[=:]")
 
 # The crucible Int-identifier rule. `Int` is a downstream (ceramic) type
 # name: crucible does not know ceramic, gtStatic is the only compile-time
@@ -335,6 +349,8 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"\bmint(s|ed)?\b",
+     None, "minting jargon, name the actor that defines or writes the specialized type"),
     (r"\bpast the\b",
      None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
@@ -354,6 +370,7 @@ BANNED = [
      "use sit on, carry, or restate the mechanism"),
     (r"\bbite\b|\bbites\b", None, "use chunk, step, or case"),
     (r"\bmissions?\b", None, "use the module's real name or path"),
+    (r"\blegs?\b", None, "name the compilation stage or the artifact directly"),
     (r"\bdigests?\b",
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
@@ -418,6 +435,10 @@ BANNED = [
      r"|\bfor consistency\b|\bfor safety\b|\bfor simplicity\b",
      None, "lawyer and justification prose is banned, state the contract "
            "(what the surface exports, not why the choice is defensible)"),
+    (r"\bnot (?:the |a |an )?[\w`-]+ itself\b", None,
+     "state what the thing is, the 'not X itself' emphasis carries no information"),
+    (r"\bright here\b|\bright there\b", None,
+     "name the site or stage directly, the location deictic adds nothing"),
     (r"\bfam\b",
      lambda l: bool(re.search(r"gmmfamily|gmmbf16|gmmf16|gmmwiden", l)),
      "name the type directly (the GmmFamily value surface keeps its names)"),
@@ -480,6 +501,8 @@ RULES = {
                        "a line opens on a severed one-word continuation"),
     "severed-tail": Rule("severed-tail", True,
                          "a continuing sentence ends its line on a 1-2 word tail after the last clause boundary"),
+    "comma-stub": Rule("comma-stub", True,
+                       "a 1-2 word line ends on a comma, the clause belongs at the end of the previous line"),
     "paren-split": Rule("paren-split", True, "a line ends inside an open parenthesis"),
     "quote-split": Rule("quote-split", True, "a line ends inside a quoted string"),
     "single-word-eol": Rule("single-word-eol", True,
@@ -515,6 +538,10 @@ RULES = {
                             "a multi-step flow described in prose or bullets with no diagram"),
     "how-narration": Rule("how-narration", False,
                           "a doc narrates the how: \"This function...\", \"we iterate\", \"make sure\""),
+    "comment-the": Rule("comment-the", True,
+                         "a comment opens on the definite article, the article is warranted only for a unique noun, clear from context, open on the noun"),
+    "comma-the": Rule("comma-the", False,
+                       "a comma-the appositive, the definite article is warranted only for a unique noun, clear from context"),
     "hidden-context": Rule("hidden-context", False,
                            "an advisory hidden-context word (\"mirrors\"), the audience is a CS undergraduate that just cloned the repo and want to understand usage"),
     "module-header-length": Rule("module-header-length", False,
@@ -539,6 +566,13 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "reduction-call-syntax": Rule("reduction-call-syntax", True,
+                                  "a tile axis reduction in plain dst-first call syntax or with a positional axis, use src.max(dst, axis = <axis>, map)"),
+    "dump-identifier": Rule("dump-identifier", True,
+                            "an identifier carrying dump in crucible or ceramic Nim code, "
+                            "dump mechanisms are for debugging only and do not make it "
+                            "into commits, debugEcho the value inline, write the file at "
+                            "the call site, a macro can debugEcho result.toStrLit()"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "stmt-inline": Rule("stmt-inline", True,
@@ -779,6 +813,7 @@ def nim_prose_lines(text):
     """
     out = []
     in_block_comment = False
+    nim_fence = False
     raws = text.splitlines()
 
     def banner_rule(s):
@@ -803,6 +838,16 @@ def nim_prose_lines(text):
                 # `#` prefixed only, a `##` banner is a violation reported
                 # through check_line's `license` kind
                 out.append((i, "license banner must be `#` prefixed, not `##`", "license", 0, False))
+                continue
+            if s[2:].strip().startswith("```"):
+                # a ## doc comment can carry a fenced example, the same
+                # contract as markdown: fenced lines are code-with-layout,
+                # the vocabulary rules apply, the prose-structure rules do not
+                nim_fence = not nim_fence
+                out.append((i, s[2:].strip(), "fence", 0, False))
+                continue
+            if nim_fence:
+                out.append((i, s[2:].strip(), "fence", comment_indent(s[2:]), False))
                 continue
             out.append((i, s[2:].strip(), "doc", comment_indent(s[2:]), False))
             continue
@@ -1174,6 +1219,12 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             "prose line is %d chars, cap is %d" % (len(c), PROSE_CAP)))
     if ";" in bare:
         findings.append(Finding(path, n, "semicolon", "semicolon in prose"))
+    if kind == "hash" and COMMENT_THE_OPEN_RE.match(c):
+        findings.append(Finding(
+            path, n, "comment-the",
+            "a comment opens on the definite article, open on the noun, "
+            "the article is warranted only for a unique noun, clear from "
+            "context"))
     if "—" in c or "–" in c:
         findings.append(Finding(path, n, "em-dash", "em-dash in prose"))
     low = bare.lower()
@@ -1192,6 +1243,8 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
     _pattern_findings(path, n, c, HOW_NARRATION_RE, "how-narration",
                       findings, warning=True)
     _pattern_findings(path, n, c, HIDDEN_CONTEXT_RE, "hidden-context",
+                      findings, warning=True)
+    _pattern_findings(path, n, c, COMMA_THE_RE, "comma-the",
                       findings, warning=True)
     if ESCAPE_SEQ.search(bare):
         findings.append(Finding(
@@ -1705,6 +1758,18 @@ DESIGN_NARRATION_RE = re.compile(
     r"\b(?:because|instead of|rather than|which is why)\b"
     r"|\b(?:declared|defined)\s+(?:ahead|before|after|above|below)\b"
     r"|\band not\b|\bbut not\b", re.IGNORECASE)
+COMMA_THE = [
+    (r",\s+the\b",
+     "the definite article is warranted only for a unique noun, clear "
+     "from context"),
+]
+COMMA_THE_RE = _compile_table(COMMA_THE, True)
+
+# A comment opening on the definite article presumes a uniqueness the
+# reader cannot verify, open on the noun instead. The content arrives
+# stripped of the # marks. Doc lines open on The via the-opener already,
+# this covers hash comments.
+COMMENT_THE_OPEN_RE = re.compile(r"^[Tt]he\b")
 
 
 def nim_block_comment_lines(text):
@@ -1837,6 +1902,18 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if REDUCE_PLAIN_CALL_RE.search(code) \
+                        and not REDUCE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "reduction-call-syntax",
+                        "axis reduction in plain dst-first call syntax, use "
+                        "the method call src.max(dst, axis = <axis>, map)"))
+                if REDUCE_POS_AXIS_RE.search(code) \
+                        and not REDUCE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "reduction-call-syntax",
+                        "the axis argument is positional, name it: "
+                        "axis = <axis>"))
     for i, raw in enumerate(lines):
         line = raw.rstrip()
         ofm = (i + 1) not in blocked and OF_SUFFIX_DECL_RE.match(line)
@@ -2214,6 +2291,13 @@ def scan(path, text, findings):
                     path, n, "single-word-eol",
                     "line ends on a %d-word stub, the previous line had room "
                     "to reflow" % wc))
+            # a 1-2 word line ending on a comma is a severed clause stub,
+            # the clause belongs at the end of the previous line
+            if wc <= 2 and c.endswith(","):
+                findings.append(Finding(
+                    path, n, "comma-stub",
+                    "a %d-word line ends on a comma, the clause belongs "
+                    "on the previous line" % wc))
             # a continuing sentence must not end its line on a 1-2 word
             # orphan after the last clause boundary, the semantic unit
             # continues on the next line
@@ -2274,12 +2358,17 @@ def _diff_added_map(base):
     cmd = ["git", "diff", "--find-renames", "--unified=0"]
     if base:
         cmd.append(base)
-    out = subprocess.run(cmd, capture_output=True, text=True)
+    out = subprocess.run(cmd, capture_output=True)
     if out.returncode != 0:
         return None
+    # binary content (git diffs files without NUL bytes in the first 8KB
+    # as text) must not crash the decode, such chunks are not lintable
+    stdout = out.stdout.decode("utf-8", errors="surrogateescape")
     added = {}
-    for chunk in out.stdout.split("diff --git "):
+    for chunk in stdout.split("diff --git "):
         if not chunk.strip():
+            continue
+        if any("\udc80" <= c <= "\udcff" for c in chunk):
             continue
         path = None
         for line in chunk.split("\n"):
@@ -2443,6 +2532,7 @@ def lint(paths, base=None):
             passes_export_hygiene(f, text, findings, added)
         if f.suffix == ".nim":
             stmt_inline(f, text, findings, added)
+            scan_dump_identifier(f, text, findings, added)
             diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
@@ -3766,6 +3856,9 @@ def scan_doc_shape(path, proc, lines, findings, exempt_file):
 
 
 DECL_T_SUFFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*T$")
+DUMP_IDENT_RE = re.compile(r"\b[A-Za-z_]*[dD]ump[A-Za-z0-9_]*\b")
+
+
 TYPE_SUFFIX_RE = re.compile(
     r"^\s*(?:type\s+\*?\s*([A-Za-z_][A-Za-z0-9_]*)\b"
     r"|([A-Za-z_][A-Za-z0-9_]*)\s*\*?\s*=\s*"
@@ -4521,6 +4614,39 @@ def scan_explicit_generics(path, lines, ds, generic_map, findings):
                 "the call %s[%s] spells generic arguments the compiler "
                 "infers from the value arguments, drop the bracket list"
                 % (callee, ", ".join(args))))
+
+
+def scan_dump_identifier(path, text, findings, added):
+    """Flags identifiers carrying dump in crucible or ceramic Nim code.
+
+    Contract:
+
+    - code identifiers only, comments and string literals sit outside the scan
+    - a dedicated dump proc, hook or compile-time switch is banned
+    - dump mechanisms are for debugging only and do not make it into commits
+    - the alternatives: debugEcho the value inline, write the file at the
+      call site when a file is genuinely needed, a macro can
+      debugEcho result.toStrLit()
+    """
+    if not ("crucible" in path.parts or "ceramic" in path.parts):
+        return
+    blocked = nim_block_comment_lines(text)
+    for i, raw in enumerate(text.splitlines()):
+        if (i + 1) in blocked:
+            continue
+        code, comment_only = _strip_comment(raw)
+        if comment_only or not code:
+            continue
+        code = _blank_nim_strings(code)
+        for m in DUMP_IDENT_RE.finditer(code):
+            if added is not None and (i + 1) not in added:
+                continue
+            findings.append(Finding(
+                path, i + 1, "dump-identifier",
+                "identifier '%s' carries dump, dumping is for debugging only "
+                "and does not make it into commits, debugEcho the value inline, "
+                "write the file at the call site, a macro can "
+                "debugEcho result.toStrLit()" % m.group(0)))
 
 
 def tile_scan(path, text, findings, consts, builtins, generic_map=None):

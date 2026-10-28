@@ -30,7 +30,6 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
-  reg.registerMapOperators()
   reg.registerFilterPragmas()
   reg.registerResolveOverloadedOperators()
 
@@ -46,34 +45,21 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
 
   reg.registerMangleNames()
 
-func registerMapOperators(reg: var PassRegistry) =
-  reg.register("mapOperators", pkTransform, phaseEarly,
-    "Patches operator function names (+,*,/,-) to valid C++ identifiers",
-    dependsOn = @[],
-    run = proc(ctx: var GpuContext): void =
-      for fnKey in ctx.allFnTab.keys:
-        var fn = ctx.allFnTab[fnKey]
-        if fn.kind == gpuProc:
-          mapOperatorsImpl(fn)
-      for fnKey in ctx.genericInsts.keys:
-        var fn = ctx.genericInsts[fnKey]
-        if fn.kind == gpuProc:
-          mapOperatorsImpl(fn)
-  )
-
 func registerFilterPragmas(reg: var PassRegistry) =
   reg.register("filterPragmas", pkTransform, phaseEarly,
-    "Filters Nim-specific pragmas from gpuProc pRawPragmas into pAttributes",
+    "Filters Nim-specific pragmas: gpuProc pRawPragmas into pAttributes, statement pragmas into their GPU meaning (unroll marks the enclosing loop)",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       for fnKey in ctx.allFnTab.keys:
         var fn = ctx.allFnTab[fnKey]
         if fn.kind == gpuProc:
           filterPragmasImpl(fn)
+          markExplicitUnrollsImpl(fn.pBody)
       for fnKey in ctx.genericInsts.keys:
         var fn = ctx.genericInsts[fnKey]
         if fn.kind == gpuProc:
           filterPragmasImpl(fn)
+          markExplicitUnrollsImpl(fn.pBody)
   )
 
 func registerResolveOverloadedOperators(reg: var PassRegistry) =
@@ -108,7 +94,7 @@ func registerDeEmbedForRangeAdjustment(reg: var PassRegistry) =
 
 func registerMangleNames(reg: var PassRegistry) =
   reg.register("mangleNames", pkTransform, phaseMain,
-    "Applies NamePolicy (base58 hash, clean, patch) to all fnTable entries",
+    "Finalizes fnTable display names: plain names keep their name, collisions get the iSym hash",
     dependsOn = @[],
     run = proc(ctx: var GpuContext): void =
       mangleNamesImpl(ctx)
@@ -142,163 +128,29 @@ proc deadCodeElimination(ctx: var GpuContext) =
 # ═══════════════════════════════════════════════════════════════════════
 
 func mangleNamesImpl(ctx: var GpuContext) =
-  ## Walk all functions in fnTable and apply NamePolicy per function:
-  ## - fkGenericInst → npHashSuffix (append 7-char base58 of hash)
-  ## - fkDefined + non-overloaded → npClean (no suffix — C++ mangling handles it)
-  ## - Operator functions → npPatch (+ → add, etc.)
-  ## For variables: apply npHashSuffix when dedup would cause collision.
-  ##
-  ## Updates symbol.name accordingly.
+  ## Finalize fnTable display names:
+  ## - fkBuiltin entries emit their plain name as-is
+  ## - fkDefined plain names keep the name, on collision the first keeps
+  ##   it and every later entry gets an iSym hash (7 base58 chars)
+  ## - operator overloads were finalized at registration
+  ##   (getOperatorMangledName in nim_to_crucible) and are skipped here
   var seenNames = initHashSet[string]()
 
   for key, entry in ctx.fnTable.mpairs:
     let ident = entry.ident
     if ident.isNil or ident.symbol.isNil:
       continue
-
+    if fkBuiltin in entry.kind:
+      continue
     let name = ident.symbol.name
-    let iSym = ident.symbol.iSym
+    if not name.isPlainIdentifier:
+      continue
 
-    var effectivePolicy = entry.namePolicy
-    if effectivePolicy == npUnassigned:
-      # Determine policy if not already assigned
-      if fkGenericInst in entry.kind:
-        effectivePolicy = npHashSuffix
-      elif fkDefined in entry.kind:
-        if name in ["+", "-", "*", "/", ".."]:
-          effectivePolicy = npPatch
-        elif name in seenNames or name.len == 0:
-          effectivePolicy = npHashSuffix
-        else:
-          effectivePolicy = npClean
-      else:
-        # builtin/external: keep as-is
-        effectivePolicy = npClean
-      entry.namePolicy = effectivePolicy
-
-    case effectivePolicy
-
-    of npClean:
-      discard
-
-    of npHashSuffix:
+    if name.len == 0 or name in seenNames:
       # Use the iSym as the hash source (stable across compilation units)
-      ident.symbol.name = mangledHashName(name, iSym)
-
-    of npPatch:
-      let newName = case name
-        of "+": "add"
-        of "-": "sub"
-        of "*": "mul"
-        of "/": "div"
-        of "..": "range"
-        else: name
-      ident.symbol.name = newName
-      ident.symbol.iSym = ident.symbol.iSym.replace(name, newName)
-    else:
-      discard
+      ident.symbol.name = mangledHashName(name, ident.symbol.iSym)
 
     seenNames.incl ident.symbol.name
-
-# ═══════════════════════════════════════════════════════════════════════
-# mapOperators
-# ═══════════════════════════════════════════════════════════════════════
-
-proc maybePatchFnName(n: var GpuAst) =
-  ## E.g. `+` -> `add`
-  doAssert n.kind == gpuIdent
-  template patch(arg, by: untyped): untyped =
-    arg.symbol.iSym = arg.symbol.iSym.replace(arg.symbol.name, by)
-    arg.symbol.name = by
-  let name = n.symbol.name
-  case name
-  of "+": patch(n, "add")
-  of "-": patch(n, "sub")
-  of "*": patch(n, "mul")
-  of "/": patch(n, "div")
-  of "..": patch(n, "range")
-  else: discard
-
-func mapOperatorsImpl(n: var GpuAst) =
-  ## Only gsProc idents, gpuBinOp operator symbols are valid C++ as-is
-  case n.kind
-  of gpuIdent:
-    if n.symbol.symKind == gsProc:
-      maybePatchFnName(n)
-  of gpuBlock:
-    for i in 0 ..< n.statements.len:
-      mapOperatorsImpl(n.statements[i])
-  of gpuFor:
-    mapOperatorsImpl(n.fStart)
-    mapOperatorsImpl(n.fEnd)
-    mapOperatorsImpl(n.fBody)
-    mapOperatorsImpl(n.fVar)
-  of gpuWhile:
-    mapOperatorsImpl(n.wCond)
-    mapOperatorsImpl(n.wBody)
-  of gpuTernary:
-    mapOperatorsImpl(n.tCond)
-    mapOperatorsImpl(n.tThen)
-    if n.tElse.kind != gpuDiscard:
-      mapOperatorsImpl(n.tElse)
-  of gpuCall:
-    mapOperatorsImpl(n.cName)
-    for i in 0 ..< n.cArgs.len:
-      mapOperatorsImpl(n.cArgs[i])
-  of gpuBinOp:
-    # the pass never touches bOp, operator symbols are valid C++
-    mapOperatorsImpl(n.bLeft)
-    mapOperatorsImpl(n.bRight)
-  of gpuVar:
-    mapOperatorsImpl(n.vName)
-    mapOperatorsImpl(n.vInit)
-  of gpuAssign:
-    mapOperatorsImpl(n.aLeft)
-    mapOperatorsImpl(n.aRight)
-  of gpuReturn:
-    mapOperatorsImpl(n.rValue)
-  of gpuDot:
-    mapOperatorsImpl(n.dParent)
-    mapOperatorsImpl(n.dField)
-  of gpuIndex:
-    mapOperatorsImpl(n.iArr)
-    mapOperatorsImpl(n.iIndex)
-  of gpuObjConstr:
-    for f in n.ocFields.mitems:
-      mapOperatorsImpl(f.value)
-  of gpuPrefix:
-    mapOperatorsImpl(n.pVal)
-  of gpuAddr:
-    mapOperatorsImpl(n.aOf)
-  of gpuDeref:
-    mapOperatorsImpl(n.dOf)
-  of gpuConv:
-    mapOperatorsImpl(n.convExpr)
-  of gpuCast:
-    mapOperatorsImpl(n.cExpr)
-  of gpuConstexpr:
-    mapOperatorsImpl(n.cIdent)
-    mapOperatorsImpl(n.cValue)
-  of gpuMaterialize:
-    mapOperatorsImpl(n.mExpr)
-  of gpuArrayLit:
-    for v in n.aValues.mitems:
-      mapOperatorsImpl(v)
-  of gpuIf:
-    mapOperatorsImpl(n.ifCond)
-    mapOperatorsImpl(n.ifThen)
-    for el in n.ifElifs.mitems:
-      mapOperatorsImpl(el.cond)
-      mapOperatorsImpl(el.body)
-    if n.ifElse.kind != gpuDiscard:
-      mapOperatorsImpl(n.ifElse)
-  of gpuProc:
-    mapOperatorsImpl(n.pName)
-    for p in n.pParams.mitems:
-      mapOperatorsImpl(p.ident)
-    mapOperatorsImpl(n.pBody)
-  else:
-    discard
 
 # ═══════════════════════════════════════════════════════════════════════
 # filterPragmas
@@ -329,6 +181,21 @@ func filterPragmasImpl(n: var GpuAst) =
     else:
       discard
   n.pAttributes = attrs
+
+func markExplicitUnrollsImpl(n: var GpuAst) =
+  if n.kind == gpuFor:
+    var unroll = false
+    var kept: seq[GpuAst]
+    for stmt in n.fBody.statements:
+      if stmt.kind == gpuComment and stmt.comment == "{.unroll.}":
+        unroll = true
+      else:
+        kept.add stmt
+    if unroll:
+      n.fUnroll = true
+      n.fBody.statements = kept
+  for child in n.mitems:
+    markExplicitUnrollsImpl(child)
 
 # ═══════════════════════════════════════════════════════════════════════
 # resolveOverloadedOperators

@@ -330,7 +330,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuFor:
     let i = ast.fVar.ident()
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(var " & i & ": i32 = " &
+    if ast.fUnroll:
+      # no unroll directive exists in WGSL, surface the drop in the artifact
+      result = indentStr & "// {.unroll.} requested but not honored on WebGPU\n"
+    result &= indentStr & "for(var " & i & ": i32 = " &
              ctx.genWebGpu(ast.fStart) & "; " &
              i & cmp & ctx.genWebGpu(ast.fEnd) & "; " &
              i & " = " & i & " + " & (if ast.fStep == nil: "1" else: ctx.genWebGpu(ast.fStep)) & ") {\n"
@@ -374,9 +377,19 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
         ctx.withoutSemicolon:
           result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
       of gbkNone:
-        ctx.withoutSemicolon:
-          result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
-                   ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+        case ast.cName.symbol.shuffleBuiltin
+        of gbkSimdShuffle:
+          # `subgroupShuffle` takes the subgroup-relative source index as `u32`, cast.
+          ctx.withoutSemicolon:
+            result = indentStr & "subgroupShuffle(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
+        of gbkSimdShuffleXor:
+          # `subgroupShuffleXor` takes the xor mask as `u32`, cast.
+          ctx.withoutSemicolon:
+            result = indentStr & "subgroupShuffleXor(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
+        of gbkNone:
+          ctx.withoutSemicolon:
+            result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
+                     ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
 
 
 
