@@ -15,12 +15,10 @@
 # - full: every query tile visits kvTiles
 # - per visited tile: QK 2*MT*NT*Dk, PV 2*MT*NT*Dv, over Hq*B heads
 #
-# Causal alignment for L < S: the kernel contract is hi(q) = min(S, q + offset + 1)
-# with offset 0, a top-left band. A query row touches keys 0 .. L-1 at most, so
-# the MLX side slices k and v to the first min(S, L) keys on causal cases. The
-# "causal" mask string is lower-right aligned, on the sliced square shapes the
-# two alignments agree. The Nim kernel never reads the masked-out key tiles,
-# the slice keeps both sides on identical math over identical key counts.
+# Causal alignment for L < S: the kernel band is bottom-right-aligned,
+# offset = S - L. run_case passes all S keys, no slicing, the same op the
+# Metal bench times. check_math validates the installed MLX mask alignment
+# against the explicit top-left / bottom-right masks before any timing.
 #
 # Run from the worktree root:
 #   uv run python workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_mlx.py
