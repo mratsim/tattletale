@@ -1,9 +1,6 @@
 ## SPIR-V binary emission: shuffle kernels execute through the Vulkan engine
-##
 ## Test that `simd_shuffle` gathers from an absolute lane index while
-## `simd_shuffle_xor` exchanges with the lane at callerLane xor mask,
-## both compiled straight from the `spirv:` macro words and launched
-## on the device
+## `simd_shuffle_xor` exchanges with the lane at callerLane xor mask
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

@@ -114,7 +114,7 @@ func finiteFloor*(T: typedesc): T {.inline.} =
   elif T is bfloat16:
     cast[T](0xFF7F'u16)
   else:
-    T(-1e30'f32)
+    cast[T](0xFF7FFFFF'u32)
 
 func posInf*(T: typedesc): T {.inline.} =
   ## Plus-infinity fill value of `T`

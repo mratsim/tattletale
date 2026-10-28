@@ -1,6 +1,5 @@
 ## OpenCL: `simd_shuffle` and `simd_shuffle_xor` cross-lane shuffles.
-## Test that the shuffle builtins emit `sub_group_shuffle` and `sub_group_shuffle_xor`
-## and exchange values bitwise against host-side expectations over 32 lanes. Requires OpenCL 2.1+ hardware (sub-group shuffles are core there).
+## Test that the shuffle builtins exchange values bitwise against host-side expectations over 32 lanes
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -25,6 +24,8 @@ const butterflyCl = opencl:
     outBuf[lane] = sub_group_shuffle_xor(uint32(lane), 1)
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+  # Requires OpenCL 2.1+ hardware: sub-group shuffles are core there
+
   suite "OpenCL - cross-lane shuffles":
 
 

@@ -1,7 +1,5 @@
 ## Vulkan (GLSL): `simd_shuffle` and `simd_shuffle_xor` cross-lane shuffles.
-## Test that the shuffle builtins emit `subgroupShuffle`/`subgroupShuffleXor`
-## under the KHR subgroup shuffle extensions and exchange values bitwise
-## against host-side expectations across the 32 lanes.
+## Test that the shuffle builtins exchange values bitwise against host-side expectations across the 32 lanes
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

@@ -1,11 +1,8 @@
 ## markExplicitUnrolls: `{.unroll.}` comments become fUnroll flags
-##
-## Test that the filterPragmas pass sets fUnroll on `{.unroll.}` loops,
-## consumes the pragma comments, leaves unmarked loops and other
-## statement pragmas untouched
+## Test that the filterPragmas pass sets fUnroll on loops carrying the `{.unroll.}` pragma
 ##
 ## Run:
-##   nim c --hints:off --warnings:off \
+##   cd tattletale && ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/control_flow/t_ir_mark_explicit_unrolls.nim
 

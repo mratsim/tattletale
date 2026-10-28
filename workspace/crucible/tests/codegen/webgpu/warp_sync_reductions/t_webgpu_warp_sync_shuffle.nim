@@ -1,7 +1,7 @@
 ## WebGPU: `simd_shuffle` and `simd_shuffle_xor` cross-lane shuffles.
 ## Test that `subgroupShuffle` broadcasts the subgroup's lane 0 while
 ## `subgroupShuffleXor` exchanges with the lane at callerLane xor mask,
-## bitwise over 32 lanes. Requires an adapter exposing the subgroups device feature.
+## bitwise over 32 lanes
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -26,6 +26,7 @@ const butterflyWgsl = webgpu:
     outBuf[lane] = subgroupShuffleXor(uint32(lane), 1)
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+  # Requires an adapter exposing the subgroups device feature
   suite "WebGPU - cross-lane shuffles":
 
     test "simd_shuffle broadcasts lane 0 to every lane":

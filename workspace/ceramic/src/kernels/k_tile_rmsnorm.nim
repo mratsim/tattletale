@@ -21,8 +21,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ##
   ## Sum of squares per row, one register tile at a time:
   ## - `atAxisIndex` cuts the source and destination strips per row, the rank-1 weight strip is the full tensor
-  ## - tile loads pad past-the-end slots with the `roSum` identity, so short and ragged rows contribute nothing to the sum
-  ## - `acc.reduceAcc(reg, roSum)` accumulates each tile's sum of squares onto the accumulator, one subgroup butterfly per tile
+  ## - tile loads pad past-the-end slots with zero, so short and ragged rows contribute nothing to the sum
+  ## - `tileSum += reg.data[i]` per element, `acc += reduceAdd(tileSum)` folds each tile onto the accumulator, one subgroup butterfly per tile
   ##
   ## Mean accumulation in fp32. `rsqrt` is the backend native reciprocal square root.
   ##

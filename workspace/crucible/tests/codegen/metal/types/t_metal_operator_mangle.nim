@@ -1,18 +1,15 @@
 ## Metal: user operator overloads on a struct emit mangled callee names.
-##
-## `*=` / `+=` compound assigns and `+` infix over a user struct call
-## callees named by getOperatorMangledName (`star_eq_...` shape).
-## The emitted MSL contains no raw `*=` identifier and the kernels compute:
-##
-## - two structs each overloading `+` get two distinct callees, a constant
-##   hash would emit one definition twice
-## - the compound assigns take a `var T` first parameter, registration
-##   resolves `var T` params
+## Test that compound assigns and infix over a user struct call mangled callees and the emitted MSL contains no raw operator identifier
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   cd tattletale && ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/types/t_metal_operator_mangle.nim
+##
+## Two structs each overloading `+` get two distinct callees.
+## A constant hash would emit one definition twice.
+## The compound assigns take a `var T` first parameter,
+## registration resolves `var T` params.
 
 import std/[strutils, unittest]
 import workspace/crucible

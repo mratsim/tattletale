@@ -93,7 +93,6 @@ proc scaled_dot_product_attention*(
   let qMul = scale * Log2e                     # exp2 shape of the softmax
 
   let
-    qTile = threadgroup_position_in_grid.x
     head  = threadgroup_position_in_grid.y
     batch = threadgroup_position_in_grid.z
     thrID = getLocalThreadID()

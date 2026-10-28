@@ -1,7 +1,6 @@
 ## CUDA: `simd_shuffle` and `simd_shuffle_xor` cross-lane shuffles.
 ## Test that `shfl_sync` broadcasts the warp's lane 0 and `shfl_xor_sync`
 ## exchanges with the lane at callerLane xor mask, bitwise over 32 lanes.
-## Auto-runs on the CUDA workstation.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

@@ -1,10 +1,8 @@
 ## launchDeviceFn applies the callee's default values for omitted arguments
-##
-## A kernel with defaulted parameters launches with fewer arguments.
-## The omitted trailing formals fill from their defaults, both compile-time (static) and runtime parameters.
+## Test that launching a kernel with omitted trailing arguments fills them from their defaults, both static and runtime parameters
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
+##   cd tattletale && ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/runtime/t_launch_device_fn_default_args.nim
 

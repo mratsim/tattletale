@@ -1,17 +1,15 @@
 ## mangleNames pass and operator display names
-##
-## - plain fkDefined names keep their name, on collision every entry after
-##   the first gets an iSym hash (7 base58 chars) appended
-## - fkBuiltin entries emit as-is
-## - operator overloads finalize at registration (getOperatorMangledName)
-## - the mangleNames pass skips them
-##
-## mangleGpuName applies Nim's compiler/mangleutils.nim word mapping
+## Test that colliding fkDefined names get an iSym hash suffix while fkBuiltin entries and operator overloads emit as-is
 ##
 ## Run:
-##   nim c --hints:off --warnings:off \
+##   cd tattletale && ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
 ##     workspace/crucible/tests/ir/mangling/t_ir_mangleNames.nim
+##
+## On collision every fkDefined entry after the first gets an iSym hash
+## (7 base58 chars) appended. Operator overloads finalize at registration
+## (getOperatorMangledName) and the mangleNames pass skips them.
+## mangleGpuName applies Nim's compiler/mangleutils.nim word mapping.
 
 import std / [tables, sequtils, strutils]
 import workspace/crucible/src/crucible_internal_compiler
