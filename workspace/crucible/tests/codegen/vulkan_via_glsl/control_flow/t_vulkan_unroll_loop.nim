@@ -9,6 +9,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/control_flow/t_vulkan_unroll_loop.nim
 
+import std/strutils
 import workspace/crucible
 
 const unrollGlsl = glsl:

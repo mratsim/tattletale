@@ -8,6 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/control_flow/t_opencl_unroll_loop.nim
 
+import std/strutils
 import workspace/crucible
 
 const unrollOpenCL = opencl:

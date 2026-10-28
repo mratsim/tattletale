@@ -8,6 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cuda/control_flow/t_cuda_unroll_loop.nim
 
+import std/strutils
 import workspace/crucible
 
 const unrollCuda = cuda:
