@@ -28,16 +28,16 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
 ## Architecture in brief
 
-- **One IR, six backends.** [`src/codegen/frontend/nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim)
-  lowers Nim AST to a backend-neutral IR.
-  Each backend under [`src/codegen/backends/`](src/codegen/backends/) prints it:
-  `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `hlsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
+- **One IR, six backends.** [`nim_to_crucible.nim`](src/codegen/frontend/nim_to_crucible.nim) lowers Nim AST to one
+  backend-neutral IR, each backend under [`src/codegen/backends/`](src/codegen/backends/) prints it:
+  `printer_opencl.nim`, `printer_glsl.nim`, `printer_hlsl.nim`, `printer_wgsl.nim`, `printer_msl.nim`,
+  plus `printer_spirv.nim`, the direct SPIR-V encoder. The CUDA printer is not rebuilt on the CIRv2 IR yet, `cuda:` blocks refuse loudly.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
   run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
   Pass families: normalizations, legalizations, preprocessing, lowering, and validations.
 - **Compile-time codegen.** The `cuda`/`opencl`/`glsl`/`hlsl`/`webgpu`/`metal` macros emit
   source at compile time through [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
-- **Tests.** IR-level tests under [`tests/ir/`](tests/ir/) plus auto-runnable suites per backend
+- **Tests.** IR-level tests under [`tests/cirv2/`](tests/cirv2/) plus auto-runnable suites per backend
   (`cuda/`, `opencl/`, `vulkan_via_glsl/`, `vulkan_via_hlsl/`, `webgpu/`, `metal/`).
   Tests must call `engine.launchKernel()`, not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
 
@@ -115,7 +115,6 @@ workspace/crucible/
   src/
     crucible_public_api.nim       Curated surface: engines, device memory, launch sugar, macros
     crucible_gpu_builtins.nim     Builtin vocabulary hub, callable from kernel bodies
-    crucible_internal_compiler.nim  IR/compiler internals, the test surface for tests/ir
     builtins/
       builtins.nim              Re-exports the catalog and pragmas to the entry macros
       builtins_catalog.nim      Canonical coordinate/sync builtins + per-backend idiom aliases
@@ -131,32 +130,38 @@ workspace/crucible/
         nim_to_crucible.nim            Frontend: pure 1:1 Nim AST -> IR translator
         nim_type_resolvers.nim  Type/overload resolution
       ir/
-        ast_datatypes.nim     IR types: GpuAst, GpuType, GpuContext, Symbol, fnTable
-        ast_type_resolvers.nim  IR type helpers
-        ast_type_constructors.nim Type constructors
+        cirv2_lang.nim        IR types: the CIRv2 module/proc/inst graph
+        cirv2_build.nim       IR constructors
+        cirv2_pretty.nim      IR pretty-printer
+        cirv2_verify.nim      IR verifier
       passes/
         pass_datatypes.nim        Pass/registry types, walk, runPasses
         pass_registry.nim         PassRegistry
         passes_normalizations.nim  Frontend-extraction passes
         passes_legalizations.nim  Legalizations
-        passes_preprocessing.nim  Preprocessing (incl. mangleNames, backend phases)
-        passes_lowering.nim       Lowering (gtSpan -> ptr+len, etc.)
+        passes_norm_aliases.nim   Builtin-alias normalization
+        passes_norm_shell_fold.nim  Constant shell folding
+        passes_norm_structure.nim Structure normalization
+        passes_low_kernel_params.nim  Kernel-parameter lowering
+        passes_low_reserved.nim   Reserved-identifier lowering
+        passes_lowering.nim       Lowering
         passes_validations.nim    Pre/post validation passes
         passes_optimizations.nim  Optimizations
-        passes_cuda.nim           Per-language passes
-        passes_glsl.nim
-        passes_msl.nim
-        passes_opencl.nim
-        passes_wgsl.nim
+        passes_lowering_cuda.nim  Per-language lowering passes
+        passes_lowering_glsl.nim
+        passes_lowering_hlsl.nim
+        passes_lowering_msl.nim
+        passes_lowering_opencl.nim
+        passes_lowering_wgsl.nim
       backends/
-        backends_api.nim          Dispatches codegen to the printers
-        cuda_lang.nim             Printers: CUDA C++, OpenCL C, GLSL, WGSL, MSL
-        opencl_lang.nim
-        glsl_lang.nim
-        hlsl_lang.nim             HLSL printer: dxc-compiled, D3D12 register bindings, ConstantBuffer scalars
-        wgsl_lang.nim
-        msl_lang.nim
-        lang_utils.nim            Shared printer helpers
+        targets.nim               BackendKind, the backend identifier shared by
+                                  printers, engines and launch serialization
+        printer_opencl.nim        Printers: OpenCL C, GLSL, HLSL, WGSL, MSL
+        printer_glsl.nim
+        printer_hlsl.nim          HLSL printer: dxc-compiled, D3D12 register bindings, ConstantBuffer scalars
+        printer_wgsl.nim
+        printer_msl.nim
+        printer_spirv.nim         Direct SPIR-V emission over spirv_encoder.nim
     runtime/
       engines_api.nim is under engines/: the HwEngine concept, newEngine, re-exports
       engines/
@@ -190,7 +195,7 @@ workspace/crucible/
       objc_abi.nim                libobjc msgSend bridge (Metal's host API)
     macros/ast_rebuilder.nim
   tests/
-    ir/                           IR-level tests (pure Nim, no engine)
+    cirv2/                        IR-level tests (pure Nim, no engine)
     codegen/
       cuda/ opencl/ vulkan_via_glsl/ vulkan_via_hlsl/ webgpu/ metal/
                                   Per-backend auto-runnable tests
@@ -243,8 +248,8 @@ nim test_crucible_metal
 
 # IR-level tests (pure Nim)
 nim c -r --hints:off --warnings:off \
-  --outdir:build/tests/ir --nimcache:nimcache/tests/ir \
-  workspace/crucible/tests/ir/*/*.nim
+  --outdir:build/tests/cirv2 --nimcache:nimcache/tests/cirv2 \
+  workspace/crucible/tests/cirv2/*.nim
 ```
 
 ## Related docs

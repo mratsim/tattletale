@@ -9,15 +9,15 @@
 import workspace/crucible/src/abis/c_abi
 import workspace/crucible/src/abis/nvidia_abi
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/codegen/backends/targets
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/cuda_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   NVRTC = object
@@ -49,9 +49,9 @@ proc newCudaEngine*(): CudaEngine =
   result = CudaEngine()
   result.nvrtc = initNvrtc()
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
@@ -80,9 +80,9 @@ proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArr
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx[n: static int] = object
   addrs: array[n, pointer]
@@ -142,9 +142,9 @@ proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer
 proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) {.inline.} =
   check cuMemcpyDtoH(dst, src, csize_t(n))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc initNvrtc(): NVRTC =
   var

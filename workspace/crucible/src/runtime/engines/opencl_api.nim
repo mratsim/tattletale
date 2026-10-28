@@ -10,15 +10,15 @@ import std/[macros, tables]
 
 import workspace/crucible/src/abis/opencl_abi
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/codegen/backends/targets
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   OpenCLKernelCache = object
@@ -35,9 +35,9 @@ template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
 proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
   OpenCLEngine(ctx: newOpenCLContext())
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
   if engine.source.len > 0:
@@ -64,9 +64,9 @@ proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   kern: OpenCLKernel
@@ -84,9 +84,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   blob.packFrom(off, v, bkOpenCL)
   ctx.kern.setArg(argIdx, size, blob[0].addr)
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.

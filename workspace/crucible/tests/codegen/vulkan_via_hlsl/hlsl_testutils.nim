@@ -1,6 +1,6 @@
 ## HLSL test utilities:
-## - DXC compiles emitted kernel source twice (compileToSpirV, compileCheck):
-##   DXIL output, then SPIR-V through spirv-val
+## - DXC two-stage compile of emitted kernel source (compileToSpirV, compileCheck):
+##   the DXIL stage, then the SPIR-V stage through spirv-val
 ## - SPIR-V binding reflection for the descriptor-route tests (assertHlslBindings)
 ##
 ## Shared by the tests under `tests/codegen/vulkan_via_hlsl/`,
@@ -10,14 +10,17 @@ import std/[os, osproc, strutils, tables]
 
 type BindingExpectation* = tuple[name: string, ordinal: int, readOnly: bool]
 
-proc compileToSpirV*(name, source: string): seq[uint32] =
+proc compileToSpirV*(name, source: string, dxilLeg: bool = true): seq[uint32] =
   ## Compiles one emitted kernel through the validated DXC route:
-  ## - dxc -T cs_6_4 -E main -Fo, the DXIL output
-  ## - dxc -T cs_6_4 -E main -spirv -Fo, the SPIR-V module
+  ## - dxc -T cs_6_4 -E main -Fo, the DXIL stage, unless `dxilLeg` is false
+  ## - dxc -T cs_6_4 -E main -spirv -Fo, the SPIR-V stage
   ## - spirv-val --target-env vulkan1.1
   ## Returns the SPIR-V words for vkCreateShaderModule.
   ## Artifacts go to `build/tests/hlsl/<name>.hlsl(.cso)(.spv)`.
   ## A non-zero exit fails the test.
+  ##
+  ## `dxilLeg = false` for the fvVulkan flavor sources since `vk::BufferPointer`
+  ## exists in DXC's SPIR-V direct mode only, DXIL has no `vk` namespace.
   ##
   ## -E is required, DXC has no default entry point.
   ## This DXC 1.11 build rejects the cs_6_x profile alias, cs_6_4 is the profile in use.
@@ -29,15 +32,13 @@ proc compileToSpirV*(name, source: string): seq[uint32] =
   createDir(dir)
   let path = dir / name & ".hlsl"
   writeFile(path, source)
-  let (dxilOut, dxilCode) = execCmdEx(
-    dxc & " -T cs_6_4 -E main -Fo " & path & ".cso " & path)
-  doAssert dxilCode == 0,
-    "dxc DXIL compilation failed (exit " & $dxilCode & ") for " & name & ":\n" & dxilOut
-  # The HLSL shuffle builtin needs a Vulkan target env on the SPIR-V module,
-  # DXC refuses it under the default env. vulkan1.1 keeps the emitted
-  # SPIR-V at version 1.3, the version spirv-val validates under.
+  if dxilLeg:
+    let (dxilOut, dxilCode) = execCmdEx(
+      dxc & " -T cs_6_4 -E main -Fo " & path & ".cso " & path)
+    doAssert dxilCode == 0,
+      "dxc DXIL leg failed (exit " & $dxilCode & ") for " & name & ":\n" & dxilOut
   let (spvOut, spvCode) = execCmdEx(
-    dxc & " -T cs_6_4 -E main -spirv -fspv-target-env=vulkan1.1 -Fo " & path & ".spv " & path)
+    dxc & " -T cs_6_4 -E main -spirv -Fo " & path & ".spv " & path)
   doAssert spvCode == 0,
     "dxc SPIR-V leg failed (exit " & $spvCode & ") for " & name & ":\n" & spvOut
   let (valOut, valCode) = execCmdEx(
@@ -52,7 +53,7 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
   ## Checks the compiled module's SPIR-V reflection against the printer's
   ## binding assignment. Per buffer resource:
   ## - the Binding decoration matches the printer's parameter-order numbering, set 0
-  ## - no resource carries NonWritable: DXC emits no read-only decoration,
+  ## - no resource is marked NonWritable: DXC emits no read-only decoration,
   ##   the printer's write-scan is the only read-only source (it chooses t vs u registers)
   ##
   ## Binding-order mismatches are silent on MoltenVK, zero diagnostics, so the disassembly is the guard.
@@ -72,7 +73,7 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
         idNames[rest[0 ..< sp]] = rest[sp + 1 .. ^1].strip(chars = {'"'})
     elif t.startsWith("OpDecorate "):
       # Decoration line: `OpDecorate %id <decoration> <value?>`.
-      # the compiler suffixes duplicate OpNames with `_0`, the resource variable (not its block type) carries the decorations
+      # compiler suffixes duplicate OpNames with `_0`, the decorations sit on the resource variable, not its block type
       let parts = t.split(' ')
       if parts.len >= 3:
         case parts[2]

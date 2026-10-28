@@ -15,9 +15,9 @@ type
     ## - tuple so `.x` and `[idx]` access both work, `nim_to_crucible` normalizes
     ##   tuple `[idx]` to a field access
 
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 0. Canonical thread coordinates (Metal Shading Language)
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #
 # {.builtin.} are repl
 
@@ -46,56 +46,65 @@ proc threadgroup_barrier_device*()
   ## the reverse fence of `threadgroup_barrier`.
   discard
 
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 1. Coordinates
-# ═══════════════════════════════════════════════════════════
-
-template blockIdx*(): untyped = threadgroup_position_in_grid
-template blockDim*(): untyped = threads_per_threadgroup
-template gridDim*(): untyped = threadgroups_per_grid
-template threadIdx*(): untyped = thread_position_in_threadgroup
+# ═══════════════════════════════════════════════════════════════════════
 
 template get_global_id*(d: static int): int =
-  when d == 0: thread_position_in_grid.x
-  elif d == 1: thread_position_in_grid.y
-  elif d == 2: thread_position_in_grid.z
+  when d == 0:
+    thread_position_in_grid.x
+  elif d == 1:
+    thread_position_in_grid.y
+  elif d == 2:
+    thread_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_global_id".}
 template get_group_id*(d: static int): int =
-  when d == 0: threadgroup_position_in_grid.x
-  elif d == 1: threadgroup_position_in_grid.y
-  elif d == 2: threadgroup_position_in_grid.z
+  when d == 0:
+    threadgroup_position_in_grid.x
+  elif d == 1:
+    threadgroup_position_in_grid.y
+  elif d == 2:
+    threadgroup_position_in_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_group_id".}
 template get_local_id*(d: static int): int =
-  when d == 0: thread_position_in_threadgroup.x
-  elif d == 1: thread_position_in_threadgroup.y
-  elif d == 2: thread_position_in_threadgroup.z
+  when d == 0:
+    thread_position_in_threadgroup.x
+  elif d == 1:
+    thread_position_in_threadgroup.y
+  elif d == 2:
+    thread_position_in_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_id".}
 template get_local_size*(d: static int): int =
-  when d == 0: threads_per_threadgroup.x
-  elif d == 1: threads_per_threadgroup.y
-  elif d == 2: threads_per_threadgroup.z
+  when d == 0:
+    threads_per_threadgroup.x
+  elif d == 1:
+    threads_per_threadgroup.y
+  elif d == 2:
+    threads_per_threadgroup.z
   else:
     {.error: "Invalid dimension " & $d & " in get_local_size".}
 template get_num_groups*(d: static int): int =
-  when d == 0: threadgroups_per_grid.x
-  elif d == 1: threadgroups_per_grid.y
-  elif d == 2: threadgroups_per_grid.z
+  when d == 0:
+    threadgroups_per_grid.x
+  elif d == 1:
+    threadgroups_per_grid.y
+  elif d == 2:
+    threadgroups_per_grid.z
   else:
     {.error: "Invalid dimension " & $d & " in get_num_groups".}
 
-template gl_GlobalInvocationID*(): untyped = thread_position_in_grid
-template gl_LocalInvocationIndex*(): untyped = thread_index_in_threadgroup
-
-template global_id*(): untyped = thread_position_in_grid
+# `{.builtin.}` alias declarations in `builtins_aliases` cover the CUDA/GLSL/WGSL
+# coordinate names. The alias relation derives from those declarations alone.
+# No parallel name table exists.
 # No `workgroup_size` alias: WGSL has no `workgroup_size` builtin,
 # only the `@workgroup_size` attribute, so `threads_per_threadgroup` is deferred on WGSL.
 
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 2. Synchronization
-# ═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template syncthreads*(): untyped = threadgroup_barrier()
 

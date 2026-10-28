@@ -5,8 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU builtin vocabulary available inside kernel bodies, the stable
-## surface downstream users bind against.
+## GPU builtin vocabulary available inside kernel bodies, the stable surface downstream users bind against.
 ##
 ## | Section      | Symbols                                                                                    |
 ## | ------------ | ------------------------------------------------------------------------------------------ |
@@ -33,6 +32,7 @@
 
 import
   ./builtins/builtins_catalog,
+  ./builtins/builtins_aliases,
   ./builtins/builtins_functions,
   ./builtins/builtins_gpu_types,
   ./builtins/builtins_warp_sync_reductions,
@@ -41,22 +41,16 @@ import
   ./builtins/builtins_compilermagic
 
 export builtins_catalog
+export builtins_aliases
 
 export builtins_functions.exp2, builtins_functions.rsqrt
 
 export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
        builtins_gpu_types.fp8e4m3, builtins_gpu_types.fp8e5m2,
        builtins_gpu_types.toFp16, builtins_gpu_types.toFp32,
-       builtins_gpu_types.toBf16, builtins_gpu_types.toBf32,
-       builtins_gpu_types.toFp8e4m3, builtins_gpu_types.toFp8e5m2,
-       builtins_gpu_types.asFp16, builtins_gpu_types.asU16,
-       builtins_gpu_types.to
+       builtins_gpu_types.asFp16, builtins_gpu_types.asU16
 
-export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax,
-       builtins_warp_sync_reductions.simd_shuffle, builtins_warp_sync_reductions.simd_shuffle_xor,
-       builtins_warp_sync_reductions.subgroupShuffle, builtins_warp_sync_reductions.subgroupShuffleXor,
-       builtins_warp_sync_reductions.shfl_sync, builtins_warp_sync_reductions.shfl_xor_sync,
-       builtins_warp_sync_reductions.WaveReadLaneAt
+export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax
 
 export builtins_atomics
 

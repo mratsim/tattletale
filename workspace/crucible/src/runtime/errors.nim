@@ -13,3 +13,9 @@ template failLoud*(msg: string) =
   writeStackTrace()
   stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
   quit 1
+
+proc gpuBuiltinHostStub*(msg: string) {.noreturn, inline.} =
+  ## Body of a GPU-only builtin function executing on the host:
+  ## - the host has no such arithmetic or conversion
+  ## - the device side is intercepted by the codegen before any call exists
+  raise newException(ValueError, msg)

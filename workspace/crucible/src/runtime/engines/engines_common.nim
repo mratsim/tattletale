@@ -6,12 +6,12 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Shared leaf: the launch modules, the engines and the public API import it.
-## DeviceMem and the per-backend buffer release share this module, the type
-## and its allocator live in one scope like the stdlib's memalloc and seqs_v2,
-## the release procs are private and never re-exported.
+## DeviceMem and the per-backend buffer release share one scope in this module,
+## the stdlib's memalloc and seqs_v2 pattern, with the release procs private
+## and never re-exported.
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
-export ast_datatypes.BackendKind
+import workspace/crucible/src/codegen/backends/targets
+export targets.BackendKind
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc
@@ -48,7 +48,10 @@ proc freeDeviceImpl(h: VulkanBuffer) {.inline.} =
   h.dealloc()
 
 proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
-  wgpuBufferRelease(h)
+  # Guard: a DeviceMem consumed by a launch leaves a nil handle behind,
+  # releasing it would abort in wgpu.
+  if not h.isNil:
+    wgpuBufferRelease(h)
 
 proc freeDeviceImpl(h: objc.ID) {.inline.} =
   if not objc.isNil(h):

@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/codegen/backends/targets
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
@@ -36,6 +36,8 @@ type
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
     isHlsl: bool
+    stagesGrid: bool       # source reads the dispatch grid, stage cfg.grid
+                           # into the uniform block (the materialized parameter)
     caches: VulkanCaches
 
 template backendKind(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
@@ -95,9 +97,18 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.spirv = compileHlslToSpirvViaDxc(hlsl)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
+  engine.stagesGrid = "crucible_numworkgroups" in hlsl
 
-proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
-  ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
+proc ingest*(engine: VulkanEngine, spirv: seq[uint32], stagedGrid: bool = false) =
+  ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block or of a compiled fvVulkan HLSL flavor source.
+  ##
+  ## Args:
+  ## - `stagedGrid`: true when the module expects the dispatch group counts
+  ##   staged at the end of its push constant block, the fvVulkan flavor's
+  ##   materialized `crucible_numworkgroups` member
+  ##
+  ## The words hold no such signal, the compile side passes the flag explicitly,
+  ## the address route stages the counts at launch.
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
@@ -114,6 +125,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   engine.entryPoint = sq.name
   engine.shaderSquadron = sq.localSize
   engine.isHlsl = false
+  engine.stagesGrid = stagedGrid
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   ## Ingested GLSL source, the ingest-if-differs identity
@@ -304,7 +316,20 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
                         output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
   bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
-  let pushConstLen = dctx.pn
+  var pushConstLen = dctx.pn
+  if engine.stagesGrid:
+    # staged dispatch grid size, 3 x i32 behind the packed kernel args,
+    # at the 16-byte offset where the fvVulkan printer locks the grid member
+    let gridOff = round_multiple_up(dctx.pn, 16)
+    if gridOff + 12 > 128:
+      failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+    let groups = [ceil_div(cfg.grid.x * squadron.x, squadron.x),
+                  ceil_div(cfg.grid.y * squadron.y, squadron.y),
+                  ceil_div(cfg.grid.z * squadron.z, squadron.z)]
+    for i, g in groups:
+      let gi = int32(g)
+      copyMem(dctx.pushBuf[gridOff + i * 4].addr, gi.unsafeAddr, 4)
+    pushConstLen = gridOff + 12
 
   let pipelineKey = (kernel, pushConstLen)
   if not engine.caches.pipelineCache.hasKey(pipelineKey):
@@ -340,18 +365,50 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
 
 proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                            output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+  # Buffer leaves bind as storage descriptors 0 ..< bufs.len,
+  # value leaves pack into one uniform blob staged behind them,
+  # binding bufs.len, the printed Push block's register(bN) ordinal.
   var bufs: seq[VulkanBuffer]
-  template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
-    bufs.add v
-  template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
+  var blob: array[hlslUniformBlobCap(typeof(output), typeof(args), VulkanBuffer), byte]
+  var off = 0
+  template collectDescriptorLeaf(ctx: var auto, v: auto, argIdx: int) =
+    when typeof(v) is VulkanBuffer:
+      bufs.add v
+    elif typeof(v) is DeviceMem:
+      bufs.add v.mem
+    else:
+      blob.packHlslPush(off, v)
+  bindArgs(bufs, output, args, collectDescriptorLeaf, VulkanBuffer, bkWebGPU)
+  if not engine.isHlsl and off > 0:
     failLoud("descriptor route: scalar kernel args are not supported, " &
              "the uniform-block layout model does not exist yet")
-  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, bkGlsl)
 
-  let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len))
-  let pool = engine.ctx.createDescriptorPool(uint32(bufs.len))
+  var uniforms: seq[VulkanBuffer]
+  if engine.isHlsl:
+    if engine.stagesGrid:
+      # materialized dispatch grid size, 3 x i32 with the vector rule:
+      # 4-byte aligned, never straddling a 16-byte register.
+      # staged values are the dispatch group counts runKernel computes, what a threadgroups_per_grid read means.
+      off = (off + 3) div 4 * 4
+      if off mod 16 + 12 > 16:
+        off = (off + 15) div 16 * 16
+      let groups = [ceil_div(cfg.grid.x * squadron.x, squadron.x),
+                    ceil_div(cfg.grid.y * squadron.y, squadron.y),
+                    ceil_div(cfg.grid.z * squadron.z, squadron.z)]
+      for g in groups:
+        let gi = int32(g)
+        copyMem(blob[off].addr, gi.unsafeAddr, 4)
+        off += 4
+    if off > 0:
+      var uniform = engine.allocDeviceImpl(off)
+      engine.copyToDeviceFromHostImpl(uniform, blob[0].addr, off)
+      uniforms.add uniform
+
+  let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len),
+    uint32(uniforms.len))
+  let pool = engine.ctx.createDescriptorPool(uint32(bufs.len), uint32(uniforms.len))
   let descSet = engine.ctx.allocateDescriptorSet(pool, setLayout)
-  engine.ctx.updateDescriptorSet(descSet, bufs, uint32(bufs.len))
+  engine.ctx.updateDescriptorSet(descSet, bufs, uint32(bufs.len), uniforms)
 
   let pipelineKey = (kernel, 0)
   if not engine.caches.pipelineCache.hasKey(pipelineKey):
@@ -368,7 +425,10 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  nil, 0, descSet)
 
-  # Sets and pools are per-launch and die once runKernel's fence wait returns, the pipeline outlives them in the engine's pipeline cache
+  # Sets, pools and the uniform scratch die once runKernel's fence wait returns,
+  # pipeline outlives them in the engine's pipeline cache
+  for buf in uniforms.mitems:
+    buf.dealloc()
   engine.ctx.destroyDescriptorPool(pool)
   engine.ctx.destroyDescriptorSetLayout(setLayout)
 

@@ -161,8 +161,8 @@ genSpvOpcodeTable:
   op OpFunction: 54: [o(spvIdResultType), o(spvIdResult), o(spvFunctionControl), o(spvIdRef)]
   op OpFunctionParameter: 55: [o(spvIdResultType), o(spvIdResult)]
   # Arguments are IdRefs after the function id. Function-storage pointer args
-  # (an OpVariable Function result passed directly) validate and execute under
-  # the Vulkan target environment without any VariablePointers capability.
+  # (an OpVariable Function result passed directly) validate and execute
+  # under the Vulkan target environment without any VariablePointers capability.
   # A pointer-to-pointer Function-storage VARIABLE is categorically invalid.
   op OpFunctionCall: 57: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), oMany(spvIdRef)]
   op OpFunctionEnd: 56
@@ -219,6 +219,14 @@ genSpvOpcodeTable:
   op OpFOrdGreaterThan: 186: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpFOrdLessThanEqual: 188: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
   op OpFOrdGreaterThanEqual: 190: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  # Bit and shift ops over integer operands, the shift amount is unsigned
+  op OpShiftLeftLogical: 202: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpShiftRightLogical: 203: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpShiftRightArithmetic: 204: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpBitwiseOr: 146: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpBitwiseAnd: 147: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpBitwiseXor: 148: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]
+  op OpBitwiseNot: 149: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   op OpControlBarrier: 224: [o(spvIdScope), o(spvIdScope), o(spvIdMemorySemantics)]
   op OpLabel: 248: [o(spvIdResult)]
   op OpBranch: 249: [o(spvIdRef)]
@@ -227,13 +235,9 @@ genSpvOpcodeTable:
   op OpSelectionMerge: 247: [o(spvIdRef), o(spvSelectionControl)]
   op OpReturn: 253
   op OpReturnValue: 254: [o(spvIdRef)]
-  # The GroupOperation enumerant (Reduce/InclusiveScan/ExclusiveScan) sits
+  # GroupOperation enumerant (Reduce/InclusiveScan/ExclusiveScan) sits
   # between Scope and the value, the optional trailing IdRef is the ClusterSize
   op OpGroupNonUniformFAdd: 350: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvGroupOperation), o(spvIdRef), oOpt(spvIdRef)]
-  # Shuffle ops carry no GroupOperation word: the last operand is the lane id
-  # (Shuffle) or the xor mask (ShuffleXor), both plain IdRef
-  op OpGroupNonUniformShuffle: 345: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
-  op OpGroupNonUniformShuffleXor: 346: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string pairs with the AtomicFloat32AddEXT capability
   op OpAtomicFAddEXT: 6035: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdScope), o(spvIdMemorySemantics), o(spvIdRef)]
 
@@ -251,7 +255,6 @@ const
   capInt16 = 22'u32
   capPhysicalStorageBufferAddresses* = 5347'u32
   capGroupNonUniformArithmetic = 63'u32
-  capGroupNonUniformShuffle = 65'u32
   capAtomicFloat32AddEXT = 6033'u32
 
 const
@@ -317,7 +320,6 @@ const
   fcNone = 0'u32
   selNone = 0'u32
   lcNone = 0'u32
-  lcUnroll = 1'u32 ## LoopControlUnroll bit
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Module sections and word stream
@@ -344,7 +346,7 @@ type
 
 const spvMagic = 0x07230203'u32
 # Module baseline: SPIR-V 1.3, encoded in the spvVersion13 version word.
-# The baseline implies semantics beyond the number:
+# That baseline implies semantics beyond the number:
 # - the entry-point interface lists Input/Output variables only
 # - OpTypeFloat omits the FPEncoding operand, the 1.3 form
 # - PhysicalStorageBufferAddresses is extension-gated
@@ -396,7 +398,7 @@ func emitInstSeq(m: var SpvModule, section: SpvSection, opcode: SpvOp, operands:
 
 func finalize(m: SpvModule): seq[uint32] =
   # Header words: magic, version, generator (0), bound, schema (0).
-  # The bound word is nextId at finalize time, covering all allocated ids.
+  # Bound word is nextId at finalize time, covering all allocated ids.
   result = @[spvMagic, m.version, spvGeneratorNone, m.nextId, spvSchemaNone]
   for section in SpvSection:
     result.add m.sections[section]
@@ -455,7 +457,7 @@ func emitMemoryModel(b: var SpvBuilder, addressingModel, memoryModel: uint32) =
   b.module.emitInstSeq(ssMemoryModel, OpMemoryModel, @[addressingModel, memoryModel])
 
 func emitEntryPoint(b: var SpvBuilder, executionModel, entryPoint: uint32, name: string, iface: openArray[uint32]) =
-  # The interface lists the global Input/Output variables the entry point reads:
+  # Interface lists the global Input/Output variables the entry point reads:
   # - Vulkan requires every such variable listed
   # - an empty list is valid when the entry point reads none
   # - the Input/Output-only interface matches the spvVersion13 baseline,

@@ -10,16 +10,16 @@ import std/[macros, monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/codegen/backends/targets
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/webgpu_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   WebgpuPipelineCache = object
@@ -36,6 +36,7 @@ type
     ctx: WebgpuContext
     cache: WebgpuCache
     shaderSquadron: Dim3
+    shaderReadOnly: set[int16]
 
 template backendKind*(_: typedesc[WebgpuEngine]): BackendKind = bkWebGPU
 
@@ -53,9 +54,9 @@ proc newWebgpuEngine*(): WebgpuEngine =
     cache: WebgpuCache(pipelines: initTable[(string, seq[int]), WebgpuPipelineCache]())
   )
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template check*(status: WGPUBufferMapAsyncStatus) =
   let code = status
@@ -87,6 +88,7 @@ proc ingest*(engine: WebgpuEngine, source: string) =
     failLoud("WebGPU: failed to create shader module")
   engine.source = source
   engine.shaderSquadron = parseShaderSquadron(source)
+  engine.shaderReadOnly = parseReadOnlyBindings(source)
 
 proc getArtifact*(engine: WebgpuEngine): string {.inline.} =
   engine.source
@@ -106,9 +108,9 @@ proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   handles: array[64, WGPUBuffer]
@@ -136,9 +138,31 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
   inc ctx.pn, padded
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+
+proc parseReadOnlyBindings(wgsl: string): set[int16] =
+  ## Collects the binding indices the WGSL declares read-only:
+  ## `@binding(N) var<storage, read>`, one declaration per line.
+  ## Buffers the kernel writes declare `read_write` and stay out of the set.
+  var i = 0
+  while true:
+    i = wgsl.find("@binding(", i)
+    if i < 0:
+      return
+    var j = i + "@binding(".len
+    var n = 0
+    var digits = 0
+    while j < wgsl.len and wgsl[j] in {'0' .. '9'}:
+      n = n * 10 + (ord(wgsl[j]) - ord('0'))
+      inc j
+      inc digits
+    while j < wgsl.len and wgsl[j] in {')', ' '}:
+      inc j
+    if digits > 0 and wgsl.find("var<storage, read>", j) == j:
+      result.incl int16(n)
+    i = j
 
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
@@ -165,8 +189,10 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
       inc j
   if result.x == 0:
     return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
-  if result.y == 0: result.y = 1
-  if result.z == 0: result.z = 1
+  if result.y == 0:
+    result.y = 1
+  if result.z == 0:
+    result.z = 1
 
 proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -187,7 +213,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
          " — launch config mismatch (squadron is shader-baked on WebGPU)")
 
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
-  # the device keeps the spec-default limits, the spec-default alignment is 256.
+  # device keeps the spec-default limits, the spec-default alignment is 256.
   const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWebGPU)
 
   var dctx = SerializationCtx()
@@ -231,7 +257,8 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
         binding: i.cuint,
         visibility: WGPUShaderStageCompute,
         buffer: WGPUBufferBindingLayout(
-          `type`: if dctx.chunkLen[i] > 0: WGPUBufferBindingTypeReadOnlyStorage
+          `type`: if dctx.chunkLen[i] > 0 or int16(i) in engine.shaderReadOnly:
+                    WGPUBufferBindingTypeReadOnlyStorage
                   else: WGPUBufferBindingTypeStorage,
           minBindingSize: dctx.chunkLen[i].csize_t
         )

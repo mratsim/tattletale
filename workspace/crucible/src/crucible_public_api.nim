@@ -7,13 +7,13 @@
 
 ## Curated public surface of crucible.
 ##
-## | Section       | Symbols                                                                                                                             |
-## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                       |
-## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                          |
+## | Section       | Symbols                                                                                                               |
+## | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
+## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Geometry      | `Dim3`, `dim3`                                                                                                                      |
-## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                       |
+## | Geometry      | `Dim3`, `dim3`                                                                                                        |
+## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                         |
 
 import
   ./codegen/gpu_compiler,
@@ -50,5 +50,5 @@ export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.spirv
 # exporting the type also exports the non-pure enum's members by bare name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
-from ./codegen/backends/hlsl_lang import HlslFlavor
+from ./codegen/backends/targets import HlslFlavor
 export HlslFlavor
