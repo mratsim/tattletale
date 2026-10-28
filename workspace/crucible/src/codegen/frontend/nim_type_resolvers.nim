@@ -9,6 +9,12 @@
 ##
 ## Each Nim type is translated exactly once to the closed CirType lattice
 ## (ADR 0001), cached by the type's `getTypeInst` representation.
+##
+## Struct names derive from the canonical type identity:
+##
+## - readable base: the canonical generic instantiation's name
+## - suffix: a 7-character base58 hash of the canonical type text
+## - a type alias and the instantiation it names share one struct
 ## Widths use the crucible convention: Nim `int`/`uint` lower to 32 bits.
 ##
 ## Rejections go into `err` as the first refusal message, the walk unwinds
@@ -46,7 +52,13 @@ func sanitizeIdent*(s: string): string =
     result.add(if c in {'a'..'z', 'A'..'Z', '0'..'9', '_'}: c else: '_')
 
 func deriveStructName*(n: NimNode): string =
-  ## Returns the stable name of a nominal type node, for a generic instantiation the base name with each argument's name appended.
+  ## Returns the readable base of a struct name: a generic instantiation
+  ## contributes its base name and each argument's name.
+  ##
+  ## `resolveStructType` appends the base58 hash of the canonical type text.
+  ##
+  ## Example:
+  ##   TensorView[float32, Shape, Stride] -> "TensorView_float32_Shape_Stride"
   ##
   ## Example:
   ##   TensorView[float32, Shape, Stride] -> "TensorView_float32_Shape_Stride"
@@ -172,11 +184,82 @@ func followAliasHead(n: NimNode): NimNode =
       return
   return n
 
+func canonicalTypeNode(n: NimNode): NimNode =
+  ## Returns the canonical type node: alias symbols replaced by the types they name, so one type identity derives one struct name.
+  ##
+  ## Example:
+  ##   `V2F` aliasing `Vec2[float32]` reads back as `Vec2[float32]`
+  ##
+  ## Contract:
+  ## - a symbol unwraps when its instantiated kind is a generic instantiation and its definition names a type on its right-hand side
+  ## - a directly named instantiation, a plain object type, and a builtin scalar keep their own nodes
+  ## - bracket arguments canonicalize recursively
+  ## - the head symbol stays: an alias head with unbound generic parameters rewrites through `followAliasHead`
+  case n.kind
+  of nnkSym:
+    if n.typeKind == ntyGenericInst and n.symKind == nskType:
+      let impl = n.getImpl()
+      if impl.kind == nnkTypeDef and impl[2].kind in {nnkSym, nnkBracketExpr}:
+        return canonicalTypeNode(impl[2])
+    result = n
+  of nnkBracketExpr:
+    if n.len > 1:
+      result = nnkBracketExpr.newTree(n[0])
+      for i in 1 ..< n.len:
+        result.add(canonicalTypeNode(n[i]))
+    else:
+      result = n
+  else:
+    result = n
+
+const Base58Alphabet* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  ## Base58 alphabet, no 0/O/I/l for readability in emitted device code.
+
+func base58Short*(h: uint64): string =
+  ## Returns the 7-character base58 encoding of `h`, left-padded with `1` while `h` is small.
+  ## 58^7 is about 2.2e12: enough collision avoidance for one compilation unit's struct names.
+  var n = h
+  result = newString(7)
+  for i in countdown(6, 0):
+    result[i] = Base58Alphabet[int(n mod 58)]
+    n = n div 58
+    if n == 0 and i == 0:
+      break
+    if n == 0:
+      for j in 0 ..< i:
+        result[j] = '1'
+      break
+
+func typeIdentityHash*(s: string): uint64 =
+  ## Returns the 64-bit hash of a canonical type text: FNV-1a accumulation plus a splitmix64 finalizer.
+  ## The value distributes uniformly over all 64 bits so the base58 digits never cluster on short inputs.
+  var h: uint64 = 0xcbf29ce484222325'u64
+  for c in s:
+    h = (h xor uint64(ord(c))) * 0x100000001b3'u64
+  h = (h xor (h shr 30)) * 0xbf58476d1ce4e5b9'u64
+  h = (h xor (h shr 27)) * 0x94d049bb133111eb'u64
+  h = h xor (h shr 31)
+  if h == 0:
+    h = 1
+  result = h
+
 proc resolveStructType(r: var CirTypeResolver, n: NimNode): CirType =
   ## Nominal struct translation for an object, tuple, or generic instantiation
-  ## type node, deduplicated by name.
-  let canon = followAliasHead(n)
-  let name = deriveStructName(canon)
+  ## type node, deduplicated by canonical type identity.
+  ##
+  ## Struct name:
+  ##
+  ## - base: `deriveStructName` of the canonical type node
+  ## - suffix: base58 hash of the canonical type text
+  ##
+  ## An alias and the instantiation it names produce one struct, distinct instantiations produce distinct names.
+  ##
+  ## Identity key is the canonical type text, already the resolver's dedup key.
+  ## Nim symbol ids cannot serve as identity:
+  ##
+  ## - an alias and the instantiation it names carry different ids
+  ## - distinct instantiations of one generic can share one id
+  let canon = followAliasHead(canonicalTypeNode(n))
   let cacheKey = canon.repr
   if r.cache.hasKey(cacheKey):
     return r.cache[cacheKey]
@@ -184,6 +267,8 @@ proc resolveStructType(r: var CirTypeResolver, n: NimNode): CirType =
   let fields = r.deriveStructFields(impl)
   if r.err.len > 0:
     return nil
+  let name = deriveStructName(canon) & "_" &
+    base58Short(typeIdentityHash(cacheKey))
   result = tStruct(name, fields).withOrigin(canon)
   r.cache[cacheKey] = result
   r.structs.add(result)
