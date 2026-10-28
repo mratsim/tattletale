@@ -1229,6 +1229,8 @@ proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
   case n.kind
   of gpuDiscard:
     discard
+  of gpuComment:
+    discard
   of gpuBlock:
     doAssert not n.isExpr, "block expressions are outside the SPIR-V subset"
     for s in n.statements:
