@@ -38,8 +38,7 @@ proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
   ## index `lane` and returns it on every lane of the subgroup.
   ##
   ## Contract:
-  ## - `lane` need not be uniform across the subgroup, except on HLSL
-  ##   where `WaveReadLaneAt` requires a dynamically uniform lane.
+  ## - `lane` need not be uniform across the subgroup on any backend.
   ## - `lane` must name an existing lane: an index outside the subgroup
   ##   is undefined (MSL, OpenCL, WGSL) or poison (SPIR-V).
   ## - Keep `lane` in `[0, subgroupSize)` so every lane reads a defined value.
@@ -54,7 +53,7 @@ proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
   ## | OpenCL        | `sub_group_shuffle(value, index)`                                                 | OpenCL 2.1 core, no pragma                                                                               |
   ## | CUDA          | `__shfl_sync(0xffffffff, value, lane)`                                            | full mask: every warp lane participates and receives the result                                          |
   ## | SPIR-V        | `OpGroupNonUniformShuffle` (opcode 345), capability `GroupNonUniformShuffle` (65) | none in core SPIR-V 1.6: the result is poison only when the index leaves the subgroup                    |
-  ## | HLSL          | `WaveReadLaneAt(value, lane)`                                                     | lane dynamically uniform: the same value on every warp lane (HLSL docs, see Slang wave-intrinsics notes) |
+  ## | HLSL          | `WaveReadLaneAt(value, lane)`                                                     | laneIndex need not be uniform, a non-uniform index is the shuffle operation (HLSL docs + WaveReadLaneAt) |
 
 proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin.} = discard
   ## Pairs each lane with the lane whose subgroup-relative index is
