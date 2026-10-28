@@ -285,3 +285,39 @@ suite "MSL lowering fixtures: const_mem survivors":
 
   test "loud refusal: const_mem local without an initializer":
     check constNoInitErr.contains("const_mem local cmBias without an initializer")
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Cast spelling fixtures
+# ═══════════════════════════════════════════════════════════════════════
+
+proc buildBitcastModule(): CirModule =
+  ## kernel: a same-size bit-reinterpreting cast (`cast`, uint32 -> float32)
+  ## and a numeric conversion control (`float()`, int32 -> float32)
+  let f32 = tFloat(32)
+  let u32 = tUint(32)
+  let i32 = tInt(32)
+  let aptrD = tAptr(caDevice, f32)
+  let kern = procD("kern_lower_bitcast", @[
+    param("dst", aptrD)], tVoid(), @[
+    asgnS(patE(sym("dst", aptrD), intLit(0, i32)),
+      castE(f32, intLit(0xFF7FFFFF, u32))),
+    asgnS(patE(sym("dst", aptrD), intLit(1, i32)),
+      convE(f32, intLit(3, i32))),
+    retS(),
+  ])
+  kern.isKernel = true
+  moduleD("lower_bitcast", @[], @[kern])
+
+const bitcastPipe = emitPipe(buildBitcastModule)
+
+suite "MSL lowering fixtures: cast spelling":
+
+  test "same-size cast reinterprets the bits, conversions stay numeric":
+    ## `cast` moves the bit pattern: MSL emits `as_type<T>`. A C-style cast
+    ## would be a numeric conversion instead. Bits 0xFF7FFFFF read
+    ## -FLT_MAX as float32, a numeric conversion reads +4286578687.0f.
+    check bitcastPipe.err == ""
+    check "dst[0] = as_type<float>(4286578687U);" in bitcastPipe.src
+    check "(float)4286578687U" notin bitcastPipe.src
+    # a conversion to float32 keeps the C-style numeric cast text
+    check "dst[1] = (float)3;" in bitcastPipe.src

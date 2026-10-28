@@ -241,3 +241,41 @@ static:
   doAssert enumArgTrace.count("(proc pick_") == 2
   doAssert enumArgTrace.count("(call pick_") == 2
   doAssert "(param v (i +32)) (i +32)" in enumArgTrace
+
+proc orKernel(o: ptr UncheckedArray[int32]) {.global.} =
+  let x = o[0]
+  var outOfRange = (x < 0'i32) or (10'i32 < x)
+  if outOfRange:
+    o[1] = 1'i32
+  else:
+    o[1] = 0'i32
+
+const orTrace = lowerTrace:
+  orKernel
+
+static:
+  # statement-position `or` materializes into a bool temp through
+  # `ite` statements: the both-operands-false path must assign false
+  # so the disjunction reads false with the temp starting true (or's identity)
+  doAssert "(var condtmp (bool) (true))" in orTrace, orTrace
+  # only the materialization assigns the temp, its false branch is the both-operands-false path
+  doAssert "(asgn condtmp (false))" in orTrace,
+    "the both-operands-false path of `or` never assigns false: " & orTrace
+
+proc andKernel(o: ptr UncheckedArray[int32]) {.global.} =
+  let x = o[0]
+  var inRange = (0'i32 <= x) and (x <= 10'i32)
+  if inRange:
+    o[1] = 1'i32
+  else:
+    o[1] = 0'i32
+
+const andTrace = lowerTrace:
+  andKernel
+
+static:
+  # symmetric `and` contract: the both-operands-true path must assign
+  # true so the conjunction reads true with the temp starting false (and's identity)
+  doAssert "(var condtmp (bool) (false))" in andTrace, andTrace
+  doAssert "(asgn condtmp (true))" in andTrace,
+    "the both-operands-true path of `and` never assigns true: " & andTrace

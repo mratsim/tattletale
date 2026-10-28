@@ -376,10 +376,24 @@ proc isCompileTimeFormal(t: NimNode): bool =
   return false
 
 proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
-  ## Stable per-instantiation name: the proc name plus a base58 hash over the instantiated formals.
-  ## One CIRv2 proc exists per distinct signature.
-  ## The formals node contains the bound types of the static parameters.
-  ## The `ProcTy` repr erases them, so distinct instantiations collide under that hash.
+  ## Stable per-callee-instantiation name: the sanitized proc name plus
+  ## a base58 hash over the callee's identity.
+  ##
+  ## Hash input:
+  ##
+  ## - the instantiated signature
+  ## - the callee's name
+  ## - the callee's definition site
+  ##
+  ## One CIRv2 proc exists per distinct callee instantiation:
+  ##
+  ## - the signature alone cannot separate callees: the `ProcTy` repr
+  ##   erases bound static formals
+  ## - distinct operator overloads over the same operand types share one
+  ##   erased signature and sanitize to one base name (`__`), so the hash
+  ##   folds the callee's name and definition site to separate them
+  ## - two call sites of one proc instantiation produce the same name,
+  ##   the harvest dedup keeps one body per instantiation
   let base = sanitizeIdent(callee.strVal)
   let formals = getFormalParams(callee.getTypeInst())
   var sigRepr = callee.getTypeInst().repr
@@ -402,7 +416,12 @@ proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
           sigRepr.add(ft.getTypeInst().repr)
       else:
         sigRepr.add(f.repr)
-  var h = hash(sigRepr)
+  let impl = callee.getImpl()
+  let calleeSite = if impl.kind == nnkEmpty:
+    ""
+  else:
+    impl.lineInfo
+  var h = hash(sigRepr & "\x1f" & callee.strVal & "\x1f" & calleeSite)
   h = !$h
   var x = uint64(h) and 0xFFFFFFFFFFFFFFFF'u64
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -588,11 +607,32 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
 # Expression translation
 # ═══════════════════════════════════════════════════════════════════════
 
+proc isLatticeScalar(ctx: var FrontendCtx, n: NimNode): bool =
+  ## True when the expression's type resolves to a lattice scalar: bool, int, uint, float.
+  ## The primitive arithmetic applies to those.
+  ##
+  ## An overloaded operand (a register tile, an element-wise `-.`/`*.` proc)
+  ## lowers as the proc's call instead.
+  let t = ctx.resolver.resolveCirType(n.getTypeInst())
+  if ctx.failing():
+    return false
+  return t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
+
 proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Operators: arithmetic and bitwise directly, comparisons normalized to
   ## the lattice's four kinds (`>` and `>=` swap operands), boolean
   ## `and`/`or` materialize into a temp through `ite` statements.
   let op = n[0].strVal
+  case op
+  of "+", "-", "*", "div", "mod", "shl", "shr", "/":
+    if not (ctx.isLatticeScalar(n[1]) and ctx.isLatticeScalar(n[2])):
+      # overloaded operator over non-scalar operands: the lattice resolution
+      # picks the proc, lowered here as the call it is.
+      # Example: `m_i - m_ij` over (MT x 1) tiles. Each operand lowers once,
+      # inside the call, since this check runs before operand lowering.
+      return ctx.lowerCallValue(n[0], n)
+  else:
+    discard
   let a = ctx.lowerExpr(unwrapConv(n[1]))
   if ctx.failing():
     return nil
@@ -635,6 +675,7 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
       if ctx.failing():
         return nil
       let setTrue = asgnS(sym(tmpName, boolT), trueE())
+      let setFalse = asgnS(sym(tmpName, boolT), falseE())
       if op == "xor":
         let b = bVal
         result = neqE(a, b)
@@ -644,7 +685,7 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
         ctx.hoisted.add(iteS(a, bHoists & iteS(bVal, @[setTrue]), @[]))
       else:
         ctx.hoisted.add(varD(tmpName, boolT, trueE()))
-        ctx.hoisted.add(iteS(a, @[], bHoists & iteS(bVal, @[setTrue])))
+        ctx.hoisted.add(iteS(a, @[], bHoists & iteS(bVal, @[setTrue], @[setFalse])))
       ctx.declareLocal(tmpName, sym(tmpName, boolT))
       return sym(tmpName, boolT)
     let b = ctx.lowerExpr(unwrapConv(n[2]))
@@ -1607,6 +1648,24 @@ proc lowerConstSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.declareLocal(nameNode, sym(cirName, typ))
     result.add(hoists & @[constD(cirName, typ, value)])
 
+proc isScalarCompoundAssign(ctx: var FrontendCtx, n: NimNode): bool =
+  ## True when a statement-position compound assign's operands are lattice
+  ## scalars and the primitive arithmetic applies: the left operand goes
+  ## through its `var` pointer when the target is a var parameter.
+  ##
+  ## An overloaded operand (a register tile, an element-wise `op=` proc)
+  ## lowers as the proc's call instead.
+  if n[0].kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+    return false
+  let lt = ctx.resolver.resolveCirType(n[1].getTypeInst())
+  let rt = ctx.resolver.resolveCirType(n[2].getTypeInst())
+  if ctx.failing():
+    return false
+  let lp = if lt != nil and lt.kind == ctPtr: lt.pElem else: lt
+  proc isScalar(t: CirType): bool =
+    t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
+  return isScalar(lp) and isScalar(rt)
+
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## Translates one statement node.
   if ctx.failing():
@@ -1673,33 +1732,35 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       return @[]
     return ctx.drainHoisted() & @[asgnS(lhs, rhs)]
   of nnkInfix:
-    # compound assignment `x op= y` reaches the statement position as an infix
+    # compound assignment reaches the statement position as an infix:
+    # lattice-scalar operands take the primitive arithmetic, any other `op=`
+    # (`qk -.= m_ij` over register tiles) resolves to its overloaded proc
+    # and lowers as a var-target call in statement position
     let op = n[0].strVal
-    if op notin ["+=", "-=", "*=", "/="]:
-      ctx.fail("infix operator " & op & " in statement position")
-      return @[]
-    var lhs = ctx.lowerExpr(n[1])
-    if ctx.failing():
-      return @[]
-    if lhs.kind == eAddr:
-      # a var-returning `[]` hands the compound assignment the element's address
-      # and the assignment target is the location behind it
-      lhs = lhs.addrOperand
-    elif lhs.kind == eSym and getExprType(lhs) != nil and
-        getExprType(lhs).kind == ctPtr:
-      # a var parameter names its location through a pointer and the compound
-      # assignment operates on the pointee the pointer names
-      lhs = derefE(lhs)
-    let rhs = ctx.lowerExpr(unwrapConv(n[2]))
-    if ctx.failing():
-      return @[]
-    let opType = getExprType(lhs)
-    let arith = case op
-      of "+=": addE(opType, lhs, rhs)
-      of "-=": subE(opType, lhs, rhs)
-      of "*=": mulE(opType, lhs, rhs)
-      else: divE(opType, lhs, rhs)
-    return ctx.drainHoisted() & @[asgnS(lhs, arith)]
+    if op in ["+=", "-=", "*=", "/="] and ctx.isScalarCompoundAssign(n):
+      var lhs = ctx.lowerExpr(n[1])
+      if ctx.failing():
+        return @[]
+      if lhs.kind == eAddr:
+        # a var-returning `[]` hands the compound assignment the element's address
+        # and the assignment target is the location behind it
+        lhs = lhs.addrOperand
+      elif lhs.kind == eSym and getExprType(lhs) != nil and
+          getExprType(lhs).kind == ctPtr:
+        # a var parameter names its location through a pointer and the compound
+        # assignment operates on the pointee the pointer names
+        lhs = derefE(lhs)
+      let rhs = ctx.lowerExpr(unwrapConv(n[2]))
+      if ctx.failing():
+        return @[]
+      let opType = getExprType(lhs)
+      let arith = case op
+        of "+=": addE(opType, lhs, rhs)
+        of "-=": subE(opType, lhs, rhs)
+        of "*=": mulE(opType, lhs, rhs)
+        else: divE(opType, lhs, rhs)
+      return ctx.drainHoisted() & @[asgnS(lhs, arith)]
+    return ctx.lowerVoidCall(n)
   of nnkIfStmt:
     return ctx.lowerIfStmt(n)
   of nnkWhileStmt:

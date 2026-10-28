@@ -24,7 +24,7 @@
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
-import std/[macros, strutils, sequtils, sets, tables]
+import std/[macros, strutils, sequtils, sets, tables, math]
 
 type
   PrintError* = object
@@ -186,10 +186,21 @@ proc spellMslLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    case e.fLitType.bits
-    of 16: result = $e.fValue & "h"
-    of 32: result = $e.fValue & "f"
-    else: result = $e.fValue
+    # MSL has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`.
+    # Emission text is the <math.h> macros the MSL compiler accepts.
+    # Literal width converts at the use site.
+    case e.fValue.classify
+    of fcInf:
+      result = "INFINITY"
+    of fcNegInf:
+      result = "-INFINITY"
+    of fcNan:
+      result = "NAN"
+    else:
+      case e.fLitType.bits
+      of 16: result = $e.fValue & "h"
+      of 32: result = $e.fValue & "f"
+      else: result = $e.fValue
   of eNil: result = "nullptr"
   of eTrue: result = "true"
   of eFalse: result = "false"
@@ -269,8 +280,27 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eCast, eConv:
+  of eConv:
+    # a numeric conversion prints as the C-style cast
     let t = e.castType
+    var castTyp = spellMslType(t, "", true)
+    if t.kind in {ctPtr, ctAptr}:
+      castTyp = spellMslSpace(t.space) & ' ' & castTyp
+    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+  of eCast:
+    # A same-size scalar `cast` reinterprets the bits: the SPIR-V printer
+    # emits OpBitcast and the MSL text is `as_type<T>`. A C-style cast
+    # converts numerically instead: 0xFF7FFFFF read as float32 gives
+    # +4.29e9 and the same bits reinterpreted give -FLT_MAX.
+    #
+    # Pointer and machine-word casts keep the C-style text.
+    # as_type accepts neither pointers nor width changes.
+    let t = e.castType
+    let src = getExprType(e.castOperand)
+    if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+        src.kind in {ctInt, ctUint, ctFloat} and
+        t.bits in {8, 16, 32, 64} and src.bits == t.bits:
+      return "as_type<" & spellMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
     var castTyp = spellMslType(t, "", true)
     if t.kind in {ctPtr, ctAptr}:
       castTyp = spellMslSpace(t.space) & ' ' & castTyp
