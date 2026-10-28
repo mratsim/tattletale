@@ -676,6 +676,22 @@ proc runTransposeTests =
     doAssert tT.getLayout().stride === t.getLayout().stride
     doAssert tT[(1, 2, 3)] == t[(1, 2, 3)]
 
+proc runPermuteTests =
+  # permute(2, 0, 1) rotates the modes
+  # every element reads back through the permutation
+  block:
+    var buf = newSeq[float32](24)
+    for i in 0 ..< 24:
+      buf[i] = float32(i)
+    let t = make_view(buf +% 0, make_layout((2, 3, 4), (12, 4, 1)))
+    let p = t.permute(2, 0, 1)
+    doAssert p.shape === (4, 2, 3)
+    doAssert p.getLayout().stride === (1, 12, 4)
+    for a in 0 ..< 4:
+      for b in 0 ..< 2:
+        for c in 0 ..< 3:
+          doAssert p[(a, b, c)] == t[(b, c, a)]
+
 proc runTests =
   runMakeTensorLikeTests()
   runTensorConstructionTests()
@@ -683,6 +699,7 @@ proc runTests =
   runFlatIndexTests()
   runMultiIndexTests()
   runTransposeTests()
+  runPermuteTests()
   runSliceTests()
   runDisplaceTests()
   runTypeTests()
