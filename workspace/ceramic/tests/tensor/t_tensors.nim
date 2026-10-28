@@ -635,12 +635,54 @@ proc runMakeTensorLikeTests =
 #  Test runner
 # ═════════════════════════════════════════════════════════════════════════════
 
+proc runTransposeTests =
+  # rank-2 swap: the modes exchange, the data is untouched
+  block:
+    var buf = newSeq[float32](6)
+    for i in 0 ..< 6:
+      buf[i] = float32(i)
+    let t = make_view(buf +% 0, make_layout((2, 3), (3, 1)))
+    let tT = t.transpose(1, 0)
+    doAssert tT.rank == 2
+    doAssert tT.shape === (3, 2)
+    doAssert tT.getLayout().stride === (1, 3)
+    for a in 0 ..< 2:
+      for b in 0 ..< 3:
+        doAssert tT[(b, a)] == t[(a, b)]
+
+  # rank-3 transpose(0, 2): all three modes kept, positions 0 and 2 swap
+  block:
+    var buf = newSeq[float32](24)
+    for i in 0 ..< 24:
+      buf[i] = float32(i)
+    let t = make_view(buf +% 0, make_layout((2, 3, 4), (12, 4, 1)))
+    let tT = t.transpose(0, 2)
+    doAssert tT.rank == 3
+    doAssert tT.shape === (4, 3, 2)
+    doAssert tT.getLayout().stride === (1, 4, 12)
+    for a in 0 ..< 4:
+      for b in 0 ..< 3:
+        for c in 0 ..< 2:
+          doAssert tT[(a, b, c)] == t[(c, b, a)]
+
+  # transpose(i, i) is the identity, not a duplicated mode
+  block:
+    var buf = newSeq[float32](24)
+    for i in 0 ..< 24:
+      buf[i] = float32(i)
+    let t = make_view(buf +% 0, make_layout((2, 3, 4), (12, 4, 1)))
+    let tT = t.transpose(1, 1)
+    doAssert tT.shape === t.shape
+    doAssert tT.getLayout().stride === t.getLayout().stride
+    doAssert tT[(1, 2, 3)] == t[(1, 2, 3)]
+
 proc runTests =
   runMakeTensorLikeTests()
   runTensorConstructionTests()
   runTensorViewTests()
   runFlatIndexTests()
   runMultiIndexTests()
+  runTransposeTests()
   runSliceTests()
   runDisplaceTests()
   runTypeTests()

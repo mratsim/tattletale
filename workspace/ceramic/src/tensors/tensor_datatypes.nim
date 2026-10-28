@@ -70,20 +70,6 @@ template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
     data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
 
-template transpose*(t: AnyTensor, dim0, dim1: static int): auto =
-  ## Swaps modes `dim0` and `dim1`, PyTorch's `Tensor.transpose`, zero-copy:
-  ## - the shape and stride entries at the two positions exchange
-  ## - the memory is untouched and the result reads the same data
-  ##
-  ## Example: V stored (S, Dv) row-major, its MMA B operand addressed (N, K) = (Dv, S):
-  ##   vV = V(batch, kvHead, _, _).transpose(1, 0)  # (Dv, S) over the same data
-  make_view(t.data, selectDimensions(t.getLayout(), dim0, dim1))
-
-template permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
-  ## Reorders the view's modes by index, PyTorch's `Tensor.permute`, zero-copy:
-  ## mode `i` of the result reads the input's mode `Is[i]`.
-  make_view(t.data, selectDimensions(t.getLayout(), Is))
-
 template slice*[T, Sh, St](t: AnyTensor[T, Sh, St], R: Layout, sel: untyped): auto =
   make_view(addr t.data[crd2idx(R, sel)], slice(R, sel))
 
