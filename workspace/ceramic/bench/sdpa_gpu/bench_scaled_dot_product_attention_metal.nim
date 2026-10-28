@@ -34,11 +34,18 @@ when sdpaDtype == "bf16":
 else:
   type Elem = float32
 
+const
+  ## Tile shape of the bench kernel, measured per dtype on M4 Max:
+  ## f32 peaks at (32, 16), bf16 at (16, 32). The flops formula reads
+  ## these consts too, so the kernel and the formula cannot drift apart
+  benchMT = when Elem is float32: 32 else: 16
+  benchNT = when Elem is float32: 16 else: 32
+
 proc sdpaBenchLoop(o, q, k, v: distinct TensorView, scale: float32, Dk, Dv: static int, Causal: static bool, iters: int) =
   ## `iters` attention passes in one launch, idempotent stores
   const
-    MT = 16
-    NT = 32
+    MT = benchMT
+    NT = benchNT
   for _ in 0 ..< iters:
     scaled_dot_product_attention(
       tiledMma(float32, Elem, Elem, MT, NT, 32),
@@ -74,8 +81,8 @@ proc runCase(engine: MetalEngine, L, S: int, Causal: static bool, iters: int) =
     Hkv = 8
     Dk = 128
     Dv = 128
-    MT = 32
-    NT = 16
+    MT = benchMT
+    NT = benchNT
   let shapeQ = (B, Hq, L, Dk)
   let shapeKV = (B, Hkv, S, Dk)
   let shapeO = (B, Hq, L, Dv)

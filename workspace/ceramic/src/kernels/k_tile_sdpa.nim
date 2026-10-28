@@ -107,63 +107,69 @@ proc scaled_dot_product_attention*(
     vV0 = V(batch, kvHead, _, _)               # (S, Dv), transposed below
     vV = vV0.transpose(1, 0)                   # (Dv, S), B operand of MMA 2
 
-  var q: tile(Q.T, qkMma.getMmaLayout(opA))    # (MT, Dk)
-  q.load(vQ, qMap, thrID, (qTile, 0))
-
-  var qk = zeros(tile(float32, qkCLayout))      # S = Q·Kᵀ scores, (MT × NT)
-  const rowStatsL = reducedLayout(qkMap.layout, 1)
-  var m_i = finiteFloor(tile(float32, rowStatsL)) # running row max, (MT × 1)
-    # init to a finite floor, not -inf: a fully-masked kv tile would NaN alpha through -inf - -inf and poison the row
-  var l_i = zeros(tile(float32, rowStatsL))     # running row sum, (MT × 1)
-  var acc = zeros(tile(float32, pvCLayout))     # (MT × Dv) accumulator
-
   let (kvTiles, _) = vK.tileWith((nt, Dk)).getTileGrid()
-  let
-    qBase = qTile * mt + offset                # this tile's first aligned query position
-    kvStart = when windowed: max(0, qBase - windowSize) div nt else: 0
-    kvEnd = when isCausal: min(kvTiles, (qBase + mt).ceil_div(nt)) else: kvTiles
-
   let
     thrCrd = idx2crd(qkMap.getThreadPartitioning(), thrID)
     regCrd = qkMap.layout.slice(((thrCrd, _), _))
     crdBase = qkMap.layout.crd2idx(((thrCrd, _), _))
 
-  for kv in kvStart ..< kvEnd:
-    var k: tile(K.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
-    k.load(vK, kMap, thrID, (kv, 0))
-    qk.fillWith(0'f32)
-    qkMma.atom.gemm_tile(qk, q, k, qk)         # S = Q·Kᵀ   (MMA 1)
+  # Each workgroup starts at its own query tile and steps by the grid width,
+  # so a grid smaller than the tile count still covers every tile
+  let
+    qGrid = vQ.tileWith((mt, Dk)).getTileGrid()
+    (qStride, _, _) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
+  for qTile in countup(threadgroup_position_in_grid.x, qGrid.size() - 1, qStride):
+    var q: tile(Q.T, qkMma.getMmaLayout(opA))    # (MT, Dk)
+    q.load(vQ, qMap, thrID, (qTile, 0))
 
-    qk *= qMul                                 # scale, before the band cut
+    var qk = zeros(tile(float32, qkCLayout))      # S = Q·Kᵀ scores, (MT × NT)
+    const rowStatsL = reducedLayout(qkMap.layout, 1)
+    var m_i = finiteFloor(tile(float32, rowStatsL)) # running row max, (MT × 1)
+      # init to a finite floor, not -inf: a fully-masked kv tile would NaN alpha through -inf - -inf and poison the row
+    var l_i = zeros(tile(float32, rowStatsL))     # running row sum, (MT × 1)
+    var acc = zeros(tile(float32, pvCLayout))     # (MT × Dv) accumulator
 
-    var band: tile(bool, qkCLayout)
-    forEach idx, var c in band:
-      let (qRow, kCol) = crdBase + regCrd.crd2idx(idx)
-      let qPos = qBase + qRow
-      let kPos = kv * nt + kCol                # kv tile's column base
-      c = kPos < (when windowed: max(0, qPos - windowSize) else: 0) or
-          kPos >= (when isCausal: min(K.shape[2], qPos + 1) else: K.shape[2])
-    qk.where(band, negInf(float32), qk)        # masked keys read -inf
+    let
+      qBase = qTile * mt + offset                # this tile's first aligned query position
+      kvStart = when windowed: max(0, qBase - windowSize) div nt else: 0
+      kvEnd = when isCausal: min(kvTiles, (qBase + mt).ceil_div(nt)) else: kvTiles
 
-    var m_ij: tile(float32, rowStatsL)         # (MT × 1) row max
-    qk.max(m_ij, axis = 1, qkMap)
-    m_ij = max(m_i, m_ij)                      # running row max
-    var alpha: tile(float32, rowStatsL)        # rescale factor (MT × 1)
-    alpha = m_i - m_ij
-    alpha.exp2()
-    m_i = m_ij
-    qk -.= m_ij                                # (MT × NT) -.= (MT × 1)
-    qk.exp2()
-    l_i *= alpha                               # row-sum rescale
-    var l_ij: tile(float32, rowStatsL)         # (MT × 1) row sum
-    qk.sum(l_ij, axis = 1, qkMap)
-    l_i += l_ij
+    for kv in kvStart ..< kvEnd:
+      var k: tile(K.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
+      k.load(vK, kMap, thrID, (kv, 0))
+      qk.fillWith(0'f32)
+      qkMma.atom.gemm_tile(qk, q, k, qk)         # S = Q·Kᵀ   (MMA 1)
 
-    let p = qk.downcast(Q.T)                   # P.to(Q.T), (MT × NT), layout preserved
-    acc *.= alpha                              # (MT × Dv) *.= (MT × 1)
-    var v: tile(V.T, pvMma.getMmaLayout(opB))  # (Dv, NT), B operand of MMA 2
-    v.load(vV, vMap, thrID, (0, kv))
-    pvMma.atom.gemm_tile(acc, p, v, acc)       # O += P·V   (MMA 2)
+      qk *= qMul                                 # scale, before the band cut
 
-  acc /.= l_i                                  # (MT × Dv) /.= (MT × 1)
-  vO.store(acc.downcast(O.T), oMap, thrID, (qTile, 0))
+      var band: tile(bool, qkCLayout)
+      forEach idx, var c in band:
+        let (qRow, kCol) = crdBase + regCrd.crd2idx(idx)
+        let qPos = qBase + qRow
+        let kPos = kv * nt + kCol                # kv tile's column base
+        c = kPos < (when windowed: max(0, qPos - windowSize) else: 0) or
+            kPos >= (when isCausal: min(K.shape[2], qPos + 1) else: K.shape[2])
+      qk.where(band, negInf(float32), qk)        # masked keys read -inf
+
+      var m_ij: tile(float32, rowStatsL)         # (MT × 1) row max
+      qk.max(m_ij, axis = 1, qkMap)
+      m_ij = max(m_i, m_ij)                      # running row max
+      var alpha: tile(float32, rowStatsL)        # rescale factor (MT × 1)
+      alpha = m_i - m_ij
+      alpha.exp2()
+      m_i = m_ij
+      qk -.= m_ij                                # (MT × NT) -.= (MT × 1)
+      qk.exp2()
+      l_i *= alpha                               # row-sum rescale
+      var l_ij: tile(float32, rowStatsL)         # (MT × 1) row sum
+      qk.sum(l_ij, axis = 1, qkMap)
+      l_i += l_ij
+
+      let p = qk.downcast(Q.T)                   # P.to(Q.T), (MT × NT), layout preserved
+      acc *.= alpha                              # (MT × Dv) *.= (MT × 1)
+      var v: tile(V.T, pvMma.getMmaLayout(opB))  # (Dv, NT), B operand of MMA 2
+      v.load(vV, vMap, thrID, (0, kv))
+      pvMma.atom.gemm_tile(acc, p, v, acc)       # O += P·V   (MMA 2)
+
+    acc /.= l_i                                  # (MT × Dv) /.= (MT × 1)
+    vO.store(acc.downcast(O.T), oMap, thrID, (qTile, 0))

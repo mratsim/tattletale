@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/typetraits
+import std/[macros, typetraits]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_compiletime
@@ -200,18 +200,20 @@ template reduceIntoPartials(op, identity: untyped, partial: var array, src: Tile
   ## Phase 1 combines the lane's slots that share a kept coordinate.
   ## Phase 2 merges lane groups pairwise through xor shuffles.
   ## Every lane must call it unconditionally, the merge is a subgroup collective.
-  for k in 0 ..< keptCount:
-    {.unroll.}
-    partial[k] = identity(typeof(partial[0]))
-    for a in 0 ..< axisSpan:
-      {.unroll.}
-      partial[k] = op(partial[k], src.data[reduceSlot(l, axis, k, a)])
+  ##
+  ## `op` and `identity` take operator and magic references
+  ## (`+`, `max`, `zero`, ...) untyped.
+  ##
+  ## The static() calls fold the index derivations in the VM.
+  ## Runtime loop variables would emit them as standalone functions rescanning the slots per element.
   const passes = treePasses(l, axis)
-  for x in 0 ..< passes:
-    {.unroll.}
-    for k in 0 ..< keptCount:
-      {.unroll.}
-      partial[k] = op(partial[k], simd_shuffle_xor(partial[k], treeDelta(l, axis, x)))
+  staticFor k, 0, keptCount:
+    partial[k] = identity(typeof(partial[0]))
+    staticFor a, 0, axisSpan:
+      partial[k] = op(partial[k], src.data[static(reduceSlot(l, axis, k, a))])
+  staticFor x, 0, passes:
+    staticFor k, 0, keptCount:
+      partial[k] = op(partial[k], simd_shuffle_xor(partial[k], static(treeDelta(l, axis, x))))
 
 proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layout[Sh, St], axis: static int, keptCount: static int, partial: array[keptCount, T]) =
   ## Stores the per-lane partials into `dst`.
@@ -223,9 +225,8 @@ proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layo
       {.unroll.}
       dst.data[k] = partial[k]
   else:
-    for i in 0 ..< dstLen:
-      {.unroll.}
-      dst.data[i] = partial[keptRank(l, axis, i)]
+    staticFor i, 0, dstLen:
+      dst.data[i] = partial[static(keptRank(l, axis, i))]
 
 proc sum*[T, Sh, St, ShD, StD](src: Tile[T, Sh, St], dst: var Tile[T, ShD, StD], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Sums one axis of the register tile `src` into `dst`, one axis sum per kept coordinate per lane.
