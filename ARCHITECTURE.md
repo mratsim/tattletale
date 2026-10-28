@@ -2,7 +2,10 @@
 
 Tattletale is a high-performance inference engine written in Nim.
 
-Nim compiles to C, C++ or Javascript by default, it also provides some of the most powerful macros of all statically typed programming languages. Tattletale leverages that to implement a compiler directly in Nim macros that transforms Nim code into Cuda, OpenCL, Vulkan or WebGPU directly at Nim-compile-time (or runtime if preferable).
+Nim compiles to C, C++ or Javascript by default, it also provides some of the most powerful macros
+of all statically typed programming languages.
+Tattletale leverages that to implement a compiler directly in Nim macros.
+The macros transform Nim code into Metal, OpenCL, Vulkan or WebGPU code at Nim-compile-time (or runtime if preferable).
 
 This document describes how the monorepo is organized and how the pieces connect, from a
 high-level inference goal down to emitted GPU code.
@@ -39,7 +42,7 @@ flowchart TB
     end
 
     subgraph HW ["Hardware"]
-        H["CUDA / OpenCL / Vulkan / WebGPU"]
+        H["Metal / OpenCL / Vulkan / WebGPU"]
     end
 
     APP --> TR
@@ -99,11 +102,29 @@ The data flow runs top-down from an inference goal to emitted GPU code.
    [`workspace/positron/libpositron_cuda.nim`](workspace/positron/libpositron_cuda.nim).
 
 7. **`crucible`** ([`workspace/crucible/crucible.nim`](workspace/crucible/crucible.nim))
-   is the GPU kernel code generator: Nim macros consume ceramic layout algebra
-   and positron kernel specs and emit native CUDA, OpenCL, Vulkan and WebGPU
-   code ([`workspace/crucible/src/codegen/gpu_compiler.nim`](workspace/crucible/src/codegen/gpu_compiler.nim),
-   backends under [`workspace/crucible/src/codegen/backends/`](workspace/crucible/src/codegen/backends/),
-   ABIs under [`workspace/crucible/src/abis/`](workspace/crucible/src/abis/)).
+   is the GPU kernel code generator: Nim DSL macros consume ceramic layout algebra and positron kernel specs,
+   emitting native GPU code through CIRv2 (macros: `cuda:`, `opencl:`, `glsl:`, `hlsl:`, `webgpu:`, `metal:`).
+
+### Crucible internals: the CIRv2 pipeline
+
+The public surface, one [`import workspace/crucible`](workspace/crucible/crucible.nim), is unchanged: the same DSL
+macros and the same engine surface (`newEngine`, `ingest`, `launchKernel`, `launchDeviceFn`).
+Internally the compiler runs on CIRv2, its backend-neutral intermediate representation:
+
+- **IR**: [`src/codegen/ir/`](workspace/crucible/src/codegen/ir/) is the CIRv2 module graph (`cirv2_*`).
+- **Frontend**: [`src/codegen/frontend/`](workspace/crucible/src/codegen/frontend/)
+  lowers the typed Nim body to CIRv2.
+  Struct names derive from the canonical, alias-resolved Nim type identity plus a 7-character base58 hash
+  (`Vec2_float32_DsoW2JH`).
+- **Passes**: [`src/codegen/passes/`](workspace/crucible/src/codegen/passes/) runs legalize, normalize, optimize, lower
+  and validate (structuring is one of the normalizations).
+- **Printers**: one per backend under [`src/codegen/backends/`](workspace/crucible/src/codegen/backends/).
+
+- Metal kernel compilation is about 2.2x faster than on the previous IR.
+  Runtime parity with the previous IR is measured on the benchmarks at bf16: GEMM 4.5s vs 10.0s, SDPA 10.4s vs 23.3s.
+- `{.smem.}` kernel locals become in-body threadgroup storage on Metal and `{.unroll.}` is honored end to end.
+- The `cuda:` target refuses at compile time on CIRv2 (no CUDA printer yet).
+- A classified set of existing-suite tests still fails on CIRv2, mostly non-Metal printer parity and type-lowering gaps.
 
 ## Repo layout
 
@@ -138,12 +159,9 @@ its `src/` modules.
 
 ## Extension points
 
-- **New hardware target**: add a backend under
-  [`workspace/crucible/src/codegen/backends/`](workspace/crucible/src/codegen/backends/)
-  and the corresponding ABI under
-  [`workspace/crucible/src/abis/`](workspace/crucible/src/abis/). Crucible's
-  pass pipeline is registered in
-  [`workspace/crucible/src/codegen/gpu_compiler.nim`](workspace/crucible/src/codegen/gpu_compiler.nim).
+- **New hardware target**: add a printer under `src/codegen/backends/` with its lowering passes in `src/codegen/passes/`.
+  The corresponding ABI is under [`workspace/crucible/src/abis/`](workspace/crucible/src/abis/).
+  The pass pipeline is registered in [`workspace/crucible/src/codegen/gpu_compiler.nim`](workspace/crucible/src/codegen/gpu_compiler.nim).
 - **New kernel**: add a portable spec under
   [`workspace/positron/src/kernels/portable/`](workspace/positron/src/kernels/portable/)
   or a CUDA kernel under
