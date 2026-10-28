@@ -20,6 +20,7 @@ const unrollGlsl = glsl:
 proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(unrollGlsl)
+  doAssert "[[unroll]]" in engine.getArtifact(), "unroll pragma missing in the generated code"
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]

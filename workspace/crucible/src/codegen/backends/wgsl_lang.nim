@@ -330,7 +330,10 @@ proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
   of gpuFor:
     let i = ast.fVar.ident()
     let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = indentStr & "for(var " & i & ": i32 = " &
+    if ast.fUnroll:
+      # no unroll directive exists in WGSL, surface the drop in the artifact
+      result = indentStr & "// {.unroll.} requested but not honored on WebGPU\n"
+    result &= indentStr & "for(var " & i & ": i32 = " &
              ctx.genWebGpu(ast.fStart) & "; " &
              i & cmp & ctx.genWebGpu(ast.fEnd) & "; " &
              i & " = " & i & " + " & (if ast.fStep == nil: "1" else: ctx.genWebGpu(ast.fStep)) & ") {\n"

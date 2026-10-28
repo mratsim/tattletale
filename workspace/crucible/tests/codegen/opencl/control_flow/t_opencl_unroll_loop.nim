@@ -19,6 +19,7 @@ const unrollOpenCL = opencl:
 proc runTest() =
   var engine = newEngine(runOpenCL)
   engine.ingest(unrollOpenCL)
+  doAssert "#pragma unroll" in engine.getArtifact(), "unroll pragma missing in the generated code"
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]
